@@ -41,9 +41,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Doc", "Doc", "{C5A09A9C-9EB
 		Doc\Usage-Guide.md = Doc\Usage-Guide.md
 		Doc\Clone-Sinks.md = Doc\Clone-Sinks.md
 		Doc\MediaPlayer-Guide.md = Doc\MediaPlayer-Guide.md
-		Doc\Clock-And-AV-Drift-Analysis.md = Doc\Clock-And-AV-Drift-Analysis.md
-		Doc\TODOs.md = Doc\TODOs.md
-		Doc\Heavy-Media-Playback-Fixes-Checklist.md = Doc\Heavy-Media-Playback-Fixes-Checklist.md
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Libraries", "Libraries", "{2F8E4C91-5B3D-4A1E-9C7D-8E6F5A4B3C2D}"

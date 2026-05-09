@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.Playback;
@@ -106,7 +107,7 @@ public sealed class AppSettingsService
     private static readonly ILogger Log = MediaCoreLogging.GetLogger("SPlayer.AppSettingsService");
 
     private readonly string _path;
-    private readonly object _saveLock = new();
+    private readonly Lock _saveLock = new();
 
     public AppSettingsService(string? path = null)
     {
