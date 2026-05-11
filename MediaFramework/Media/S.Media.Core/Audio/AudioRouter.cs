@@ -174,7 +174,7 @@ public sealed class AudioRouter : IDisposable
 
             var floatsPerChunk = _chunkSamples * sink.Format.Channels;
             var pump = new SinkPump(sink, _pumpCapacityChunks, floatsPerChunk, id);
-            var entry = new SinkEntry(id, sink, new float[floatsPerChunk], pump);
+            var entry = new SinkEntry(id, sink, pump);
             Volatile.Write(ref _state, _state with { Sinks = _state.Sinks.Add(id, entry) });
             return id;
         }
@@ -191,27 +191,33 @@ public sealed class AudioRouter : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
         SinkPump? pump;
+        bool wasRunning;
         lock (_gate)
         {
             if (!_state.Sinks.TryGetValue(id, out var entry)) return false;
             pump = entry.Pump;
+            // Use the pre-removal Routes snapshot to know exactly which
+            // (sourceId, sinkId) keys belong to this sink — avoids enumerating
+            // the entire _currentGains dictionary while concurrent
+            // AddRoute/RemoveRoute calls mutate it.
+            foreach (var route in _state.Routes)
+                if (route.SinkId == id)
+                    _currentGains.TryRemove((route.SourceId, route.SinkId), out _);
             Volatile.Write(ref _state, _state with
             {
                 Sinks = _state.Sinks.Remove(id),
                 Routes = _state.Routes.RemoveAll(r => r.SinkId == id),
             });
+            wasRunning = _isRunning;
         }
-        // Drop any pending chunks (caller asked for "stop delivering") and
-        // clean up per-route ramp state for routes that targeted this sink.
-        // Then wait briefly for an in-flight Submit on the drainer thread to
+        // Drop any pending chunks (caller asked for "stop delivering"), then
+        // wait briefly for an in-flight Submit on the drainer thread to
         // complete. The next run-loop iteration sees the new state and won't
         // enqueue further; the pump's thread join is deferred so RemoveSink
         // can return promptly.
-        foreach (var key in _currentGains.Keys)
-            if (key.Item2 == id) _currentGains.TryRemove(key, out _);
         pump.AbandonQueue();
         pump.WaitForIdle(TimeSpan.FromMilliseconds(100));
-        if (_isRunning) _pumpsAwaitingDispose.Enqueue(pump);
+        if (wasRunning) _pumpsAwaitingDispose.Enqueue(pump);
         else pump.Dispose();
         return true;
     }
@@ -534,8 +540,11 @@ public sealed class AudioRouter : IDisposable
                 if (!src.Source.IsExhausted) keepRunning = true;
             }
 
+            // Per-sink working buffers come from each pump's free-pool. The
+            // router writes the mixed audio directly into them and Commit()s
+            // by reference — no second copy on the producer thread.
             foreach (var (_, sink) in snapshot.Sinks)
-                Array.Clear(sink.Scratch);
+                Array.Clear(sink.Pump.WorkingBuffer);
 
             foreach (var route in snapshot.Routes)
             {
@@ -546,15 +555,16 @@ public sealed class AudioRouter : IDisposable
                 var fromGain = _currentGains.GetValueOrDefault(key, route.Gain);
                 var toGain = route.Gain;
                 ApplyRoute(src.Scratch, src.Source.Format.Channels,
-                           sink.Scratch, sink.Sink.Format.Channels,
+                           sink.Pump.WorkingBuffer, sink.Sink.Format.Channels,
                            route.Map, fromGain, toGain, _chunkSamples);
                 if (fromGain != toGain) _currentGains[key] = toGain;
             }
 
-            // Hand the mixed scratch off to each sink's pump. The pump's drainer
-            // thread does the actual Submit; this never blocks the run loop.
+            // Publish each sink's mixed buffer to its pump (zero-copy hand-off);
+            // the drainer thread does the actual Submit so the run loop is
+            // never blocked by a slow sink.
             foreach (var (_, sink) in snapshot.Sinks)
-                sink.Pump.Enqueue(sink.Scratch);
+                sink.Pump.Commit();
 
             Interlocked.Increment(ref _chunksProduced);
 
@@ -623,7 +633,7 @@ public sealed class AudioRouter : IDisposable
     public readonly record struct SinkPumpStats(long Enqueued, long Processed, long Dropped);
 
     private sealed record SourceEntry(string Id, IAudioSource Source, float[] Scratch);
-    private sealed record SinkEntry(string Id, IAudioSink Sink, float[] Scratch, SinkPump Pump);
+    private sealed record SinkEntry(string Id, IAudioSink Sink, SinkPump Pump);
 
     private sealed record RouterState(
         ImmutableDictionary<string, SourceEntry> Sources,
@@ -644,6 +654,13 @@ public sealed class AudioRouter : IDisposable
     /// calls <see cref="IAudioSink.Submit"/>. On overflow the oldest queued
     /// chunk is dropped (sink can't keep up).
     /// </summary>
+    /// <remarks>
+    /// Zero-copy producer path: the router fills <see cref="WorkingBuffer"/>
+    /// in place and calls <see cref="Commit"/> to publish it. The pump
+    /// rotates the working buffer with one from its free-pool on every
+    /// commit; a fresh buffer is allocated only if the pool is empty (sink
+    /// can't keep up — also accounts as a drop).
+    /// </remarks>
     private sealed class SinkPump : IDisposable
     {
         private readonly IAudioSink _sink;
@@ -651,6 +668,8 @@ public sealed class AudioRouter : IDisposable
         private readonly ConcurrentQueue<float[]> _free = new();
         private readonly Thread _thread;
         private readonly CancellationTokenSource _cts = new();
+        private readonly int _floatsPerChunk;
+        private float[] _working;
         private long _enqueued;
         private long _processed;
         private long _dropped;
@@ -661,12 +680,24 @@ public sealed class AudioRouter : IDisposable
             Volatile.Read(ref _processed),
             Volatile.Read(ref _dropped));
 
+        /// <summary>
+        /// Producer-thread scratch — the buffer the router currently writes
+        /// into. <see cref="Commit"/> publishes it and rotates a fresh one in.
+        /// Only the producer thread should access this.
+        /// </summary>
+        public float[] WorkingBuffer => _working;
+
         public SinkPump(IAudioSink sink, int capacityChunks, int floatsPerChunk, string sinkId)
         {
             _sink = sink;
+            _floatsPerChunk = floatsPerChunk;
             _ready = new BlockingCollection<float[]>(boundedCapacity: capacityChunks);
+            // Allocate one extra so the producer always owns a working buffer
+            // even when every other slot is in flight (capacity in the queue +
+            // possibly being drained by the consumer).
             for (var i = 0; i < capacityChunks; i++)
                 _free.Enqueue(new float[floatsPerChunk]);
+            _working = new float[floatsPerChunk];
 
             _thread = new Thread(() => DrainLoop(_cts.Token))
             {
@@ -676,33 +707,45 @@ public sealed class AudioRouter : IDisposable
             _thread.Start();
         }
 
-        public void Enqueue(ReadOnlySpan<float> chunk)
+        /// <summary>
+        /// Publish <see cref="WorkingBuffer"/> to the consumer queue and
+        /// rotate in a fresh buffer for the next chunk. On pool exhaustion
+        /// (consumer behind), evict the oldest queued chunk to make room
+        /// and count the drop.
+        /// </summary>
+        public void Commit()
         {
             if (_disposed) return;
 
-            float[] buf;
-            if (!_free.TryDequeue(out buf!))
+            var buf = _working;
+            // Get the next working buffer from the free pool. If empty, the
+            // consumer is behind: evict the oldest ready chunk back to free
+            // (count it dropped), and reuse it as our next working buffer.
+            if (!_free.TryDequeue(out var next))
             {
-                // Pump is full — drainer is behind. Recycle the oldest queued
-                // chunk to make room and count the drop.
-                if (_ready.TryTake(out buf!))
+                if (_ready.TryTake(out next!))
                     Interlocked.Increment(ref _dropped);
                 else
-                    buf = new float[chunk.Length]; // shouldn't happen — pre-sized
+                    next = new float[_floatsPerChunk]; // shouldn't happen — pre-sized
             }
-
-            if (buf.Length < chunk.Length) buf = new float[chunk.Length];
-            chunk.CopyTo(buf);
+            _working = next;
 
             try
             {
                 if (_ready.TryAdd(buf))
+                {
                     Interlocked.Increment(ref _enqueued);
+                }
                 else
+                {
+                    // Race with Dispose/CompleteAdding: the new chunk is lost.
+                    // Recycle the buffer and count the loss.
                     _free.Enqueue(buf);
+                    Interlocked.Increment(ref _dropped);
+                }
             }
-            catch (ObjectDisposedException)   { /* race: Dispose fired before TryAdd */ }
-            catch (InvalidOperationException) { /* race: CompleteAdding fired before TryAdd */ }
+            catch (ObjectDisposedException)   { Interlocked.Increment(ref _dropped); }
+            catch (InvalidOperationException) { Interlocked.Increment(ref _dropped); }
         }
 
         /// <summary>

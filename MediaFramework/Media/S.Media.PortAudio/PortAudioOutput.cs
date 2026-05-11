@@ -27,6 +27,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
 
     private long _writeIndex;
     private long _readIndex;
+    private long _playedSamples;
     private long _droppedSamples;
     private long _underrunSamples;
     private long _callbackCount;
@@ -40,8 +41,8 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     public bool IsRunning => _isRunning;
     public int DeviceIndex => _deviceIndex;
 
-    /// <summary>Total samples (per channel × channels) PortAudio has already played from this output.</summary>
-    public long PlayedSamples => Volatile.Read(ref _readIndex) / _format.Channels;
+    /// <summary>Total frames (samples per channel) PortAudio has already played from this output. Monotonic across Stop/Start.</summary>
+    public long PlayedSamples => Volatile.Read(ref _playedSamples);
     /// <summary>Approximate samples-per-channel currently sitting in the ring buffer.</summary>
     public int QueuedSamples => (int)((Volatile.Read(ref _writeIndex) - Volatile.Read(ref _readIndex)) / _format.Channels);
     public int CapacitySamples => _ringBuffer.Length / _format.Channels;
@@ -60,7 +61,8 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     /// <summary>
     /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic playback time
     /// derived from <see cref="PlayedSamples"/>. Stays at zero until the audio
-    /// thread starts consuming the ring; freezes when the stream is stopped.
+    /// thread starts consuming the ring; freezes when the stream is stopped
+    /// and resumes (without resetting) on the next Start.
     /// </summary>
     public TimeSpan ElapsedSinceStart => TimeSpan.FromSeconds(PlayedSamples / (double)_format.SampleRate);
 
@@ -78,6 +80,8 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     {
         if (_disposed || !_isRunning || _stream == nint.Zero) return;
         Native.Pa_AbortStream(_stream);
+        // Reset ring positions so the queue starts empty post-restart;
+        // _playedSamples is preserved (lifetime stat / monotonic clock).
         Volatile.Write(ref _writeIndex, 0);
         Volatile.Write(ref _readIndex, 0);
         var err = Native.Pa_StartStream(_stream);
@@ -197,6 +201,12 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
         }
         if (_selfHandle.IsAllocated) _selfHandle.Free();
         _isRunning = false;
+        // Clear ring-buffer positions so a subsequent Start() begins with an
+        // empty queue (orphaned samples from before Stop are discarded).
+        // Lifetime stats — _playedSamples, _droppedSamples, _underrunSamples,
+        // _callbackCount — are intentionally preserved.
+        Volatile.Write(ref _writeIndex, 0);
+        Volatile.Write(ref _readIndex, 0);
     }
 
     /// <summary>Convenience overload: submits a frame's samples after validating its format.</summary>
@@ -316,6 +326,10 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
                 if (firstChunk < toRead)
                     self._ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(output[firstChunk..]);
                 Volatile.Write(ref self._readIndex, read + toRead);
+                // _playedSamples is the lifetime per-channel frame counter
+                // (preserved across Stop/Start) — separate from the ring read
+                // pointer, which may reset on Stop or Flush.
+                Interlocked.Add(ref self._playedSamples, toRead / self._format.Channels);
             }
 
             if (toRead < totalFloats)

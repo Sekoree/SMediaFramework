@@ -72,7 +72,7 @@ var drain = System.Diagnostics.Stopwatch.StartNew();
 while (output.QueuedSamples > 0 && !cts.IsCancellationRequested && drain.ElapsedMilliseconds < 5000)
 {
     Thread.Sleep(50);
-    if (status.ElapsedMilliseconds >= 250)
+    if (status.ElapsedMilliseconds >= 100)
     {
         PrintStatus(decoder, output, router);
         status.Restart();

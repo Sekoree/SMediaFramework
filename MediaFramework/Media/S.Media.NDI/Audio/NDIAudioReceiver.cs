@@ -9,13 +9,22 @@ namespace S.Media.NDI.Audio;
 /// stream from a discovered NDI source on a background thread, converts the
 /// native planar float (FLTP) frames to packed float32 via NDIlib's
 /// interleaving utility, and queues into a lock-free SPSC ring buffer that
-/// <see cref="TryReadFrame"/> drains.
+/// <see cref="ReadInto"/> drains.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The first audio frame from the source determines the
 /// <see cref="AudioFormat"/> (sample rate × channel count). Until that frame
 /// arrives <see cref="Format"/> is unknown — wait for <see cref="IsConnected"/>
 /// or for a successful read before binding routes.
+/// </para>
+/// <para>
+/// Read path is lock-free: producer and consumer share an immutable
+/// <see cref="FormatSnapshot"/> record holding the ring + format. A
+/// mid-stream format change publishes a fresh snapshot via
+/// <see cref="Volatile.Write{T}"/>; the in-flight chunk on the abandoned
+/// snapshot is discarded (acceptable for the rare format-change event).
+/// </para>
 /// </remarks>
 public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 {
@@ -23,35 +32,24 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     private readonly NDIReceiver _receiver;
     private readonly Thread _captureThread;
     private readonly CancellationTokenSource _cts = new();
+    private readonly int _capacityFrames;
 
-    private readonly Lock _formatGate = new();
-    private AudioFormat _format;
-    private bool _formatKnown;
-
-    private float[] _ringBuffer = new float[1];
-    private int _ringMask;
-    private long _writeIndex;
-    private long _readIndex;
+    private FormatSnapshot? _state;
     private long _overflowSamples;
     private bool _disposed;
 
     /// <summary>True once at least one audio frame has been received and
     /// <see cref="Format"/> is meaningful.</summary>
-    public bool IsConnected
-    {
-        get { lock (_formatGate) return _formatKnown; }
-    }
+    public bool IsConnected => Volatile.Read(ref _state) is not null;
 
     public AudioFormat Format
     {
         get
         {
-            lock (_formatGate)
-            {
-                return _formatKnown
-                    ? _format
-                    : throw new InvalidOperationException("NDI source has not delivered an audio frame yet — wait until IsConnected is true");
-            }
+            var snap = Volatile.Read(ref _state);
+            return snap is null
+                ? throw new InvalidOperationException("NDI source has not delivered an audio frame yet — wait until IsConnected is true")
+                : snap.Format;
         }
     }
 
@@ -62,11 +60,9 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     {
         get
         {
-            lock (_formatGate)
-            {
-                if (!_formatKnown) return 0;
-                return (int)((Volatile.Read(ref _writeIndex) - Volatile.Read(ref _readIndex)) / _format.Channels);
-            }
+            var snap = Volatile.Read(ref _state);
+            if (snap is null) return 0;
+            return (int)((Volatile.Read(ref snap.WriteIndex) - Volatile.Read(ref snap.ReadIndex)) / snap.Channels);
         }
     }
 
@@ -104,14 +100,9 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
             throw;
         }
 
-        // Allocate a 1-element placeholder; real ring is built once we know the channel count.
-        _ringMask = 0;
+        _capacityFrames = ringCapacityFrames;
 
-        var initialCapacity = ringCapacityFrames;
-        // Pre-allocate assuming the worst case is 16 channels; resized on first frame anyway.
-        AllocateRing(initialCapacity, channels: 1);
-
-        _captureThread = new Thread(() => CaptureLoop(_cts.Token, initialCapacity))
+        _captureThread = new Thread(() => CaptureLoop(_cts.Token))
         {
             IsBackground = true,
             Name = "NDIAudioReceiver",
@@ -123,38 +114,34 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        // Hold the format gate for the entire operation. The capture thread's
-        // EnsureFormat (and the AllocateRing it calls) take the same lock, so
-        // a mid-stream reformat cannot reassign _ringBuffer or reset the
-        // indices while we're reading. Lock duration is just a memcpy of the
-        // chunk — microseconds.
-        lock (_formatGate)
-        {
-            if (!_formatKnown) return 0;
-            var channels = _format.Channels;
-            if (dst.Length % channels != 0)
-                throw new ArgumentException(
-                    $"dst length {dst.Length} is not a multiple of channel count {channels}", nameof(dst));
+        // Lock-free read: capture the current snapshot once. If a format
+        // change races with us mid-read, we still get a self-consistent view
+        // of the snapshot we observed (its buffer is rooted by our local).
+        var snap = Volatile.Read(ref _state);
+        if (snap is null) return 0;
 
-            var read = Volatile.Read(ref _readIndex);
-            var write = Volatile.Read(ref _writeIndex);
-            var available = (int)(write - read);
-            var toRead = Math.Min(dst.Length, available);
-            if (toRead == 0) return 0;
+        var channels = snap.Channels;
+        if (dst.Length % channels != 0)
+            throw new ArgumentException(
+                $"dst length {dst.Length} is not a multiple of channel count {channels}", nameof(dst));
 
-            var startIdx = (int)(read & _ringMask);
-            var firstChunk = Math.Min(toRead, _ringBuffer.Length - startIdx);
-            _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
-            if (firstChunk < toRead)
-                _ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(dst[firstChunk..]);
-            Volatile.Write(ref _readIndex, read + toRead);
-            return toRead;
-        }
+        var read = Volatile.Read(ref snap.ReadIndex);
+        var write = Volatile.Read(ref snap.WriteIndex);
+        var available = (int)(write - read);
+        var toRead = Math.Min(dst.Length, available);
+        if (toRead == 0) return 0;
+
+        var startIdx = (int)(read & snap.RingMask);
+        var firstChunk = Math.Min(toRead, snap.RingBuffer.Length - startIdx);
+        snap.RingBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
+        if (firstChunk < toRead)
+            snap.RingBuffer.AsSpan(0, toRead - firstChunk).CopyTo(dst[firstChunk..]);
+        Volatile.Write(ref snap.ReadIndex, read + toRead);
+        return toRead;
     }
 
-    private void CaptureLoop(CancellationToken token, int desiredCapacityFrames)
+    private void CaptureLoop(CancellationToken token)
     {
-        // Buffer for the packed-interleaved conversion result. Resized on demand.
         var interleaved = new NDIAudioInterleaved32f();
         var heldBuffer = Array.Empty<float>();
         GCHandle pin = default;
@@ -172,7 +159,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                     var sampleRate = audio.SampleRate;
                     var totalFloats = samples * channels;
 
-                    EnsureFormat(sampleRate, channels, desiredCapacityFrames);
+                    var snap = EnsureFormat(sampleRate, channels);
 
                     // Resize / pin our packed-output buffer if needed.
                     if (heldBuffer.Length < totalFloats)
@@ -192,7 +179,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                     NDIAudioUtils.ToInterleaved32f(audio, ref interleaved);
                     _receiver.FreeAudio(audio);
 
-                    EnqueueSamples(heldBuffer.AsSpan(0, totalFloats));
+                    EnqueueSamples(snap, heldBuffer.AsSpan(0, totalFloats));
                 }
                 else if (frameType == NDIFrameType.Video)
                 {
@@ -211,52 +198,39 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         }
     }
 
-    private void EnsureFormat(int sampleRate, int channels, int capacityFrames)
+    private FormatSnapshot EnsureFormat(int sampleRate, int channels)
     {
-        lock (_formatGate)
-        {
-            if (_formatKnown)
-            {
-                if (_format.SampleRate != sampleRate || _format.Channels != channels)
-                {
-                    // Source format changed mid-stream — drop the queue and re-init.
-                    _format = new AudioFormat(sampleRate, channels);
-                    AllocateRing(capacityFrames, channels);
-                }
-                return;
-            }
-            _format = new AudioFormat(sampleRate, channels);
-            AllocateRing(capacityFrames, channels);
-            _formatKnown = true;
-        }
+        var existing = Volatile.Read(ref _state);
+        if (existing is not null
+            && existing.Format.SampleRate == sampleRate
+            && existing.Format.Channels == channels)
+            return existing;
+
+        // First frame, or a mid-stream format change: publish a fresh
+        // snapshot. The previous one (if any) is dropped on the floor and
+        // GC'd once the reader's local goes out of scope; that's acceptable
+        // — format changes are rare and a brief discontinuity at the
+        // boundary is preferable to copying state across.
+        var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), _capacityFrames);
+        Volatile.Write(ref _state, snap);
+        return snap;
     }
 
-    private void AllocateRing(int capacityFrames, int channels)
+    private void EnqueueSamples(FormatSnapshot snap, ReadOnlySpan<float> src)
     {
-        var capFloats = capacityFrames * channels;
-        var rounded = 1;
-        while (rounded < capFloats) rounded <<= 1;
-        _ringBuffer = new float[rounded];
-        _ringMask = rounded - 1;
-        Volatile.Write(ref _writeIndex, 0);
-        Volatile.Write(ref _readIndex, 0);
-    }
-
-    private void EnqueueSamples(ReadOnlySpan<float> src)
-    {
-        var write = Volatile.Read(ref _writeIndex);
-        var read = Volatile.Read(ref _readIndex);
-        var freeFloats = _ringBuffer.Length - (int)(write - read);
+        var write = Volatile.Read(ref snap.WriteIndex);
+        var read = Volatile.Read(ref snap.ReadIndex);
+        var freeFloats = snap.RingBuffer.Length - (int)(write - read);
         var toWrite = Math.Min(src.Length, freeFloats);
 
         if (toWrite > 0)
         {
-            var startIdx = (int)(write & _ringMask);
-            var firstChunk = Math.Min(toWrite, _ringBuffer.Length - startIdx);
-            src[..firstChunk].CopyTo(_ringBuffer.AsSpan(startIdx));
+            var startIdx = (int)(write & snap.RingMask);
+            var firstChunk = Math.Min(toWrite, snap.RingBuffer.Length - startIdx);
+            src[..firstChunk].CopyTo(snap.RingBuffer.AsSpan(startIdx));
             if (firstChunk < toWrite)
-                src.Slice(firstChunk, toWrite - firstChunk).CopyTo(_ringBuffer.AsSpan(0));
-            Volatile.Write(ref _writeIndex, write + toWrite);
+                src.Slice(firstChunk, toWrite - firstChunk).CopyTo(snap.RingBuffer.AsSpan(0));
+            Volatile.Write(ref snap.WriteIndex, write + toWrite);
         }
 
         var dropped = src.Length - toWrite;
@@ -273,5 +247,32 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         _cts.Dispose();
         _receiver.Dispose();
         _runtime.Dispose();
+    }
+
+    /// <summary>
+    /// Immutable-shape snapshot of (format, ring, indices). The ring and
+    /// format never change after construction; the long indices are mutated
+    /// volatilely by exactly one producer (capture thread) and one consumer
+    /// (router thread).
+    /// </summary>
+    private sealed class FormatSnapshot
+    {
+        public readonly AudioFormat Format;
+        public readonly int Channels;
+        public readonly float[] RingBuffer;
+        public readonly int RingMask;
+        public long WriteIndex;
+        public long ReadIndex;
+
+        public FormatSnapshot(AudioFormat format, int capacityFrames)
+        {
+            Format = format;
+            Channels = format.Channels;
+            var capFloats = capacityFrames * format.Channels;
+            var rounded = 1;
+            while (rounded < capFloats) rounded <<= 1;
+            RingBuffer = new float[rounded];
+            RingMask = rounded - 1;
+        }
     }
 }

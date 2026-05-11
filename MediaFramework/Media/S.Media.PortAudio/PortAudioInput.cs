@@ -174,12 +174,37 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     /// capture buffer into a fresh frame. Returns false if not enough samples
     /// are available yet — caller can wait and retry.
     /// </summary>
+    /// <remarks>
+    /// Allocates a fresh sample array per call. For high-frequency capture
+    /// loops prefer <see cref="ReadInto"/> with a reusable destination, or
+    /// <see cref="TryReadFrame(Memory{float}, out AudioFrame)"/> to supply a
+    /// pooled buffer.
+    /// </remarks>
     public bool TryReadFrame(int samplesPerChannel, out AudioFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (samplesPerChannel <= 0) throw new ArgumentOutOfRangeException(nameof(samplesPerChannel));
+        return TryReadFrame(new float[samplesPerChannel * _format.Channels], samplesPerChannel, out frame);
+    }
 
+    /// <summary>
+    /// Same as <see cref="TryReadFrame(int, out AudioFrame)"/> but writes into
+    /// a caller-supplied destination — eliminates the per-call allocation.
+    /// <paramref name="destination"/>'s length must equal
+    /// <c>samplesPerChannel × Format.Channels</c>; the resulting <see cref="AudioFrame"/>
+    /// references the same memory, so callers must not reuse it until the
+    /// frame has been consumed.
+    /// </summary>
+    public bool TryReadFrame(Memory<float> destination, int samplesPerChannel, out AudioFrame frame)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (samplesPerChannel <= 0) throw new ArgumentOutOfRangeException(nameof(samplesPerChannel));
         var totalFloats = samplesPerChannel * _format.Channels;
+        if (destination.Length != totalFloats)
+            throw new ArgumentException(
+                $"destination length {destination.Length} must equal samplesPerChannel × channels ({totalFloats})",
+                nameof(destination));
+
         var read = Volatile.Read(ref _readIndex);
         var write = Volatile.Read(ref _writeIndex);
         var available = (int)(write - read);
@@ -189,17 +214,17 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
             return false;
         }
 
-        var samples = new float[totalFloats];
+        var dst = destination.Span;
         var startIdx = (int)(read & _ringMask);
         var firstChunk = Math.Min(totalFloats, _ringBuffer.Length - startIdx);
-        _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(samples);
+        _ringBuffer.AsSpan(startIdx, firstChunk).CopyTo(dst);
         if (firstChunk < totalFloats)
-            _ringBuffer.AsSpan(0, totalFloats - firstChunk).CopyTo(samples.AsSpan(firstChunk));
+            _ringBuffer.AsSpan(0, totalFloats - firstChunk).CopyTo(dst[firstChunk..]);
         Volatile.Write(ref _readIndex, read + totalFloats);
 
         var pts = TimeSpan.FromSeconds((double)_samplesEmitted / _format.SampleRate);
         _samplesEmitted += samplesPerChannel;
-        frame = new AudioFrame(pts, _format, samplesPerChannel, samples);
+        frame = new AudioFrame(pts, _format, samplesPerChannel, destination);
         return true;
     }
 

@@ -244,6 +244,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
                     return;
                 }
                 FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+                return;
             }
             FFmpegException.ThrowIfError(ret, nameof(av_read_frame));
 
@@ -374,32 +375,34 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
 
     private static PixelFormat MapNativePixelFormat(AVPixelFormat src) => src switch
     {
-        AVPixelFormat.AV_PIX_FMT_YUV420P  => PixelFormat.I420,
-        AVPixelFormat.AV_PIX_FMT_YUVJ420P => PixelFormat.I420,
-        AVPixelFormat.AV_PIX_FMT_NV12     => PixelFormat.Nv12,
-        AVPixelFormat.AV_PIX_FMT_NV21     => PixelFormat.Nv21,
-        AVPixelFormat.AV_PIX_FMT_BGRA     => PixelFormat.Bgra32,
-        AVPixelFormat.AV_PIX_FMT_RGBA     => PixelFormat.Rgba32,
-        AVPixelFormat.AV_PIX_FMT_BGR24    => PixelFormat.Bgr24,
-        AVPixelFormat.AV_PIX_FMT_RGB24    => PixelFormat.Rgb24,
-        AVPixelFormat.AV_PIX_FMT_UYVY422  => PixelFormat.Uyvy,
-        AVPixelFormat.AV_PIX_FMT_YUYV422  => PixelFormat.Yuyv,
-        _                                 => PixelFormat.Unknown,
+        AVPixelFormat.AV_PIX_FMT_YUV420P    => PixelFormat.I420,
+        AVPixelFormat.AV_PIX_FMT_YUVJ420P   => PixelFormat.I420,
+        AVPixelFormat.AV_PIX_FMT_NV12       => PixelFormat.Nv12,
+        AVPixelFormat.AV_PIX_FMT_NV21       => PixelFormat.Nv21,
+        AVPixelFormat.AV_PIX_FMT_BGRA       => PixelFormat.Bgra32,
+        AVPixelFormat.AV_PIX_FMT_RGBA       => PixelFormat.Rgba32,
+        AVPixelFormat.AV_PIX_FMT_BGR24      => PixelFormat.Bgr24,
+        AVPixelFormat.AV_PIX_FMT_RGB24      => PixelFormat.Rgb24,
+        AVPixelFormat.AV_PIX_FMT_UYVY422    => PixelFormat.Uyvy,
+        AVPixelFormat.AV_PIX_FMT_YUYV422    => PixelFormat.Yuyv,
+        AVPixelFormat.AV_PIX_FMT_YUV422P10LE => PixelFormat.Yuv422P10Le,
+        _                                   => PixelFormat.Unknown,
     };
 
     private static AVPixelFormat? ToAVPixelFormat(PixelFormat fmt) => fmt switch
     {
-        PixelFormat.I420   => AVPixelFormat.AV_PIX_FMT_YUV420P,
-        PixelFormat.Nv12   => AVPixelFormat.AV_PIX_FMT_NV12,
-        PixelFormat.Nv21   => AVPixelFormat.AV_PIX_FMT_NV21,
-        PixelFormat.Bgra32 => AVPixelFormat.AV_PIX_FMT_BGRA,
-        PixelFormat.Rgba32 => AVPixelFormat.AV_PIX_FMT_RGBA,
-        PixelFormat.Bgr24  => AVPixelFormat.AV_PIX_FMT_BGR24,
-        PixelFormat.Rgb24  => AVPixelFormat.AV_PIX_FMT_RGB24,
-        PixelFormat.Uyvy   => AVPixelFormat.AV_PIX_FMT_UYVY422,
-        PixelFormat.Yuyv   => AVPixelFormat.AV_PIX_FMT_YUYV422,
-        PixelFormat.Yv12   => AVPixelFormat.AV_PIX_FMT_YUV420P, // FFmpeg has no YV12 enum; same layout, U/V swap.
-        _                  => null,
+        PixelFormat.I420        => AVPixelFormat.AV_PIX_FMT_YUV420P,
+        PixelFormat.Nv12        => AVPixelFormat.AV_PIX_FMT_NV12,
+        PixelFormat.Nv21        => AVPixelFormat.AV_PIX_FMT_NV21,
+        PixelFormat.Bgra32      => AVPixelFormat.AV_PIX_FMT_BGRA,
+        PixelFormat.Rgba32      => AVPixelFormat.AV_PIX_FMT_RGBA,
+        PixelFormat.Bgr24       => AVPixelFormat.AV_PIX_FMT_BGR24,
+        PixelFormat.Rgb24       => AVPixelFormat.AV_PIX_FMT_RGB24,
+        PixelFormat.Uyvy        => AVPixelFormat.AV_PIX_FMT_UYVY422,
+        PixelFormat.Yuyv        => AVPixelFormat.AV_PIX_FMT_YUYV422,
+        PixelFormat.Yv12        => AVPixelFormat.AV_PIX_FMT_YUV420P, // FFmpeg has no YV12 enum; same layout, U/V swap.
+        PixelFormat.Yuv422P10Le => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
+        _                       => null,
     };
 
     private static int BytesPerPackedPixel(PixelFormat fmt) => fmt switch

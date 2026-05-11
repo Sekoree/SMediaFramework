@@ -31,4 +31,9 @@ public enum PixelFormat
     // Packed YUV 4:2:2
     Uyvy,
     Yuyv,
+
+    // Planar YUV 4:2:2, 10-bit little-endian (e.g. ProRes 422). 3 planes:
+    // Y, U, V. Each sample is stored in a 16-bit word (10 bits valid in
+    // the lower bits). Chroma planes are half-width but full height.
+    Yuv422P10Le,
 }

@@ -283,6 +283,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
                 }
                 if (ret == AVERROR(EAGAIN)) return;
                 FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+                return;
             }
             FFmpegException.ThrowIfError(ret, nameof(av_read_frame));
 
