@@ -1,0 +1,215 @@
+using System.Runtime.InteropServices;
+using S.Media.Core.Video;
+
+namespace S.Media.FFmpeg.Video;
+
+/// <summary>Optional flags for <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>.</summary>
+public sealed class VideoDecoderOpenOptions
+{
+    /// <summary>When true, try libav hardware acceleration before falling back to software decode.</summary>
+    public bool TryHardwareAcceleration { get; init; }
+
+    /// <summary>
+    /// Hardware device types to try in order. When empty, a platform default list is used
+    /// (VAAPI on Linux, D3D11VA / QSV on Windows).
+    /// </summary>
+    public IReadOnlyList<HardwareVideoDeviceType> PreferredDeviceTypes { get; init; } = [];
+
+    /// <summary>
+    /// When <see cref="TryHardwareAcceleration"/> is true on Linux and the codec advertises DRM PRIME,
+    /// keep decode on dma-bufs (no libav CPU <c>av_hwframe_transfer_data</c> copy) for EGL / GL upload.
+    /// </summary>
+    public bool RetainDmabufForGl { get; init; }
+}
+
+/// <summary>Portable hardware device enum (mirrors <see cref="AVHWDeviceType"/>).</summary>
+public enum HardwareVideoDeviceType
+{
+    Vaapi = AVHWDeviceType.AV_HWDEVICE_TYPE_VAAPI,
+    D3D11Va = AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA,
+    Dxva2 = AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2,
+    Qsv = AVHWDeviceType.AV_HWDEVICE_TYPE_QSV,
+    Cuda = AVHWDeviceType.AV_HWDEVICE_TYPE_CUDA,
+    Vulkan = AVHWDeviceType.AV_HWDEVICE_TYPE_VULKAN,
+}
+
+/// <summary>Libav hardware decode helper: device context, <c>get_format</c> hook, and CPU transfer scratch.</summary>
+internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
+{
+    // AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX
+    private const int HwConfigMethodHwDeviceCtx = 0x01;
+
+    private GCHandle _self;
+    private AVBufferRef* _deviceRef;
+    private AVPixelFormat _hwPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+    private AVFrame* _swScratch;
+    private bool _disposed;
+
+    private VideoHardwareDecodeContext(AVBufferRef* deviceRef, AVPixelFormat hwPixFmt)
+    {
+        _deviceRef = deviceRef;
+        _hwPixFmt = hwPixFmt;
+        _swScratch = av_frame_alloc();
+        if (_swScratch == null)
+            throw new OutOfMemoryException("av_frame_alloc (hw scratch)");
+    }
+
+    /// <summary>Delegate instance reachable for libav (do not discard).</summary>
+    private static readonly AVCodecContext_get_format HwGetFormat = HwGetFormatImpl;
+
+    public static VideoHardwareDecodeContext? TryCreate(AVCodec* codec, AVCodecContext* codecCtx,
+        IReadOnlyList<HardwareVideoDeviceType> preferredOrder,
+        bool preferLinuxDrmPrimeForGl)
+    {
+        var order = preferredOrder.Count > 0
+            ? preferredOrder
+            : DefaultDeviceOrder();
+
+        var dmabufPrefer = preferLinuxDrmPrimeForGl && OperatingSystem.IsLinux();
+
+        foreach (var devEnum in order)
+        {
+            var devType = (AVHWDeviceType)devEnum;
+            AVBufferRef* devRef = null;
+            var ret = av_hwdevice_ctx_create(&devRef, devType, null, null, 0);
+            if (ret < 0 || devRef == null)
+                continue;
+
+            if (!TryFindHwPixFmt(codec, devType, dmabufPrefer, out var hwPix))
+            {
+                av_buffer_unref(&devRef);
+                continue;
+            }
+
+            var ctx = new VideoHardwareDecodeContext(devRef, hwPix);
+            ctx._self = GCHandle.Alloc(ctx);
+            codecCtx->opaque = (void*)GCHandle.ToIntPtr(ctx._self);
+            codecCtx->get_format =
+                HwGetFormat;
+            codecCtx->hw_device_ctx = av_buffer_ref(devRef);
+            return ctx;
+        }
+
+        return null;
+    }
+
+    internal bool OutputsDrmPrimeGpuFrame =>
+        _hwPixFmt == AVPixelFormat.AV_PIX_FMT_DRM_PRIME;
+
+    private static IReadOnlyList<HardwareVideoDeviceType> DefaultDeviceOrder()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return
+            [
+                HardwareVideoDeviceType.D3D11Va, HardwareVideoDeviceType.Qsv, HardwareVideoDeviceType.Dxva2,
+                HardwareVideoDeviceType.Cuda,
+            ];
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            return [HardwareVideoDeviceType.Vaapi, HardwareVideoDeviceType.Vulkan];
+        return [HardwareVideoDeviceType.Vaapi];
+    }
+
+    private static bool TryFindHwPixFmt(AVCodec* codec, AVHWDeviceType devType, bool preferDrmPrime,
+        out AVPixelFormat hwPixFmt)
+    {
+        hwPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+        AVPixelFormat drmPrime = AVPixelFormat.AV_PIX_FMT_NONE;
+        AVPixelFormat other = AVPixelFormat.AV_PIX_FMT_NONE;
+
+        for (var i = 0;; i++)
+        {
+            var cfg = avcodec_get_hw_config(codec, i);
+            if (cfg == null)
+                break;
+
+            if ((cfg->methods & HwConfigMethodHwDeviceCtx) == 0)
+                continue;
+
+            if (cfg->device_type != devType)
+                continue;
+
+            var px = cfg->pix_fmt;
+            if (px == AVPixelFormat.AV_PIX_FMT_DRM_PRIME)
+                drmPrime = px;
+            else if (px != AVPixelFormat.AV_PIX_FMT_NONE && other == AVPixelFormat.AV_PIX_FMT_NONE)
+                other = px;
+        }
+
+        if (preferDrmPrime && drmPrime != AVPixelFormat.AV_PIX_FMT_NONE)
+        {
+            hwPixFmt = drmPrime;
+            return true;
+        }
+
+        hwPixFmt = other != AVPixelFormat.AV_PIX_FMT_NONE ? other : drmPrime;
+        return hwPixFmt != AVPixelFormat.AV_PIX_FMT_NONE;
+    }
+
+    public bool IsActive => _deviceRef != null;
+
+    public AVPixelFormat HwAccelPixFmt => _hwPixFmt;
+
+    private static AVPixelFormat HwGetFormatImpl(AVCodecContext* avctx, AVPixelFormat* fmt)
+    {
+        if (avctx->opaque == null) return AVPixelFormat.AV_PIX_FMT_NONE;
+        var h = GCHandle.FromIntPtr((nint)avctx->opaque);
+        if (!h.IsAllocated || h.Target is not VideoHardwareDecodeContext ctx)
+            return AVPixelFormat.AV_PIX_FMT_NONE;
+
+        var want = ctx._hwPixFmt;
+        for (var p = fmt; *p != AVPixelFormat.AV_PIX_FMT_NONE; p++)
+        {
+            if (*p == want)
+                return *p;
+        }
+        return AVPixelFormat.AV_PIX_FMT_NONE;
+    }
+
+    /// <summary>CPU copy of a hardware frame — <paramref name="hwFrame"/> stays valid for the caller.</summary>
+    public AVFrame* TransferToScratch(AVFrame* hwFrame)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(hwFrame);
+        av_frame_unref(_swScratch);
+        var ret = av_hwframe_transfer_data(_swScratch, hwFrame, 0);
+        FFmpegException.ThrowIfError(ret, nameof(av_hwframe_transfer_data));
+        return _swScratch;
+    }
+
+    /// <summary>Clear hooks on <paramref name="codecCtx"/> — does not dispose this context (caller still owns).</summary>
+    public void DetachFromCodec(AVCodecContext* codecCtx)
+    {
+        codecCtx->get_format = null;
+        codecCtx->opaque = null;
+        var hw = codecCtx->hw_device_ctx;
+        if (hw != null)
+        {
+            var tmp = hw;
+            av_buffer_unref(&tmp);
+            codecCtx->hw_device_ctx = null;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        if (_swScratch != null)
+        {
+            var f = _swScratch;
+            av_frame_free(&f);
+            _swScratch = null;
+        }
+
+        if (_deviceRef != null)
+        {
+            var dev = _deviceRef;
+            av_buffer_unref(&dev);
+            _deviceRef = null;
+        }
+
+        if (_self.IsAllocated)
+            _self.Free();
+    }
+}

@@ -36,4 +36,44 @@ public enum PixelFormat
     // Y, U, V. Each sample is stored in a 16-bit word (10 bits valid in
     // the lower bits). Chroma planes are half-width but full height.
     Yuv422P10Le,
+
+    /// <summary>8-bit planar 4:2:2: Y full size, U and V at half horizontal resolution, full height.</summary>
+    Yuv422P,
+
+    /// <summary>8-bit planar 4:4:4: Y, U, and V full width and height.</summary>
+    Yuv444P,
+
+    /// <summary>Semi-planar 4:2:0, 10-bit MSBs in 16-bit little-endian words (NV12 layout, e.g. HEVC decode).</summary>
+    P010,
+
+    /// <summary>Semi-planar 4:2:0, 16-bit little-endian samples per component (NV12 layout).</summary>
+    P016,
+
+    /// <summary>
+    /// Packed 32 bpp. Memory order follows FFmpeg <c>AV_PIX_FMT_ARGB</c>:
+    /// per pixel bytes are A,R,G,B at increasing addresses (RGBA texture upload interprets channels raw;
+    /// the fragment shader remaps to display RGBA).
+    /// </summary>
+    Argb32,
+
+    /// <summary>Packed 32 bpp. Memory order follows FFmpeg <c>AV_PIX_FMT_ABGR</c> (bytes A,B,G,R).</summary>
+    Abgr32,
+
+    /// <summary>Single-plane luminance — 8 bits per pixel.</summary>
+    Gray8,
+
+    /// <summary>Single-plane luminance — stored as 16-bit little-endian samples (e.g. FFmpeg GRAY16LE).</summary>
+    Gray16,
+
+    /// <summary>Planar YUV 4:2:0 — 10 valid bits stored in lower bits of LE 16-bit words per sample (planes Y,U,V).</summary>
+    Yuv420P10Le,
+
+    /// <summary>Planar YUV 4:2:0 — 12 valid bits stored in LE 16-bit words per sample (planes Y,U,V).</summary>
+    Yuv420P12Le,
+
+    /// <summary>Planar YUV 4:4:4 — 10-bit LE 16-bit words per sample.</summary>
+    Yuv444P10Le,
+
+    /// <summary>Planar YUV 4:2:0 with full-resolution 8‑bit alpha plane (Y, U, V, A) — FFmpeg <c>YUVA420P</c>.</summary>
+    Yuva420p,
 }

@@ -1,3 +1,4 @@
+using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using CoreVideo = S.Media.Core.Video;
 
@@ -228,7 +229,7 @@ public sealed unsafe class SDL3VideoSink : IVideoSink, IDisposable
         {
             _cts?.Cancel();
             _wakeup.Set(); // poke the render thread out of WaitOne
-            _renderThread?.Join(TimeSpan.FromSeconds(2));
+            CooperativePlaybackJoin.JoinThread(_renderThread, TimeSpan.FromSeconds(2));
             _cts?.Dispose();
         }
         else

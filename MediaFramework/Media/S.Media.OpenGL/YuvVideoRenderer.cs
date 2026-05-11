@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using S.Media.Core.Video;
 using GlPixelFormat = Silk.NET.OpenGL.PixelFormat;
@@ -8,36 +9,19 @@ using CorePixelFormat = S.Media.Core.Video.PixelFormat;
 namespace S.Media.OpenGL;
 
 /// <summary>
-/// Renders <see cref="VideoFrame"/>s into the currently-bound OpenGL
-/// framebuffer. Format-aware: picks the right shader + texture layout
-/// based on the configured <see cref="VideoFormat"/>.
+/// Renders <see cref="VideoFrame"/>s into the currently-bound OpenGL framebuffer.
+/// Format-aware via <see cref="GlVideoFormatSupport"/>.
 /// </summary>
 /// <remarks>
-/// <para>
-/// The renderer does <strong>not</strong> own a window or GL context — the
-/// caller (a windowing layer like SDL3, or Avalonia's GL surface) creates
-/// the context, makes it current, then calls into the renderer. This lets
-/// the same renderer power both a stand-alone SDL window and an embedded
-/// Avalonia surface from one shader/texture pipeline.
-/// </para>
-/// <para>
-/// Supported formats: <see cref="CorePixelFormat.Bgra32"/>,
-/// <see cref="CorePixelFormat.I420"/>, <see cref="CorePixelFormat.Nv12"/>,
-/// <see cref="CorePixelFormat.Yuv422P10Le"/>. The 10-bit format uploads
-/// each sample as a 16-bit unsigned short into an R16 texture; the shader
-/// scales by <c>65535/1023</c> to bring the 10 valid bits back to [0, 1].
-/// </para>
-/// <para>
-/// Threading: every method must be called on the thread that owns the GL
-/// context (the standard GL contract). The renderer holds no internal
-/// synchronization.
-/// </para>
+/// Threading: call only on the GL context owner thread. Pixel-store unpacked state is restored after <see cref="Upload"/>.
 /// </remarks>
 public sealed unsafe class YuvVideoRenderer : IDisposable
 {
+    private static readonly ConcurrentDictionary<string, string> ShaderSourceCache = new(StringComparer.Ordinal);
+
     private readonly GL _gl;
     private readonly VideoFormat _format;
-    private readonly YuvColorSpace _colorSpace;
+    private readonly GlVideoFormatSupport.GlFormatRecipe _recipe;
 
     private uint _program;
     private uint _vao;
@@ -46,40 +30,137 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     private int _uBitScale = -1;
     private int _uYuvOffset = -1;
     private int _uYuvMatrix = -1;
+    private int _uYuvFlip = -1;
+    private int _uFrameWidth = -1;
+    private int _uHalfTexWidth = -1;
+    private int _uHdrTransfer = -1;
+    private int _uHdrExposure = -1;
+
+    private YuvColorSpace _colorSpace;
+    private float _yUvFlip = 1f;
+    private VideoHdrTransfer _hdrTransfer = VideoHdrTransfer.None;
+    private float _hdrPreviewExposure = 400f;
+
+    private int? _lastUnpackAlignment;
+    private int? _lastUnpackRowLength;
+    private int _savedUnpackAlignment = 4;
+    private int _savedUnpackRowLength;
+    private bool _unpackSession;
+
+    private uint _samplerLinear;
+    private uint _samplerYMipmap;
+
+    private readonly bool _shareShaderPrograms;
+    private readonly string? _shaderProgramCacheKey;
+    private readonly bool _yPlaneMipmapsEnabled;
+
+    private readonly Nv12DmabufGpuUploader? _nv12DmabufGpuUploader;
+    private bool _suppressYPlaneMipForLastGlDmabufUpload;
+
     private bool _disposed;
 
-    /// <summary>The negotiated frame format the renderer is configured for.</summary>
     public VideoFormat Format => _format;
-    /// <summary>The active YUV → RGB colour space (irrelevant for BGRA pass-through).</summary>
-    public YuvColorSpace ColorSpace => _colorSpace;
 
-    public YuvVideoRenderer(GL gl, VideoFormat format, YuvColorSpace? colorSpace = null)
+    public YuvColorSpace ColorSpace
+    {
+        get => _colorSpace;
+        set
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _colorSpace = value;
+            ApplyYuvColorUniforms();
+        }
+    }
+
+    public float YAxisUvFlip
+    {
+        get => _yUvFlip;
+        set
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (value is < 0f or > 1f)
+                throw new ArgumentOutOfRangeException(nameof(value), "must be between 0 and 1.");
+            _yUvFlip = value;
+            ApplyYuvFlipUniform();
+        }
+    }
+
+    public VideoHdrTransfer HdrTransfer
+    {
+        get => _hdrTransfer;
+        set
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _hdrTransfer = value;
+            ApplyHdrUniforms();
+        }
+    }
+
+    public float HdrPreviewExposure
+    {
+        get => _hdrPreviewExposure;
+        set
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!float.IsFinite(value) || value <= 0f)
+                throw new ArgumentOutOfRangeException(nameof(value), "must be a finite positive number.");
+            _hdrPreviewExposure = value;
+            ApplyHdrUniforms();
+        }
+    }
+
+    public YuvVideoRenderer(GL gl, VideoFormat format, YuvColorSpace? colorSpace = null,
+        bool sharedShaderPrograms = false, bool yPlaneMipmaps = false, YuvDmabufEglInterop? eglDmabufInterop = null)
     {
         ArgumentNullException.ThrowIfNull(gl);
         if (format.Width <= 0 || format.Height <= 0)
             throw new ArgumentException("video format must have positive dimensions", nameof(format));
-        if (PlanesNeeded(format.PixelFormat) == 0)
-            throw new NotSupportedException(
-                $"YuvVideoRenderer does not support pixel format {format.PixelFormat}");
+        if (!GlVideoFormatSupport.TryGetRecipe(format.PixelFormat, out var recipe))
+            throw new NotSupportedException($"YuvVideoRenderer does not support pixel format {format.PixelFormat}");
 
         _gl = gl;
         _format = format;
+        _recipe = recipe;
         _colorSpace = colorSpace
-            ?? (format.PixelFormat == CorePixelFormat.Bgra32
-                ? default
-                : YuvColorSpace.DefaultForHeight(format.Height));
-        _textures = new uint[PlanesNeeded(format.PixelFormat)];
-        _samplerUniforms = new int[_textures.Length];
+            ?? (recipe.NeedsYuvMatrix
+                ? YuvColorSpace.DefaultForHeight(format.Height)
+                : YuvColorSpace.Bt709Limited);
 
+        _shareShaderPrograms = sharedShaderPrograms;
+        _shaderProgramCacheKey = sharedShaderPrograms
+            ? $"{recipe.VertexFile}\0{recipe.FragmentFile}"
+            : null;
+        _yPlaneMipmapsEnabled = yPlaneMipmaps && recipe.NeedsYuvMatrix && recipe.PlaneCount >= 2;
+
+        _nv12DmabufGpuUploader =
+            eglDmabufInterop != null ? Nv12DmabufGpuUploader.TryCreate(gl, eglDmabufInterop) : null;
+
+        _textures = new uint[recipe.PlaneCount];
+        _samplerUniforms = new int[_textures.Length];
         BuildPipeline();
     }
 
-    /// <summary>
-    /// Upload <paramref name="frame"/>'s planes into the renderer's
-    /// textures. Caller retains ownership of the frame — does not
-    /// <see cref="VideoFrame.Dispose"/> it (the host typically does so
-    /// after upload returns).
-    /// </summary>
+    public static bool IsFormatSupported(CorePixelFormat format) =>
+        GlVideoFormatSupport.TryGetRecipe(format, out _);
+
+    public static IReadOnlyList<CorePixelFormat> SupportedPixelFormats =>
+        GlVideoFormatSupport.SupportedPixelFormats;
+
+    private static void ValidateStridesAgainstFormat(CorePixelFormat pixelFormat, int frameWidth, int frameHeight,
+        ReadOnlySpan<int> strides, int expectedPlaneCount)
+    {
+        if (strides.Length != expectedPlaneCount)
+            throw new ArgumentException($"expected {expectedPlaneCount} strides, got {strides.Length}.");
+        for (var i = 0; i < strides.Length; i++)
+        {
+            var minStride = PixelFormatInfo.PlaneByteWidth(pixelFormat, frameWidth, i);
+            if (strides[i] < minStride)
+                throw new ArgumentOutOfRangeException(nameof(strides),
+                    $"stride[{i}] ({strides[i]}) must be ≥ visible row bytes ({minStride}) for {pixelFormat}.");
+            _ = PixelFormatInfo.PlanePitchBufferLength(pixelFormat, frameWidth, frameHeight, i, strides[i]);
+        }
+    }
+
     public void Upload(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
@@ -87,39 +168,211 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         if (frame.Format.PixelFormat != _format.PixelFormat
             || frame.Format.Width != _format.Width
             || frame.Format.Height != _format.Height)
-            throw new ArgumentException(
-                $"frame format {frame.Format} does not match renderer format {_format}", nameof(frame));
+            throw new ArgumentException($"frame format {frame.Format} does not match renderer format {_format}", nameof(frame));
 
+        _suppressYPlaneMipForLastGlDmabufUpload = false;
+        if (frame.DmabufNv12 is not null)
+        {
+            if (_nv12DmabufGpuUploader is null)
+                throw new InvalidOperationException(
+                    "NV12 DRM PRIME frames require EGL DMA-BUF upload; GPU uploader is unavailable (extensions or GL context).");
+
+            if (!_nv12DmabufGpuUploader.TryUpload(_textures[0], _textures[1], Format, frame.DmabufNv12))
+                throw new InvalidOperationException(
+                    "NV12 DRM PRIME EGL import failed (linear/modifier tiling, pitches, FOURCC, or driver EGL path). Clear RetainDmabufForGl if you need CPU-plane fallback.");
+
+            _suppressYPlaneMipForLastGlDmabufUpload = true;
+            RegenerateYPlaneMipmapsIfNeeded();
+            return;
+        }
+
+        BeginUnpackSession();
+        try { DispatchUploadFromFrame(frame); }
+        finally { EndUnpackSession(); }
+
+        _suppressYPlaneMipForLastGlDmabufUpload = false;
+        RegenerateYPlaneMipmapsIfNeeded();
+    }
+
+    /// <summary>Pinned-pixel upload for callers holding unmanaged plane pointers (must stay valid for the duration of the call).</summary>
+    public unsafe void Upload(ReadOnlySpan<nint> planeBasePointers, ReadOnlySpan<int> strideBytesPerPlane)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (planeBasePointers.Length != _textures.Length || strideBytesPerPlane.Length != _textures.Length)
+            throw new ArgumentException("must supply exactly one unmanaged pointer and stride per configured plane.");
+
+        ValidateStridesAgainstFormat(_format.PixelFormat, _format.Width, _format.Height,
+            strideBytesPerPlane, _textures.Length);
+
+        BeginUnpackSession();
+        try { DispatchUploadFromPointers(planeBasePointers, strideBytesPerPlane); }
+        finally { EndUnpackSession(); }
+        RegenerateYPlaneMipmapsIfNeeded();
+    }
+
+    private void DispatchUploadFromFrame(VideoFrame frame)
+    {
         switch (_format.PixelFormat)
         {
             case CorePixelFormat.Bgra32:
-                UploadBgra(frame);
+                UploadBgraFromFrame(frame);
+                break;
+            case CorePixelFormat.Rgba32:
+            case CorePixelFormat.Argb32:
+            case CorePixelFormat.Abgr32:
+                UploadRgbaFromFrame(frame);
+                break;
+            case CorePixelFormat.Rgb24:
+                UploadRgb24FromFrame(frame);
+                break;
+            case CorePixelFormat.Bgr24:
+                UploadBgr24FromFrame(frame);
                 break;
             case CorePixelFormat.I420:
-                UploadI420(frame);
+                UploadI420FromFrame(frame);
                 break;
-            case CorePixelFormat.Nv12:
-                UploadNv12(frame);
+            case CorePixelFormat.Yv12:
+                UploadYv12FromFrame(frame);
+                break;
+            case CorePixelFormat.Yuv422P:
+                UploadYuv422PFromFrame(frame);
+                break;
+            case CorePixelFormat.Yuv444P:
+                UploadYuv444PFromFrame(frame);
                 break;
             case CorePixelFormat.Yuv422P10Le:
-                UploadYuv422P10Le(frame);
+                UploadYuv422P10LeFromFrame(frame);
+                break;
+            case CorePixelFormat.Nv12:
+                UploadNv12Adaptive(frame);
+                break;
+            case CorePixelFormat.Nv21:
+                UploadNv21FromFrame(frame);
+                break;
+            case CorePixelFormat.P010:
+            case CorePixelFormat.P016:
+                UploadSemiPlanar16FromFrame(frame);
+                break;
+            case CorePixelFormat.Uyvy:
+                UploadUyvyFromFrame(frame);
+                break;
+            case CorePixelFormat.Yuyv:
+                UploadYuyvFromFrame(frame);
+                break;
+            case CorePixelFormat.Gray8:
+                UploadGray8FromFrame(frame);
+                break;
+            case CorePixelFormat.Gray16:
+                UploadGray16FromFrame(frame);
+                break;
+            case CorePixelFormat.Yuv420P10Le:
+            case CorePixelFormat.Yuv420P12Le:
+                UploadPlanar420P16FromFrame(frame);
+                break;
+            case CorePixelFormat.Yuv444P10Le:
+                UploadYuv444P10LeFromFrame(frame);
+                break;
+            case CorePixelFormat.Yuva420p:
+                UploadYuva420FromFrame(frame);
                 break;
             default:
                 throw new NotSupportedException($"Upload: {_format.PixelFormat}");
         }
     }
 
-    /// <summary>
-    /// Draw the most recently uploaded frame to the bound framebuffer.
-    /// <paramref name="viewportWidth"/> and <paramref name="viewportHeight"/>
-    /// set the GL viewport (caller can letter/pillar-box by passing a
-    /// smaller-than-window region — for now we fill).
-    /// </summary>
-    public void Render(int viewportWidth, int viewportHeight)
+    private unsafe void DispatchUploadFromPointers(ReadOnlySpan<nint> planes, ReadOnlySpan<int> strides)
+    {
+        switch (_format.PixelFormat)
+        {
+            case CorePixelFormat.Bgra32:
+                UploadBgraPtr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.Rgba32:
+            case CorePixelFormat.Argb32:
+            case CorePixelFormat.Abgr32:
+                UploadRgbaPtr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.Rgb24:
+                UploadRgb24Ptr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.Bgr24:
+                UploadBgr24Ptr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.I420:
+                UploadI420Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1], (byte*)planes[2], strides[2]);
+                break;
+            case CorePixelFormat.Yv12:
+                UploadYv12Ptr((byte*)planes[0], strides[0], (byte*)planes[2], strides[2], (byte*)planes[1], strides[1]);
+                break;
+            case CorePixelFormat.Yuv422P:
+                UploadYuv422PPtr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1], (byte*)planes[2], strides[2]);
+                break;
+            case CorePixelFormat.Yuv444P:
+                UploadYuv444PPtr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1], (byte*)planes[2], strides[2]);
+                break;
+            case CorePixelFormat.Yuv422P10Le:
+                UploadYuv422P10LePtr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1], (byte*)planes[2], strides[2]);
+                break;
+            case CorePixelFormat.Nv12:
+                UploadNv12Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1]);
+                break;
+            case CorePixelFormat.Nv21:
+                UploadNv21Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1]);
+                break;
+            case CorePixelFormat.P010:
+            case CorePixelFormat.P016:
+                UploadSemiPlanar16Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1]);
+                break;
+            case CorePixelFormat.Uyvy:
+                UploadUyvyPtr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.Yuyv:
+                UploadYuyvPtr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.Gray8:
+                UploadPlanarR8Ptr(0, (byte*)planes[0], strides[0], _format.Width, _format.Height);
+                break;
+            case CorePixelFormat.Gray16:
+                UploadPlanarR16Ptr(0, (byte*)planes[0], strides[0], _format.Width, _format.Height);
+                break;
+            case CorePixelFormat.Yuv420P10Le:
+            case CorePixelFormat.Yuv420P12Le:
+                UploadPlanar420P16Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2]);
+                break;
+            case CorePixelFormat.Yuv444P10Le:
+                UploadYuv444P10LePtr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2]);
+                break;
+            case CorePixelFormat.Yuva420p:
+                UploadYuva420Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2], (byte*)planes[3], strides[3]);
+                break;
+            default:
+                throw new NotSupportedException($"Upload: {_format.PixelFormat}");
+        }
+    }
+
+    public void Render(int viewportWidth, int viewportHeight) =>
+        Render(0, 0, viewportWidth, viewportHeight, VideoViewportFit.Stretch);
+
+    public void Render(int viewportWidth, int viewportHeight, VideoViewportFit fit) =>
+        Render(0, 0, viewportWidth, viewportHeight, fit);
+
+    public void Render(int x, int y, int viewportWidth, int viewportHeight) =>
+        Render(x, y, viewportWidth, viewportHeight, VideoViewportFit.Stretch);
+
+    public void Render(int x, int y, int viewportWidth, int viewportHeight, VideoViewportFit fit)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _gl.Viewport(0, 0, (uint)viewportWidth, (uint)viewportHeight);
-        _gl.Clear((uint)ClearBufferMask.ColorBufferBit);
+        var laid = VideoViewportLayout.Compute(x, y, viewportWidth, viewportHeight, _format.Width, _format.Height, fit);
+        DrawFrame(laid.x, laid.y, laid.w, laid.h);
+    }
+
+    private void DrawFrame(int x, int y, int viewportWidth, int viewportHeight)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _gl.Viewport(x, y, (uint)viewportWidth, (uint)viewportHeight);
         _gl.UseProgram(_program);
         _gl.BindVertexArray(_vao);
 
@@ -127,9 +380,14 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         {
             _gl.ActiveTexture(TextureUnit.Texture0 + i);
             _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
+            var samp = (_yPlaneMipmapsEnabled && _samplerYMipmap != 0 && i == 0) ? _samplerYMipmap : _samplerLinear;
+            _gl.BindSampler((uint)i, samp);
         }
 
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
+
+        for (var i = 0; i < _textures.Length; i++)
+            _gl.BindSampler((uint)i, 0);
     }
 
     public void Dispose()
@@ -137,84 +395,160 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        try { _nv12DmabufGpuUploader?.Dispose(); } catch { /* best-effort */ }
+
         for (var i = 0; i < _textures.Length; i++)
             if (_textures[i] != 0) { _gl.DeleteTexture(_textures[i]); _textures[i] = 0; }
-        if (_program != 0) { _gl.DeleteProgram(_program); _program = 0; }
-        if (_vao != 0)     { _gl.DeleteVertexArray(_vao); _vao = 0; }
-    }
 
-    // ---------- pipeline construction --------------------------------------
+        if (_samplerLinear != 0) { _gl.DeleteSampler(_samplerLinear); _samplerLinear = 0; }
+        if (_samplerYMipmap != 0) { _gl.DeleteSampler(_samplerYMipmap); _samplerYMipmap = 0; }
+
+        if (_shaderProgramCacheKey is not null)
+        {
+            SharedGlProgramCache.Release(_gl, _shaderProgramCacheKey);
+            _program = 0;
+        }
+        else if (_program != 0)
+        {
+            _gl.DeleteProgram(_program);
+            _program = 0;
+        }
+
+        if (_vao != 0) { _gl.DeleteVertexArray(_vao); _vao = 0; }
+    }
 
     private void BuildPipeline()
     {
-        // VAO is required by Core profile even though we have no attributes.
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
 
-        var (vsName, fsName) = ShaderNames(_format.PixelFormat);
-        var vertSrc = LoadShader(vsName);
-        var fragSrc = LoadShader(fsName);
-        _program = LinkProgram(vertSrc, fragSrc);
+        var vertSrc = LoadShaderCached(_recipe.VertexFile);
+        var fragSrc = LoadShaderCached(_recipe.FragmentFile);
+        if (_shaderProgramCacheKey is not null)
+            _program = SharedGlProgramCache.Acquire(_shaderProgramCacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
+        else
+            _program = LinkProgram(vertSrc, fragSrc);
         _gl.UseProgram(_program);
 
-        // Sampler uniforms — bind each texture unit.
-        var samplerNames = SamplerUniformNames(_format.PixelFormat);
+        var samplerNames = _recipe.Samplers;
         for (var i = 0; i < samplerNames.Length; i++)
         {
             _samplerUniforms[i] = _gl.GetUniformLocation(_program, samplerNames[i]);
             if (_samplerUniforms[i] < 0)
-                throw new InvalidOperationException($"shader missing sampler uniform '{samplerNames[i]}'");
+                throw new InvalidOperationException($"shader missing sampler '{samplerNames[i]}'");
             _gl.Uniform1(_samplerUniforms[i], i);
         }
 
-        if (_format.PixelFormat != CorePixelFormat.Bgra32)
+        _uYuvFlip = _gl.GetUniformLocation(_program, "yUvFlip");
+        if (_uYuvFlip < 0)
+            throw new InvalidOperationException("shader missing uniform 'yUvFlip'");
+        ApplyYuvFlipUniform();
+
+        _uBitScale = _gl.GetUniformLocation(_program, "bitScale");
+        if (_uBitScale >= 0)
+            _gl.Uniform1(_uBitScale, _recipe.DefaultBitScale);
+
+        if (_recipe.NeedsYuvMatrix)
         {
-            _uBitScale  = _gl.GetUniformLocation(_program, "bitScale");
             _uYuvOffset = _gl.GetUniformLocation(_program, "yuvOffset");
             _uYuvMatrix = _gl.GetUniformLocation(_program, "yuvMatrix");
-
-            if (_uBitScale >= 0)
-            {
-                var scale = _format.PixelFormat == CorePixelFormat.Yuv422P10Le
-                    ? 65535f / 1023f
-                    : 1f;
-                _gl.Uniform1(_uBitScale, scale);
-            }
-
-            if (_uYuvOffset >= 0)
-            {
-                var off = _colorSpace.Offset;
-                _gl.Uniform3(_uYuvOffset, off[0], off[1], off[2]);
-            }
-
-            if (_uYuvMatrix >= 0)
-            {
-                // Row-major in source; GLSL mat3 is column-major, so transpose
-                // when uploading.
-                fixed (float* p = _colorSpace.Matrix)
-                    _gl.UniformMatrix3(_uYuvMatrix, 1, transpose: true, p);
-            }
+            ApplyYuvColorUniforms();
         }
 
-        // Textures — sized once, content goes in via TexSubImage in Upload.
+        _uFrameWidth = _gl.GetUniformLocation(_program, "frameWidth");
+        _uHalfTexWidth = _gl.GetUniformLocation(_program, "halfTexWidth");
+        if (_uFrameWidth >= 0 && _uHalfTexWidth >= 0)
+        {
+            _gl.Uniform1(_uFrameWidth, _format.Width);
+            _gl.Uniform1(_uHalfTexWidth, PixelFormatInfo.ChromaWidth422(_format.Width));
+        }
+
+        _uHdrTransfer = _gl.GetUniformLocation(_program, "uHdrTransfer");
+        _uHdrExposure = _gl.GetUniformLocation(_program, "uHdrExposure");
+        ApplyHdrUniforms();
+
+        var filter = _recipe.NearestSampling ? TextureMinFilter.Nearest : TextureMinFilter.Linear;
+        var magFilter = _recipe.NearestSampling ? TextureMagFilter.Nearest : TextureMagFilter.Linear;
+
         for (var i = 0; i < _textures.Length; i++)
         {
             _textures[i] = _gl.GenTexture();
             _gl.ActiveTexture(TextureUnit.Texture0 + i);
             _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
-            var (w, h) = PlaneTextureSize(_format, i);
-            var (intFmt, fmt, type) = PlaneTextureFormat(_format.PixelFormat, i);
+            var (w, h) = _recipe.PlaneSize(_format, i);
+            var (intFmt, fmt, type) = _recipe.PlaneGl(i);
             _gl.TexImage2D(TextureTarget.Texture2D, 0, intFmt, (uint)w, (uint)h, 0, fmt, type, null);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)filter);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)magFilter);
             _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
             _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        }
+
+        _samplerLinear = _gl.GenSampler();
+        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureMinFilter, (int)filter);
+        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureMagFilter, (int)magFilter);
+
+        if (_yPlaneMipmapsEnabled)
+        {
+            _samplerYMipmap = _gl.GenSampler();
+            var miniM = _recipe.NearestSampling
+                ? TextureMinFilter.NearestMipmapNearest
+                : TextureMinFilter.LinearMipmapLinear;
+            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureMinFilter, (int)miniM);
+            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureMagFilter, (int)magFilter);
+        }
+    }
+
+    private void RegenerateYPlaneMipmapsIfNeeded()
+    {
+        if (_suppressYPlaneMipForLastGlDmabufUpload)
+            return;
+        if (!_yPlaneMipmapsEnabled || _textures.Length == 0 || _textures[0] == 0) return;
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, _textures[0]);
+        _gl.GenerateMipmap(TextureTarget.Texture2D);
+    }
+
+    private void ApplyHdrUniforms()
+    {
+        if (_program == 0) return;
+        _gl.UseProgram(_program);
+        if (_uHdrTransfer >= 0) _gl.Uniform1(_uHdrTransfer, (int)_hdrTransfer);
+        if (_uHdrExposure >= 0) _gl.Uniform1(_uHdrExposure, _hdrPreviewExposure);
+    }
+
+    private void ApplyYuvFlipUniform()
+    {
+        if (_uYuvFlip < 0 || _program == 0) return;
+        _gl.UseProgram(_program);
+        _gl.Uniform1(_uYuvFlip, _yUvFlip);
+    }
+
+    private void ApplyYuvColorUniforms()
+    {
+        if (!_recipe.NeedsYuvMatrix || _program == 0) return;
+        _gl.UseProgram(_program);
+
+        if (_uYuvOffset >= 0)
+        {
+            var off = _colorSpace.Offset;
+            _gl.Uniform3(_uYuvOffset, off[0], off[1], off[2]);
+        }
+
+        if (_uYuvMatrix >= 0)
+        {
+            fixed (float* p = _colorSpace.Matrix)
+                _gl.UniformMatrix3(_uYuvMatrix, 1, transpose: true, p);
         }
     }
 
     private uint LinkProgram(string vertSrc, string fragSrc)
     {
-        var vs = CompileShader(ShaderType.VertexShader,   vertSrc);
+        var vs = CompileShader(ShaderType.VertexShader, vertSrc);
         var fs = CompileShader(ShaderType.FragmentShader, fragSrc);
         try
         {
@@ -255,71 +589,345 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         return s;
     }
 
-    // ---------- per-format upload paths ------------------------------------
+    private void BeginUnpackSession()
+    {
+        _gl.GetInteger(GetPName.UnpackAlignment, out _savedUnpackAlignment);
+        _gl.GetInteger(GetPName.UnpackRowLength, out _savedUnpackRowLength);
+        _unpackSession = true;
+        _lastUnpackAlignment = null;
+        _lastUnpackRowLength = null;
+    }
 
-    private void UploadBgra(VideoFrame frame)
+    private void EndUnpackSession()
+    {
+        if (!_unpackSession) return;
+        _unpackSession = false;
+        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, _savedUnpackAlignment);
+        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, _savedUnpackRowLength);
+        _lastUnpackAlignment = null;
+        _lastUnpackRowLength = null;
+    }
+
+    // --- Frame uploads (pin wrappers) ---
+    private void UploadBgraFromFrame(VideoFrame f)
+    {
+        using var pin = f.Planes[0].Pin();
+        UploadBgraPtr((byte*)pin.Pointer, f.Strides[0]);
+    }
+
+    /// RGBA‑ordered uploads for <see cref="CorePixelFormat.Rgba32"/> and FFmpeg‑compatible
+    /// packed <see cref="CorePixelFormat.Argb32"/> / <see cref="CorePixelFormat.Abgr32"/> textures.
+    private void UploadRgbaFromFrame(VideoFrame f)
+    {
+        using var pin = f.Planes[0].Pin();
+        UploadRgbaPtr((byte*)pin.Pointer, f.Strides[0]);
+    }
+
+    private void UploadRgb24FromFrame(VideoFrame f)
+    {
+        using var pin = f.Planes[0].Pin();
+        UploadRgb24Ptr((byte*)pin.Pointer, f.Strides[0]);
+    }
+
+    private void UploadBgr24FromFrame(VideoFrame f)
+    {
+        using var pin = f.Planes[0].Pin();
+        UploadBgr24Ptr((byte*)pin.Pointer, f.Strides[0]);
+    }
+
+    private void UploadI420FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadI420Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2]);
+    }
+
+    private void UploadYv12FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadYv12Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p2.Pointer, f.Strides[2],
+            (byte*)p1.Pointer, f.Strides[1]);
+    }
+
+    private void UploadYuv422PFromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadYuv422PPtr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2]);
+    }
+
+    private void UploadYuv444PFromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadYuv444PPtr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2]);
+    }
+
+    private void UploadYuv422P10LeFromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadYuv422P10LePtr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2]);
+    }
+
+    private void UploadNv12Adaptive(VideoFrame frame) =>
+        UploadNv12FromFrame(frame);
+
+    private void UploadNv12FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        UploadNv12Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1]);
+    }
+
+    private void UploadNv21FromFrame(VideoFrame f) => UploadNv12FromFrame(f);
+
+    private void UploadSemiPlanar16FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        UploadSemiPlanar16Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1]);
+    }
+
+    private void UploadUyvyFromFrame(VideoFrame f)
+    {
+        using var p = f.Planes[0].Pin();
+        UploadUyvyPtr((byte*)p.Pointer, f.Strides[0]);
+    }
+
+    private void UploadYuyvFromFrame(VideoFrame f)
+    {
+        using var p = f.Planes[0].Pin();
+        UploadYuyvPtr((byte*)p.Pointer, f.Strides[0]);
+    }
+
+    private void UploadGray8FromFrame(VideoFrame f)
+    {
+        using var p = f.Planes[0].Pin();
+        UploadPlanarR8Ptr(0, (byte*)p.Pointer, f.Strides[0], _format.Width, _format.Height);
+    }
+
+    private void UploadGray16FromFrame(VideoFrame f)
+    {
+        using var p = f.Planes[0].Pin();
+        UploadPlanarR16Ptr(0, (byte*)p.Pointer, f.Strides[0], _format.Width, _format.Height);
+    }
+
+    private void UploadPlanar420P16FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadPlanar420P16Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2]);
+    }
+
+    private void UploadYuv444P10LeFromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadYuv444P10LePtr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2]);
+    }
+
+    private void UploadYuva420FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        using var p3 = f.Planes[3].Pin();
+        UploadYuva420Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2], (byte*)p3.Pointer, f.Strides[3]);
+    }
+
+    // --- Native pointer uploads (shared paths) ---
+    // Bgra: assumes little-endian 8-bit packing (memory order matches GL Bgra + UnsignedByte; big-endian hosts are rare/non-target).
+    private void UploadBgraPtr(byte* basePtr, int stride)
     {
         BindUnit(0);
-        var width = _format.Width;
-        var height = _format.Height;
-        var stride = frame.Strides[0];
-        SetUnpackAlignment(stride, width * 4);
-        SetUnpackRowLength(stride / 4, width);
-        using var pin = frame.Planes[0].Pin();
-        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)width, (uint)height,
-            GlPixelFormat.Bgra, GlPixelType.UnsignedByte, pin.Pointer);
+        SetUnpackAlignment(stride, _format.Width * 4);
+        SetUnpackRowLength(stride / 4, _format.Width);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)_format.Width, (uint)_format.Height,
+            GlPixelFormat.Bgra, GlPixelType.UnsignedByte, basePtr);
     }
 
-    private void UploadI420(VideoFrame frame)
+    private void UploadRgbaPtr(byte* basePtr, int stride)
     {
-        UploadPlanarR8(frame, 0, _format.Width,     _format.Height);
-        UploadPlanarR8(frame, 1, _format.Width / 2, _format.Height / 2);
-        UploadPlanarR8(frame, 2, _format.Width / 2, _format.Height / 2);
+        BindUnit(0);
+        SetUnpackAlignment(stride, _format.Width * 4);
+        SetUnpackRowLength(stride / 4, _format.Width);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)_format.Width, (uint)_format.Height,
+            GlPixelFormat.Rgba, GlPixelType.UnsignedByte, basePtr);
     }
 
-    private void UploadNv12(VideoFrame frame)
+    private void UploadRgb24Ptr(byte* basePtr, int stride)
     {
-        UploadPlanarR8(frame, 0, _format.Width, _format.Height);
+        BindUnit(0);
+        SetUnpackAlignment(stride, _format.Width * 3);
+        SetUnpackRowLength(stride / 3, _format.Width);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)_format.Width, (uint)_format.Height,
+            GlPixelFormat.Rgb, GlPixelType.UnsignedByte, basePtr);
+    }
 
+    private void UploadBgr24Ptr(byte* basePtr, int stride)
+    {
+        BindUnit(0);
+        SetUnpackAlignment(stride, _format.Width * 3);
+        SetUnpackRowLength(stride / 3, _format.Width);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)_format.Width, (uint)_format.Height,
+            GlPixelFormat.Bgr, GlPixelType.UnsignedByte, basePtr);
+    }
+
+    private void UploadI420Ptr(byte* yPtr, int yStride, byte* uPtr, int uStride, byte* vPtr, int vStride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth420(_format.Width);
+        var ch = PixelFormatInfo.ChromaHeight420(_format.Height);
+        UploadPlanarR8Ptr(0, yPtr, yStride, _format.Width, _format.Height);
+        UploadPlanarR8Ptr(1, uPtr, uStride, cw, ch);
+        UploadPlanarR8Ptr(2, vPtr, vStride, cw, ch);
+    }
+
+    private void UploadYv12Ptr(byte* yPtr, int yStride, byte* uSrcPtr, int uStride, byte* vSrcPtr, int vStride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth420(_format.Width);
+        var ch = PixelFormatInfo.ChromaHeight420(_format.Height);
+        UploadPlanarR8Ptr(0, yPtr, yStride, _format.Width, _format.Height);
+        UploadPlanarR8Ptr(1, uSrcPtr, uStride, cw, ch);
+        UploadPlanarR8Ptr(2, vSrcPtr, vStride, cw, ch);
+    }
+
+    private void UploadYuv422PPtr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs)
+    {
+        var cw = PixelFormatInfo.ChromaWidth422(_format.Width);
+        var h = _format.Height;
+        UploadPlanarR8Ptr(0, yPtr, ys, _format.Width, h);
+        UploadPlanarR8Ptr(1, uPtr, us, cw, h);
+        UploadPlanarR8Ptr(2, vPtr, vs, cw, h);
+    }
+
+    private void UploadYuv444PPtr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs)
+    {
+        var w = _format.Width;
+        var h = _format.Height;
+        UploadPlanarR8Ptr(0, yPtr, ys, w, h);
+        UploadPlanarR8Ptr(1, uPtr, us, w, h);
+        UploadPlanarR8Ptr(2, vPtr, vs, w, h);
+    }
+
+    private void UploadYuv422P10LePtr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs)
+    {
+        var cw = PixelFormatInfo.ChromaWidth422(_format.Width);
+        var h = _format.Height;
+        UploadPlanarR16Ptr(0, yPtr, ys, _format.Width, h);
+        UploadPlanarR16Ptr(1, uPtr, us, cw, h);
+        UploadPlanarR16Ptr(2, vPtr, vs, cw, h);
+    }
+
+    private void UploadPlanar420P16Ptr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs)
+    {
+        var cw = PixelFormatInfo.ChromaWidth420(_format.Width);
+        var ch = PixelFormatInfo.ChromaHeight420(_format.Height);
+        UploadPlanarR16Ptr(0, yPtr, ys, _format.Width, _format.Height);
+        UploadPlanarR16Ptr(1, uPtr, us, cw, ch);
+        UploadPlanarR16Ptr(2, vPtr, vs, cw, ch);
+    }
+
+    private void UploadYuv444P10LePtr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs)
+    {
+        var w = _format.Width;
+        var h = _format.Height;
+        UploadPlanarR16Ptr(0, yPtr, ys, w, h);
+        UploadPlanarR16Ptr(1, uPtr, us, w, h);
+        UploadPlanarR16Ptr(2, vPtr, vs, w, h);
+    }
+
+    private void UploadYuva420Ptr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs,
+        byte* aPtr, int astride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth420(_format.Width);
+        var ch = PixelFormatInfo.ChromaHeight420(_format.Height);
+        UploadPlanarR8Ptr(0, yPtr, ys, _format.Width, _format.Height);
+        UploadPlanarR8Ptr(1, uPtr, us, cw, ch);
+        UploadPlanarR8Ptr(2, vPtr, vs, cw, ch);
+        UploadPlanarR8Ptr(3, aPtr, astride, _format.Width, _format.Height);
+    }
+
+    private void UploadNv12Ptr(byte* yPtr, int yStride, byte* uvPtr, int uvStride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth420(_format.Width);
+        var ch = PixelFormatInfo.ChromaHeight420(_format.Height);
+        UploadPlanarR8Ptr(0, yPtr, yStride, _format.Width, _format.Height);
         BindUnit(1);
-        var width = _format.Width / 2;
-        var height = _format.Height / 2;
-        var stride = frame.Strides[1];          // bytes; UV row is width*2 bytes
-        SetUnpackAlignment(stride, width * 2);
-        SetUnpackRowLength(stride / 2, width);  // pixels = bytes/2 (RG = 2bpp)
-        using var pin = frame.Planes[1].Pin();
-        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)width, (uint)height,
-            GlPixelFormat.RG, GlPixelType.UnsignedByte, pin.Pointer);
+        SetUnpackAlignment(uvStride, cw * 2);
+        SetUnpackRowLength(uvStride / 2, cw);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)cw, (uint)ch,
+            GlPixelFormat.RG, GlPixelType.UnsignedByte, uvPtr);
     }
 
-    private void UploadYuv422P10Le(VideoFrame frame)
+    private void UploadNv21Ptr(byte* yPtr, int yStride, byte* vuPtr, int vuStride) =>
+        UploadNv12Ptr(yPtr, yStride, vuPtr, vuStride);
+
+    private void UploadSemiPlanar16Ptr(byte* yPtr, int yStride, byte* uvPtr, int uvStride)
     {
-        UploadPlanarR16(frame, 0, _format.Width,     _format.Height);
-        UploadPlanarR16(frame, 1, _format.Width / 2, _format.Height);
-        UploadPlanarR16(frame, 2, _format.Width / 2, _format.Height);
+        var cw = PixelFormatInfo.ChromaWidth420(_format.Width);
+        var ch = PixelFormatInfo.ChromaHeight420(_format.Height);
+        UploadPlanarR16Ptr(0, yPtr, yStride, _format.Width, _format.Height);
+        BindUnit(1);
+        SetUnpackAlignment(uvStride, cw * 4);
+        SetUnpackRowLength(uvStride / 4, cw);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)cw, (uint)ch,
+            GlPixelFormat.RG, GlPixelType.UnsignedShort, uvPtr);
     }
 
-    private void UploadPlanarR8(VideoFrame frame, int plane, int planeWidth, int planeHeight)
+    private void UploadUyvyPtr(byte* basePtr, int stride)
     {
-        BindUnit(plane);
-        var stride = frame.Strides[plane];
-        SetUnpackAlignment(stride, planeWidth);
-        SetUnpackRowLength(stride, planeWidth);
-        using var pin = frame.Planes[plane].Pin();
+        BindUnit(0);
+        var texW = PixelFormatInfo.ChromaWidth422(_format.Width);
+        SetUnpackAlignment(stride, _format.Width * 2);
+        SetUnpackRowLength(stride / 4, texW);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)texW, (uint)_format.Height,
+            GlPixelFormat.Rgba, GlPixelType.UnsignedByte, basePtr);
+    }
+
+    private void UploadYuyvPtr(byte* basePtr, int stride)
+    {
+        BindUnit(0);
+        var texW = PixelFormatInfo.ChromaWidth422(_format.Width);
+        SetUnpackAlignment(stride, _format.Width * 2);
+        SetUnpackRowLength(stride / 4, texW);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)texW, (uint)_format.Height,
+            GlPixelFormat.Rgba, GlPixelType.UnsignedByte, basePtr);
+    }
+
+    private void UploadPlanarR8Ptr(int textureUnit, byte* ptr, int strideBytes, int planeWidth, int planeHeight)
+    {
+        BindUnit(textureUnit);
+        SetUnpackAlignment(strideBytes, planeWidth);
+        SetUnpackRowLength(strideBytes, planeWidth);
         _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)planeWidth, (uint)planeHeight,
-            GlPixelFormat.Red, GlPixelType.UnsignedByte, pin.Pointer);
+            GlPixelFormat.Red, GlPixelType.UnsignedByte, ptr);
     }
 
-    private void UploadPlanarR16(VideoFrame frame, int plane, int planeWidth, int planeHeight)
+    private void UploadPlanarR16Ptr(int textureUnit, byte* ptr, int strideBytes, int planeWidth, int planeHeight)
     {
-        BindUnit(plane);
-        var strideBytes = frame.Strides[plane];
-        var visibleBytes = planeWidth * 2;
-        SetUnpackAlignment(strideBytes, visibleBytes);
-        SetUnpackRowLength(strideBytes / 2, planeWidth);   // pixels = bytes/2 (16-bit per pixel)
-        using var pin = frame.Planes[plane].Pin();
+        if (strideBytes % 2 != 0)
+            throw new ArgumentOutOfRangeException(nameof(strideBytes), "stride must be even for R16 uploads.");
+        BindUnit(textureUnit);
+        SetUnpackAlignment(strideBytes, planeWidth * 2);
+        SetUnpackRowLength(strideBytes / 2, planeWidth);
         _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)planeWidth, (uint)planeHeight,
-            GlPixelFormat.Red, GlPixelType.UnsignedShort, pin.Pointer);
+            GlPixelFormat.Red, GlPixelType.UnsignedShort, ptr);
     }
 
     private void BindUnit(int unit)
@@ -328,89 +936,40 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         _gl.BindTexture(TextureTarget.Texture2D, _textures[unit]);
     }
 
-    private void SetUnpackRowLength(int rowLength, int visiblePixels)
+    private void SetUnpackRowLength(int rowLengthPixels, int visiblePixelsPerRow)
     {
-        // 0 = "row length equals width"; only set when stride differs.
-        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, rowLength == visiblePixels ? 0 : rowLength);
+        var value = rowLengthPixels == visiblePixelsPerRow ? 0 : rowLengthPixels;
+        if (_lastUnpackRowLength == value) return;
+        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, value);
+        _lastUnpackRowLength = value;
     }
 
-    private void SetUnpackAlignment(int strideBytes, int visibleBytes)
+    private void SetUnpackAlignment(int strideBytes, int visibleBytesPerRow)
     {
-        // GL_UNPACK_ALIGNMENT default is 4. For non-multiples we need 1.
-        // Codecs typically pad to 16/32 bytes which is fine at alignment 4
-        // — but UV planes at half-width can land odd, so we pick the
-        // largest power-of-two divisor of strideBytes (1, 2, 4, 8).
-        int alignment = 1;
+        var alignment = 1;
         if (strideBytes % 8 == 0) alignment = 8;
         else if (strideBytes % 4 == 0) alignment = 4;
         else if (strideBytes % 2 == 0) alignment = 2;
+        alignment = Math.Min(alignment, 8);
+        if (visibleBytesPerRow > 0 && strideBytes < visibleBytesPerRow)
+            throw new ArgumentException("row stride shorter than visible row bytes", nameof(strideBytes));
+
+        if (_lastUnpackAlignment == alignment) return;
         _gl.PixelStore(PixelStoreParameter.UnpackAlignment, alignment);
-        _ = visibleBytes; // reserved for future right-edge cropping
+        _lastUnpackAlignment = alignment;
     }
 
-    // ---------- format → shader / texture metadata -------------------------
+    private static string LoadShaderCached(string fileName) =>
+        ShaderSourceCache.GetOrAdd(fileName, LoadShaderUncached);
 
-    private static (string vert, string frag) ShaderNames(CorePixelFormat fmt) => fmt switch
-    {
-        CorePixelFormat.Bgra32      => ("fullscreen.vert.glsl", "bgra.frag.glsl"),
-        CorePixelFormat.I420        => ("fullscreen.vert.glsl", "yuv_planar.frag.glsl"),
-        CorePixelFormat.Nv12        => ("fullscreen.vert.glsl", "yuv_nv12.frag.glsl"),
-        CorePixelFormat.Yuv422P10Le => ("fullscreen.vert.glsl", "yuv_planar.frag.glsl"),
-        _ => throw new NotSupportedException($"ShaderNames: {fmt}"),
-    };
-
-    private static string[] SamplerUniformNames(CorePixelFormat fmt) => fmt switch
-    {
-        CorePixelFormat.Bgra32      => ["image"],
-        CorePixelFormat.I420        => ["yPlane", "uPlane", "vPlane"],
-        CorePixelFormat.Nv12        => ["yPlane", "uvPlane"],
-        CorePixelFormat.Yuv422P10Le => ["yPlane", "uPlane", "vPlane"],
-        _ => throw new NotSupportedException($"SamplerUniformNames: {fmt}"),
-    };
-
-    private static int PlanesNeeded(CorePixelFormat fmt) => fmt switch
-    {
-        CorePixelFormat.Bgra32      => 1,
-        CorePixelFormat.I420        => 3,
-        CorePixelFormat.Nv12        => 2,
-        CorePixelFormat.Yuv422P10Le => 3,
-        _ => 0,
-    };
-
-    private static (int width, int height) PlaneTextureSize(VideoFormat fmt, int plane) => fmt.PixelFormat switch
-    {
-        CorePixelFormat.Bgra32                         => (fmt.Width, fmt.Height),
-        CorePixelFormat.I420 when plane == 0           => (fmt.Width, fmt.Height),
-        CorePixelFormat.I420                           => (fmt.Width / 2, fmt.Height / 2),
-        CorePixelFormat.Nv12 when plane == 0           => (fmt.Width, fmt.Height),
-        CorePixelFormat.Nv12                           => (fmt.Width / 2, fmt.Height / 2),
-        CorePixelFormat.Yuv422P10Le when plane == 0    => (fmt.Width, fmt.Height),
-        CorePixelFormat.Yuv422P10Le                    => (fmt.Width / 2, fmt.Height),
-        _ => throw new NotSupportedException($"PlaneTextureSize: {fmt.PixelFormat}"),
-    };
-
-    private static (GlInternalFormat intFmt, GlPixelFormat fmt, GlPixelType type) PlaneTextureFormat(
-        CorePixelFormat fmt, int plane) => fmt switch
-    {
-        CorePixelFormat.Bgra32      => (GlInternalFormat.Rgba8, GlPixelFormat.Bgra, GlPixelType.UnsignedByte),
-        CorePixelFormat.I420        => (GlInternalFormat.R8,    GlPixelFormat.Red,  GlPixelType.UnsignedByte),
-        CorePixelFormat.Nv12 when plane == 0 => (GlInternalFormat.R8, GlPixelFormat.Red, GlPixelType.UnsignedByte),
-        CorePixelFormat.Nv12        => (GlInternalFormat.RG8,   GlPixelFormat.RG,   GlPixelType.UnsignedByte),
-        CorePixelFormat.Yuv422P10Le => (GlInternalFormat.R16,   GlPixelFormat.Red,  GlPixelType.UnsignedShort),
-        _ => throw new NotSupportedException($"PlaneTextureFormat: {fmt}"),
-    };
-
-    // ---------- shader source loading --------------------------------------
-
-    private static string LoadShader(string fileName)
+    private static string LoadShaderUncached(string fileName)
     {
         var asm = typeof(YuvVideoRenderer).Assembly;
-        // Embedded resource path is "<rootnamespace>.Shaders.<file>".
         var resourceName = asm.GetManifestResourceNames()
             .FirstOrDefault(n => n.EndsWith($".Shaders.{fileName}", StringComparison.Ordinal))
             ?? throw new InvalidOperationException($"shader resource '{fileName}' not embedded");
         using var s = asm.GetManifestResourceStream(resourceName)
-            ?? throw new InvalidOperationException($"shader resource '{resourceName}' could not be opened");
+            ?? throw new InvalidOperationException($"shader '{resourceName}' unavailable");
         using var r = new StreamReader(s);
         return r.ReadToEnd();
     }

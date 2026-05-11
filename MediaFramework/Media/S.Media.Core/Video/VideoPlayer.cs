@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
+using S.Media.Core.Threading;
 
 namespace S.Media.Core.Video;
 
@@ -28,8 +29,9 @@ namespace S.Media.Core.Video;
 /// </para>
 /// <para>
 /// Frame negotiation runs at construction via
-/// <see cref="VideoFormatNegotiator.Connect"/>, so the source and sink
-/// agree on a pixel format before <see cref="Play"/>.
+/// <see cref="VideoFormatNegotiator.Connect"/> (optional
+/// <c>negotiatePixelFormats</c> predicate excludes pixel formats Core would
+/// otherwise pick). The source and sink agree on a format before <see cref="Play"/>.
 /// </para>
 /// </remarks>
 public sealed class VideoPlayer : IDisposable
@@ -82,7 +84,8 @@ public sealed class VideoPlayer : IDisposable
     public TimeSpan EarlyTolerance { get; set; } = TimeSpan.FromMilliseconds(8);
 
     public VideoPlayer(IVideoSource source, IVideoSink sink, IMediaClock clock,
-                       int queueCapacity = 4, TimeSpan? decodePollInterval = null)
+                       int queueCapacity = 4, TimeSpan? decodePollInterval = null,
+                       Func<PixelFormat, bool>? negotiatePixelFormats = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
@@ -98,7 +101,7 @@ public sealed class VideoPlayer : IDisposable
 
         // Negotiate format up front so the sink is configured before any
         // frame arrives. Either side throws here if no compatible format.
-        VideoFormatNegotiator.Connect(_source, _sink);
+        VideoFormatNegotiator.Connect(_source, _sink, negotiatePixelFormats);
     }
 
     /// <summary>Start decoding and scheduling. Idempotent.</summary>
@@ -129,10 +132,11 @@ public sealed class VideoPlayer : IDisposable
     /// both pause and stop semantics — when the master clock is also paused,
     /// the displayed frame just freezes anyway.
     /// </summary>
-    public void Pause() => StopInternal();
+    /// <param name="cancellationToken">Cooperative cancel while joining the decode thread.</param>
+    public void Pause(CancellationToken cancellationToken = default) => StopInternal(cancellationToken);
 
-    /// <summary>Alias for <see cref="Pause"/>.</summary>
-    public void Stop() => StopInternal();
+    /// <summary>Alias for <see cref="Pause(CancellationToken)"/>.</summary>
+    public void Stop(CancellationToken cancellationToken = default) => StopInternal(cancellationToken);
 
     /// <summary>
     /// Coordinated seek: pauses, calls <see cref="ISeekableSource.Seek"/> on
@@ -146,7 +150,7 @@ public sealed class VideoPlayer : IDisposable
             throw new InvalidOperationException("source does not implement ISeekableSource");
 
         var wasRunning = IsRunning;
-        if (wasRunning) StopInternal();
+        if (wasRunning) StopInternal(CancellationToken.None);
         seekable.Seek(position);
         if (wasRunning) Play();
     }
@@ -155,13 +159,13 @@ public sealed class VideoPlayer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try { StopInternal(); } catch { /* best effort */ }
+        try { StopInternal(CancellationToken.None); } catch { /* best effort */ }
         _slotsAvailable.Dispose();
     }
 
     // --- internals ---------------------------------------------------------
 
-    private void StopInternal()
+    private void StopInternal(CancellationToken cancellationToken = default)
     {
         Thread? toJoin;
         CancellationTokenSource? toDispose;
@@ -181,11 +185,14 @@ public sealed class VideoPlayer : IDisposable
         if (handler is not null)
             _clock.VideoTick -= handler;
         toDispose?.Cancel();
-        toJoin?.Join(TimeSpan.FromSeconds(2));
+        TryJoinDecodeThread(toJoin, cancellationToken);
         toDispose?.Dispose();
 
         DrainQueue();
     }
+
+    private static void TryJoinDecodeThread(Thread? thread, CancellationToken cancellationToken)
+        => CooperativePlaybackJoin.JoinThreadWhileCancelable(thread, cancellationToken);
 
     private void DrainQueue()
     {

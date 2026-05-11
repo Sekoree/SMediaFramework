@@ -115,7 +115,7 @@ public class MediaClockMasterTests
     }
 
     [Fact]
-    public void Resume_AfterPause_ReAnchorsToMaster()
+    public void Resume_AfterPause_IncludesMasterDriftWhilePaused()
     {
         var master = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(0), IsAdvancing = true };
         using var clock = new MediaClock();
@@ -130,14 +130,14 @@ public class MediaClockMasterTests
         master.ElapsedSinceStart = TimeSpan.FromSeconds(30);
         clock.Start();
 
-        // Right after resume, the apparent position should NOT include the
-        // jump — only further master advances should count.
+        // Right after resume, position includes elapsed master time accrued while paused
+        // so the timeline stays aligned with audio that continued in the sink buffer.
         var afterResume = clock.CurrentPosition;
-        Assert.InRange((afterResume - paused).Duration().TotalMilliseconds, 0, 10);
+        Assert.True(afterResume > paused + TimeSpan.FromSeconds(20));
 
         master.ElapsedSinceStart = TimeSpan.FromSeconds(30.1);
         var advanced = clock.CurrentPosition;
-        Assert.InRange((advanced - paused).TotalMilliseconds, 95, 110);
+        Assert.InRange((advanced - afterResume).TotalMilliseconds, 95, 110);
     }
 
     [Fact]

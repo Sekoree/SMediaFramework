@@ -1,8 +1,8 @@
 #version 330 core
 
 // Pre-RGBA pass-through. Texture is uploaded with internal=GL_RGBA8 and
-// data format=GL_BGRA — the driver swizzles on upload so the sampled
-// texel is already in the correct R,G,B,A order.
+// data format=GL_BGRA — on little-endian hosts this matches B,G,R,A in
+// memory (Avalonia/SDL surfaces). Big-endian ports must revisit packing.
 
 in vec2 v_uv;
 out vec4 fragColor;

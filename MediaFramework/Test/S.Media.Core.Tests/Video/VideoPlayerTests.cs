@@ -206,8 +206,8 @@ internal sealed class FakeMediaClock : IMediaClock
     public void RaiseAudioTick() => AudioTick?.Invoke(this, EventArgs.Empty);
 
     public void Start() => IsRunning = true;
-    public void Stop() => IsRunning = false;
-    public void Pause() => IsRunning = false;
+    public void Stop(CancellationToken cancellationToken = default) => IsRunning = false;
+    public void Pause(CancellationToken cancellationToken = default) => IsRunning = false;
     public void Reset() { _position = TimeSpan.Zero; }
     public void Seek(TimeSpan position) => AdvanceTo(position);
     public void SetMaster(IPlaybackClock? master) { /* no-op */ }

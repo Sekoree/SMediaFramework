@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using NDILib;
 using S.Media.Core.Audio;
+using S.Media.Core.Threading;
 
 namespace S.Media.NDI.Audio;
 
@@ -243,7 +244,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         if (_disposed) return;
         _disposed = true;
         _cts.Cancel();
-        _captureThread.Join(TimeSpan.FromSeconds(2));
+        CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2));
         _cts.Dispose();
         _receiver.Dispose();
         _runtime.Dispose();

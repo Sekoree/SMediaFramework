@@ -55,6 +55,56 @@ public class VideoFormatNegotiatorTests
         Assert.Equal(PixelFormat.I420, sink.ConfiguredFormat?.PixelFormat);
     }
 
+    [Fact]
+    public void Negotiate_WithFilter_SkipsFirstSinkPreference_InOverlap()
+    {
+        var src = new FakeSource([PixelFormat.I420, PixelFormat.Nv12]);
+        var sink = new FakeSink([PixelFormat.Bgra32, PixelFormat.Nv12, PixelFormat.I420]);
+
+        var pf = VideoFormatNegotiator.Negotiate(src, sink, pf => pf != PixelFormat.Nv12);
+        Assert.Equal(PixelFormat.I420, pf);
+    }
+
+    [Fact]
+    public void Negotiate_WithFilter_FallbackToFilteredSinkPreferenceWhenNoNativeOverlap()
+    {
+        var src = new FakeSource([PixelFormat.I420]);
+        var sink = new FakeSink([PixelFormat.Bgra32, PixelFormat.Rgba32]);
+
+        var pf = VideoFormatNegotiator.Negotiate(src, sink, pf => pf == PixelFormat.Rgba32);
+        Assert.Equal(PixelFormat.Rgba32, pf);
+    }
+
+    [Fact]
+    public void Negotiate_WithFilter_SinkAnything_PicksFilteredNativeSecond()
+    {
+        var src = new FakeSource([PixelFormat.Bgra32, PixelFormat.Nv12]);
+        var sink = new FakeSink([]);
+
+        var pf = VideoFormatNegotiator.Negotiate(src, sink, pf => pf == PixelFormat.Nv12);
+        Assert.Equal(PixelFormat.Nv12, pf);
+    }
+
+    [Fact]
+    public void Negotiate_WithFilter_RejectsEverything_Throws()
+    {
+        var src = new FakeSource([PixelFormat.I420]);
+        var sink = new FakeSink([PixelFormat.Bgra32]);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            VideoFormatNegotiator.Negotiate(src, sink, static _ => false));
+    }
+
+    [Fact]
+    public void Negotiate_WithFilter_EmptySink_RejectsEveryNative_Throws()
+    {
+        var src = new FakeSource([PixelFormat.Bgra32, PixelFormat.I420]);
+        var sink = new FakeSink([]);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            VideoFormatNegotiator.Negotiate(src, sink, static _ => false));
+    }
+
     private sealed class FakeSource(PixelFormat[] native) : IVideoSource
     {
         public VideoFormat Format { get; private set; } =

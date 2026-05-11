@@ -38,7 +38,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     private bool _disposed;
 
     public AudioFormat Format => _format;
-    public bool IsRunning => _isRunning;
+    public bool IsRunning => Volatile.Read(ref _isRunning);
     public int DeviceIndex => _deviceIndex;
 
     /// <summary>Total frames (samples per channel) PortAudio has already played from this output. Monotonic across Stop/Start.</summary>
@@ -78,7 +78,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     /// </summary>
     public void Flush()
     {
-        if (_disposed || !_isRunning || _stream == nint.Zero) return;
+        if (_disposed || !Volatile.Read(ref _isRunning) || _stream == nint.Zero) return;
         Native.Pa_AbortStream(_stream);
         // Reset ring positions so the queue starts empty post-restart;
         // _playedSamples is preserved (lifetime stat / monotonic clock).
@@ -187,26 +187,28 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
             PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
         }
 
-        _isRunning = true;
+        Volatile.Write(ref _isRunning, true);
     }
 
     public void Stop()
     {
-        if (!_isRunning) return;
-        if (_stream != nint.Zero)
+        if (!Volatile.Read(ref _isRunning)) return;
+        try
         {
-            Native.Pa_StopStream(_stream);
-            Native.Pa_CloseStream(_stream);
-            _stream = nint.Zero;
+            if (_stream != nint.Zero)
+            {
+                Native.Pa_StopStream(_stream);
+                Native.Pa_CloseStream(_stream);
+                _stream = nint.Zero;
+            }
         }
-        if (_selfHandle.IsAllocated) _selfHandle.Free();
-        _isRunning = false;
-        // Clear ring-buffer positions so a subsequent Start() begins with an
-        // empty queue (orphaned samples from before Stop are discarded).
-        // Lifetime stats — _playedSamples, _droppedSamples, _underrunSamples,
-        // _callbackCount — are intentionally preserved.
-        Volatile.Write(ref _writeIndex, 0);
-        Volatile.Write(ref _readIndex, 0);
+        finally
+        {
+            if (_selfHandle.IsAllocated) _selfHandle.Free();
+            Volatile.Write(ref _isRunning, false);
+            Volatile.Write(ref _writeIndex, 0);
+            Volatile.Write(ref _readIndex, 0);
+        }
     }
 
     /// <summary>Convenience overload: submits a frame's samples after validating its format.</summary>
@@ -259,11 +261,15 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
 
         // Before the stream is started PA isn't draining yet — pretend ready,
         // so prebuffering can fill the ring up to the target before Start().
-        if (!_isRunning) return !token.IsCancellationRequested;
+        if (!Volatile.Read(ref _isRunning)) return !token.IsCancellationRequested;
 
         var target = TargetQueueSamples;
+        var deadlineTicks = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
         while (!token.IsCancellationRequested)
         {
+            if (Environment.TickCount64 >= deadlineTicks)
+                return false;
+
             var queued = QueuedSamples;
             if (queued + chunkSamples <= target) return true;
 

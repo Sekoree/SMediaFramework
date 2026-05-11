@@ -24,6 +24,7 @@ namespace S.Media.NDI;
 /// </remarks>
 public sealed class NDIOutput : IDisposable
 {
+    private readonly TimeSpan? _minimumVideoSubmitSpacing;
     private readonly NDIRuntime _runtime;
     private readonly NDISender _sender;
     private readonly object _gate = new();
@@ -52,10 +53,19 @@ public sealed class NDIOutput : IDisposable
     /// <paramref name="clockAudio"/> tell the SDK to pace each stream against
     /// its declared rate (typical for a self-driving sender).
     /// </summary>
-    public NDIOutput(string sourceName, string? groups = null, bool clockVideo = true, bool clockAudio = true)
+    /// <param name="minimumVideoSubmitSpacing">
+    /// Optional wall-clock throttle between video frames (<see cref="NDIVideoSender"/> submit path).
+    /// Use with <paramref name="clockVideo"/>:false when you want MFPlayer to pace instead of NDI timestamps.
+    /// </param>
+    public NDIOutput(string sourceName, string? groups = null, bool clockVideo = true, bool clockAudio = true,
+                      TimeSpan? minimumVideoSubmitSpacing = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceName);
         SourceName = sourceName;
+
+        if (minimumVideoSubmitSpacing is { } spacing && spacing < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(minimumVideoSubmitSpacing));
+        _minimumVideoSubmitSpacing = minimumVideoSubmitSpacing;
 
         var rc = NDIRuntime.Create(out var rt);
         if (rc != 0 || rt is null) throw new NDIException(rc, "NDIRuntime.Create");
@@ -100,7 +110,7 @@ public sealed class NDIOutput : IDisposable
     {
         lock (_gate)
         {
-            return _videoSink ??= new NDIVideoSender(_sender);
+            return _videoSink ??= new NDIVideoSender(_sender, _minimumVideoSubmitSpacing);
         }
     }
 

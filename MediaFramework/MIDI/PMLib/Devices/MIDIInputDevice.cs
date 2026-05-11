@@ -94,8 +94,24 @@ public class MIDIInputDevice : MIDIDevice
             Logger.LogDebug("MIDIInputDevice.Close() (deviceId={DeviceId}, name={Name})", DeviceId, Name);
 
         _polling = false;
-        _pollThread?.Join(TimeSpan.FromSeconds(2));
-        _pollThread  = null;
+        _pollWakeSignal.Set();
+
+        if (_pollThread is { IsAlive: true } t)
+        {
+            var deadlineTicks = Environment.TickCount64 + 2000;
+            while (t.IsAlive)
+            {
+                var remainMs = deadlineTicks - Environment.TickCount64;
+                if (remainMs <= 0)
+                    break;
+
+                var slice = remainMs > 32 ? 32 : (int)remainMs;
+                if (slice < 1) slice = 1;
+                _ = t.Join(TimeSpan.FromMilliseconds(slice));
+            }
+        }
+
+        _pollThread = null;
         _sysExBuffer = null;
         return base.Close();
     }

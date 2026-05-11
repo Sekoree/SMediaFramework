@@ -10,16 +10,19 @@ namespace S.Media.Core.Audio;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The first output that implements <em>both</em> <see cref="IClockedSink"/>
-/// and <see cref="IPlaybackClock"/> (typically the PortAudio output) becomes
-/// the <strong>primary</strong>: the router is slaved to its consumption rate
-/// and the <see cref="Clock"/> derives its position from its played samples.
+/// The first output that implements <see cref="IClockedSink"/> (typically
+/// PortAudio for pacing) becomes the <strong>primary</strong> for the router.
+/// If it also implements <see cref="IPlaybackClock"/>, the
+/// <see cref="Clock"/> masters to it so position tracks played samples;
+/// otherwise the clock stays in stopwatch mode until you attach a master via
+/// <see cref="MediaClock.SetMaster"/>.
 /// You can opt out by setting <see cref="AutoWirePrimary"/> to <c>false</c>
 /// before adding outputs and configuring the router/clock yourself.
 /// </para>
 /// <para>
-/// Sources passed to <see cref="LoadFile"/> (or <see cref="AddOwnedSource"/>)
-/// are owned by the player and disposed with it. Sinks are <strong>not</strong>
+/// Sources passed to <see cref="AddOwnedSource"/> (for example an
+/// <c>AudioFileDecoder</c> opened by the caller) are owned by the player and
+/// disposed with it. Sinks are <strong>not</strong>
 /// owned — the caller decides when to dispose hardware resources, since they
 /// often outlive a single player instance.
 /// </para>
@@ -53,9 +56,8 @@ public sealed class AudioPlayer : IDisposable
     public string? PrimarySinkId { get { lock (_gate) return _primarySinkId; } }
 
     /// <summary>
-    /// When <c>true</c> (default), the first eligible output (implements both
-    /// <see cref="IClockedSink"/> and <see cref="IPlaybackClock"/>) becomes
-    /// the primary clock source automatically. Set to <c>false</c> before
+    /// When <c>true</c> (default), the first sink that implements
+    /// <see cref="IClockedSink"/> becomes the pacing primary automatically.
     /// <see cref="AddOutput"/> if you want to manage clocking manually.
     /// </summary>
     public bool AutoWirePrimary { get; set; } = true;
@@ -69,10 +71,8 @@ public sealed class AudioPlayer : IDisposable
     // --- attaching pieces -------------------------------------------------
 
     /// <summary>
-    /// Register an output sink with the router. If <see cref="AutoWirePrimary"/>
-    /// is on and this is the first sink that implements both
-    /// <see cref="IClockedSink"/> and <see cref="IPlaybackClock"/>, the router
-    /// is slaved to it and the clock's master is set to it.
+    /// Register an output sink with the router. See <see cref="AutoWirePrimary"/>
+    /// for clock/pacing wiring.
     /// </summary>
     public string AddOutput(IAudioSink sink, string? id = null)
     {
@@ -84,11 +84,11 @@ public sealed class AudioPlayer : IDisposable
         lock (_gate)
         {
             _sinkFormats[sinkId] = sink.Format;
-            if (AutoWirePrimary && _primarySinkId is null
-                && sink is IClockedSink && sink is IPlaybackClock pc)
+            if (AutoWirePrimary && _primarySinkId is null && sink is IClockedSink)
             {
                 _router.SlaveTo(sinkId);
-                _clock.SetMaster(pc);
+                if (sink is IPlaybackClock pc)
+                    _clock.SetMaster(pc);
                 _primarySinkId = sinkId;
             }
         }
@@ -136,7 +136,11 @@ public sealed class AudioPlayer : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         var sourceId = _router.AddSource(source, id);
-        if (source is IDisposable d) _ownedDisposables.Add(d);
+        if (source is IDisposable d)
+        {
+            lock (_gate)
+                _ownedDisposables.Add(d);
+        }
         return sourceId;
     }
 
@@ -210,6 +214,24 @@ public sealed class AudioPlayer : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         _router.SeekSource(sourceId, position);
         _clock.Seek(position);
+    }
+
+    /// <summary>
+    /// Seeks the only registered source. Throws if there are zero or multiple sources.
+    /// </summary>
+    public void Seek(TimeSpan position)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        string id;
+        lock (_gate)
+        {
+            var ids = Router.SourceIds;
+            if (ids.Count != 1)
+                throw new InvalidOperationException(
+                    $"Seek() requires exactly one registered source (found {ids.Count}); use Seek(sourceId, position) instead.");
+            id = ids.First();
+        }
+        Seek(id, position);
     }
 
     /// <summary>

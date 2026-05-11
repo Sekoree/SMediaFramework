@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using Microsoft.Extensions.Logging;
+using S.Media.Core.Diagnostics;
+using S.Media.Core.Threading;
 
 namespace S.Media.Core.Clock;
 
@@ -18,10 +21,16 @@ namespace S.Media.Core.Clock;
 /// the loop.
 /// </para>
 /// <para>
-/// Coordination caveat: when the master keeps advancing (e.g. PortAudio is
-/// still playing buffered audio) but the clock is paused, the apparent
-/// position freezes while real audio continues. Pause the audio sink first if
-/// you want both to stop together.
+/// <see cref="PositionChanged"/> is usually raised from the driver thread at
+/// ~30 Hz. <see cref="Reset"/> and <see cref="Seek"/> raise it synchronously
+/// on the caller's thread immediately after updating the stored position —
+/// marshal if your UI requires a single context.
+/// </para>
+/// <para>
+/// When a master clock is attached, <see cref="Pause"/> snapshots how far the
+/// master had advanced; <see cref="Start"/> adds any additional master
+/// elapsed time that accrued while paused (e.g. PortAudio still draining) so
+/// the playhead stays aligned with heard audio.
 /// </para>
 /// </remarks>
 public sealed class MediaClock : IMediaClock, IDisposable
@@ -34,19 +43,26 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private readonly Lock _gate = new();
     private readonly TimeSpan _audioTickInterval;
     private readonly TimeSpan _videoTickInterval;
+    private readonly ILogger? _log;
 
     private TimeSpan _basePosition;
     private IPlaybackClock? _master;
     private TimeSpan _masterAnchor;
+    /// <summary>Master elapsed at last <see cref="Pause"/> — used to fold in audio that played during pause.</summary>
+    private TimeSpan? _masterElapsedWhenPaused;
+
     private bool _isRunning;
     private bool _disposed;
 
     private Thread? _driverThread;
     private CancellationTokenSource? _driverCts;
 
-    public MediaClock() : this(DefaultAudioTickInterval, DefaultVideoTickInterval) { }
+    public MediaClock() : this(DefaultAudioTickInterval, DefaultVideoTickInterval, logger: null) { }
 
-    public MediaClock(TimeSpan audioTickInterval, TimeSpan videoTickInterval)
+    public MediaClock(ILogger? logger)
+        : this(DefaultAudioTickInterval, DefaultVideoTickInterval, logger) { }
+
+    public MediaClock(TimeSpan audioTickInterval, TimeSpan videoTickInterval, ILogger? logger = null)
     {
         if (audioTickInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(audioTickInterval));
@@ -54,6 +70,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
             throw new ArgumentOutOfRangeException(nameof(videoTickInterval));
         _audioTickInterval = audioTickInterval;
         _videoTickInterval = videoTickInterval;
+        _log = logger;
     }
 
     public event EventHandler<TimeSpan>? PositionChanged;
@@ -84,14 +101,26 @@ public sealed class MediaClock : IMediaClock, IDisposable
             if (_isRunning) return;
             _isRunning = true;
             if (_master is not null)
+            {
+                if (_masterElapsedWhenPaused is { } pausedAt)
+                {
+                    var now = _master.ElapsedSinceStart;
+                    var drift = now - pausedAt;
+                    if (drift > TimeSpan.Zero)
+                        _basePosition += drift;
+                    _masterElapsedWhenPaused = null;
+                }
                 _masterAnchor = _master.ElapsedSinceStart;
+            }
             else
+            {
                 _stopwatch.Start();
+            }
             StartDriver();
         }
     }
 
-    public void Pause()
+    public void Pause(CancellationToken cancellationToken = default)
     {
         Thread? toJoin;
         CancellationTokenSource? toDispose;
@@ -99,16 +128,19 @@ public sealed class MediaClock : IMediaClock, IDisposable
         {
             ThrowIfDisposed();
             if (!_isRunning) return;
-            _basePosition = ComputePositionUnlocked(); // capture before stopping
-            if (_master is null) _stopwatch.Reset();
+            _basePosition = ComputePositionUnlocked();
+            if (_master is not null)
+                _masterElapsedWhenPaused = _master.ElapsedSinceStart;
+            else
+                _stopwatch.Reset();
             _isRunning = false;
             (toJoin, toDispose) = DetachDriver();
         }
-        JoinDriver(toJoin, toDispose);
+        JoinDriver(toJoin, toDispose, cancellationToken);
     }
 
     /// <summary>Same as <see cref="Pause"/> for now — semantics may diverge later.</summary>
-    public void Stop() => Pause();
+    public void Stop(CancellationToken cancellationToken = default) => Pause(cancellationToken);
 
     public void Reset()
     {
@@ -116,6 +148,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
         {
             ThrowIfDisposed();
             _basePosition = TimeSpan.Zero;
+            _masterElapsedWhenPaused = null;
             if (_master is not null) _masterAnchor = _master.ElapsedSinceStart;
             else if (_isRunning) _stopwatch.Restart();
             else _stopwatch.Reset();
@@ -131,6 +164,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
         {
             ThrowIfDisposed();
             _basePosition = position;
+            _masterElapsedWhenPaused = null;
             if (_master is not null) _masterAnchor = _master.ElapsedSinceStart;
             else if (_isRunning) _stopwatch.Restart();
             else _stopwatch.Reset();
@@ -143,10 +177,10 @@ public sealed class MediaClock : IMediaClock, IDisposable
         lock (_gate)
         {
             ThrowIfDisposed();
-            // Capture current apparent position so the swap is continuous.
             var current = ComputePositionUnlocked();
             _master = master;
             _basePosition = current;
+            _masterElapsedWhenPaused = null;
             if (master is not null)
             {
                 _masterAnchor = master.ElapsedSinceStart;
@@ -171,14 +205,13 @@ public sealed class MediaClock : IMediaClock, IDisposable
             _isRunning = false;
             (toJoin, toDispose) = DetachDriver();
         }
-        JoinDriver(toJoin, toDispose);
+        JoinDriver(toJoin, toDispose, CancellationToken.None);
     }
 
     // --- driver thread -----------------------------------------------------
 
     private void StartDriver()
     {
-        // called under _gate
         if (_driverThread is { IsAlive: true }) return;
         _driverCts = new CancellationTokenSource();
         var token = _driverCts.Token;
@@ -191,7 +224,6 @@ public sealed class MediaClock : IMediaClock, IDisposable
         _driverThread.Start();
     }
 
-    /// <summary>Detaches the current driver and signals cancellation. Joining is the caller's job (must be done outside <see cref="_gate"/>).</summary>
     private (Thread? thread, CancellationTokenSource? cts) DetachDriver()
     {
         var t = _driverThread;
@@ -202,10 +234,16 @@ public sealed class MediaClock : IMediaClock, IDisposable
         return (t, cts);
     }
 
-    private static void JoinDriver(Thread? thread, CancellationTokenSource? cts)
+    private static void JoinDriver(Thread? thread, CancellationTokenSource? cts, CancellationToken cancellationToken)
     {
-        thread?.Join(TimeSpan.FromSeconds(1));
-        cts?.Dispose();
+        try
+        {
+            CooperativePlaybackJoin.JoinThreadWhileCancelable(thread, cancellationToken);
+        }
+        finally
+        {
+            cts?.Dispose();
+        }
     }
 
     private void DriverLoop(CancellationToken token)
@@ -215,6 +253,8 @@ public sealed class MediaClock : IMediaClock, IDisposable
         var nextVideo     = _videoTickInterval;
         var nextPosition  = PositionChangedInterval;
 
+        var waitHandle = token.WaitHandle;
+
         while (!token.IsCancellationRequested)
         {
             var elapsed = Stopwatch.GetElapsedTime(sessionStart);
@@ -223,7 +263,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
             if (sleep > TimeSpan.Zero)
             {
-                if (token.WaitHandle.WaitOne(sleep)) break;
+                if (waitHandle.WaitOne(sleep)) break;
             }
 
             elapsed = Stopwatch.GetElapsedTime(sessionStart);
@@ -250,7 +290,13 @@ public sealed class MediaClock : IMediaClock, IDisposable
     {
         if (handler is null) return;
         try { handler.Invoke(this, EventArgs.Empty); }
-        catch { /* a misbehaving subscriber must not kill the driver */ }
+        catch (Exception ex)
+        {
+            if (_log is { } l)
+                l.LogError(ex, "MediaClock.{Event} subscriber threw", handler.Method.Name);
+            else
+                MediaDiagnostics.LogError(ex, $"MediaClock subscriber ({handler.Method.Name})");
+        }
     }
 
     private void RaisePositionChanged(TimeSpan position)
@@ -258,7 +304,13 @@ public sealed class MediaClock : IMediaClock, IDisposable
         var handler = PositionChanged;
         if (handler is null) return;
         try { handler.Invoke(this, position); }
-        catch { /* see SafeInvoke */ }
+        catch (Exception ex)
+        {
+            if (_log is { } l)
+                l.LogError(ex, "MediaClock.PositionChanged subscriber threw");
+            else
+                MediaDiagnostics.LogError(ex, "MediaClock.PositionChanged subscriber");
+        }
     }
 
     private TimeSpan ComputePositionUnlocked()
@@ -267,8 +319,6 @@ public sealed class MediaClock : IMediaClock, IDisposable
         if (_master is not null)
         {
             var delta = _master.ElapsedSinceStart - _masterAnchor;
-            // Defensive clamp: a misbehaving master that goes backwards
-            // shouldn't make our position go backwards either.
             if (delta < TimeSpan.Zero) delta = TimeSpan.Zero;
             return _basePosition + delta;
         }

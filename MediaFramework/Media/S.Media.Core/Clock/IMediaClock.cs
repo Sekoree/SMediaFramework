@@ -10,10 +10,11 @@ public interface IMediaClock
     public event EventHandler? VideoTick;
 
     public void Start();
-    public void Stop();
+    public void Stop(CancellationToken cancellationToken = default);
     public void Reset();
 
-    public void Pause();
+    /// <param name="cancellationToken">Thrown through while blocking on the timing driver shutdown.</param>
+    public void Pause(CancellationToken cancellationToken = default);
 
     public bool IsRunning { get; }
 

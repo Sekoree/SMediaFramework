@@ -1,3 +1,7 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
 namespace S.Media.Core.Audio;
 
 /// <summary>
@@ -110,6 +114,18 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         if (dst.Length < samplesPerChannel * outChannels)
             throw new ArgumentException("dst is shorter than samplesPerChannel * OutputChannels", nameof(dst));
 
+        if (TryAccumulateStereoIdentityInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateMonoDupStereoInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateStereoDuplexWideInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
         var map = _outToIn;
         for (var s = 0; s < samplesPerChannel; s++)
         {
@@ -121,6 +137,181 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
                 if (ic >= 0) dst[dstBase + oc] += src[srcBase + ic];
             }
         }
+    }
+
+    /// <summary>
+    /// SIMD fast path for 2‑channel interleaved stereo (identity or swapped L/R) with uniform gain.
+    /// </summary>
+    internal static bool TryAccumulateStereoIdentityInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        if (routing.Length != 2 || map.RequiredInputChannels != 2 || srcChannels != 2 || dstChannels != 2)
+            return false;
+
+        var swapStereo = false;
+        if (routing[0] == 0 && routing[1] == 1)
+            swapStereo = false;
+        else if (routing[0] == 1 && routing[1] == 0)
+            swapStereo = true;
+        else
+            return false;
+
+        var vn = Vector<float>.Count;
+        if ((vn % 2) != 0)
+            return false;
+
+        var floats = samplesPerChannel * 2;
+        if (floats < vn)
+            return false;
+
+        var limit = floats - floats % vn;
+        var g = new Vector<float>(uniformGain);
+        var i = 0;
+        for (; i < limit; i += vn)
+        {
+            var sin = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(i, vn))[0];
+            if (swapStereo)
+                sin = StereoSwapAdjacentChannels(sin);
+            var acc = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(i, vn))[0];
+            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(i, vn))[0] = acc + sin * g;
+        }
+
+        for (; i < floats; i += 2)
+        {
+            dst[i] += (swapStereo ? src[i + 1] : src[i]) * uniformGain;
+            dst[i + 1] += (swapStereo ? src[i] : src[i + 1]) * uniformGain;
+        }
+
+        return true;
+    }
+
+    /// <summary>Mono packed as one float per frame → duplicated stereo interleaved (<c>[0,0]</c>), uniform gain.</summary>
+    internal static bool TryAccumulateMonoDupStereoInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        if (routing.Length != 2 || srcChannels != 1 || dstChannels != 2) return false;
+        if (routing[0] != 0 || routing[1] != 0 || map.RequiredInputChannels != 1) return false;
+
+        var vn = Vector<float>.Count;
+
+        var g = new Vector<float>(uniformGain);
+        Span<float> scratch = stackalloc float[vn * 2];
+
+        var s = 0;
+        var limit = samplesPerChannel - samplesPerChannel % vn;
+        for (; s < limit; s += vn)
+        {
+            var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(s, vn))[0] * g;
+            ref var sc = ref MemoryMarshal.GetReference(scratch);
+            for (var j = 0; j < vn; j++)
+            {
+                var v = m[j];
+                Unsafe.Add(ref sc, 2 * j) = v;
+                Unsafe.Add(ref sc, 2 * j + 1) = v;
+            }
+
+            var dstBase = s * 2;
+            var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
+            var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
+            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
+
+            var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
+            var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
+            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+        }
+
+        for (; s < samplesPerChannel; s++)
+        {
+            var v = src[s] * uniformGain;
+            var b = s * 2;
+            dst[b] += v;
+            dst[b + 1] += v;
+        }
+
+        return true;
+    }
+
+    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[0,1,0,1]</c>), uniform gain.</summary>
+    internal static bool TryAccumulateStereoDuplexWideInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        if (routing.Length != 4 || srcChannels != 2 || dstChannels != 4) return false;
+        if (routing[0] != 0 || routing[1] != 1 || routing[2] != 0 || routing[3] != 1) return false;
+        if (map.RequiredInputChannels != 2) return false;
+
+        var vn = Vector<float>.Count;
+        if ((vn % 2) != 0) return false;
+
+        var stereoFloats = samplesPerChannel * 2;
+
+        var g = new Vector<float>(uniformGain);
+        Span<float> scratch = stackalloc float[vn * 2];
+
+        var i = 0;
+        var limit = stereoFloats - stereoFloats % vn;
+        for (; i < limit; i += vn)
+        {
+            var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(i, vn))[0] * g;
+            ref var sc = ref MemoryMarshal.GetReference(scratch);
+            for (var j = 0; j < vn; j += 2)
+            {
+                var L = m[j];
+                var R = m[j + 1];
+                var p = j * 2;
+                Unsafe.Add(ref sc, p) = L;
+                Unsafe.Add(ref sc, p + 1) = R;
+                Unsafe.Add(ref sc, p + 2) = L;
+                Unsafe.Add(ref sc, p + 3) = R;
+            }
+
+            var dstBase = i * 2;
+            var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
+            var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
+            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
+
+            var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
+            var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
+            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+        }
+
+        for (; i < stereoFloats; i += 2)
+        {
+            var L = src[i] * uniformGain;
+            var R = src[i + 1] * uniformGain;
+            var dstBase = i * 2;
+            dst[dstBase + 0] += L;
+            dst[dstBase + 1] += R;
+            dst[dstBase + 2] += L;
+            dst[dstBase + 3] += R;
+        }
+
+        return true;
+    }
+
+    private static Vector<float> StereoSwapAdjacentChannels(Vector<float> v)
+    {
+        var result = Vector<float>.Zero;
+        for (var j = 0; j < Vector<float>.Count; j += 2)
+            result = Vector.WithElement(Vector.WithElement(result, j, v[j + 1]), j + 1, v[j]);
+        return result;
     }
 
     // --- helpers ----------------------------------------------------------

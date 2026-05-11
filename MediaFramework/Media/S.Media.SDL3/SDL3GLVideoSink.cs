@@ -1,3 +1,4 @@
+using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using S.Media.OpenGL;
 using SilkGL = Silk.NET.OpenGL.GL;
@@ -13,10 +14,8 @@ namespace S.Media.SDL3;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Pixel-format support: BGRA32, I420, NV12, and the 10-bit
-/// <see cref="PixelFormat.Yuv422P10Le"/> (e.g. ProRes 422 stress files) —
-/// the GL renderer uploads each plane to its own R8/R16 texture and
-/// converts to RGB on the GPU via a BT.709 matrix.
+/// Pixel-format support matches <see cref="YuvVideoRenderer.SupportedPixelFormats"/>
+/// (BGRA/RGBA/RGB24, planar and semi-planar YUV, 10-bit 422, packed 422, P010/P016, …).
 /// </para>
 /// <para>
 /// VSYNC: enabled by default via <c>SDL_GL_SetSwapInterval(1)</c>; pass
@@ -27,19 +26,15 @@ namespace S.Media.SDL3;
 /// </remarks>
 public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
 {
-    private static readonly PixelFormat[] AcceptedFormats =
-    [
-        PixelFormat.Bgra32,
-        PixelFormat.I420,
-        PixelFormat.Nv12,
-        PixelFormat.Yuv422P10Le,
-    ];
+    private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
 
     private readonly string _title;
     private readonly int _initialWindowWidth;
     private readonly int _initialWindowHeight;
     private readonly bool _vsync;
     private readonly bool _ownsThread;
+
+    private GlVideoSinkHdrPreference _hdrPreference = GlVideoSinkHdrPreference.FollowFrameHints;
 
     private VideoFormat _format;
     private bool _configured;
@@ -81,7 +76,8 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
     public event EventHandler<(int Width, int Height)>? Resized;
 
     public SDL3GLVideoSink(string title = "SDL3 GL Video", int initialWidth = 1280, int initialHeight = 720,
-                          bool vsync = true, bool ownsThread = true)
+                          bool vsync = true, bool ownsThread = true,
+                          GlVideoSinkHdrPreference hdrPreference = GlVideoSinkHdrPreference.FollowFrameHints)
     {
         ArgumentException.ThrowIfNullOrEmpty(title);
         if (initialWidth <= 0) throw new ArgumentOutOfRangeException(nameof(initialWidth));
@@ -92,8 +88,16 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         _initialWindowHeight = initialHeight;
         _vsync = vsync;
         _ownsThread = ownsThread;
+        _hdrPreference = hdrPreference;
         _viewportWidth = initialWidth;
         _viewportHeight = initialHeight;
+    }
+
+    /// <summary>Allows changing HDR handling after construction (effective on the next rendered frame).</summary>
+    public GlVideoSinkHdrPreference HdrPreference
+    {
+        get => _hdrPreference;
+        set => _hdrPreference = value;
     }
 
     public void Configure(VideoFormat format)
@@ -194,7 +198,7 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         {
             _cts?.Cancel();
             _wakeup.Set();
-            _renderThread?.Join(TimeSpan.FromSeconds(2));
+            CooperativePlaybackJoin.JoinThread(_renderThread, TimeSpan.FromSeconds(2));
             _cts?.Dispose();
         }
         else
@@ -278,7 +282,9 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         SDL.GLSetSwapInterval(_vsync ? 1 : 0);
 
         _gl = SilkGL.GetApi(name => SDL.GLGetProcAddress(name));
-        _renderer = new YuvVideoRenderer(_gl, _format);
+        _renderer = new YuvVideoRenderer(_gl, _format, eglDmabufInterop: OperatingSystem.IsLinux()
+            ? new YuvDmabufEglInterop(SDL.EGLGetCurrentDisplay(), name => SDL.EGLGetProcAddress(name))
+            : null);
     }
 
     private void TeardownGraphics()
@@ -292,10 +298,62 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
     private void PresentFrame(VideoFrame frame)
     {
         if (_renderer is null || _gl is null) return;
+        ApplyTransferHintToRenderer(frame);
         _renderer.Upload(frame);
         _renderer.Render(_viewportWidth, _viewportHeight);
         SDL.GLSwapWindow(_window);
         Interlocked.Increment(ref _displayed);
+    }
+
+    private void ApplyTransferHintToRenderer(VideoFrame frame)
+    {
+        var r = _renderer;
+        if (r == null)
+            return;
+
+        switch (_hdrPreference)
+        {
+            case GlVideoSinkHdrPreference.IgnoreFrameHints:
+                return;
+            case GlVideoSinkHdrPreference.ForceSdrDisplay:
+                r.HdrTransfer = VideoHdrTransfer.None;
+                return;
+            case GlVideoSinkHdrPreference.ForceSrgbPreview:
+                r.HdrTransfer = VideoHdrTransfer.Srgb;
+                return;
+            case GlVideoSinkHdrPreference.ForcePqPreview:
+                r.HdrTransfer = VideoHdrTransfer.Pq;
+                return;
+            case GlVideoSinkHdrPreference.ForceHlgPreview:
+                r.HdrTransfer = VideoHdrTransfer.Hlg;
+                return;
+            case GlVideoSinkHdrPreference.FollowFrameHints:
+                break;
+            default:
+                r.HdrTransfer = VideoHdrTransfer.None;
+                return;
+        }
+
+        switch (frame.ColorTransferHint)
+        {
+            case VideoTransferHint.Unspecified:
+                return;
+            case VideoTransferHint.Sdr:
+                r.HdrTransfer = VideoHdrTransfer.None;
+                return;
+            case VideoTransferHint.FromSrgb:
+                r.HdrTransfer = VideoHdrTransfer.Srgb;
+                return;
+            case VideoTransferHint.FromPq:
+                r.HdrTransfer = VideoHdrTransfer.Pq;
+                return;
+            case VideoTransferHint.FromHlg:
+                r.HdrTransfer = VideoHdrTransfer.Hlg;
+                return;
+            default:
+                r.HdrTransfer = VideoHdrTransfer.None;
+                return;
+        }
     }
 
     private void DrainEvents()

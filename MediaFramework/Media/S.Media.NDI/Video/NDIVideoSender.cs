@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NDILib;
 using S.Media.Core.Video;
@@ -48,6 +49,9 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
     // True after the first SendVideoAsync — we owe a FlushAsync on dispose
     // to release whichever staging buffer is currently in-flight.
     private bool _hasInFlight;
+    /// <summary>Wall-clock spacing between submits; zero disables pacing.</summary>
+    private readonly TimeSpan _minimumSubmitSpacing;
+    private long _lastSubmitTimestamp;
 
     public VideoFormat Format
     {
@@ -61,10 +65,35 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats => AcceptedFormats;
 
-    internal NDIVideoSender(NDISender sender)
+    internal NDIVideoSender(NDISender sender, TimeSpan? minimumSubmitSpacing = null)
     {
         ArgumentNullException.ThrowIfNull(sender);
         _sender = sender;
+        var spacing = minimumSubmitSpacing ?? TimeSpan.Zero;
+        ArgumentOutOfRangeException.ThrowIfLessThan(spacing, TimeSpan.Zero);
+        _minimumSubmitSpacing = spacing;
+    }
+
+    private void PaceBeforePack()
+    {
+        if (_minimumSubmitSpacing <= TimeSpan.Zero)
+            return;
+
+        var now = Stopwatch.GetTimestamp();
+        if (_lastSubmitTimestamp != 0)
+        {
+            var since = Stopwatch.GetElapsedTime(_lastSubmitTimestamp, now);
+            var wait = _minimumSubmitSpacing - since;
+            if (wait > TimeSpan.Zero)
+            {
+                var ms = (int)Math.Clamp(wait.TotalMilliseconds, 0, int.MaxValue);
+                if (ms > 0)
+                    Thread.Sleep(ms);
+                now = Stopwatch.GetTimestamp();
+            }
+        }
+
+        _lastSubmitTimestamp = now;
     }
 
     public void Configure(VideoFormat format)
@@ -75,12 +104,18 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         if (Array.IndexOf(AcceptedFormats, format.PixelFormat) < 0)
             throw new NotSupportedException(
                 $"NDIVideoSender does not accept pixel format {format.PixelFormat}; supported: {string.Join(", ", AcceptedFormats)}");
-        // Planar 4:2:0 formats need even dimensions so the chroma planes
-        // come out clean (no half-pixel rows).
+        // Planar 4:2:0 formats need even dimensions so chroma grids align.
         if ((format.PixelFormat == PixelFormat.I420 || format.PixelFormat == PixelFormat.Nv12)
             && (format.Width % 2 != 0 || format.Height % 2 != 0))
             throw new ArgumentException(
                 $"{format.PixelFormat} requires even width/height (got {format.Width}x{format.Height})",
+                nameof(format));
+
+        // Packed staging assumes an even stride in bytes (BGRA/UYVY use full width × Bpp).
+        if ((format.PixelFormat == PixelFormat.Bgra32 || format.PixelFormat == PixelFormat.Uyvy)
+            && format.Width % 2 != 0)
+            throw new ArgumentException(
+                $"{format.PixelFormat} requires even width so row packing matches NDI line stride ({format.Width})",
                 nameof(format));
 
         _format = format;
@@ -105,6 +140,8 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
                 throw new ArgumentException(
                     $"frame has {frame.PlaneCount} planes; {_format.PixelFormat} requires {expectedPlanes}",
                     nameof(frame));
+
+            PaceBeforePack();
 
             var totalBytes = StagingBytes(_format);
             EnsureStagingCapacity(_stagingIdx, totalBytes);
@@ -161,6 +198,13 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         var srcPlane = frame.Planes[0].Span;
         var srcStride = frame.Strides[0];
         var visibleStride = _format.Width * BytesPerPackedPixel(_format.PixelFormat);
+        var contiguous = visibleStride * _format.Height;
+        if (srcStride == visibleStride && srcPlane.Length >= contiguous)
+        {
+            srcPlane.Slice(0, contiguous).CopyTo(new Span<byte>(dst, contiguous));
+            return;
+        }
+
         for (var row = 0; row < _format.Height; row++)
         {
             var srcRow = srcPlane.Slice(row * srcStride, visibleStride);
@@ -196,12 +240,10 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     private void PackI420(VideoFrame frame, byte* dst)
     {
-        // NDI: Y at LineStrideInBytes (=Width); U then V each at half stride
-        // (Width/2) and half height (Yres/2).
         var width = _format.Width;
         var height = _format.Height;
-        var halfW = width / 2;
-        var halfH = height / 2;
+        var chromaW = PixelFormatInfo.ChromaWidth420(width);
+        var chromaH = PixelFormatInfo.ChromaHeight420(height);
 
         var ySrc = frame.Planes[0].Span;
         var ySrcStride = frame.Strides[0];
@@ -214,19 +256,22 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         var uDstBase = dst + width * height;
         var uSrc = frame.Planes[1].Span;
         var uSrcStride = frame.Strides[1];
-        for (var row = 0; row < halfH; row++)
+        for (var row = 0; row < chromaH; row++)
         {
-            uSrc.Slice(row * uSrcStride, halfW)
-                .CopyTo(new Span<byte>(uDstBase + row * halfW, halfW));
+            uSrc.Slice(row * uSrcStride, chromaW)
+                .CopyTo(new Span<byte>(uDstBase + row * chromaW, chromaW));
         }
 
-        var vDstBase = uDstBase + halfW * halfH;
+        // V begins after the contiguous U bitmap (handles future strides that differ from half-visible width).
+        var uPackedRowBytes = PixelFormatInfo.PlaneByteWidth(PixelFormat.I420, width, 1);
+        var uPlaneByteCount = uPackedRowBytes * chromaH;
+        var vDstBase = uDstBase + uPlaneByteCount;
         var vSrc = frame.Planes[2].Span;
         var vSrcStride = frame.Strides[2];
-        for (var row = 0; row < halfH; row++)
+        for (var row = 0; row < chromaH; row++)
         {
-            vSrc.Slice(row * vSrcStride, halfW)
-                .CopyTo(new Span<byte>(vDstBase + row * halfW, halfW));
+            vSrc.Slice(row * vSrcStride, chromaW)
+                .CopyTo(new Span<byte>(vDstBase + row * chromaW, chromaW));
         }
     }
 

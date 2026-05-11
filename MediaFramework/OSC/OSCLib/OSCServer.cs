@@ -210,7 +210,21 @@ public sealed class OSCServer : IOSCServer
         try
         {
             _loopCts?.Cancel();
-            _loopTask?.Wait(TimeSpan.FromSeconds(2));
+            var task = _loopTask;
+            if (task is not null)
+            {
+                var deadlineTicks = Environment.TickCount64 + 2000;
+                while (!task.IsCompleted)
+                {
+                    var remainMs = deadlineTicks - Environment.TickCount64;
+                    if (remainMs <= 0)
+                        break;
+
+                    var slice = remainMs > 32 ? 32 : (int)remainMs;
+                    if (slice < 1) slice = 1;
+                    task.Wait(TimeSpan.FromMilliseconds(slice));
+                }
+            }
         }
         catch
         {
