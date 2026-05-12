@@ -62,7 +62,11 @@ public sealed class VideoPlayer : IDisposable
     /// <see cref="VideoFrame.PresentationTime"/> (for example to feed a
     /// <see cref="VideoPtsClock"/>).
     /// </summary>
+    /// <remarks>Runs on the <see cref="IMediaClock"/> driver thread (same thread as <see cref="IMediaClock.VideoTick"/>). Keep handlers lightweight or marshal work elsewhere.</remarks>
     public event Action<TimeSpan>? FramePresentationTimePresented;
+
+    /// <summary>The clock that paces <see cref="IMediaClock.VideoTick"/> and <see cref="Play"/>.</summary>
+    public IMediaClock Clock => _clock;
 
     public VideoFormat Format => _sink.Format;
     public bool IsRunning { get { lock (_gate) return _isRunning; } }
@@ -167,7 +171,12 @@ public sealed class VideoPlayer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try { StopInternal(CancellationToken.None); } catch { /* best effort */ }
+        try { StopInternal(CancellationToken.None); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, "VideoPlayer.Dispose: StopInternal"); }
+#else
+        catch { /* best effort */ }
+#endif
         _slotsAvailable.Dispose();
     }
 
@@ -298,10 +307,18 @@ public sealed class VideoPlayer : IDisposable
             }
             catch (Exception ex)
             {
+#if DEBUG
                 MediaDiagnostics.LogError(ex, "VideoPlayer.OnVideoTick sink Submit");
+#endif
                 // Sink threw — make sure the frame is released to avoid a
                 // native buffer leak; rethrow would kill MediaClock's driver.
-                try { toShow.Dispose(); } catch { /* best effort */ }
+                try { toShow.Dispose(); }
+#if DEBUG
+                catch (Exception dex) { MediaDiagnostics.LogError(dex, "VideoPlayer.OnVideoTick frame Dispose after Submit failure"); }
+#else
+                catch { /* best effort */ }
+#endif
+                _ = ex;
             }
         }
         else if (_source.IsExhausted && _queue.IsEmpty)

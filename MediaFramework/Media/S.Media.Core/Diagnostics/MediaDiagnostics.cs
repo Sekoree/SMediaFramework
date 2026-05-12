@@ -4,8 +4,8 @@ using Microsoft.Extensions.Logging;
 namespace S.Media.Core.Diagnostics;
 
 /// <summary>
-/// Optional framework-wide logger for subscriber/sink failures that are
-/// intentionally non-fatal. Falls back to <see cref="Debug.WriteLine(string?)"/>
+/// Optional framework-wide logger for subscriber/sink failures and informational
+/// diagnostics that are intentionally non-fatal. Falls back to <see cref="Debug.WriteLine(string?)"/>
 /// when no logger is assigned.
 /// </summary>
 public static class MediaDiagnostics
@@ -25,6 +25,19 @@ public static class MediaDiagnostics
         {
             if (args.Length > 0) log.LogWarning(message, args);
             else log.LogWarning("{Message}", message);
+        }
+        else
+        {
+            Debug.WriteLine($"[Media] {message}");
+        }
+    }
+
+    public static void LogInformation(string message, params object?[] args)
+    {
+        if (_logger is { } log)
+        {
+            if (args.Length > 0) log.LogInformation(message, args);
+            else log.LogInformation("{Message}", message);
         }
         else
         {

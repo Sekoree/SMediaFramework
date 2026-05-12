@@ -6,8 +6,14 @@ namespace S.Media.FFmpeg.Video;
 /// <summary>Optional flags for <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>.</summary>
 public sealed class VideoDecoderOpenOptions
 {
-    /// <summary>When true, try libav hardware acceleration before falling back to software decode.</summary>
-    public bool TryHardwareAcceleration { get; init; }
+    /// <summary>When true, try libav hardware acceleration before falling back to software decode (default).</summary>
+    public bool TryHardwareAcceleration { get; init; } = true;
+
+    /// <summary>
+    /// FFmpeg decoder thread count for frame/slice threading on software decode.
+    /// Zero picks a bounded default from <see cref="Environment.ProcessorCount"/> (ignored when hardware decode is active).
+    /// </summary>
+    public int DecoderThreadCount { get; init; }
 
     /// <summary>
     /// Hardware device types to try in order. When empty, a platform default list is used
@@ -20,6 +26,12 @@ public sealed class VideoDecoderOpenOptions
     /// keep decode on dma-bufs (no libav CPU <c>av_hwframe_transfer_data</c> copy) for EGL / GL upload.
     /// </summary>
     public bool RetainDmabufForGl { get; init; }
+
+    /// <summary>
+    /// When <see cref="TryHardwareAcceleration"/> is true on Windows with D3D11VA and the codec advertises
+    /// <c>AV_PIX_FMT_D3D11</c>, keep libav output on D3D11 surfaces and export DXGI NT shared handles for GL / interop.
+    /// </summary>
+    public bool RetainD3D11SharedHandleForGl { get; init; }
 }
 
 /// <summary>Portable hardware device enum (mirrors <see cref="AVHWDeviceType"/>).</summary>
@@ -59,13 +71,15 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
 
     public static VideoHardwareDecodeContext? TryCreate(AVCodec* codec, AVCodecContext* codecCtx,
         IReadOnlyList<HardwareVideoDeviceType> preferredOrder,
-        bool preferLinuxDrmPrimeForGl)
+        bool preferLinuxDrmPrimeForGl,
+        bool preferWindowsD3D11SharedHandleForGl)
     {
         var order = preferredOrder.Count > 0
             ? preferredOrder
             : DefaultDeviceOrder();
 
         var dmabufPrefer = preferLinuxDrmPrimeForGl && OperatingSystem.IsLinux();
+        var d3d11Prefer = preferWindowsD3D11SharedHandleForGl && OperatingSystem.IsWindows();
 
         foreach (var devEnum in order)
         {
@@ -75,7 +89,7 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
             if (ret < 0 || devRef == null)
                 continue;
 
-            if (!TryFindHwPixFmt(codec, devType, dmabufPrefer, out var hwPix))
+            if (!TryFindHwPixFmt(codec, devType, dmabufPrefer, d3d11Prefer, out var hwPix))
             {
                 av_buffer_unref(&devRef);
                 continue;
@@ -96,6 +110,28 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
     internal bool OutputsDrmPrimeGpuFrame =>
         _hwPixFmt == AVPixelFormat.AV_PIX_FMT_DRM_PRIME;
 
+    internal bool OutputsD3D11GpuFrame =>
+        _hwPixFmt is AVPixelFormat.AV_PIX_FMT_D3D11 or AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD;
+
+    /// <summary>
+    /// Libav's D3D11VA <c>ID3D11Device</c> pointer (COM) from <c>AVHWDeviceContext</c>, when this context uses D3D11VA.
+    /// Use for Win32 NV12 GL upload without creating a second D3D11 device in the video sink.
+    /// </summary>
+    internal nint TryGetD3D11DeviceComPtr()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!OutputsD3D11GpuFrame || _deviceRef == null)
+            return 0;
+        var pData = _deviceRef->data;
+        if (pData == null)
+            return 0;
+        var hw = (AVHWDeviceContext*)pData;
+        if (hw->type != AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA || hw->hwctx == null)
+            return 0;
+        var d3d = (AVD3D11VADeviceContext*)hw->hwctx;
+        return (nint)d3d->device;
+    }
+
     private static IReadOnlyList<HardwareVideoDeviceType> DefaultDeviceOrder()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -110,10 +146,12 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
     }
 
     private static bool TryFindHwPixFmt(AVCodec* codec, AVHWDeviceType devType, bool preferDrmPrime,
+        bool preferWindowsD3D11SharedHandle,
         out AVPixelFormat hwPixFmt)
     {
         hwPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
         AVPixelFormat drmPrime = AVPixelFormat.AV_PIX_FMT_NONE;
+        AVPixelFormat d3d11Out = AVPixelFormat.AV_PIX_FMT_NONE;
         AVPixelFormat other = AVPixelFormat.AV_PIX_FMT_NONE;
 
         for (var i = 0;; i++)
@@ -131,6 +169,8 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
             var px = cfg->pix_fmt;
             if (px == AVPixelFormat.AV_PIX_FMT_DRM_PRIME)
                 drmPrime = px;
+            else if (px is AVPixelFormat.AV_PIX_FMT_D3D11 or AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+                d3d11Out = px;
             else if (px != AVPixelFormat.AV_PIX_FMT_NONE && other == AVPixelFormat.AV_PIX_FMT_NONE)
                 other = px;
         }
@@ -141,7 +181,16 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
             return true;
         }
 
+        if (preferWindowsD3D11SharedHandle && devType == AVHWDeviceType.AV_HWDEVICE_TYPE_D3D11VA &&
+            d3d11Out != AVPixelFormat.AV_PIX_FMT_NONE)
+        {
+            hwPixFmt = d3d11Out;
+            return true;
+        }
+
         hwPixFmt = other != AVPixelFormat.AV_PIX_FMT_NONE ? other : drmPrime;
+        if (hwPixFmt == AVPixelFormat.AV_PIX_FMT_NONE && d3d11Out != AVPixelFormat.AV_PIX_FMT_NONE)
+            hwPixFmt = d3d11Out;
         return hwPixFmt != AVPixelFormat.AV_PIX_FMT_NONE;
     }
 

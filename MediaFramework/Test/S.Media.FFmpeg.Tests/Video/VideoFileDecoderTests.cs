@@ -7,6 +7,8 @@ namespace S.Media.FFmpeg.Tests.Video;
 
 public sealed class VideoFileDecoderTests : IDisposable
 {
+    private static readonly VideoDecoderOpenOptions SoftwareDecodeOnly = new() { TryHardwareAcceleration = false };
+
     private const int Width = 320;
     private const int Height = 240;
     private const int Fps = 10;
@@ -36,7 +38,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
 
         Assert.Equal(Width, decoder.Format.Width);
         Assert.Equal(Height, decoder.Format.Height);
@@ -51,7 +53,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         var frames = 0;
         while (decoder.TryReadNextFrame(out var frame))
         {
@@ -72,7 +74,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         Assert.True(decoder.TryReadNextFrame(out var frame));
         using (frame)
         {
@@ -93,7 +95,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         Assert.Contains(PixelFormat.I420, decoder.NativePixelFormats);
     }
 
@@ -102,7 +104,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         decoder.SelectOutputFormat(PixelFormat.Bgra32);
 
         Assert.Equal(PixelFormat.Bgra32, decoder.Format.PixelFormat);
@@ -122,7 +124,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         decoder.SelectOutputFormat(PixelFormat.Bgra32);
         decoder.SelectOutputFormat(PixelFormat.I420);
 
@@ -140,7 +142,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         Assert.True(decoder.TryReadNextFrame(out var frame));
         // Should not throw — release callback is one-shot.
         frame.Dispose();
@@ -152,7 +154,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         Assert.True(decoder.TryReadNextFrame(out var f1));
         f1.Dispose();
         var after1 = decoder.Position;
@@ -168,7 +170,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         while (decoder.TryReadNextFrame(out var f)) f.Dispose();
         Assert.True(decoder.IsAtEnd);
 
@@ -183,7 +185,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        using var decoder = VideoFileDecoder.Open(_videoPath);
+        using var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         Assert.Throws<ArgumentOutOfRangeException>(() => decoder.Seek(TimeSpan.FromSeconds(-1)));
     }
 
@@ -198,7 +200,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath is null) return;
 
-        var decoder = VideoFileDecoder.Open(_videoPath);
+        var decoder = VideoFileDecoder.Open(_videoPath, SoftwareDecodeOnly);
         decoder.Dispose();
         decoder.Dispose();
         Assert.Throws<ObjectDisposedException>(() => decoder.TryReadNextFrame(out _));

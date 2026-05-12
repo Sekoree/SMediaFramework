@@ -10,6 +10,6 @@ uniform sampler2D image;
 
 void main()
 {
-    vec4 t = texture(image, v_uv);
+    vec4 t = textureBicubicVec4(image, v_uv, uTexBicubicDim0);
     fragColor = vec4(t.a, t.b, t.g, t.r);
 }

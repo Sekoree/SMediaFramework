@@ -22,6 +22,14 @@ public class AudioPlayerTests
     }
 
     [Fact]
+    public void AddOutput_SinkPumpCapacity_IsVisibleInRouterStats()
+    {
+        using var player = new AudioPlayer(SampleRate, chunkSamples: 480);
+        var id = player.AddOutput(new PlainSink(Stereo), "x", sinkPumpCapacityChunks: 40);
+        Assert.Equal(40, player.Router.GetPumpStats(id).PumpCapacityChunks);
+    }
+
+    [Fact]
     public void AddOutput_NonClockedSink_NotPrimary()
     {
         using var player = new AudioPlayer(SampleRate);
@@ -104,6 +112,21 @@ public class AudioPlayerTests
         Assert.Equal(TimeSpan.FromMinutes(1), src.LastSeekTo);
         Assert.True(player.Position >= TimeSpan.FromMinutes(1));
         player.Stop();
+    }
+
+    [Fact]
+    public void RemoveOutput_AfterPrimaryRemoved_SecondClockedSinkBecomesPrimary()
+    {
+        using var player = new AudioPlayer(SampleRate);
+        var first = new ClockedPlaybackSink(Stereo);
+        var second = new ClockedPlaybackSink(Stereo);
+        player.AddOutput(first, "a");
+        player.AddOutput(second, "b");
+
+        Assert.Equal("a", player.PrimarySinkId);
+        Assert.True(player.RemoveOutput("a"));
+        Assert.Equal("b", player.PrimarySinkId);
+        Assert.Same(second, player.Clock.Master);
     }
 
     [Fact]

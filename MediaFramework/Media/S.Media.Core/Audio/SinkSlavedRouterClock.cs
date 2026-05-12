@@ -11,35 +11,55 @@ namespace S.Media.Core.Audio;
 /// (immutable) state on each tick — additions and removals take effect on the
 /// next chunk without re-binding the clock.
 /// <para>
-/// The wall-clock <paramref name="fallback"/> is constructed once with a
-/// fixed chunk size / rate. If live resampling were introduced without tearing
-/// down the router clock, sample-rate changes might not propagate through that
-/// fallback path — revisit if dynamic rate shifts become a requirement.
+/// The wall-clock fallback is created <strong>lazily</strong> the first time
+/// <see cref="Reset"/> runs or the first time a tick needs it, using the
+/// <paramref name="sampleRate"/> and <paramref name="chunkSamples"/> captured
+/// here (so it always matches the owning router's current rate).
+/// </para>
+/// <para>
+/// <paramref name="resolveSink"/> runs on the router producer thread once per
+/// chunk. Avoid blocking on the same lock the router holds while mutating the
+/// graph; read a lock-free snapshot (as <see cref="AudioRouter"/> does via
+/// <c>Volatile.Read</c> of its immutable state) so <see cref="SlaveTo"/> /
+/// <see cref="RetargetSlaveClock"/> cannot deadlock with the run loop.
 /// </para>
 /// </remarks>
 public sealed class SinkSlavedRouterClock : IRouterClock
 {
+    private readonly object _fallbackGate = new();
     private readonly Func<IClockedSink?> _resolveSink;
+    private readonly int _sampleRate;
     private readonly int _chunkSamples;
-    private readonly IRouterClock _fallback;
+    private WallClockRouterClock? _lazyFallback;
 
-    public SinkSlavedRouterClock(int chunkSamples, Func<IClockedSink?> resolveSink, IRouterClock fallback)
+    public SinkSlavedRouterClock(int sampleRate, int chunkSamples, Func<IClockedSink?> resolveSink)
     {
+        if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate));
         if (chunkSamples <= 0) throw new ArgumentOutOfRangeException(nameof(chunkSamples));
         ArgumentNullException.ThrowIfNull(resolveSink);
-        ArgumentNullException.ThrowIfNull(fallback);
+        _sampleRate = sampleRate;
         _chunkSamples = chunkSamples;
         _resolveSink = resolveSink;
-        _fallback = fallback;
     }
 
-    public void Reset() => _fallback.Reset();
+    public void Reset()
+    {
+        lock (_fallbackGate)
+        {
+            _lazyFallback ??= new WallClockRouterClock(_sampleRate, _chunkSamples);
+            _lazyFallback.Reset();
+        }
+    }
 
     public bool WaitForNextChunk(CancellationToken token)
     {
         var sink = _resolveSink();
-        return sink is null
-            ? _fallback.WaitForNextChunk(token)
-            : sink.WaitForCapacity(_chunkSamples, token);
+        if (sink is not null)
+            return sink.WaitForCapacity(_chunkSamples, token);
+
+        WallClockRouterClock fb;
+        lock (_fallbackGate)
+            fb = _lazyFallback ??= new WallClockRouterClock(_sampleRate, _chunkSamples);
+        return fb.WaitForNextChunk(token);
     }
 }

@@ -2,8 +2,10 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Optional platform/hardware video plumbing (Vulkan external memory,
-/// DRM PRIME FDs, DXGI shared handles, …). Defaults are no-ops until a backend
-/// populates descriptors.
+/// DRM PRIME FDs, DXGI shared handles, Metal IOSurface, …). Defaults are no-ops until a backend
+/// populates descriptors. Concrete packers include <see cref="LinuxDmabufNv12Interop"/>,
+/// <see cref="WindowsNv12SharedHandleInterop"/>, <see cref="WindowsNv12SharedHandleInterop.AllocToken(VideoWin32Nv12Backing, int, int)"/>, <see cref="VulkanExternalNv12Interop"/>, and
+/// <see cref="MetalIosurfaceNv12Interop"/>.
 /// </summary>
 public interface IHardwareVideoInterop
 {

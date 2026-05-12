@@ -22,9 +22,10 @@ namespace S.Media.Core.Audio;
 /// sum.
 /// </para>
 /// <para>
-/// All sources and sinks must run at the router's sample rate (no resampling
-/// in v1). Channel counts may differ; the route's <see cref="ChannelMap"/>
-/// bridges the gap.
+/// All sources and sinks must agree on the router's nominal sample rate for
+/// routing and mixing. Optional per-leaf wrappers (e.g. FFmpeg
+/// <c>AdaptiveRateAudioSink</c>) may apply a tiny rate tweak only on the path
+/// into that sink without changing the router's graph rate.
 /// </para>
 /// <para>
 /// The graph is <strong>fully dynamic</strong> — sources, sinks, and routes
@@ -34,11 +35,12 @@ namespace S.Media.Core.Audio;
 /// blocking.
 /// </para>
 /// <para>
-/// <strong>Per-sink threading</strong>: every sink gets its own
-/// <see cref="SinkPump"/> — a small bounded chunk queue plus a drainer
-/// thread that calls <see cref="IAudioSink.Submit"/>. Slow or blocking sinks
-/// (e.g. a clocked NDI sender) cannot throttle the router or any other sink;
-/// they only fill their own pump and eventually drop oldest chunks.
+/// <strong>Per-sink threading</strong>: every sink gets its own bounded chunk
+/// queue plus a drainer thread that calls <see cref="IAudioSink.Submit"/>.
+/// Slow or blocking sinks (e.g. a clocked NDI sender) cannot throttle the router
+/// or any other sink; they only fill their own queue and eventually drop oldest chunks.
+/// Queue depth defaults to the router constructor's <c>pumpCapacityChunks</c>;
+/// <see cref="AddSink(IAudioSink, string?, int?)"/> can override depth per sink.
 /// </para>
 /// <para>
 /// <strong>Pacing</strong>: the router is paced by an <see cref="IRouterClock"/>.
@@ -46,10 +48,10 @@ namespace S.Media.Core.Audio;
 /// to bind production to a specific <see cref="IClockedSink"/> (typically a
 /// PortAudio output) for sample-accurate sync.
 /// </para>
-    /// <para>
-    /// <strong>Volume changes are click-free</strong>: <see cref="SetRouteGain"/>
-    /// updates the route's target in a concurrent map (no immutable graph rebuild);
-    /// the next chunk linearly interpolates from the
+/// <para>
+/// <strong>Volume changes are click-free</strong>: <see cref="SetRouteGain"/>
+/// updates the route's target in a concurrent map (no immutable graph rebuild);
+/// the next chunk linearly interpolates from the
 /// previously-applied gain to the new target across its samples, so even a
 /// hard 1.0 → 0.0 transition produces a smooth fade rather than a discontinuity.
 /// </para>
@@ -59,14 +61,16 @@ namespace S.Media.Core.Audio;
 /// (PortAudio's hardware crystal, NDI sender's internal pace) drift relative
 /// to the master at typical ±50 ppm hardware tolerance — over hours, the
 /// non-slaved sink's pump accumulates fill or empty pressure and eventually
-    /// drops oldest chunks. Per-sink rate adaptation / resampling is a known
-    /// follow-up; subscribe to <see cref="PumpPressure"/> when
-    /// <c>Dropped</c> increments so a UI host can react to sustained drops.
+/// drops oldest chunks. Subscribe to <see cref="PumpPressure"/> when
+/// <c>Dropped</c> increments so a host can react. For automatic easing on one
+/// slow sink without retuning the master clock, wrap that sink with the FFmpeg
+/// <c>AdaptiveRateAudioSink</c> (per-sink <c>swresample</c> driven by
+/// <see cref="PumpPressurePlaybackHintMonitor"/> filtered to that sink id).
 /// </para>
 /// </remarks>
 public sealed class AudioRouter : IDisposable
 {
-    private readonly int _sampleRate;
+    private int _sampleRate;
     private readonly int _chunkSamples;
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<SinkPump> _pumpsAwaitingDispose = new();
@@ -79,6 +83,8 @@ public sealed class AudioRouter : IDisposable
 
     private RouterState _state = RouterState.Empty;
     private IRouterClock _clock;
+    /// <summary>When pacing uses <see cref="SinkSlavedRouterClock"/>, the sink id passed to <see cref="SlaveTo"/> / <see cref="RetargetSlaveClock"/>.</summary>
+    private string? _slaveClockSinkId;
     private Thread? _thread;
     private CancellationTokenSource? _cts;
     private bool _isRunning;
@@ -174,7 +180,12 @@ public sealed class AudioRouter : IDisposable
         }
     }
 
-    public string AddSink(IAudioSink sink, string? id = null)
+    /// <param name="pumpCapacityChunks">
+    /// Bounded depth of this sink's background chunk queue (see remarks on
+    /// <see cref="AudioRouter"/>). <c>null</c> uses the router constructor default.
+    /// When set, must be at least 2.
+    /// </param>
+    public string AddSink(IAudioSink sink, string? id = null, int? pumpCapacityChunks = null)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -182,6 +193,10 @@ public sealed class AudioRouter : IDisposable
         if (sink.Format.SampleRate != _sampleRate)
             throw new InvalidOperationException(
                 $"sink sample rate {sink.Format.SampleRate} doesn't match router's {_sampleRate}");
+
+        var capacity = pumpCapacityChunks ?? _pumpCapacityChunks;
+        if (capacity < 2)
+            throw new ArgumentOutOfRangeException(nameof(pumpCapacityChunks), "must be >= 2 when specified");
 
         lock (_gate)
         {
@@ -191,7 +206,7 @@ public sealed class AudioRouter : IDisposable
                 throw new ArgumentException($"sink ID '{id}' is already registered", nameof(id));
 
             var floatsPerChunk = _chunkSamples * sink.Format.Channels;
-            var pump = new SinkPump(this, sink, _pumpCapacityChunks, floatsPerChunk, id);
+            var pump = new SinkPump(this, sink, capacity, floatsPerChunk, id);
             var entry = new SinkEntry(id, sink, pump);
             Volatile.Write(ref _state, _state with { Sinks = _state.Sinks.Add(id, entry) });
             return id;
@@ -363,6 +378,42 @@ public sealed class AudioRouter : IDisposable
         }
     }
 
+    /// <summary>Try to resolve a live sink instance by id (for capability checks outside the router).</summary>
+    public bool TryGetSink(string sinkId, out IAudioSink? sink)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sinkId);
+        lock (_gate)
+        {
+            if (_state.Sinks.TryGetValue(sinkId, out var entry))
+            {
+                sink = entry.Sink;
+                return true;
+            }
+        }
+
+        sink = null;
+        return false;
+    }
+
+    /// <summary>
+    /// Point <see cref="SinkSlavedRouterClock"/> pacing at <paramref name="sinkId"/>.
+    /// Safe while the router is running — the next <see cref="IRouterClock.WaitForNextChunk"/> uses the new sink.
+    /// </summary>
+    public void RetargetSlaveClock(string sinkId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sinkId);
+        lock (_gate)
+        {
+            if (!_state.Sinks.TryGetValue(sinkId, out var entry))
+                throw new ArgumentException($"unknown sink ID '{sinkId}'", nameof(sinkId));
+            if (entry.Sink is not IClockedSink)
+                throw new ArgumentException($"sink '{sinkId}' does not implement IClockedSink", nameof(sinkId));
+
+            _slaveClockSinkId = sinkId;
+            _clock = new SinkSlavedRouterClock(_sampleRate, _chunkSamples, () => ResolveClockedSink(sinkId));
+        }
+    }
+
     // --- clocking ----------------------------------------------------------
 
     /// <summary>
@@ -377,7 +428,55 @@ public sealed class AudioRouter : IDisposable
         {
             if (_isRunning)
                 throw new InvalidOperationException("cannot replace clock while router is running");
+            _slaveClockSinkId = null;
             _clock = clock;
+        }
+    }
+
+    /// <summary>
+    /// Moves the router's nominal sample rate to <paramref name="newSampleRate"/> while stopped.
+    /// Every registered source and sink must already use that rate. Rebuilds the wall or slaved clock.
+    /// </summary>
+    public void ReconfigureSampleRate(int newSampleRate)
+    {
+        if (newSampleRate <= 0)
+            throw new ArgumentOutOfRangeException(nameof(newSampleRate));
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_isRunning)
+                throw new InvalidOperationException("ReconfigureSampleRate requires a stopped router.");
+
+            foreach (var kv in _state.Sources)
+            {
+                if (kv.Value.Source.Format.SampleRate != newSampleRate)
+                    throw new InvalidOperationException(
+                        $"source '{kv.Key}' is {kv.Value.Source.Format.SampleRate} Hz; all sources must already match {newSampleRate} Hz before reconfiguration.");
+            }
+
+            foreach (var kv in _state.Sinks)
+            {
+                if (kv.Value.Sink.Format.SampleRate != newSampleRate)
+                    throw new InvalidOperationException(
+                        $"sink '{kv.Key}' is {kv.Value.Sink.Format.SampleRate} Hz; all sinks must already match {newSampleRate} Hz before reconfiguration.");
+            }
+
+            _sampleRate = newSampleRate;
+            if (_slaveClockSinkId is { } sid)
+            {
+                if (!_state.Sinks.ContainsKey(sid))
+                    throw new InvalidOperationException($"slaved sink '{sid}' is no longer registered.");
+                _clock = new SinkSlavedRouterClock(newSampleRate, _chunkSamples, () => ResolveClockedSink(sid));
+            }
+            else if (_clock is WallClockRouterClock)
+            {
+                _clock = new WallClockRouterClock(newSampleRate, _chunkSamples);
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "ReconfigureSampleRate: clock must be WallClockRouterClock (default) or SinkSlavedRouterClock from SlaveTo / RetargetSlaveClock. Install a known clock with SetClock first.");
+            }
         }
     }
 
@@ -400,8 +499,8 @@ public sealed class AudioRouter : IDisposable
             if (entry.Sink is not IClockedSink)
                 throw new ArgumentException($"sink '{sinkId}' does not implement IClockedSink", nameof(sinkId));
 
-            var fallback = new WallClockRouterClock(_sampleRate, _chunkSamples);
-            _clock = new SinkSlavedRouterClock(_chunkSamples, () => ResolveClockedSink(sinkId), fallback);
+            _slaveClockSinkId = sinkId;
+            _clock = new SinkSlavedRouterClock(_sampleRate, _chunkSamples, () => ResolveClockedSink(sinkId));
         }
     }
 
@@ -440,7 +539,8 @@ public sealed class AudioRouter : IDisposable
     /// <see cref="Stop"/> reaches its sink. Use <see cref="Pause"/> instead for
     /// "stop now and go silent immediately."
     /// </summary>
-    public void Stop(CancellationToken cancellationToken = default) => StopInternal(drain: true, cancellationToken);
+    public void Stop(CancellationToken cancellationToken = default) =>
+        StopInternal(drain: true, flushAfterAbandon: false, cancellationToken);
 
     /// <summary>
     /// Immediate-silence stop: tears the run loop down, abandons any audio
@@ -451,36 +551,32 @@ public sealed class AudioRouter : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The sink enumeration for <see cref="IFlushableSink.Flush"/> can differ from the set that was
-    /// actively driven if <see cref="AddSink"/> / <see cref="RemoveSink"/> run concurrently —
-    /// in practice callers invoke <see cref="Pause"/> from the same synchronization domain that owns routing.
+    /// Sink snapshots for <see cref="IFlushableSink.Flush"/> are taken in the same critical section
+    /// that stops the run loop, so the list matches the graph that was active for the final mixed
+    /// chunk (still invoke <see cref="Pause"/> from the same synchronization domain that owns routing
+    /// if you mutate sinks while paused).
     /// </para>
     /// </remarks>
     public void Pause()
     {
         if (!IsRunning) return;
-        StopInternal(drain: false);
-
-        IAudioSink[] sinks;
-        lock (_gate) sinks = [.. _state.Sinks.Values.Select(e => e.Sink)];
-        foreach (var s in sinks)
-        {
-            if (s is IFlushableSink f)
-            {
-                try { f.Flush(); }
-                catch (Exception ex)
-                {
-                    if (_log is { } l)
-                        l.LogError(ex, "IFlushableSink.Flush failed");
-                    else
-                        MediaDiagnostics.LogError(ex, "AudioRouter Pause Flush");
-                }
-            }
-        }
+        StopInternal(drain: false, flushAfterAbandon: true, CancellationToken.None);
     }
 
     /// <summary>Alias for <see cref="Start"/>. Reads as a pair with <see cref="Pause"/>.</summary>
-    /// <remarks>The first chunk after a pause may be silence‑padded where decoders emit short reads (see run‑loop scratch pad); this is intentional and inaudible in most setups.</remarks>
+    /// <remarks>
+    /// <para>
+    /// The first chunk after a pause may be silence‑padded where sources emit
+    /// short reads (see run‑loop scratch pad); this is usually inaudible.
+    /// </para>
+    /// <para>
+    /// For seek/resume-heavy hosts using FFmpeg file decoders, a short gap can
+    /// come from resampler / decoder internal queues: before <see cref="Start"/>,
+    /// you may <see cref="ISeekableSource.Seek"/> to the current playhead (same
+    /// timestamp) to reset converter state, or perform an application-level
+    /// prebuffer pass so the first mixed chunk is full.
+    /// </para>
+    /// </remarks>
     public void Resume() => Start();
 
     /// <summary>
@@ -518,11 +614,12 @@ public sealed class AudioRouter : IDisposable
         if (wasRunning) Resume();
     }
 
-    private void StopInternal(bool drain, CancellationToken cancellationToken = default)
+    private void StopInternal(bool drain, bool flushAfterAbandon, CancellationToken cancellationToken = default)
     {
         Thread? toJoin;
         CancellationTokenSource? toDispose;
         SinkPump[] activePumps;
+        IAudioSink[]? sinksForFlush = null;
         lock (_gate)
         {
             if (!_isRunning) return;
@@ -532,6 +629,8 @@ public sealed class AudioRouter : IDisposable
             _thread = null;
             _isRunning = false;
             activePumps = [.. _state.Sinks.Values.Select(e => e.Pump)];
+            if (flushAfterAbandon)
+                sinksForFlush = [.. _state.Sinks.Values.Select(e => e.Sink)];
         }
         toDispose?.Cancel();
         CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(2), cancellationToken);
@@ -543,6 +642,23 @@ public sealed class AudioRouter : IDisposable
             else p.AbandonQueue();
         }
         while (_pumpsAwaitingDispose.TryDequeue(out var pending)) pending.Dispose();
+
+        if (sinksForFlush is null) return;
+
+        foreach (var s in sinksForFlush)
+        {
+            if (s is IFlushableSink f)
+            {
+                try { f.Flush(); }
+                catch (Exception ex)
+                {
+                    if (_log is { } l)
+                        l.LogError(ex, "IFlushableSink.Flush failed");
+                    else
+                        MediaDiagnostics.LogError(ex, "AudioRouter Pause Flush");
+                }
+            }
+        }
     }
 
     public void Dispose()
@@ -553,7 +669,24 @@ public sealed class AudioRouter : IDisposable
         lock (_gate)
         {
             foreach (var (_, entry) in _state.Sinks)
-                entry.Pump.Dispose();
+            {
+                try
+                {
+                    entry.Pump.Dispose();
+                }
+#if DEBUG
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, "AudioRouter.Dispose: SinkPump.Dispose");
+                }
+#else
+                catch
+                {
+                    // best-effort shutdown
+                }
+#endif
+            }
+
             _state = RouterState.Empty;
         }
     }
@@ -641,7 +774,7 @@ public sealed class AudioRouter : IDisposable
         }
     }
 
-    private static void ApplyRoute(
+    internal static void ApplyRoute(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
         ChannelMap map, float fromGain, float toGain, int samplesPerChannel)
@@ -652,7 +785,23 @@ public sealed class AudioRouter : IDisposable
         // Steady-state: same gain at both ends, take the constant-gain fast path.
         if (fromGain == toGain)
         {
+            if (ChannelMap.TryAccumulateStereoFullSilenceStereoInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
             if (ChannelMap.TryAccumulateStereoIdentityInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
+            if (ChannelMap.TryAccumulateStereoDupSingleChannelInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
+            if (ChannelMap.TryAccumulateStereoSilenceOrZeroDupInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
+            if (ChannelMap.TryAccumulateMonoSilenceOrZeroDupInterleaved(src, srcChannels,
                     dst, dstChannels, map, samplesPerChannel, fromGain))
                 return;
 
@@ -660,7 +809,15 @@ public sealed class AudioRouter : IDisposable
                     dst, dstChannels, map, samplesPerChannel, fromGain))
                 return;
 
+            if (ChannelMap.TryAccumulateMonoDupNInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
             if (ChannelMap.TryAccumulateStereoDuplexWideInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
+            if (ChannelMap.TryAccumulateStereoToNInterleaved(src, srcChannels,
                     dst, dstChannels, map, samplesPerChannel, fromGain))
                 return;
 
@@ -704,7 +861,7 @@ public sealed class AudioRouter : IDisposable
     public sealed record Route(string SourceId, string SinkId, ChannelMap Map, float Gain);
 
     /// <summary>Snapshot of pump throughput stats.</summary>
-    public readonly record struct SinkPumpStats(long Enqueued, long Processed, long Dropped);
+    public readonly record struct SinkPumpStats(long Enqueued, long Processed, long Dropped, int PumpCapacityChunks);
 
     private sealed record SourceEntry(string Id, IAudioSource Source, float[] Scratch);
     private sealed record SinkEntry(string Id, IAudioSink Sink, SinkPump Pump);
@@ -732,8 +889,8 @@ public sealed class AudioRouter : IDisposable
     /// Zero-copy producer path: the router fills <see cref="WorkingBuffer"/>
     /// in place and calls <see cref="Commit"/> to publish it. The pump
     /// rotates the working buffer with one from its free-pool on every
-    /// commit; a fresh buffer is allocated only if the pool is empty (sink
-    /// can't keep up — also accounts as a drop).
+    /// commit; if both the pool and consumer queue are empty, the mixed chunk
+    /// is dropped in place (no fresh allocation) and the same buffer is reused for the next mix.
     /// </remarks>
     private sealed class SinkPump : IDisposable
     {
@@ -745,6 +902,7 @@ public sealed class AudioRouter : IDisposable
         private readonly Thread _thread;
         private readonly CancellationTokenSource _cts = new();
         private readonly int _floatsPerChunk;
+        private readonly int _pumpCapacityChunks;
         private float[] _working;
         private long _enqueued;
         private long _processed;
@@ -754,7 +912,8 @@ public sealed class AudioRouter : IDisposable
         public SinkPumpStats Stats => new(
             Volatile.Read(ref _enqueued),
             Volatile.Read(ref _processed),
-            Volatile.Read(ref _dropped));
+            Volatile.Read(ref _dropped),
+            _pumpCapacityChunks);
 
         /// <summary>
         /// Producer-thread scratch — the buffer the router currently writes
@@ -769,6 +928,7 @@ public sealed class AudioRouter : IDisposable
             _sinkId = sinkId;
             _sink = sink;
             _floatsPerChunk = floatsPerChunk;
+            _pumpCapacityChunks = capacityChunks;
             _ready = new BlockingCollection<float[]>(boundedCapacity: capacityChunks);
             for (var i = 0; i < capacityChunks; i++)
                 _free.Enqueue(new float[floatsPerChunk]);
@@ -806,7 +966,12 @@ public sealed class AudioRouter : IDisposable
                 if (_ready.TryTake(out next!))
                     RecordDrop();
                 else
-                    next = new float[_floatsPerChunk];
+                {
+                    // Pool and consumer queue are empty: drop this mixed chunk and
+                    // reuse the same buffer next iteration — avoids allocating on the producer thread.
+                    RecordDrop();
+                    return;
+                }
             }
             _working = next;
 
@@ -876,13 +1041,25 @@ public sealed class AudioRouter : IDisposable
             if (_disposed) return;
             _disposed = true;
             try { _ready.CompleteAdding(); }
+#if DEBUG
             catch (ObjectDisposedException ex) { MediaDiagnostics.LogError(ex, "SinkPump.CompleteAdding"); }
+#else
+            catch (ObjectDisposedException) { /* queue may already be completed or disposed */ }
+#endif
 
             CooperativePlaybackJoin.JoinThread(_thread, TimeSpan.FromSeconds(2));
             if (_thread.IsAlive)
             {
                 try { _cts.Cancel(); }
-                catch { /* best effort */ }
+                catch (Exception ex)
+                {
+#if DEBUG
+                    MediaDiagnostics.LogError(ex, "SinkPump.Dispose: CancellationTokenSource.Cancel");
+#else
+                    _ = ex;
+#endif
+                }
+
                 CooperativePlaybackJoin.JoinThread(_thread, TimeSpan.FromSeconds(1));
             }
 

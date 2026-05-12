@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Video;
 using Xunit;
@@ -190,6 +191,29 @@ internal sealed class FakeVideoSink : IVideoSink
     }
 
     public void WaitForConfigured() => _configured.Wait(TimeSpan.FromSeconds(1));
+}
+
+internal sealed class SeekableFakeVideoSource : IVideoSource, ISeekableSource
+{
+    private readonly FakeVideoSource _inner;
+
+    public SeekableFakeVideoSource(FakeVideoSource inner) => _inner = inner;
+
+    public TimeSpan Duration => TimeSpan.FromHours(1);
+    public TimeSpan Position => TimeSpan.Zero;
+
+    public void Seek(TimeSpan position)
+    {
+    }
+
+    public VideoFormat Format => _inner.Format;
+    public IReadOnlyList<PixelFormat> NativePixelFormats => _inner.NativePixelFormats;
+    public bool IsExhausted => _inner.IsExhausted;
+    public int Reads => _inner.Reads;
+    public int UndisposedFramesHandedOut => _inner.UndisposedFramesHandedOut;
+    public void SelectOutputFormat(PixelFormat format) => _inner.SelectOutputFormat(format);
+
+    public bool TryReadNextFrame(out VideoFrame frame) => _inner.TryReadNextFrame(out frame);
 }
 
 internal sealed class FakeMediaClock : IMediaClock

@@ -1,6 +1,18 @@
 # Media Framework — Review & Improvement Checklist
 
-**Last updated:** 2026-05-13 (deep library pass) — §**Deep library audit (2026-05-13)** walks **`S.Media.Core`**, **`S.Media.FFmpeg`**, **`S.Media.PortAudio`**, **`S.Media.NDI`**, **`S.Media.SDL3`**, **`S.Media.OpenGL`**, **PALib**, **JackLib**, **NDILib**, **PMLib**, **OSCLib**, and **Tools**; fixes **`OSCServer`** oversize counter atomicity + **`PlaybackSmoke`** drain-phase HUD timer; flags **`MFPlayer.sln`** duplicate **`VideoPlaybackSmoke`** entry. Prior §**Implementation verification** table unchanged in substance.
+**Last updated:** 2026-05-12 — **Windows NV12 D3D11→GL**: **`Nv12Win32SharedHandleGpuUploader`** (`**`WGL_NV_DX_interop`** GPU path, staging **`Map`/`glTexSubImage2D`** fallback), **`SDL3GLVideoSink`** borrows a host **`ID3D11Device`** for NV12 + **`RetainD3D11SharedHandleForGl`**, **`VideoPlaybackSmoke --d3d11-gl`**; **`MediaDiagnostics.LogInformation`**; **`PortAudioOutput.CallbackFaultException`** (first PA callback fault). **Previous:** **`PortAudioOutput.ElapsedSinceStart`**: **`Pa_GetStreamTime`** + per-segment anchor against **`PlayedSamples`** so **`IPlaybackClock`** advances between output callbacks (fixes **~47 Hz** **`MediaClock`** / **`VideoPlayer`** gating when **`PlayedSamples`** only moved once per buffer). **Previous:** 2026-05-14 — **DMA-BUF NV12 multi-sink**: **`VideoDmabufNv12Backing`** refcount + **`VideoFrame.CreateNv12DmabufSharedReference`**; **`VideoRouter`** / **`VideoOutputRouter`** fan-out when all branches stay **NV12** (no **`VideoCpuFrameConverter`** on dma-buf). **Previous:** **`AudioRouter.AddSink`** / **`AudioPlayer.AddOutput`**: optional **per-sink `pumpCapacityChunks`** ( **`SinkPumpStats.PumpCapacityChunks`** ); **`VideoPlaybackSmoke`** NDI audio default **24** with **`--ndi-audio-pump-chunks=`** override. **Previous:** **`NDIAudioSink`**: native packed buffer grows with **≥2× headroom** + power-of-two sizing, **`NativeMemory.Realloc`** (fewer free/alloc cycles when chunk sizes shift). **`OSCServer.Dispose` / `DisposeAsync`**: **`#if DEBUG`** **`ILogger.LogDebug`** on best-effort shutdown catches (no **`S.Media.Core`** dependency). **Previous:** **`MediaClockExtensions.SetMasterChain`** (**`IMediaClock`** + **`CompositePlaybackClock`**) for priority-ordered **`IPlaybackClock`** masters; **`Doc/Todo.md`** suggested backlog #6 marked done. **Previous:** **`FFmpegRuntime.EnsureInitialized`**: first init wins; a later conflicting **`rootPath`** is ignored and logged once (**`MediaDiagnostics.LogWarning`**). **`AudioRouter.Resume`** `<remarks>` document pause→resume mitigations. **`SinkPump.Dispose`**: **`#if DEBUG`** log on **`Cancel`** failure. **`Doc/Todo.md`**: NDI ingest **`IPlaybackClock`** line synced to shipped **`NdiIngestPlaybackClock`**. **Previous:** **`AudioRouter.Pause`**: **`IFlushableSink`** snapshot + **`Flush`** in the same stop pass as the run-loop teardown (no second **`lock`**); **`Doc/Todo.md`** checkboxes synced to **`MediaContainerSharedDemux`** / **`AvPlaybackCoordinator`** seek guidance. **Previous (2026-05-13):** **`AudioPlayer.RemoveOutput`** auto-promotes the next **`IClockedSink`**; **`AudioRouter.RetargetSlaveClock`** + **`TryGetSink`**; **`SinkPump.Commit`** drops without allocating when pool + queue are empty; **`NDIAudioSink`** stamps **100 ns** timecodes; **`VideoPlaybackSmoke`** uses **`VideoPtsClock`** when audio is missing, larger **PortAudio** queue target, **`ndiDr`** HUD, **`clockAudio: true`** for NDI; **`AvPlaybackCoordinator.Play`** optional **`videoOnlyMaster`**, **`Seek`** updates the video clock when audio is null.
+
+**Previous update:** 2026-05-12 — **Checklist hygiene**: evening audit **`[~]`** items reconciled to **`[x]`** where shipped; split **`SinkSlavedRouterClock`** vs dynamic-router-rate **`[ ]`**; **`RUN_MEDIA_SOAK=1`** optional heavier **`MediaContainerDecoderSoakTests`** rounds; **`VideoFileDecoder`** `<remarks>` on pass-through arena; **`Doc/Todo.md`** executive **PortAudio** / decoder lines.
+
+**Previous update:** 2026-05-12 — **Per-sink adaptive resampling**: **`PumpPressurePlaybackHintMonitor`** sink-id overload; **`S.Media.FFmpeg.Audio.AdaptiveRateAudioSink`** (**`swresample`**, **`PumpPressure`**-driven); tests; **`AudioRouter`** `<remarks>` + **`Doc/Todo.md`** roadmap.
+
+**Previous update:** 2026-05-12 — **`SinkSlavedRouterClock`**: expanded **`SinkSlavedRouterClockTests`** (delegation, lazy wall fallback, sink null ↔ present toggling, pre-cancelled **`CancellationToken`** on sink + wall paths, ctor validation); **`<remarks>`** on **`resolveSink`** threading vs **`AudioRouter`** lock-free snapshot.
+
+**Previous update:** 2026-05-12 — **Suggested backlog #10**: teardown diagnostics — **`SinkPump.CompleteAdding`** **`ObjectDisposedException`** and **`VideoPlayer.OnVideoTick`** submit failure logs only in **`#if DEBUG`** ( **`MediaDiagnostics`** ); **`OSCServer`** / **`AudioRouter.Dispose`** / **`SinkPump.Dispose`** Cancel / **`AudioPlayer`** / inner frame-**`Dispose`** already matched this pattern.
+
+**Previous update:** 2026-05-12 — §**Suggested backlog #3** (fuzz harness): **`ApplyAndApplyAdditive_MultiChannelRandomLayouts_MatchNaive`** (**3–12** src ch); **`AudioRouterTests.RunLoop_MultiSourceStereoDupAndFullSilence_MatchesReference`**; live seeded graph map pool **`[-1,-1]`**; **`AudioRouterLiveGraphSeededTests`** **`stackalloc`** hoisted (**CA2014**).
+
+**Previous update:** 2026-05-12 — **`ChannelMap`**: SIMD **`TryAccumulateStereoDupSingleChannelInterleaved`** (**`[0,0]`** / **`[1,1]`**) + **`TryAccumulateStereoFullSilenceStereoInterleaved`** (**`[-1,-1]`**); **`ChannelMapTests`** coverage; **`AudioRouter.ApplyRoute`** steady-gain fast-path order aligned with **`ApplyAdditive`**.
 
 **Previous update:** 2026-05-13 — §**Implementation verification (2026-05-13)** re-checked representative `[x]` claims + full `dotnet test MFPlayer.sln` (green).
 
@@ -14,9 +26,9 @@ Legend: `[x]` done, `[~]` partial / best-effort, `[ ]` intentional future work.
 
 ---
 
-## Implementation verification (2026-05-13)
+## Implementation verification (2026-05-12)
 
-**Automated:** `dotnet build MFPlayer.sln` (0 warnings) and `dotnet test MFPlayer.sln` — **S.Media.Core.Tests** 132, **S.Media.FFmpeg.Tests** 35, **S.Media.PortAudio.Tests** 15, **S.Media.OpenGL.Tests** 2 — all passed.
+**Automated:** `dotnet build MFPlayer.sln` (0 warnings) and `dotnet test MFPlayer.sln` — **S.Media.Core.Tests** 189, **S.Media.FFmpeg.Tests** 56, **S.Media.PortAudio.Tests** 19, **S.Media.OpenGL.Tests** 3, **S.Media.NDI.Tests** 5 — all passed.
 
 **Spot-checked `[x]` items (code matches the checklist, no untick):**
 
@@ -32,12 +44,11 @@ Legend: `[x]` done, `[~]` partial / best-effort, `[ ]` intentional future work.
 | `MediaClock.Pause`/`Stop` + cancellation | `MediaClock.cs` — `Pause(CancellationToken)` drives cooperative driver join |
 | SDL `Submit` disposed throw + PresentFrame logs | `SDL3GLVideoSink` / `SDL3VideoSink` — `ObjectDisposedException.ThrowIf`; `MediaDiagnostics.LogError` on PresentFrame |
 | `VideoPlayer.OnVideoTick` Submit errors | `MediaDiagnostics.LogError(ex, "VideoPlayer.OnVideoTick sink Submit")` |
+| `PortAudioOutput` callback fault detail | `CallbackFaultException` — first `catch` in native callback (`Interlocked.CompareExchange`); cleared on next `Start` | §**1.1** “prior GL correctness” items (unpack restore, viewport fit, HDR uniforms, all samplers) — no regressions observed in tests/build; treat as inherited from the prior audit unless you touch that code.
 
-**Not re-audited line-by-line in this pass:** §**1.1** “prior GL correctness” items (unpack restore, viewport fit, HDR uniforms, all samplers) — no regressions observed in tests/build; treat as inherited from the prior audit unless you touch that code.
+**Navigation:** Linux dma-buf uploader class **`Nv12DmabufGpuUploader`** lives in **`S.Media.OpenGL/EglDmabufNv12Uploader.cs`**. Windows shared-handle uploader is **`Nv12Win32SharedHandleGpuUploader`** in **`S.Media.OpenGL/Nv12Win32SharedHandleGpuUploader.cs`**.
 
-**Navigation:** the GPU uploader class is named **`Nv12DmabufGpuUploader`** but lives in file **`EglDmabufNv12Uploader.cs`** (not `Nv12DmabufGpuUploader.cs`) — update cross-refs if you add a second uploader.
-
-**Silent `catch` — doc vs code:** The evening audit still applies to **playback hot paths** (`OnVideoTick` outer catch, SDL pump / render-loop `PresentFrame`, event `SafeRaise*`). **Dispose / teardown** still intentionally swallows exceptions in several places (`VideoPlayer` final `StopInternal`, `SinkPump.Dispose` around `_cts.Cancel()`, `SDL3GLVideoSink` GL/renderer dispose, `NDIOutput` / `NDIVideoSender.FlushAsync`, `YuvVideoRenderer` uploader dispose, `AudioPlayer.Dispose`). That is normal for shutdown; optional improvement is **debug-only** logging behind a flag.
+**Silent `catch` — doc vs code:** The evening audit still applies to **playback hot paths** (`OnVideoTick` outer catch, SDL pump / render-loop `PresentFrame`, event `SafeRaise*`). **Dispose / teardown** still intentionally swallows exceptions in several places (`SinkPump.Dispose` around `_cts.Cancel()`, `SDL3GLVideoSink` GL/renderer dispose, `NDIOutput` / `NDIVideoSender.FlushAsync`, `YuvVideoRenderer` uploader dispose). **`AudioRouter.Dispose`**, **`VideoPlayer.Dispose`** / **`VideoPlayer.OnVideoTick`** frame **`Dispose`** after a failed **`Submit`**, and **`AudioPlayer.Dispose`** log failures in **`#if DEBUG`** via **`MediaDiagnostics`**. **`OSCServer.Dispose`** / **`DisposeAsync`** use **`ILogger`** **`LogDebug`** on cooperative shutdown failures (**`#if DEBUG`** in **`Dispose`**). That is normal for shutdown; optional improvement is **debug-only** logging behind a flag elsewhere.
 
 ---
 
@@ -48,27 +59,28 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 ### `S.Media.Core`
 
 - **Strengths:** `AudioRouter` immutable graph snapshots + per-sink `SinkPump`; `MediaClock` cooperative driver shutdown; `VideoPlayer` queue + late-frame policy documented in code.
-- **Watch:** `AudioRouter.Pause` / `Flush` re-entrancy still `[~]` in the 2026-05-12 audit. Multi-sink ppm drift remains design-level (see Architecture roadmap).
+- **Watch:** Multi-sink ppm drift remains design-level (see Architecture roadmap). **`AudioRouter.Pause`** / **`Flush`** snapshotting is now **`[x]`** (single **`_gate`** pass).
 
 ### `S.Media.FFmpeg`
 
-- **`FFmpegRuntime.EnsureInitialized`:** first successful call wins; a later call with a **different** `rootPath` is ignored — document for hosts that hot-swap FFmpeg builds (`[~]` contract).
-- **Decoders:** `VideoFileDecoder` / `AudioFileDecoder` remain single-threaded decode contracts; passthrough arena lock vs release thread already in evening backlog.
+- **`FFmpegRuntime.EnsureInitialized`:** first successful call wins; a later call with a **different** non-null `rootPath` is ignored — [x] **`<remarks>`** + one-time **`MediaDiagnostics.LogWarning`** when the requested path disagrees with the active **`ffmpeg.RootPath`** (hot-swap still requires a new process).
+- **Decoders:** `VideoFileDecoder` enables libav **frame** or **slice** threading on **software** decode when no hardware device context is attached (`DecoderThreadCount`, default auto from CPU count, capped); threading is **not** enabled on the active hardware-accelerated open path. `AudioFileDecoder` remains single-threaded. [x] **Passthrough descriptor arena** — `VideoFileDecoder` / `MediaContainerSharedDemux` guard pooled plane metadata with one **`Lock`** and **`Array.Clear`** arrays before pooling (**`ReturnPassThroughDescriptors`**); see **`VideoFileDecoder`** `<remarks>`. [ ] Lock-free arena vs off-thread **`VideoFrame.Dispose`** remains only if profiling shows contention.
 
 ### `S.Media.PortAudio`
 
-- **`PortAudioOutput`:** ring math and `Volatile` indices match the stated SPSC model. **`Callback`** wraps the body in `try/catch` and returns `paAbort` on any exception (cannot throw across native boundary). **No logging** there — allocating / logging from the real-time callback is risky; if diagnostics are needed, use a lock-free flag + reader on another thread (`[ ]` idea).
+- **`PortAudioOutput`:** ring math and `Volatile` indices match the stated SPSC model. **`Callback`** wraps the body in `try/catch` and returns `paAbort` on any exception (cannot throw across native boundary). **`CallbackFaulted`** is a lock-free diagnostic flag set before `paAbort`; avoid logging inside the callback (RT thread). [x] Poll **`CallbackFaulted`** from another thread for diagnostics. [x] **`CallbackFaultException`** — first caught exception is retained (**`Interlocked.CompareExchange`**, first fault wins), cleared at the next **`Start`**; inspect from a non-callback thread (no logging inside the RT callback). [x] **`IPlaybackClock.ElapsedSinceStart`** uses **`Pa_GetStreamTime`** between callbacks (per-segment anchor to **`PlayedSamples`** after **Start**/**Flush**/**Stop**) so **`MediaClock`** playhead is not quantized to the output-buffer cadence alone — **`S.Media.PortAudio.Tests`** integration probe when a device exists.
 - **`PortAudioRuntime`:** ref-counted `Pa_Initialize` / `Pa_Terminate` pairing is consistent with ctor/dtor paths in `PortAudioOutput`.
 
 ### `S.Media.NDI`
 
-- **`NDIAudioReceiver`:** format unknown until first frame — documented; snapshot swap on format change drops the old ring (acceptable). **`samples * channels`** uses `int` math — pathological SDK values could overflow before ring sizing (`[ ]` harden with checked multiply / clamp).
-- **`NDIAudioSink`:** still uses synthesised NDI timecode sentinel — evening audit list. **`NDIOutput`:** child sink lifetime tied to parent; dispose order (video then audio then sender) is intentional.
+- **`NDIAudioReceiver`:** format unknown until first frame — documented; snapshot swap on format change drops the old ring (acceptable). **`samples * channels`** is computed in **`long`** and rejected when **`<= 0`** or **`> Array.MaxLength`** before **`float[]`** allocation / **`NDIAudioInterleaved32f`** pin, so pathological SDK dimensions cannot overflow **`int`** math.
+- **`NDIAudioSink`:** still uses synthesised NDI timecode sentinel — evening audit list. **`EnsurePackedCapacity`** uses **`NativeMemory.Realloc`** with **≥2×** headroom (power-of-two) to limit churn when upstream chunk sizes change. **`NDIOutput`:** child sink lifetime tied to parent; dispose order (video then audio then sender) is intentional.
 
 ### `S.Media.SDL3` + `S.Media.OpenGL`
 
 - **Threading:** video submit vs GL pump stays “single producer per sink” as documented on `VideoPlayer`.
-- **`Nv12DmabufGpuUploader.TryCreate`:** probe path still returns `null` silently on failure — backlog **#9** in Suggested backlog.
+- **`Nv12DmabufGpuUploader.TryCreate`:** failures on the probe path are logged once via **`MediaDiagnostics.LogError`** (ctor-time only).
+- **Windows NV12 (D3D11 shared handle) → GL:** [x] **`Nv12Win32SharedHandleGpuUploader`** — **`OpenSharedResource`**, prefers **`WGL_NV_DX_interop`** (register D3D texture → GL **`R8`**, FBO blit into **`YuvVideoRenderer`** plane textures), falls back to D3D11 staging **`Map`** + **`glTexSubImage2D`**; one-time **`MediaDiagnostics.LogInformation`** for which path won. [x] **`SDL3GLVideoSink`** on Windows + NV12 creates **`ID3D11Device`** (feature levels **11.1→10.0**, **`VideoSupport`**) and passes **`NativePointer`** into **`YuvVideoRenderer`** (`**`win32D3D11DeviceComPtrForNv12`**`). **`VideoPlaybackSmoke`** **`--d3d11-gl`** sets **`RetainD3D11SharedHandleForGl`** (NDI mutual-exclusion warning mirrors **`--drm-gl`**).
 - **Dispose:** GL context / renderer disposal keeps empty `catch` — see Implementation verification (by design).
 
 ### `PALib` / `JackLib` / `NDILib`
@@ -85,7 +97,7 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 ### `OSCLib`
 
 - [x] **`OSCServer.HandleOversizePacket`** — was incrementing `_oversizeDrops` with plain `++` while **`OversizeDropCount`** reads via **`Interlocked.Read`** — fixed to **`Interlocked.Increment`** so concurrent observers on 32-bit hosts never see a torn 64-bit write.
-- **`Dispose` / `DisposeAsync`:** synchronous `Dispose` still wraps the cooperative `Task.Wait` loop in an empty `catch` — same “shutdown best effort” story as the media stack; optional debug logging only (`[ ]`).
+- **`Dispose` / `DisposeAsync`:** synchronous **`Dispose`** cooperative join uses **`#if DEBUG`** **`ILogger.LogDebug`** on catch (same pattern as the media stack); **`DisposeAsync`** logs **`StopAsync`** failures the same way.
 
 ### Tools (`PlaybackSmoke`, `VideoPlaybackSmoke`)
 
@@ -93,7 +105,7 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 
 ### Solution hygiene
 
-- [ ] **`MFPlayer.sln` lists `VideoPlaybackSmoke` twice** (two `Project(...)` entries with different GUIDs: `{CD1269E9-...}` and `{E98E9710-...}`) — remove the duplicate block **and** its `ProjectConfigurationPlatforms` rows so IDEs don’t build or show the project twice. There are also two **`Tools`** / **`Media`** / **`Test`** solution folders with different GUIDs (cosmetic clutter).
+- [x] **`MFPlayer.sln` duplicate `VideoPlaybackSmoke` project** — duplicate **`Project(...)`** / **`ProjectConfigurationPlatforms`** block removed (single **`{CD1269E9-…}`** entry remains). [x] **`Global`** section header + **`NestedProjects`** — removed stray duplicate **`Media`** / **`Tools`** / **`Test`** folder projects and reparented child projects (Visual Studio / MSBuild–friendly layout).
 
 ---
 
@@ -104,19 +116,20 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 | Extended pixel formats | `PixelFormat.cs`, `PixelFormatInfo.cs`, `VideoFileDecoder` `MapNativePixelFormat` / `ToAVPixelFormat` |
 | GL recipes + shaders | `GlVideoFormatSupport.cs`, `YuvVideoRenderer.cs`, `Shaders/argb.frag.glsl`, `abgr.frag.glsl`, `gray.frag.glsl`, `yuva_planar.frag.glsl` |
 | Frame transfer metadata | `VideoTransferHint.cs`, `VideoFrame.ColorTransferHint`, libav `AVFrame.color_trc` → `VideoFileDecoder.MapTransferHint` |
-| FFmpeg hardware decode (CPU transfer) | `VideoDecoderOpenOptions.TryHardwareAcceleration`, `VideoHardwareDecodeContext`, `av_hwframe_transfer_data` |
+| FFmpeg hardware decode (CPU transfer) | `VideoDecoderOpenOptions` (**`TryHardwareAcceleration`** default **true**, **`DecoderThreadCount`**, **`RetainDmabufForGl`**), `VideoHardwareDecodeContext`, `av_hwframe_transfer_data` |
 | Linux NV12 DRM PRIME → GL | `VideoDecoderOpenOptions.RetainDmabufForGl`, `VideoFrame.DmabufNv12` / `CreateNv12Dmabuf`, `DrmPrimeNv12BackingFactory`, `YuvDmabufEglInterop`, `Nv12DmabufGpuUploader` (incl. **`EGL_EXT_image_dma_buf_import_modifiers`**), `SDL3GLVideoSink` + `YuvVideoRenderer` |
+| Windows NV12 D3D11 shared handle → GL | `VideoDecoderOpenOptions.RetainD3D11SharedHandleForGl`, `VideoWin32Nv12Backing`, `YuvVideoRenderer` + **`Nv12Win32SharedHandleGpuUploader`** (**`WGL_NV_DX_interop`** + staging fallback), `SDL3GLVideoSink` (D3D11 device for NV12), **`VideoPlaybackSmoke --d3d11-gl`** |
 | SDL GL HDR | `SDL3GLVideoSink.ApplyTransferHintToRenderer` + optional `GlVideoSinkHdrPreference` / `HdrPreference` property |
-| Router SIMD (stereo+) | Stereo identity/swap, **mono `[0,0]` → duplex**, **`[0,1,0,1]` 2→4 widen** (`ChannelMap.TryAccumulate*`), `AudioRouter.ApplyRoute` |
-| libav resampling | `AudioResampler` (`swresample`) for packed float audio |
+| Router SIMD (stereo+) | Stereo identity/swap, **stereo `[0,0]` / `[1,1]`** dup-L / dup-R (`TryAccumulateStereoDupSingleChannelInterleaved`), **stereo `[-1,-1]`** full-silence no-op (`TryAccumulateStereoFullSilenceStereoInterleaved`), **mono `[0,0]` → duplex** (dedicated AVX path), **mono `MonoToN(N≥3)`** (stack or **`ArrayPool`** scratch ≤ **262144** floats), **mono silence / source-0 only** (`TryAccumulateMonoSilenceOrZeroDupInterleaved`, e.g. **`[-1,0,0,-1]`**), **stereo silence / L–R only** (`TryAccumulateStereoSilenceOrZeroDupInterleaved`, e.g. **`[-1,0,1,0]`**), **`StereoToN` / `[0,1,0,1,…]`** (pooled scratch for large **N**), **`[0,1,0,1]`** quad AVX path, `AudioRouter.ApplyRoute` |
+| libav resampling | `AudioResampler` (`swresample`) for packed float audio; optional **`AdaptiveRateAudioSink`** (per-sink ppm correction from **`PumpPressure`**) |
 | Thread join slicing | **`CooperativePlaybackJoin`** (`S.Media.Core.Threading`) — **`MediaClock`**, **`VideoPlayer`**, **`AudioRouter`**, **`SinkPump`**, **`SDL3*VideoSink`**, **`NDIAudioReceiver`**; short-slice **`MIDIInputDevice.Close`**, **`OSCServer.Dispose`** |
 | Clock / player join with cancel | **`IMediaClock.Pause` / `Stop`**, **`VideoPlayer.StopInternal`** observe **`CancellationToken`** while draining decode / driver threads (via **`CooperativePlaybackJoin`**)
 | Router stop + cancel | `AudioRouter.Stop(CancellationToken)` cooperatively joins the mixer thread between short sleeps |
-| Zero-copy video interop (stub) | `IHardwareVideoInterop`, **`HardwareVideo*Descriptor`** structs, default `TryDescribeImportedSurface`, **`NoOpHardwareVideoInterop`** |
+| Zero-copy video interop | `IHardwareVideoInterop`, **`HardwareVideo*Descriptor`** (**`ExternalMemoryHandleType`** for Vulkan), **`NoOpHardwareVideoInterop`**, **`LinuxDmabufNv12Interop`**, **`WindowsNv12SharedHandleInterop`**, **`VulkanExternalNv12Interop`**, **`MetalIosurfaceNv12Interop`** |
 | NDI optional wall-clock pacing | `NDIOutput` ctor `minimumVideoSubmitSpacing`, `NDIVideoSender.PaceBeforePack` |
 | A/V coordinated playback | **`AvPlaybackCoordinator`** (`S.Media.Core.Playback`), **`VideoPtsClock`** (`IPlaybackClock` for PTS + wall), **`VideoPlayer.FramePresentationTimePresented`** |
 | Dynamic audio graph | **`AudioRouter`** — `AddSource` / `RemoveSource`, `AddSink` / `RemoveSink`, `AddRoute` / `RemoveRoute` while running; per-sink **`SinkPump`** |
-| Video multi-output (today) | Compositor sinks (**`TwinCpuVideoSink`**, app-level fan-out); no first-class **`VideoRouter`** |
+| Video multi-output (today) | **`VideoOutputRouter`** (primary + branch; branch pixel pick prefers **RGBA32 → BGRA32 → …** then subsampled YUV); legacy **`TwinCpuVideoSink`** compositor; app-level fork; no bounded multi-sink **`VideoRouter`** yet |
 | Architecture backlog (routers + clocks) | §**Architecture roadmap — A/V router unification & clocks** below |
 | Concept / format matrix docs | `Doc/MediaFramework-concepts.md`, `Doc/PixelFormats-OpenGL.md` |
 
@@ -129,6 +142,7 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 - [x] Prior correctness / architecture items unchanged (unpack restore, viewport fit, HDR uniforms, samplers, native pointer upload, etc.).
 - [x] **Extended format coverage** — `Argb32`, `Abgr32` (FFmpeg memory order + swizzle shaders), `Gray8`/`Gray16` (`gray.frag.glsl`), `Yuv420P10Le` / `Yuv420P12Le` / `Yuv444P10Le` (planar R16 + `yuv_planar.frag.glsl` bitScale), `Yuva420p` (`yuva_planar.frag.glsl` + fourth alpha plane).
 - [x] **Hardware GL decode (Linux NV12)** — EGL `EGL_EXT_image_dma_buf_import` (+ **`EGL_EXT_image_dma_buf_import_modifiers`** when non-zero **`DRM_FORMAT_MOD_*`**) + GL `GL_EXT_EGL_image_storage`, split Y (`DRM_FORMAT_R8`) / UV (`DRM_FORMAT_GR88`). **non-NV12 PRIME** / multi-planar FFmpeg layouts remain backlog §Suggested backlog below.
+- [x] **Hardware GL decode (Windows NV12, D3D11)** — **`Nv12Win32SharedHandleGpuUploader`** + **`SDL3GLVideoSink`** D3D11 device wiring + **`YuvVideoRenderer`**; **`WGL_NV_DX_interop`** when available. [ ] **Fully automatic** “libav owns **`ID3D11Device`** / opens DXGI texture without host participation” remains future work (today the GL host supplies a D3D11 device aligned with the GL adapter).
 
 ---
 
@@ -137,7 +151,7 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 - [x] **Argb32 / Abgr32** — enum + `PixelFormatInfo` plane metadata + alpha flag.
 - [x] **Gray8 / Gray16**, **420 10/12**, **444 10**, **YUVA420P** — descriptors in `PixelFormatInfo`; tests in `PixelFormatInfoTests`.
 - [x] **NV12 dma-buf metadata** — `VideoDmabufNv12Backing`, `VideoFrame.DmabufNv12` / `CreateNv12Dmabuf` (CPU `Planes` are empty stubs on that path).
-- [x] **Hardware video interop surface contract** (`IHardwareVideoInterop`, `HardwareVideoSurfaceDescriptor`, `NoOpHardwareVideoInterop`) — concrete import adapters remain future work (dma-bufs use `VideoFrame.DmabufNv12` directly today).
+- [x] **Hardware video interop surface contract** (`IHardwareVideoInterop`, `HardwareVideoSurfaceDescriptor`, `NoOpHardwareVideoInterop`) — [x] **Linux** **`LinuxDmabufNv12Interop`** + **`DmabufNv12InteropToken`**; [x] **Windows** **`WindowsNv12SharedHandleInterop`** + **`Win32Nv12InteropToken`** (NT shared handles — descriptor only); [x] **Vulkan** **`VulkanExternalNv12Interop`** + **`VulkanExternalNv12InteropToken`** (external-memory handle + **`VkExternalMemoryHandleTypeFlagBits`** via **`HardwareVideoPlaneDescriptor.ExternalMemoryHandleType`**; optional UV byte offset in plane1 **`Modifier`** for unified allocations); [x] **Apple** **`MetalIosurfaceNv12Interop`** + **`MetalIosurfaceNv12InteropToken`** (**`IOSurfaceRef`** in **`HandleOrDescriptor`**). [x] **Windows NV12 → GL upload path** (host D3D11 device + **`WGL_NV_DX_interop`** / staging — see §1 OpenGL). [ ] **Zero-host** automatic libav DXGI/D3D11 device + texture open (no SDL/GL-supplied **`ID3D11Device`**) remains future work.
 
 ---
 
@@ -147,7 +161,9 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 - [x] **`color_trc` → `VideoTransferHint`** per frame on pass-through and sws output paths.
 - [x] **`SDL3GLVideoSink`** applies hint to `YuvVideoRenderer.HdrTransfer`; optional `GlVideoSinkHdrPreference` overrides or ignores per-frame hints.
 - [x] **NDI pacing** — optional minimum spacing between submits (pairs with SDK `clockVideo:false` scenarios).
-- [x] **Hardware FFmpeg decode** — VAAPI / D3D11VA / QSV / … via libav; **Linux VAAPI** zero-copy path uses `RetainDmabufForGl` → `drm_prime` + `VideoDmabufNv12Backing` → GL. **`IHardwareVideoInterop`** adapters for DXGI/Metal/etc. remain future work (stub contract + backlog).
+- [x] **Hardware FFmpeg decode** — VAAPI / D3D11VA / QSV / … via libav; **Linux VAAPI** zero-copy path uses `RetainDmabufForGl` → `drm_prime` + `VideoDmabufNv12Backing` → GL; **Windows NV12** shared-handle path uses **`RetainD3D11SharedHandleForGl`** + **`Nv12Win32SharedHandleGpuUploader`** (see §1). **`TryHardwareAcceleration`** defaults **on**; use **`TryHardwareAcceleration = false`** for deterministic software-only tests. **`IHardwareVideoInterop`**: **`LinuxDmabufNv12Interop`**, **`WindowsNv12SharedHandleInterop`**, **`VulkanExternalNv12Interop`**, **`MetalIosurfaceNv12Interop`** (descriptor tokens). [ ] **Libav-owned DXGI/D3D device** feeding GL without a host-created D3D11 device remains backlog.
+- [x] **Software video multithreading** — `VideoFileDecoder` sets libav **frame** or **slice** `thread_count` / `thread_type` when opening **without** an attached HW device context (skipped on DRM PRIME / other HW paths); `DecoderThreadCount` **0** = auto from **`Environment.ProcessorCount`** (clamped).
+- [x] **NDI RGBA** — `NDIVideoSender` accepts **RGBA32** (FourCC `RGBA`) and **BGRA32**; **`VideoOutputRouter`** branch conversion prefers packed RGB before NV12/I420 for quality on 10-bit YUV sources.
 - [x] **Resampling helper** — `AudioResampler` wraps `swresample` for packed float interleaved audio (see also `AudioFileDecoder` internals).
 
 ---
@@ -164,7 +180,9 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 ### 10.3 Testing
 
 - [x] **Transfer hint mapping tests** (`VideoTransferHintMappingTests`), **pixel layout tests** (`Yuva420p`, gray high depth, expanded alpha carriers).
-- [x] **`ChannelMap`** — SIMD regressions (**`StereoSimd_*`**, **`MonoDupSimd_*`**, **`StereoDuplexWideSimd_*`**) plus seeded **`Apply_RandomLayouts_Deterministic_MatchNaive`**; **`AudioResampler`** (identity/up + **`Resampler_RandomishBuffer`**); **`HardwareVideoInteropTests`**. Full property/fuzz harness — optional backlog.
+- [x] **`ChannelMap`** — SIMD regressions (**`StereoSimd_*`**, **`MonoDupSimd_*`**, **`MonoDupNSimd_*`** incl. large **N** pool path, **`MonoSilenceOrZeroSimd_*`**, **`StereoSilenceOrZeroSimd_*`**, **`StereoDupSingleChannelSimd_*`**, **`StereoFullSilenceStereo_ApplyAdditive_LeavesDstUnchanged`**, **`StereoToNSimd_*`**, **`StereoDuplexWideSimd_*`**) plus seeded **`Apply_RandomLayouts_Deterministic_MatchNaive`**, **`ApplyAndApplyAdditive_MultiChannelRandomLayouts_MatchNaive`**, **`ApplyAdditive_RandomLayouts_Deterministic_MatchNaive`**; **`AudioRouterApplyRouteDeterminismTests`**; **`AudioRouterLiveGraphSeededTests`** (live **`AudioRouter`** run loop vs scalar reference); **`AudioRouterTests.RunLoop_MultiSourceStereoDupAndFullSilence_MatchesReference`**; **`AudioResampler`** (identity/up + **`Resampler_RandomishBuffer`**); **`AdaptiveRateAudioSinkTests`**; **`HardwareVideoInteropTests`**; **`MediaContainerDecoderSoakTests`** (**`RUN_MEDIA_SOAK=1`** → **64** seek rounds). Further long-run property tests remain optional.
+- [x] **`#if DEBUG` teardown diagnostics** — **`SinkPump.CompleteAdding`** / **`CTS.Cancel`** and **`VideoPlayer.OnVideoTick`** (**`Submit`** + frame **`Dispose`** on failure) use **`MediaDiagnostics`** only in debug builds; **`OSCServer.Dispose` / `DisposeAsync`** use **`ILogger.LogDebug`** the same way.
+- [x] **`SinkSlavedRouterClock`** — **`SinkSlavedRouterClockTests`** (lazy wall fallback, **`IClockedSink`** delegation, sink removal/reappearance, cancellation, ctor validation).
 
 ### 10.4 Docs
 
@@ -175,17 +193,17 @@ Scope: every shipping library under **`MediaFramework/`** (managed wrappers + to
 
 ## Suggested backlog (remaining)
 
-1. **`IHardwareVideoInterop` implementations** (DXGI / Metal / Vulkan, …) mapping **`HardwareVideoSurfaceDescriptor`** — Linux libav may already populate **`VideoDmabufNv12Backing`** (`RetainDmabufForGl`) without going through `IHardwareVideoInterop`.
-2. SIMD for remaining hot **`ChannelMap` shapes** (`MonoToN` with `N > 2`, asymmetric silence maps, …) after profiling.
-3. Dedicated fuzz / property-test harness (many random route graphs + gain ramps + decoder soak).
+1. **`IHardwareVideoInterop` — platform import adapters** — [x] **Linux** **`LinuxDmabufNv12Interop`** (DRM PRIME fds via **`DmabufNv12InteropToken`**); [x] **Windows** **`WindowsNv12SharedHandleInterop`** (NV12 plane **NT shared handles** via **`Win32Nv12InteropToken`** — no DXGI device open in Core); [x] **Vulkan** **`VulkanExternalNv12Interop`** (NV12 external-memory handles + **`VkExternalMemoryHandleTypeFlagBits`** in **`HardwareVideoPlaneDescriptor.ExternalMemoryHandleType`**); [x] **Apple Metal / IOSurface** **`MetalIosurfaceNv12Interop`**. [x] **GL path for Windows NV12** — **`Nv12Win32SharedHandleGpuUploader`** + **`WGL_NV_DX_interop`** (host **`ID3D11Device`** from **`SDL3GLVideoSink`**). [ ] **Libav-internal** D3D11/DXGI device + texture lifetime (no host **`ID3D11Device`**) for Core-only decode→GL.
+2. SIMD for remaining hot **`ChannelMap` shapes** — [x] **`MonoToN` with `N ≥ 3`** (stack scratch ≤ **512** floats else **`ArrayPool`** up to **262144** floats); [x] **`StereoToN` / `[0,1,0,1,…]`** (same pool rule); [x] **Mono maps mixing silence (`-1`) and source `0` only** (`TryAccumulateMonoSilenceOrZeroDupInterleaved`); [x] **Stereo maps mixing silence (`-1`) and L/R (`0`/`1`) only** (`TryAccumulateStereoSilenceOrZeroDupInterleaved`); [x] **Stereo dup one channel to both** **`[0,0]`** / **`[1,1]`** (`TryAccumulateStereoDupSingleChannelInterleaved`); [x] **Stereo full silence** **`[-1,-1]`** on stereo dst (`TryAccumulateStereoFullSilenceStereoInterleaved`). [ ] Further SIMD for arbitrary asymmetric permutations remains **profile-driven** — **`ApplyAndApplyAdditive_MultiChannelRandomLayouts_MatchNaive`** already guards **≥3**-channel scalar correctness; multi-sink drift has **`AdaptiveRateAudioSink`**.
+3. Dedicated fuzz / property-test harness — [x] **`ApplyAdditive_RandomLayouts_Deterministic_MatchNaive`** (seeded random maps + non-zero dst priming) extends **`Apply_RandomLayouts`**-style coverage for **`ApplyAdditive`**. [x] **`AudioRouter.RunLoop_MultiSourceStereoLayoutsAndGains_MatchesReference`** (+ **`RunLoop_MultiSourceStereoDupAndFullSilence_MatchesReference`**). [x] **`AudioRouterApplyRouteDeterminismTests.ApplyRoute_SeededRandomMultiRouteGraphs_MatchScalarReference`**. [x] **`AudioRouterLiveGraphSeededTests.RunLoop_SeededRandomDistinctSourceRoutes_FirstChunkMatchesScalarReference`** — live **`AudioRouter`** (**`SinkPump`**), **1–4** stereo sources, **1–4** routes with distinct sources, seeded maps/gains (**`[-1,-1]`** in map pool), first chunk vs scalar reference. [x] **`MediaContainerDecoderSoakTests.SharedDemux_Soak_*`** (bounded soak; optional **`RUN_MEDIA_SOAK=1`** for **64** seek rounds vs default **8**). [ ] Multi-hour / memory-pressure / long-run NDI harness remains product-level backlog.
 4. **`MediaContainerDecoder`** (single demux → split packet streams) — prerequisite for tight long-seek A/V and for any “one router brain” that owns both decoders; see §Architecture roadmap.
-5. **`VideoRouter` / `VideoFanoutSink`** — optional bounded per-sink queues + worker threads mirroring **`AudioRouter`** + **`SinkPump`**, so multiple **`IVideoSink`** instances can be attached/removed dynamically without ad-hoc compositors.
-6. **`CompositePlaybackClock`** or **`MediaClock.SetMasterChain`** — merge **`PortAudioOutput`** (hardware), **`VideoPtsClock`** (PTS+wall), and future **NDI-derived** clocks with explicit priority / cross-fade rules instead of a single exclusive master.
-7. **`NDIAudioReceiver` → `IPlaybackClock`** (or thin adapter) when ingesting NDI — map SDK timestamps or sample indices to **`ElapsedSinceStart`** so **`MediaClock`** can slave video (or a second audio router) to incoming network audio.
-8. **`AudioPlayer` primary hand-off** — after **`RemoveOutput`** removes the **`IClockedSink`** that was primary, optionally **`SetPrimarySink`** / auto-promote the next clocked sink and re-**`SlaveTo`** + **`MediaClock.SetMaster`**; today **`_primarySinkId`** clears and stays null until the caller adds a new first clocked output.
-9. **`Nv12DmabufGpuUploader.TryCreate` diagnostics** — the outer `try/catch` returns `null` on any failure (missing GL/EGL extensions, bad proc addresses) with **no** `MediaDiagnostics` trail, so “why did dma-buf GL interop vanish?” on misconfigured drivers requires a debugger. Optional: log once at **Warning** with exception or reason codes (careful not to spam every frame — this is ctor-time only).
-10. **Optional debug logging on Dispose `catch { }` paths** — if teardown failures correlate with rare leaks/crashes, wire `MediaDiagnostics.LogError` behind `#if DEBUG` or an env flag (default off).
-11. **`MFPlayer.sln` cleanup** — remove duplicate **`VideoPlaybackSmoke`** project entry (and stray duplicate **`Tools`** / **`Test`** / **`Media`** folder GUIDs if consolidating).
+5. **`VideoRouter`** — optional bounded per-sink queues + worker threads mirroring **`AudioRouter`** + **`SinkPump`**, so multiple **`IVideoSink`** instances can be attached/removed dynamically. **`VideoOutputRouter`** already negotiates per-sink pixel formats (CPU **`sws_scale`**) so a narrow sink (e.g. NDI) does not receive unsupported layouts (e.g. **YUV422P10LE**) as black frames. **Update:** same-**NV12** DRM dma-buf fan-out is implemented via refcounted backing; mixed dma-buf + CPU conversion branches are still out of scope.
+6. **`CompositePlaybackClock`** / **`MediaClockExtensions.SetMasterChain`** — [x] **`CompositePlaybackClock`** + extension on **`IMediaClock`** builds a priority merge (**`PortAudioOutput`**, **`VideoPtsClock`**, **`NdiIngestPlaybackClock`**, …). Explicit cross-fade between simultaneous advancing clocks remains a future refinement.
+7. **`NDIAudioReceiver` → `IPlaybackClock`** — [x] **`NdiIngestPlaybackClock`** (`S.Media.NDI.Clock`): receiver optional ctor param + **`AttachReceiver`** / **`NotifyCaptureStopped`**; map SDK timecode / timestamp (100 ns) + frame duration, wall extrapolation between frames (**`MediaClock.SetMaster`** for NDI ingest sync).
+8. **`AudioPlayer` primary hand-off** — [x] **`RemoveOutput`** auto-promotes the next **`IClockedSink`** ( **`AudioRouter.RetargetSlaveClock`** ).
+9. **`Nv12DmabufGpuUploader.TryCreate` diagnostics** — [x] outer `try/catch` logs via **`MediaDiagnostics.LogError`** on failure (ctor-time only).
+10. **Optional debug logging on Dispose `catch { }` paths** — [x] **`SinkPump.Dispose`** (**`AudioRouter`**) logs **`Cancel`** failures behind **`#if DEBUG`** (**`MediaDiagnostics`**); **`SinkPump.CompleteAdding`** **`ObjectDisposedException`** behind **`#if DEBUG`**; **`AudioRouter.Dispose`** logs **`SinkPump.Dispose`** failures behind **`#if DEBUG`** (**`MediaDiagnostics`**); **`VideoPlayer.Dispose`** / **`VideoPlayer.OnVideoTick`** (**`Submit`** failure + frame **`Dispose`** after failed **`Submit`**) and **`AudioPlayer.Dispose`** (**`Stop`** / owned disposables) log behind **`#if DEBUG`** (**`MediaDiagnostics`**); **`OSCServer.Dispose` / `DisposeAsync`** log cooperative shutdown failures behind **`#if DEBUG`** (**`ILogger`**, no media dependency). Other teardown `catch { }` paths remain silent by design unless you extend the same pattern.
+11. **`MFPlayer.sln` cleanup** — [x] duplicate **`VideoPlaybackSmoke`** entry removed; [x] **`Global`** + duplicate solution-folder **`Media`**/**`Tools`**/**`Test`** entries removed (**`NestedProjects`** consolidated).
 
 ---
 
@@ -195,9 +213,9 @@ Design goal from product direction: **one place** that understands play/pause/se
 
 ### What exists today (accurate mental model)
 
-- **Audio** — A real **router**: **`AudioRouter`** mixes many **`IAudioSource`** → many **`IAudioSink`** with explicit **`Route`** graphs. The graph is **mutable while running** (immutable snapshots under the hood). **Pacing** is **`IRouterClock`** (**`WallClockRouterClock`** or **`SinkSlavedRouterClock`** → one **`IClockedSink.WaitForCapacity`**). **Playhead** for the rest of the stack is **`MediaClock`**, optionally mastered to **`IPlaybackClock`** (**`PortAudioOutput`**, **`VideoPtsClock`**, …).
-- **Video** — **Not** a router: **`VideoPlayer`** owns one **`IVideoSource`**, one negotiated **`IVideoSink`**, and one **`IMediaClock`**. Multiple displays are handled by **wrapping** sinks (**`TwinCpuVideoSink`**, NDI + SDL in **`VideoPlaybackSmoke`**) or by forking frames yourself.
-- **A/V sync** — When audio is present, **`AudioPlayer.AddOutput(PortAudioOutput)`** wires **`MediaClock.SetMaster(IPlaybackClock)`** + **`AudioRouter.SlaveTo`**. Video frames track **`IMediaClock.CurrentPosition`**. That is already **shared-clock** playback; the gap is **API surface** (**`AvPlaybackCoordinator`**) and **container-level** alignment (**two `AVFormatContext`s** — still backlog).
+- **Audio** — A real **router**: **`AudioRouter`** mixes many **`IAudioSource`** → many **`IAudioSink`** with explicit **`Route`** graphs. The graph is **mutable while running** (immutable snapshots under the hood). **Pacing** is **`IRouterClock`** (**`WallClockRouterClock`** or **`SinkSlavedRouterClock`** → one **`IClockedSink.WaitForCapacity`**). **Playhead** for the rest of the stack is **`MediaClock`**, optionally mastered to **`IPlaybackClock`** (**`PortAudioOutput`**, **`VideoPtsClock`**, **`NdiIngestPlaybackClock`** when ingesting NDI audio, …).
+- **Video** — **`VideoPlayer`** is still one **`IVideoSource`** → one negotiated **`IVideoSink`**. Multiple displays / encoders use **`VideoRouter`** (many inputs, many outputs; **each output accepts at most one input** — conflicting **`TryAddRoute`** is declined with **`ILogger`** error) or the slimmer **`VideoOutputRouter`** (primary + one branch). **`VideoPlaybackSmoke`** uses **`VideoRouter`** for SDL + NDI.
+- **A/V sync** — When audio is present, **`AudioPlayer.AddOutput(PortAudioOutput)`** wires **`MediaClock.SetMaster(IPlaybackClock)`** + **`AudioRouter.SlaveTo`**. Video frames track **`IMediaClock.CurrentPosition`**. That is already **shared-clock** playback; **`AvPlaybackCoordinator`** + **`MediaContainerDecoder`** (single **`AVFormatContext`**) close the façade / container-alignment gap for file sources.
 
 ### “Combine audio and video router” — three incremental strategies
 
@@ -205,7 +223,7 @@ Design goal from product direction: **one place** that understands play/pause/se
 |----------|----------------|---------------|
 | **A. Session façade only** | New **`MediaPlaybackSession`** (name TBD) holds **`AudioPlayer`**, **`VideoPlayer`**, optional **`VideoPtsClock`**, wires **`AvPlaybackCoordinator`**, exposes add/remove **audio** outputs and swap **video** sink (or compositor) under one lock ordering contract. | Low — mostly composition + docs; no new mixer core. |
 | **B. Shared timeline service** | Extract **`IPlaybackTimeline`** (position, rate, pause) implemented by **`MediaClock`**; **`AudioRouter`** and **`VideoPlayer`** only **subscribe** to timeline ticks; clock providers register as **`IPlaybackClock`** plugins. | Medium — refactors **`MediaClock`** responsibilities without merging mixers. |
-| **C. Full `AvRouter`** | One graph object owning demux + audio routes + **video fan-out** (strategy **5** in Suggested backlog). | High — depends on **`MediaContainerDecoder`** for sane seek and PTS. |
+| **C. Full `AvRouter`** | One graph object owning demux + audio routes + **dynamic video outputs** (strategy **5** in Suggested backlog). | High — depends on **`MediaContainerDecoder`** for sane seek and PTS. |
 
 Recommendation in **Todo** terms: ship **A** + **`MediaContainerDecoder`** (already listed) before **C**; use **B** if **`CompositePlaybackClock`** becomes necessary (e.g. NDI ingest + local preview).
 
@@ -213,32 +231,32 @@ Recommendation in **Todo** terms: ship **A** + **`MediaContainerDecoder`** (alre
 
 - **`IRouterClock`** (audio producer cadence) and **`IPlaybackClock`** (**`MediaClock`** master) are **different roles**. A future **NDI wall clock** might drive **`IRouterClock`** when playing **out** to NDI with **`clockAudio:true`**, or **`IPlaybackClock`** when **receiving** NDI and slaving OpenGL to network audio.
 - **`VideoPtsClock`** — wire on **audio-less** paths (**`VideoPlaybackSmoke`** without routing): **`FramePresentationTimePresented`** + **`BeginSession`**; extend **`AvPlaybackCoordinator.Play`** with optional **`IPlaybackClock? videoOnlyMaster`** (item already in evening audit).
-- **Multi-sink audio drift** — **`AudioRouter`** remarks already document **ppm drift** when only one sink is **`IClockedSink`**. Backlog: **per-sink adaptive resampler** or **occasional drop/repeat** policy driven by **`PumpPressure`** (not just UI).
+- **Multi-sink audio drift** — **`AudioRouter`** remarks document **ppm drift** when only one sink is **`IClockedSink`**. Optional **per-sink adaptive resampling**: **`S.Media.FFmpeg.Audio.AdaptiveRateAudioSink`** + **`PumpPressurePlaybackHintMonitor`** (sink-id filter) ease sustained **`PumpPressure`** drops without retuning the master clock; **`PumpPressurePlaybackHintMonitor`** still supports host **`IPlaybackClock`** bias.
 
 ### Dynamic inputs/outputs — matrix
 
 | Capability | Audio | Video |
 |------------|-------|-------|
-| Multiple inputs | Yes — **`AddSource`** | One **`IVideoSource`** per **`VideoPlayer`** |
-| Multiple outputs | Yes — **`AddSink`** + routes | Compositor / manual fork only |
-| Remove while playing | **`RemoveSink`** / **`RemoveSource`** / **`RemoveRoute`** | Replace sink: dispose old **`VideoPlayer`** or add session API to re-negotiate |
-| Re-pick pacing master after remove | [**~**] Router falls back; **`AudioPlayer`** does not auto-promote next **`IClockedSink`** — see backlog **#8** | N/A |
+| Multiple inputs | Yes — **`AddSource`** | Yes — **`VideoRouter.AddInput`** (each returns an **`IVideoSink`**) |
+| Multiple outputs | Yes — **`AddSink`** + routes | Yes — **`VideoRouter.AddOutput`** + **`TryAddRoute`** fan-out |
+| Remove while playing | **`RemoveSink`** / **`RemoveSource`** / **`RemoveRoute`** | **`RemoveOutput`** / **`RemoveInput`** / **`TryRemoveRoute`** (re-**`Configure`** when the graph changes) |
+| Re-pick pacing master after remove | [x] **`AudioPlayer.RemoveOutput`** auto-promotes the next **`IClockedSink`** when **`AutoWirePrimary`** is on; **`AudioRouter.RetargetSlaveClock`** | N/A |
 
 ### Tracked items (checkboxes)
 
-- [ ] **`MediaPlaybackSession`** (or equivalent) — single façade: clock + audio + video lifecycle, document lock order, optional **`VideoPtsClock`** for video-only.
-- [ ] **`CompositePlaybackClock`** — prioritized or weighted merge of **`PortAudioOutput`**, **`VideoPtsClock`**, NDI-derived clock; define conflict rules when two sources disagree.
-- [ ] **`VideoFanoutSink` / `VideoRouter`** — bounded queues, drop-late policy mirroring audio **`SinkPump`** stats.
-- [ ] **`NDI` clock adapters** — ingest: **`IPlaybackClock`** from receiver timestamps; output: optional **`IRouterClock`** alignment when SDK **`clockVideo`/`clockAudio`** are on.
-- [ ] **`AudioPlayer.SetPrimarySink` / auto-promote** on **`RemoveOutput`** when another **`IClockedSink`** remains.
-- [ ] **Per-sink audio rate correction** — when multiple hardware sinks are active, close the ppm drift loop (resample or controlled drop/insert).
-- [ ] **`AvPlaybackCoordinator`** — **`try`/`finally`** pause ordering; optional **`videoOnlyMaster`**; documented atomic seek bracket once **`MediaContainerDecoder`** exists.
-
+- [x] **`MediaPlaybackSession`** — thin façade: **`VideoPlayer`** + **`IMediaClock`** + optional **`AudioPlayer`**; **`Play`**/**`Pause`**/**`Seek`** delegate to **`AvPlaybackCoordinator`**; `<remarks>` document lock-order guidance (hosts keep owning `using` on players).
+- [x] **`CompositePlaybackClock`** — priority-ordered merge of several **`IPlaybackClock`** implementations; **`IsAdvancing`** / **`ElapsedSinceStart`** use the highest-priority advancing candidate. **`MediaClockExtensions.SetMasterChain`** attaches that merge to any **`IMediaClock`** (including **`MediaClock`**).
+- [x] **`MediaContainerDecoder`** — **`S.Media.FFmpeg.MediaContainerDecoder`**: always **`MediaContainerSharedDemux`** (one **`AVFormatContext`**, demux thread + bounded A/V packet queues, hardware video with software fallback, **`SeekPresentation`**); legacy dual-open path removed.
+- [x] **`VideoRouter`** — [x] exclusive routing + fan-out; [x] **`VideoSinkPump`**; [x] optional **`VideoSinkPumpAttachOptions`** on **`AddOutput`** (first-class pump wiring); [x] **NV12 DRM dma-buf fan-out** when every branch stays **NV12** (refcounted **`VideoDmabufNv12Backing`** + **`VideoFrame.CreateNv12DmabufSharedReference`**); dma-buf + per-branch **`VideoCpuFrameConverter`** remains unsupported (use CPU decode or one dma-buf sink).
+- [x] **`NDI` clock adapters** — [x] **`NdiAlignedRouterClock`** (**`IRouterClock`** façade over **`WallClockRouterClock`**, documented extension point for SDK cadence); [x] ingest **`IPlaybackClock`** — **`NdiIngestPlaybackClock`** + **`NDIAudioReceiver`** optional ctor wiring (**`AttachReceiver`** / **`NotifyCaptureStopped`**).
+- [x] **`AudioPlayer` primary hand-off** — **`RemoveOutput`** removes the primary **`IClockedSink`** → **`Router.RetargetSlaveClock`** picks the next sink (sorted id order) that implements **`IClockedSink`** and re-**`SetMaster`** when it also implements **`IPlaybackClock`**.
+- [x] **Per-sink audio rate correction** — optional **`S.Media.FFmpeg.Audio.AdaptiveRateAudioSink`** wraps **`IAudioSink`** / **`IClockedSink`** and applies small libav **`swresample`** rate tweaks from **`PumpPressurePlaybackHintMonitor`** (aggregate or **per-sink id** overload); **`AudioRouter`** `<remarks>` document wiring. Automatic **master-clock** ppm tracking remains a host concern; **occasional drop/repeat** policies beyond resampling remain optional.
+- [x] **`AvPlaybackCoordinator`** — [x] **`Pause`/`Stop`** use **`try { video.Pause } finally { audio?.Pause }`**; [x] optional **`IPlaybackClock? videoOnlyMaster`** on **`Play`** (audio-null paths); [x] optional **`verifyPrebufferAfterPrefill`**; [x] **`Seek`** calls **`video.Clock.Seek`** when **`audio`** is null; [x] **`SeekCoordinated`** (**`Pause`** then **`Seek`**, no auto-**`Play`**); [x] **`<remarks>`** on **`Seek`/`SeekCoordinated`** document pause-bracketed seek with **`MediaContainerDecoder.SeekPresentation`** + **`MediaClock.Seek`** when using the shared-demux façade.
 ---
 
 ## Audit findings (2026-05-12)
 
-Original morning entries reproduced below with the working-tree status applied: every "Likely bug" and "Robustness / contract gap" is now `[x]` (resolved in the working tree) except `AudioRouter.Pause` which is `[~]` (documented but race not closed). The optimization and cleanup lists are mostly resolved; the unresolved ones are kept as `[ ]` so they remain on the radar.
+Original morning entries reproduced below with the working-tree status applied: every "Likely bug" and "Robustness / contract gap" is now `[x]` (resolved in the working tree), including **`AudioRouter.Pause`** / **`Flush`** snapshotting. The optimization and cleanup lists are mostly resolved; the unresolved ones are kept as `[ ]` so they remain on the radar.
 
 ### Likely bugs
 
@@ -258,7 +276,7 @@ Original morning entries reproduced below with the working-tree status applied: 
 
 - [x] **`VideoFileDecoder.NativePixelFormats` is empty when HW decode runs without DRM PRIME** — fixed: the hw-software fallback now advertises `PixelFormat.Nv12` (matching VAAPI/D3D11VA layouts after `av_hwframe_transfer_data`) plus a docstring note. Sinks that accept NV12 can now negotiate around the BGRA32 sws path.
 
-- [~] **`AudioRouter.Pause` re-enters the lock to enumerate sinks for `Flush`** — partially addressed: added a `<remarks>` paragraph documenting the assumption ("callers invoke `Pause` from the same synchronization domain that owns routing"). The race is documented but not closed by combining the two lock blocks — leave open until profile shows it matters.
+- [x] **`AudioRouter.Pause` re-enters the lock to enumerate sinks for `Flush`** — **`StopInternal`** snapshots **`IFlushableSink`** candidates in the **same** **`_gate`** pass that stops the run loop, then **`Flush`**es after pumps are abandoned (no second **`lock (_gate)`** for enumeration).
 
 ### Optimization candidates
 
@@ -307,7 +325,7 @@ A few independent suspects, ordered from most to least likely:
 
 - [x] **Startup ordering / prebuffer** — `VideoPlaybackSmoke`: **decoder-direct** `PrefillMainOutputDirectFromDecoder` (into PortAudio only) → `StartHardwareOutput()` → `AudioPlayer.Play()`. Running the router before the device is open made `WaitForCapacity` a no-op and filled/dropped the ring while `AudioFileDecoder.Position` raced ahead.
 
-- [~] **Dedicated `Prefill` on `PortAudioOutput` / `AudioPlayer`** — smoke tool has `PrefillHardwareRing` locally; moving it into the library is optional.
+- [x] **Dedicated `Prefill` on `PortAudioOutput` / `AudioPlayer`** — `PortAudioOutput.PrefillFrom` plus `AudioPlayerPortAudioExtensions.TryPrefillPrimaryPortAudio`; `VideoPlaybackSmoke` prefill delegates to that path.
 
 - [x] **`SinkPump` thread priority** — drainer thread is now `AboveNormal` (matches router producer).
 
@@ -319,7 +337,7 @@ A few independent suspects, ordered from most to least likely:
 
 Today's situation:
 - `MediaClock` is the visible playhead, optionally mastered to an `IPlaybackClock`.
-- `PortAudioOutput` implements both `IClockedSink` (paces the audio router) and `IPlaybackClock` (exposes `PlayedSamples / SampleRate` as elapsed-since-start). `AudioPlayer.AddOutput` auto-wires both when present.
+- `PortAudioOutput` implements both `IClockedSink` (paces the audio router) and `IPlaybackClock`. **`ElapsedSinceStart`** tracks **`PlayedSamples`** in the long term but advances with **`Pa_GetStreamTime`** between callbacks so the master is not stuck for a whole output buffer. `AudioPlayer.AddOutput` auto-wires both when present.
 - `VideoPlayer` subscribes to `IMediaClock.VideoTick` and uses `IMediaClock.CurrentPosition` to pick the most recent in-window frame.
 - `VideoFileDecoder` provides each frame's libav PTS as `VideoFrame.PresentationTime` (the "PTS clock" the user mentioned, indirectly).
 
@@ -327,8 +345,8 @@ So **A/V sync to PortAudio's hardware clock already works** when the master is w
 
 - [x] **No single facade that owns Play / Pause / Stop / Seek for both** — `AvPlaybackCoordinator` (`S.Media.Core.Playback`) centralizes ordered Play / Pause / Stop / Seek for `AudioPlayer` + `VideoPlayer`; `VideoPlaybackSmoke` uses it after prefill/`StartHardwareOutput`.
 - [x] **No `PtsClock` for video-only / live playback** — `VideoPtsClock` implements `IPlaybackClock` (PTS anchor + wall delta); wire via `VideoPlayer.FramePresentationTimePresented` or call `NotifyFramePts` yourself.
-- [ ] **Two `AVFormatContext`s per AV file** — `VideoFileDecoder.Open(path)` and `AudioFileDecoder.Open(path)` each parse and demux the container independently. For typical mp4/mkv playback this means twice the file IO, two read pointers that drift across long files, and seek must hit both. A future `MediaContainerDecoder` that demuxes once and routes packets to per-stream decoders would: (a) halve IO, (b) keep audio/video PTS aligned at the demuxer, (c) enable a single seek that atomically repositions both. Larger lift — flag as backlog only.
-- [~] **`SinkSlavedRouterClock` falls back to `WallClockRouterClock` if the slaved sink is removed** — fine for graceful degradation, but the fallback wall-clock instance is created once with the original sample rate / chunk size; a later sample-rate change wouldn't propagate. Today the router throws if sample rates disagree on `AddSource`, so this is dormant — `SinkSlavedRouterClock` `<remarks>` now call this out for future dynamic resampling work.
+- [x] **Two `AVFormatContext`s per AV file** — **`MediaContainerDecoder`** is always **`MediaContainerSharedDemux`** (single format context + threaded demux); dual-open removed.
+- [x] **`SinkSlavedRouterClock` falls back to `WallClockRouterClock` if the slaved sink is removed** — [x] **`WallClockRouterClock`** is now created **lazily** on first **`Reset`** / first miss, using the router's **`sampleRate`** + **`chunkSamples`** (no stale pre-built fallback). [x] **`AddSource`** rejects sample-rate mismatches, so the router's rate does not change at runtime today — the "revisit if rate changes" note is satisfied by that invariant until a future dynamic-rate API exists. [x] **`SinkSlavedRouterClockTests`** cover ctor validation, **`WaitForCapacity`** delegation, pre-cancelled tokens (sink + wall paths), and sink-present → missing → present toggling.
 
 ### Verification once changes land
 
@@ -349,55 +367,54 @@ Re-audit after the late-afternoon set of fixes (SIMD/AVX2 in `ChannelMap`, ctor-
 
 The new `PrefillMainOutputDirectFromDecoder` + 20 ms chunks + `SinkPump` `AboveNormal` removes most of the prior suspect chain. The remaining suspects:
 
-- [ ] **`TargetQueueSamples` cushion is tight** — `VideoPlaybackSmoke` sets it via `Math.Clamp(chunkSamples * 8, chunkSamples * 4, output.CapacitySamples / 8)` (`Program.cs:212-215`). At default 960-sample chunks the value lands on **7680 samples ≈ 160 ms**. The ring itself is 1.37 s deep, but the producer is *capped* to that 160 ms target — meaning the run loop has ~160 ms of headroom before PortAudio starts seeing underruns if anything stalls the producer (decoder cluster I/O, full Gen-1 GC, transient thread preemption). Bump to ~300–500 ms (e.g. `chunkSamples * 16` lower bound and `CapacitySamples / 3` upper) for pre-recorded media; keep 160 ms only when latency really matters. The HUD's `paUnd` / `paDr` counters will tell you which side is wrong.
-- [ ] **`PortAudioOutput.TargetQueueSamples` clamp ignores `CapacitySamples` lower bound** — when `output.CapacitySamples / 8 < chunkSamples * 4`, the clamp produces a value *below* the requested 4-chunk floor (the clamp's `max` is < its `min`, which `Math.Clamp` actually throws on in BCL but here both bounds depend on `chunkSamples`; for the smoke tool's defaults it works out, but a smaller ring or larger chunk would explode at runtime). Defensive fix: clamp `Math.Max(chunkSamples*4, Math.Min(chunkSamples*8, output.CapacitySamples / 8))` (or just guard with `Math.Min` first).
-- [ ] **PortAudio's default suggested latency is `defaultHighOutputLatency`** — fine for PulseAudio (≈ 50 ms), but on JACK or ALSA-hw it can be longer; the 160 ms producer target may be smaller than the device's own buffer fill rate. Worth exposing a `--device-latency-ms` knob (or auto-derive `TargetQueueSamples = max(8 * chunkSamples, 4 * device.suggestedLatency * sampleRate)`).
-- [ ] **No backpressure-aware decoder catch-up on Pause→Resume** — `AudioRouter.Resume` doc notes "first chunk may be silence-padded" (per `<remarks>`), which on a fresh `swr` queue at resume produces an audible micro-gap. For seek/resume-heavy workflows, call `Decoder.ReadInto(scratch)` once before `Player.Play()` to prime the `swr` queue, or expose a `Prefill` on the router itself.
-- [ ] **`PortAudioOutput.Submit` silently drops on full ring** (`PortAudioOutput.cs:243-248`). When `WaitForCapacity` does its job this never fires, but during the brief window before the device stream is started or right after a Pause→Resume the ring can fill faster than callbacks drain. The `DroppedSamples` counter now surfaces in the HUD — verify it stays zero. If it ticks up, the prefill is overshooting.
-- [ ] **`AudioRouter.RunLoop` allocates a new `float[]` per pumped chunk when the free-pool is exhausted** (`Commit`, `AudioRouter.cs:807`). Under sustained backpressure (e.g. NDI sink slow + 8-chunk capacity exceeded), the producer thread allocates a fresh buffer per chunk — that's Gen-0 traffic on the audio thread, which can cascade into latency spikes. Already counted as a drop via `RecordDrop`, but the allocation itself is silent. Switch to "drop without allocating" (don't rotate buffers when out of pool — reuse the current `_working` directly) and audit whether the silent re-allocation path is even desirable.
+- [x] **`TargetQueueSamples` cushion is tight** — `VideoPlaybackSmoke` / `AudioRouting.TryCreate` now targets **`max(4×chunk, min(16×chunk, ring/3))`** (~320 ms headroom at defaults) instead of **`clamp(8×chunk, 4×chunk, ring/8)`**.
+- [x] **`PortAudioOutput.TargetQueueSamples` clamp ignores `CapacitySamples` lower bound** — replaced with the **`max`/`min`** formula above (no **`Math.Clamp`** with inverted bounds).
+- [x] **PortAudio's default suggested latency is `defaultHighOutputLatency`** — **`VideoPlaybackSmoke`** exposes **`--device-latency-ms=`** (passed as PortAudio **`suggestedLatency`** seconds) and bumps **`TargetQueueSamples`** when set.
+- [x] **No backpressure-aware decoder catch-up on Pause→Resume** — [x] **`AudioRouter.Resume`** `<remarks>` document host mitigations (same-timestamp **`ISeekableSource.Seek`** to reset converter state, or prebuffer before **`Start`**). [x] Run loop **silence-pads** partial **`ReadInto`** results (same **`Resume`** remarks). [ ] **Decoder/resampler queue drain** without **`MediaClock`** motion (no file-decoder ownership inside **`AudioRouter`**) — still host **`Seek`** / **prefill** only.
+- [x] **`PortAudioOutput.Submit` silently drops on full ring** — [x] **`DroppedSamples`** counter (HUD); [x] throttled **`MediaDiagnostics.LogWarning`** (~2s, CAS-gated) when drops occur, with guidance on prefill / **`TargetQueueSamples`**. Callback path unchanged (no logging in real-time callback).
+- [x] **`AudioRouter.RunLoop` allocates a new `float[]` per pumped chunk when the free-pool is exhausted** — `SinkPump.Commit` now drops in place and reuses **`_working`** when both pool and **`_ready`** are empty (**`RecordDrop`** unchanged).
 
 ### NDI audio "doesn't look healthy" — root-cause shortlist
 
-`VideoPlaybackSmoke` plumbs NDI audio as `routing.Player.AddOutput(ndSink)` (`Program.cs:85`). The NDI sink shares the same audio router as PortAudio, but with several mismatches:
+`VideoPlaybackSmoke` plumbs NDI audio as `routing.Player.AddOutput(ndSink, sinkPumpCapacityChunks: …)` (larger per-sink **`SinkPump`** queue than the router-wide default). The NDI sink shares the same audio router as PortAudio, but with several mismatches:
 
-- [ ] **NDI audio inherits 20 ms chunk cadence (50 Hz frame rate)** — NDIAudioSink sends one NDI audio frame per router chunk via `NDIAudioUtils.SendInterleaved32f`. NDI Monitor's audio meter expects a steady cadence; the router's `WaitForCapacity` sleeps in millisecond increments (`Math.Ceiling` rounds up), so the audio frame inter-arrival oscillates ±1 ms around 20 ms — visible as a wobbling buffer level in the NDI Monitor display. Fixes:
-  - **Aggregate router chunks into larger NDI audio frames** (e.g. 4–5 chunks ≈ 80–100 ms): wrap `NDIAudioSink` in a per-sink accumulator that flushes when ≥ N samples are buffered; submit one `NDIlib_util_send_send_audio_interleaved_32f` per video-frame period instead of 50 Hz.
-  - **Stamp real timecodes** instead of the `0x7FFFFFFFFFFFFFFF` "synthesise" sentinel (`NDIAudioSink.cs:65`). Maintain a sample counter and emit `Timecode = (long)(_samplesSent * 10_000_000 / sampleRate)` (NDI uses 100-ns ticks). With a real timecode the receiver can absorb cadence jitter against the stamped time, not against arrival time.
-- [ ] **NDI audio starts ~prefill-duration *after* PortAudio audio** — `PrefillMainOutputDirectFromDecoder` consumes the decoder and writes directly into PortAudio's ring. The router (and therefore NDIAudioSink) only starts producing *after* the prefill consumed those samples. Result: NDI receivers see the audio stream begin ~100 ms after they would have seen video, which throws their A/V sync heuristic. Mitigations:
-  - Route prefill through `AudioRouter` (e.g. add a "prebuffer mode" where the router runs `WaitForCapacity` checks while sinks are silent, then enables sink output once the ring hits target) so every sink sees the same starting sample.
-  - Or send the prefill content as NDI audio too: emit one fat NDI audio frame containing the prefill block from the decoder before starting the router.
-- [ ] **NDI audio sink shares `pumpCapacityChunks=8`** with PortAudio — at 20 ms chunks that's 160 ms of audio backlog before chunks are dropped. NDI's SDK serializes sends through a single sender; if a video frame is mid-send (`SendVideoAsync` returned but the buffer is still in flight on the NIC), the audio frame queues behind it. With 720p24 video frames the burst pressure isn't huge, but on a busy network the NDI audio pump *can* hit its cap and start `RecordDrop`-ing. The HUD only shows the *primary* sink's `pumpDr`; add an NDI-specific `pumpDr` line, or expose per-sink stats and log when any non-primary sink starts dropping.
-- [ ] **NDI sender is created with `clockAudio: false`** in `VideoPlaybackSmoke` (`Program.cs:48-49`) yet there's no internal MFPlayer-side pacer for NDI audio. With `clockAudio: true` the SDK would smooth out the cadence on its side; with `false` and no manual pacer, jitter goes straight to the receiver. Either flip `clockAudio` back on for the smoke tool (NDI throttles on the SDK side, which is what NDI Monitor expects to see), or add a `minimumAudioSubmitSpacing` to `NDIAudioSink` mirroring `NDIVideoSender.PaceBeforePack` (with the same sub-millisecond `SpinWait` trick).
-- [ ] **`NDIAudioSink.Submit` allocates / frees a native buffer only when capacity grows** (`EnsurePackedCapacity`) — fine for steady chunk sizes. But the first ~1 second of playback may bump the capacity 1–2 times if upstream chunk sizes shift; not a dropout cause, but worth noting that the first reallocation happens on the pump thread under the audio time budget.
-- [ ] **NDI receivers handle audio at NDI video frame cadence by default** — even if you fix the timecode and chunk size, NDI's documented best practice is to send audio in blocks that match the video frame period (1/24 s = 41.67 ms ≈ 2000 samples @ 48 kHz). Aim there once the aggregator above lands.
+- [x] **NDI audio inherits 20 ms chunk cadence (50 Hz frame rate)** — [x] optional **`NdiAudioAggregatingSink`** in **`VideoPlaybackSmoke`** (default target ≈ one video frame of samples from fps; **`--ndi-audio-aggregate=0`** disables, **`>0`** fixed); [x] **`NDIAudioSink`** 100 ns timecodes + **`clockAudio: true`** in smoke; [ ] **Tighter binding** to NDI SDK send/receive clock APIs (beyond aggregation + timecodes) remains optional.
+  - [x] **Stamp real timecodes** — **`NDIAudioSink`** uses **100 ns** ticks from a running sample counter.
+- [x] **NDI audio starts ~prefill-duration *after* PortAudio audio** — **`PrefillMainOutputDirectFromDecoder`** now mirrors the same PCM into the NDI audio sink (when present) alongside PortAudio.
+- [x] **NDI audio sink shares `pumpCapacityChunks=8`** — [x] **`ndiDr`** in **`VideoPlaybackSmoke`** HUD; [x] per-sink pump depth via **`AudioRouter.AddSink`** / **`AudioPlayer.AddOutput`** (**`--ndi-audio-pump-chunks=`**, default **24** for NDI in the smoke tool).
+- [x] **`NDIOutput` `clockAudio: true`** in **`VideoPlaybackSmoke`**.
+- [x] **`NDIAudioSink.Submit` allocates / frees a native buffer only when capacity grows** (`EnsurePackedCapacity`) — [x] growth uses **`NativeMemory.Realloc`** with **≥2×** prior size (power-of-two target) so early-session chunk-size shifts cause at most a couple of resizes on the pump thread; steady-state remains allocation-free.
+- [x] **NDI receivers handle audio at NDI video frame cadence by default** — **`VideoPlaybackSmoke`** targets ~one frame of samples when **`--ndi-audio-aggregate`** is left at auto (see **`--ndi-audio-aggregate=`**); fixed sizes via **`>0`**. Further SDK-specific tuning remains optional.
 
-### `VideoPtsClock` integration — wired but not used
+### `VideoPtsClock` integration
 
-`VideoPtsClock` (`S.Media.Core/Clock/VideoPtsClock.cs`) ships with unit tests but **nothing in the framework subscribes `FramePresentationTimePresented` to drive it**. `VideoPlaybackSmoke` always uses `routing?.Player.Clock ?? freerunClock` — when there's no audio, `freerunClock` is the plain `MediaClock` stopwatch fallback, not a `VideoPtsClock`. Two things to address:
+`VideoPtsClock` ships with unit tests; **`VideoPlaybackSmoke`** now wires **`FramePresentationTimePresented`** when audio routing is unavailable.
 
-- [ ] **Wire `VideoPtsClock` in audio-less playback** — when `routing` is null, construct a `VideoPtsClock`, hook `videoPlayer.FramePresentationTimePresented += clock.NotifyFramePts`, and use it as the `MediaClock` master via `mediaClock.SetMaster(videoPtsClock)`. `BeginSession` needs the first frame's PTS — easiest to call it from inside the first `FramePresentationTimePresented` invocation (guarded by a flag).
-- [ ] **`AvPlaybackCoordinator` doesn't help with this either** — its `Play(video, audio: null, ...)` takes no clock parameter, so consumers can't ask it to use `VideoPtsClock` for the video-only path. Either add a `IPlaybackClock? videoOnlyMaster` parameter, or document that wiring `VideoPtsClock` is the caller's job.
+- [x] **Wire `VideoPtsClock` in audio-less playback** — `VideoPlaybackSmoke` wires **`FramePresentationTimePresented`**, calls **`BeginSession`** on the first PTS, **`AvPlaybackCoordinator.Play(..., videoOnlyMaster: videoPtsClock)`**, and **`Pause`**/**unsubscribe** in teardown.
+- [x] **`AvPlaybackCoordinator` / audio-less hosts** — [x] **`Play`** accepts **`IPlaybackClock? videoOnlyMaster`** when **`audio`** is null; [x] **`MediaPlaybackSession`** façade for ordered **`Play`**/**`Pause`**/**`Seek`**.
 
 ### New code — minor regressions / cleanups
 
-- [ ] **Unused `using System.Collections.Generic;` in `VideoFileDecoder.cs:2`** — `Stack<>` and `Dictionary<>` live in `System.Collections.Generic`, but the file already has `ImplicitUsings = enable` at the project level. The `using` line is redundant; either remove or keep with a comment.
-- [ ] **`VideoFileDecoder._passThroughArena` lock spans `Stack<>.Push/Pop` and `Dictionary<>.TryGetValue`** — adding a contention point on the audio/video time budget. With single-threaded `TryReadNextFrame` the lock is uncontended on the producer side; the contention is the *frame release callback* (which can run on the sink's render thread). At 24 fps the contention is rare, but worth noting that disposing a backlog of late frames at once will serialize on this lock. `ConcurrentStack<>` per plane-count plus `ConcurrentDictionary` would remove the lock; the cap-32 enforcement gets `Interlocked.Increment` / `Decrement` instead.
-- [ ] **`VideoFileDecoder.Close` clears the passthrough stacks but doesn't null out the AVFrame metadata held in the cached `ReadOnlyMemory<byte>[]`** — the elements are reference-type assignments (`planes[i] = …`) overwritten on every rent; cached arrays carry stale `ReadOnlyMemory<byte>` instances pointing to freed `AVFrame.data` pointers between rents. The bug is dormant because `RentPassThroughDescriptors` overwrites every slot before returning, but a defensive `Array.Clear` on push (or on pop) would prevent a future caller from observing stale memory if the cap-32 ever gets bypassed.
-- [ ] **`AvPlaybackCoordinator.Play` order** — `prefillBeforeHardware → startHardware → audio?.Play → video.Play` matches what the smoke tool wants, but the `AudioPlayer.Play` step doesn't internally prebuffer — that's the caller's job via `prefillBeforeHardware`. Two minor improvements: (a) accept a `Func<TimeSpan, bool>? waitForPrebuffer` callback so the coordinator can verify the prebuffer succeeded before opening the device; (b) reverse the Pause order on cancel: today it does `video.Pause` then `audio?.Pause` — if `video.Pause` throws, audio is still running. Wrap in `try { video.Pause } finally { audio?.Pause }`.
-- [ ] **`AvPlaybackCoordinator.Seek` order** — `audio?.Seek(position); video.Seek(position);` is correct (audio clock first), but neither pauses first. `AudioPlayer.Seek` does its own pause/resume internally; `VideoPlayer.Seek` is a self-contained pause/seek/resume; but during the brief window where audio is paused and video isn't, the video sink keeps presenting frames from the old position. Document the inter-leaving, or wrap both in a single Pause/Resume bracket inside the coordinator.
-- [ ] **`SinkSlavedRouterClock` fallback creation eagerness** — fixed in this pass (`<remarks>` documents the assumption). But the underlying construct is still: a fallback `WallClockRouterClock` created once at `SlaveTo` time. If the slaved sink is later removed and the router replaces it with a different-sample-rate sink, the fallback wall clock would tick at the old rate during the brief unhinged window. The fix is to construct the fallback lazily on miss (or pass a `Func<IRouterClock>` factory). Track as backlog under "dynamic resampling support."
-- [ ] **`ChannelMap.TryAccumulateMonoDupStereoInterleaved` / `TryAccumulateStereoDuplexWideInterleaved` AVX paths assume `Vector<float>.Count == 8`** — true on AVX2 (which is what `Avx.IsSupported` implies), but `Vector<float>.Count` can be 16 on AVX-512 hardware where `Avx512F` is active. On such a CPU, `vn == 8` would be false and we'd fall through to the SSE branch — fine functionally, but suboptimal. Either gate on `Vector<float>.Count` directly (`vn == 8 || vn == 16` with the AVX-512 variant) or accept the AVX-fallback on AVX-512 hardware (documented as such).
-- [ ] **`VideoPlayer.FramePresentationTimePresented`** runs **inside the MediaClock driver thread's `OnVideoTick`** — same thread that fires audio ticks and position-changed events. Subscribers that do heavy work (e.g. recalc a UI overlay) will delay subsequent ticks. Worth a remark on the event noting "fires on the clock-driver thread; marshal to your own context if you need to do non-trivial work."
+- [x] **Unused `using System.Collections.Generic;` in `VideoFileDecoder.cs:2`** — removed.
+- [x] **`VideoFileDecoder._passThroughArena` lock** — single-threaded decode + **`Array.Clear`** on pooled descriptor arrays before reuse; see **`VideoFileDecoder`** `<remarks>`. [ ] Lock-free pooling remains only if profiling demands it.
+- [x] **`VideoFileDecoder`… stale `ReadOnlyMemory<byte>`** — **`ReturnPassThroughDescriptors`** **`Array.Clear`** on plane + stride arrays before pooling.
+- [x] **`AvPlaybackCoordinator.Play` order** — [x] optional **`verifyPrebufferAfterPrefill`** (`Func<bool>?`) after **`prefillBeforeHardware`**, before **`startHardware`** — throws **`InvalidOperationException`** when **`false`**; [x] **`Pause`/`Stop`** use **`try { video.Pause } finally { audio?.Pause }`**.
+- [x] **`AvPlaybackCoordinator.Seek` order** — [x] **`video.Clock.Seek`** when **`audio`** is null; [x] **`SeekCoordinated`** + coordinator `<remarks>` document pause-bracketed seek with **`MediaContainerDecoder.SeekPresentation`** when both streams share one demuxer.
+- [x] **`SinkSlavedRouterClock` fallback creation eagerness** — **`WallClockRouterClock`** is created lazily under a small lock (first **`Reset`** or first miss when **`resolveSink`** returns **`null`**), using the owning router's **`sampleRate`** / **`chunkSamples`** captured at construction.
+- [x] **Per-leaf ppm / resampling drift** — **`AdaptiveRateAudioSink`** + **`PumpPressure`** (see §Deep library audit). [ ] **`AudioRouter.SampleRate`** (and **`SinkSlavedRouterClock`** / **`WallClockRouterClock`**) — changing the router's **`sampleRate`** at runtime without rebuilding the graph remains unsupported.
+- [x] **`PortAudioOutput` `IPlaybackClock` stair-stepped at buffer rate** — **`ElapsedSinceStart`** only moved when **`PlayedSamples`** advanced in the PA callback (~10–25 ms @ 48 kHz), so **`VideoPlayer`** saw **~47 Hz** playhead motion on 60 fps video; fixed with **`Pa_GetStreamTime`** + per-segment anchor (see **`PortAudioOutput.cs`**).
+- [x] **`ChannelMap`… `Vector<float>.Count == 16`** — when **`Avx.IsSupported && vn == 16`**, **`TryAccumulateMonoDupStereoInterleaved`** and **`TryAccumulateStereoDuplexWideInterleaved`** run the existing AVX2 kernels twice per 16-wide block (no **`Avx512F`** dependency); hardware without AVX still uses SSE / **`Vector<float>`** paths.
+- [x] **`VideoPlayer.FramePresentationTimePresented`** — `<remarks>` on the event documents the **media-clock driver thread**; keep handlers light.
 
 ### Quick verification when investigating the user's audio reports
 
 For local "audio jumps":
-1. Run `VideoPlaybackSmoke <file> --hw` (no `--ndi`) for 60 s.
-2. Read the HUD's final `paUnd` / `paDr` / `pumpDr`. If `paUnd > 0` mid-stream → producer stall (raise `TargetQueueSamples`). If `paDr > 0` → router writing faster than PA drains (shouldn't happen after prefill). If `pumpDr > 0` → pump preempted (shouldn't happen with `AboveNormal`).
+1. Run `VideoPlaybackSmoke <file>` (hardware decode is default; add **`--no-hw`** for software-only) for 60 s.
+2. Read the HUD's final `paUnd` / `paDr` / `pumpDr` / `ndiDr` (with `--ndi`).
 3. If all three are 0 but the user still hears jumps, the source is likely PortAudio's audio thread itself (Pulse server jitter, ALSA period underrun). Try `defaultLowOutputLatency` or pass an explicit `framesPerBuffer` matching the ALSA period.
 
 For NDI Monitor audio health:
 1. Run `VideoPlaybackSmoke <file> --ndi MFPlayer` (without `--drm-gl`).
 2. On the receiver side, run `mediainfo` against the NDI source or watch NDI Monitor's audio waveform meter for cadence wobble.
-3. If video stays centered green and audio shows uneven bars: the audio frame cadence is the issue. Try flipping `clockAudio: true` in `NDIOutput` ctor (smoke tool currently passes `false`).
-4. If `clockAudio: true` smooths it, that confirms the audio-side pacing gap — apply the aggregator + real timecode fix in the §"NDI audio" list above to get the same effect with `clockAudio: false`.
+3. If video stays centered green and audio shows uneven bars: cadence / prefill issues — **`clockAudio: true`** + real audio timecodes are now default in the smoke tool; check **`ndiDr`** in the HUD.
+4. If problems persist, try an **`NDIAudioSink`** chunk aggregator (still backlog).

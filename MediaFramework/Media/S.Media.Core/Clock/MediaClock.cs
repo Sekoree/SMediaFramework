@@ -7,18 +7,19 @@ namespace S.Media.Core.Clock;
 
 /// <summary>
 /// Master playback clock. Free-running by default (backed by
-/// <see cref="Stopwatch"/>); call <see cref="SetMaster"/> to slave it to an
-/// external <see cref="IPlaybackClock"/> (typically the audio sink) so
-/// reported position tracks actual played samples instead of wall time.
+/// <see cref="Stopwatch"/>); call <see cref="SetMaster"/> (or
+/// <see cref="MediaClockExtensions.SetMasterChain"/> for <see cref="IMediaClock"/>) to slave it to an external
+/// <see cref="IPlaybackClock"/> (typically the audio sink) so reported position
+/// tracks actual played samples instead of wall time.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Tick events (<see cref="AudioTick"/>, <see cref="VideoTick"/>,
 /// <see cref="PositionChanged"/>) are driven by an internal wall-clock thread
 /// regardless of master attachment — they're "render at this cadence" signals,
-/// not "media time advanced by X." Subscribers should marshal to their own
-/// context (UI thread, etc.) if needed; one throwing handler will not stop
-/// the loop.
+/// not "media time advanced by X." When a tick handler runs long or the thread
+/// wakes late, the driver <strong>bursts</strong> missed deadlines (capped) and
+/// then fast-forwards the schedule so a long stall does not freeze the process.
 /// </para>
 /// <para>
 /// <see cref="PositionChanged"/> is usually raised from the driver thread at
@@ -270,18 +271,44 @@ public sealed class MediaClock : IMediaClock, IDisposable
 
             if (elapsed >= nextAudio)
             {
-                SafeInvoke(AudioTick);
-                while (nextAudio <= elapsed) nextAudio += _audioTickInterval;
+                var audioBurst = 0;
+                while (elapsed >= nextAudio && audioBurst++ < 64)
+                {
+                    SafeInvoke(AudioTick);
+                    nextAudio += _audioTickInterval;
+                    elapsed = Stopwatch.GetElapsedTime(sessionStart);
+                }
+
+                while (nextAudio <= elapsed)
+                    nextAudio += _audioTickInterval;
             }
+
             if (elapsed >= nextVideo)
             {
-                SafeInvoke(VideoTick);
-                while (nextVideo <= elapsed) nextVideo += _videoTickInterval;
+                var videoBurst = 0;
+                while (elapsed >= nextVideo && videoBurst++ < 64)
+                {
+                    SafeInvoke(VideoTick);
+                    nextVideo += _videoTickInterval;
+                    elapsed = Stopwatch.GetElapsedTime(sessionStart);
+                }
+
+                while (nextVideo <= elapsed)
+                    nextVideo += _videoTickInterval;
             }
+
             if (elapsed >= nextPosition)
             {
-                RaisePositionChanged(CurrentPosition);
-                while (nextPosition <= elapsed) nextPosition += PositionChangedInterval;
+                var posBurst = 0;
+                while (elapsed >= nextPosition && posBurst++ < 8)
+                {
+                    RaisePositionChanged(CurrentPosition);
+                    nextPosition += PositionChangedInterval;
+                    elapsed = Stopwatch.GetElapsedTime(sessionStart);
+                }
+
+                while (nextPosition <= elapsed)
+                    nextPosition += PositionChangedInterval;
             }
         }
     }

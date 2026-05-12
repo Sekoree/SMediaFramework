@@ -22,6 +22,13 @@ public readonly struct HardwareVideoPlaneDescriptor
     public nint HandleOrDescriptor { get; init; }
     public nuint RowPitchBytes { get; init; }
     public ulong Modifier { get; init; }
+
+    /// <summary>
+    /// When <see cref="Kind"/> is <see cref="HardwareVideoMemoryKind.VulkanExternal"/>, the Vulkan
+    /// <c>VkExternalMemoryHandleTypeFlagBits</c> value used to obtain <see cref="HandleOrDescriptor"/>.
+    /// When <see cref="Kind"/> is another kind, callers should leave this <c>0</c> unless a backend documents otherwise.
+    /// </summary>
+    public uint ExternalMemoryHandleType { get; init; }
 }
 
 /// <summary>Portable bundle for up to four planes (covers most YUV + RGB surfaces).</summary>

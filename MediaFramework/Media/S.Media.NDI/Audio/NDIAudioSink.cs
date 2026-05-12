@@ -13,6 +13,12 @@ namespace S.Media.NDI.Audio;
 /// <c>NDIlib_util_send_send_audio_interleaved_32f</c> (the SDK does the
 /// deinterleave + send in optimized native code). Lifetime is owned by
 /// <see cref="NDIOutput"/>; callers do not dispose this sink directly.
+/// <para>
+/// A single native packed buffer is grown with headroom (at least double the
+/// prior capacity, rounded up to a power of two) so upstream chunk-size
+/// changes during the first seconds of a session rarely require more than one
+/// or two reallocations on the pump thread.
+/// </para>
 /// </remarks>
 public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
 {
@@ -21,6 +27,8 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
     private byte* _packedBuffer;
     private int _packedCapacityBytes;
     private bool _disposed;
+
+    private long _samplesSentPerChannel;
 
     public AudioFormat Format => _format;
 
@@ -53,6 +61,9 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
         var samplesPerChannel = packedSamples.Length / channels;
         if (samplesPerChannel == 0) return;
 
+        // NDI timecode is 100 ns units; stamp the start sample of this packet so receivers can de-jitter.
+        var timecode100Ns = _samplesSentPerChannel * 10_000_000L / _format.SampleRate;
+
         var packedBytes = packedSamples.Length * sizeof(float);
         EnsurePackedCapacity(packedBytes);
         packedSamples.CopyTo(new Span<float>(_packedBuffer, packedSamples.Length));
@@ -62,19 +73,24 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
             SampleRate = _format.SampleRate,
             NoChannels = channels,
             NoSamples = samplesPerChannel,
-            Timecode = 0x7FFFFFFFFFFFFFFF,
+            Timecode = timecode100Ns,
             PData = (nint)_packedBuffer,
         };
         NDIAudioUtils.SendInterleaved32f(_sender, interleaved);
+        _samplesSentPerChannel += samplesPerChannel;
     }
 
     private void EnsurePackedCapacity(int neededBytes)
     {
         if (_packedCapacityBytes >= neededBytes) return;
-        if (_packedBuffer != null) NativeMemory.Free(_packedBuffer);
+
+        // Grow with slack so modest increases in chunk size (e.g. router pump
+        // tuning) do not thrash Alloc/Free on every Submit.
+        var minNext = Math.Max(neededBytes, _packedCapacityBytes > 0 ? _packedCapacityBytes * 2 : neededBytes);
         var capacity = 1;
-        while (capacity < neededBytes) capacity <<= 1;
-        _packedBuffer = (byte*)NativeMemory.Alloc((nuint)capacity);
+        while (capacity < minNext) capacity <<= 1;
+
+        _packedBuffer = (byte*)NativeMemory.Realloc(_packedBuffer, (nuint)capacity);
         _packedCapacityBytes = capacity;
     }
 

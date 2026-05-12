@@ -50,11 +50,15 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     private uint _samplerLinear;
     private uint _samplerYMipmap;
 
+    private readonly int[] _uTexBicubicDimLocs = new int[4];
+    private static string? _bicubicLibrary;
+
     private readonly bool _shareShaderPrograms;
     private readonly string? _shaderProgramCacheKey;
     private readonly bool _yPlaneMipmapsEnabled;
 
     private readonly Nv12DmabufGpuUploader? _nv12DmabufGpuUploader;
+    private readonly Nv12Win32SharedHandleGpuUploader? _nv12Win32SharedUploader;
     private bool _suppressYPlaneMipForLastGlDmabufUpload;
 
     private readonly Action<VideoFrame> _uploadFromFrame;
@@ -112,7 +116,8 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     }
 
     public YuvVideoRenderer(GL gl, VideoFormat format, YuvColorSpace? colorSpace = null,
-        bool sharedShaderPrograms = false, bool yPlaneMipmaps = false, YuvDmabufEglInterop? eglDmabufInterop = null)
+        bool sharedShaderPrograms = false, bool yPlaneMipmaps = false, YuvDmabufEglInterop? eglDmabufInterop = null,
+        nint win32D3D11DeviceComPtrForNv12 = 0)
     {
         ArgumentNullException.ThrowIfNull(gl);
         if (format.Width <= 0 || format.Height <= 0)
@@ -136,6 +141,10 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
 
         _nv12DmabufGpuUploader =
             eglDmabufInterop != null ? Nv12DmabufGpuUploader.TryCreate(gl, eglDmabufInterop) : null;
+
+        _nv12Win32SharedUploader = OperatingSystem.IsWindows() && win32D3D11DeviceComPtrForNv12 != 0
+            ? Nv12Win32SharedHandleGpuUploader.TryCreate(gl, win32D3D11DeviceComPtrForNv12)
+            : null;
 
         _textures = new uint[recipe.PlaneCount];
         _samplerUniforms = new int[_textures.Length];
@@ -174,6 +183,29 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             throw new ArgumentException($"frame format {frame.Format} does not match renderer format {_format}", nameof(frame));
 
         _suppressYPlaneMipForLastGlDmabufUpload = false;
+        if (frame.Win32Nv12 is not null)
+        {
+            if (_nv12Win32SharedUploader is null)
+                throw new InvalidOperationException(
+                    "NV12 Win32 D3D11 shared-handle frames require a D3D11 device pointer when constructing YuvVideoRenderer (win32D3D11DeviceComPtrForNv12).");
+
+            BeginUnpackSession();
+            try
+            {
+                if (!_nv12Win32SharedUploader.TryUpload(_textures[0], _textures[1], Format, frame.Win32Nv12))
+                    throw new InvalidOperationException(
+                        "NV12 Win32 D3D11 import/upload failed (OpenSharedResource, staging copy, or GL unpack path).");
+            }
+            finally
+            {
+                EndUnpackSession();
+            }
+
+            _suppressYPlaneMipForLastGlDmabufUpload = true;
+            RegenerateYPlaneMipmapsIfNeeded();
+            return;
+        }
+
         if (frame.DmabufNv12 is not null)
         {
             if (_nv12DmabufGpuUploader is null)
@@ -330,6 +362,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     private void DrawFrame(int x, int y, int viewportWidth, int viewportHeight)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        ApplyBicubicPlaneDimensions();
         _gl.Viewport(x, y, (uint)viewportWidth, (uint)viewportHeight);
         _gl.UseProgram(_program);
         _gl.BindVertexArray(_vao);
@@ -354,6 +387,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         _disposed = true;
 
         try { _nv12DmabufGpuUploader?.Dispose(); } catch { /* best-effort */ }
+        try { _nv12Win32SharedUploader?.Dispose(); } catch { /* best-effort */ }
 
         for (var i = 0; i < _textures.Length; i++)
             if (_textures[i] != 0) { _gl.DeleteTexture(_textures[i]); _textures[i] = 0; }
@@ -381,7 +415,8 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         _gl.BindVertexArray(_vao);
 
         var vertSrc = LoadShaderCached(_recipe.VertexFile);
-        var fragSrc = LoadShaderCached(_recipe.FragmentFile);
+        var fragRaw = LoadShaderCached(_recipe.FragmentFile);
+        var fragSrc = _recipe.NearestSampling ? fragRaw : InjectAfterFirstLine(fragRaw, GetBicubicLibrary());
         if (_shaderProgramCacheKey is not null)
             _program = SharedGlProgramCache.Acquire(_shaderProgramCacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
         else
@@ -424,6 +459,15 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         _uHdrTransfer = _gl.GetUniformLocation(_program, "uHdrTransfer");
         _uHdrExposure = _gl.GetUniformLocation(_program, "uHdrExposure");
         ApplyHdrUniforms();
+
+        for (var pi = 0; pi < _uTexBicubicDimLocs.Length; pi++)
+            _uTexBicubicDimLocs[pi] = -1;
+        if (!_recipe.NearestSampling)
+        {
+            for (var pi = 0; pi < _uTexBicubicDimLocs.Length; pi++)
+                _uTexBicubicDimLocs[pi] = _gl.GetUniformLocation(_program, $"uTexBicubicDim{pi}");
+            ApplyBicubicPlaneDimensions();
+        }
 
         var filter = _recipe.NearestSampling ? TextureMinFilter.Nearest : TextureMinFilter.Linear;
         var magFilter = _recipe.NearestSampling ? TextureMagFilter.Nearest : TextureMagFilter.Linear;
@@ -477,6 +521,24 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         _gl.UseProgram(_program);
         if (_uHdrTransfer >= 0) _gl.Uniform1(_uHdrTransfer, (int)_hdrTransfer);
         if (_uHdrExposure >= 0) _gl.Uniform1(_uHdrExposure, _hdrPreviewExposure);
+    }
+
+    private void ApplyBicubicPlaneDimensions()
+    {
+        if (_recipe.NearestSampling || _program == 0) return;
+        _gl.UseProgram(_program);
+        for (var i = 0; i < _uTexBicubicDimLocs.Length; i++)
+        {
+            var loc = _uTexBicubicDimLocs[i];
+            if (loc < 0) continue;
+            if (i < _textures.Length)
+            {
+                var (w, h) = _recipe.PlaneSize(_format, i);
+                _gl.Uniform2(loc, (float)w, (float)h);
+            }
+            else
+                _gl.Uniform2(loc, 1f, 1f);
+        }
     }
 
     private void ApplyYuvFlipUniform()
@@ -919,6 +981,15 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
 
     private static string LoadShaderCached(string fileName) =>
         ShaderSourceCache.GetOrAdd(fileName, LoadShaderUncached);
+
+    private static string GetBicubicLibrary() =>
+        _bicubicLibrary ??= LoadShaderUncached("bicubic.glsl");
+
+    private static string InjectAfterFirstLine(string shader, string body)
+    {
+        var nl = shader.IndexOf('\n');
+        return nl < 0 ? body + shader : shader[..(nl + 1)] + body + shader[(nl + 1)..];
+    }
 
     private static string LoadShaderUncached(string fileName)
     {

@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.PortAudio;
 
@@ -31,11 +32,21 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     private long _droppedSamples;
     private long _underrunSamples;
     private long _callbackCount;
+    private long _lastSubmitDropLogTicks;
+    private int _callbackFaulted;
+    private Exception? _callbackFaultException;
 
     private nint _stream;
     private GCHandle _selfHandle;
     private bool _isRunning;
     private bool _disposed;
+
+    /// <summary>Pa_GetStreamTime at <see cref="_segmentPlayed0Samples"/> — set on first callback after Start/Flush.</summary>
+    private double _segmentStreamT0;
+    /// <summary><see cref="PlayedSamples"/> snapshot paired with <see cref="_segmentStreamT0"/>.</summary>
+    private long _segmentPlayed0Samples;
+    /// <summary>1 after first callback calibrates stream time vs played samples for this stream segment.</summary>
+    private int _streamSmoothCalibrated;
 
     public AudioFormat Format => _format;
     public bool IsRunning => Volatile.Read(ref _isRunning);
@@ -52,6 +63,15 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     public long UnderrunSamples => Volatile.Read(ref _underrunSamples);
     /// <summary>How many times the PA callback has fired (debug).</summary>
     public long CallbackCount => Volatile.Read(ref _callbackCount);
+    /// <summary>Non-zero if the native stream callback caught an exception (diagnostics only; never throws across native boundary).</summary>
+    public bool CallbackFaulted => Volatile.Read(ref _callbackFaulted) != 0;
+
+    /// <summary>
+    /// First exception caught in the PortAudio stream callback, if <see cref="CallbackFaulted"/> is true.
+    /// Cleared when <see cref="Start"/> begins a new stream session. Never throws from the callback thread;
+    /// retain only for inspection on another thread.
+    /// </summary>
+    public Exception? CallbackFaultException => Volatile.Read(ref _callbackFaultException);
     /// <summary>1 = PA reports stream active, 0 = inactive, negative = error/closed.</summary>
     public int StreamActive => _stream != nint.Zero ? (int)Native.Pa_IsStreamActive(_stream) : -1;
 
@@ -59,12 +79,33 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     public double StreamTime => _stream != nint.Zero ? Native.Pa_GetStreamTime(_stream) : 0.0;
 
     /// <summary>
-    /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic playback time
-    /// derived from <see cref="PlayedSamples"/>. Stays at zero until the audio
-    /// thread starts consuming the ring; freezes when the stream is stopped
-    /// and resumes (without resetting) on the next Start.
+    /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic playback time aligned with
+    /// <see cref="PlayedSamples"/> but advanced with PortAudio's <c>Pa_GetStreamTime</c> between
+    /// callbacks so the master clock is not stuck for an entire output buffer (~10–25 ms at 48 kHz).
+    /// Falls back to sample counts when the stream is inactive or before the first callback.
     /// </summary>
-    public TimeSpan ElapsedSinceStart => TimeSpan.FromSeconds(PlayedSamples / (double)_format.SampleRate);
+    public TimeSpan ElapsedSinceStart
+    {
+        get
+        {
+            if (_stream != nint.Zero
+                && (int)Native.Pa_IsStreamActive(_stream) == 1
+                && Volatile.Read(ref _streamSmoothCalibrated) != 0)
+            {
+                Thread.MemoryBarrier();
+                var st = Native.Pa_GetStreamTime(_stream);
+                if (double.IsFinite(st))
+                {
+                    var elapsedSec = _segmentPlayed0Samples / (double)_format.SampleRate + (st - _segmentStreamT0);
+                    if (elapsedSec < 0)
+                        elapsedSec = 0;
+                    return TimeSpan.FromSeconds(elapsedSec);
+                }
+            }
+
+            return TimeSpan.FromSeconds(PlayedSamples / (double)_format.SampleRate);
+        }
+    }
 
     /// <summary><see cref="IPlaybackClock.IsAdvancing"/>: true when the PA stream is open and reporting active.</summary>
     public bool IsAdvancing => _stream != nint.Zero && (int)Native.Pa_IsStreamActive(_stream) == 1;
@@ -87,6 +128,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
         var err = Native.Pa_StartStream(_stream);
         if (err != PaError.paNoError)
             PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
+        Volatile.Write(ref _streamSmoothCalibrated, 0);
     }
 
     /// <summary>
@@ -149,6 +191,9 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_isRunning) return;
 
+        Interlocked.Exchange(ref _callbackFaultException, null);
+        Volatile.Write(ref _callbackFaulted, 0);
+
         _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
 
         var outParams = new PaStreamParameters
@@ -187,6 +232,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
             PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
         }
 
+        Volatile.Write(ref _streamSmoothCalibrated, 0);
         Volatile.Write(ref _isRunning, true);
     }
 
@@ -206,6 +252,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
         {
             if (_selfHandle.IsAllocated) _selfHandle.Free();
             Volatile.Write(ref _isRunning, false);
+            Volatile.Write(ref _streamSmoothCalibrated, 0);
             Volatile.Write(ref _writeIndex, 0);
             Volatile.Write(ref _readIndex, 0);
         }
@@ -245,7 +292,66 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
 
         var dropped = packedSamples.Length - toWrite;
         if (dropped > 0)
+        {
             Interlocked.Add(ref _droppedSamples, dropped);
+            var now = Environment.TickCount64;
+            var prev = Volatile.Read(ref _lastSubmitDropLogTicks);
+            if (now - prev >= 2000 || prev == 0)
+            {
+                if (Interlocked.CompareExchange(ref _lastSubmitDropLogTicks, now, prev) == prev)
+                {
+                    var frames = dropped / _format.Channels;
+                    var total = Volatile.Read(ref _droppedSamples);
+                    MediaDiagnostics.LogWarning(
+                        $"PortAudioOutput: ring full — dropped {dropped} floats (~{frames} frames this Submit); " +
+                        $"total DroppedSamples={total}. Prefill / TargetQueueSamples / stream-not-started windows can cause bursts.");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fills the ring from <paramref name="source"/> before <see cref="Start"/> (and before
+    /// <see cref="AudioRouter.Start"/>) so the first callback has PCM ready. Optionally mirrors the
+    /// same packed floats into <paramref name="mirrorPackedFloats"/> (same <see cref="AudioFormat"/>).
+    /// </summary>
+    /// <remarks>
+    /// Target queue depth defaults to <c>max(sampleRate/10, chunkSamples×4)</c> samples per channel
+    /// (same heuristic as the smoke tools). Stops if the ring stops accepting data (full / drops) so
+    /// an oversized target cannot spin forever.
+    /// </remarks>
+    public void PrefillFrom(
+        IAudioSource source,
+        TimeSpan timeout,
+        int chunkSamples,
+        IAudioSink? mirrorPackedFloats = null,
+        int? targetQueuedSamplesOverride = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.Format != _format)
+            throw new ArgumentException("Source format must match this output's format.", nameof(source));
+        if (mirrorPackedFloats is not null && mirrorPackedFloats.Format != _format)
+            throw new ArgumentException("Mirror sink format must match this output's format.", nameof(mirrorPackedFloats));
+        if (chunkSamples < 16)
+            throw new ArgumentOutOfRangeException(nameof(chunkSamples));
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout));
+
+        var targetQueued = targetQueuedSamplesOverride ?? Math.Max(_format.SampleRate / 10, chunkSamples * 4);
+        var ch = _format.Channels;
+        var bufFloats = Math.Min(65536, Math.Max(chunkSamples * ch * 8, 8192 * ch));
+        var buf = new float[bufFloats];
+        var deadline = DateTime.UtcNow + timeout;
+        while (QueuedSamples < targetQueued && DateTime.UtcNow < deadline)
+        {
+            var read = source.ReadInto(buf);
+            if (read == 0) break;
+            var span = buf.AsSpan(0, read);
+            var q0 = QueuedSamples;
+            Submit(span);
+            mirrorPackedFloats?.Submit(span);
+            if (QueuedSamples == q0 && read > 0) break;
+        }
     }
 
     /// <summary>
@@ -309,11 +415,13 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
         nint inputBuffer, nint outputBuffer, nuint frames,
         nint timeInfo, PaStreamCallbackFlags flags, nint userData)
     {
+        PortAudioOutput? self = null;
         try
         {
             var handle = GCHandle.FromIntPtr(userData);
-            if (handle.Target is not PortAudioOutput self)
+            if (handle.Target is not PortAudioOutput s)
                 return (int)PaStreamCallbackResult.paAbort;
+            self = s;
 
             Interlocked.Increment(ref self._callbackCount);
             var totalFloats = (int)frames * self._format.Channels;
@@ -344,11 +452,30 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
                 Interlocked.Add(ref self._underrunSamples, totalFloats - toRead);
             }
 
+            if (Volatile.Read(ref self._streamSmoothCalibrated) == 0)
+            {
+                var st = Native.Pa_GetStreamTime(self._stream);
+                if (double.IsFinite(st))
+                {
+                    var playedNow = Volatile.Read(ref self._playedSamples);
+                    self._segmentPlayed0Samples = playedNow;
+                    self._segmentStreamT0 = st;
+                    Thread.MemoryBarrier();
+                    Volatile.Write(ref self._streamSmoothCalibrated, 1);
+                }
+            }
+
             return (int)PaStreamCallbackResult.paContinue;
         }
-        catch
+        catch (Exception ex)
         {
             // Throwing across the unmanaged boundary would crash the process.
+            if (self is not null)
+            {
+                Interlocked.CompareExchange(ref self._callbackFaultException, ex, null);
+                Volatile.Write(ref self._callbackFaulted, 1);
+            }
+
             return (int)PaStreamCallbackResult.paAbort;
         }
     }

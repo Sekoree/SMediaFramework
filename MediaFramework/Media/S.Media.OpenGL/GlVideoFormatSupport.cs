@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Linq;
 using S.Media.Core.Video;
 using CorePixelFormat = S.Media.Core.Video.PixelFormat;
 using GlInternalFormat = Silk.NET.OpenGL.InternalFormat;
@@ -197,9 +198,56 @@ internal static class GlVideoFormatSupport
 
     internal static bool TryGetRecipe(CorePixelFormat pf, out GlFormatRecipe r) => Recipes.TryGetValue(pf, out r);
 
-    internal static CorePixelFormat[] SupportedPixelFormats { get; } = Recipes.Keys
-        .OrderBy(static x => (int)x)
-        .ToArray();
+    /// <summary>
+    /// Sink-side negotiation order: higher-fidelity YUV (e.g. ProRes 422 10-bit) is preferred before
+    /// NV12 so hardware decode paths that expose multiple natives do not pick 8-bit 4:2:0 by default.
+    /// </summary>
+    private static readonly CorePixelFormat[] SupportedPixelFormatsOrder =
+    [
+        CorePixelFormat.Yuv422P10Le,
+        CorePixelFormat.Yuv444P10Le,
+        CorePixelFormat.Yuv420P10Le,
+        CorePixelFormat.Yuv420P12Le,
+        CorePixelFormat.P010,
+        CorePixelFormat.P016,
+        CorePixelFormat.Yuv444P,
+        CorePixelFormat.Yuv422P,
+        CorePixelFormat.Yuva420p,
+        CorePixelFormat.I420,
+        CorePixelFormat.Yv12,
+        CorePixelFormat.Nv12,
+        CorePixelFormat.Nv21,
+        CorePixelFormat.Uyvy,
+        CorePixelFormat.Yuyv,
+        CorePixelFormat.Bgra32,
+        CorePixelFormat.Rgba32,
+        CorePixelFormat.Bgr24,
+        CorePixelFormat.Rgb24,
+        CorePixelFormat.Argb32,
+        CorePixelFormat.Abgr32,
+        CorePixelFormat.Gray8,
+        CorePixelFormat.Gray16,
+    ];
+
+    internal static CorePixelFormat[] SupportedPixelFormats { get; } = BuildSupportedPixelFormats();
+
+    private static CorePixelFormat[] BuildSupportedPixelFormats()
+    {
+        var recipeKeys = Recipes.Keys.ToHashSet();
+        foreach (var pf in SupportedPixelFormatsOrder)
+        {
+            if (!recipeKeys.Remove(pf))
+                throw new InvalidOperationException(
+                    $"GlVideoFormatSupport.SupportedPixelFormatsOrder lists {pf} but no recipe exists (typo?).");
+        }
+
+        if (recipeKeys.Count != 0)
+            throw new InvalidOperationException(
+                "GlVideoFormatSupport: add new PixelFormat entries to SupportedPixelFormatsOrder: "
+                + string.Join(", ", recipeKeys.OrderBy(static x => (int)x)));
+
+        return SupportedPixelFormatsOrder;
+    }
 
     private static (int w, int h) Planar420Size(VideoFormat vf, int p) => p switch
     {

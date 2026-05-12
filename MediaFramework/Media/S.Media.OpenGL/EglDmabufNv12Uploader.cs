@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using Silk.NET.OpenGL;
 
@@ -104,8 +105,9 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
             return new Nv12DmabufGpuUploader(gl, egl.EglDisplay, eglCreate, eglDestroy, eglErrLocal, glEGL,
                 modifiersExt);
         }
-        catch
+        catch (Exception ex)
         {
+            MediaDiagnostics.LogError(ex, "Nv12DmabufGpuUploader.TryCreate");
             return null;
         }
     }

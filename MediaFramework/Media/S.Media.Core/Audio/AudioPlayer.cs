@@ -1,4 +1,5 @@
 using S.Media.Core.Clock;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.Core.Audio;
 
@@ -30,6 +31,12 @@ namespace S.Media.Core.Audio;
 /// <see cref="Router"/> and <see cref="Clock"/> are exposed for power users
 /// who need finer control (custom routes, channel maps, per-route gains,
 /// non-default <see cref="IRouterClock"/>, etc.).
+/// </para>
+/// <para>
+/// To pre-buffer a PortAudio device ring before <see cref="Play"/> (decoder-direct,
+/// before the router thread runs), use <c>S.Media.PortAudio.PortAudioOutput.PrefillFrom</c>
+/// or <c>S.Media.PortAudio.AudioPlayerPortAudioExtensions.TryPrefillPrimaryPortAudio</c>
+/// from a project that references <c>S.Media.PortAudio</c>.
 /// </para>
 /// </remarks>
 public sealed class AudioPlayer : IDisposable
@@ -74,12 +81,15 @@ public sealed class AudioPlayer : IDisposable
     /// Register an output sink with the router. See <see cref="AutoWirePrimary"/>
     /// for clock/pacing wiring.
     /// </summary>
-    public string AddOutput(IAudioSink sink, string? id = null)
+    /// <param name="sinkPumpCapacityChunks">
+    /// Optional per-sink pump queue depth (mixed chunks); see <see cref="AudioRouter.AddSink"/>.
+    /// </param>
+    public string AddOutput(IAudioSink sink, string? id = null, int? sinkPumpCapacityChunks = null)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var sinkId = _router.AddSink(sink, id);
+        var sinkId = _router.AddSink(sink, id, sinkPumpCapacityChunks);
 
         lock (_gate)
         {
@@ -98,9 +108,10 @@ public sealed class AudioPlayer : IDisposable
     /// <summary>
     /// Remove an output sink. Cleans up the player's metadata and forwards
     /// to <see cref="AudioRouter.RemoveSink"/>. If this was the primary sink,
-    /// the clock master is detached and the router clock falls back to
-    /// wall-clock automatically (via <see cref="SinkSlavedRouterClock"/>'s
-    /// fallback chain).
+    /// the clock master is detached. When <see cref="AutoWirePrimary"/> is
+    /// <c>true</c>, another sink that implements <see cref="IClockedSink"/> is
+    /// promoted (router pacing + optional <see cref="IPlaybackClock"/> master)
+    /// if one remains.
     /// </summary>
     public bool RemoveOutput(string sinkId)
     {
@@ -108,6 +119,7 @@ public sealed class AudioPlayer : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         bool removed;
+        string? promoteTo = null;
         lock (_gate)
         {
             removed = _router.RemoveSink(sinkId);
@@ -117,10 +129,30 @@ public sealed class AudioPlayer : IDisposable
             {
                 _primarySinkId = null;
                 _clock.SetMaster(null);
-                // Router's slaved clock auto-falls-back to wall-clock when the
-                // sink is gone, no SetClock call needed.
+                if (AutoWirePrimary)
+                {
+                    foreach (var id in _router.SinkIds.Order(StringComparer.Ordinal))
+                    {
+                        if (id == sinkId) continue;
+                        if (!_router.TryGetSink(id, out var s) || s is not IClockedSink) continue;
+                        promoteTo = id;
+                        break;
+                    }
+                }
             }
         }
+
+        if (promoteTo is not null)
+        {
+            _router.RetargetSlaveClock(promoteTo);
+            lock (_gate)
+            {
+                if (_router.TryGetSink(promoteTo, out var s) && s is IPlaybackClock pc)
+                    _clock.SetMaster(pc);
+                _primarySinkId = promoteTo;
+            }
+        }
+
         return true;
     }
 
@@ -249,12 +281,22 @@ public sealed class AudioPlayer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try { Stop(); } catch { /* best-effort */ }
+        try { Stop(); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, "AudioPlayer.Dispose: Stop"); }
+#else
+        catch { /* best-effort */ }
+#endif
         _router.Dispose();
         _clock.Dispose();
         foreach (var d in _ownedDisposables)
         {
-            try { d.Dispose(); } catch { /* don't let one disposal swallow others */ }
+            try { d.Dispose(); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, "AudioPlayer.Dispose: owned disposable"); }
+#else
+            catch { /* don't let one disposal swallow others */ }
+#endif
         }
         _ownedDisposables.Clear();
     }

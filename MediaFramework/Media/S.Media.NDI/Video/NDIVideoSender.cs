@@ -18,7 +18,8 @@ namespace S.Media.NDI.Video;
 /// contract), so we ping-pong two natively-allocated frames.
 /// </para>
 /// <para>
-/// Pixel-format support: BGRA32, UYVY, NV12, I420. Planar (NV12 / I420)
+/// Pixel-format support (negotiation order — higher chroma first when multiple
+/// paths exist): UYVY, BGRA32, RGBA32, NV12, I420. Planar (NV12 / I420)
 /// frames are packed into one contiguous staging buffer — Y plane first at
 /// the visible-width stride NDI declares via <c>LineStrideInBytes</c>;
 /// chroma planes follow at the layout NDI's docs prescribe (UV interleaved
@@ -29,8 +30,9 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats =
     [
-        PixelFormat.Bgra32,
         PixelFormat.Uyvy,
+        PixelFormat.Bgra32,
+        PixelFormat.Rgba32,
         PixelFormat.Nv12,
         PixelFormat.I420,
     ];
@@ -117,8 +119,8 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
                 $"{format.PixelFormat} requires even width/height (got {format.Width}x{format.Height})",
                 nameof(format));
 
-        // Packed staging assumes an even stride in bytes (BGRA/UYVY use full width × Bpp).
-        if ((format.PixelFormat == PixelFormat.Bgra32 || format.PixelFormat == PixelFormat.Uyvy)
+        // Packed staging assumes an even stride in bytes (RGBA/BGRA/UYVY use full width × Bpp).
+        if ((format.PixelFormat is PixelFormat.Rgba32 or PixelFormat.Bgra32 or PixelFormat.Uyvy)
             && format.Width % 2 != 0)
             throw new ArgumentException(
                 $"{format.PixelFormat} requires even width so row packing matches NDI line stride ({format.Width})",
@@ -184,6 +186,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
     {
         switch (_format.PixelFormat)
         {
+            case PixelFormat.Rgba32:
             case PixelFormat.Bgra32:
             case PixelFormat.Uyvy:
                 PackPacked(frame, dst);
@@ -315,6 +318,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     private static int StagingBytes(VideoFormat fmt) => fmt.PixelFormat switch
     {
+        PixelFormat.Rgba32 => fmt.Width * fmt.Height * 4,
         PixelFormat.Bgra32 => fmt.Width * fmt.Height * 4,
         PixelFormat.Uyvy   => fmt.Width * fmt.Height * 2,
         PixelFormat.Nv12   => fmt.Width * fmt.Height * 3 / 2,
@@ -324,6 +328,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     private static int LineStrideForFormat(VideoFormat fmt) => fmt.PixelFormat switch
     {
+        PixelFormat.Rgba32 => fmt.Width * 4,
         PixelFormat.Bgra32 => fmt.Width * 4,
         PixelFormat.Uyvy   => fmt.Width * 2,
         // For planar formats LineStrideInBytes is the Y plane's stride
@@ -335,6 +340,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     private static int BytesPerPackedPixel(PixelFormat format) => format switch
     {
+        PixelFormat.Rgba32 => 4,
         PixelFormat.Bgra32 => 4,
         PixelFormat.Uyvy   => 2,
         _ => throw new NotSupportedException($"BytesPerPackedPixel: {format}"),
@@ -342,6 +348,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     private static NDIFourCCVideoType ToFourCC(PixelFormat format) => format switch
     {
+        PixelFormat.Rgba32 => NDIFourCCVideoType.Rgba,
         PixelFormat.Bgra32 => NDIFourCCVideoType.Bgra,
         PixelFormat.Uyvy   => NDIFourCCVideoType.Uyvy,
         PixelFormat.Nv12   => NDIFourCCVideoType.Nv12,

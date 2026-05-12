@@ -10,6 +10,6 @@ uniform float bitScale;
 
 void main()
 {
-    float L = clamp(texture(grayPlane, v_uv).r * bitScale, 0.0, 1.0);
+    float L = clamp(textureBicubicR(grayPlane, v_uv, uTexBicubicDim0) * bitScale, 0.0, 1.0);
     fragColor = vec4(L, L, L, 1.0);
 }

@@ -185,6 +185,33 @@ public class ChannelMapTests
         }
     }
 
+    private static void ReferenceMonoDupNAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var v = src[s] * uniformGain;
+            var b = s * nOut;
+            for (var k = 0; k < nOut; k++)
+                dst[b + k] += v;
+        }
+    }
+
+    private static void ReferenceMonoSilenceOrZeroAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, ReadOnlySpan<int> routing, int samplesPerChannel, float uniformGain)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var v = src[s] * uniformGain;
+            var b = s * routing.Length;
+            for (var k = 0; k < routing.Length; k++)
+            {
+                if (routing[k] >= 0)
+                    dst[b + k] += v;
+            }
+        }
+    }
+
     private static void ReferenceStereoWideAccumulate(
         ReadOnlySpan<float> src, Span<float> dst, int samplesPerChannel, float uniformGain)
     {
@@ -197,6 +224,48 @@ public class ChannelMapTests
             dst[dstBase + 1] += R;
             dst[dstBase + 2] += L;
             dst[dstBase + 3] += R;
+        }
+    }
+
+    private static void ReferenceStereoToNAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var L = src[s * 2] * uniformGain;
+            var R = src[s * 2 + 1] * uniformGain;
+            var b = s * nOut;
+            for (var k = 0; k < nOut; k++)
+                dst[b + k] += (k & 1) == 0 ? L : R;
+        }
+    }
+
+    private static void ReferenceStereoSilenceLrAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, ReadOnlySpan<int> routing, int samplesPerChannel, float uniformGain)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var L = src[s * 2] * uniformGain;
+            var R = src[s * 2 + 1] * uniformGain;
+            var b = s * routing.Length;
+            for (var k = 0; k < routing.Length; k++)
+            {
+                var ic = routing[k];
+                if (ic >= 0)
+                    dst[b + k] += ic == 0 ? L : R;
+            }
+        }
+    }
+
+    private static void ReferenceStereoDupSameChannelAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int sourceChannelIndex, int samplesPerChannel, float uniformGain)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var v = src[s * 2 + sourceChannelIndex] * uniformGain;
+            var b = s * 2;
+            dst[b] += v;
+            dst[b + 1] += v;
         }
     }
 
@@ -243,6 +312,138 @@ public class ChannelMapTests
         Assert.Equal(expected, actual);
     }
 
+    [Theory]
+    [InlineData(3, 1f, 200)]
+    [InlineData(4, 0.5f, 9)]
+    [InlineData(8, -0.25f, 64)]
+    [InlineData(6, 1.25f, 5)]
+    [InlineData(400, 1f, 16)]
+    public void MonoDupNSimd_AccumulatesLikeScalar(int nOut, float gain, int samplesPerChannel)
+    {
+        var map = ChannelMap.MonoToN(nOut);
+        var mono = new float[samplesPerChannel];
+        var rnd = new Random(61 + nOut + samplesPerChannel);
+        for (var i = 0; i < mono.Length; i++)
+            mono[i] = (float)(rnd.NextDouble() - 0.5);
+
+        var expected = new float[samplesPerChannel * nOut];
+        ReferenceMonoDupNAccumulate(mono, expected, nOut, samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * nOut];
+        if (!ChannelMap.TryAccumulateMonoDupNInterleaved(mono, 1, actual, nOut, map, samplesPerChannel, gain))
+            ReferenceMonoDupNAccumulate(mono, actual, nOut, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(1f, 120)]
+    [InlineData(-0.5f, 7)]
+    [InlineData(0.25f, 64)]
+    public void MonoSilenceOrZeroSimd_AccumulatesLikeScalar(float gain, int samplesPerChannel)
+    {
+        var map = new ChannelMap([-1, 0, 0, -1]);
+        var mono = new float[samplesPerChannel];
+        var rnd = new Random(71 + samplesPerChannel);
+        for (var i = 0; i < mono.Length; i++)
+            mono[i] = (float)(rnd.NextDouble() - 0.5);
+
+        var expected = new float[samplesPerChannel * 4];
+        ReferenceMonoSilenceOrZeroAccumulate(mono, expected, map.AsSpan(), samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * 4];
+        if (!ChannelMap.TryAccumulateMonoSilenceOrZeroDupInterleaved(mono, 1, actual, 4, map, samplesPerChannel, gain))
+            ReferenceMonoSilenceOrZeroAccumulate(mono, actual, map.AsSpan(), samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(1f, 96)]
+    [InlineData(0.5f, 11)]
+    [InlineData(-0.25f, 64)]
+    public void StereoSilenceOrZeroSimd_AccumulatesLikeScalar(float gain, int samplesPerChannel)
+    {
+        var map = new ChannelMap([-1, 0, 1, 0, -1]);
+        var stereo = new float[samplesPerChannel * 2];
+        var rnd = new Random(81 + samplesPerChannel);
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = (float)(rnd.NextDouble() - 0.25);
+
+        var expected = new float[samplesPerChannel * 5];
+        ReferenceStereoSilenceLrAccumulate(stereo, expected, map.AsSpan(), samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * 5];
+        if (!ChannelMap.TryAccumulateStereoSilenceOrZeroDupInterleaved(stereo, 2, actual, 5, map, samplesPerChannel, gain))
+            ReferenceStereoSilenceLrAccumulate(stereo, actual, map.AsSpan(), samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(0, 1f, 120)]
+    [InlineData(1, 0.5f, 15)]
+    [InlineData(0, -0.25f, 64)]
+    public void StereoDupSingleChannelSimd_AccumulatesLikeScalar(int whichDup, float gain, int samplesPerChannel)
+    {
+        var map = whichDup == 0 ? new ChannelMap([0, 0]) : new ChannelMap([1, 1]);
+        var stereo = new float[samplesPerChannel * 2];
+        var rnd = new Random(91 + whichDup + samplesPerChannel);
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = (float)(rnd.NextDouble() - 0.2);
+
+        var expected = new float[samplesPerChannel * 2];
+        ReferenceStereoDupSameChannelAccumulate(stereo, expected, whichDup, samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * 2];
+        if (!ChannelMap.TryAccumulateStereoDupSingleChannelInterleaved(stereo, 2, actual, 2, map, samplesPerChannel, gain))
+            ReferenceStereoDupSameChannelAccumulate(stereo, actual, whichDup, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void StereoFullSilenceStereo_ApplyAdditive_LeavesDstUnchanged()
+    {
+        var map = new ChannelMap([-1, -1]);
+        var stereo = new float[128];
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = 2.71f;
+        var dst = new float[128];
+        for (var i = 0; i < dst.Length; i++)
+            dst[i] = (float)(i * 0.01 + 0.33);
+        var expected = (float[])dst.ToArray();
+        map.ApplyAdditive(stereo, 2, dst, 64);
+        Assert.Equal(expected, dst);
+    }
+
+    [Theory]
+    [InlineData(3, 1f, 180)]
+    [InlineData(5, 0.25f, 11)]
+    [InlineData(6, -0.5f, 33)]
+    [InlineData(4, 0.75f, 128)]
+    [InlineData(120, 0.5f, 8)]
+    public void StereoToNSimd_AccumulatesLikeScalar(int nOut, float gain, int samplesPerChannel)
+    {
+        var map = ChannelMap.StereoToN(nOut);
+        var stereo = new float[samplesPerChannel * 2];
+        var rnd = new Random(62 + nOut + samplesPerChannel);
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = (float)(rnd.NextDouble() - 0.25);
+
+        var expected = new float[samplesPerChannel * nOut];
+        ReferenceStereoToNAccumulate(stereo, expected, nOut, samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * nOut];
+        var ok = nOut == 4
+            ? ChannelMap.TryAccumulateStereoDuplexWideInterleaved(stereo, 2, actual, 4, map, samplesPerChannel, gain)
+            : ChannelMap.TryAccumulateStereoToNInterleaved(stereo, 2, actual, nOut, map, samplesPerChannel, gain);
+        if (!ok)
+            ReferenceStereoToNAccumulate(stereo, actual, nOut, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void Apply_RandomLayouts_Deterministic_MatchNaive()
     {
@@ -277,6 +478,93 @@ public class ChannelMapTests
         }
     }
 
+    [Fact]
+    public void ApplyAndApplyAdditive_MultiChannelRandomLayouts_MatchNaive()
+    {
+        // Sources with ≥3 channels exercise routing indices beyond mono/stereo L–R against the
+        // generic scalar paths (SIMD fast paths are not required here).
+        var rnd = new Random(926_535);
+        var wiring = Array.Empty<int>();
+        for (var n = 0; n < 450; n++)
+        {
+            var srcCh = rnd.Next(3, 13);
+            var outCh = rnd.Next(1, 11);
+            Array.Resize(ref wiring, outCh);
+            for (var o = 0; o < outCh; o++)
+                wiring[o] = rnd.Next(-1, srcCh);
+            wiring[rnd.Next(outCh)] = srcCh - 1;
+
+            var map = new ChannelMap(wiring.AsSpan());
+
+            var spc = rnd.Next(1, 48);
+            var srcTotal = srcCh * spc;
+            var dstTotal = map.OutputChannels * spc;
+
+            var src = new float[srcTotal];
+            for (var i = 0; i < src.Length; i++)
+                src[i] = (float)rnd.NextDouble();
+
+            var expectedApply = new float[dstTotal];
+            var actualApply = new float[dstTotal];
+            ApplyPackedNaive(map.AsSpan(), src, srcCh, expectedApply, map.OutputChannels, spc);
+            map.Apply(src, srcCh, actualApply, spc);
+            Assert.Equal(expectedApply, actualApply);
+
+            var expectedAdd = new float[dstTotal];
+            var actualAdd = new float[dstTotal];
+            for (var i = 0; i < dstTotal; i++)
+            {
+                var v = (float)rnd.NextDouble();
+                expectedAdd[i] = v;
+                actualAdd[i] = v;
+            }
+
+            ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expectedAdd, map.OutputChannels, spc);
+            map.ApplyAdditive(src, srcCh, actualAdd, spc);
+            Assert.Equal(expectedAdd, actualAdd);
+        }
+    }
+
+    [Fact]
+    public void ApplyAdditive_RandomLayouts_Deterministic_MatchNaive()
+    {
+        var rnd = new Random(161803);
+        var wiring = Array.Empty<int>();
+        for (var n = 0; n < 400; n++)
+        {
+            var srcCh = rnd.Next(1, 10);
+            var outCh = rnd.Next(1, 9);
+            Array.Resize(ref wiring, outCh);
+            for (var o = 0; o < outCh; o++)
+                wiring[o] = rnd.Next(-1, srcCh);
+            wiring[rnd.Next(outCh)] = srcCh - 1;
+
+            var map = new ChannelMap(wiring.AsSpan());
+
+            var spc = rnd.Next(1, 64);
+            var srcTotal = srcCh * spc;
+            var dstTotal = map.OutputChannels * spc;
+
+            var src = new float[srcTotal];
+            for (var i = 0; i < src.Length; i++)
+                src[i] = (float)rnd.NextDouble();
+
+            var expected = new float[dstTotal];
+            var actual = new float[dstTotal];
+            for (var i = 0; i < dstTotal; i++)
+            {
+                var v = (float)rnd.NextDouble();
+                expected[i] = v;
+                actual[i] = v;
+            }
+
+            ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, map.OutputChannels, spc);
+            map.ApplyAdditive(src, srcCh, actual, spc);
+
+            Assert.Equal(expected, actual);
+        }
+    }
+
     private static void ApplyPackedNaive(
         ReadOnlySpan<int> routing, ReadOnlySpan<float> src, int srcChannels, Span<float> dst, int outChannels,
         int samplesPerChannel)
@@ -289,6 +577,23 @@ public class ChannelMapTests
             {
                 var ic = routing[oc];
                 dst[dstBase + oc] = ic < 0 ? 0f : src[srcBase + ic];
+            }
+        }
+    }
+
+    private static void ApplyAdditivePackedNaive(
+        ReadOnlySpan<int> routing, ReadOnlySpan<float> src, int srcChannels, Span<float> dst, int outChannels,
+        int samplesPerChannel)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var srcBase = s * srcChannels;
+            var dstBase = s * outChannels;
+            for (var oc = 0; oc < outChannels; oc++)
+            {
+                var ic = routing[oc];
+                if (ic >= 0)
+                    dst[dstBase + oc] += src[srcBase + ic];
             }
         }
     }

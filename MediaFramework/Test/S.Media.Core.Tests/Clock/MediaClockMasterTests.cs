@@ -185,6 +185,50 @@ public class MediaClockMasterTests
         Assert.True(p2 <= p1, "position should clamp instead of moving backwards");
     }
 
+    [Fact]
+    public void SetMasterChain_SelectsHighestPriorityAdvancingMaster()
+    {
+        IMediaClock clock = new MediaClock();
+        var low = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(1), IsAdvancing = true };
+        var high = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(9), IsAdvancing = true };
+        clock.SetMasterChain(
+            new PlaybackClockCandidate(low, 1),
+            new PlaybackClockCandidate(high, 100));
+        clock.Start();
+
+        Assert.Equal(TimeSpan.Zero, clock.CurrentPosition);
+        high.ElapsedSinceStart = TimeSpan.FromSeconds(10);
+        low.ElapsedSinceStart = TimeSpan.FromSeconds(3);
+        Assert.Equal(TimeSpan.FromSeconds(1), clock.CurrentPosition);
+    }
+
+    [Fact]
+    public void SetMasterChain_NoArgs_DetachesMaster()
+    {
+        using var clock = new MediaClock();
+        var master = new FakeClock { ElapsedSinceStart = TimeSpan.Zero, IsAdvancing = true };
+        clock.SetMaster(master);
+        Assert.NotNull(clock.Master);
+        clock.SetMasterChain();
+        Assert.Null(clock.Master);
+    }
+
+    [Fact]
+    public void SetMasterChain_WhenOnlyLowerPriorityAdvancing_UsesThatMaster()
+    {
+        IMediaClock clock = new MediaClock();
+        var primary = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(5), IsAdvancing = false };
+        var fallback = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(2), IsAdvancing = true };
+        clock.SetMasterChain(
+            new PlaybackClockCandidate(fallback, 1),
+            new PlaybackClockCandidate(primary, 100));
+        clock.Start();
+
+        Assert.Equal(TimeSpan.Zero, clock.CurrentPosition);
+        fallback.ElapsedSinceStart = TimeSpan.FromSeconds(3);
+        Assert.Equal(TimeSpan.FromSeconds(1), clock.CurrentPosition);
+    }
+
     private sealed class FakeClock : IPlaybackClock
     {
         public TimeSpan ElapsedSinceStart { get; set; }

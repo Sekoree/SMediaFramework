@@ -3,6 +3,8 @@ using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using S.Media.OpenGL;
 using SilkGL = Silk.NET.OpenGL.GL;
+using Vortice.Direct3D;
+using Vortice.Direct3D11;
 
 namespace S.Media.SDL3;
 
@@ -14,6 +16,12 @@ namespace S.Media.SDL3;
 /// shared with an Avalonia OpenGL surface later on.
 /// </summary>
 /// <remarks>
+/// <para>
+/// On Windows, when the negotiated format is <see cref="PixelFormat.Nv12"/>, a default
+/// hardware <c>ID3D11Device</c> is created so <see cref="VideoFrame.Win32Nv12"/> frames
+/// (D3D11 shared-handle decode path) can upload through <see cref="Nv12Win32SharedHandleGpuUploader"/>,
+/// unless <paramref name="borrowD3D11DeviceComPtrForNv12Gl"/> supplies libav's device (same adapter as decoded textures).
+/// </para>
 /// <para>
 /// Pixel-format support matches <see cref="YuvVideoRenderer.SupportedPixelFormats"/>
 /// (BGRA/RGBA/RGB24, planar and semi-planar YUV, 10-bit 422, packed 422, P010/P016, …).
@@ -55,6 +63,10 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
     private nint _glContext;
     private SilkGL? _gl;
     private YuvVideoRenderer? _renderer;
+    /// <summary>Hardware D3D11 device created by this sink for Win32 NV12 → GL when no borrowed pointer is supplied.</summary>
+    private ID3D11Device? _nv12D3d11Device;
+    /// <summary>Non-zero: use this libav-owned <c>ID3D11Device</c> COM pointer (do not dispose).</summary>
+    private readonly nint _borrowD3D11DeviceComPtrForNv12Gl;
     private int _viewportWidth;
     private int _viewportHeight;
 
@@ -78,7 +90,8 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
 
     public SDL3GLVideoSink(string title = "SDL3 GL Video", int initialWidth = 1280, int initialHeight = 720,
                           bool vsync = true, bool ownsThread = true,
-                          GlVideoSinkHdrPreference hdrPreference = GlVideoSinkHdrPreference.FollowFrameHints)
+                          GlVideoSinkHdrPreference hdrPreference = GlVideoSinkHdrPreference.FollowFrameHints,
+                          nint borrowD3D11DeviceComPtrForNv12Gl = 0)
     {
         ArgumentException.ThrowIfNullOrEmpty(title);
         if (initialWidth <= 0) throw new ArgumentOutOfRangeException(nameof(initialWidth));
@@ -92,6 +105,7 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         _hdrPreference = hdrPreference;
         _viewportWidth = initialWidth;
         _viewportHeight = initialHeight;
+        _borrowD3D11DeviceComPtrForNv12Gl = borrowD3D11DeviceComPtrForNv12Gl;
     }
 
     /// <summary>Allows changing HDR handling after construction (effective on the next rendered frame).</summary>
@@ -289,14 +303,43 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         SDL.GLSetSwapInterval(_vsync ? 1 : 0);
 
         _gl = SilkGL.GetApi(name => SDL.GLGetProcAddress(name));
+
+        nint win32D3d11DevicePtr = 0;
+        if (OperatingSystem.IsWindows() && _format.PixelFormat == PixelFormat.Nv12)
+        {
+            if (_borrowD3D11DeviceComPtrForNv12Gl != 0)
+            {
+                win32D3d11DevicePtr = _borrowD3D11DeviceComPtrForNv12Gl;
+            }
+            else
+            {
+                try
+                {
+                    _nv12D3d11Device = D3D11.D3D11CreateDevice(
+                        DriverType.Hardware,
+                        DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport,
+                        [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0, FeatureLevel.Level_10_1, FeatureLevel.Level_10_0]);
+                    win32D3d11DevicePtr = _nv12D3d11Device.NativePointer;
+                }
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogWarning(
+                        "SDL3GLVideoSink: could not create D3D11 device for Win32 NV12 GL upload — Win32Nv12 frames will fail until a device is supplied: {0}",
+                        ex.Message);
+                }
+            }
+        }
+
         _renderer = new YuvVideoRenderer(_gl, _format, eglDmabufInterop: OperatingSystem.IsLinux()
-            ? new YuvDmabufEglInterop(SDL.EGLGetCurrentDisplay(), name => SDL.EGLGetProcAddress(name))
-            : null);
+                ? new YuvDmabufEglInterop(SDL.EGLGetCurrentDisplay(), name => SDL.EGLGetProcAddress(name))
+                : null,
+            win32D3D11DeviceComPtrForNv12: win32D3d11DevicePtr);
     }
 
     private void TeardownGraphics()
     {
         try { _renderer?.Dispose(); } catch { /* best effort */ } _renderer = null;
+        try { _nv12D3d11Device?.Dispose(); } catch { /* best effort */ } _nv12D3d11Device = null;
         try { _gl?.Dispose(); } catch { /* best effort */ } _gl = null;
         if (_glContext != nint.Zero) { SDL.GLDestroyContext(_glContext); _glContext = nint.Zero; }
         if (_window != nint.Zero)    { SDL.DestroyWindow(_window);       _window = nint.Zero; }

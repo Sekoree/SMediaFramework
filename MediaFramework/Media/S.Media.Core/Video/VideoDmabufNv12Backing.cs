@@ -12,7 +12,8 @@ public sealed class VideoDmabufNv12Backing : IDisposable
 {
     private int _yFd;
     private int _uvFd;
-    private int _disposed;
+    private int _closed;
+    private int _refCount = 1;
 
     public VideoDmabufNv12Backing(
         int yPlaneDupFd,
@@ -61,10 +62,28 @@ public sealed class VideoDmabufNv12Backing : IDisposable
     public int YPlaneFd => _yFd;
     public int UvPlaneFd => _uvFd;
 
+    /// <summary>
+    /// Increment the shared ownership count (one per <see cref="VideoFrame"/> that wraps this backing).
+    /// Call before handing the same backing to another consumer that will invoke <see cref="Dispose"/> independently.
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">Backing file descriptors are already closed.</exception>
+    public void AddReference()
+    {
+        if (Volatile.Read(ref _closed) != 0)
+            throw new ObjectDisposedException(nameof(VideoDmabufNv12Backing));
+        Interlocked.Increment(ref _refCount);
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        var remaining = Interlocked.Decrement(ref _refCount);
+        if (remaining > 0)
+            return;
+        if (remaining < 0)
+            return;
+
+        if (Interlocked.Exchange(ref _closed, 1) != 0)
             return;
 
         if (_yFd >= 0)

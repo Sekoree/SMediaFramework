@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using S.Media.Core.Audio;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video.Internal;
@@ -9,7 +10,8 @@ namespace S.Media.FFmpeg.Video;
 
 /// <summary>
 /// Pull-based decoder for the best video stream in a container. Implements
-/// <see cref="IVideoSource"/>: <see cref="NativePixelFormats"/> reports the
+/// <see cref="IVideoSource"/> and <see cref="ISeekableSource"/> (so <see cref="VideoPlayer.Seek"/> works
+/// without a wrapper). <see cref="NativePixelFormats"/> reports the
 /// codec's native layout (zero-copy pass-through) and
 /// <see cref="SelectOutputFormat"/> swaps in an internal <c>sws_scale</c>
 /// context if a different format is requested.
@@ -19,11 +21,15 @@ namespace S.Media.FFmpeg.Video;
 /// must be <see cref="VideoFrame.Dispose"/>d — the release callback either
 /// unrefs a cloned <c>AVFrame</c> (pass-through) or returns nothing
 /// (conversion path owns a fresh byte array).
-/// Hardware decode without Linux DRM dma-bufs still lists <see cref="PixelFormat.Nv12"/> in
-/// <see cref="NativePixelFormats"/> while the default output stays <see cref="PixelFormat.Bgra32"/> CPU conversion —
-/// callers can negotiate NV12 zero-copy decode when downstream accepts planar frames.
+/// Hardware decode without Linux DRM dma-bufs or Windows D3D11 shared-handle export leaves <see cref="NativePixelFormats"/> empty until one
+/// transferred frame is probed at open time, so negotiation does not assume NV12 prematurely.
+/// Libav may use internal frame/slice threads on software decode when no hardware device context is active.
+/// Pass-through frames borrow pooled plane and stride descriptor arrays guarded by a single
+/// <see cref="Lock"/>; arrays are <c>Array.Clear</c>ed before returning them to the pool so release callbacks
+/// running off-thread do not observe stale plane views. A lock-free arena would be a future perf experiment only
+/// if profiling shows contention here (single-threaded decode today).
 /// </remarks>
-public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
+public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDisposable
 {
     private AVFormatContext* _formatCtx;
     private AVCodecContext* _codecCtx;
@@ -45,6 +51,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
     private VideoFrame? _primedAfterSeek;
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
+    private bool _d3d11GpuNv12Path;
+
+    private const int SwsResizeFilter = (int)SwsFlags.SWS_BICUBIC;
 
     /// <summary>
     /// Pooled arrays for libav pass-through <see cref="VideoFrame"/> metadata; returned when the frame
@@ -65,6 +74,8 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
 
     public VideoFormat Format { get; private set; }
     public string CodecName { get; private set; } = "";
+    /// <summary>Libav <c>AVCodecContext.thread_count</c> after open (frame/slice threads on software decode; often 1 with hardware).</summary>
+    public int CodecThreadCount => _disposed || _codecCtx == null ? 0 : _codecCtx->thread_count;
     public TimeSpan Duration { get; private set; }
     public TimeSpan Position { get; private set; }
     public bool IsAtEnd => _eofReached;
@@ -74,6 +85,19 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
 
     /// <summary>Pixel formats this decoder can deliver without a CPU conversion (just the codec's native layout).</summary>
     public IReadOnlyList<PixelFormat> NativePixelFormats => _nativePixelFormats;
+
+    /// <summary>
+    /// When Windows D3D11VA NV12 shared-handle decode is active, returns libav's <c>ID3D11Device</c> COM pointer
+    /// (same device as decoded textures). Pass to <c>SDL3GLVideoSink</c> so GL does not create a second device.
+    /// </summary>
+    public bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr)
+    {
+        deviceComPtr = 0;
+        if (_disposed || !_d3d11GpuNv12Path || _hwAccel == null)
+            return false;
+        deviceComPtr = _hwAccel.TryGetD3D11DeviceComPtr();
+        return deviceComPtr != 0;
+    }
 
     private VideoFileDecoder() { }
 
@@ -164,14 +188,21 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
             return;
         }
 
-        if (format == _outPixelFormat) return;
-
-        if (_hwAccel != null && _srcPixelFormat == AVPixelFormat.AV_PIX_FMT_NONE)
+        if (_d3d11GpuNv12Path)
         {
+            if (format != PixelFormat.Nv12)
+                throw new NotSupportedException(
+                    "D3D11 shared-handle zero-copy decoding only supports PixelFormat.Nv12 output matching the DXGI NV12 texture export.");
+            if (_outPixelFormat == format)
+                return;
+            _passThrough = true;
+            ReleaseSws();
             _outPixelFormat = format;
             Format = Format with { PixelFormat = format };
             return;
         }
+
+        if (format == _outPixelFormat) return;
 
         if (format == _nativePixelFormat)
         {
@@ -180,13 +211,13 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         }
         else
         {
-            var avTarget = ToAVPixelFormat(format)
+            var avTarget = FfmpegVideoPixelMaps.ToAvPixelFormat(format)
                 ?? throw new NotSupportedException($"pixel format {format} has no FFmpeg mapping");
             ReleaseSws();
             _swsCtx = sws_getCachedContext(null,
                 _codecCtx->width, _codecCtx->height, _srcPixelFormat,
                 _codecCtx->width, _codecCtx->height, avTarget,
-                (int)SwsFlags.SWS_BILINEAR, null, null, null);
+                SwsResizeFilter, null, null, null);
             if (_swsCtx == null)
                 throw new FFmpegException(0, $"sws_getCachedContext for {format} returned NULL");
             _passThrough = false;
@@ -244,6 +275,25 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         if (_formatCtx != null) { var f = _formatCtx;  avformat_close_input(&f);    _formatCtx = null; }
     }
 
+    /// <summary>Enables libav frame or slice threading for software video decode (not used with active HW device ctx).</summary>
+    internal static void ApplyDecoderThreading(AVCodec* codec, AVCodecContext* ctx, VideoDecoderOpenOptions? options)
+    {
+        var requested = options?.DecoderThreadCount ?? 0;
+        var cores = Math.Max(1, Environment.ProcessorCount);
+        var count = requested <= 0 ? Math.Clamp(cores, 1, 16) : Math.Clamp(requested, 1, 16);
+
+        if ((codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0)
+        {
+            ctx->thread_count = count;
+            ctx->thread_type = (int)FF_THREAD_FRAME;
+        }
+        else if ((codec->capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0)
+        {
+            ctx->thread_count = count;
+            ctx->thread_type = (int)FF_THREAD_SLICE;
+        }
+    }
+
     // --- internals ---------------------------------------------------------
 
     private void OpenInternal(string path, VideoDecoderOpenOptions? options)
@@ -270,14 +320,25 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         ret = avcodec_parameters_to_context(_codecCtx, stream->codecpar);
         FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
 
+        var tryHw = options?.TryHardwareAcceleration ?? true;
+        var retainDmabuf = options?.RetainDmabufForGl ?? false;
+        var retainD3D11 = options?.RetainD3D11SharedHandleForGl ?? false;
+        var preferredDevices = options?.PreferredDeviceTypes ?? [];
+
         VideoHardwareDecodeContext? hw = null;
-        if (options?.TryHardwareAcceleration == true)
-            hw = VideoHardwareDecodeContext.TryCreate(codec, _codecCtx, options.PreferredDeviceTypes,
-                options.RetainDmabufForGl);
+        if (tryHw)
+            hw = VideoHardwareDecodeContext.TryCreate(codec, _codecCtx, preferredDevices, retainDmabuf, retainD3D11);
+
+        // Frame/slice threading helps heavy software codecs; skip while a HW device is attached — libav
+        // hardware decode paths are not reliably compatible with frame threading.
+        if (hw == null)
+            ApplyDecoderThreading(codec, _codecCtx, options);
 
         AVDictionary* openOpts = null;
         if (hw?.OutputsDrmPrimeGpuFrame == true)
             av_dict_set(&openOpts, "hwaccel_output_format", "drm_prime", 0);
+        else if (hw?.OutputsD3D11GpuFrame == true)
+            av_dict_set(&openOpts, "hwaccel_output_format", "d3d11", 0);
 
         ret = avcodec_open2(_codecCtx, codec, &openOpts);
         if (openOpts != null)
@@ -288,12 +349,14 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
             hw.DetachFromCodec(_codecCtx);
             hw.Dispose();
             hw = null;
+            ApplyDecoderThreading(codec, _codecCtx, options);
             ret = avcodec_open2(_codecCtx, codec, null);
         }
         FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
 
         _hwAccel = hw;
         _drmGpuNv12Path = hw?.OutputsDrmPrimeGpuFrame == true;
+        _d3d11GpuNv12Path = hw?.OutputsD3D11GpuFrame == true;
 
         if (hw != null)
         {
@@ -305,14 +368,24 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
                 _outPixelFormat = PixelFormat.Nv12;
                 _nativePixelFormats = [PixelFormat.Nv12];
             }
+            else if (_d3d11GpuNv12Path)
+            {
+                _srcPixelFormat = _hwAccel!.HwAccelPixFmt;
+                _nativePixelFormat = PixelFormat.Nv12;
+                _passThrough = true;
+                _outPixelFormat = PixelFormat.Nv12;
+                _nativePixelFormats = [PixelFormat.Nv12];
+            }
             else
             {
-                // Post-av_hwframe_transfer_data layouts are codec-dependent; NV12 covers VAAPI/D3D11VA-style paths for negotiation.
+                // Real layout comes from av_hwframe_transfer_data (first frame). Do not
+                // advertise NV12 here — negotiation would pick it before we know the
+                // transfer format (e.g. ProRes → YUV422P10LE) and break swscale.
                 _srcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
-                _nativePixelFormat = PixelFormat.Nv12;
+                _nativePixelFormat = PixelFormat.Unknown;
                 _passThrough = false;
                 _outPixelFormat = PixelFormat.Bgra32;
-                _nativePixelFormats = [PixelFormat.Nv12];
+                _nativePixelFormats = [];
             }
         }
         else
@@ -343,7 +416,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
             _swsCtx = sws_getCachedContext(null,
                 _codecCtx->width, _codecCtx->height, _srcPixelFormat,
                 _codecCtx->width, _codecCtx->height, AVPixelFormat.AV_PIX_FMT_BGRA,
-                (int)SwsFlags.SWS_BILINEAR, null, null, null);
+                SwsResizeFilter, null, null, null);
             if (_swsCtx == null)
                 throw new FFmpegException(0, "sws_getCachedContext returned NULL");
         }
@@ -352,6 +425,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         if (_packet == null) throw new OutOfMemoryException("av_packet_alloc returned NULL");
         _frame = av_frame_alloc();
         if (_frame == null) throw new OutOfMemoryException("av_frame_alloc returned NULL");
+
+        if (_hwAccel != null && !_drmGpuNv12Path && !_d3d11GpuNv12Path)
+            PrimeHardwareTransferPixelFormat();
     }
 
     private void FeedDecoder()
@@ -394,6 +470,10 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         if (_drmGpuNv12Path && fmt == AVPixelFormat.AV_PIX_FMT_DRM_PRIME)
             return _frame;
 
+        if (_d3d11GpuNv12Path &&
+            fmt is AVPixelFormat.AV_PIX_FMT_D3D11 or AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+            return _frame;
+
         if (_hwAccel != null && fmt == _hwAccel.HwAccelPixFmt)
             return _hwAccel.TransferToScratch(_frame);
         return _frame;
@@ -408,6 +488,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         if (_drmGpuNv12Path)
             return BuildNv12DrmDmabufGpuFrame(work, pts, trc);
 
+        if (_d3d11GpuNv12Path)
+            return BuildNv12D3D11SharedGpuFrame(work, pts, trc);
+
         return _passThrough
             ? BuildPassThroughFrame(work, pts, trc)
             : BuildConvertedFrame(work, pts, trc);
@@ -421,6 +504,16 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
                 "DRM PRIME frame could not be mapped to NV12 dma-bufs. Disable decoder option RetainDmabufForGl or try a CPU upload path.");
 
         return VideoFrame.CreateNv12Dmabuf(pts, Format, backing, MapTransferHint(trc));
+    }
+
+    private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
+    {
+        var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame);
+        if (backing == null)
+            throw new InvalidOperationException(
+                "D3D11 frame could not be exported to NT shared handles. Disable decoder option RetainD3D11SharedHandleForGl or try a CPU upload path.");
+
+        return VideoFrame.CreateNv12Win32Shared(pts, Format, backing, MapTransferHint(trc));
     }
 
     private VideoFrame BuildPassThroughFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
@@ -490,27 +583,35 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         {
             if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
                 ps.Count < PassThroughDescriptorPoolCap)
+            {
+                Array.Clear(planes);
                 ps.Push(planes);
+            }
 
             if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
                 ss.Count < PassThroughDescriptorPoolCap)
+            {
+                Array.Clear(strides);
                 ss.Push(strides);
+            }
         }
     }
 
     private VideoFrame BuildConvertedFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
     {
-        // Single-plane conversion (BGRA32 / RGBA32 / BGR24 / RGB24). The
-        // multi-plane targets (I420, NV12, …) are reachable via SelectOutputFormat
-        // but if you're paying for sws_scale you usually want a packed RGB
-        // layout for a CPU sink. Multi-plane conversion targets can be added
-        // later as PlaneCount(_outPixelFormat) > 1 cases.
+        if (_swsCtx == null)
+            throw new InvalidOperationException("swscale is not configured — SelectOutputFormat must run before decoding.");
+
         var width = Format.Width;
         var height = Format.Height;
         var bytesPerPixel = BytesPerPackedPixel(_outPixelFormat);
         if (bytesPerPixel == 0)
+        {
+            if (_outPixelFormat is PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.I420)
+                return BuildConvertedPlanarFrame(work, pts, trc);
             throw new NotSupportedException(
-                $"sws conversion to {_outPixelFormat} (multi-plane / non-packed) is not implemented yet — pick a packed RGB target or extend BuildConvertedFrame");
+                $"sws conversion to {_outPixelFormat} is not implemented — use BGRA32, NV12, I420, or a packed RGB layout.");
+        }
 
         var stride = width * bytesPerPixel;
         var contiguous = stride * height;
@@ -559,6 +660,91 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
             release: () => ArrayPool<byte>.Shared.Return(pooled));
     }
 
+    private VideoFrame BuildConvertedPlanarFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    {
+        var width = Format.Width;
+        var height = Format.Height;
+        var n = PixelFormatInfo.PlaneCount(_outPixelFormat);
+
+        _swScaleSrcLines[0] = work->data[0];
+        _swScaleSrcLines[1] = work->data[1];
+        _swScaleSrcLines[2] = work->data[2];
+        _swScaleSrcLines[3] = work->data[3];
+        _swScaleSrcLines[4] = work->data[4];
+        _swScaleSrcLines[5] = work->data[5];
+        _swScaleSrcLines[6] = work->data[6];
+        _swScaleSrcLines[7] = work->data[7];
+        _swScaleSrcStride[0] = work->linesize[0];
+        _swScaleSrcStride[1] = work->linesize[1];
+        _swScaleSrcStride[2] = work->linesize[2];
+        _swScaleSrcStride[3] = work->linesize[3];
+        _swScaleSrcStride[4] = work->linesize[4];
+        _swScaleSrcStride[5] = work->linesize[5];
+        _swScaleSrcStride[6] = work->linesize[6];
+        _swScaleSrcStride[7] = work->linesize[7];
+
+        var strides = new int[n];
+        for (var i = 0; i < n; i++)
+            strides[i] = PixelFormatInfo.PlaneByteWidth(_outPixelFormat, width, i);
+
+        var buffers = new byte[n][];
+        var handles = new List<GCHandle>(n);
+        try
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var len = PixelFormatInfo.PlanePitchBufferLength(_outPixelFormat, width, height, i, strides[i]);
+                buffers[i] = ArrayPool<byte>.Shared.Rent(len);
+                handles.Add(GCHandle.Alloc(buffers[i], GCHandleType.Pinned));
+            }
+
+            for (var i = 0; i < n; i++)
+                _swScaleDstLines[i] = (byte*)handles[i].AddrOfPinnedObject();
+            for (var i = n; i < 8; i++)
+                _swScaleDstLines[i] = null;
+
+            Array.Clear(_swScaleDstStride);
+            for (var i = 0; i < n; i++)
+                _swScaleDstStride[i] = strides[i];
+
+            var ret = sws_scale(_swsCtx, _swScaleSrcLines, _swScaleSrcStride, 0, height, _swScaleDstLines,
+                _swScaleDstStride);
+            if (ret < 0) FFmpegException.ThrowIfError(ret, nameof(sws_scale));
+        }
+        catch
+        {
+            foreach (var h in handles)
+            {
+                if (h.IsAllocated)
+                    h.Free();
+            }
+            foreach (var b in buffers)
+            {
+                if (b is not null)
+                    ArrayPool<byte>.Shared.Return(b);
+            }
+            throw;
+        }
+
+        foreach (var h in handles)
+            h.Free();
+
+        var memories = new ReadOnlyMemory<byte>[n];
+        for (var i = 0; i < n; i++)
+        {
+            var len = PixelFormatInfo.PlanePitchBufferLength(_outPixelFormat, width, height, i, strides[i]);
+            memories[i] = buffers[i].AsMemory(0, len);
+        }
+
+        var hint = MapTransferHint(trc);
+        var captured = buffers;
+        return new VideoFrame(pts, Format, memories, strides, hint, release: () =>
+        {
+            foreach (var b in captured)
+                ArrayPool<byte>.Shared.Return(b);
+        });
+    }
+
     private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)
     {
         while (true)
@@ -595,7 +781,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
     /// <summary>Rebuild native / scaler state when libav reports a different software pixel layout mid-stream.</summary>
     private void SyncCodecPixelFormatIfNeeded(AVFrame* workFrame)
     {
-        if (_drmGpuNv12Path)
+        if (_drmGpuNv12Path || _d3d11GpuNv12Path)
             return;
 
         var effective = (AVPixelFormat)workFrame->format;
@@ -617,6 +803,36 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         if (_swsCtx == null) return;
         sws_freeContext(_swsCtx);
         _swsCtx = null;
+    }
+
+    /// <summary>
+    /// Hardware decode: learn the CPU layout after <c>av_hwframe_transfer_data</c> so
+    /// <see cref="NativePixelFormats"/> matches reality before <see cref="VideoFormatNegotiator.Connect"/>.
+    /// </summary>
+    private void PrimeHardwareTransferPixelFormat()
+    {
+        if (_hwAccel == null || _drmGpuNv12Path || _d3d11GpuNv12Path)
+            return;
+
+        while (true)
+        {
+            var ret = avcodec_receive_frame(_codecCtx, _frame);
+            if (ret == 0)
+            {
+                var workFrame = ResolveWorkFrame();
+                SyncCodecPixelFormatIfNeeded(workFrame);
+                av_frame_unref(_frame);
+                return;
+            }
+            if (ret == AVERROR_EOF)
+                return;
+            if (ret == AVERROR(EAGAIN))
+            {
+                FeedDecoder();
+                continue;
+            }
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
+        }
     }
 
     private static void FreeAVFrame(nint ptr)
@@ -642,9 +858,11 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
     private TimeSpan PtsToTimeSpan(long pts)
         => TimeSpan.FromSeconds((double)pts * _videoTimeBase.num / _videoTimeBase.den);
 
-    private static PixelFormat MapNativePixelFormat(AVPixelFormat src) => src switch
+    internal static PixelFormat MapNativePixelFormat(AVPixelFormat src) => src switch
     {
         AVPixelFormat.AV_PIX_FMT_DRM_PRIME      => PixelFormat.Nv12,
+        AVPixelFormat.AV_PIX_FMT_D3D11          => PixelFormat.Nv12,
+        AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD    => PixelFormat.Nv12,
         AVPixelFormat.AV_PIX_FMT_YUV420P    => PixelFormat.I420,
         AVPixelFormat.AV_PIX_FMT_YUVJ420P   => PixelFormat.I420,
         AVPixelFormat.AV_PIX_FMT_NV12       => PixelFormat.Nv12,
@@ -671,37 +889,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         _                                   => PixelFormat.Unknown,
     };
 
-    private static AVPixelFormat? ToAVPixelFormat(PixelFormat fmt) => fmt switch
-    {
-        PixelFormat.I420        => AVPixelFormat.AV_PIX_FMT_YUV420P,
-        PixelFormat.Nv12        => AVPixelFormat.AV_PIX_FMT_NV12,
-        PixelFormat.Nv21        => AVPixelFormat.AV_PIX_FMT_NV21,
-        PixelFormat.Bgra32      => AVPixelFormat.AV_PIX_FMT_BGRA,
-        PixelFormat.Rgba32      => AVPixelFormat.AV_PIX_FMT_RGBA,
-        PixelFormat.Bgr24       => AVPixelFormat.AV_PIX_FMT_BGR24,
-        PixelFormat.Rgb24       => AVPixelFormat.AV_PIX_FMT_RGB24,
-        PixelFormat.Uyvy        => AVPixelFormat.AV_PIX_FMT_UYVY422,
-        PixelFormat.Yuyv        => AVPixelFormat.AV_PIX_FMT_YUYV422,
-        // FFmpeg distinguishes I420 (YUV420P) from YV12 (YVU420P), but FFmpeg.AutoGen 8 omits AV_PIX_FMT_YVU420P.
-        // Keep the historical I420 mapping so callers can still request sws output; note plane order is I420, not YV12.
-        PixelFormat.Yv12        => AVPixelFormat.AV_PIX_FMT_YUV420P,
-        PixelFormat.Yuv422P     => AVPixelFormat.AV_PIX_FMT_YUV422P,
-        PixelFormat.Yuv444P     => AVPixelFormat.AV_PIX_FMT_YUV444P,
-        PixelFormat.P010        => AVPixelFormat.AV_PIX_FMT_P010LE,
-        PixelFormat.P016        => AVPixelFormat.AV_PIX_FMT_P016LE,
-        PixelFormat.Yuv422P10Le => AVPixelFormat.AV_PIX_FMT_YUV422P10LE,
-        PixelFormat.Yuv420P10Le => AVPixelFormat.AV_PIX_FMT_YUV420P10LE,
-        PixelFormat.Yuv420P12Le => AVPixelFormat.AV_PIX_FMT_YUV420P12LE,
-        PixelFormat.Yuv444P10Le => AVPixelFormat.AV_PIX_FMT_YUV444P10LE,
-        PixelFormat.Gray8       => AVPixelFormat.AV_PIX_FMT_GRAY8,
-        PixelFormat.Gray16      => AVPixelFormat.AV_PIX_FMT_GRAY16LE,
-        PixelFormat.Yuva420p    => AVPixelFormat.AV_PIX_FMT_YUVA420P,
-        PixelFormat.Argb32      => AVPixelFormat.AV_PIX_FMT_ARGB,
-        PixelFormat.Abgr32      => AVPixelFormat.AV_PIX_FMT_ABGR,
-        _                       => null,
-    };
-
-    private static int BytesPerPackedPixel(PixelFormat fmt) => fmt switch
+    internal static int BytesPerPackedPixel(PixelFormat fmt) => fmt switch
     {
         PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Argb32 or PixelFormat.Abgr32 => 4,
         PixelFormat.Bgr24  or PixelFormat.Rgb24  => 3,

@@ -129,4 +129,116 @@ public class PortAudioOutputTests
         Assert.True(output.IsRunning);
         output.Stop();
     }
+
+    /// <summary>
+    /// Regression: <see cref="PortAudioOutput.ElapsedSinceStart"/> must advance between PortAudio
+    /// output callbacks, not only when <see cref="PortAudioOutput.PlayedSamples"/> bumps each buffer
+    /// (~10–25 ms at 48 kHz), or video playhead gating can sit near ~47 Hz on 60 fps content.
+    /// </summary>
+    [Fact]
+    public void ElapsedSinceStart_GranularBetweenCallbacks_Integration()
+    {
+        if (!HasOutputDevice()) return;
+
+        using var output = new PortAudioOutput(StereoFormat, ringCapacityFrames: 8192);
+        output.Start();
+        var frames = Math.Max(output.Format.SampleRate / 6, 4096);
+        var samples = new float[frames * output.Format.Channels];
+        output.Submit(new AudioFrame(TimeSpan.Zero, output.Format, frames, samples));
+
+        Thread.Sleep(100);
+
+        var ticks = new List<long>(48);
+        for (var i = 0; i < 48; i++)
+        {
+            ticks.Add(output.ElapsedSinceStart.Ticks);
+            Thread.Sleep(2);
+        }
+
+        var distinct = ticks.Distinct().Count();
+        Assert.True(
+            distinct >= 8,
+            $"expected granular ElapsedSinceStart (distinct={distinct}); played={output.PlayedSamples} streamActive={output.StreamActive}");
+
+        output.Stop();
+    }
+
+    [Fact]
+    public void PrefillFrom_WithoutStart_ReachesTarget()
+    {
+        if (!HasOutputDevice()) return;
+
+        using var output = new PortAudioOutput(StereoFormat, ringCapacityFrames: 4096);
+        var source = new TestFrameSource(StereoFormat, totalFrames: 10_000);
+        const int target = 512;
+        output.PrefillFrom(source, TimeSpan.FromSeconds(2), chunkSamples: 480, null, target);
+        Assert.True(output.QueuedSamples >= target);
+        Assert.True(output.QueuedSamples <= output.CapacitySamples);
+    }
+
+    [Fact]
+    public void PrefillFrom_MirrorReceivesSamePackedFloatsAsRing()
+    {
+        if (!HasOutputDevice()) return;
+
+        using var output = new PortAudioOutput(StereoFormat, ringCapacityFrames: 4096);
+        var mirror = new FloatCountingSink(StereoFormat);
+        var source = new TestFrameSource(StereoFormat, totalFrames: 10_000);
+        const int target = 400;
+        output.PrefillFrom(source, TimeSpan.FromSeconds(2), chunkSamples: 480, mirror, target);
+        var floatsInRing = output.QueuedSamples * StereoFormat.Channels;
+        Assert.True(output.QueuedSamples >= target);
+        Assert.True(mirror.SubmittedFloats >= floatsInRing);
+        if (output.DroppedSamples == 0)
+            Assert.Equal(floatsInRing, mirror.SubmittedFloats);
+    }
+
+    [Fact]
+    public void TryPrefillPrimaryPortAudio_UsesPrimaryPortAudioSink()
+    {
+        if (!HasOutputDevice()) return;
+
+        using var pa = new PortAudioOutput(StereoFormat, ringCapacityFrames: 4096);
+        using var player = new AudioPlayer(StereoFormat.SampleRate, chunkSamples: 480);
+        player.AddOutput(pa);
+        var source = new TestFrameSource(StereoFormat, totalFrames: 8_000);
+        Assert.True(player.TryPrefillPrimaryPortAudio(source, TimeSpan.FromSeconds(2), null, 450));
+        Assert.True(pa.QueuedSamples >= 450);
+    }
+
+    private sealed class TestFrameSource : IAudioSource
+    {
+        private readonly int _totalFrames;
+        private int _emittedFrames;
+
+        public TestFrameSource(AudioFormat format, int totalFrames)
+        {
+            Format = format;
+            _totalFrames = totalFrames;
+        }
+
+        public AudioFormat Format { get; }
+        public bool IsExhausted => _emittedFrames >= _totalFrames;
+
+        public int ReadInto(Span<float> destination)
+        {
+            if (_emittedFrames >= _totalFrames)
+                return 0;
+            var maxFrames = destination.Length / Format.Channels;
+            var nFrames = Math.Min(maxFrames, _totalFrames - _emittedFrames);
+            var nFloats = nFrames * Format.Channels;
+            destination[..nFloats].Fill(0.01f);
+            _emittedFrames += nFrames;
+            return nFloats;
+        }
+    }
+
+    private sealed class FloatCountingSink : IAudioSink
+    {
+        public FloatCountingSink(AudioFormat format) => Format = format;
+        public AudioFormat Format { get; }
+        public int SubmittedFloats { get; private set; }
+
+        public void Submit(ReadOnlySpan<float> packedSamples) => SubmittedFloats += packedSamples.Length;
+    }
 }

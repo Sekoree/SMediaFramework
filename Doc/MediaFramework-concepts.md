@@ -4,7 +4,7 @@ This document summarizes how the MFPlayer-style media DLLs hang together: clocks
 
 ## Clocking
 
-- **`MediaClock`** emits **audio** and **video** tick events on a dedicated driver thread. Position can track an external **`IPlaybackClock`** (`SetMaster`) so video stays aligned with played audio samples.
+- **`MediaClock`** emits **audio** and **video** tick events on a dedicated driver thread. Position can track an external **`IPlaybackClock`** (`SetMaster`) so video stays aligned with played audio samples. **`MediaClockExtensions.SetMasterChain`** builds a **`CompositePlaybackClock`** when you need priority-ordered fallbacks (e.g. PortAudio vs **`VideoPtsClock`** vs NDI ingest).
 - **Pause / Stop** can take a **`CancellationToken`** so callers avoid wedging indefinitely while the timing driver shuts down (`MediaClock.JoinDriver`).
 - **`VideoPlayer`** multiplexes **`IVideoSource.TryReadNextFrame`** into a PTS-sorted queue; on each **`VideoTick`** it selects the freshest frame whose PTS ≤ playhead ± tolerances.
 

@@ -1,0 +1,1111 @@
+using System.Buffers;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using S.Media.Core.Audio;
+using S.Media.Core.Video;
+using S.Media.FFmpeg.Internal;
+using S.Media.FFmpeg.Video;
+using S.Media.FFmpeg.Video.Internal;
+
+namespace S.Media.FFmpeg;
+
+/// <summary>
+/// Single <see cref="AVFormatContext"/> demux with a background reader thread, bounded packet queues
+/// per A/V stream, and independent decode locks so audio and video consumers can run on different threads.
+/// Video matches <see cref="VideoFileDecoder"/> hardware / software behaviour (including DRM PRIME NV12 and D3D11 shared-handle NV12).
+/// </summary>
+internal sealed unsafe class MediaContainerSharedDemux : IDisposable
+{
+    private const long AvTimeBase = 1_000_000L;
+    private const int MaxAudioPacketsQueued = 192;
+    private const int MaxVideoPacketsQueued = 384;
+    private const int PassThroughDescriptorPoolCap = 32;
+
+    private readonly object _lifecycleLock = new();
+    private readonly Lock _audioDecodeLock = new();
+    private readonly Lock _videoDecodeLock = new();
+    private readonly object _queueGate = new();
+
+    private volatile bool _disposed;
+    private volatile bool _demuxerStopRequest;
+    private volatile bool _fileReadCompleted;
+    private Thread? _demuxerThread;
+    private AVFormatContext* _fmt;
+    private AVPacket* _demuxPkt;
+
+    private readonly Queue<nint> _audioPacketQ = new();
+    private readonly Queue<nint> _videoPacketQ = new();
+
+    private int _aStream = -1;
+    private AVRational _aTb;
+    private AVCodecContext* _aCtx;
+    private SwrContext* _swr;
+    private AVFrame* _aFrame;
+    private bool _aEof;
+    private bool _aDrainSent;
+    private long _aSamplesEmitted;
+    private bool _aDrainedTail;
+
+    private int _vStream = -1;
+    private AVRational _vTb;
+    private AVCodecContext* _vCtx;
+    private SwsContext* _swsCtx;
+    private AVFrame* _vFrame;
+    private AVPixelFormat _vSrcPixFmt;
+    private PixelFormat _vNativePixFmt;
+    private PixelFormat _vOutPixFmt;
+    private PixelFormat[] _vNativePixFormats = [];
+    private bool _vPassThrough;
+    private long _vFramesEmitted;
+    private bool _vEof;
+    private bool _vDrainSent;
+    private VideoFrame? _vPrimedAfterSeek;
+    private VideoHardwareDecodeContext? _hwAccel;
+    private bool _drmGpuNv12Path;
+    private bool _d3d11GpuNv12Path;
+
+    private readonly Lock _passThroughArena = new();
+    private readonly Dictionary<int, Stack<ReadOnlyMemory<byte>[]>> _passThroughPlaneStacks = new();
+    private readonly Dictionary<int, Stack<int[]>> _passThroughStrideStacks = new();
+
+    private readonly byte*[] _swSrcLines = new byte*[8];
+    private readonly int[] _swSrcStride = new int[8];
+    private readonly byte*[] _swDstLines = new byte*[8];
+    private readonly int[] _swDstStride = new int[8];
+
+    public AudioTrack Audio { get; }
+    public VideoTrack Video { get; }
+
+    public string AudioCodecName { get; private set; } = "";
+    public string VideoCodecName { get; private set; } = "";
+    public TimeSpan Duration { get; private set; }
+
+    private MediaContainerSharedDemux()
+    {
+        Audio = new AudioTrack(this);
+        Video = new VideoTrack(this);
+    }
+
+    internal static MediaContainerSharedDemux Open(string path, VideoDecoderOpenOptions? videoOptions)
+    {
+        var d = new MediaContainerSharedDemux();
+        try
+        {
+            d.OpenInternal(path, videoOptions);
+            return d;
+        }
+        catch
+        {
+            d.Dispose();
+            throw;
+        }
+    }
+
+    internal bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr)
+    {
+        deviceComPtr = _hwAccel?.TryGetD3D11DeviceComPtr() ?? 0;
+        return deviceComPtr != 0;
+    }
+
+    private void OpenInternal(string path, VideoDecoderOpenOptions? videoOptions)
+    {
+        AVFormatContext* fmt = null;
+        var ret = avformat_open_input(&fmt, path, null, null);
+        FFmpegException.ThrowIfError(ret, nameof(avformat_open_input));
+        _fmt = fmt;
+
+        ret = avformat_find_stream_info(_fmt, null);
+        FFmpegException.ThrowIfError(ret, nameof(avformat_find_stream_info));
+
+        AVCodec* aCodec = null;
+        _aStream = av_find_best_stream(_fmt, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &aCodec, 0);
+        if (_aStream < 0 || aCodec == null)
+            throw new FFmpegException(_aStream, "no decodable audio stream found");
+
+        AVCodec* vCodec = null;
+        _vStream = av_find_best_stream(_fmt, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, _aStream, &vCodec, 0);
+        if (_vStream < 0 || vCodec == null)
+            throw new FFmpegException(_vStream, "no decodable video stream found");
+
+        var aSt = _fmt->streams[_aStream];
+        _aTb = aSt->time_base;
+        AudioCodecName = Marshal.PtrToStringAnsi((IntPtr)aCodec->name) ?? "unknown";
+
+        _aCtx = avcodec_alloc_context3(aCodec);
+        if (_aCtx == null) throw new OutOfMemoryException("audio avcodec_alloc_context3 returned NULL");
+        ret = avcodec_parameters_to_context(_aCtx, aSt->codecpar);
+        FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
+        ret = avcodec_open2(_aCtx, aCodec, null);
+        FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
+
+        Audio.Format = new AudioFormat(_aCtx->sample_rate, _aCtx->ch_layout.nb_channels);
+
+        AVChannelLayout outLayout;
+        av_channel_layout_default(&outLayout, Audio.Format.Channels);
+        SwrContext* swr = null;
+        ret = swr_alloc_set_opts2(&swr,
+            &outLayout, AVSampleFormat.AV_SAMPLE_FMT_FLT, Audio.Format.SampleRate,
+            &_aCtx->ch_layout, _aCtx->sample_fmt, _aCtx->sample_rate,
+            0, null);
+        av_channel_layout_uninit(&outLayout);
+        FFmpegException.ThrowIfError(ret, nameof(swr_alloc_set_opts2));
+        _swr = swr;
+        ret = swr_init(_swr);
+        FFmpegException.ThrowIfError(ret, nameof(swr_init));
+
+        var vSt = _fmt->streams[_vStream];
+        _vTb = vSt->time_base;
+        VideoCodecName = Marshal.PtrToStringAnsi((IntPtr)vCodec->name) ?? "unknown";
+
+        _vCtx = avcodec_alloc_context3(vCodec);
+        if (_vCtx == null) throw new OutOfMemoryException("video avcodec_alloc_context3 returned NULL");
+        ret = avcodec_parameters_to_context(_vCtx, vSt->codecpar);
+        FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
+
+        var tryHw = videoOptions?.TryHardwareAcceleration ?? true;
+        var retainDmabuf = videoOptions?.RetainDmabufForGl ?? false;
+        var retainD3D11 = videoOptions?.RetainD3D11SharedHandleForGl ?? false;
+        var preferredDevices = videoOptions?.PreferredDeviceTypes ?? [];
+
+        VideoHardwareDecodeContext? hw = null;
+        if (tryHw)
+            hw = VideoHardwareDecodeContext.TryCreate(vCodec, _vCtx, preferredDevices, retainDmabuf, retainD3D11);
+
+        if (hw == null)
+            VideoFileDecoder.ApplyDecoderThreading(vCodec, _vCtx, videoOptions);
+
+        AVDictionary* openOpts = null;
+        if (hw?.OutputsDrmPrimeGpuFrame == true)
+            av_dict_set(&openOpts, "hwaccel_output_format", "drm_prime", 0);
+        else if (hw?.OutputsD3D11GpuFrame == true)
+            av_dict_set(&openOpts, "hwaccel_output_format", "d3d11", 0);
+
+        ret = avcodec_open2(_vCtx, vCodec, &openOpts);
+        if (openOpts != null)
+            av_dict_free(&openOpts);
+
+        if (ret < 0 && hw != null)
+        {
+            hw.DetachFromCodec(_vCtx);
+            hw.Dispose();
+            hw = null;
+            VideoFileDecoder.ApplyDecoderThreading(vCodec, _vCtx, videoOptions);
+            ret = avcodec_open2(_vCtx, vCodec, null);
+        }
+        FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
+
+        _hwAccel = hw;
+        _drmGpuNv12Path = hw?.OutputsDrmPrimeGpuFrame == true;
+        _d3d11GpuNv12Path = hw?.OutputsD3D11GpuFrame == true;
+
+        if (hw != null)
+        {
+            if (_drmGpuNv12Path)
+            {
+                _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_DRM_PRIME;
+                _vNativePixFmt = PixelFormat.Nv12;
+                _vPassThrough = true;
+                _vOutPixFmt = PixelFormat.Nv12;
+                _vNativePixFormats = [PixelFormat.Nv12];
+            }
+            else if (_d3d11GpuNv12Path)
+            {
+                _vSrcPixFmt = _hwAccel!.HwAccelPixFmt;
+                _vNativePixFmt = PixelFormat.Nv12;
+                _vPassThrough = true;
+                _vOutPixFmt = PixelFormat.Nv12;
+                _vNativePixFormats = [PixelFormat.Nv12];
+            }
+            else
+            {
+                _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+                _vNativePixFmt = PixelFormat.Nv12;
+                _vPassThrough = false;
+                _vOutPixFmt = PixelFormat.Bgra32;
+                _vNativePixFormats = [PixelFormat.Nv12];
+            }
+        }
+        else
+        {
+            _vSrcPixFmt = _vCtx->pix_fmt;
+            var nativeSoft = VideoFileDecoder.MapNativePixelFormat(_vSrcPixFmt);
+            _vNativePixFmt = nativeSoft != PixelFormat.Unknown ? nativeSoft : PixelFormat.Bgra32;
+            _vPassThrough = nativeSoft != PixelFormat.Unknown;
+            _vOutPixFmt = _vNativePixFmt;
+            _vNativePixFormats = nativeSoft != PixelFormat.Unknown ? [nativeSoft] : [];
+        }
+
+        var fps = vSt->avg_frame_rate;
+        if (fps.num <= 0 || fps.den <= 0) fps = vSt->r_frame_rate;
+        var frameRate = new Rational(fps.num, Math.Max(fps.den, 1));
+
+        Video.Format = new VideoFormat(_vCtx->width, _vCtx->height, _vOutPixFmt, frameRate);
+
+        if (aSt->duration > 0)
+            Duration = PtsToTimeSpanAudio(aSt->duration);
+        else if (vSt->duration > 0)
+            Duration = PtsToTimeSpanVideo(vSt->duration);
+        else if (_fmt->duration > 0)
+            Duration = TimeSpan.FromMicroseconds(_fmt->duration);
+
+        if (hw == null && !_vPassThrough)
+        {
+            _swsCtx = sws_getCachedContext(null,
+                _vCtx->width, _vCtx->height, _vSrcPixFmt,
+                _vCtx->width, _vCtx->height, AVPixelFormat.AV_PIX_FMT_BGRA,
+                (int)SwsFlags.SWS_BICUBIC, null, null, null);
+            if (_swsCtx == null)
+                throw new FFmpegException(0, "sws_getCachedContext returned NULL");
+        }
+
+        _demuxPkt = av_packet_alloc();
+        if (_demuxPkt == null) throw new OutOfMemoryException("demux av_packet_alloc returned NULL");
+        _aFrame = av_frame_alloc();
+        if (_aFrame == null) throw new OutOfMemoryException("audio av_frame_alloc returned NULL");
+        _vFrame = av_frame_alloc();
+        if (_vFrame == null) throw new OutOfMemoryException("video av_frame_alloc returned NULL");
+
+        StartDemuxerThread();
+    }
+
+    private void StartDemuxerThread()
+    {
+        _demuxerStopRequest = false;
+        _fileReadCompleted = false;
+        _demuxerThread = new Thread(DemuxerThreadProc)
+        {
+            IsBackground = true,
+            Name = "MediaContainerSharedDemux.Read",
+        };
+        _demuxerThread.Start();
+    }
+
+    private void StopDemuxerAndDrainQueues()
+    {
+        _demuxerStopRequest = true;
+        lock (_queueGate)
+            Monitor.PulseAll(_queueGate);
+
+        if (_demuxerThread is { } t)
+        {
+            if (!t.Join(TimeSpan.FromSeconds(4)))
+            {
+                // Best-effort: demuxer may be blocked in av_read_frame; continue teardown.
+            }
+            _demuxerThread = null;
+        }
+
+        _demuxerStopRequest = false;
+        FreeAllQueuedPacketsLocked();
+    }
+
+    private void FreeAllQueuedPacketsLocked()
+    {
+        lock (_queueGate)
+        {
+            while (_audioPacketQ.Count > 0)
+            {
+                var pkt = (AVPacket*)_audioPacketQ.Dequeue();
+                av_packet_free(&pkt);
+            }
+            while (_videoPacketQ.Count > 0)
+            {
+                var pkt = (AVPacket*)_videoPacketQ.Dequeue();
+                av_packet_free(&pkt);
+            }
+        }
+    }
+
+    private void DemuxerThreadProc()
+    {
+        while (true)
+        {
+            if (_demuxerStopRequest)
+                return;
+
+            av_packet_unref(_demuxPkt);
+            var ret = av_read_frame(_fmt, _demuxPkt);
+            if (ret == AVERROR_EOF)
+            {
+                lock (_queueGate)
+                {
+                    _fileReadCompleted = true;
+                    Monitor.PulseAll(_queueGate);
+                }
+                return;
+            }
+            if (ret < 0)
+            {
+                FFmpegException.ThrowIfError(ret, nameof(av_read_frame));
+                return;
+            }
+
+            if (_demuxPkt->stream_index == _aStream)
+                EnqueuePacketCopy(_audioPacketQ, MaxAudioPacketsQueued);
+            else if (_demuxPkt->stream_index == _vStream)
+                EnqueuePacketCopy(_videoPacketQ, MaxVideoPacketsQueued);
+        }
+    }
+
+    private void EnqueuePacketCopy(Queue<nint> target, int maxCount)
+    {
+        var copy = av_packet_alloc();
+        if (copy == null) throw new OutOfMemoryException("av_packet_alloc (queue) returned NULL");
+        var refRet = av_packet_ref(copy, _demuxPkt);
+        if (refRet < 0)
+        {
+            var c = copy;
+            av_packet_free(&c);
+            FFmpegException.ThrowIfError(refRet, nameof(av_packet_ref));
+        }
+
+        lock (_queueGate)
+        {
+            while (target.Count >= maxCount && !_demuxerStopRequest)
+                Monitor.Wait(_queueGate, 5);
+
+            if (_demuxerStopRequest)
+            {
+                var c = copy;
+                av_packet_free(&c);
+                return;
+            }
+
+            target.Enqueue((nint)copy);
+            Monitor.PulseAll(_queueGate);
+        }
+    }
+
+    internal void SeekPresentation(TimeSpan position)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(position));
+
+        lock (_lifecycleLock)
+        {
+            ThrowIfDisposedUnsafe();
+            StopDemuxerAndDrainQueues();
+
+            var timestampUs = (long)(position.TotalSeconds * AvTimeBase);
+            var ret = avformat_seek_file(_fmt, -1, long.MinValue, timestampUs, long.MaxValue, AVSEEK_FLAG_BACKWARD);
+            if (ret < 0)
+            {
+                var vTs = (long)(position.TotalSeconds * _vTb.den / _vTb.num);
+                ret = av_seek_frame(_fmt, _vStream, vTs, AVSEEK_FLAG_BACKWARD);
+                FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
+            }
+
+            avcodec_flush_buffers(_aCtx);
+            avcodec_flush_buffers(_vCtx);
+
+            av_packet_unref(_demuxPkt);
+            av_frame_unref(_aFrame);
+            av_frame_unref(_vFrame);
+            swr_close(_swr);
+            ret = swr_init(_swr);
+            FFmpegException.ThrowIfError(ret, nameof(swr_init));
+
+            _aEof = false;
+            _aDrainSent = false;
+            _aDrainedTail = false;
+            _aSamplesEmitted = (long)(position.TotalSeconds * Audio.Format.SampleRate);
+            Audio.Position = position;
+
+            _vEof = false;
+            _vDrainSent = false;
+            _vPrimedAfterSeek?.Dispose();
+            _vPrimedAfterSeek = null;
+            Video.Position = position;
+
+            _fileReadCompleted = false;
+            StartDemuxerThread();
+
+            lock (_videoDecodeLock)
+                ConsumeDecoderUntilPts(position);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+
+        lock (_lifecycleLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            StopDemuxerAndDrainQueues();
+
+            _vPrimedAfterSeek?.Dispose();
+            _vPrimedAfterSeek = null;
+
+            if (_demuxPkt != null) { var p = _demuxPkt; av_packet_free(&p); _demuxPkt = null; }
+            if (_aFrame != null) { var f = _aFrame; av_frame_free(&f); _aFrame = null; }
+            if (_vFrame != null) { var f = _vFrame; av_frame_free(&f); _vFrame = null; }
+
+            if (_swr != null) { var s = _swr; swr_free(&s); _swr = null; }
+            ReleaseSws();
+
+            if (_aCtx != null) { var c = _aCtx; avcodec_free_context(&c); _aCtx = null; }
+            if (_vCtx != null)
+            {
+                _hwAccel?.DetachFromCodec(_vCtx);
+                var c = _vCtx;
+                avcodec_free_context(&c);
+                _vCtx = null;
+            }
+
+            _hwAccel?.Dispose();
+            _hwAccel = null;
+
+            if (_fmt != null) { var f = _fmt; avformat_close_input(&f); _fmt = null; }
+        }
+    }
+
+    private void ThrowIfDisposedUnsafe()
+    {
+        if (_fmt == null) throw new ObjectDisposedException(nameof(MediaContainerSharedDemux));
+    }
+
+    private TimeSpan PtsToTimeSpanAudio(long pts)
+        => TimeSpan.FromSeconds((double)pts * _aTb.num / _aTb.den);
+
+    private TimeSpan PtsToTimeSpanVideo(long pts)
+        => TimeSpan.FromSeconds((double)pts * _vTb.num / _vTb.den);
+
+    private void ReleaseSws()
+    {
+        if (_swsCtx == null) return;
+        sws_freeContext(_swsCtx);
+        _swsCtx = null;
+    }
+
+    private bool TryReceiveAudioFrame()
+    {
+        while (true)
+        {
+            var ret = avcodec_receive_frame(_aCtx, _aFrame);
+            if (ret == 0) return true;
+            if (ret == AVERROR_EOF)
+            {
+                _aEof = true;
+                return false;
+            }
+            if (ret == AVERROR(EAGAIN))
+            {
+                FeedAudioFromQueue();
+                continue;
+            }
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
+            return false;
+        }
+    }
+
+    private void FeedAudioFromQueue()
+    {
+        while (true)
+        {
+            AVPacket* pkt = null;
+            lock (_queueGate)
+            {
+                while (_audioPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
+                    Monitor.Wait(_queueGate, 50);
+
+                if (_audioPacketQ.Count > 0)
+                    pkt = (AVPacket*)_audioPacketQ.Dequeue();
+
+                Monitor.PulseAll(_queueGate);
+            }
+
+            if (pkt != null)
+            {
+                var ret = avcodec_send_packet(_aCtx, pkt);
+                av_packet_free(&pkt);
+                if (ret == 0)
+                {
+                    _aDrainSent = false;
+                    return;
+                }
+                if (ret == AVERROR(EAGAIN)) return;
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+                return;
+            }
+
+            if (_fileReadCompleted)
+            {
+                if (_aDrainSent) return;
+                var ret = avcodec_send_packet(_aCtx, null);
+                if (ret == 0 || ret == AVERROR(EAGAIN))
+                {
+                    _aDrainSent = true;
+                    return;
+                }
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+                return;
+            }
+        }
+    }
+
+    private int SwrConvertInto(Span<float> dst, int capacityFrames, byte** inputData, int inputSamples)
+    {
+        if (capacityFrames <= 0) return 0;
+        int converted;
+        fixed (float* dstPtr = dst)
+        {
+            var outBuf = (byte*)dstPtr;
+            converted = swr_convert(_swr, &outBuf, capacityFrames, inputData, inputSamples);
+        }
+        if (converted < 0) FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+        return converted;
+    }
+
+    private TimeSpan ResolveAudioPts()
+    {
+        var pts = _aFrame->best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE) pts = _aFrame->pts;
+        return pts == AV_NOPTS_VALUE
+            ? TimeSpan.FromSeconds((double)_aSamplesEmitted / Audio.Format.SampleRate)
+            : PtsToTimeSpanAudio(pts);
+    }
+
+    private AudioFrame ConvertAudioFrame()
+    {
+        var srcSamples = _aFrame->nb_samples;
+        var outCapacity = (int)av_rescale_rnd(
+            swr_get_delay(_swr, Audio.Format.SampleRate) + srcSamples,
+            Audio.Format.SampleRate, Audio.Format.SampleRate, AVRounding.AV_ROUND_UP);
+
+        var samples = new float[outCapacity * Audio.Format.Channels];
+        int converted;
+        fixed (float* outPtr = samples)
+        {
+            var outBuf = (byte*)outPtr;
+            converted = swr_convert(_swr, &outBuf, outCapacity, _aFrame->extended_data, srcSamples);
+        }
+        if (converted < 0) FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+
+        var pts = ResolveAudioPts();
+        Audio.Position = pts + TimeSpan.FromSeconds((double)converted / Audio.Format.SampleRate);
+        _aSamplesEmitted += converted;
+
+        return new AudioFrame(pts, Audio.Format, converted, samples.AsMemory(0, converted * Audio.Format.Channels));
+    }
+
+    private void FeedVideoFromQueue()
+    {
+        while (true)
+        {
+            AVPacket* pkt = null;
+            lock (_queueGate)
+            {
+                while (_videoPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
+                    Monitor.Wait(_queueGate, 50);
+
+                if (_videoPacketQ.Count > 0)
+                    pkt = (AVPacket*)_videoPacketQ.Dequeue();
+
+                Monitor.PulseAll(_queueGate);
+            }
+
+            if (pkt != null)
+            {
+                var ret = avcodec_send_packet(_vCtx, pkt);
+                av_packet_free(&pkt);
+                if (ret == 0)
+                {
+                    _vDrainSent = false;
+                    return;
+                }
+                if (ret == AVERROR(EAGAIN)) return;
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+                return;
+            }
+
+            if (_fileReadCompleted)
+            {
+                if (_vDrainSent) return;
+                var ret = avcodec_send_packet(_vCtx, null);
+                if (ret == 0 || ret == AVERROR(EAGAIN))
+                {
+                    _vDrainSent = true;
+                    return;
+                }
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+                return;
+            }
+        }
+    }
+
+    private AVFrame* ResolveWorkVideoFrame()
+    {
+        var fmt = (AVPixelFormat)_vFrame->format;
+
+        if (_drmGpuNv12Path && fmt == AVPixelFormat.AV_PIX_FMT_DRM_PRIME)
+            return _vFrame;
+
+        if (_d3d11GpuNv12Path &&
+            fmt is AVPixelFormat.AV_PIX_FMT_D3D11 or AVPixelFormat.AV_PIX_FMT_D3D11VA_VLD)
+            return _vFrame;
+
+        if (_hwAccel != null && fmt == _hwAccel.HwAccelPixFmt)
+            return _hwAccel.TransferToScratch(_vFrame);
+        return _vFrame;
+    }
+
+    private void SyncVideoPixelFormatIfNeeded(AVFrame* workFrame)
+    {
+        if (_drmGpuNv12Path || _d3d11GpuNv12Path)
+            return;
+
+        var effective = (AVPixelFormat)workFrame->format;
+        if (effective == _vSrcPixFmt)
+            return;
+
+        _vSrcPixFmt = effective;
+        var mapped = VideoFileDecoder.MapNativePixelFormat(_vSrcPixFmt);
+        _vNativePixFmt = mapped != PixelFormat.Unknown ? mapped : PixelFormat.Bgra32;
+        _vNativePixFormats = mapped != PixelFormat.Unknown ? [mapped] : [];
+
+        var desiredOutput = _vOutPixFmt;
+        _vOutPixFmt = PixelFormat.Unknown;
+        SelectVideoOutputFormatLocked(desiredOutput);
+    }
+
+    private void SelectVideoOutputFormatLocked(PixelFormat format)
+    {
+        if (format == PixelFormat.Unknown)
+            throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
+
+        if (_drmGpuNv12Path)
+        {
+            if (format != PixelFormat.Nv12)
+                throw new NotSupportedException(
+                    "DRM PRIME zero-copy decoding only supports PixelFormat.Nv12 output matching the GPU-exported NV12 dma-bufs.");
+            if (_vOutPixFmt == format)
+                return;
+            _vPassThrough = true;
+            ReleaseSws();
+            _vOutPixFmt = format;
+            Video.Format = Video.Format with { PixelFormat = format };
+            return;
+        }
+
+        if (_d3d11GpuNv12Path)
+        {
+            if (format != PixelFormat.Nv12)
+                throw new NotSupportedException(
+                    "D3D11 shared-handle zero-copy decoding only supports PixelFormat.Nv12 output matching the DXGI NV12 texture export.");
+            if (_vOutPixFmt == format)
+                return;
+            _vPassThrough = true;
+            ReleaseSws();
+            _vOutPixFmt = format;
+            Video.Format = Video.Format with { PixelFormat = format };
+            return;
+        }
+
+        if (format == _vOutPixFmt) return;
+
+        if (_hwAccel != null && _vSrcPixFmt == AVPixelFormat.AV_PIX_FMT_NONE)
+        {
+            _vOutPixFmt = format;
+            Video.Format = Video.Format with { PixelFormat = format };
+            return;
+        }
+
+        if (format == _vNativePixFmt)
+        {
+            ReleaseSws();
+            _vPassThrough = true;
+        }
+        else
+        {
+            var avTarget = FfmpegVideoPixelMaps.ToAvPixelFormat(format)
+                ?? throw new NotSupportedException($"pixel format {format} has no FFmpeg mapping");
+            ReleaseSws();
+            _swsCtx = sws_getCachedContext(null,
+                _vCtx->width, _vCtx->height, _vSrcPixFmt,
+                _vCtx->width, _vCtx->height, avTarget,
+                (int)SwsFlags.SWS_BICUBIC, null, null, null);
+            if (_swsCtx == null)
+                throw new FFmpegException(0, $"sws_getCachedContext for {format} returned NULL");
+            _vPassThrough = false;
+        }
+
+        _vOutPixFmt = format;
+        Video.Format = Video.Format with { PixelFormat = format };
+    }
+
+    private TimeSpan ResolveVideoPts(AVFrame* frame)
+    {
+        var pts = frame->best_effort_timestamp;
+        if (pts == AV_NOPTS_VALUE) pts = frame->pts;
+        if (pts == AV_NOPTS_VALUE)
+        {
+            var fps = Video.Format.FrameRate.ToDouble();
+            return fps > 0
+                ? TimeSpan.FromSeconds(_vFramesEmitted / fps)
+                : TimeSpan.Zero;
+        }
+        return PtsToTimeSpanVideo(pts);
+    }
+
+    private VideoFrame BuildVideoFrame(AVFrame* work, AVColorTransferCharacteristic trc)
+    {
+        var pts = ResolveVideoPts(work);
+        Video.Position = pts;
+        _vFramesEmitted++;
+
+        if (_drmGpuNv12Path)
+            return BuildNv12DrmDmabufGpuFrame(work, pts, trc);
+
+        if (_d3d11GpuNv12Path)
+            return BuildNv12D3D11SharedGpuFrame(work, pts, trc);
+
+        return _vPassThrough
+            ? BuildPassThroughVideoFrame(work, pts, trc)
+            : BuildConvertedVideoFrame(work, pts, trc);
+    }
+
+    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
+    {
+        var backing = DrmPrimeNv12BackingFactory.TryCreateBacking(drmFrame);
+        if (backing == null)
+            throw new InvalidOperationException(
+                "DRM PRIME frame could not be mapped to NV12 dma-bufs. Disable decoder option RetainDmabufForGl or try a CPU upload path.");
+
+        return VideoFrame.CreateNv12Dmabuf(pts, Video.Format, backing, VideoFileDecoder.MapTransferHint(trc));
+    }
+
+    private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
+    {
+        var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame);
+        if (backing == null)
+            throw new InvalidOperationException(
+                "D3D11 frame could not be exported to NT shared handles. Disable decoder option RetainD3D11SharedHandleForGl or try a CPU upload path.");
+
+        return VideoFrame.CreateNv12Win32Shared(pts, Video.Format, backing, VideoFileDecoder.MapTransferHint(trc));
+    }
+
+    private VideoFrame BuildPassThroughVideoFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    {
+        var clone = av_frame_alloc();
+        if (clone == null) throw new OutOfMemoryException("av_frame_alloc (clone) returned NULL");
+        var ret = av_frame_ref(clone, work);
+        if (ret < 0)
+        {
+            var c = clone;
+            av_frame_free(&c);
+            FFmpegException.ThrowIfError(ret, nameof(av_frame_ref));
+        }
+
+        var planeCount = PixelFormatInfo.PlaneCount(_vOutPixFmt);
+        var (planes, strides) = RentPassThroughDescriptors(planeCount);
+        var hint = VideoFileDecoder.MapTransferHint(trc);
+        for (var i = 0; i < planeCount; i++)
+        {
+            var rawStride = clone->linesize[(uint)i];
+            var absStride = Math.Abs(rawStride);
+            var planeH = PixelFormatInfo.PlaneHeight(_vOutPixFmt, Video.Format.Height, i);
+            var ptr = clone->data[(uint)i];
+            if (rawStride < 0)
+                ptr += rawStride * (planeH - 1);
+            planes[i] = new UnmanagedMemoryManager<byte>(ptr, absStride * planeH).Memory;
+            strides[i] = absStride;
+        }
+
+        var clonePtr = (nint)clone;
+        var pc = planeCount;
+        return new VideoFrame(pts, Video.Format, planes, strides, hint, release: () =>
+        {
+            var f = (AVFrame*)clonePtr;
+            av_frame_free(&f);
+            ReturnPassThroughDescriptors(pc, planes, strides);
+        });
+    }
+
+    private (ReadOnlyMemory<byte>[] planes, int[] strides) RentPassThroughDescriptors(int planeCount)
+    {
+        lock (_passThroughArena)
+        {
+            if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
+            {
+                ps = new Stack<ReadOnlyMemory<byte>[]>();
+                _passThroughPlaneStacks[planeCount] = ps;
+            }
+
+            if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
+            {
+                ss = new Stack<int[]>();
+                _passThroughStrideStacks[planeCount] = ss;
+            }
+
+            var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
+            var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
+            return (planes, strides);
+        }
+    }
+
+    private void ReturnPassThroughDescriptors(int planeCount, ReadOnlyMemory<byte>[] planes, int[] strides)
+    {
+        lock (_passThroughArena)
+        {
+            if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
+                ps.Count < PassThroughDescriptorPoolCap)
+            {
+                Array.Clear(planes);
+                ps.Push(planes);
+            }
+
+            if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
+                ss.Count < PassThroughDescriptorPoolCap)
+            {
+                Array.Clear(strides);
+                ss.Push(strides);
+            }
+        }
+    }
+
+    private VideoFrame BuildConvertedVideoFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    {
+        var width = Video.Format.Width;
+        var height = Video.Format.Height;
+        var bytesPerPixel = VideoFileDecoder.BytesPerPackedPixel(_vOutPixFmt);
+        if (bytesPerPixel == 0)
+            throw new NotSupportedException(
+                $"sws conversion to {_vOutPixFmt} (multi-plane / non-packed) is not implemented");
+
+        var stride = width * bytesPerPixel;
+        var contiguous = stride * height;
+        var rented = ArrayPool<byte>.Shared.Rent(contiguous);
+        var dstMem = rented.AsMemory(0, contiguous);
+
+        _swSrcLines[0] = work->data[0];
+        _swSrcLines[1] = work->data[1];
+        _swSrcLines[2] = work->data[2];
+        _swSrcLines[3] = work->data[3];
+        _swSrcLines[4] = work->data[4];
+        _swSrcLines[5] = work->data[5];
+        _swSrcLines[6] = work->data[6];
+        _swSrcLines[7] = work->data[7];
+        _swSrcStride[0] = work->linesize[0];
+        _swSrcStride[1] = work->linesize[1];
+        _swSrcStride[2] = work->linesize[2];
+        _swSrcStride[3] = work->linesize[3];
+        _swSrcStride[4] = work->linesize[4];
+        _swSrcStride[5] = work->linesize[5];
+        _swSrcStride[6] = work->linesize[6];
+        _swSrcStride[7] = work->linesize[7];
+
+        fixed (byte* dstPtr = dstMem.Span)
+        {
+            _swDstLines[0] = dstPtr;
+            for (var i = 1; i < 8; i++) _swDstLines[i] = null;
+            Array.Clear(_swDstStride);
+            _swDstStride[0] = stride;
+
+            var sret = sws_scale(_swsCtx, _swSrcLines, _swSrcStride, 0, height, _swDstLines, _swDstStride);
+            if (sret < 0) FFmpegException.ThrowIfError(sret, nameof(sws_scale));
+        }
+
+        var hint = VideoFileDecoder.MapTransferHint(trc);
+        byte[] pooled = rented;
+        return new VideoFrame(pts, Video.Format, dstMem, stride, hint,
+            release: () => ArrayPool<byte>.Shared.Return(pooled));
+    }
+
+    private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)
+    {
+        while (true)
+        {
+            var ret = avcodec_receive_frame(_vCtx, _vFrame);
+            if (ret == AVERROR_EOF)
+            {
+                _vEof = true;
+                return;
+            }
+            if (ret == AVERROR(EAGAIN))
+            {
+                FeedVideoFromQueue();
+                continue;
+            }
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
+
+            var workFrame = ResolveWorkVideoFrame();
+            SyncVideoPixelFormatIfNeeded(workFrame);
+            var trc = _vFrame->color_trc;
+            var pts = ResolveVideoPts(workFrame);
+            if (pts >= targetPresentationTime)
+            {
+                _vPrimedAfterSeek = BuildVideoFrame(workFrame, trc);
+                av_frame_unref(_vFrame);
+                return;
+            }
+
+            av_frame_unref(_vFrame);
+        }
+    }
+
+    internal sealed class AudioTrack : IAudioSource, ISeekableSource, IDisposable
+    {
+        private readonly MediaContainerSharedDemux _o;
+
+        internal AudioTrack(MediaContainerSharedDemux owner) => _o = owner;
+
+        public AudioFormat Format { get; internal set; } = default!;
+        public string CodecName => _o.AudioCodecName;
+        public TimeSpan Duration => _o.Duration;
+        public TimeSpan Position { get; internal set; }
+        public bool IsAtEnd => _o._aEof;
+        public bool IsExhausted => _o._aEof && _o._aDrainedTail;
+
+        public int ReadInto(Span<float> dst)
+        {
+            ObjectDisposedException.ThrowIf(_o._disposed, this);
+            if (dst.Length % Format.Channels != 0)
+                throw new ArgumentException(
+                    $"destination length {dst.Length} is not a multiple of channel count {Format.Channels}", nameof(dst));
+
+            lock (_o._audioDecodeLock)
+            {
+                _o.ThrowIfDisposedUnsafe();
+                if (IsExhausted) return 0;
+
+                var written = 0;
+                while (written < dst.Length)
+                {
+                    var remainingFrames = (dst.Length - written) / Format.Channels;
+                    if (remainingFrames == 0) break;
+
+                    var drained = _o.SwrConvertInto(dst[written..], remainingFrames, null, 0);
+                    if (drained > 0)
+                    {
+                        written += drained * Format.Channels;
+                        _o._aSamplesEmitted += drained;
+                    }
+                    if (drained == remainingFrames) continue;
+
+                    if (_o._aEof)
+                    {
+                        if (drained == 0)
+                        {
+                            _o._aDrainedTail = true;
+                            break;
+                        }
+                        continue;
+                    }
+
+                    if (!_o.TryReceiveAudioFrame()) continue;
+
+                    var capacity = (dst.Length - written) / Format.Channels;
+                    var produced = _o.SwrConvertInto(dst[written..], capacity, _o._aFrame->extended_data, _o._aFrame->nb_samples);
+                    if (produced > 0)
+                    {
+                        written += produced * Format.Channels;
+                        _o._aSamplesEmitted += produced;
+                    }
+                    av_frame_unref(_o._aFrame);
+                }
+
+                if (written > 0)
+                    Position = TimeSpan.FromSeconds((double)_o._aSamplesEmitted / Format.SampleRate);
+                return written;
+            }
+        }
+
+        public bool TryReadNextFrame(out AudioFrame frame)
+        {
+            ObjectDisposedException.ThrowIf(_o._disposed, this);
+            lock (_o._audioDecodeLock)
+            {
+                _o.ThrowIfDisposedUnsafe();
+                if (!_o.TryReceiveAudioFrame())
+                {
+                    frame = default;
+                    return false;
+                }
+                frame = _o.ConvertAudioFrame();
+                av_frame_unref(_o._aFrame);
+                return true;
+            }
+        }
+
+        public void Seek(TimeSpan position) => _o.SeekPresentation(position);
+
+        public void Dispose() { }
+    }
+
+    internal sealed class VideoTrack : IVideoSource, ISeekableSource, IDisposable
+    {
+        private readonly MediaContainerSharedDemux _o;
+
+        internal VideoTrack(MediaContainerSharedDemux owner) => _o = owner;
+
+        public VideoFormat Format { get; internal set; } = default!;
+        public string CodecName => _o.VideoCodecName;
+        public TimeSpan Duration => _o.Duration;
+        public TimeSpan Position { get; internal set; }
+        public bool IsAtEnd => _o._vEof;
+        public bool IsExhausted => _o._vEof;
+        public IReadOnlyList<PixelFormat> NativePixelFormats => _o._vNativePixFormats;
+
+        public void SelectOutputFormat(PixelFormat format)
+        {
+            ObjectDisposedException.ThrowIf(_o._disposed, this);
+            if (format == PixelFormat.Unknown)
+                throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
+
+            lock (_o._videoDecodeLock)
+            {
+                _o.ThrowIfDisposedUnsafe();
+                _o.SelectVideoOutputFormatLocked(format);
+            }
+        }
+
+        public bool TryReadNextFrame(out VideoFrame frame)
+        {
+            ObjectDisposedException.ThrowIf(_o._disposed, this);
+            lock (_o._videoDecodeLock)
+            {
+                _o.ThrowIfDisposedUnsafe();
+
+                if (_o._vPrimedAfterSeek is { } primed)
+                {
+                    frame = primed;
+                    _o._vPrimedAfterSeek = null;
+                    return true;
+                }
+
+                while (true)
+                {
+                    var ret = avcodec_receive_frame(_o._vCtx, _o._vFrame);
+                    if (ret == 0)
+                    {
+                        var workFrame = _o.ResolveWorkVideoFrame();
+                        _o.SyncVideoPixelFormatIfNeeded(workFrame);
+                        var trc = _o._vFrame->color_trc;
+                        frame = _o.BuildVideoFrame(workFrame, trc);
+                        av_frame_unref(_o._vFrame);
+                        return true;
+                    }
+                    if (ret == AVERROR_EOF)
+                    {
+                        _o._vEof = true;
+                        frame = null!;
+                        return false;
+                    }
+                    if (ret == AVERROR(EAGAIN))
+                    {
+                        _o.FeedVideoFromQueue();
+                        continue;
+                    }
+                    FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
+                }
+            }
+        }
+
+        public void Seek(TimeSpan position) => _o.SeekPresentation(position);
+
+        public void Dispose() { }
+    }
+}

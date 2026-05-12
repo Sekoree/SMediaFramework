@@ -15,6 +15,7 @@
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="SDL3-CS" />
         <PackageReference Include="SDL3-CS.Native" />
+        <PackageReference Include="Vortice.Direct3D11" />
     </ItemGroup>
 
     <ItemGroup>

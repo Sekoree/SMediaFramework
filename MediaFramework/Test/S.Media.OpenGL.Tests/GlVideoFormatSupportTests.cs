@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using S.Media.Core.Video;
 using S.Media.OpenGL;
 using Xunit;
@@ -9,6 +10,27 @@ namespace S.Media.OpenGL.Tests;
 /// </summary>
 public sealed class GlVideoFormatSupportTests
 {
+    [Fact]
+    public void SupportedPixelFormats_prefers_Yuv422P10Le_before_Nv12_for_negotiation()
+    {
+        var list = YuvVideoRenderer.SupportedPixelFormats;
+        var i422 = IndexOf(list, PixelFormat.Yuv422P10Le);
+        var nv12 = IndexOf(list, PixelFormat.Nv12);
+        Assert.True(i422 >= 0 && nv12 >= 0);
+        Assert.True(i422 < nv12);
+    }
+
+    private static int IndexOf(IReadOnlyList<PixelFormat> list, PixelFormat pf)
+    {
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (list[i] == pf)
+                return i;
+        }
+
+        return -1;
+    }
+
     [Fact]
     public void P010_DefaultBitScale_IsOne()
     {

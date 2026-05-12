@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Threading;
+using S.Media.NDI.Clock;
 
 namespace S.Media.NDI.Audio;
 
@@ -31,6 +32,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 {
     private readonly NDIRuntime _runtime;
     private readonly NDIReceiver _receiver;
+    private readonly NdiIngestPlaybackClock? _ingestClock;
     private readonly Thread _captureThread;
     private readonly CancellationTokenSource _cts = new();
     private readonly int _capacityFrames;
@@ -76,10 +78,18 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     /// <param name="source">A discovered source from <see cref="NDIFinder"/>.</param>
     /// <param name="receiverName">Optional human-readable receiver name.</param>
     /// <param name="ringCapacityFrames">Upper bound on samples-per-channel buffered (default 96000 = ~2 s @ 48 kHz).</param>
-    public NDIAudioReceiver(NDIDiscoveredSource source, string? receiverName = null, int ringCapacityFrames = 96000)
+    /// <param name="ingestClock">Optional <see cref="S.Media.Core.Clock.IPlaybackClock"/> implementation updated from this receiver's capture thread.</param>
+    public NDIAudioReceiver(
+        NDIDiscoveredSource source,
+        string? receiverName = null,
+        int ringCapacityFrames = 96000,
+        NdiIngestPlaybackClock? ingestClock = null)
     {
         if (ringCapacityFrames < 1024)
             throw new ArgumentOutOfRangeException(nameof(ringCapacityFrames), "must be >= 1024");
+
+        _ingestClock = ingestClock;
+        _ingestClock?.AttachReceiver();
 
         var rc = NDIRuntime.Create(out var rt);
         if (rc != 0 || rt is null)
@@ -158,7 +168,14 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                     var samples = audio.NoSamples;
                     var channels = audio.NoChannels;
                     var sampleRate = audio.SampleRate;
-                    var totalFloats = samples * channels;
+                    long totalFloatsLong = (long)samples * channels;
+                    if (totalFloatsLong <= 0 || totalFloatsLong > Array.MaxLength)
+                    {
+                        _receiver.FreeAudio(audio);
+                        continue;
+                    }
+
+                    var totalFloats = (int)totalFloatsLong;
 
                     var snap = EnsureFormat(sampleRate, channels);
 
@@ -178,6 +195,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                         PData = pin.AddrOfPinnedObject(),
                     };
                     NDIAudioUtils.ToInterleaved32f(audio, ref interleaved);
+                    _ingestClock?.NotifyAudioFrame(in audio);
                     _receiver.FreeAudio(audio);
 
                     EnqueueSamples(snap, heldBuffer.AsSpan(0, totalFloats));
@@ -245,6 +263,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         _disposed = true;
         _cts.Cancel();
         CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2));
+        _ingestClock?.NotifyCaptureStopped();
         _cts.Dispose();
         _receiver.Dispose();
         _runtime.Dispose();

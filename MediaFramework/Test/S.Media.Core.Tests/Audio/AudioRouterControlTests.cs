@@ -257,6 +257,55 @@ public class AudioRouterControlTests
             Assert.Equal(2.0f, any[i], precision: 4);
     }
 
+    [Fact]
+    public void ReconfigureSampleRate_MatchingFormats_Succeeds()
+    {
+        using var r = new AudioRouter(44100, chunkSamples: 128);
+        var f = new AudioFormat(44100, 2);
+        r.AddSource(new TestSource(f), "s");
+        r.AddSink(new FlushableSink(f), "o");
+        r.AddRoute("s", "o", ChannelMap.Identity(2));
+        r.ReconfigureSampleRate(44100);
+        Assert.Equal(44100, r.SampleRate);
+    }
+
+    [Fact]
+    public void ReconfigureSampleRate_MismatchedSource_Throws()
+    {
+        using var r = new AudioRouter(48000);
+        var f48 = new AudioFormat(48000, 2);
+        r.AddSource(new TestSource(f48), "s");
+        r.AddSink(new FlushableSink(f48), "o");
+        r.AddRoute("s", "o", ChannelMap.Identity(2));
+        Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRate(44100));
+    }
+
+    [Fact]
+    public void ReconfigureSampleRate_WhenRunning_Throws()
+    {
+        using var r = new AudioRouter(48000, chunkSamples: 480);
+        var f = new AudioFormat(48000, 2);
+        r.AddSource(new TestSource(f), "s");
+        r.AddSink(new FlushableSink(f), "o");
+        r.AddRoute("s", "o", ChannelMap.Identity(2));
+        r.Start();
+        Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRate(48000));
+        r.Stop();
+    }
+
+    [Fact]
+    public void ReconfigureSampleRate_AfterSlaveTo_RebuildsSlavedClock()
+    {
+        using var r = new AudioRouter(48000, chunkSamples: 64);
+        var f = new AudioFormat(48000, 2);
+        r.AddSource(new TestSource(f), "s");
+        r.AddSink(new ImmediateClockedSink(f), "p");
+        r.AddRoute("s", "p", ChannelMap.Identity(2));
+        r.SlaveTo("p");
+        r.ReconfigureSampleRate(48000);
+        Assert.Equal(48000, r.SampleRate);
+    }
+
     // --- helpers ----------------------------------------------------------
 
     private sealed class TestSource(AudioFormat fmt, Func<int, float>? perChannelValue = null) : IAudioSource
@@ -331,5 +380,12 @@ public class AudioRouterControlTests
         {
             lock (_gate) _chunks.Add(packedSamples.ToArray());
         }
+    }
+
+    private sealed class ImmediateClockedSink(AudioFormat fmt) : IAudioSink, IClockedSink
+    {
+        public AudioFormat Format { get; } = fmt;
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+        public bool WaitForCapacity(int chunkSamples, CancellationToken token) => !token.IsCancellationRequested;
     }
 }

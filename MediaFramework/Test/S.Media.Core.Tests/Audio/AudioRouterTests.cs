@@ -49,6 +49,24 @@ public class AudioRouterTests
     }
 
     [Fact]
+    public void AddSink_PerSinkPumpCapacity_OverridesRouterDefault()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480, pumpCapacityChunks: 8);
+        r.AddSink(new TestSink(Stereo), "narrow", pumpCapacityChunks: 8);
+        r.AddSink(new TestSink(Stereo), "wide", pumpCapacityChunks: 40);
+        Assert.Equal(8, r.GetPumpStats("narrow").PumpCapacityChunks);
+        Assert.Equal(40, r.GetPumpStats("wide").PumpCapacityChunks);
+    }
+
+    [Fact]
+    public void AddSink_PumpCapacityBelow2_Throws()
+    {
+        using var r = new AudioRouter(SampleRate);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            r.AddSink(new TestSink(Stereo), "x", pumpCapacityChunks: 1));
+    }
+
+    [Fact]
     public void AddRoute_UnknownSource_Throws()
     {
         using var r = new AudioRouter(SampleRate);
@@ -175,6 +193,53 @@ public class AudioRouterTests
         r.Stop();
 
         AssertFramePattern(sink.Captured[0], expected: [13f, 24f]);
+    }
+
+    [Fact]
+    public void RunLoop_MultiSourceStereoLayoutsAndGains_MatchesReference()
+    {
+        // Exercises ApplyRoute steady-state SIMD for identity, stereo silence/L–R maps, and summed gains.
+        using var r = new AudioRouter(SampleRate, chunkSamples: 32);
+        var srcA = new TestSource(Stereo, c => c == 0 ? 3f : 4f);
+        var srcB = new TestSource(Stereo, c => c == 0 ? 10f : 20f);
+        var srcC = new TestSource(Stereo, c => c == 0 ? 1f : 2f);
+        var sink = new TestSink(Stereo);
+
+        r.AddSource(srcA, "a");
+        r.AddSource(srcB, "b");
+        r.AddSource(srcC, "c");
+        r.AddSink(sink, "out");
+        r.AddRoute("a", "out", ChannelMap.Identity(2), gain: 0.5f);
+        r.AddRoute("b", "out", new ChannelMap([-1, 0]), gain: 0.25f);
+        r.AddRoute("c", "out", new ChannelMap([1, -1]), gain: 1f);
+
+        r.Start();
+        WaitForChunks(r, 3);
+        r.Stop();
+
+        AssertFramePattern(sink.Captured[0], expected: [3.5f, 4.5f]);
+    }
+
+    [Fact]
+    public void RunLoop_MultiSourceStereoDupAndFullSilence_MatchesReference()
+    {
+        // Dup-L plus a second route that is all silence (high gain must not read / add samples).
+        using var r = new AudioRouter(SampleRate, chunkSamples: 32);
+        var srcA = new TestSource(Stereo, c => c == 0 ? 3f : 4f);
+        var srcB = new TestSource(Stereo, c => c == 0 ? 99f : 100f);
+        var sink = new TestSink(Stereo);
+
+        r.AddSource(srcA, "a");
+        r.AddSource(srcB, "b");
+        r.AddSink(sink, "out");
+        r.AddRoute("a", "out", new ChannelMap([0, 0]), gain: 1f);
+        r.AddRoute("b", "out", new ChannelMap([-1, -1]), gain: 999f);
+
+        r.Start();
+        WaitForChunks(r, 3);
+        r.Stop();
+
+        AssertFramePattern(sink.Captured[0], expected: [3f, 3f]);
     }
 
     [Fact]

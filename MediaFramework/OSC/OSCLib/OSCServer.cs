@@ -230,9 +230,13 @@ public sealed class OSCServer : IOSCServer
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // best-effort
+#if DEBUG
+            _logger.LogDebug(ex, "OSCServer.Dispose: cooperative shutdown join/cancel (best effort).");
+#else
+            _ = ex;
+#endif
         }
         finally
         {
@@ -254,9 +258,13 @@ public sealed class OSCServer : IOSCServer
         {
             await StopAsync().ConfigureAwait(false);
         }
-        catch
+        catch (Exception ex)
         {
-            // ignore dispose shutdown exceptions
+#if DEBUG
+            _logger.LogDebug(ex, "OSCServer.DisposeAsync: StopAsync (best effort).");
+#else
+            _ = ex;
+#endif
         }
 
         _udpClient.Dispose();

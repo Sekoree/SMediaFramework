@@ -87,9 +87,9 @@ vec3 hdrPreviewAfterMatrix(vec3 rgb)
 
 void main()
 {
-    float y = texture(yPlane, v_uv).r * bitScale;
-    float u = texture(uPlane, v_uv).r * bitScale;
-    float v = texture(vPlane, v_uv).r * bitScale;
+    float y = textureBicubicR(yPlane, v_uv, uTexBicubicDim0) * bitScale;
+    float u = textureBicubicR(uPlane, v_uv, uTexBicubicDim1) * bitScale;
+    float v = textureBicubicR(vPlane, v_uv, uTexBicubicDim2) * bitScale;
     vec3 yuv = vec3(y, u, v) - yuvOffset;
     vec3 rgb = yuvMatrix * yuv;
     fragColor = vec4(hdrPreviewAfterMatrix(rgb), 1.0);

@@ -1,3 +1,6 @@
+using System.Threading;
+using S.Media.Core.Diagnostics;
+
 namespace S.Media.FFmpeg;
 
 /// <summary>
@@ -11,11 +14,19 @@ namespace S.Media.FFmpeg;
 /// the libs in standard paths (e.g. <c>/usr/lib/libavformat.so.62</c>); on
 /// Windows the AutoGen default (the executable directory) is left alone so
 /// the FFmpeg.AutoGen.Redist.windows.x64 companion package keeps working.
+/// <para>
+/// The <strong>first</strong> successful initialization wins: later calls are
+/// cheap no-ops, but a non-null <paramref name="rootPath"/> that disagrees with
+/// the already-configured native search path is ignored (logged once at warning
+/// level). Hot-swapping to a different FFmpeg build directory requires a new
+/// process.
+/// </para>
 /// </remarks>
 public static class FFmpegRuntime
 {
     private static readonly Lock Gate = new();
-    private static bool _initialized;
+    private static volatile bool _initialized;
+    private static int _ignoredRootPathLogged;
 
     /// <summary>
     /// Initializes the dynamic bindings. Optionally override the lookup path
@@ -23,10 +34,20 @@ public static class FFmpegRuntime
     /// </summary>
     public static void EnsureInitialized(string? rootPath = null)
     {
-        if (_initialized) return;
+        if (_initialized)
+        {
+            MaybeLogIgnoredRootPath(rootPath);
+            return;
+        }
+
         lock (Gate)
         {
-            if (_initialized) return;
+            if (_initialized)
+            {
+                MaybeLogIgnoredRootPath(rootPath);
+                return;
+            }
+
             if (rootPath is not null)
                 ffmpeg.RootPath = rootPath;
             else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
@@ -35,5 +56,23 @@ public static class FFmpegRuntime
             DynamicallyLoadedBindings.Initialize();
             _initialized = true;
         }
+    }
+
+    private static void MaybeLogIgnoredRootPath(string? requested)
+    {
+        if (requested is null)
+            return;
+
+        var current = ffmpeg.RootPath ?? "";
+        if (string.Equals(current, requested, StringComparison.Ordinal))
+            return;
+
+        if (Interlocked.Exchange(ref _ignoredRootPathLogged, 1) != 0)
+            return;
+
+        MediaDiagnostics.LogWarning(
+            "FFmpegRuntime.EnsureInitialized: bindings already initialized (RootPath '{0}'); ignoring requested rootPath '{1}'. Use a new process to load a different native FFmpeg build.",
+            current,
+            requested);
     }
 }

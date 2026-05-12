@@ -7,9 +7,9 @@ using S.Media.FFmpeg;
 using S.Media.FFmpeg.Audio;
 using S.Media.FFmpeg.Video;
 using S.Media.NDI;
+using S.Media.NDI.Audio;
 using S.Media.PortAudio;
 using S.Media.SDL3;
-using VideoPlaybackSmoke;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -29,31 +29,50 @@ if (!File.Exists(opt.MediaPath))
     return 3;
 }
 
-VideoDecoderOpenOptions? vOpts = opt.HardwareDecode
-    ? new VideoDecoderOpenOptions { TryHardwareAcceleration = true, RetainDmabufForGl = opt.LinuxDrmDmabufGl }
-    : null;
+var videoDecoderOptions = new VideoDecoderOpenOptions
+{
+    TryHardwareAcceleration = !opt.NoHardwareDecode,
+    RetainDmabufForGl = opt.LinuxDrmDmabufGl,
+    RetainD3D11SharedHandleForGl = opt.WindowsD3d11SharedGl,
+};
+using var videoDecoder = VideoFileDecoder.Open(opt.MediaPath, videoDecoderOptions);
 
-using var videoDecoder = VideoFileDecoder.Open(opt.MediaPath, vOpts);
+nint borrowD3d = 0;
+if (OperatingSystem.IsWindows() && opt.WindowsD3d11SharedGl)
+    videoDecoder.TryGetHardwareD3D11DeviceForWin32Gl(out borrowD3d);
 
 var sdlGl = new SDL3GLVideoSink(
     title: Path.GetFileName(opt.MediaPath),
     initialWidth: Math.Min(videoDecoder.Format.Width, 1920),
-    initialHeight: Math.Min(videoDecoder.Format.Height, 1080));
+    initialHeight: Math.Min(videoDecoder.Format.Height, 1080),
+    borrowD3D11DeviceComPtrForNv12Gl: borrowD3d);
 
-TwinCpuVideoSink? twin = null;
+VideoRouter? videoRouter = null;
 NDIOutput? ndi = null;
+string? ndiVideoOutputId = null;
+NdiAudioAggregatingSink? ndiAudioAgg = null;
+IAudioSink? ndiMirrorPrefill = null;
 IVideoSink videoFront = sdlGl;
+string? ndiAudioSinkId = null;
+VideoPtsClock? videoPtsClock = null;
+Action<TimeSpan>? videoPtsHook = null;
 
 if (opt.NdiEnable)
 {
-    ndi = new NDIOutput(opt.NdiName, clockVideo: false, clockAudio: false,
+    ndi = new NDIOutput(opt.NdiName, clockVideo: false, clockAudio: true,
         minimumVideoSubmitSpacing: PaceBelowFramePeriod(videoDecoder));
 
-    twin = new TwinCpuVideoSink(sdlGl, ndi.VideoSink);
-    videoFront = twin;
+    videoRouter = new VideoRouter(null);
+    var outSdl = videoRouter.AddOutput(sdlGl, "sdl", disposeSinkOnRouterDispose: true);
+    ndiVideoOutputId = videoRouter.AddOutput(ndi.VideoSink, "ndi", disposeSinkOnRouterDispose: true,
+        asyncPump: new VideoSinkPumpAttachOptions(4, "ndi-video", null, DisposeInnerSinkWhenPumpDisposes: false));
+    var mainIn = videoRouter.AddInput(outSdl);
+    if (!videoRouter.TryAddRoute(mainIn.Id, ndiVideoOutputId, out var routeErr))
+        throw new InvalidOperationException(routeErr ?? "VideoRouter.TryAddRoute(ndi) failed");
+    videoFront = mainIn.Sink;
 }
 
-AudioRouting? routing = AudioRouting.TryCreate(opt.MediaPath, opt.AudioChunkSamples);
+AudioRouting? routing = AudioRouting.TryCreate(opt.MediaPath, opt.AudioChunkSamples, opt.DeviceLatencyMs);
 using var freerunClock = new MediaClock();
 
 IMediaClock playClock = routing?.Player.Clock ?? freerunClock;
@@ -67,10 +86,13 @@ try
         $"{videoDecoder.Format.PixelFormat} @{videoDecoder.Format.FrameRate}");
 
     if (routing is null)
-        Console.WriteLine("[audio] not wired — see stderr above; video clock is wall-time-only.");
+        Console.WriteLine("[audio] not wired — see stderr above; using VideoPtsClock as MediaClock master.");
 
     if (opt.NdiEnable && opt.LinuxDrmDmabufGl)
-        Console.WriteLine("[ndi] DRM dma-buf decode + twin NDI is unsupported — omit --ndi or disable --drm-gl.");
+        Console.WriteLine("[ndi] DRM dma-buf decode + NDI branch routing is unsupported — omit --ndi or disable --drm-gl.");
+
+    if (opt.NdiEnable && opt.WindowsD3d11SharedGl)
+        Console.WriteLine("[ndi] D3D11 shared-handle NV12 decode + NDI branch routing is unsupported — omit --ndi or disable --d3d11-gl.");
 
     using CancellationTokenSource cts = new();
     Console.CancelKeyPress += (_, e) =>
@@ -82,11 +104,28 @@ try
 
     if (ndi is not null && routing is not null)
     {
-        var ndSink = ndi.EnableAudio(routing.AudioFormat);
-        var ndiSinkId = routing.Player.AddOutput(ndSink);
+        IAudioSink ndAudio = ndi.EnableAudio(routing.AudioFormat);
+        var agg = opt.NdiAudioAggregateSamples;
+        if (agg < 0)
+        {
+            var fps = videoDecoder.Format.FrameRate.ToDouble();
+            agg = fps > 0 && !double.IsNaN(fps)
+                ? (int)Math.Clamp(routing.AudioFormat.SampleRate / fps, 960, 8192)
+                : 2000;
+        }
 
-        routing.Player.Connect(routing.SourceId, ndiSinkId,
+        if (agg > 0)
+        {
+            ndiAudioAgg = new NdiAudioAggregatingSink(ndAudio, agg);
+            ndAudio = ndiAudioAgg;
+        }
+
+        ndiAudioSinkId = routing.Player.AddOutput(ndAudio, sinkPumpCapacityChunks: opt.NdiAudioPumpCapacityChunks);
+
+        routing.Player.Connect(routing.SourceId, ndiAudioSinkId,
             ChannelMap.Identity(Math.Min(2, routing.AudioFormat.Channels)));
+
+        ndiMirrorPrefill = ndAudio;
     }
 
     if (routing != null)
@@ -96,37 +135,70 @@ try
         // and Submit() would drop samples while AudioFileDecoder.Position still advanced
         // ("audio 7s ahead" in the HUD). Match PlaybackSmoke: prebuffer by reading the
         // shared decoder directly into the device ring, open the stream, then start the router.
-        routing.PrefillMainOutputDirectFromDecoder(TimeSpan.FromSeconds(3));
+        routing.PrefillMainOutputDirectFromDecoder(TimeSpan.FromSeconds(3),
+            mirrorPackedFloats: ndiMirrorPrefill);
         routing.StartHardwareOutput();
         AvPlaybackCoordinator.Play(videoPlayer, routing.Player);
     }
     else
     {
-        freerunClock.Start();
-        videoPlayer.Play();
+        videoPtsClock = new VideoPtsClock();
+        var vpt = videoPtsClock;
+        var begun = false;
+        videoPtsHook = pts =>
+        {
+            if (!begun)
+            {
+                vpt.BeginSession(pts);
+                begun = true;
+            }
+            else
+            {
+                vpt.NotifyFramePts(pts);
+            }
+        };
+        videoPlayer.FramePresentationTimePresented += videoPtsHook;
+        AvPlaybackCoordinator.Play(videoPlayer, null, null, null, videoPtsClock);
     }
 
     var ticker = System.Diagnostics.Stopwatch.StartNew();
+    long lastHudDisplayed = 0;
     while (!cts.IsCancellationRequested)
     {
         if (ticker.ElapsedMilliseconds >= 650)
         {
+            var intervalSec = ticker.Elapsed.TotalSeconds;
+            var dShown = videoPlayer.DisplayedCount - lastHudDisplayed;
+            lastHudDisplayed = videoPlayer.DisplayedCount;
+            var vFps = intervalSec > 1e-6 ? dShown / intervalSec : 0.0;
+            var nomFps = videoDecoder.Format.FrameRate.ToDouble();
+            var nomFpsStr = nomFps > 0 && !double.IsNaN(nomFps) ? $"{nomFps:0.##}Hz" : "?Hz";
+
             var aHeard = routing != null
                 ? TimeSpan.FromSeconds(routing.MainOutput.PlayedSamples / (double)routing.MainOutput.Format.SampleRate)
                 : TimeSpan.Zero;
             var aDeckDec = routing?.Decoder.Position ?? TimeSpan.Zero;
-            long pumpDr = 0, paUnd = 0, paDr = 0;
+            long pumpDr = 0, paUnd = 0, paDr = 0, ndiDr = 0;
+            long ndiVidDr = 0;
             if (routing != null)
             {
                 pumpDr = routing.Player.Router.GetPumpStats(routing.PrimarySinkId).Dropped;
                 paUnd = routing.MainOutput.UnderrunSamples;
                 paDr = routing.MainOutput.DroppedSamples;
+                if (ndiAudioSinkId is not null)
+                    ndiDr = routing.Player.Router.GetPumpStats(ndiAudioSinkId).Dropped;
             }
+
+            if (videoRouter is not null && ndiVideoOutputId is not null
+                && videoRouter.TryGetVideoSinkPumpMetrics(ndiVideoOutputId, out var nvD, out _))
+                ndiVidDr = nvD;
 
             Console.Write(
                 $"\r clock {FormatClock(playClock.CurrentPosition)}  vPTS {videoDecoder.Position:mm\\:ss\\.fff}  " +
-                $"aHeard {aHeard:mm\\:ss\\.fff}  aDec {aDeckDec:mm\\:ss\\.fff}  show {videoPlayer.DisplayedCount}/{videoPlayer.DecodedCount}  " +
-                $"vLate {videoPlayer.DroppedLate}  paUnd {paUnd}  paDr {paDr}  pumpDr {pumpDr}");
+                $"aHeard {aHeard:mm\\:ss\\.fff}  aDec {aDeckDec:mm\\:ss\\.fff}  " +
+                $"show {videoPlayer.DisplayedCount}/{videoPlayer.DecodedCount}  vFps~{vFps:0.#}  nom {nomFpsStr}  " +
+                $"decTh {videoDecoder.CodecThreadCount}  vLate {videoPlayer.DroppedLate}  vDrn {videoPlayer.DroppedDrain}  " +
+                $"glDr {sdlGl.DroppedNewer}  ndiVidDr {ndiVidDr}  paUnd {paUnd}  paDr {paDr}  pumpDr {pumpDr}  ndiAuDr {ndiDr}");
             Console.Out.Flush();
 
             ticker.Restart();
@@ -142,14 +214,19 @@ try
 
     Console.WriteLine();
     AvPlaybackCoordinator.Pause(videoPlayer, routing?.Player, cts.Token);
+    videoPtsClock?.Pause();
     if (routing is null)
         freerunClock.Stop(cts.Token);
 }
 finally
 {
+    if (videoPtsHook is not null)
+        videoPlayer.FramePresentationTimePresented -= videoPtsHook;
+
+    ndiAudioAgg?.Dispose();
     routing?.Dispose();
-    twin?.Dispose();
-    if (twin is null)
+    videoRouter?.Dispose();
+    if (videoRouter is null)
         sdlGl.Dispose();
 
     ndi?.Dispose();
@@ -194,21 +271,32 @@ file sealed class AudioRouting : IDisposable
 
     internal PortAudioOutput MainOutput => _mainOutput;
 
-    internal static AudioRouting? TryCreate(string mediaPath, int chunkSamples)
+    internal static AudioRouting? TryCreate(string mediaPath, int chunkSamples, int? deviceLatencyMs = null)
     {
         try
         {
             var decoder = AudioFileDecoder.Open(mediaPath);
             var player = new AudioPlayer(decoder.Format.SampleRate, chunkSamples);
 
+            double? latencySec = deviceLatencyMs is > 0 ? deviceLatencyMs.Value / 1000.0 : null;
             var output = new PortAudioOutput(
                 decoder.Format,
+                deviceIndex: null,
+                suggestedLatency: latencySec,
                 framesPerBuffer: chunkSamples,
                 ringCapacityFrames: decoder.Format.SampleRate);
-            // Default target is half the ring (~0.68 s here) — the router runs unthrottled whenever
-            // queued + chunk fits, then sleeps in bursts, which interacts badly with Pulse/ALSA jitter.
-            // Keep a modest cushion (~8 router chunks ≈ 160 ms @ 960 samples).
-            output.TargetQueueSamples = Math.Clamp(chunkSamples * 8, chunkSamples * 4, output.CapacitySamples / 8);
+            // Target ~16 chunks (≈320 ms @ 960 samples / 48 kHz), capped at ring/3, floored at 4 chunks.
+            // Avoids Math.Clamp throwing when capacity/8 < 4*chunk and reduces mid-stream underruns vs a 160 ms cap.
+            var cap = output.CapacitySamples;
+            var floor = chunkSamples * 4;
+            var target = Math.Max(floor, Math.Min(chunkSamples * 16, cap / 3));
+            if (latencySec is { } s && s > 0)
+            {
+                var latencySamples = (int)(decoder.Format.SampleRate * s);
+                target = Math.Max(target, Math.Min(latencySamples * 2, cap / 2));
+            }
+
+            output.TargetQueueSamples = target;
 
             string sourceId = player.AddOwnedSource(decoder);
             string sinkMain = player.AddOutput(output); // pacing + playback clock wiring
@@ -225,24 +313,15 @@ file sealed class AudioRouting : IDisposable
 
     /// <summary>
     /// Prefill the hardware ring by pulling from <see cref="Decoder"/> before any router thread runs
-    /// (<see cref="PlaybackSmoke"/> pattern). With <c>--ndi</c>, only PortAudio receives this segment;
-    /// the mixer path starts on the next decoded sample (brief NDI audio delay vs speakers).
+    /// (same ordering as other smoke tools: prefill before router/device pacing). Delegates to
+    /// <see cref="AudioPlayerPortAudioExtensions.TryPrefillPrimaryPortAudio"/>.
+    /// Optionally mirrors the same PCM into <paramref name="mirrorPackedFloats"/>
+    /// (for example an <see cref="NDIAudioSink"/> wrapper) so NDI audio starts aligned with PortAudio prefill.
     /// </summary>
-    internal void PrefillMainOutputDirectFromDecoder(TimeSpan timeout)
+    internal void PrefillMainOutputDirectFromDecoder(TimeSpan timeout, IAudioSink? mirrorPackedFloats = null)
     {
-        var sr = _mainOutput.Format.SampleRate;
-        var chunk = Player.Router.ChunkSamples;
-        var targetQueued = Math.Max(sr / 10, chunk * 4);
-        var ch = Decoder.Format.Channels;
-        var bufFloats = Math.Min(65536, Math.Max(chunk * ch * 8, 8192 * ch));
-        var buf = new float[bufFloats];
-        var deadline = DateTime.UtcNow + timeout;
-        while (_mainOutput.QueuedSamples < targetQueued && DateTime.UtcNow < deadline)
-        {
-            var read = Decoder.ReadInto(buf);
-            if (read == 0) break;
-            _mainOutput.Submit(buf.AsSpan(0, read));
-        }
+        if (!Player.TryPrefillPrimaryPortAudio(Decoder, timeout, mirrorPackedFloats))
+            throw new InvalidOperationException("Primary sink must be PortAudio for hardware prefill.");
     }
 
     /// <summary>Opens the native PortAudio stream (after <see cref="PrefillMainOutputDirectFromDecoder"/>, before <see cref="AudioPlayer.Play"/>).</summary>
@@ -259,9 +338,13 @@ internal readonly record struct PlaybackOptions(
     string MediaPath,
     bool NdiEnable,
     string NdiName,
-    bool HardwareDecode,
+    bool NoHardwareDecode,
     bool LinuxDrmDmabufGl,
-    int AudioChunkSamples);
+    bool WindowsD3d11SharedGl,
+    int AudioChunkSamples,
+    int? DeviceLatencyMs,
+    int NdiAudioAggregateSamples,
+    int? NdiAudioPumpCapacityChunks);
 
 file static class PlaybackCli
 {
@@ -273,9 +356,14 @@ file static class PlaybackCli
         bool ndi = false;
         string ndiName = "MFPlayer PlaybackVideo";
 
-        bool hw = false;
+        bool noHw = false;
         bool drmGl = false;
+        bool d3d11Gl = false;
         int chunkSamples = 960;
+        int? deviceLatencyMs = null;
+        int ndiAudioAggregateSamples = -1;
+        var ndiPumpFromCli = false;
+        var ndiPumpCliValue = 0;
 
         var positional = new List<string>();
 
@@ -295,16 +383,41 @@ file static class PlaybackCli
                     if (i + 1 < argv.Length && !argv[i + 1].StartsWith('-'))
                         ndiName = argv[++i];
                     break;
+                case "--no-hw":
+                    noHw = true;
+                    break;
                 case "--hw":
-                    hw = true;
+                    // Kept for scripts; hardware decode is now the default.
                     break;
                 case "--drm-gl":
                     drmGl = true;
+                    break;
+                case "--d3d11-gl":
+                    d3d11Gl = true;
                     break;
                 default:
                     if (TryParseKeyedInt(a, "--chunk-samples=", out var ck) && ck > 0)
                     {
                         chunkSamples = ck;
+                        break;
+                    }
+
+                    if (TryParseKeyedInt(a, "--device-latency-ms=", out var dlm) && dlm > 0)
+                    {
+                        deviceLatencyMs = dlm;
+                        break;
+                    }
+
+                    if (TryParseKeyedInt(a, "--ndi-audio-aggregate=", out var naa))
+                    {
+                        ndiAudioAggregateSamples = naa;
+                        break;
+                    }
+
+                    if (TryParseKeyedInt(a, "--ndi-audio-pump-chunks=", out var napc))
+                    {
+                        ndiPumpFromCli = true;
+                        ndiPumpCliValue = napc;
                         break;
                     }
 
@@ -319,7 +432,11 @@ file static class PlaybackCli
             return false;
         }
 
-        opt = new PlaybackOptions(positional[0], ndi, ndiName, hw, OperatingSystem.IsLinux() && drmGl, chunkSamples);
+        int? ndiPumpCap = !ndiPumpFromCli ? 24 : (ndiPumpCliValue < 2 ? null : ndiPumpCliValue);
+
+        opt = new PlaybackOptions(positional[0], ndi, ndiName, noHw, OperatingSystem.IsLinux() && drmGl,
+            OperatingSystem.IsWindows() && d3d11Gl, chunkSamples,
+            deviceLatencyMs, ndiAudioAggregateSamples, ndiPumpCap);
         return true;
     }
 
@@ -339,11 +456,15 @@ usage: VideoPlaybackSmoke <media-file> [options]
 
 Smoke test for video + mastered audio clock (SDL3 GL by default).
 
-  --ndi [name]        Mirror video/audio over NDI (CPU copy of decoded frames — incompatible with --drm-gl).
-  --hw                Prefer FFmpeg hardware decode when available.
-  --drm-gl            (Linux only, with --hw) Prefer DRM PRIME EGL NV12 dma-bufs to GL (do not combine with --ndi).
+  --ndi [name]        Mirror video/audio over NDI (CPU copy of decoded frames — incompatible with --drm-gl / --d3d11-gl).
+  --no-hw             Force FFmpeg software video decode (default tries hardware when available).
+  --drm-gl            (Linux only) Prefer DRM PRIME EGL NV12 dma-bufs to GL (do not combine with --ndi).
+  --d3d11-gl          (Windows only) Prefer D3D11 NV12 shared handles + GL staging upload (do not combine with --ndi).
 
   --chunk-samples=n   AudioRouter chunk span (default 960 ≈ 20 ms @ 48 kHz).
+  --device-latency-ms=n  PortAudio suggested latency (ms) + larger TargetQueueSamples floor (JACK/ALSA-hw).
+  --ndi-audio-aggregate=n  Fixed NDI audio packet size in samples/channel (0=off, default auto from video fps).
+  --ndi-audio-pump-chunks=n  NDI audio only: per-sink SinkPump depth (default 24 if omitted; 0–1 = router default).
 """);
     }
 }
