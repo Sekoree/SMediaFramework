@@ -59,7 +59,7 @@ var status = System.Diagnostics.Stopwatch.StartNew();
 while (router.IsRunning && !cts.IsCancellationRequested)
 {
     Thread.Sleep(50);
-    if (status.ElapsedMilliseconds >= 250)
+    if (status.ElapsedMilliseconds >= 100)
     {
         PrintStatus(decoder, output, router);
         status.Restart();
@@ -69,6 +69,7 @@ while (router.IsRunning && !cts.IsCancellationRequested)
 Console.WriteLine();
 Console.WriteLine($"  router stopped (completed naturally: {router.CompletedNaturally}) — draining {output.QueuedSamples} samp...");
 var drain = System.Diagnostics.Stopwatch.StartNew();
+status.Restart(); // drain loop reuses the same 100 ms HUD cadence (don't inherit pre-drain elapsed time)
 while (output.QueuedSamples > 0 && !cts.IsCancellationRequested && drain.ElapsedMilliseconds < 5000)
 {
     Thread.Sleep(50);

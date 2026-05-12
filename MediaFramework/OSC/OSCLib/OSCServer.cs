@@ -173,7 +173,7 @@ public sealed class OSCServer : IOSCServer
 
     private void HandleOversizePacket(int packetLength)
     {
-        _oversizeDrops++;
+        Interlocked.Increment(ref _oversizeDrops);
 
         // P2.9: Previously, OversizePolicy.Throw would throw inside the receive loop,
         // killing it entirely. Now we always log and drop; the Throw policy escalates

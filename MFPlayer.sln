@@ -66,6 +66,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Test", "Test", "{37834576-8
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.OpenGL.Tests", "MediaFramework\Test\S.Media.OpenGL.Tests\S.Media.OpenGL.Tests.csproj", "{E3DB51AF-3B5B-4E7B-8EE9-BBD0D0DBFC3D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VideoPlaybackSmoke", "MediaFramework\Tools\VideoPlaybackSmoke\VideoPlaybackSmoke.csproj", "{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -280,6 +282,18 @@ Global
 		{E3DB51AF-3B5B-4E7B-8EE9-BBD0D0DBFC3D}.Release|x64.Build.0 = Release|Any CPU
 		{E3DB51AF-3B5B-4E7B-8EE9-BBD0D0DBFC3D}.Release|x86.ActiveCfg = Release|Any CPU
 		{E3DB51AF-3B5B-4E7B-8EE9-BBD0D0DBFC3D}.Release|x86.Build.0 = Release|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Debug|x64.Build.0 = Debug|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Debug|x86.Build.0 = Debug|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Release|x64.ActiveCfg = Release|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Release|x64.Build.0 = Release|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Release|x86.ActiveCfg = Release|Any CPU
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -309,6 +323,7 @@ Global
 		{CD1269E9-A798-463D-9496-447066E2ED75} = {61672D0C-4685-2B36-060B-615AC3E8C3DC}
 		{37834576-8066-D2C1-E76B-AC59F10D21F7} = {5C4D3E2F-1A0B-4C8D-9E7F-403020105060}
 		{E3DB51AF-3B5B-4E7B-8EE9-BBD0D0DBFC3D} = {37834576-8066-D2C1-E76B-AC59F10D21F7}
+		{E98E9710-F1F0-4CB4-81EC-8700F243C4FF} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {83CB65B8-011F-4ED7-BCD3-A6CFA935EF7E}
