@@ -145,8 +145,6 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
         return hwPixFmt != AVPixelFormat.AV_PIX_FMT_NONE;
     }
 
-    public bool IsActive => _deviceRef != null;
-
     public AVPixelFormat HwAccelPixFmt => _hwPixFmt;
 
     private static AVPixelFormat HwGetFormatImpl(AVCodecContext* avctx, AVPixelFormat* fmt)

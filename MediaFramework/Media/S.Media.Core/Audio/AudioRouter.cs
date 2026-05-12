@@ -71,9 +71,9 @@ public sealed class AudioRouter : IDisposable
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<SinkPump> _pumpsAwaitingDispose = new();
     /// <summary>Per-route "currently applied" gain. <see cref="Route.Gain"/> is the target; this tracks the value we ramped to last chunk.</summary>
-    private readonly ConcurrentDictionary<(string, string), float> _currentGains = new();
+    private readonly ConcurrentDictionary<string, float> _currentGains = new();
     /// <summary>Concurrent target gain for routing (hot updates from <see cref="SetRouteGain"/> without rewriting <see cref="RouterState"/>).</summary>
-    private readonly ConcurrentDictionary<(string SourceId, string SinkId), float> _routeTargetGains = new();
+    private readonly ConcurrentDictionary<string, float> _routeTargetGains = new();
     private readonly ILogger? _log;
     private readonly int _pumpCapacityChunks;
 
@@ -161,8 +161,9 @@ public sealed class AudioRouter : IDisposable
             foreach (var r in _state.Routes)
                 if (r.SourceId == id)
                 {
-                    _currentGains.TryRemove((r.SourceId, r.SinkId), out _);
-                    _routeTargetGains.TryRemove((r.SourceId, r.SinkId), out _);
+                    var rk = RouteGainDictionaryKey(r.SourceId, r.SinkId);
+                    _currentGains.TryRemove(rk, out _);
+                    _routeTargetGains.TryRemove(rk, out _);
                 }
             Volatile.Write(ref _state, _state with
             {
@@ -220,8 +221,9 @@ public sealed class AudioRouter : IDisposable
             foreach (var route in _state.Routes)
                 if (route.SinkId == id)
                 {
-                    _currentGains.TryRemove((route.SourceId, route.SinkId), out _);
-                    _routeTargetGains.TryRemove((route.SourceId, route.SinkId), out _);
+                    var rk = RouteGainDictionaryKey(route.SourceId, route.SinkId);
+                    _currentGains.TryRemove(rk, out _);
+                    _routeTargetGains.TryRemove(rk, out _);
                 }
             Volatile.Write(ref _state, _state with
             {
@@ -278,11 +280,12 @@ public sealed class AudioRouter : IDisposable
                 ? _state.Routes.SetItem(existing, route)
                 : _state.Routes.Add(route);
             Volatile.Write(ref _state, _state with { Routes = newRoutes });
-            _routeTargetGains[(sourceId, sinkId)] = gain;
+            var rk = RouteGainDictionaryKey(sourceId, sinkId);
+            _routeTargetGains[rk] = gain;
             // Brand-new route starts at its target gain (no ramp on first chunk).
             // Re-adding an existing route is treated as a fresh registration —
             // user explicitly replaced the route, no fade.
-            _currentGains[(sourceId, sinkId)] = gain;
+            _currentGains[rk] = gain;
         }
     }
 
@@ -296,8 +299,9 @@ public sealed class AudioRouter : IDisposable
             var idx = FindRouteIndex(_state.Routes, sourceId, sinkId);
             if (idx < 0) return false;
             Volatile.Write(ref _state, _state with { Routes = _state.Routes.RemoveAt(idx) });
-            _currentGains.TryRemove((sourceId, sinkId), out _);
-            _routeTargetGains.TryRemove((sourceId, sinkId), out _);
+            var rk = RouteGainDictionaryKey(sourceId, sinkId);
+            _currentGains.TryRemove(rk, out _);
+            _routeTargetGains.TryRemove(rk, out _);
             return true;
         }
     }
@@ -317,9 +321,12 @@ public sealed class AudioRouter : IDisposable
             var idx = FindRouteIndex(_state.Routes, sourceId, sinkId);
             if (idx < 0)
                 throw new InvalidOperationException($"no route exists from '{sourceId}' to '{sinkId}'");
-            _routeTargetGains[(sourceId, sinkId)] = gain;
+            _routeTargetGains[RouteGainDictionaryKey(sourceId, sinkId)] = gain;
         }
     }
+
+    private static string RouteGainDictionaryKey(string sourceId, string sinkId) =>
+        string.Concat(sourceId, '\u001f', sinkId);
 
     private static int FindRouteIndex(ImmutableArray<Route> routes, string sourceId, string sinkId)
     {
@@ -442,6 +449,13 @@ public sealed class AudioRouter : IDisposable
     /// <see cref="Start"/>) to continue. Routes, sources, sinks, and the
     /// router clock are preserved across the pause.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The sink enumeration for <see cref="IFlushableSink.Flush"/> can differ from the set that was
+    /// actively driven if <see cref="AddSink"/> / <see cref="RemoveSink"/> run concurrently —
+    /// in practice callers invoke <see cref="Pause"/> from the same synchronization domain that owns routing.
+    /// </para>
+    /// </remarks>
     public void Pause()
     {
         if (!IsRunning) return;
@@ -519,7 +533,7 @@ public sealed class AudioRouter : IDisposable
             activePumps = [.. _state.Sinks.Values.Select(e => e.Pump)];
         }
         toDispose?.Cancel();
-        CooperativeJoin(toJoin, TimeSpan.FromSeconds(2), cancellationToken);
+        CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(2), cancellationToken);
         toDispose?.Dispose();
 
         foreach (var p in activePumps)
@@ -600,13 +614,13 @@ public sealed class AudioRouter : IDisposable
                 if (!snapshot.Sources.TryGetValue(route.SourceId, out var src)) continue;
                 if (!snapshot.Sinks.TryGetValue(route.SinkId, out var sink)) continue;
 
-                var key = (route.SourceId, route.SinkId);
-                var fromGain = _currentGains.GetValueOrDefault(key, route.Gain);
-                var toGain = _routeTargetGains.TryGetValue(key, out var tg) ? tg : route.Gain;
+                var rk = RouteGainDictionaryKey(route.SourceId, route.SinkId);
+                var fromGain = _currentGains.GetValueOrDefault(rk, route.Gain);
+                var toGain = _routeTargetGains.TryGetValue(rk, out var tg) ? tg : route.Gain;
                 ApplyRoute(src.Scratch, src.Source.Format.Channels,
                            sink.Pump.WorkingBuffer, sink.Sink.Format.Channels,
                            route.Map, fromGain, toGain, _chunkSamples);
-                if (fromGain != toGain) _currentGains[key] = toGain;
+                if (fromGain != toGain) _currentGains[rk] = toGain;
             }
 
             // Publish each sink's mixed buffer to its pump (zero-copy hand-off);
@@ -684,11 +698,6 @@ public sealed class AudioRouter : IDisposable
             gain += step;
         }
     }
-
-    private static void CooperativeJoin(Thread? thread, TimeSpan timeout, CancellationToken cancellationToken)
-        => CooperativePlaybackJoin.JoinThread(thread, timeout, cancellationToken);
-
-    // --- state -------------------------------------------------------------
 
     /// <summary>One side of a routing connection.</summary>
     public sealed record Route(string SourceId, string SinkId, ChannelMap Map, float Gain);

@@ -85,9 +85,10 @@ public class MIDIInputDevice : MIDIDevice
         return PmError.NoError;
     }
 
-    /// <summary>
-    /// Stops the polling thread and closes the stream.
-    /// </summary>
+    /// <remarks>
+    /// Cooperative thread shutdown uses short sliced <c>Join</c>s on purpose instead of referencing the media playback
+    /// helper types from another assembly layer.
+    /// </remarks>
     public override PmError Close()
     {
         if (Logger.IsEnabled(LogLevel.Debug))

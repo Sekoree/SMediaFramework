@@ -1,7 +1,7 @@
 #version 330 core
 
-// FFmpeg AV_PIX_FMT_ARGB: memory bytes A,R,G,B per texel uploaded as GL_RGBA UNSIGNED_BYTE —
-// sampled as .r=A, .g=R, .b=G, .a=B in GLSL → map to RGBA fragment output (.rgb=R,G,B).
+// FFmpeg AV_PIX_FMT_ARGB: memory bytes A,R,G,B per texel uploaded as GL_RGBA UNSIGNED_BYTE -
+// sampled as .r=A, .g=R, .b=G, .a=B in GLSL -> map to RGBA fragment output (.rgb=R,G,B).
 
 in vec2 v_uv;
 out vec4 fragColor;

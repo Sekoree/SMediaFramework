@@ -202,6 +202,10 @@ public sealed class OSCServer : IOSCServer
         }
     }
 
+    /// <remarks>
+    /// Cooperative task shutdown uses sliced <c>Wait</c> calls — intentional duplication versus the media stack so
+    /// OSCLib stays free of any <c>S.Media.Core</c> dependency for thread joins.
+    /// </remarks>
     public void Dispose()
     {
         if (_disposed)

@@ -1,8 +1,8 @@
 #version 330 core
 
-// Full-screen triangle from gl_VertexID 0..2 — no VBO needed.
+// Full-screen triangle from gl_VertexID 0..2 - no VBO needed.
 //   v0 (-1,-1)  v1 (3,-1)  v2 (-1,3)
-// covers the [-1,1]² NDC quad with one triangle (extends past corners).
+// covers the [-1,1]^2 NDC quad with one triangle (extends past corners).
 //
 // UV is derived from NDC. When yUvFlip is 1, the V coordinate is flipped so
 // row 0 of uploaded textures (FFmpeg / typical CPU buffers) appears at

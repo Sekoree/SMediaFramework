@@ -107,12 +107,13 @@ internal static class GlVideoFormatSupport
                 SemiPlanar420Gl,
                 1f, true, false),
 
+            // High 10 bits in each 16-bit word; UNSIGNED_SHORT normalized sampling is already correct.
             [CorePixelFormat.P010] = new(
                 "fullscreen.vert.glsl", "yuv_nv12.frag.glsl",
                 ["yPlane", "uvPlane"], 2,
                 SemiPlanar420Size,
                 SemiPlanar420Gl16,
-                65535f / 1023f, true, false),
+                1f, true, false),
 
             [CorePixelFormat.P016] = new(
                 "fullscreen.vert.glsl", "yuv_nv12.frag.glsl",

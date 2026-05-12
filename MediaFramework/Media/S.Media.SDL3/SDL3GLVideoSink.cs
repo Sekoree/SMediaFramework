@@ -1,3 +1,4 @@
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using S.Media.OpenGL;
@@ -148,7 +149,7 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
     public void Submit(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        if (_disposed) { frame.Dispose(); return; }
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_configured)
         {
             frame.Dispose();
@@ -185,7 +186,10 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         if (frame is null) return;
 
         try { PresentFrame(frame); }
-        catch { /* upload/present failures shouldn't kill the host's loop */ }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "SDL3GLVideoSink.Pump PresentFrame");
+        }
         finally { frame.Dispose(); }
     }
 
@@ -237,7 +241,10 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
                     if (frame is null) continue;
 
                     try { PresentFrame(frame); }
-                    catch { /* see Pump */ }
+                    catch (Exception ex)
+                    {
+                        MediaDiagnostics.LogError(ex, "SDL3GLVideoSink.RenderLoop PresentFrame");
+                    }
                     finally { frame.Dispose(); }
                 }
             }
@@ -389,7 +396,10 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
     {
         if (handler is null) return;
         try { handler.Invoke(this, EventArgs.Empty); }
-        catch { /* one bad subscriber must not kill the render thread */ }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "SDL3GLVideoSink event subscriber");
+        }
     }
 
     private void SafeRaiseResized(int width, int height)
@@ -397,6 +407,9 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         var handler = Resized;
         if (handler is null) return;
         try { handler.Invoke(this, (width, height)); }
-        catch { /* see SafeRaise */ }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "SDL3GLVideoSink Resized subscriber");
+        }
     }
 }

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace S.Media.Core.Video;
 
@@ -20,7 +21,8 @@ public sealed class VideoDmabufNv12Backing : IDisposable
         int uvPlaneDupFd,
         nint uvPlaneOffsetBytes,
         int uvPlanePitchBytes,
-        ulong drmFormatModifier)
+        ulong yPlaneDrmFormatModifier,
+        ulong uvPlaneDrmFormatModifier)
     {
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException("DMA-BUF video backing is Linux-only.");
@@ -35,7 +37,8 @@ public sealed class VideoDmabufNv12Backing : IDisposable
         YPlanePitchBytes = yPlanePitchBytes;
         UvPlaneOffsetBytes = uvPlaneOffsetBytes;
         UvPlanePitchBytes = uvPlanePitchBytes;
-        DrmFormatModifier = drmFormatModifier;
+        YPlaneDrmFormatModifier = yPlaneDrmFormatModifier;
+        UvPlaneDrmFormatModifier = uvPlaneDrmFormatModifier;
     }
 
     public nint YPlaneOffsetBytes { get; }
@@ -43,8 +46,17 @@ public sealed class VideoDmabufNv12Backing : IDisposable
     public nint UvPlaneOffsetBytes { get; }
     public int UvPlanePitchBytes { get; }
 
-    /// <summary>Per-object DRM_FORMAT_MOD_* (linear / tiled).</summary>
-    public ulong DrmFormatModifier { get; }
+    /// <summary>DRM_FORMAT_MOD_* for the Y-plane EGL import (the dma-buf backing Y).</summary>
+    public ulong YPlaneDrmFormatModifier { get; }
+
+    /// <summary>DRM_FORMAT_MOD_* for the UV-plane EGL import (the dma-buf backing UV).</summary>
+    public ulong UvPlaneDrmFormatModifier { get; }
+
+    /// <summary>
+    /// Both plane FDs come from different DRM objects; per-plane modifiers must be honored independently
+    /// (contrast with typical single-buffer NV12 where Y/UV share one modifier).
+    /// </summary>
+    public bool UsesDistinctDmaBufObjects => YPlaneFd != UvPlaneFd;
 
     public int YPlaneFd => _yFd;
     public int UvPlaneFd => _uvFd;

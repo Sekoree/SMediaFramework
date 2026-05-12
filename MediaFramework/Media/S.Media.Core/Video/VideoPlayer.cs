@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
 
 namespace S.Media.Core.Video;
@@ -185,14 +186,11 @@ public sealed class VideoPlayer : IDisposable
         if (handler is not null)
             _clock.VideoTick -= handler;
         toDispose?.Cancel();
-        TryJoinDecodeThread(toJoin, cancellationToken);
+        CooperativePlaybackJoin.JoinThreadWhileCancelable(toJoin, cancellationToken);
         toDispose?.Dispose();
 
         DrainQueue();
     }
-
-    private static void TryJoinDecodeThread(Thread? thread, CancellationToken cancellationToken)
-        => CooperativePlaybackJoin.JoinThreadWhileCancelable(thread, cancellationToken);
 
     private void DrainQueue()
     {
@@ -290,8 +288,9 @@ public sealed class VideoPlayer : IDisposable
                 _sink.Submit(toShow);
                 Interlocked.Increment(ref _displayed);
             }
-            catch
+            catch (Exception ex)
             {
+                MediaDiagnostics.LogError(ex, "VideoPlayer.OnVideoTick sink Submit");
                 // Sink threw — make sure the frame is released to avoid a
                 // native buffer leak; rethrow would kill MediaClock's driver.
                 try { toShow.Dispose(); } catch { /* best effort */ }

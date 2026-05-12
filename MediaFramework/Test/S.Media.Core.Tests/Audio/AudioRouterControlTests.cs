@@ -186,18 +186,36 @@ public class AudioRouterControlTests
 
         r.Start();
         Thread.Sleep(40);                     // let some steady-state chunks land
-        var beforeChange = sink.AllChunks.Count;
+        var chunksBeforeMutation = sink.AllChunks.Count;
         r.SetRouteGain("src", "out", 0.5f);
         Thread.Sleep(40);
         r.Stop();
 
-        // Find the first chunk after the change.
+        // Between reading Count and calling SetRouteGain, the router can still
+        // deliver one steady-state chunk (gain 1.0). Scan forward — the ramp
+        // chunk has first≈4, last≈2.
         var captured = sink.AllChunks;
-        Assert.True(captured.Count > beforeChange + 2,
-            $"need post-change chunks, before={beforeChange} total={captured.Count}");
-        var rampChunk = captured[beforeChange];
+        Assert.True(captured.Count > chunksBeforeMutation + 1,
+            $"need chunks after mutation start, countBefore={chunksBeforeMutation} total={captured.Count}");
+        float[]? rampChunk = null;
+        var rampIndex = -1;
+        for (var i = chunksBeforeMutation; i < captured.Count; i++)
+        {
+            var c = captured[i];
+            var f = c[0];
+            var l = c[(chunk - 1) * 2];
+            if (l < f - 1.5f && f > 3.85f && l is > 1.85f and < 2.15f)
+            {
+                rampChunk = c;
+                rampIndex = i;
+                break;
+            }
+        }
 
-        var first = rampChunk[0];
+        Assert.True(rampChunk is not null,
+            $"expected a ramp chunk after gain change; countBefore={chunksBeforeMutation} total={captured.Count}");
+
+        var first = rampChunk![0];
         var last  = rampChunk[(chunk - 1) * 2];
 
         // First sample should be near old gain × source = ~4.0; last near new = ~2.0.
@@ -208,9 +226,9 @@ public class AudioRouterControlTests
         Assert.True(last < first - 1.0f, $"expected ramp down: first={first}, last={last}");
 
         // Subsequent chunks should be steady at the new gain.
-        if (captured.Count > beforeChange + 1)
+        if (rampIndex >= 0 && captured.Count > rampIndex + 1)
         {
-            var steady = captured[beforeChange + 1];
+            var steady = captured[rampIndex + 1];
             Assert.InRange(steady[0], 1.95f, 2.05f);
             Assert.InRange(steady[(chunk - 1) * 2], 1.95f, 2.05f);
         }

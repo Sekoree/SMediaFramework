@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Internal;
@@ -17,6 +18,9 @@ namespace S.Media.FFmpeg.Video;
 /// must be <see cref="VideoFrame.Dispose"/>d — the release callback either
 /// unrefs a cloned <c>AVFrame</c> (pass-through) or returns nothing
 /// (conversion path owns a fresh byte array).
+/// Hardware decode without Linux DRM dma-bufs still lists <see cref="PixelFormat.Nv12"/> in
+/// <see cref="NativePixelFormats"/> while the default output stays <see cref="PixelFormat.Bgra32"/> CPU conversion —
+/// callers can negotiate NV12 zero-copy decode when downstream accepts planar frames.
 /// </remarks>
 public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
 {
@@ -40,6 +44,14 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
     private VideoFrame? _primedAfterSeek;
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
+
+    /// <remarks>Caches FFmpeg swscale pointer/strides — do not reorder across concurrent calls (<see cref="TryReadNextFrame"/> is single-threaded).</remarks>
+    private readonly byte*[] _swScaleSrcLines = new byte*[8];
+
+    private readonly int[] _swScaleSrcStride = new int[8];
+    private readonly byte*[] _swScaleDstLines = new byte*[8];
+
+    private readonly int[] _swScaleDstStride = new int[8];
 
     public VideoFormat Format { get; private set; }
     public string CodecName { get; private set; } = "";
@@ -279,11 +291,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
             }
             else
             {
+                // Post-av_hwframe_transfer_data layouts are codec-dependent; NV12 covers VAAPI/D3D11VA-style paths for negotiation.
                 _srcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
-                _nativePixelFormat = PixelFormat.Unknown;
+                _nativePixelFormat = PixelFormat.Nv12;
                 _passThrough = false;
                 _outPixelFormat = PixelFormat.Bgra32;
-                _nativePixelFormats = [];
+                _nativePixelFormats = [PixelFormat.Nv12];
             }
         }
         else
@@ -442,32 +455,50 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
                 $"sws conversion to {_outPixelFormat} (multi-plane / non-packed) is not implemented yet — pick a packed RGB target or extend BuildConvertedFrame");
 
         var stride = width * bytesPerPixel;
-        var bytes = new byte[stride * height];
+        var contiguous = stride * height;
+        var rented = ArrayPool<byte>.Shared.Rent(contiguous);
+        var dstMem = rented.AsMemory(0, contiguous);
 
-        // FFmpeg.AutoGen's sws_scale wrapper insists on managed byte*[] / int[]
-        // arrays. Allocate inline (8 elements each) — small enough to ignore.
-        var srcData = new byte*[]
-        {
-            work->data[0u], work->data[1u], work->data[2u], work->data[3u],
-            work->data[4u], work->data[5u], work->data[6u], work->data[7u],
-        };
-        var srcStride = new int[]
-        {
-            work->linesize[0u], work->linesize[1u], work->linesize[2u], work->linesize[3u],
-            work->linesize[4u], work->linesize[5u], work->linesize[6u], work->linesize[7u],
-        };
+        _swScaleSrcLines[0] = work->data[0];
+        _swScaleSrcLines[1] = work->data[1];
+        _swScaleSrcLines[2] = work->data[2];
+        _swScaleSrcLines[3] = work->data[3];
+        _swScaleSrcLines[4] = work->data[4];
+        _swScaleSrcLines[5] = work->data[5];
+        _swScaleSrcLines[6] = work->data[6];
+        _swScaleSrcLines[7] = work->data[7];
+        _swScaleSrcStride[0] = work->linesize[0];
+        _swScaleSrcStride[1] = work->linesize[1];
+        _swScaleSrcStride[2] = work->linesize[2];
+        _swScaleSrcStride[3] = work->linesize[3];
+        _swScaleSrcStride[4] = work->linesize[4];
+        _swScaleSrcStride[5] = work->linesize[5];
+        _swScaleSrcStride[6] = work->linesize[6];
+        _swScaleSrcStride[7] = work->linesize[7];
 
-        fixed (byte* dstPtr = bytes)
+        fixed (byte* dstPtr = dstMem.Span)
         {
-            var dstData = new byte*[] { dstPtr, null, null, null, null, null, null, null };
-            var dstStride = new int[] { stride, 0, 0, 0, 0, 0, 0, 0 };
+            _swScaleDstLines[0] = dstPtr;
+            _swScaleDstLines[1] = null;
+            _swScaleDstLines[2] = null;
+            _swScaleDstLines[3] = null;
+            _swScaleDstLines[4] = null;
+            _swScaleDstLines[5] = null;
+            _swScaleDstLines[6] = null;
+            _swScaleDstLines[7] = null;
 
-            var ret = sws_scale(_swsCtx, srcData, srcStride, 0, height, dstData, dstStride);
+            Array.Clear(_swScaleDstStride);
+            _swScaleDstStride[0] = stride;
+
+            var ret = sws_scale(_swsCtx, _swScaleSrcLines, _swScaleSrcStride, 0, height, _swScaleDstLines,
+                _swScaleDstStride);
             if (ret < 0) FFmpegException.ThrowIfError(ret, nameof(sws_scale));
         }
 
         var hint = MapTransferHint(trc);
-        return new VideoFrame(pts, Format, bytes, stride, hint);
+        byte[] pooled = rented;
+        return new VideoFrame(pts, Format, dstMem, stride, hint,
+            release: () => ArrayPool<byte>.Shared.Return(pooled));
     }
 
     private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)

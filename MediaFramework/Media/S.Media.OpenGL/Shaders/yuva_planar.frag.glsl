@@ -1,6 +1,6 @@
 #version 330 core
 
-// 4-plane YUVA420: Y/U/V behave like planar 4:2:0 RGB path; plane A is full-size 8‑bit alpha.
+// 4-plane YUVA420: Y/U/V behave like planar 4:2:0 RGB path; plane A is full-size 8-bit alpha.
 
 in vec2 v_uv;
 out vec4 fragColor;

@@ -50,9 +50,6 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
 
     private readonly int[] _attribsScratch = new int[32];
 
-    private IntPtr _yImage = IntPtr.Zero;
-    private IntPtr _uvImage = IntPtr.Zero;
-
     private bool _disposed;
 
     private Nv12DmabufGpuUploader(GL gl, nint display, eglCreateImageKHR_d eglCreate,
@@ -128,17 +125,15 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
 
         if (format.PixelFormat != global::S.Media.Core.Video.PixelFormat.Nv12)
             throw new ArgumentException($"expected NV12 renderer format ({format.PixelFormat}).", nameof(format));
-        if (dma.DrmFormatModifier != 0 && !_dmaBufImportModifiersExt)
+        if ((dma.YPlaneDrmFormatModifier != 0 || dma.UvPlaneDrmFormatModifier != 0) && !_dmaBufImportModifiersExt)
             return false;
-
-        DestroyImages();
 
         int cw = PixelFormatInfo.ChromaWidth420(format.Width);
         int ch = PixelFormatInfo.ChromaHeight420(format.Height);
         if (!AppendPlaneAttribs(dma.YPlaneFd, dma.YPlaneOffsetBytes, dma.YPlanePitchBytes, format.Width,
                 format.Height,
                 DrmPixelFormats.R8,
-                dma.DrmFormatModifier))
+                dma.YPlaneDrmFormatModifier))
             return false;
 
         IntPtr eglY;
@@ -152,7 +147,7 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
 
         if (!AppendPlaneAttribs(dma.UvPlaneFd, dma.UvPlaneOffsetBytes, dma.UvPlanePitchBytes, cw, ch,
                 DrmPixelFormats.Gr88,
-                dma.DrmFormatModifier))
+                dma.UvPlaneDrmFormatModifier))
         {
             _eglDestroyImage(_dpy, eglY);
             return false;
@@ -171,16 +166,23 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
         }
 
         uint glTarget = (uint)TextureTarget.Texture2D;
+        bool glOk;
 
         _gl.BindTexture(TextureTarget.Texture2D, texYId);
         _glEGLStorage(glTarget, (void*)(nint)eglY, null);
+        glOk = _gl.GetError() == GLEnum.NoError;
 
         _gl.BindTexture(TextureTarget.Texture2D, texUvId);
-        _glEGLStorage(glTarget, (void*)(nint)eglUv, null);
+        if (glOk)
+        {
+            _glEGLStorage(glTarget, (void*)(nint)eglUv, null);
+            glOk = _gl.GetError() == GLEnum.NoError;
+        }
 
-        _yImage = eglY;
-        _uvImage = eglUv;
-        return true;
+        _eglDestroyImage(_dpy, eglY);
+        _eglDestroyImage(_dpy, eglUv);
+
+        return glOk;
     }
 
     private bool AppendPlaneAttribs(int dupFd, nint planeOffsetBytes, int pitchBytes, int w, int h, uint drmFourCc,
@@ -206,8 +208,6 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
             _attribsScratch[11] = pitchBytes;
             if (drmFormatModifier != 0)
             {
-                if (!_dmaBufImportModifiersExt)
-                    return false;
                 _attribsScratch[12] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
                 _attribsScratch[13] = unchecked((int)drmFormatModifier);
                 _attribsScratch[14] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
@@ -221,26 +221,9 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
         return true;
     }
 
-    private void DestroyImages()
-    {
-        if (_yImage != IntPtr.Zero)
-        {
-            _eglDestroyImage(_dpy, _yImage);
-            _yImage = IntPtr.Zero;
-        }
-
-        if (_uvImage != IntPtr.Zero)
-        {
-            _eglDestroyImage(_dpy, _uvImage);
-            _uvImage = IntPtr.Zero;
-        }
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-
-        DestroyImages();
     }
 }

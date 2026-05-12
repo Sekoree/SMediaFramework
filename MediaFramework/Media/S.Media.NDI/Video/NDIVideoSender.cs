@@ -86,9 +86,15 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
             var wait = _minimumSubmitSpacing - since;
             if (wait > TimeSpan.Zero)
             {
-                var ms = (int)Math.Clamp(wait.TotalMilliseconds, 0, int.MaxValue);
-                if (ms > 0)
-                    Thread.Sleep(ms);
+                var deadlineTicks = now + (long)(wait.TotalSeconds * Stopwatch.Frequency);
+                // Thread.Sleep resolves whole milliseconds (~±0.5 ms); coarse sleep then SpinWait remainder.
+                var coarseMs = (int)Math.Truncate(wait.TotalMilliseconds);
+                if (coarseMs >= 2)
+                    Thread.Sleep(coarseMs - 1);
+
+                while (Stopwatch.GetTimestamp() < deadlineTicks)
+                    Thread.SpinWait(32);
+
                 now = Stopwatch.GetTimestamp();
             }
         }

@@ -1,3 +1,4 @@
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using CoreVideo = S.Media.Core.Video;
@@ -170,11 +171,7 @@ public sealed unsafe class SDL3VideoSink : IVideoSink, IDisposable
     public void Submit(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        if (_disposed)
-        {
-            frame.Dispose();
-            return;
-        }
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_configured)
         {
             frame.Dispose();
@@ -216,7 +213,10 @@ public sealed unsafe class SDL3VideoSink : IVideoSink, IDisposable
         if (frame is null) return;
 
         try { PresentFrame(frame); }
-        catch { /* upload/present failures shouldn't kill the host's loop */ }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "SDL3VideoSink.Pump PresentFrame");
+        }
         finally { frame.Dispose(); }
     }
 
@@ -279,11 +279,9 @@ public sealed unsafe class SDL3VideoSink : IVideoSink, IDisposable
                     if (frame is null) continue;
 
                     try { PresentFrame(frame); }
-                    catch
+                    catch (Exception ex)
                     {
-                        // SDL upload/present failures shouldn't kill the
-                        // thread — we'll log + drop the frame and try again
-                        // on the next one.
+                        MediaDiagnostics.LogError(ex, "SDL3VideoSink.RenderLoop PresentFrame");
                     }
                     finally { frame.Dispose(); }
                 }
@@ -350,7 +348,10 @@ public sealed unsafe class SDL3VideoSink : IVideoSink, IDisposable
     {
         if (handler is null) return;
         try { handler.Invoke(this, EventArgs.Empty); }
-        catch { /* one bad subscriber must not kill the render thread */ }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "SDL3VideoSink event subscriber");
+        }
     }
 
     private void SafeRaiseResized(int width, int height)
@@ -358,7 +359,10 @@ public sealed unsafe class SDL3VideoSink : IVideoSink, IDisposable
         var handler = Resized;
         if (handler is null) return;
         try { handler.Invoke(this, (width, height)); }
-        catch { /* see SafeRaise */ }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "SDL3VideoSink Resized subscriber");
+        }
     }
 
     private void TeardownGraphics()

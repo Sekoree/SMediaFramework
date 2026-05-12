@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Threading;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg.Video.Internal;
@@ -46,6 +48,21 @@ internal struct AvDrmFrameDescriptorInterop
 {
     internal const int ExpectedSizeBytes = 528;
 
+    private static int _loggedLayoutMismatch;
+
+    /// <summary>One-shot warning when interop footprint disagrees with <see cref="ExpectedSizeBytes"/> (libavutil bumps).</summary>
+    internal static void WarnIfInteropSizeMismatchLp64LoggedOnce()
+    {
+        var n = Marshal.SizeOf<AvDrmFrameDescriptorInterop>();
+        if (n == ExpectedSizeBytes)
+            return;
+        if (Interlocked.CompareExchange(ref _loggedLayoutMismatch, 1, 0) != 0)
+            return;
+        MediaDiagnostics.LogWarning(
+            "DRM PRIME: AvDrmFrameDescriptorInterop CLR size ({Actual} bytes) != ExpectedSizeBytes ({Expected}) — libavutil hwcontext_drm.h may have drifted from this build; DRM metadata parsing offsets may be wrong.",
+            n, ExpectedSizeBytes);
+    }
+
     [FieldOffset(0)] public int NbObjects;
 
     [FieldOffset(8)] public AvDrmObjectDescriptor Object0;
@@ -87,6 +104,8 @@ internal static unsafe class DrmPrimeNv12BackingFactory
         if (blob == null)
             return null;
 
+        AvDrmFrameDescriptorInterop.WarnIfInteropSizeMismatchLp64LoggedOnce();
+
         ref readonly var hdr =
             ref *(AvDrmFrameDescriptorInterop*)(void*)blob;
 
@@ -120,14 +139,13 @@ internal static unsafe class DrmPrimeNv12BackingFactory
 
         try
         {
-            ulong modifier = uvObj.FormatModifier != 0 ? uvObj.FormatModifier : yObj.FormatModifier;
             long yPitch = (long)pY.PitchBytes;
             long uvPitch = (long)pUv.PitchBytes;
             if (yPitch <= 0 || yPitch > int.MaxValue || uvPitch <= 0 || uvPitch > int.MaxValue)
                 throw new InvalidOperationException("invalid DRM dma-buf pitch.");
 
             return new VideoDmabufNv12Backing(dupY, pY.OffsetBytes, (int)yPitch,
-                dupUv, pUv.OffsetBytes, (int)uvPitch, modifier);
+                dupUv, pUv.OffsetBytes, (int)uvPitch, yObj.FormatModifier, uvObj.FormatModifier);
         }
         catch
         {
