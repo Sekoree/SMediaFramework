@@ -480,6 +480,7 @@ public sealed class AudioRouter : IDisposable
     }
 
     /// <summary>Alias for <see cref="Start"/>. Reads as a pair with <see cref="Pause"/>.</summary>
+    /// <remarks>The first chunk after a pause may be silence‑padded where decoders emit short reads (see run‑loop scratch pad); this is intentional and inaudible in most setups.</remarks>
     public void Resume() => Start();
 
     /// <summary>
@@ -776,6 +777,7 @@ public sealed class AudioRouter : IDisposable
             _thread = new Thread(() => DrainLoop(_cts.Token))
             {
                 IsBackground = true,
+                Priority = ThreadPriority.AboveNormal,
                 Name = $"SinkPump:{sinkId}",
             };
             _thread.Start();

@@ -10,6 +10,12 @@ namespace S.Media.Core.Audio;
 /// The sink lookup is a callback so the router can resolve from its current
 /// (immutable) state on each tick — additions and removals take effect on the
 /// next chunk without re-binding the clock.
+/// <para>
+/// The wall-clock <paramref name="fallback"/> is constructed once with a
+/// fixed chunk size / rate. If live resampling were introduced without tearing
+/// down the router clock, sample-rate changes might not propagate through that
+/// fallback path — revisit if dynamic rate shifts become a requirement.
+/// </para>
 /// </remarks>
 public sealed class SinkSlavedRouterClock : IRouterClock
 {

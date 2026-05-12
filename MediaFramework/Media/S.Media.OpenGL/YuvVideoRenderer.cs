@@ -57,6 +57,8 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     private readonly Nv12DmabufGpuUploader? _nv12DmabufGpuUploader;
     private bool _suppressYPlaneMipForLastGlDmabufUpload;
 
+    private readonly Action<VideoFrame> _uploadFromFrame;
+
     private bool _disposed;
 
     public VideoFormat Format => _format;
@@ -138,6 +140,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         _textures = new uint[recipe.PlaneCount];
         _samplerUniforms = new int[_textures.Length];
         BuildPipeline();
+        _uploadFromFrame = CreateUploadFromFrameDelegate(format.PixelFormat);
     }
 
     public static bool IsFormatSupported(CorePixelFormat format) =>
@@ -187,7 +190,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         }
 
         BeginUnpackSession();
-        try { DispatchUploadFromFrame(frame); }
+        try { _uploadFromFrame(frame); }
         finally { EndUnpackSession(); }
 
         _suppressYPlaneMipForLastGlDmabufUpload = false;
@@ -210,75 +213,30 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         RegenerateYPlaneMipmapsIfNeeded();
     }
 
-    private void DispatchUploadFromFrame(VideoFrame frame)
-    {
-        switch (_format.PixelFormat)
+    private Action<VideoFrame> CreateUploadFromFrameDelegate(CorePixelFormat pixelFormat) =>
+        pixelFormat switch
         {
-            case CorePixelFormat.Bgra32:
-                UploadBgraFromFrame(frame);
-                break;
-            case CorePixelFormat.Rgba32:
-            case CorePixelFormat.Argb32:
-            case CorePixelFormat.Abgr32:
-                UploadRgbaFromFrame(frame);
-                break;
-            case CorePixelFormat.Rgb24:
-                UploadRgb24FromFrame(frame);
-                break;
-            case CorePixelFormat.Bgr24:
-                UploadBgr24FromFrame(frame);
-                break;
-            case CorePixelFormat.I420:
-                UploadI420FromFrame(frame);
-                break;
-            case CorePixelFormat.Yv12:
-                UploadYv12FromFrame(frame);
-                break;
-            case CorePixelFormat.Yuv422P:
-                UploadYuv422PFromFrame(frame);
-                break;
-            case CorePixelFormat.Yuv444P:
-                UploadYuv444PFromFrame(frame);
-                break;
-            case CorePixelFormat.Yuv422P10Le:
-                UploadYuv422P10LeFromFrame(frame);
-                break;
-            case CorePixelFormat.Nv12:
-                UploadNv12Adaptive(frame);
-                break;
-            case CorePixelFormat.Nv21:
-                UploadNv21FromFrame(frame);
-                break;
-            case CorePixelFormat.P010:
-            case CorePixelFormat.P016:
-                UploadSemiPlanar16FromFrame(frame);
-                break;
-            case CorePixelFormat.Uyvy:
-                UploadUyvyFromFrame(frame);
-                break;
-            case CorePixelFormat.Yuyv:
-                UploadYuyvFromFrame(frame);
-                break;
-            case CorePixelFormat.Gray8:
-                UploadGray8FromFrame(frame);
-                break;
-            case CorePixelFormat.Gray16:
-                UploadGray16FromFrame(frame);
-                break;
-            case CorePixelFormat.Yuv420P10Le:
-            case CorePixelFormat.Yuv420P12Le:
-                UploadPlanar420P16FromFrame(frame);
-                break;
-            case CorePixelFormat.Yuv444P10Le:
-                UploadYuv444P10LeFromFrame(frame);
-                break;
-            case CorePixelFormat.Yuva420p:
-                UploadYuva420FromFrame(frame);
-                break;
-            default:
-                throw new NotSupportedException($"Upload: {_format.PixelFormat}");
-        }
-    }
+            CorePixelFormat.Bgra32 => UploadBgraFromFrame,
+            CorePixelFormat.Rgba32 or CorePixelFormat.Argb32 or CorePixelFormat.Abgr32 => UploadRgbaFromFrame,
+            CorePixelFormat.Rgb24 => UploadRgb24FromFrame,
+            CorePixelFormat.Bgr24 => UploadBgr24FromFrame,
+            CorePixelFormat.I420 => UploadI420FromFrame,
+            CorePixelFormat.Yv12 => UploadYv12FromFrame,
+            CorePixelFormat.Yuv422P => UploadYuv422PFromFrame,
+            CorePixelFormat.Yuv444P => UploadYuv444PFromFrame,
+            CorePixelFormat.Yuv422P10Le => UploadYuv422P10LeFromFrame,
+            CorePixelFormat.Nv12 => UploadNv12Adaptive,
+            CorePixelFormat.Nv21 => UploadNv21FromFrame,
+            CorePixelFormat.P010 or CorePixelFormat.P016 => UploadSemiPlanar16FromFrame,
+            CorePixelFormat.Uyvy => UploadUyvyFromFrame,
+            CorePixelFormat.Yuyv => UploadYuyvFromFrame,
+            CorePixelFormat.Gray8 => UploadGray8FromFrame,
+            CorePixelFormat.Gray16 => UploadGray16FromFrame,
+            CorePixelFormat.Yuv420P10Le or CorePixelFormat.Yuv420P12Le => UploadPlanar420P16FromFrame,
+            CorePixelFormat.Yuv444P10Le => UploadYuv444P10LeFromFrame,
+            CorePixelFormat.Yuva420p => UploadYuva420FromFrame,
+            _ => throw new NotSupportedException($"Upload: {pixelFormat}"),
+        };
 
     private unsafe void DispatchUploadFromPointers(ReadOnlySpan<nint> planes, ReadOnlySpan<int> strides)
     {

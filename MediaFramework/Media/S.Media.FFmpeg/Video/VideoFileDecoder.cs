@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Internal;
@@ -44,6 +45,15 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
     private VideoFrame? _primedAfterSeek;
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
+
+    /// <summary>
+    /// Pooled arrays for libav pass-through <see cref="VideoFrame"/> metadata; returned when the frame
+    /// <c>release</c> callback runs (dispose may occur off-thread vs <see cref="TryReadNextFrame"/>).
+    /// </summary>
+    private readonly Lock _passThroughArena = new();
+
+    private readonly Dictionary<int, Stack<ReadOnlyMemory<byte>[]>> _passThroughPlaneStacks = new();
+    private readonly Dictionary<int, Stack<int[]>> _passThroughStrideStacks = new();
 
     /// <remarks>Caches FFmpeg swscale pointer/strides — do not reorder across concurrent calls (<see cref="TryReadNextFrame"/> is single-threaded).</remarks>
     private readonly byte*[] _swScaleSrcLines = new byte*[8];
@@ -224,6 +234,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
 
         _hwAccel?.Dispose();
         _hwAccel = null;
+
+        lock (_passThroughArena)
+        {
+            _passThroughPlaneStacks.Clear();
+            _passThroughStrideStacks.Clear();
+        }
 
         if (_formatCtx != null) { var f = _formatCtx;  avformat_close_input(&f);    _formatCtx = null; }
     }
@@ -421,8 +437,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         }
 
         var planeCount = PixelFormatInfo.PlaneCount(_outPixelFormat);
-        var planes = new ReadOnlyMemory<byte>[planeCount];
-        var strides = new int[planeCount];
+        var (planes, strides) = RentPassThroughDescriptors(planeCount);
         var hint = MapTransferHint(trc);
         for (var i = 0; i < planeCount; i++)
         {
@@ -437,7 +452,50 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, IDisposable
         }
 
         var clonePtr = (nint)clone;
-        return new VideoFrame(pts, Format, planes, strides, hint, release: () => FreeAVFrame(clonePtr));
+        var pc = planeCount;
+        return new VideoFrame(pts, Format, planes, strides, hint, release: () =>
+        {
+            FreeAVFrame(clonePtr);
+            ReturnPassThroughDescriptors(pc, planes, strides);
+        });
+    }
+
+    private const int PassThroughDescriptorPoolCap = 32;
+
+    private (ReadOnlyMemory<byte>[] planes, int[] strides) RentPassThroughDescriptors(int planeCount)
+    {
+        lock (_passThroughArena)
+        {
+            if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
+            {
+                ps = new Stack<ReadOnlyMemory<byte>[]>();
+                _passThroughPlaneStacks[planeCount] = ps;
+            }
+
+            if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
+            {
+                ss = new Stack<int[]>();
+                _passThroughStrideStacks[planeCount] = ss;
+            }
+
+            var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
+            var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
+            return (planes, strides);
+        }
+    }
+
+    private void ReturnPassThroughDescriptors(int planeCount, ReadOnlyMemory<byte>[] planes, int[] strides)
+    {
+        lock (_passThroughArena)
+        {
+            if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
+                ps.Count < PassThroughDescriptorPoolCap)
+                ps.Push(planes);
+
+            if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
+                ss.Count < PassThroughDescriptorPoolCap)
+                ss.Push(strides);
+        }
     }
 
     private VideoFrame BuildConvertedFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)

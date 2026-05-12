@@ -1,6 +1,7 @@
 using System.Text;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
+using S.Media.Core.Playback;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Audio;
@@ -90,26 +91,42 @@ try
 
     if (routing != null)
     {
-        // PortAudio only pulls from Submit() once the native stream is started;
-        // AudioPlayer.Play() starts the router, not hardware outputs (see PlaybackSmoke).
+        // While PortAudio hasn't started, SinkSlavedRouterClock's WaitForCapacity() returns
+        // unconditionally — the router would decode as fast as CPU allows, overfill the ring,
+        // and Submit() would drop samples while AudioFileDecoder.Position still advanced
+        // ("audio 7s ahead" in the HUD). Match PlaybackSmoke: prebuffer by reading the
+        // shared decoder directly into the device ring, open the stream, then start the router.
+        routing.PrefillMainOutputDirectFromDecoder(TimeSpan.FromSeconds(3));
         routing.StartHardwareOutput();
-        routing.Player.Play();
+        AvPlaybackCoordinator.Play(videoPlayer, routing.Player);
     }
     else
+    {
         freerunClock.Start();
-
-    videoPlayer.Play();
+        videoPlayer.Play();
+    }
 
     var ticker = System.Diagnostics.Stopwatch.StartNew();
     while (!cts.IsCancellationRequested)
     {
         if (ticker.ElapsedMilliseconds >= 650)
         {
-            var adeckPos = routing?.Decoder.Position ?? TimeSpan.Zero;
+            var aHeard = routing != null
+                ? TimeSpan.FromSeconds(routing.MainOutput.PlayedSamples / (double)routing.MainOutput.Format.SampleRate)
+                : TimeSpan.Zero;
+            var aDeckDec = routing?.Decoder.Position ?? TimeSpan.Zero;
+            long pumpDr = 0, paUnd = 0, paDr = 0;
+            if (routing != null)
+            {
+                pumpDr = routing.Player.Router.GetPumpStats(routing.PrimarySinkId).Dropped;
+                paUnd = routing.MainOutput.UnderrunSamples;
+                paDr = routing.MainOutput.DroppedSamples;
+            }
 
             Console.Write(
                 $"\r clock {FormatClock(playClock.CurrentPosition)}  vPTS {videoDecoder.Position:mm\\:ss\\.fff}  " +
-                $"audio {adeckPos:mm\\:ss\\.fff}  shown {videoPlayer.DisplayedCount} / decoded {videoPlayer.DecodedCount}");
+                $"aHeard {aHeard:mm\\:ss\\.fff}  aDec {aDeckDec:mm\\:ss\\.fff}  show {videoPlayer.DisplayedCount}/{videoPlayer.DecodedCount}  " +
+                $"vLate {videoPlayer.DroppedLate}  paUnd {paUnd}  paDr {paDr}  pumpDr {pumpDr}");
             Console.Out.Flush();
 
             ticker.Restart();
@@ -124,9 +141,9 @@ try
     }
 
     Console.WriteLine();
-    videoPlayer.Stop(cts.Token);
-    routing?.Player.Stop();
-    freerunClock.Stop(cts.Token);
+    AvPlaybackCoordinator.Pause(videoPlayer, routing?.Player, cts.Token);
+    if (routing is null)
+        freerunClock.Stop(cts.Token);
 }
 finally
 {
@@ -155,13 +172,15 @@ file sealed class AudioRouting : IDisposable
 {
     private readonly PortAudioOutput _mainOutput;
 
-    private AudioRouting(AudioPlayer player, AudioFileDecoder decoder, string sourceId, PortAudioOutput mainOutput)
+    private AudioRouting(AudioPlayer player, AudioFileDecoder decoder, string sourceId, PortAudioOutput mainOutput,
+                         string primarySinkId)
     {
         Player = player;
         Decoder = decoder;
         SourceId = sourceId;
         AudioFormat = decoder.Format;
         _mainOutput = mainOutput;
+        PrimarySinkId = primarySinkId;
     }
 
     internal AudioPlayer Player { get; }
@@ -170,6 +189,11 @@ file sealed class AudioRouting : IDisposable
 
     internal AudioFormat AudioFormat { get; }
 
+    /// <summary>Router id of the main <see cref="PortAudioOutput"/> (for <see cref="AudioRouter.GetPumpStats"/>).</summary>
+    internal string PrimarySinkId { get; }
+
+    internal PortAudioOutput MainOutput => _mainOutput;
+
     internal static AudioRouting? TryCreate(string mediaPath, int chunkSamples)
     {
         try
@@ -177,17 +201,20 @@ file sealed class AudioRouting : IDisposable
             var decoder = AudioFileDecoder.Open(mediaPath);
             var player = new AudioPlayer(decoder.Format.SampleRate, chunkSamples);
 
-            // Match PlaybackSmoke: second ctor arg is deviceIndex, not sample rate.
-            using (var probe = new PortAudioOutput(decoder.Format))
-                _ = probe.DeviceIndex;
-
-            var output = new PortAudioOutput(decoder.Format, ringCapacityFrames: decoder.Format.SampleRate);
+            var output = new PortAudioOutput(
+                decoder.Format,
+                framesPerBuffer: chunkSamples,
+                ringCapacityFrames: decoder.Format.SampleRate);
+            // Default target is half the ring (~0.68 s here) — the router runs unthrottled whenever
+            // queued + chunk fits, then sleeps in bursts, which interacts badly with Pulse/ALSA jitter.
+            // Keep a modest cushion (~8 router chunks ≈ 160 ms @ 960 samples).
+            output.TargetQueueSamples = Math.Clamp(chunkSamples * 8, chunkSamples * 4, output.CapacitySamples / 8);
 
             string sourceId = player.AddOwnedSource(decoder);
             string sinkMain = player.AddOutput(output); // pacing + playback clock wiring
             player.Connect(sourceId, sinkMain);
 
-            return new AudioRouting(player, decoder, sourceId, output);
+            return new AudioRouting(player, decoder, sourceId, output, sinkMain);
         }
         catch (Exception ex)
         {
@@ -196,7 +223,29 @@ file sealed class AudioRouting : IDisposable
         }
     }
 
-    /// <summary>Opens the native PortAudio stream (must run before <see cref="AudioPlayer.Play"/>).</summary>
+    /// <summary>
+    /// Prefill the hardware ring by pulling from <see cref="Decoder"/> before any router thread runs
+    /// (<see cref="PlaybackSmoke"/> pattern). With <c>--ndi</c>, only PortAudio receives this segment;
+    /// the mixer path starts on the next decoded sample (brief NDI audio delay vs speakers).
+    /// </summary>
+    internal void PrefillMainOutputDirectFromDecoder(TimeSpan timeout)
+    {
+        var sr = _mainOutput.Format.SampleRate;
+        var chunk = Player.Router.ChunkSamples;
+        var targetQueued = Math.Max(sr / 10, chunk * 4);
+        var ch = Decoder.Format.Channels;
+        var bufFloats = Math.Min(65536, Math.Max(chunk * ch * 8, 8192 * ch));
+        var buf = new float[bufFloats];
+        var deadline = DateTime.UtcNow + timeout;
+        while (_mainOutput.QueuedSamples < targetQueued && DateTime.UtcNow < deadline)
+        {
+            var read = Decoder.ReadInto(buf);
+            if (read == 0) break;
+            _mainOutput.Submit(buf.AsSpan(0, read));
+        }
+    }
+
+    /// <summary>Opens the native PortAudio stream (after <see cref="PrefillMainOutputDirectFromDecoder"/>, before <see cref="AudioPlayer.Play"/>).</summary>
     internal void StartHardwareOutput() => _mainOutput.Start();
 
     public void Dispose()
@@ -226,7 +275,7 @@ file static class PlaybackCli
 
         bool hw = false;
         bool drmGl = false;
-        int chunkSamples = 480;
+        int chunkSamples = 960;
 
         var positional = new List<string>();
 
@@ -290,11 +339,11 @@ usage: VideoPlaybackSmoke <media-file> [options]
 
 Smoke test for video + mastered audio clock (SDL3 GL by default).
 
-  --ndi [name]        Also send mirrored video/audio over NDI (CPU video copy — not paired with DRM dma-buf decode).
+  --ndi [name]        Mirror video/audio over NDI (CPU copy of decoded frames — incompatible with --drm-gl).
   --hw                Prefer FFmpeg hardware decode when available.
-  --drm-gl            (Linux only, with --hw) Prefer DRM PRIME EGL NV12 dma-bufs to GL.
+  --drm-gl            (Linux only, with --hw) Prefer DRM PRIME EGL NV12 dma-bufs to GL (do not combine with --ndi).
 
-  --chunk-samples=n   AudioRouter chunk span (default 480 ≈ 10 ms @ 48 kHz).
+  --chunk-samples=n   AudioRouter chunk span (default 960 ≈ 20 ms @ 48 kHz).
 """);
     }
 }

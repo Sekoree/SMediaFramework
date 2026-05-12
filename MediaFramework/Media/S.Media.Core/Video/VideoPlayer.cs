@@ -57,6 +57,13 @@ public sealed class VideoPlayer : IDisposable
     private long _droppedLate;
     private long _droppedQueueDrain;
 
+    /// <summary>
+    /// Raised after a frame is successfully submitted to the sink with its
+    /// <see cref="VideoFrame.PresentationTime"/> (for example to feed a
+    /// <see cref="VideoPtsClock"/>).
+    /// </summary>
+    public event Action<TimeSpan>? FramePresentationTimePresented;
+
     public VideoFormat Format => _sink.Format;
     public bool IsRunning { get { lock (_gate) return _isRunning; } }
 
@@ -287,6 +294,7 @@ public sealed class VideoPlayer : IDisposable
             {
                 _sink.Submit(toShow);
                 Interlocked.Increment(ref _displayed);
+                FramePresentationTimePresented?.Invoke(toShow.PresentationTime);
             }
             catch (Exception ex)
             {

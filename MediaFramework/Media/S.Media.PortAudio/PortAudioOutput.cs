@@ -276,7 +276,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
             // Estimate how long until the device drains the excess. Add a 1ms
             // floor so we don't spin when we're only marginally over.
             var excessSamples = queued + chunkSamples - target;
-            var waitMs = Math.Max(1, (int)(1000.0 * excessSamples / _format.SampleRate));
+            var waitMs = Math.Max(1, (int)Math.Ceiling(1000.0 * excessSamples / _format.SampleRate));
             if (token.WaitHandle.WaitOne(waitMs)) return false;
         }
         return false;

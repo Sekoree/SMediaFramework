@@ -1,6 +1,8 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 namespace S.Media.Core.Audio;
 
@@ -192,7 +194,7 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
     }
 
     /// <summary>Mono packed as one float per frame → duplicated stereo interleaved (<c>[0,0]</c>), uniform gain.</summary>
-    internal static bool TryAccumulateMonoDupStereoInterleaved(
+    internal static unsafe bool TryAccumulateMonoDupStereoInterleaved(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
         in ChannelMap map, int samplesPerChannel, float uniformGain)
@@ -207,29 +209,71 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         var vn = Vector<float>.Count;
 
         var g = new Vector<float>(uniformGain);
-        Span<float> scratch = stackalloc float[vn * 2];
 
         var s = 0;
         var limit = samplesPerChannel - samplesPerChannel % vn;
-        for (; s < limit; s += vn)
+
+        if (Avx.IsSupported && vn == 8)
         {
-            var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(s, vn))[0] * g;
-            ref var sc = ref MemoryMarshal.GetReference(scratch);
-            for (var j = 0; j < vn; j++)
+            var g256 = Vector256.Create(uniformGain);
+            for (; s < limit; s += 8)
             {
-                var v = m[j];
-                Unsafe.Add(ref sc, 2 * j) = v;
-                Unsafe.Add(ref sc, 2 * j + 1) = v;
+                fixed (float* pSrc = src.Slice(s))
+                fixed (float* pDst = dst.Slice(s * 2))
+                {
+                    var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                    var lo = m.GetLower();
+                    var hi = m.GetUpper();
+                    var d0 = Sse.UnpackLow(lo, lo);
+                    var d1 = Sse.UnpackHigh(lo, lo);
+                    var d2 = Sse.UnpackLow(hi, hi);
+                    var d3 = Sse.UnpackHigh(hi, hi);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), d0));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), d1));
+                    Sse.Store(pDst + 8, Sse.Add(Sse.LoadVector128(pDst + 8), d2));
+                    Sse.Store(pDst + 12, Sse.Add(Sse.LoadVector128(pDst + 12), d3));
+                }
             }
+        }
+        else if (Sse.IsSupported && vn == 4)
+        {
+            var g128 = Vector128.Create(uniformGain);
+            for (; s < limit; s += 4)
+            {
+                fixed (float* pSrc = src.Slice(s))
+                fixed (float* pDst = dst.Slice(s * 2))
+                {
+                    var m = Sse.Multiply(Sse.LoadVector128(pSrc), g128);
+                    var dupLo = Sse.UnpackLow(m, m);
+                    var dupHi = Sse.UnpackHigh(m, m);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), dupLo));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), dupHi));
+                }
+            }
+        }
+        else
+        {
+            Span<float> scratch = stackalloc float[vn * 2];
+            for (; s < limit; s += vn)
+            {
+                var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(s, vn))[0] * g;
+                ref var sc = ref MemoryMarshal.GetReference(scratch);
+                for (var j = 0; j < vn; j++)
+                {
+                    var v = m[j];
+                    Unsafe.Add(ref sc, 2 * j) = v;
+                    Unsafe.Add(ref sc, 2 * j + 1) = v;
+                }
 
-            var dstBase = s * 2;
-            var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
-            var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
-            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
+                var dstBase = s * 2;
+                var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
+                var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
 
-            var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
-            var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
-            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+                var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
+                var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+            }
         }
 
         for (; s < samplesPerChannel; s++)
@@ -244,7 +288,7 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
     }
 
     /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[0,1,0,1]</c>), uniform gain.</summary>
-    internal static bool TryAccumulateStereoDuplexWideInterleaved(
+    internal static unsafe bool TryAccumulateStereoDuplexWideInterleaved(
         ReadOnlySpan<float> src, int srcChannels,
         Span<float> dst, int dstChannels,
         in ChannelMap map, int samplesPerChannel, float uniformGain)
@@ -263,33 +307,71 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         var stereoFloats = samplesPerChannel * 2;
 
         var g = new Vector<float>(uniformGain);
-        Span<float> scratch = stackalloc float[vn * 2];
 
         var i = 0;
         var limit = stereoFloats - stereoFloats % vn;
-        for (; i < limit; i += vn)
+
+        if (Avx.IsSupported && vn == 8)
         {
-            var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(i, vn))[0] * g;
-            ref var sc = ref MemoryMarshal.GetReference(scratch);
-            for (var j = 0; j < vn; j += 2)
+            var g256 = Vector256.Create(uniformGain);
+            for (; i < limit; i += 8)
             {
-                var L = m[j];
-                var R = m[j + 1];
-                var p = j * 2;
-                Unsafe.Add(ref sc, p) = L;
-                Unsafe.Add(ref sc, p + 1) = R;
-                Unsafe.Add(ref sc, p + 2) = L;
-                Unsafe.Add(ref sc, p + 3) = R;
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                    var lo = m.GetLower();
+                    var hi = m.GetUpper();
+                    var expLo = Vector256.Create(Sse.Shuffle(lo, lo, 0x44), Sse.Shuffle(lo, lo, 0xEE));
+                    var expHi = Vector256.Create(Sse.Shuffle(hi, hi, 0x44), Sse.Shuffle(hi, hi, 0xEE));
+                    Avx.Store(pDst, Avx.Add(Avx.LoadVector256(pDst), expLo));
+                    Avx.Store(pDst + 8, Avx.Add(Avx.LoadVector256(pDst + 8), expHi));
+                }
             }
+        }
+        else if (Sse.IsSupported && vn == 4)
+        {
+            var g128 = Vector128.Create(uniformGain);
+            for (; i < limit; i += 4)
+            {
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Sse.Multiply(Sse.LoadVector128(pSrc), g128);
+                    var e0 = Sse.Shuffle(m, m, 0x44);
+                    var e1 = Sse.Shuffle(m, m, 0xEE);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), e0));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), e1));
+                }
+            }
+        }
+        else
+        {
+            Span<float> scratch = stackalloc float[vn * 2];
+            for (; i < limit; i += vn)
+            {
+                var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(i, vn))[0] * g;
+                ref var sc = ref MemoryMarshal.GetReference(scratch);
+                for (var j = 0; j < vn; j += 2)
+                {
+                    var L = m[j];
+                    var R = m[j + 1];
+                    var p = j * 2;
+                    Unsafe.Add(ref sc, p) = L;
+                    Unsafe.Add(ref sc, p + 1) = R;
+                    Unsafe.Add(ref sc, p + 2) = L;
+                    Unsafe.Add(ref sc, p + 3) = R;
+                }
 
-            var dstBase = i * 2;
-            var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
-            var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
-            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
+                var dstBase = i * 2;
+                var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
+                var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
 
-            var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
-            var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
-            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+                var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
+                var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+            }
         }
 
         for (; i < stereoFloats; i += 2)
@@ -308,10 +390,12 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
 
     private static Vector<float> StereoSwapAdjacentChannels(Vector<float> v)
     {
-        var result = Vector<float>.Zero;
+        Span<float> buf = stackalloc float[Vector<float>.Count];
+        v.CopyTo(buf);
         for (var j = 0; j < Vector<float>.Count; j += 2)
-            result = Vector.WithElement(Vector.WithElement(result, j, v[j + 1]), j + 1, v[j]);
-        return result;
+            (buf[j], buf[j + 1]) = (buf[j + 1], buf[j]);
+
+        return MemoryMarshal.Cast<float, Vector<float>>(buf)[0];
     }
 
     // --- helpers ----------------------------------------------------------
