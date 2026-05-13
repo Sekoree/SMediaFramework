@@ -57,6 +57,7 @@ public sealed class HardwareVideoInteropTests
             Assert.Equal(3840, d.WidthPixels);
             Assert.Equal(2160, d.HeightPixels);
             Assert.Equal(2, (int)d.PlaneCount);
+            Assert.Equal(0, (nint)d.D3D11DeviceComPtr);
             Assert.Equal(HardwareVideoMemoryKind.LinuxDmabufFd, d.Plane0.Kind);
             Assert.Equal((nint)y, d.Plane0.HandleOrDescriptor);
             Assert.Equal((nuint)256, d.Plane0.RowPitchBytes);
@@ -120,6 +121,7 @@ public sealed class HardwareVideoInteropTests
             Assert.Equal(1280, d.WidthPixels);
             Assert.Equal(720, d.HeightPixels);
             Assert.Equal(2, (int)d.PlaneCount);
+            Assert.Equal(0, (nint)d.D3D11DeviceComPtr);
             Assert.Equal(HardwareVideoMemoryKind.Win32SharedHandle, d.Plane0.Kind);
             Assert.Equal((nint)101, d.Plane0.HandleOrDescriptor);
             Assert.Equal((nuint)1280, d.Plane0.RowPitchBytes);
@@ -174,6 +176,158 @@ public sealed class HardwareVideoInteropTests
         IHardwareVideoInterop h = new WindowsNv12SharedHandleInterop();
         Assert.False(h.TryDescribeImportedSurface(0, out var d));
         Assert.Equal(default, d);
+    }
+
+    [Fact]
+    public void WindowsNv12D3D11TextureInterop_AllocToken_Throws_OnNonWindows()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Throws<PlatformNotSupportedException>(() =>
+            WindowsNv12D3D11TextureInterop.AllocToken((nint)1, (nint)2, 0, 64, 64, 64, 64));
+    }
+
+    [Fact]
+    public void WindowsNv12D3D11TextureInterop_NotWindows_DisablesImports()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        IHardwareVideoInterop h = new WindowsNv12D3D11TextureInterop();
+        Assert.False(h.IsGpuImportSupported);
+        Assert.False(h.TryDescribeImportedSurface((nint)1, out var d));
+        Assert.Equal(default, d);
+    }
+
+    [Fact]
+    public void WindowsNv12D3D11TextureInterop_OnWindows_describes_nv12_from_token()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        IHardwareVideoInterop h = new WindowsNv12D3D11TextureInterop();
+        Assert.True(h.IsGpuImportSupported);
+
+        const nint dev = (nint)0x1000;
+        const nint tex = (nint)0x2000;
+        const int slice = 2;
+        var token = WindowsNv12D3D11TextureInterop.AllocToken(dev, tex, slice, 1920, 1080, 1920, 960);
+        try
+        {
+            Assert.True(h.TryDescribeImportedSurface(token, out var d));
+            Assert.Equal(1920, d.WidthPixels);
+            Assert.Equal(1080, d.HeightPixels);
+            Assert.Equal(2, (int)d.PlaneCount);
+            Assert.Equal(dev, d.D3D11DeviceComPtr);
+            Assert.Equal(HardwareVideoMemoryKind.Win32D3D11Nv12Texture, d.Plane0.Kind);
+            Assert.Equal(tex, d.Plane0.HandleOrDescriptor);
+            Assert.Equal((nuint)1920, d.Plane0.RowPitchBytes);
+            Assert.Equal((ulong)slice, d.Plane0.Modifier);
+            Assert.Equal(HardwareVideoMemoryKind.Win32D3D11Nv12Texture, d.Plane1.Kind);
+            Assert.Equal(tex, d.Plane1.HandleOrDescriptor);
+            Assert.Equal((nuint)960, d.Plane1.RowPitchBytes);
+            Assert.Equal((ulong)slice, d.Plane1.Modifier);
+        }
+        finally
+        {
+            WindowsNv12D3D11TextureInterop.FreeToken(token);
+        }
+    }
+
+    [Fact]
+    public void WindowsNv12D3D11TextureInterop_OnWindows_zero_device_throws()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            WindowsNv12D3D11TextureInterop.AllocToken(0, (nint)1, 0, 64, 64, 64, 64));
+    }
+
+    [Fact]
+    public void WindowsNv12D3D11TextureInterop_OnWindows_zero_texture_throws()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            WindowsNv12D3D11TextureInterop.AllocToken((nint)1, 0, 0, 64, 64, 64, 64));
+    }
+
+    [Fact]
+    public void WindowsNv12D3D11TextureInterop_TryDescribe_zero_token_returns_false()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        IHardwareVideoInterop h = new WindowsNv12D3D11TextureInterop();
+        Assert.False(h.TryDescribeImportedSurface(0, out var d));
+        Assert.Equal(default, d);
+    }
+
+    [Fact]
+    public void HardwareVideoWin32Nv12_TryCreateWin32Nv12Backing_FromD3D11InteropDescriptor()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        const nint dev = (nint)0x4000;
+        const nint tex = (nint)0x8000;
+        var token = WindowsNv12D3D11TextureInterop.AllocToken(dev, tex, arraySlice: 3, 320, 240, 320, 160);
+        try
+        {
+            IHardwareVideoInterop h = new WindowsNv12D3D11TextureInterop();
+            Assert.True(h.TryDescribeImportedSurface(token, out var d));
+            Assert.True(HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing(in d, out var backing, out var err), err);
+            Assert.Null(err);
+            Assert.NotNull(backing);
+            using (backing!)
+            {
+                Assert.Equal(0, backing.LumaSharedNtHandle);
+                Assert.Equal(dev, backing.LibavD3D11DeviceComPtr);
+                Assert.Equal(tex, backing.LibavD3D11Texture2DComPtr);
+                Assert.Equal(3, backing.D3D11TextureArraySliceIndex);
+                Assert.Equal(320, backing.YPlanePitchBytes);
+                Assert.Equal(160, backing.UvPlanePitchBytes);
+            }
+        }
+        finally
+        {
+            WindowsNv12D3D11TextureInterop.FreeToken(token);
+        }
+    }
+
+    [Fact]
+    public void HardwareVideoWin32Nv12_TryCreateWin32Nv12Backing_RejectsMixedPlaneKinds()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var d = new HardwareVideoSurfaceDescriptor
+        {
+            WidthPixels = 64,
+            HeightPixels = 64,
+            PlaneCount = 2,
+            D3D11DeviceComPtr = (nint)1,
+            Plane0 = new HardwareVideoPlaneDescriptor
+            {
+                Kind = HardwareVideoMemoryKind.Win32D3D11Nv12Texture,
+                HandleOrDescriptor = (nint)2,
+                RowPitchBytes = 64,
+                Modifier = 0,
+            },
+            Plane1 = new HardwareVideoPlaneDescriptor
+            {
+                Kind = HardwareVideoMemoryKind.Win32SharedHandle,
+                HandleOrDescriptor = (nint)3,
+                RowPitchBytes = 64,
+            },
+        };
+
+        Assert.False(HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing(in d, out var b, out var msg));
+        Assert.Null(b);
+        Assert.False(string.IsNullOrEmpty(msg));
     }
 
     [Fact]

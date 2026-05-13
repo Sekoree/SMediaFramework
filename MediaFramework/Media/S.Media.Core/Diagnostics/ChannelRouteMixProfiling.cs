@@ -4,7 +4,8 @@ using System.Threading;
 namespace S.Media.Core.Diagnostics;
 
 /// <summary>
-/// Opt-in counters for <see cref="AudioRouter.ApplyRoute"/> slow paths (scalar mixing and <see cref="ChannelMap.ApplyAdditive"/>).
+/// Opt-in counters for <see cref="AudioRouter.ApplyRoute"/> slow paths (scalar mixing and <see cref="ChannelMap.ApplyAdditive"/>
+/// when no SIMD fast path matches).
 /// Set environment variable <c>MF_MEDIA_PROFILE_CHANNEL_MAP=1</c> (or <c>true</c>) to enable global recording in apps.
 /// For unit tests, call <see cref="EnterTestRecordingScope"/> and <see cref="SetTestOverride"/> together so parallel test workers
 /// do not share static counters when the env var is set. Disabled by default.

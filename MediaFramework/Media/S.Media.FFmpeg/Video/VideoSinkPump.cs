@@ -41,7 +41,7 @@ public readonly record struct VideoSinkPumpAttachOptions(
 /// Subscribe to <see cref="VideoSinkPump.PumpPressure"/> (or <see cref="VideoRouter.PumpPressure"/> when registered via the router)
 /// for per-drop callbacks on the <see cref="Submit"/> thread (same idea as <c>AudioRouter.PumpPressure</c>).
 /// </remarks>
-public sealed class VideoSinkPump : IVideoSink, IDisposable
+public sealed class VideoSinkPump : IVideoSink, IVideoSinkD3D11GlBorrowSetup, IDisposable
 {
     private readonly IVideoSink _inner;
     private readonly bool _disposeInner;
@@ -118,6 +118,17 @@ public sealed class VideoSinkPump : IVideoSink, IDisposable
             Priority = ThreadPriority.AboveNormal,
         };
         _thread.Start();
+    }
+
+    public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource)
+    {
+        if (_inner is IVideoSinkD3D11GlBorrowSetup innerBorrow)
+        {
+            if (videoSource is IHardwareD3D11GlInteropSource)
+                innerBorrow.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
+            else
+                innerBorrow.SetBorrowVideoSourceForWin32Nv12Gl(null);
+        }
     }
 
     public void Submit(VideoFrame frame)
@@ -227,7 +238,7 @@ public sealed class VideoSinkPump : IVideoSink, IDisposable
             _cts?.Cancel();
             _pending.Set();
             if (_thread is { } t)
-                CooperativePlaybackJoin.JoinThread(t, TimeSpan.FromSeconds(2), CancellationToken.None);
+                CooperativePlaybackJoin.JoinThread(t, TimeSpan.FromSeconds(30), CancellationToken.None);
         }
         finally
         {

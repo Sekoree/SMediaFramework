@@ -1,10 +1,9 @@
 using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using S.Media.Core.Audio;
 using S.Media.Core.Video;
-using S.Media.FFmpeg.Diagnostics;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video;
 using S.Media.FFmpeg.Video.Internal;
@@ -14,14 +13,17 @@ namespace S.Media.FFmpeg;
 /// <summary>
 /// Single <see cref="AVFormatContext"/> demux with a background reader thread, bounded packet queues
 /// per A/V stream, and independent decode locks so audio and video consumers can run on different threads.
-/// Video matches <see cref="VideoFileDecoder"/> hardware / software behaviour (including DRM PRIME NV12 and D3D11 shared-handle NV12).
+/// Video matches <see cref="VideoFileDecoder"/> hardware / software behaviour (including DRM PRIME semi-planar NV12/P010/P016 and D3D11 shared-handle NV12).
 /// </summary>
+/// <remarks>
+/// Pass-through libav video uses <see cref="PassThroughDescriptorArena"/> the same way as <see cref="VideoFileDecoder"/> (Treiber-stack pooled descriptor arrays, <c>Array.Clear</c> on return).
+/// <c>Rent</c>/<c>Return</c> run under the normal video decode serialization for this demux — there is no extra mutex around the arena itself (Tier E **16**).
+/// </remarks>
 internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 {
     private const long AvTimeBase = 1_000_000L;
     private const int MaxAudioPacketsQueued = 192;
     private const int MaxVideoPacketsQueued = 384;
-    private const int PassThroughDescriptorPoolCap = 32;
 
     private readonly object _lifecycleLock = new();
     private readonly Lock _audioDecodeLock = new();
@@ -30,6 +32,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private volatile bool _disposed;
     private volatile bool _demuxerStopRequest;
+    private int _videoDecodeYieldRequested;
     private volatile bool _fileReadCompleted;
     private Thread? _demuxerThread;
     private AVFormatContext* _fmt;
@@ -70,9 +73,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private bool _drmGpuNv12Path;
     private bool _d3d11GpuNv12Path;
 
-    private readonly Lock _passThroughArena = new();
-    private readonly Dictionary<int, Stack<ReadOnlyMemory<byte>[]>> _passThroughPlaneStacks = new();
-    private readonly Dictionary<int, Stack<int[]>> _passThroughStrideStacks = new();
+    private readonly PassThroughDescriptorArena _passThroughArena = new();
 
     private readonly byte*[] _swSrcLines = new byte*[8];
     private readonly int[] _swSrcStride = new int[8];
@@ -111,6 +112,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         deviceComPtr = _hwAccel?.TryGetD3D11DeviceComPtr() ?? 0;
         return deviceComPtr != 0;
+    }
+
+    internal bool TryGetHardwareD3D11AdapterLuid(out long adapterLuidPacked)
+    {
+        adapterLuidPacked = 0;
+        return _hwAccel?.TryGetD3D11AdapterLuid(out adapterLuidPacked) == true;
     }
 
     private void OpenInternal(string path, VideoDecoderOpenOptions? videoOptions)
@@ -208,11 +215,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         {
             if (_drmGpuNv12Path)
             {
+                var drmPass = VideoFileDecoder.InferDrmPrimeOutputPixelFormat(vSt->codecpar);
                 _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_DRM_PRIME;
-                _vNativePixFmt = PixelFormat.Nv12;
+                _vNativePixFmt = drmPass;
                 _vPassThrough = true;
-                _vOutPixFmt = PixelFormat.Nv12;
-                _vNativePixFormats = [PixelFormat.Nv12];
+                _vOutPixFmt = drmPass;
+                _vNativePixFormats = [drmPass];
             }
             else if (_d3d11GpuNv12Path)
             {
@@ -404,6 +412,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         lock (_lifecycleLock)
         {
             ThrowIfDisposedUnsafe();
+            ClearVideoDecodeYield();
             StopDemuxerAndDrainQueues();
 
             var timestampUs = (long)(position.TotalSeconds * AvTimeBase);
@@ -477,6 +486,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
             _hwAccel?.Dispose();
             _hwAccel = null;
+
+            _passThroughArena.Dispose();
 
             if (_fmt != null) { var f = _fmt; avformat_close_input(&f); _fmt = null; }
         }
@@ -626,10 +637,25 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         return new AudioFrame(pts, Audio.Format, converted, samples.AsMemory(0, converted * Audio.Format.Channels));
     }
 
+    internal void RequestVideoDecodeYield()
+    {
+        Volatile.Write(ref _videoDecodeYieldRequested, 1);
+        lock (_queueGate)
+            Monitor.PulseAll(_queueGate);
+    }
+
+    internal void ClearVideoDecodeYield() => Volatile.Write(ref _videoDecodeYieldRequested, 0);
+
     private void FeedVideoFromQueue()
     {
+        if (Volatile.Read(ref _videoDecodeYieldRequested) != 0)
+            return;
+
         while (true)
         {
+            if (Volatile.Read(ref _videoDecodeYieldRequested) != 0)
+                return;
+
             AVPacket* pkt = null;
             lock (_queueGate)
             {
@@ -736,9 +762,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         if (_drmGpuNv12Path)
         {
-            if (format != PixelFormat.Nv12)
+            if (format is not (PixelFormat.Nv12 or PixelFormat.P010 or PixelFormat.P016))
                 throw new NotSupportedException(
-                    "DRM PRIME zero-copy decoding only supports PixelFormat.Nv12 output matching the GPU-exported NV12 dma-bufs.");
+                    "DRM PRIME zero-copy decoding only supports PixelFormat.Nv12, P010, or P016 output matching the GPU-exported semi-planar dma-bufs.");
             if (_vOutPixFmt == format)
                 return;
             _vPassThrough = true;
@@ -825,15 +851,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             : BuildConvertedVideoFrame(work, pts, trc);
     }
 
-    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
-    {
-        var backing = DrmPrimeNv12BackingFactory.TryCreateBacking(drmFrame);
-        if (backing == null)
-            throw new InvalidOperationException(
-                "DRM PRIME frame could not be mapped to NV12 dma-bufs. Disable decoder option RetainDmabufForGl or try a CPU upload path.");
-
-        return VideoFrame.CreateNv12Dmabuf(pts, Video.Format, backing, VideoFileDecoder.MapTransferHint(trc));
-    }
+    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, AVColorTransferCharacteristic trc) =>
+        VideoFileDecoder.CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Video.Format, trc);
 
     private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
     {
@@ -858,7 +877,17 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
 
         var planeCount = PixelFormatInfo.PlaneCount(_vOutPixFmt);
-        var (planes, strides) = RentPassThroughDescriptors(planeCount);
+        if (planeCount < 1 || planeCount > PassThroughDescriptorArena.MaxPlaneCount)
+        {
+            var c = clone;
+            av_frame_free(&c);
+            throw new NotSupportedException(
+                $"pass-through plane count {planeCount} is outside the pooled range 1..{PassThroughDescriptorArena.MaxPlaneCount}");
+        }
+
+        var passHandle = _passThroughArena.Rent(planeCount);
+        var planes = passHandle.Planes;
+        var strides = passHandle.Strides;
         var hint = VideoFileDecoder.MapTransferHint(trc);
         for (var i = 0; i < planeCount; i++)
         {
@@ -873,74 +902,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
 
         var clonePtr = (nint)clone;
-        var pc = planeCount;
         return new VideoFrame(pts, Video.Format, planes, strides, hint, release: () =>
         {
             var f = (AVFrame*)clonePtr;
             av_frame_free(&f);
-            ReturnPassThroughDescriptors(pc, planes, strides);
+            _passThroughArena.Return(in passHandle);
         });
-    }
-
-    private (ReadOnlyMemory<byte>[] planes, int[] strides) RentPassThroughDescriptors(int planeCount)
-    {
-        var profile = PassThroughArenaProfiling.IsEnabled;
-        lock (_passThroughArena)
-        {
-            long t0 = 0;
-            if (profile) t0 = Stopwatch.GetTimestamp();
-            try
-            {
-                if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
-                {
-                    ps = new Stack<ReadOnlyMemory<byte>[]>();
-                    _passThroughPlaneStacks[planeCount] = ps;
-                }
-
-                if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
-                {
-                    ss = new Stack<int[]>();
-                    _passThroughStrideStacks[planeCount] = ss;
-                }
-
-                var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
-                var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
-                return (planes, strides);
-            }
-            finally
-            {
-                if (profile)
-                    PassThroughArenaProfiling.RecordRent(Stopwatch.GetTimestamp() - t0);
-            }
-        }
-    }
-
-    private void ReturnPassThroughDescriptors(int planeCount, ReadOnlyMemory<byte>[] planes, int[] strides)
-    {
-        Array.Clear(planes);
-        Array.Clear(strides);
-
-        var profile = PassThroughArenaProfiling.IsEnabled;
-        lock (_passThroughArena)
-        {
-            long t0 = 0;
-            if (profile) t0 = Stopwatch.GetTimestamp();
-            try
-            {
-                if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
-                    ps.Count < PassThroughDescriptorPoolCap)
-                    ps.Push(planes);
-
-                if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
-                    ss.Count < PassThroughDescriptorPoolCap)
-                    ss.Push(strides);
-            }
-            finally
-            {
-                if (profile)
-                    PassThroughArenaProfiling.RecordReturn(Stopwatch.GetTimestamp() - t0);
-            }
-        }
     }
 
     private VideoFrame BuildConvertedVideoFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
@@ -993,8 +960,18 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)
     {
+        // Guard against pathological timestamp / demux states that would spin forever.
+        const int maxIterations = 2_000_000;
+        var iterations = 0;
         while (true)
         {
+            if (++iterations > maxIterations)
+            {
+                throw new InvalidOperationException(
+                    "MediaContainerSharedDemux.SeekPresentation: ConsumeDecoderUntilPts exceeded iteration guard — " +
+                    "aborting to avoid an unbounded hang (check mux timestamps vs target PTS).");
+            }
+
             var ret = avcodec_receive_frame(_vCtx, _vFrame);
             if (ret == AVERROR_EOF)
             {
@@ -1112,11 +1089,16 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public void Dispose() { }
     }
 
-    internal sealed class VideoTrack : IVideoSource, ISeekableSource, IDisposable
+    internal sealed class VideoTrack : IVideoSource, ISeekableSource, IHardwareD3D11GlInteropSource,
+        ICooperativeVideoReadInterrupt, IDisposable
     {
         private readonly MediaContainerSharedDemux _o;
 
         internal VideoTrack(MediaContainerSharedDemux owner) => _o = owner;
+
+        void ICooperativeVideoReadInterrupt.RequestYieldBetweenReads() => _o.RequestVideoDecodeYield();
+
+        void ICooperativeVideoReadInterrupt.ClearYieldRequest() => _o.ClearVideoDecodeYield();
 
         public VideoFormat Format { get; internal set; } = default!;
         public string CodecName => _o.VideoCodecName;
@@ -1146,6 +1128,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             {
                 _o.ThrowIfDisposedUnsafe();
 
+                if (Volatile.Read(ref _o._videoDecodeYieldRequested) != 0)
+                {
+                    frame = null!;
+                    return false;
+                }
+
                 if (_o._vPrimedAfterSeek is { } primed)
                 {
                     frame = primed;
@@ -1155,6 +1143,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
                 while (true)
                 {
+                    if (Volatile.Read(ref _o._videoDecodeYieldRequested) != 0)
+                    {
+                        frame = null!;
+                        return false;
+                    }
+
                     var ret = avcodec_receive_frame(_o._vCtx, _o._vFrame);
                     if (ret == 0)
                     {
@@ -1184,5 +1178,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public void Seek(TimeSpan position) => _o.SeekPresentation(position);
 
         public void Dispose() { }
+
+        public bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr) =>
+            _o.TryGetHardwareD3D11DeviceForWin32Gl(out deviceComPtr);
+
+        public bool TryGetHardwareD3D11AdapterLuid(out long adapterLuidPacked) =>
+            _o.TryGetHardwareD3D11AdapterLuid(out adapterLuidPacked);
     }
 }

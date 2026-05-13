@@ -22,6 +22,12 @@ namespace S.Media.FFmpeg.Audio;
 /// calls between them is supported but the AudioFrame's PTS may include
 /// samples buffered from a prior <see cref="ReadInto"/>.
 /// </para>
+/// <para>
+/// Optional <see cref="AudioFileDecoderOpenOptions.CodecThreadCount"/> forwards to libav
+/// <c>AVCodecContext.thread_count</c> before <c>avcodec_open2</c> (non-zero values clamped to 1…64). When the codec advertises frame or slice threading,
+/// <c>thread_type</c> is set to <c>FF_THREAD_FRAME</c> or <c>FF_THREAD_SLICE</c> respectively (same precedence as <see cref="VideoFileDecoder.ApplyDecoderThreading"/>); otherwise only <c>thread_count</c> is set and libav may ignore it. Many audio decoders still run effectively single-threaded.
+/// Splitting one stream across several libav contexts, pinning work to CPU cores, or other “second decoder” strategies are not built in — see <see cref="AudioFileDecoderOpenOptions"/> remarks and checklist Tier E **20** / §Tier F **33**.
+/// </para>
 /// </remarks>
 public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDisposable
 {
@@ -39,6 +45,15 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
     private bool _drainPacketSent;
 
     public AudioFormat Format { get; private set; }
+    /// <summary>
+    /// When <see cref="AudioFileDecoderOpenOptions.CodecThreadCount"/> was non-zero at open, the **clamped (1…64)** value assigned to
+    /// <c>AVCodecContext.thread_count</c> before <c>avcodec_open2</c>; otherwise zero. Libav may still run fewer effective threads.
+    /// </summary>
+    public int CodecThreadCountOption { get; private set; }
+    /// <summary>
+    /// Libav <c>AVCodecContext.thread_type</c> after <c>avcodec_open2</c> when <see cref="CodecThreadCountOption"/> was non-zero (frame/slice threading requested when the codec supports it); otherwise zero.
+    /// </summary>
+    public int LibavCodecThreadType { get; private set; }
     public string CodecName { get; private set; } = "";
     public TimeSpan Duration { get; private set; }
     public TimeSpan Position { get; private set; }
@@ -115,7 +130,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
 
     private AudioFileDecoder() { }
 
-    public static AudioFileDecoder Open(string path)
+    public static AudioFileDecoder Open(string path, AudioFileDecoderOpenOptions options = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
         if (!File.Exists(path)) throw new FileNotFoundException("audio file not found", path);
@@ -125,7 +140,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         var decoder = new AudioFileDecoder();
         try
         {
-            decoder.OpenInternal(path);
+            decoder.OpenInternal(path, options);
             return decoder;
         }
         catch
@@ -187,7 +202,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
 
     // --- internals ---------------------------------------------------------
 
-    private void OpenInternal(string path)
+    private void OpenInternal(string path, AudioFileDecoderOpenOptions options)
     {
         AVFormatContext* fmt = null;
         var ret = avformat_open_input(&fmt, path, null, null);
@@ -211,8 +226,23 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         ret = avcodec_parameters_to_context(_codecCtx, stream->codecpar);
         FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
 
+        CodecThreadCountOption = 0;
+        LibavCodecThreadType = 0;
+        if (options.CodecThreadCount > 0)
+        {
+            CodecThreadCountOption = Math.Clamp(options.CodecThreadCount, 1, 64);
+            _codecCtx->thread_count = CodecThreadCountOption;
+            if ((codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0)
+                _codecCtx->thread_type = (int)FF_THREAD_FRAME;
+            else if ((codec->capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0)
+                _codecCtx->thread_type = (int)FF_THREAD_SLICE;
+        }
+
         ret = avcodec_open2(_codecCtx, codec, null);
         FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
+
+        if (CodecThreadCountOption > 0)
+            LibavCodecThreadType = _codecCtx->thread_type;
 
         Format = new AudioFormat(_codecCtx->sample_rate, _codecCtx->ch_layout.nb_channels);
         CodecName = Marshal.PtrToStringAnsi((IntPtr)codec->name) ?? "unknown";

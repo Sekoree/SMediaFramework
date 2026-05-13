@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Video;
 using Xunit;
@@ -29,7 +30,12 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath != null)
         {
-            try { File.Delete(_videoPath); } catch { /* ignored */ }
+            try { File.Delete(_videoPath); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(VideoFileDecoderTests)}: temp video delete"); }
+#else
+            catch { /* ignored */ }
+#endif
         }
     }
 

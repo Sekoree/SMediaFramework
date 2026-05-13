@@ -521,6 +521,11 @@ public sealed class NDISender : IDisposable
     /// <param name="clockVideo">Rate-limit video sends to match the declared frame rate.</param>
     /// <param name="clockAudio">Rate-limit audio sends to match the declared sample rate.</param>
     /// <returns><c>0</c> on success; <c>(int)<see cref="NDIErrorCode.NDISenderCreateFailed"/></c> on failure.</returns>
+    /// <remarks>
+    /// Only the clock bits in <see cref="NDISendCreate"/> are passed through today. Hosts that want wall-clock
+    /// spacing between video frames instead of SDK pacing usually create the sender with <paramref name="clockVideo"/> set to
+    /// <see langword="false"/> and throttle <c>SendVideoAsync</c> in the hosting layer.
+    /// </remarks>
     public static int Create(
         out NDISender? sender,
         string?        senderName = null,

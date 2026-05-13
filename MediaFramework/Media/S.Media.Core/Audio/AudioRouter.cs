@@ -24,7 +24,9 @@ namespace S.Media.Core.Audio;
 /// </para>
 /// <para>
 /// All sources and sinks must agree on the router's nominal sample rate for
-/// routing and mixing. Optional per-leaf wrappers (e.g. FFmpeg
+/// routing and mixing. While <see cref="IsRunning"/> is <see langword="true"/>, that nominal rate does not change.
+/// When stopped, <see cref="ReconfigureSampleRate"/> can move <see cref="SampleRate"/> if every registered source and sink
+/// already matches the new rate (see method remarks). Optional per-leaf wrappers (e.g. FFmpeg
 /// <c>AdaptiveRateAudioSink</c>) may apply a tiny rate tweak only on the path
 /// into that sink without changing the router's graph rate.
 /// </para>
@@ -63,7 +65,8 @@ namespace S.Media.Core.Audio;
 /// </para>
 /// <para>
 /// <strong>Multi-output drift</strong>: when multiple outputs are attached,
-/// only the slaved sink's clock paces the router. Other sinks' physical clocks
+/// only one slaved sink's <see cref="IClockedSink"/> paces the router via <see cref="SlaveTo"/>.
+/// Other sinks' physical clocks
 /// (PortAudio's hardware crystal, NDI sender's internal pace) drift relative
 /// to the master at typical ±50 ppm hardware tolerance — over hours, the
 /// non-slaved sink's pump accumulates fill or empty pressure and eventually
@@ -72,6 +75,11 @@ namespace S.Media.Core.Audio;
 /// slow sink without retuning the master clock, wrap that sink with the FFmpeg
 /// <c>AdaptiveRateAudioSink</c> (per-sink <c>swresample</c> driven by
 /// <see cref="PumpPressurePlaybackHintMonitor"/> filtered to that sink id).
+/// </para>
+/// <para>
+/// Checklist (Tier E **18** / §Tier F **31**): a single coordinated <strong>master</strong> clock ppm policy plus synchronized <strong>drop/repeat</strong>
+/// across every sink is not implemented in this type — hosts combine <see cref="PumpPressure"/> telemetry, <see cref="PumpPressurePlaybackHintMonitor"/>, and per-sink
+/// FFmpeg <c>AdaptiveRateAudioSink</c> as needed.
 /// </para>
 /// </remarks>
 public sealed class AudioRouter : IDisposable
@@ -99,9 +107,12 @@ public sealed class AudioRouter : IDisposable
     private int _idCounter;
 
     /// <summary>
-    /// Nominal mix sample rate in Hz — fixed for the lifetime of this <see cref="AudioRouter"/>.
+    /// Nominal mix sample rate in Hz — unchanged while <see cref="IsRunning"/> is <see langword="true"/>.
     /// </summary>
-    /// <remarks>Changing rate at runtime without rebuilding the graph is not supported; construct a new router.</remarks>
+    /// <remarks>
+    /// When stopped, <see cref="ReconfigureSampleRate"/> may change the nominal rate if every source and sink already matches.
+    /// For per-leaf drift at a fixed nominal graph rate without replacing the router, wrap sinks with FFmpeg <c>AdaptiveRateAudioSink</c>.
+    /// </remarks>
     public int SampleRate => _sampleRate;
     public int ChunkSamples => _chunkSamples;
 
@@ -905,6 +916,14 @@ public sealed class AudioRouter : IDisposable
                 return;
 
             if (ChannelMap.TryAccumulateStereoToNInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
+            if (ChannelMap.TryAccumulatePackedIdentityInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
+            if (ChannelMap.TryAccumulatePackedPermutationInterleaved(src, srcChannels,
                     dst, dstChannels, map, samplesPerChannel, fromGain))
                 return;
 

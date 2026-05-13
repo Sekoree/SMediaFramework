@@ -1,9 +1,7 @@
 namespace S.Media.Core.Clock;
 
-public interface IMediaClock
+public interface IMediaClock : IPlaybackTimeline
 {
-    public TimeSpan CurrentPosition { get; }
-
     public event EventHandler<TimeSpan>? PositionChanged;
 
     public event EventHandler? AudioTick;
@@ -15,10 +13,6 @@ public interface IMediaClock
 
     /// <param name="cancellationToken">Thrown through while blocking on the timing driver shutdown.</param>
     public void Pause(CancellationToken cancellationToken = default);
-
-    public bool IsRunning { get; }
-
-    public void Seek(TimeSpan position);
 
     /// <summary>
     /// Slave the clock's position to an external <see cref="IPlaybackClock"/>

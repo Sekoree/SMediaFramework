@@ -63,6 +63,29 @@ public class AudioRouterControlTests
     }
 
     [Fact]
+    public void NaturalEof_FlushesFlushableSinks()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 64);
+        var src = new FiniteTestSource(Stereo, samplesPerChannelTotal: 200);
+        var sink = new FlushableSink(Stereo);
+
+        r.AddSource(src, "src");
+        r.AddSink(sink, "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        var flushBefore = sink.FlushCount;
+        r.Start();
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (r.IsRunning && DateTime.UtcNow < deadline)
+            Thread.Sleep(10);
+
+        Assert.False(r.IsRunning);
+        Assert.True(r.CompletedNaturally);
+        Assert.True(sink.FlushCount > flushBefore,
+            "natural EOF should call IFlushableSink.Flush from FinishRunLoopThreadLifetime");
+    }
+
+    [Fact]
     public void Pause_WhenNotRunning_IsNoOp()
     {
         using var r = new AudioRouter(SampleRate);
@@ -321,6 +344,28 @@ public class AudioRouterControlTests
                 for (var c = 0; c < Format.Channels; c++)
                     dst[s * Format.Channels + c] = _perChannel(c);
             return dst.Length;
+        }
+    }
+
+    /// <summary>Emits a fixed number of samples per channel then reports exhausted.</summary>
+    private sealed class FiniteTestSource(AudioFormat fmt, int samplesPerChannelTotal) : IAudioSource
+    {
+        private long _emittedSamples;
+
+        public AudioFormat Format { get; } = fmt;
+        public bool IsExhausted => _emittedSamples >= samplesPerChannelTotal;
+
+        public int ReadInto(Span<float> dst)
+        {
+            if (IsExhausted) return 0;
+            var samplesPerChannel = dst.Length / Format.Channels;
+            var remaining = samplesPerChannelTotal - (int)_emittedSamples;
+            if (samplesPerChannel > remaining) samplesPerChannel = remaining;
+            for (var s = 0; s < samplesPerChannel; s++)
+                for (var c = 0; c < Format.Channels; c++)
+                    dst[s * Format.Channels + c] = 1f;
+            _emittedSamples += samplesPerChannel;
+            return samplesPerChannel * Format.Channels;
         }
     }
 

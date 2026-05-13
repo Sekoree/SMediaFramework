@@ -10,8 +10,16 @@ namespace S.Media.FFmpeg.Video.Internal;
 /// <summary>
 /// Maps libav <see cref="AVPixelFormat.AV_PIX_FMT_D3D11"/> frames (see libavutil
 /// <c>hwcontext_d3d11va.h</c> — <c>AVFrame.data[0]</c> texture, <c>data[1]</c> array index)
-/// into <see cref="VideoWin32Nv12Backing"/> via DXGI shared NT handles.
+/// into <see cref="VideoWin32Nv12Backing"/> via DXGI shared NT handles, and records libav
+/// <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers for same-device GL upload (no <c>OpenSharedResource</c>).
 /// </summary>
+/// <remarks>
+/// For a <b>Core-only</b> portable descriptor of the same libav-held <c>ID3D11Texture2D</c> (no NT handle
+/// duplication), see <see cref="WindowsNv12D3D11TextureInterop.AllocToken"/> after resolving the decode
+/// <c>ID3D11Device</c> COM pointer (e.g. from <see cref="VideoHardwareDecodeContext"/>).
+/// <c>S.Media.OpenGL.Nv12Win32SharedHandleGpuUploader</c> uses <see cref="VideoWin32Nv12Backing.LibavD3D11Texture2DComPtr"/>
+/// when its D3D11 device matches <see cref="VideoWin32Nv12Backing.LibavD3D11DeviceComPtr"/>.
+/// </remarks>
 internal static unsafe class D3D11VaNv12BackingFactory
 {
     internal static VideoWin32Nv12Backing? TryCreateBacking(AVFrame* frame)
@@ -34,6 +42,7 @@ internal static unsafe class D3D11VaNv12BackingFactory
         var texture = new VorticeD3D11Texture2D((nint)pTex);
         try
         {
+            var deviceComPtr = texture.Device?.NativePointer ?? 0;
             using var dxgi = texture.QueryInterface<VorticeDxgiResource1>();
             var sharedHandle = dxgi.CreateSharedHandle(null, VorticeDxgiSharedFlags.None, null);
             if (sharedHandle == 0)
@@ -51,7 +60,7 @@ internal static unsafe class D3D11VaNv12BackingFactory
                 return null;
             }
 
-            return new VideoWin32Nv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice);
+            return new VideoWin32Nv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, deviceComPtr, (nint)pTex);
         }
         finally
         {

@@ -46,4 +46,34 @@ public sealed class PumpPressurePlaybackHintMonitorTests
         m.ApplyObservation(10, t0.AddSeconds(2));
         Assert.Equal(mid, m.HintPpmBias);
     }
+
+    [Fact]
+    public void ApplyObservation_manySteps_staysClamped_and_finite()
+    {
+        using var r = new AudioRouter(48_000, chunkSamples: 480);
+        using var m = new PumpPressurePlaybackHintMonitor(r, maxAbsPpm: 40, ppmPerDropPerSecond: 4);
+        var t0 = new DateTimeOffset(2026, 3, 1, 0, 0, 0, TimeSpan.Zero);
+        m.ApplyObservation(0, t0);
+        for (var i = 1; i <= 5000; i++)
+        {
+            m.ApplyObservation(i, t0.AddSeconds(i));
+            Assert.InRange(m.HintPpmBias, -40, 0);
+            Assert.True(double.IsFinite(m.HintPpmBias));
+        }
+    }
+
+    [Fact]
+    public void ApplyObservation_sinkFilterConstructor_manySteps_staysClamped_and_finite()
+    {
+        using var r = new AudioRouter(48_000, chunkSamples: 480);
+        using var m = new PumpPressurePlaybackHintMonitor(r, "slow-sink", maxAbsPpm: 40, ppmPerDropPerSecond: 4);
+        var t0 = new DateTimeOffset(2026, 4, 1, 12, 0, 0, TimeSpan.Zero);
+        m.ApplyObservation(0, t0);
+        for (var i = 1; i <= 5000; i++)
+        {
+            m.ApplyObservation(i, t0.AddSeconds(i));
+            Assert.InRange(m.HintPpmBias, -40, 0);
+            Assert.True(double.IsFinite(m.HintPpmBias));
+        }
+    }
 }

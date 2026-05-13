@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Threading;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Video;
@@ -36,6 +37,14 @@ dec.SeekPresentation(TimeSpan.Zero);
 using var ndi = new NDIOutput(ndiName, clockVideo: false, clockAudio: true,
     minimumVideoSubmitSpacing: null,
     videoTimecodeMode: NDIVideoTimecodeMode.MuxerPresentationTicks);
+
+if (opt.NdiWaitFirstReceiverMs > 0)
+{
+    var ms = (uint)opt.NdiWaitFirstReceiverMs;
+    var n = ndi.GetReceiverConnectionCount(ms);
+    if (opt.Verbose)
+        Console.Error.WriteLine($"[ndi-debug] waited up to {ms} ms for first receiver — count={n}");
+}
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
@@ -82,7 +91,18 @@ else if (!opt.VideoOnly)
 
 cts.Cancel();
 if (hudTask is not null)
-    try { hudTask.Wait(TimeSpan.FromSeconds(2)); } catch { /* ignore */ }
+{
+    try { hudTask.Wait(TimeSpan.FromSeconds(2)); }
+    catch (Exception ex)
+    {
+#if DEBUG
+        MediaDiagnostics.LogError(ex, "NDIPlayer: HUD task wait");
+#else
+        if (opt.Verbose)
+            Console.Error.WriteLine($"[ndi-debug] HUD task wait failed: {ex.Message}");
+#endif
+    }
+}
 
 return 0;
 
@@ -151,6 +171,8 @@ static void WriteUsage()
     Console.WriteLine("  --debug-ms=n     Interval for --verbose HUD (default 500, min 100).");
     Console.WriteLine("  --no-wall-pace   Disable realtime wall pacing (decode/send as fast as CPU allows).");
     Console.WriteLine("  --no-wall-drift-correct  Disable wall-anchor nudging (default: on with wall pace).");
+    Console.WriteLine("  --ndi-wait-first-receiver-ms=n  Block up to n ms for first NDI receiver (0=off, max 300000).");
+    Console.WriteLine("  Lab (dotnet test, not runtime): RUN_NDI_EGRESS_SOAK=1, RUN_NDI_EGRESS_SOAK_ROUNDS=<n>, RUN_NDI_EGRESS_SOAK_STRESS=1 — NdiEgressPresentationTimelineTests; RUN_NDI_MUX_SOAK=1 — NdiEgressMuxPlayheadClockTests; RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.");
     Console.WriteLine("  Shared-mux pause (app hosts): after stopping pumps, call MediaContainerDecoder.FlushCodecPipelines()");
     Console.WriteLine("    or pass decoder.FlushCodecPipelines to AvPlaybackCoordinator.Pause(..., flushSharedMuxAfterPause).");
 }
@@ -362,6 +384,7 @@ static bool TryParseArgs(string[] args, out NdiPlayerCliOptions opt, out string 
     var debugMs = 500;
     var wallPace = true;
     var wallDriftCorrect = true;
+    var ndiWaitFirstRxMs = 0;
     var rest = new List<string>();
     foreach (var a in args)
     {
@@ -393,6 +416,12 @@ static bool TryParseArgs(string[] args, out NdiPlayerCliOptions opt, out string 
                     break;
                 }
 
+                if (TryParseKeyedInt(a, "--ndi-wait-first-receiver-ms=", out var nwr) && nwr >= 0)
+                {
+                    ndiWaitFirstRxMs = Math.Clamp(nwr, 0, 300_000);
+                    break;
+                }
+
                 rest.Add(a);
                 break;
         }
@@ -402,7 +431,8 @@ static bool TryParseArgs(string[] args, out NdiPlayerCliOptions opt, out string 
         return false;
     if (rest.Count != 2)
         return false;
-    opt = new NdiPlayerCliOptions(videoOnly, audioOnly, noHw, verbose, debugMs, wallPace, wallDriftCorrect);
+    opt = new NdiPlayerCliOptions(videoOnly, audioOnly, noHw, verbose, debugMs, wallPace, wallDriftCorrect,
+        ndiWaitFirstRxMs);
     mediaPath = rest[0];
     ndiName = rest[1];
     return true;
@@ -423,7 +453,8 @@ file readonly record struct NdiPlayerCliOptions(
     bool Verbose,
     int DebugIntervalMs,
     bool WallPace,
-    bool WallDriftCorrect);
+    bool WallDriftCorrect,
+    int NdiWaitFirstReceiverMs);
 
 /// <summary>Cross-thread counters for <see cref="DebugHudLoop"/>.</summary>
 file sealed class NdiDebugState

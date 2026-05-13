@@ -18,6 +18,10 @@ public sealed class YuvDmabufEglInterop
     public Func<string, nint> ResolveProcedureAddress { get; }
 }
 
+/// <summary>
+/// Linux EGL/GL upload for NV12, P010, and P016 DRM PRIME dma-bufs (split-plane EGL import). Other decoded layouts are not imported here — see
+/// <see cref="LinuxDmabufGlHardwareFormats.IsSupportedForPrimeGlImport"/>.
+/// </summary>
 public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
 {
     private const int EGL_NONE = 0x3038;
@@ -126,7 +130,10 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (format.PixelFormat != global::S.Media.Core.Video.PixelFormat.Nv12)
-            throw new ArgumentException($"expected NV12 renderer format ({format.PixelFormat}).", nameof(format));
+        {
+            var blocker = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(format.PixelFormat)!;
+            throw new ArgumentException($"expected NV12 renderer format ({format.PixelFormat}): {blocker}", nameof(format));
+        }
         if ((dma.YPlaneDrmFormatModifier != 0 || dma.UvPlaneDrmFormatModifier != 0) && !_dmaBufImportModifiersExt)
             return false;
 
@@ -149,6 +156,146 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
 
         if (!AppendPlaneAttribs(dma.UvPlaneFd, dma.UvPlaneOffsetBytes, dma.UvPlanePitchBytes, cw, ch,
                 DrmPixelFormats.Gr88,
+                dma.UvPlaneDrmFormatModifier))
+        {
+            _eglDestroyImage(_dpy, eglY);
+            return false;
+        }
+
+        IntPtr eglUv;
+        fixed (int* attribUv = _attribsScratch)
+        {
+            eglUv = _eglCreateImage(_dpy, IntPtr.Zero, EGL_LINUX_DMA_BUF_EXT, IntPtr.Zero, attribUv);
+        }
+
+        if (eglUv == IntPtr.Zero || _eglGetError() != EGL_SUCCESS_CONST)
+        {
+            _eglDestroyImage(_dpy, eglY);
+            return false;
+        }
+
+        uint glTarget = (uint)TextureTarget.Texture2D;
+        bool glOk;
+
+        _gl.BindTexture(TextureTarget.Texture2D, texYId);
+        _glEGLStorage(glTarget, (void*)(nint)eglY, null);
+        glOk = _gl.GetError() == GLEnum.NoError;
+
+        _gl.BindTexture(TextureTarget.Texture2D, texUvId);
+        if (glOk)
+        {
+            _glEGLStorage(glTarget, (void*)(nint)eglUv, null);
+            glOk = _gl.GetError() == GLEnum.NoError;
+        }
+
+        _eglDestroyImage(_dpy, eglY);
+        _eglDestroyImage(_dpy, eglUv);
+
+        return glOk;
+    }
+
+    /// <summary>P010 semi-planar: Y as <see cref="DrmPixelFormats.R16"/>, UV as <see cref="DrmPixelFormats.Gr1616"/>.</summary>
+    public bool TryUploadP010(uint texYId, uint texUvId, in VideoFormat format, VideoDmabufP010Backing dma)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (format.PixelFormat != global::S.Media.Core.Video.PixelFormat.P010)
+        {
+            var blocker = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(format.PixelFormat)!;
+            throw new ArgumentException($"expected P010 renderer format ({format.PixelFormat}): {blocker}", nameof(format));
+        }
+        if ((dma.YPlaneDrmFormatModifier != 0 || dma.UvPlaneDrmFormatModifier != 0) && !_dmaBufImportModifiersExt)
+            return false;
+
+        int cw = PixelFormatInfo.ChromaWidth420(format.Width);
+        int ch = PixelFormatInfo.ChromaHeight420(format.Height);
+        if (!AppendPlaneAttribs(dma.YPlaneFd, dma.YPlaneOffsetBytes, dma.YPlanePitchBytes, format.Width,
+                format.Height,
+                DrmPixelFormats.R16,
+                dma.YPlaneDrmFormatModifier))
+            return false;
+
+        IntPtr eglY;
+        fixed (int* attrib = _attribsScratch)
+        {
+            eglY = _eglCreateImage(_dpy, IntPtr.Zero, EGL_LINUX_DMA_BUF_EXT, IntPtr.Zero, attrib);
+        }
+
+        if (eglY == IntPtr.Zero || _eglGetError() != EGL_SUCCESS_CONST)
+            return false;
+
+        if (!AppendPlaneAttribs(dma.UvPlaneFd, dma.UvPlaneOffsetBytes, dma.UvPlanePitchBytes, cw, ch,
+                DrmPixelFormats.Gr1616,
+                dma.UvPlaneDrmFormatModifier))
+        {
+            _eglDestroyImage(_dpy, eglY);
+            return false;
+        }
+
+        IntPtr eglUv;
+        fixed (int* attribUv = _attribsScratch)
+        {
+            eglUv = _eglCreateImage(_dpy, IntPtr.Zero, EGL_LINUX_DMA_BUF_EXT, IntPtr.Zero, attribUv);
+        }
+
+        if (eglUv == IntPtr.Zero || _eglGetError() != EGL_SUCCESS_CONST)
+        {
+            _eglDestroyImage(_dpy, eglY);
+            return false;
+        }
+
+        uint glTarget = (uint)TextureTarget.Texture2D;
+        bool glOk;
+
+        _gl.BindTexture(TextureTarget.Texture2D, texYId);
+        _glEGLStorage(glTarget, (void*)(nint)eglY, null);
+        glOk = _gl.GetError() == GLEnum.NoError;
+
+        _gl.BindTexture(TextureTarget.Texture2D, texUvId);
+        if (glOk)
+        {
+            _glEGLStorage(glTarget, (void*)(nint)eglUv, null);
+            glOk = _gl.GetError() == GLEnum.NoError;
+        }
+
+        _eglDestroyImage(_dpy, eglY);
+        _eglDestroyImage(_dpy, eglUv);
+
+        return glOk;
+    }
+
+    /// <summary>P016 semi-planar: same EGL plane FOURCCs as <see cref="TryUploadP010"/> (16-bit words in memory).</summary>
+    public bool TryUploadP016(uint texYId, uint texUvId, in VideoFormat format, VideoDmabufP016Backing dma)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (format.PixelFormat != global::S.Media.Core.Video.PixelFormat.P016)
+        {
+            var blocker = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(format.PixelFormat)!;
+            throw new ArgumentException($"expected P016 renderer format ({format.PixelFormat}): {blocker}", nameof(format));
+        }
+        if ((dma.YPlaneDrmFormatModifier != 0 || dma.UvPlaneDrmFormatModifier != 0) && !_dmaBufImportModifiersExt)
+            return false;
+
+        int cw = PixelFormatInfo.ChromaWidth420(format.Width);
+        int ch = PixelFormatInfo.ChromaHeight420(format.Height);
+        if (!AppendPlaneAttribs(dma.YPlaneFd, dma.YPlaneOffsetBytes, dma.YPlanePitchBytes, format.Width,
+                format.Height,
+                DrmPixelFormats.R16,
+                dma.YPlaneDrmFormatModifier))
+            return false;
+
+        IntPtr eglY;
+        fixed (int* attrib = _attribsScratch)
+        {
+            eglY = _eglCreateImage(_dpy, IntPtr.Zero, EGL_LINUX_DMA_BUF_EXT, IntPtr.Zero, attrib);
+        }
+
+        if (eglY == IntPtr.Zero || _eglGetError() != EGL_SUCCESS_CONST)
+            return false;
+
+        if (!AppendPlaneAttribs(dma.UvPlaneFd, dma.UvPlaneOffsetBytes, dma.UvPlanePitchBytes, cw, ch,
+                DrmPixelFormats.Gr1616,
                 dma.UvPlaneDrmFormatModifier))
         {
             _eglDestroyImage(_dpy, eglY);

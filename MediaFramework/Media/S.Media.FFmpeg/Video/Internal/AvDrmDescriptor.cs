@@ -97,34 +97,11 @@ internal static unsafe class DrmPrimeNv12BackingFactory
 
     private static VideoDmabufNv12Backing? TryParseNv12(AVFrame* frame)
     {
-        if (frame == null || (AVPixelFormat)frame->format != AVPixelFormat.AV_PIX_FMT_DRM_PRIME)
+        if (!TryParseTwoPlaneLayer(frame, DrmPixelFormats.Nv12, out var pY, out var pUv, out var hdr))
             return null;
 
-        byte* blob = frame->data[0];
-        if (blob == null)
-            return null;
-
-        AvDrmFrameDescriptorInterop.WarnIfInteropSizeMismatchLp64LoggedOnce();
-
-        ref readonly var hdr =
-            ref *(AvDrmFrameDescriptorInterop*)(void*)blob;
-
-        if (hdr.NbObjects is <= 0 or > AvDrmConstants.MaxObjects ||
-            hdr.NbLayers is <= 0 or > AvDrmConstants.MaxObjects)
-            return null;
-
-        ref readonly AvDrmLayerDescriptor layer = ref hdr.Layer0;
-        if (layer.FourccDrmFormat != DrmPixelFormats.Nv12 || layer.NbPlanes != 2)
-            return null;
-
-        ref readonly var pY = ref layer.Plane0;
-        ref readonly var pUv = ref layer.Plane1;
-
-        if ((uint)pY.ObjectIndex >= (uint)hdr.NbObjects || (uint)pUv.ObjectIndex >= (uint)hdr.NbObjects)
-            return null;
-
-        AvDrmObjectDescriptor yObj = GetObject(in hdr, pY.ObjectIndex);
-        AvDrmObjectDescriptor uvObj = GetObject(in hdr, pUv.ObjectIndex);
+        AvDrmObjectDescriptor yObj = GetDrmObject(in hdr, pY.ObjectIndex);
+        AvDrmObjectDescriptor uvObj = GetDrmObject(in hdr, pUv.ObjectIndex);
 
         int dupY = FFmpegLinuxDup.Dup(yObj.Fd);
         if (dupY < 0)
@@ -155,7 +132,7 @@ internal static unsafe class DrmPrimeNv12BackingFactory
         }
     }
 
-    private static AvDrmObjectDescriptor GetObject(in AvDrmFrameDescriptorInterop hdr, int index) =>
+    internal static AvDrmObjectDescriptor GetDrmObject(in AvDrmFrameDescriptorInterop hdr, int index) =>
         index switch
         {
             0 => hdr.Object0,
@@ -164,4 +141,129 @@ internal static unsafe class DrmPrimeNv12BackingFactory
             3 => hdr.Object3,
             _ => default,
         };
+
+    internal static bool TryParseTwoPlaneLayer(AVFrame* frame, uint layerFourcc,
+        out AvDrmPlaneDescriptor pY, out AvDrmPlaneDescriptor pUv, out AvDrmFrameDescriptorInterop hdr)
+    {
+        pY = default;
+        pUv = default;
+        hdr = default;
+
+        if (frame == null || (AVPixelFormat)frame->format != AVPixelFormat.AV_PIX_FMT_DRM_PRIME)
+            return false;
+
+        byte* blob = frame->data[0];
+        if (blob == null)
+            return false;
+
+        AvDrmFrameDescriptorInterop.WarnIfInteropSizeMismatchLp64LoggedOnce();
+
+        hdr = *(AvDrmFrameDescriptorInterop*)(void*)blob;
+
+        if (hdr.NbObjects is <= 0 or > AvDrmConstants.MaxObjects ||
+            hdr.NbLayers is <= 0 or > AvDrmConstants.MaxObjects)
+            return false;
+
+        ref readonly AvDrmLayerDescriptor layer = ref hdr.Layer0;
+        if (layer.FourccDrmFormat != layerFourcc || layer.NbPlanes != 2)
+            return false;
+
+        pY = layer.Plane0;
+        pUv = layer.Plane1;
+
+        if ((uint)pY.ObjectIndex >= (uint)hdr.NbObjects || (uint)pUv.ObjectIndex >= (uint)hdr.NbObjects)
+            return false;
+
+        return true;
+    }
+}
+
+/// <summary>Parses DRM PRIME metadata into P010 semi-planar dma-bufs (two-plane <c>DRM_FORMAT_P010</c> layer).</summary>
+internal static unsafe class DrmPrimeP010BackingFactory
+{
+    internal static VideoDmabufP010Backing? TryCreateBacking(AVFrame* frame)
+    {
+        if (!OperatingSystem.IsLinux())
+            return null;
+
+        if (!DrmPrimeNv12BackingFactory.TryParseTwoPlaneLayer(frame, DrmPixelFormats.P010, out var pY, out var pUv,
+                out var hdr))
+            return null;
+
+        AvDrmObjectDescriptor yObj = DrmPrimeNv12BackingFactory.GetDrmObject(in hdr, pY.ObjectIndex);
+        AvDrmObjectDescriptor uvObj = DrmPrimeNv12BackingFactory.GetDrmObject(in hdr, pUv.ObjectIndex);
+
+        int dupY = FFmpegLinuxDup.Dup(yObj.Fd);
+        if (dupY < 0)
+            return null;
+
+        int dupUv = FFmpegLinuxDup.Dup(uvObj.Fd);
+        if (dupUv < 0)
+        {
+            FFmpegLinuxDup.CloseSilently(dupY);
+            return null;
+        }
+
+        try
+        {
+            long yPitch = (long)pY.PitchBytes;
+            long uvPitch = (long)pUv.PitchBytes;
+            if (yPitch <= 0 || yPitch > int.MaxValue || uvPitch <= 0 || uvPitch > int.MaxValue)
+                throw new InvalidOperationException("invalid DRM dma-buf pitch.");
+
+            return new VideoDmabufP010Backing(dupY, pY.OffsetBytes, (int)yPitch,
+                dupUv, pUv.OffsetBytes, (int)uvPitch, yObj.FormatModifier, uvObj.FormatModifier);
+        }
+        catch
+        {
+            FFmpegLinuxDup.CloseSilently(dupUv);
+            FFmpegLinuxDup.CloseSilently(dupY);
+            throw;
+        }
+    }
+}
+
+/// <summary>Parses DRM PRIME metadata into P016 semi-planar dma-bufs (two-plane <c>DRM_FORMAT_P016</c> layer).</summary>
+internal static unsafe class DrmPrimeP016BackingFactory
+{
+    internal static VideoDmabufP016Backing? TryCreateBacking(AVFrame* frame)
+    {
+        if (!OperatingSystem.IsLinux())
+            return null;
+
+        if (!DrmPrimeNv12BackingFactory.TryParseTwoPlaneLayer(frame, DrmPixelFormats.P016, out var pY, out var pUv,
+                out var hdr))
+            return null;
+
+        AvDrmObjectDescriptor yObj = DrmPrimeNv12BackingFactory.GetDrmObject(in hdr, pY.ObjectIndex);
+        AvDrmObjectDescriptor uvObj = DrmPrimeNv12BackingFactory.GetDrmObject(in hdr, pUv.ObjectIndex);
+
+        int dupY = FFmpegLinuxDup.Dup(yObj.Fd);
+        if (dupY < 0)
+            return null;
+
+        int dupUv = FFmpegLinuxDup.Dup(uvObj.Fd);
+        if (dupUv < 0)
+        {
+            FFmpegLinuxDup.CloseSilently(dupY);
+            return null;
+        }
+
+        try
+        {
+            long yPitch = (long)pY.PitchBytes;
+            long uvPitch = (long)pUv.PitchBytes;
+            if (yPitch <= 0 || yPitch > int.MaxValue || uvPitch <= 0 || uvPitch > int.MaxValue)
+                throw new InvalidOperationException("invalid DRM dma-buf pitch.");
+
+            return new VideoDmabufP016Backing(dupY, pY.OffsetBytes, (int)yPitch,
+                dupUv, pUv.OffsetBytes, (int)uvPitch, yObj.FormatModifier, uvObj.FormatModifier);
+        }
+        catch
+        {
+            FFmpegLinuxDup.CloseSilently(dupUv);
+            FFmpegLinuxDup.CloseSilently(dupY);
+            throw;
+        }
+    }
 }

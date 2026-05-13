@@ -33,6 +33,15 @@ namespace S.Media.Core.Audio;
 /// <item><c>ChannelMap.StereoToNSwapped(4)</c> — same as <c>[1,0,1,0]</c> (R,L,R,L into quad).</item>
 /// </list>
 /// </para>
+/// <para>
+/// Checklist **Tier E** **15** shipped SIMD for same-width packed permutations (<c>N ∈ {3, 4, 5, 6, 7, 8}</c> via
+/// <see cref="TryAccumulatePackedPermutationInterleaved"/>; <c>N = 4</c>: SSE <c>SHUFPS</c>; <c>N ∈ {3, 5, 6, 7, 8}</c>: AVX2),
+/// stereo → quad paired duplicates (<c>[0,0,1,1]</c>, <c>[1,1,0,0]</c> via
+/// <see cref="TryAccumulateStereoDuplexGroupedInterleaved"/> / <see cref="TryAccumulateStereoDuplexGroupedSwappedInterleaved"/>),
+/// and stereo routes using only L/R/silence (<see cref="TryAccumulateStereoSilenceOrZeroDupInterleaved"/>, e.g. <c>[-1,0,0,-1]</c>),
+/// plus the other SIMD paths ordered in <see cref="ApplyAdditive"/> before its scalar fallback.
+/// Maps that do not match any of those fast paths use the scalar accumulation loop; new specialized kernels are profile-driven only — **§Tier F** row **28**.
+/// </para>
 /// </remarks>
 public readonly struct ChannelMap : IEquatable<ChannelMap>
 {
@@ -158,6 +167,14 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
                 this, samplesPerChannel, uniformGain: 1f))
             return;
 
+        if (TryAccumulateStereoDuplexGroupedInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateStereoDuplexGroupedSwappedInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
         if (TryAccumulateStereoDuplexWideSwappedInterleaved(src, srcChannels, dst, outChannels,
                 this, samplesPerChannel, uniformGain: 1f))
             return;
@@ -167,6 +184,14 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
             return;
 
         if (TryAccumulateStereoToNInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulatePackedIdentityInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulatePackedPermutationInterleaved(src, srcChannels, dst, outChannels,
                 this, samplesPerChannel, uniformGain: 1f))
             return;
 
@@ -904,6 +929,303 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         return RunStereoToNPooled(src, dst, nOut, samplesPerChannel, uniformGain);
     }
 
+    /// <summary>
+    /// Packed interleaved identity: <c>map[i] == i</c> for every output, and
+    /// <c>srcChannels == dstChannels == OutputChannels</c> (e.g. 5.1 passthrough into a same-width sink).
+    /// </summary>
+    internal static bool TryAccumulatePackedIdentityInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        var ch = routing.Length;
+        if (ch < 3 || srcChannels != ch || dstChannels != ch)
+            return false;
+
+        for (var i = 0; i < ch; i++)
+        {
+            if (routing[i] != i)
+                return false;
+        }
+
+        if (map.RequiredInputChannels != ch)
+            return false;
+
+        var total = samplesPerChannel * ch;
+        if (src.Length < total || dst.Length < total)
+            return false;
+
+        var vn = Vector<float>.Count;
+        var g = new Vector<float>(uniformGain);
+        var iFloat = 0;
+        var limit = total - total % vn;
+        for (; iFloat < limit; iFloat += vn)
+        {
+            var sin = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(iFloat, vn))[0];
+            var acc = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(iFloat, vn))[0];
+            MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(iFloat, vn))[0] = acc + sin * g;
+        }
+
+        for (; iFloat < total; iFloat++)
+            dst[iFloat] += src[iFloat] * uniformGain;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Packed interleaved same-width permutation: <c>srcChannels == dstChannels == N</c> for <c>N ∈ {3, 4, 5, 6, 7, 8}</c>,
+    /// <c>map</c> is a bijection on <c>0..N-1</c>, uniform gain (any finite value).
+    /// </summary>
+    internal static unsafe bool TryAccumulatePackedPermutationInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f || !float.IsFinite(uniformGain))
+            return false;
+
+        var routing = map.AsSpan();
+        var ch = routing.Length;
+        if (ch is not (3 or 4 or 5 or 6 or 7 or 8) || srcChannels != ch || dstChannels != ch)
+            return false;
+
+        if (map.RequiredInputChannels != ch)
+            return false;
+
+        if (!IsPackedPermutationRouting(routing, ch))
+            return false;
+
+        var total = samplesPerChannel * ch;
+        if (src.Length < total || dst.Length < total)
+            return false;
+
+        if (ch == 3)
+        {
+            if (!Avx2.IsSupported)
+                return false;
+
+            var idx = Vector256.Create(
+                routing[0], routing[1], routing[2],
+                3, 4, 5, 6, 7);
+            var gain3 = Vector256.Create(uniformGain);
+            fixed (float* pSrc = src)
+            fixed (float* pDst = dst)
+            {
+                var pad = stackalloc float[8];
+                for (var s = 0; s < samplesPerChannel; s++)
+                {
+                    var off = s * 3;
+                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 12);
+                    pad[3] = 0;
+                    pad[4] = 0;
+                    pad[5] = 0;
+                    pad[6] = 0;
+                    pad[7] = 0;
+                    var v = Avx.LoadVector256(pad);
+                    var p = Avx2.PermuteVar8x32(v, idx);
+                    var pM = Avx.Multiply(p, gain3);
+                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 12);
+                    pad[3] = 0;
+                    pad[4] = 0;
+                    pad[5] = 0;
+                    pad[6] = 0;
+                    pad[7] = 0;
+                    var acc = Avx.LoadVector256(pad);
+                    var sum = Avx.Add(acc, pM);
+                    Avx.Store(pad, sum);
+                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 12);
+                }
+            }
+
+            return true;
+        }
+
+        if (ch == 4)
+        {
+            if (!Sse.IsSupported)
+                return false;
+
+            var imm = BuildShufpsImm4(routing);
+            var g = Vector128.Create(uniformGain);
+#pragma warning disable CA1857 // SHUFPS immediate is a validated permutation encoding, not a hot-spot literal.
+            fixed (float* pSrc = src)
+            fixed (float* pDst = dst)
+            {
+                for (var s = 0; s < samplesPerChannel; s++)
+                {
+                    var i = s * 4;
+                    var v = Sse.LoadVector128(pSrc + i);
+                    var p = Sse.Shuffle(v, v, imm);
+                    var acc = Sse.LoadVector128(pDst + i);
+                    Sse.Store(pDst + i, Sse.Add(acc, Sse.Multiply(p, g)));
+                }
+            }
+#pragma warning restore CA1857
+
+            return true;
+        }
+
+        if (ch == 5)
+        {
+            if (!Avx2.IsSupported)
+                return false;
+
+            var idx = Vector256.Create(
+                routing[0], routing[1], routing[2], routing[3], routing[4],
+                5, 6, 7);
+            var gain5 = Vector256.Create(uniformGain);
+            fixed (float* pSrc = src)
+            fixed (float* pDst = dst)
+            {
+                var pad = stackalloc float[8];
+                for (var s = 0; s < samplesPerChannel; s++)
+                {
+                    var off = s * 5;
+                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 20);
+                    pad[5] = 0;
+                    pad[6] = 0;
+                    pad[7] = 0;
+                    var v = Avx.LoadVector256(pad);
+                    var p = Avx2.PermuteVar8x32(v, idx);
+                    var pM = Avx.Multiply(p, gain5);
+                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 20);
+                    pad[5] = 0;
+                    pad[6] = 0;
+                    pad[7] = 0;
+                    var acc = Avx.LoadVector256(pad);
+                    var sum = Avx.Add(acc, pM);
+                    Avx.Store(pad, sum);
+                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 20);
+                }
+            }
+
+            return true;
+        }
+
+        if (ch == 6)
+        {
+            if (!Avx2.IsSupported)
+                return false;
+
+            var idx = Vector256.Create(
+                routing[0], routing[1], routing[2], routing[3],
+                routing[4], routing[5], 6, 7);
+            var gain6 = Vector256.Create(uniformGain);
+            fixed (float* pSrc = src)
+            fixed (float* pDst = dst)
+            {
+                var pad = stackalloc float[8];
+                pad[6] = 0;
+                pad[7] = 0;
+                for (var s = 0; s < samplesPerChannel; s++)
+                {
+                    var off = s * 6;
+                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 24);
+                    var v = Avx.LoadVector256(pad);
+                    var p = Avx2.PermuteVar8x32(v, idx);
+                    var pM = Avx.Multiply(p, gain6);
+                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 24);
+                    pad[6] = 0;
+                    pad[7] = 0;
+                    var acc = Avx.LoadVector256(pad);
+                    var sum = Avx.Add(acc, pM);
+                    Avx.Store(pad, sum);
+                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 24);
+                }
+            }
+
+            return true;
+        }
+
+        if (ch == 7)
+        {
+            if (!Avx2.IsSupported)
+                return false;
+
+            var idx = Vector256.Create(
+                routing[0], routing[1], routing[2], routing[3],
+                routing[4], routing[5], routing[6], 7);
+            var gain7 = Vector256.Create(uniformGain);
+            fixed (float* pSrc = src)
+            fixed (float* pDst = dst)
+            {
+                var pad = stackalloc float[8];
+                for (var s = 0; s < samplesPerChannel; s++)
+                {
+                    var off = s * 7;
+                    Unsafe.CopyBlockUnaligned(pad, pSrc + off, 28);
+                    pad[7] = 0;
+                    var v = Avx.LoadVector256(pad);
+                    var p = Avx2.PermuteVar8x32(v, idx);
+                    var pM = Avx.Multiply(p, gain7);
+                    Unsafe.CopyBlockUnaligned(pad, pDst + off, 28);
+                    pad[7] = 0;
+                    var acc = Avx.LoadVector256(pad);
+                    var sum = Avx.Add(acc, pM);
+                    Avx.Store(pad, sum);
+                    Unsafe.CopyBlockUnaligned(pDst + off, pad, 28);
+                }
+            }
+
+            return true;
+        }
+
+        if (!Avx2.IsSupported)
+            return false;
+
+        var idx8 = Vector256.Create(
+            routing[0], routing[1], routing[2], routing[3],
+            routing[4], routing[5], routing[6], routing[7]);
+        var g256 = Vector256.Create(uniformGain);
+        fixed (float* pSrc = src)
+        fixed (float* pDst = dst)
+        {
+            for (var s = 0; s < samplesPerChannel; s++)
+            {
+                var off = s * 8;
+                var v = Avx.LoadVector256(pSrc + off);
+                var p = Avx2.PermuteVar8x32(v, idx8);
+                var acc = Avx.LoadVector256(pDst + off);
+                Avx.Store(pDst + off, Avx.Add(Avx.Multiply(p, g256), acc));
+            }
+        }
+
+        return true;
+    }
+
+    private static bool IsPackedPermutationRouting(ReadOnlySpan<int> routing, int n)
+    {
+        if (routing.Length != n || n > 16)
+            return false;
+
+        Span<int> mark = stackalloc int[16];
+        mark.Clear();
+        for (var i = 0; i < n; i++)
+        {
+            var c = routing[i];
+            if ((uint)c >= (uint)n)
+                return false;
+            if (mark[c] != 0)
+                return false;
+            mark[c] = 1;
+        }
+
+        return true;
+    }
+
+    private static byte BuildShufpsImm4(ReadOnlySpan<int> map)
+    {
+        byte imm = 0;
+        for (var i = 0; i < 4; i++)
+            imm |= (byte)((map[i] & 3) << (i * 2));
+
+        return imm;
+    }
+
     /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[0,1,0,1]</c>), uniform gain.</summary>
     internal static unsafe bool TryAccumulateStereoDuplexWideInterleaved(
         ReadOnlySpan<float> src, int srcChannels,
@@ -1023,6 +1345,269 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
             dst[dstBase + 1] += R;
             dst[dstBase + 2] += L;
             dst[dstBase + 3] += R;
+        }
+
+        return true;
+    }
+
+    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[0,0,1,1]</c> — L,L,R,R per frame), uniform gain.</summary>
+    internal static unsafe bool TryAccumulateStereoDuplexGroupedInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        if (routing.Length != 4 || srcChannels != 2 || dstChannels != 4) return false;
+        if (routing[0] != 0 || routing[1] != 0 || routing[2] != 1 || routing[3] != 1) return false;
+        if (map.RequiredInputChannels != 2) return false;
+
+        var vn = Vector<float>.Count;
+        if ((vn % 2) != 0) return false;
+
+        var stereoFloats = samplesPerChannel * 2;
+        var g = new Vector<float>(uniformGain);
+
+        var i = 0;
+        var limit = stereoFloats - stereoFloats % vn;
+
+        if (Avx.IsSupported && vn == 16)
+        {
+            var g256 = Vector256.Create(uniformGain);
+            var limit16 = stereoFloats - stereoFloats % 16;
+            for (; i < limit16; i += 16)
+            {
+                for (var pass = 0; pass < 2; pass++)
+                {
+                    var off = pass * 8;
+                    fixed (float* pSrc = src.Slice(i + off))
+                    fixed (float* pDst = dst.Slice((i + off) * 2))
+                    {
+                        var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                        var lo = m.GetLower();
+                        var hi = m.GetUpper();
+                        var d0 = Sse.UnpackLow(lo, lo);
+                        var d1 = Sse.UnpackHigh(lo, lo);
+                        var d2 = Sse.UnpackLow(hi, hi);
+                        var d3 = Sse.UnpackHigh(hi, hi);
+                        Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), d0));
+                        Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), d1));
+                        Sse.Store(pDst + 8, Sse.Add(Sse.LoadVector128(pDst + 8), d2));
+                        Sse.Store(pDst + 12, Sse.Add(Sse.LoadVector128(pDst + 12), d3));
+                    }
+                }
+            }
+        }
+        else if (Avx.IsSupported && vn == 8)
+        {
+            var g256 = Vector256.Create(uniformGain);
+            for (; i < limit; i += 8)
+            {
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                    var lo = m.GetLower();
+                    var hi = m.GetUpper();
+                    var d0 = Sse.UnpackLow(lo, lo);
+                    var d1 = Sse.UnpackHigh(lo, lo);
+                    var d2 = Sse.UnpackLow(hi, hi);
+                    var d3 = Sse.UnpackHigh(hi, hi);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), d0));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), d1));
+                    Sse.Store(pDst + 8, Sse.Add(Sse.LoadVector128(pDst + 8), d2));
+                    Sse.Store(pDst + 12, Sse.Add(Sse.LoadVector128(pDst + 12), d3));
+                }
+            }
+        }
+        else if (Sse.IsSupported && vn == 4)
+        {
+            var g128 = Vector128.Create(uniformGain);
+            for (; i < limit; i += 4)
+            {
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Sse.Multiply(Sse.LoadVector128(pSrc), g128);
+                    var d0 = Sse.UnpackLow(m, m);
+                    var d1 = Sse.UnpackHigh(m, m);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), d0));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), d1));
+                }
+            }
+        }
+        else
+        {
+            Span<float> scratch = stackalloc float[vn * 2];
+            for (; i < limit; i += vn)
+            {
+                var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(i, vn))[0] * g;
+                ref var sc = ref MemoryMarshal.GetReference(scratch);
+                for (var j = 0; j < vn; j += 2)
+                {
+                    var L = m[j];
+                    var R = m[j + 1];
+                    var p = j * 2;
+                    Unsafe.Add(ref sc, p) = L;
+                    Unsafe.Add(ref sc, p + 1) = L;
+                    Unsafe.Add(ref sc, p + 2) = R;
+                    Unsafe.Add(ref sc, p + 3) = R;
+                }
+
+                var dstBase = i * 2;
+                var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
+                var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
+
+                var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
+                var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+            }
+        }
+
+        for (; i < stereoFloats; i += 2)
+        {
+            var L = src[i] * uniformGain;
+            var R = src[i + 1] * uniformGain;
+            var dstBase = i * 2;
+            dst[dstBase + 0] += L;
+            dst[dstBase + 1] += L;
+            dst[dstBase + 2] += R;
+            dst[dstBase + 3] += R;
+        }
+
+        return true;
+    }
+
+    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[1,1,0,0]</c> — R,R,L,L per frame), uniform gain.</summary>
+    internal static unsafe bool TryAccumulateStereoDuplexGroupedSwappedInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        if (routing.Length != 4 || srcChannels != 2 || dstChannels != 4) return false;
+        if (routing[0] != 1 || routing[1] != 1 || routing[2] != 0 || routing[3] != 0) return false;
+        if (map.RequiredInputChannels != 2) return false;
+
+        var vn = Vector<float>.Count;
+        if ((vn % 2) != 0) return false;
+
+        var stereoFloats = samplesPerChannel * 2;
+        var g = new Vector<float>(uniformGain);
+
+        var i = 0;
+        var limit = stereoFloats - stereoFloats % vn;
+
+        if (Avx.IsSupported && vn == 16)
+        {
+            var g256 = Vector256.Create(uniformGain);
+            var limit16 = stereoFloats - stereoFloats % 16;
+            for (; i < limit16; i += 16)
+            {
+                for (var pass = 0; pass < 2; pass++)
+                {
+                    var off = pass * 8;
+                    fixed (float* pSrc = src.Slice(i + off))
+                    fixed (float* pDst = dst.Slice((i + off) * 2))
+                    {
+                        var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                        var lo = Sse.Shuffle(m.GetLower(), m.GetLower(), 0xB1);
+                        var hi = Sse.Shuffle(m.GetUpper(), m.GetUpper(), 0xB1);
+                        var d0 = Sse.UnpackLow(lo, lo);
+                        var d1 = Sse.UnpackHigh(lo, lo);
+                        var d2 = Sse.UnpackLow(hi, hi);
+                        var d3 = Sse.UnpackHigh(hi, hi);
+                        Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), d0));
+                        Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), d1));
+                        Sse.Store(pDst + 8, Sse.Add(Sse.LoadVector128(pDst + 8), d2));
+                        Sse.Store(pDst + 12, Sse.Add(Sse.LoadVector128(pDst + 12), d3));
+                    }
+                }
+            }
+        }
+        else if (Avx.IsSupported && vn == 8)
+        {
+            var g256 = Vector256.Create(uniformGain);
+            for (; i < limit; i += 8)
+            {
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                    var lo = Sse.Shuffle(m.GetLower(), m.GetLower(), 0xB1);
+                    var hi = Sse.Shuffle(m.GetUpper(), m.GetUpper(), 0xB1);
+                    var d0 = Sse.UnpackLow(lo, lo);
+                    var d1 = Sse.UnpackHigh(lo, lo);
+                    var d2 = Sse.UnpackLow(hi, hi);
+                    var d3 = Sse.UnpackHigh(hi, hi);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), d0));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), d1));
+                    Sse.Store(pDst + 8, Sse.Add(Sse.LoadVector128(pDst + 8), d2));
+                    Sse.Store(pDst + 12, Sse.Add(Sse.LoadVector128(pDst + 12), d3));
+                }
+            }
+        }
+        else if (Sse.IsSupported && vn == 4)
+        {
+            var g128 = Vector128.Create(uniformGain);
+            for (; i < limit; i += 4)
+            {
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Sse.Multiply(Sse.LoadVector128(pSrc), g128);
+                    var ms = Sse.Shuffle(m, m, 0xB1);
+                    var d0 = Sse.UnpackLow(ms, ms);
+                    var d1 = Sse.UnpackHigh(ms, ms);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), d0));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), d1));
+                }
+            }
+        }
+        else
+        {
+            Span<float> scratch = stackalloc float[vn * 2];
+            for (; i < limit; i += vn)
+            {
+                var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(i, vn))[0] * g;
+                ref var sc = ref MemoryMarshal.GetReference(scratch);
+                for (var j = 0; j < vn; j += 2)
+                {
+                    var L = m[j];
+                    var R = m[j + 1];
+                    var p = j * 2;
+                    Unsafe.Add(ref sc, p) = R;
+                    Unsafe.Add(ref sc, p + 1) = R;
+                    Unsafe.Add(ref sc, p + 2) = L;
+                    Unsafe.Add(ref sc, p + 3) = L;
+                }
+
+                var dstBase = i * 2;
+                var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
+                var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
+
+                var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
+                var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+            }
+        }
+
+        for (; i < stereoFloats; i += 2)
+        {
+            var L = src[i] * uniformGain;
+            var R = src[i + 1] * uniformGain;
+            var dstBase = i * 2;
+            dst[dstBase + 0] += R;
+            dst[dstBase + 1] += R;
+            dst[dstBase + 2] += L;
+            dst[dstBase + 3] += L;
         }
 
         return true;

@@ -15,6 +15,7 @@
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="Silk.NET.OpenGL" />
         <PackageReference Include="Vortice.Direct3D11" />
+        <PackageReference Include="Vortice.DXGI" />
     </ItemGroup>
 
     <ItemGroup>

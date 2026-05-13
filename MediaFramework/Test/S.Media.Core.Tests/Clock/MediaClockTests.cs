@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Threading;
 using S.Media.Core.Clock;
 using Xunit;
 
@@ -7,6 +8,36 @@ namespace S.Media.Core.Tests.Clock;
 public class MediaClockTests
 {
     private const int SettleMs = 80;
+
+    [Fact]
+    public void MediaClock_IsAssignableToIPlaybackTimeline()
+    {
+        using var clock = new MediaClock();
+        IPlaybackTimeline timeline = clock;
+        Assert.Equal(TimeSpan.Zero, timeline.CurrentPosition);
+        Assert.False(timeline.IsRunning);
+        Assert.Equal(1.0, timeline.PlaybackRate);
+        timeline.Seek(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), timeline.CurrentPosition);
+    }
+
+    [Fact]
+    public void SubscribePositionChanged_DisposeUnsubscribes()
+    {
+        using var clock = new MediaClock();
+        var hits = 0;
+        void Handler(object? _, TimeSpan __) => Interlocked.Increment(ref hits);
+
+        using (clock.SubscribePositionChanged(Handler))
+        {
+            clock.Seek(TimeSpan.FromSeconds(2));
+            Assert.True(hits >= 1);
+        }
+
+        var after = hits;
+        clock.Seek(TimeSpan.FromSeconds(3));
+        Assert.Equal(after, hits);
+    }
 
     [Fact]
     public void NewClock_StartsAtZeroAndNotRunning()
@@ -218,5 +249,17 @@ public class MediaClockTests
         Assert.True(clock.IsRunning);
         Assert.True(clock.CurrentPosition > target,
             $"position {clock.CurrentPosition} should have advanced past seek target {target}");
+    }
+
+    [Fact]
+    public void RepeatedSeek_whileRunning_doesNotThrow()
+    {
+        using var clock = new MediaClock();
+        clock.Start();
+        for (var i = 0; i < 3000; i++)
+            clock.Seek(TimeSpan.FromTicks(1000L * i));
+
+        Assert.True(clock.IsRunning);
+        Assert.True(clock.CurrentPosition >= TimeSpan.Zero);
     }
 }

@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using NDILib;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
 using S.Media.NDI.Clock;
 
@@ -105,8 +106,11 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
             _receiver = recv;
             _receiver.Connect(source);
         }
-        catch
+        catch (Exception ex)
         {
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver: NDIReceiver.Create/Connect");
+#endif
             _runtime.Dispose();
             throw;
         }

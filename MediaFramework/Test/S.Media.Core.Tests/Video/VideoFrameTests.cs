@@ -65,6 +65,36 @@ public class VideoFrameTests
     }
 
     [Fact]
+    public void TryCreateNv12CpuFanOutViews_ReleasesOnceAfterAllViewsDisposed()
+    {
+        var vf = new VideoFormat(64, 64, PixelFormat.Nv12, new Rational(24, 1));
+        var calls = 0;
+        var y = new byte[64 * 64];
+        var uv = new byte[64 * 32];
+        var source = new VideoFrame(TimeSpan.Zero, vf, [y, uv], [64, 64], release: () => Interlocked.Increment(ref calls));
+
+        Assert.True(VideoFrame.TryCreateNv12CpuFanOutViews(source, 3, default, out var views));
+        source.Dispose();
+
+        foreach (var v in views)
+            v.Dispose();
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void TryCreateNv12CpuFanOutViews_ReturnsFalseWithoutRelease()
+    {
+        var vf = new VideoFormat(64, 64, PixelFormat.Nv12, new Rational(24, 1));
+        var y = new byte[64 * 64];
+        var uv = new byte[64 * 32];
+        using var source = new VideoFrame(TimeSpan.Zero, vf, [y, uv], [64, 64]);
+
+        Assert.False(VideoFrame.TryCreateNv12CpuFanOutViews(source, 2, default, out var views));
+        Assert.Null(views);
+    }
+
+    [Fact]
     public void Dispose_InvokesReleaseExactlyOnce()
     {
         var calls = 0;

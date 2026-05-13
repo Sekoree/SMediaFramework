@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Threading;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using GlPixelFormat = Silk.NET.OpenGL.PixelFormat;
 using GlPixelType = Silk.NET.OpenGL.PixelType;
@@ -58,8 +60,15 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     private readonly bool _yPlaneMipmapsEnabled;
 
     private readonly Nv12DmabufGpuUploader? _nv12DmabufGpuUploader;
-    private readonly Nv12Win32SharedHandleGpuUploader? _nv12Win32SharedUploader;
+    private Nv12Win32SharedHandleGpuUploader? _nv12Win32SharedUploader;
+    /// <summary>COM pointer the Win32 NV12 uploader was created with (for lazy rebind when decode device changes).</summary>
+    private nint _nv12Win32UploaderDeviceComPtr;
+    /// <summary>When true, <see cref="Upload(VideoFrame)"/> may create the Win32 uploader on first COM-backed <see cref="VideoFrame.Win32Nv12"/> (SDL true zero-host path).</summary>
+    private readonly bool _allowLazyWin32Nv12UploaderFromDecodedFrame;
+    private static int _nv12LazyWin32DeviceDiagLogged;
     private bool _suppressYPlaneMipForLastGlDmabufUpload;
+
+    private readonly bool _ownsGpuPlaneTextures;
 
     private readonly Action<VideoFrame> _uploadFromFrame;
 
@@ -115,9 +124,15 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         }
     }
 
+    /// <param name="win32D3D11DeviceComPtrForNv12">Borrowed libav or host <c>ID3D11Device</c> for Win32 NV12; <c>0</c> defers binding when <paramref name="allowLazyWin32Nv12UploaderFromDecodedFrame"/> is <see langword="true"/>.</param>
+    /// <param name="allowLazyWin32Nv12UploaderFromDecodedFrame">
+    /// When <see langword="true"/> (Windows NV12 only, and <paramref name="win32D3D11DeviceComPtrForNv12"/> is <c>0</c>), the uploader is created from
+    /// <see cref="VideoWin32Nv12Backing.LibavD3D11DeviceComPtr"/> on the first Win32 NV12 frame (true zero-host: no SDL-owned <c>D3D11GlInteropDeviceHost</c>).
+    /// </param>
     public YuvVideoRenderer(GL gl, VideoFormat format, YuvColorSpace? colorSpace = null,
         bool sharedShaderPrograms = false, bool yPlaneMipmaps = false, YuvDmabufEglInterop? eglDmabufInterop = null,
-        nint win32D3D11DeviceComPtrForNv12 = 0)
+        nint win32D3D11DeviceComPtrForNv12 = 0,
+        bool allowLazyWin32Nv12UploaderFromDecodedFrame = false)
     {
         ArgumentNullException.ThrowIfNull(gl);
         if (format.Width <= 0 || format.Height <= 0)
@@ -125,9 +140,27 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         if (!GlVideoFormatSupport.TryGetRecipe(format.PixelFormat, out var recipe))
             throw new NotSupportedException($"YuvVideoRenderer does not support pixel format {format.PixelFormat}");
 
+        if (allowLazyWin32Nv12UploaderFromDecodedFrame)
+        {
+            if (!OperatingSystem.IsWindows() || format.PixelFormat != CorePixelFormat.Nv12)
+            {
+                throw new ArgumentException(
+                    $"{nameof(allowLazyWin32Nv12UploaderFromDecodedFrame)} is only supported for Windows NV12 formats.",
+                    nameof(allowLazyWin32Nv12UploaderFromDecodedFrame));
+            }
+
+            if (win32D3D11DeviceComPtrForNv12 != 0)
+            {
+                throw new ArgumentException(
+                    $"{nameof(allowLazyWin32Nv12UploaderFromDecodedFrame)} cannot be used together with a non-zero {nameof(win32D3D11DeviceComPtrForNv12)}.",
+                    nameof(allowLazyWin32Nv12UploaderFromDecodedFrame));
+            }
+        }
+
         _gl = gl;
         _format = format;
         _recipe = recipe;
+        _allowLazyWin32Nv12UploaderFromDecodedFrame = allowLazyWin32Nv12UploaderFromDecodedFrame;
         _colorSpace = colorSpace
             ?? (recipe.NeedsYuvMatrix
                 ? YuvColorSpace.DefaultForHeight(format.Height)
@@ -148,8 +181,68 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
 
         _textures = new uint[recipe.PlaneCount];
         _samplerUniforms = new int[_textures.Length];
-        BuildPipeline();
+        _ownsGpuPlaneTextures = true;
+        BuildPipeline(allocatePlaneTextures: true);
         _uploadFromFrame = CreateUploadFromFrameDelegate(format.PixelFormat);
+    }
+
+    private struct SharedTextureDrawViewMarker;
+
+    /// <summary>
+    /// Builds a second renderer that draws using the same GL texture names as <paramref name="textureOwner"/>.
+    /// Intended for a second OpenGL context in the same <see href="https://www.khronos.org/opengl/wiki/OpenGL_Context#Context_sharing">share group</see>
+    /// so uploads happen once on the owner while the view only runs <see cref="Render"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The owner must not use dmabuf or Win32 D3D11 interop upload paths (<see cref="VideoFrame.DmabufNv12"/> / <see cref="VideoFrame.DmabufP010"/> / <see cref="VideoFrame.DmabufP016"/> / <see cref="VideoFrame.Win32Nv12"/>);
+    /// those are not supported on draw-only peers yet.
+    /// </para>
+    /// <para>
+    /// Threading: call <see cref="Upload"/> only on the owner. After the owner uploads in its context, flush the owning GL context before making the peer context current and calling <see cref="Render"/> on this view.
+    /// </para>
+    /// </remarks>
+    public static YuvVideoRenderer CreateSharedTextureDrawView(GL gl, YuvVideoRenderer textureOwner,
+        bool sharedShaderPrograms = true, bool yPlaneMipmaps = false)
+    {
+        ArgumentNullException.ThrowIfNull(gl);
+        ArgumentNullException.ThrowIfNull(textureOwner);
+        ObjectDisposedException.ThrowIf(textureOwner._disposed, textureOwner);
+        if (textureOwner._nv12DmabufGpuUploader is not null || textureOwner._nv12Win32SharedUploader is not null
+            || textureOwner._allowLazyWin32Nv12UploaderFromDecodedFrame)
+            throw new NotSupportedException(
+                "CreateSharedTextureDrawView requires a texture owner that uses CPU-backed GL textures only (no Linux dma-buf EGL uploaders, no Win32 D3D11 NV12 uploaders, and no deferred Win32 NV12 device binding on the owner).");
+
+        return new YuvVideoRenderer(gl, textureOwner, sharedShaderPrograms, yPlaneMipmaps, default(SharedTextureDrawViewMarker));
+    }
+
+    /// <summary>Plane texture names for use with <see cref="CreateSharedTextureDrawView"/> (same GL share group).</summary>
+    public ReadOnlySpan<uint> GetPlaneTextureIds() => _textures.AsSpan();
+
+    private YuvVideoRenderer(GL gl, YuvVideoRenderer textureOwner, bool sharedShaderPrograms, bool yPlaneMipmaps,
+        SharedTextureDrawViewMarker _)
+    {
+        _gl = gl;
+        _format = textureOwner._format;
+        _recipe = textureOwner._recipe;
+        _colorSpace = textureOwner._colorSpace;
+        _shareShaderPrograms = sharedShaderPrograms;
+        _shaderProgramCacheKey = sharedShaderPrograms
+            ? $"{_recipe.VertexFile}\0{_recipe.FragmentFile}"
+            : null;
+        _yPlaneMipmapsEnabled = yPlaneMipmaps && _recipe.NeedsYuvMatrix && _recipe.PlaneCount >= 2;
+
+        _nv12DmabufGpuUploader = null;
+        _nv12Win32SharedUploader = null;
+        _allowLazyWin32Nv12UploaderFromDecodedFrame = false;
+
+        _textures = new uint[_recipe.PlaneCount];
+        textureOwner._textures.AsSpan().CopyTo(_textures);
+        _samplerUniforms = new int[_textures.Length];
+        _ownsGpuPlaneTextures = false;
+        BuildPipeline(allocatePlaneTextures: false);
+        _uploadFromFrame = _ => throw new InvalidOperationException(
+            "Shared-texture draw views cannot upload; upload on the primary renderer that owns the plane textures.");
     }
 
     public static bool IsFormatSupported(CorePixelFormat format) =>
@@ -173,10 +266,63 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         }
     }
 
+    private bool TryEnsureNv12Win32SharedUploader(nint deviceComPtr)
+    {
+        if (!OperatingSystem.IsWindows() || _format.PixelFormat != CorePixelFormat.Nv12)
+            return deviceComPtr == 0 || _nv12Win32SharedUploader is not null;
+
+        if (deviceComPtr == 0)
+            return _nv12Win32SharedUploader is not null;
+
+        if (_nv12Win32SharedUploader is not null && _nv12Win32UploaderDeviceComPtr == deviceComPtr)
+            return true;
+
+        if (_nv12Win32SharedUploader is not null)
+        {
+            try { _nv12Win32SharedUploader.Dispose(); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, "YuvVideoRenderer.TryEnsureNv12Win32SharedUploader: dispose prior uploader"); }
+#else
+            catch { /* best-effort */ }
+#endif
+            _nv12Win32SharedUploader = null;
+            _nv12Win32UploaderDeviceComPtr = 0;
+        }
+
+        var created = Nv12Win32SharedHandleGpuUploader.TryCreate(_gl, deviceComPtr);
+        if (created is null)
+            return false;
+
+        _nv12Win32SharedUploader = created;
+        _nv12Win32UploaderDeviceComPtr = deviceComPtr;
+        LogLazyWin32Nv12DeviceOnce(deviceComPtr);
+        return true;
+    }
+
+    private bool EnsureNv12UploaderForWin32Backing(VideoWin32Nv12Backing backing)
+    {
+        if (backing.LibavD3D11DeviceComPtr != 0)
+            return TryEnsureNv12Win32SharedUploader(backing.LibavD3D11DeviceComPtr);
+        return _nv12Win32SharedUploader is not null;
+    }
+
+    private static void LogLazyWin32Nv12DeviceOnce(nint deviceComPtr)
+    {
+        if (Interlocked.Exchange(ref _nv12LazyWin32DeviceDiagLogged, 1) != 0)
+            return;
+
+        MediaDiagnostics.LogInformation(
+            "YuvVideoRenderer: created Nv12Win32SharedHandleGpuUploader from libav ID3D11Device on first Win32 NV12 frame (true zero-host; no pre-bound SDL D3D11 helper). deviceComPtr={0}.",
+            deviceComPtr);
+    }
+
     public void Upload(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_ownsGpuPlaneTextures)
+            throw new InvalidOperationException(
+                "This YuvVideoRenderer is a shared-texture draw view; call Upload only on the primary renderer that owns the plane textures.");
         if (frame.Format.PixelFormat != _format.PixelFormat
             || frame.Format.Width != _format.Width
             || frame.Format.Height != _format.Height)
@@ -185,14 +331,19 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         _suppressYPlaneMipForLastGlDmabufUpload = false;
         if (frame.Win32Nv12 is not null)
         {
-            if (_nv12Win32SharedUploader is null)
+            if (!EnsureNv12UploaderForWin32Backing(frame.Win32Nv12))
+            {
+                var hint = _allowLazyWin32Nv12UploaderFromDecodedFrame
+                    ? "First Win32 NV12 frame must carry LibavD3D11DeviceComPtr on the backing (D3D11VA decode), or configure VideoFormatNegotiator / pass win32D3D11DeviceComPtrForNv12 when only NT shared handles are available."
+                    : "Pass a non-zero win32D3D11DeviceComPtrForNv12 when constructing YuvVideoRenderer, or enable SDL3GLVideoSink deferred libav binding for true zero-host.";
                 throw new InvalidOperationException(
-                    "NV12 Win32 D3D11 shared-handle frames require a D3D11 device pointer when constructing YuvVideoRenderer (win32D3D11DeviceComPtrForNv12).");
+                    "NV12 Win32 D3D11 upload has no ID3D11Device yet. " + hint);
+            }
 
             BeginUnpackSession();
             try
             {
-                if (!_nv12Win32SharedUploader.TryUpload(_textures[0], _textures[1], Format, frame.Win32Nv12))
+                if (!_nv12Win32SharedUploader!.TryUpload(_textures[0], _textures[1], Format, frame.Win32Nv12))
                     throw new InvalidOperationException(
                         "NV12 Win32 D3D11 import/upload failed (OpenSharedResource, staging copy, or GL unpack path).");
             }
@@ -221,12 +372,97 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             return;
         }
 
+        if (frame.DmabufP010 is not null)
+        {
+            if (_nv12DmabufGpuUploader is null)
+                throw new InvalidOperationException(
+                    "P010 DRM PRIME frames require EGL DMA-BUF upload; GPU uploader is unavailable (extensions or GL context).");
+
+            if (!_nv12DmabufGpuUploader.TryUploadP010(_textures[0], _textures[1], Format, frame.DmabufP010))
+                throw new InvalidOperationException(
+                    "P010 DRM PRIME EGL import failed (linear/modifier tiling, pitches, FOURCC, or driver EGL path). Clear RetainDmabufForGl if you need CPU-plane fallback.");
+
+            _suppressYPlaneMipForLastGlDmabufUpload = true;
+            RegenerateYPlaneMipmapsIfNeeded();
+            return;
+        }
+
+        if (frame.DmabufP016 is not null)
+        {
+            if (_nv12DmabufGpuUploader is null)
+                throw new InvalidOperationException(
+                    "P016 DRM PRIME frames require EGL DMA-BUF upload; GPU uploader is unavailable (extensions or GL context).");
+
+            if (!_nv12DmabufGpuUploader.TryUploadP016(_textures[0], _textures[1], Format, frame.DmabufP016))
+                throw new InvalidOperationException(
+                    "P016 DRM PRIME EGL import failed (linear/modifier tiling, pitches, FOURCC, or driver EGL path). Clear RetainDmabufForGl if you need CPU-plane fallback.");
+
+            _suppressYPlaneMipForLastGlDmabufUpload = true;
+            RegenerateYPlaneMipmapsIfNeeded();
+            return;
+        }
+
         BeginUnpackSession();
         try { _uploadFromFrame(frame); }
         finally { EndUnpackSession(); }
 
         _suppressYPlaneMipForLastGlDmabufUpload = false;
         RegenerateYPlaneMipmapsIfNeeded();
+    }
+
+    /// <summary>
+    /// Windows NV12: uploads from a <see cref="HardwareVideoSurfaceDescriptor"/> (shared NT handles or libav D3D11 COM pointers)
+    /// without building a <see cref="VideoFrame"/>. When the descriptor omits a device COM pointer, a prior
+    /// <see cref="Upload(VideoFrame)"/> must have bound the uploader, or pass <c>win32D3D11DeviceComPtrForNv12</c> at construction.
+    /// </summary>
+    public void Upload(in HardwareVideoSurfaceDescriptor descriptor)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_ownsGpuPlaneTextures)
+            throw new InvalidOperationException(
+                "This YuvVideoRenderer is a shared-texture draw view; call Upload only on the primary renderer that owns the plane textures.");
+        if (_format.PixelFormat != CorePixelFormat.Nv12)
+            throw new InvalidOperationException(
+                $"{nameof(Upload)}({nameof(HardwareVideoSurfaceDescriptor)}) is only valid for NV12 renderers (format is {_format.PixelFormat}).");
+        if (descriptor.WidthPixels != _format.Width || descriptor.HeightPixels != _format.Height)
+            throw new ArgumentException(
+                $"descriptor size {descriptor.WidthPixels}x{descriptor.HeightPixels} does not match renderer format {_format.Width}x{_format.Height}.",
+                nameof(descriptor));
+
+        if (!HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing(in descriptor, out var backing, out var err) || backing is null)
+            throw new ArgumentException(err ?? "invalid Win32 NV12 hardware descriptor", nameof(descriptor));
+
+        using (backing)
+        {
+            var devicePtr = descriptor.D3D11DeviceComPtr != 0 ? descriptor.D3D11DeviceComPtr : backing.LibavD3D11DeviceComPtr;
+            if (!TryEnsureNv12Win32SharedUploader(devicePtr))
+            {
+                if (_nv12Win32SharedUploader is null)
+                {
+                    throw new InvalidOperationException(
+                        "NV12 Win32 hardware descriptor has no D3D11 device COM pointer; bind the uploader first (e.g. upload one VideoFrame with LibavD3D11DeviceComPtr) or construct YuvVideoRenderer with win32D3D11DeviceComPtrForNv12.");
+                }
+
+                throw new InvalidOperationException(
+                    "NV12 Win32 D3D11 uploader could not be created for the descriptor's device pointer.");
+            }
+
+            _suppressYPlaneMipForLastGlDmabufUpload = false;
+            BeginUnpackSession();
+            try
+            {
+                if (!_nv12Win32SharedUploader!.TryUpload(_textures[0], _textures[1], Format, backing))
+                    throw new InvalidOperationException(
+                        "NV12 Win32 D3D11 import/upload failed (OpenSharedResource, staging copy, or GL unpack path).");
+            }
+            finally
+            {
+                EndUnpackSession();
+            }
+
+            _suppressYPlaneMipForLastGlDmabufUpload = true;
+            RegenerateYPlaneMipmapsIfNeeded();
+        }
     }
 
     /// <summary>Pinned-pixel upload for callers holding unmanaged plane pointers (must stay valid for the duration of the call).</summary>
@@ -386,11 +622,26 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        try { _nv12DmabufGpuUploader?.Dispose(); } catch { /* best-effort */ }
-        try { _nv12Win32SharedUploader?.Dispose(); } catch { /* best-effort */ }
+        try { _nv12DmabufGpuUploader?.Dispose(); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, "YuvVideoRenderer.Dispose: dmabuf uploader"); }
+#else
+        catch { /* best-effort */ }
+#endif
+        try { _nv12Win32SharedUploader?.Dispose(); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, "YuvVideoRenderer.Dispose: Win32 uploader"); }
+#else
+        catch { /* best-effort */ }
+#endif
+        _nv12Win32UploaderDeviceComPtr = 0;
 
         for (var i = 0; i < _textures.Length; i++)
-            if (_textures[i] != 0) { _gl.DeleteTexture(_textures[i]); _textures[i] = 0; }
+        {
+            if (!_ownsGpuPlaneTextures || _textures[i] == 0) continue;
+            _gl.DeleteTexture(_textures[i]);
+            _textures[i] = 0;
+        }
 
         if (_samplerLinear != 0) { _gl.DeleteSampler(_samplerLinear); _samplerLinear = 0; }
         if (_samplerYMipmap != 0) { _gl.DeleteSampler(_samplerYMipmap); _samplerYMipmap = 0; }
@@ -409,7 +660,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         if (_vao != 0) { _gl.DeleteVertexArray(_vao); _vao = 0; }
     }
 
-    private void BuildPipeline()
+    private void BuildPipeline(bool allocatePlaneTextures)
     {
         _vao = _gl.GenVertexArray();
         _gl.BindVertexArray(_vao);
@@ -472,18 +723,29 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         var filter = _recipe.NearestSampling ? TextureMinFilter.Nearest : TextureMinFilter.Linear;
         var magFilter = _recipe.NearestSampling ? TextureMagFilter.Nearest : TextureMagFilter.Linear;
 
-        for (var i = 0; i < _textures.Length; i++)
+        if (allocatePlaneTextures)
         {
-            _textures[i] = _gl.GenTexture();
-            _gl.ActiveTexture(TextureUnit.Texture0 + i);
-            _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
-            var (w, h) = _recipe.PlaneSize(_format, i);
-            var (intFmt, fmt, type) = _recipe.PlaneGl(i);
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, intFmt, (uint)w, (uint)h, 0, fmt, type, null);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)filter);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)magFilter);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            for (var i = 0; i < _textures.Length; i++)
+            {
+                _textures[i] = _gl.GenTexture();
+                _gl.ActiveTexture(TextureUnit.Texture0 + i);
+                _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
+                var (w, h) = _recipe.PlaneSize(_format, i);
+                var (intFmt, fmt, type) = _recipe.PlaneGl(i);
+                _gl.TexImage2D(TextureTarget.Texture2D, 0, intFmt, (uint)w, (uint)h, 0, fmt, type, null);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)filter);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)magFilter);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            }
+        }
+        else
+        {
+            for (var i = 0; i < _textures.Length; i++)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture0 + i);
+                _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
+            }
         }
 
         _samplerLinear = _gl.GenSampler();

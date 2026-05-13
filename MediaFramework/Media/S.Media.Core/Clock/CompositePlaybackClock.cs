@@ -11,12 +11,22 @@ namespace S.Media.Core.Clock;
 /// <see cref="ElapsedSinceStart"/> returns <see cref="TimeSpan.Zero"/> (neutral idle state).
 /// </para>
 /// <para>
+/// When several candidates have <see cref="IPlaybackClock.IsAdvancing"/> <c>true</c> at once,
+/// <see cref="ElapsedSinceStart"/> is taken from the single highest-<see cref="PlaybackClockCandidate.Priority"/> entry — an
+/// instantaneous priority handoff, not a temporal blend of elapsed values.
+/// </para>
+/// <para>
 /// Use with <see cref="MediaClockExtensions.SetMasterChain"/> to feed <see cref="MediaClock"/> from several
 /// clocks (hardware audio, PTS+wall, NDI ingest, …) with explicit priority.
 /// </para>
 /// <para>
 /// Candidates are evaluated in registration order within the same priority value
-/// (first registered wins ties).
+/// (first registered wins ties — the constructor sorts by priority descending, then by registration index ascending).
+/// </para>
+/// <para>
+/// Priority merge affects <see cref="IPlaybackClock.ElapsedSinceStart"/> / <see cref="IPlaybackClock.IsAdvancing"/> only;
+/// graph-wide coordinated master PPM and synchronized multi-sink drop/repeat remain host-owned — see
+/// <see cref="MediaClock"/> and <see cref="S.Media.Core.Audio.AudioRouter"/> remarks (checklist Tier E **18**; first-party module — §Tier F **31**).
 /// </para>
 /// </remarks>
 public sealed class CompositePlaybackClock : IPlaybackClock
@@ -29,8 +39,20 @@ public sealed class CompositePlaybackClock : IPlaybackClock
         ArgumentNullException.ThrowIfNull(candidates);
         if (candidates.Length == 0)
             throw new ArgumentException("at least one playback clock candidate is required", nameof(candidates));
-        _candidates = [.. candidates];
-        Array.Sort(_candidates, static (a, b) => b.Priority.CompareTo(a.Priority));
+
+        // Sort by priority (desc), then registration index (asc) so equal priorities follow the documented
+        // first-registered tie-break; plain Array.Sort on priority alone is unstable for duplicates.
+        var indexed = new (PlaybackClockCandidate cand, int reg)[candidates.Length];
+        for (var i = 0; i < candidates.Length; i++)
+            indexed[i] = (candidates[i], i);
+        Array.Sort(indexed, static (a, b) =>
+        {
+            var p = b.cand.Priority.CompareTo(a.cand.Priority);
+            return p != 0 ? p : a.reg.CompareTo(b.reg);
+        });
+        _candidates = new PlaybackClockCandidate[candidates.Length];
+        for (var i = 0; i < indexed.Length; i++)
+            _candidates[i] = indexed[i].cand;
     }
 
     public bool IsAdvancing

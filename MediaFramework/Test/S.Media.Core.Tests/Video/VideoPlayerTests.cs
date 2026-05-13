@@ -87,6 +87,26 @@ public class VideoPlayerTests
     }
 
     [Fact]
+    public void Pause_completes_when_decode_blocks_on_slot_semaphore_without_ticks()
+    {
+        var fmt = VideoFmt(8, 8);
+        var src = new FakeVideoSource(fmt, Frame(0, 8, 8), Frame(10_000, 8, 8), Frame(20_000, 8, 8));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        clock.Start();
+
+        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 1, decodePollInterval: TimeSpan.FromMilliseconds(2));
+        player.Play();
+        sink.WaitForConfigured();
+        // Queue holds one frame; decode is blocked on SemaphoreSlim.Wait for the next slot.
+        // No VideoTick is raised — regression for Ctrl+C where IsRunning is cleared before join.
+        WaitFor(() => src.Reads >= 2, TimeSpan.FromSeconds(2));
+
+        player.Pause();
+        Assert.False(player.IsRunning);
+    }
+
+    [Fact]
     public void Stop_Drains_Queue_And_Disposes_Frames()
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(40, 16, 16),
@@ -235,4 +255,6 @@ internal sealed class FakeMediaClock : IMediaClock
     public void Reset() { _position = TimeSpan.Zero; }
     public void Seek(TimeSpan position) => AdvanceTo(position);
     public void SetMaster(IPlaybackClock? master) { /* no-op */ }
+
+    public double PlaybackRate => 1.0;
 }

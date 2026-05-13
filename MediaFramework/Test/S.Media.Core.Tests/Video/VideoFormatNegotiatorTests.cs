@@ -105,7 +105,56 @@ public class VideoFormatNegotiatorTests
             VideoFormatNegotiator.Negotiate(src, sink, static _ => false));
     }
 
-    private sealed class FakeSource(PixelFormat[] native) : IVideoSource
+    [Fact]
+    public void Connect_WiresD3D11GlBorrowWhenSourceAndSinkSupport()
+    {
+        var src = new FakeHardwareSource(PixelFormat.Nv12);
+        var sink = new FakeBorrowSink(PixelFormat.Nv12);
+
+        VideoFormatNegotiator.Connect(src, sink);
+
+        Assert.Same(src, sink.LastBorrowSource);
+    }
+
+    [Fact]
+    public void Connect_ClearsBorrowWhenSourceDoesNotExposeHardwareD3D11()
+    {
+        var src = new FakeSource([PixelFormat.I420]);
+        var sink = new FakeBorrowSink(PixelFormat.I420);
+
+        VideoFormatNegotiator.Connect(src, sink);
+
+        Assert.Null(sink.LastBorrowSource);
+    }
+
+    private sealed class FakeHardwareSource : FakeSource, IHardwareD3D11GlInteropSource
+    {
+        public FakeHardwareSource(params PixelFormat[] native) : base(native) { }
+
+        public bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr)
+        {
+            deviceComPtr = (nint)1;
+            return true;
+        }
+
+        public bool TryGetHardwareD3D11AdapterLuid(out long adapterLuidPacked)
+        {
+            adapterLuidPacked = 0;
+            return false;
+        }
+    }
+
+    private sealed class FakeBorrowSink : FakeSink, IVideoSinkD3D11GlBorrowSetup
+    {
+        public FakeBorrowSink(params PixelFormat[] accepted) : base(accepted) { }
+
+        public IVideoSource? LastBorrowSource { get; private set; }
+
+        public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource) =>
+            LastBorrowSource = videoSource;
+    }
+
+    private class FakeSource(PixelFormat[] native) : IVideoSource
     {
         public VideoFormat Format { get; private set; } =
             new(1920, 1080, native.Length > 0 ? native[0] : PixelFormat.Unknown, new Rational(30, 1));
@@ -122,7 +171,7 @@ public class VideoFormatNegotiatorTests
         public bool TryReadNextFrame(out VideoFrame frame) { frame = null!; return false; }
     }
 
-    private sealed class FakeSink(PixelFormat[] accepted) : IVideoSink
+    private class FakeSink(PixelFormat[] accepted) : IVideoSink
     {
         public VideoFormat Format { get; private set; }
         public IReadOnlyList<PixelFormat> AcceptedPixelFormats => accepted;

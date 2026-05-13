@@ -22,6 +22,11 @@ namespace S.Media.NDI.Audio;
 /// <see cref="Submit(ReadOnlySpan{float})"/> uses a running sample counter when no frame PTS is available.
 /// </para>
 /// <para>
+/// <strong>SDK pacing:</strong> <see cref="NDIOutput"/> normally constructs the shared <see cref="NDISender"/> with
+/// <c>clockAudio:true</c> so the runtime can throttle sends to the negotiated sample rate. There is no separate
+/// wall-clock throttle on this path like optional spacing on <see cref="Video.NDIVideoSender"/> for video.
+/// </para>
+/// <para>
 /// A single native packed buffer is grown with headroom (at least double the
 /// prior capacity, rounded up to a power of two) so upstream chunk-size
 /// changes during the first seconds of a session rarely require more than one

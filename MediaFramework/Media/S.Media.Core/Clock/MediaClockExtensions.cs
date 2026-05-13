@@ -6,13 +6,19 @@ namespace S.Media.Core.Clock;
 /// <remarks>
 /// <para>
 /// Higher <see cref="PlaybackClockCandidate.Priority"/> wins when several clocks report
-/// <see cref="IPlaybackClock.IsAdvancing"/> at once. For a stable playhead, prefer a single
+/// <see cref="IPlaybackClock.IsAdvancing"/> at once; equal priorities use registration order
+/// (earlier <see cref="SetMasterChain"/> argument wins). For a stable playhead, prefer a single
 /// advancing primary (e.g. hardware audio) and keep fallbacks non-advancing until the primary stops.
 /// </para>
 /// <para>
 /// If the active leaf clock changes while multiple candidates advance, composite
 /// <see cref="IPlaybackClock.ElapsedSinceStart"/> can jump; re-anchor with <see cref="IMediaClock.SetMaster"/>
 /// or <see cref="IMediaClock.Seek"/> if you intentionally hand off between clocks.
+/// </para>
+/// <para>
+/// This API selects which <see cref="IPlaybackClock"/> drives <see cref="MediaClock"/>; it does not implement
+/// graph-wide coordinated master PPM or synchronized multi-sink drop/repeat — see <see cref="MediaClock"/> and
+/// <see cref="S.Media.Core.Audio.AudioRouter"/> remarks (checklist Tier E **18**; first-party coordination module — §Tier F **31**).
 /// </para>
 /// </remarks>
 public static class MediaClockExtensions

@@ -229,6 +229,96 @@ public class MediaClockMasterTests
         Assert.Equal(TimeSpan.FromSeconds(1), clock.CurrentPosition);
     }
 
+    [Fact]
+    public void RepeatedCurrentPositionReads_withSetMasterChain_remain_consistent()
+    {
+        IMediaClock clock = new MediaClock();
+        var high = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(10), IsAdvancing = true };
+        var low = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(1), IsAdvancing = true };
+        clock.SetMasterChain(
+            new PlaybackClockCandidate(low, 1),
+            new PlaybackClockCandidate(high, 100));
+        clock.Start();
+
+        TimeSpan? last = null;
+        for (var i = 0; i < 5000; i++)
+        {
+            high.ElapsedSinceStart = TimeSpan.FromSeconds(10 + i * 0.001);
+            low.ElapsedSinceStart = TimeSpan.FromSeconds(1 + i * 0.0005);
+            var p = clock.CurrentPosition;
+            Assert.True(p >= TimeSpan.Zero);
+            if (last is { } l)
+            {
+                Assert.True(p >= l - TimeSpan.FromTicks(1),
+                    $"position regressed at i={i}: {l} -> {p}");
+            }
+
+            last = p;
+        }
+    }
+
+    [Fact]
+    public void SetMasterChain_threeCandidates_seededReads_stayNonRegressingWhileHighestWins()
+    {
+        IMediaClock clock = new MediaClock();
+        var low = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(1), IsAdvancing = true };
+        var mid = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(2), IsAdvancing = true };
+        var high = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(100), IsAdvancing = true };
+        clock.SetMasterChain(
+            new PlaybackClockCandidate(low, 1),
+            new PlaybackClockCandidate(mid, 10),
+            new PlaybackClockCandidate(high, 100));
+        clock.Start();
+
+        TimeSpan? last = null;
+        var rnd = new Random(42_069);
+        for (var i = 0; i < 6000; i++)
+        {
+            low.ElapsedSinceStart += TimeSpan.FromMilliseconds(rnd.NextDouble() * 0.02);
+            mid.ElapsedSinceStart += TimeSpan.FromMilliseconds(rnd.NextDouble() * 0.02);
+            high.ElapsedSinceStart += TimeSpan.FromMilliseconds(0.5 + rnd.NextDouble() * 0.02);
+
+            var p = clock.CurrentPosition;
+            Assert.True(p >= TimeSpan.Zero);
+            if (last is { } l)
+            {
+                Assert.True(
+                    p >= l - TimeSpan.FromTicks(1),
+                    $"position regressed at i={i}: {l} -> {p}");
+            }
+
+            last = p;
+        }
+    }
+
+    [Fact]
+    public void RepeatedSetMasterChain_whileRunning_doesNotThrow()
+    {
+        IMediaClock clock = new MediaClock();
+        var a = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(3), IsAdvancing = true };
+        var b = new FakeClock { ElapsedSinceStart = TimeSpan.FromSeconds(5), IsAdvancing = true };
+        clock.SetMasterChain(
+            new PlaybackClockCandidate(a, 10),
+            new PlaybackClockCandidate(b, 1));
+        clock.Start();
+
+        for (var i = 0; i < 2000; i++)
+        {
+            if ((i & 1) == 0)
+                clock.SetMasterChain(
+                    new PlaybackClockCandidate(a, 100),
+                    new PlaybackClockCandidate(b, 1));
+            else
+                clock.SetMasterChain(
+                    new PlaybackClockCandidate(b, 100),
+                    new PlaybackClockCandidate(a, 1));
+
+            a.ElapsedSinceStart = TimeSpan.FromSeconds(3 + i * 0.0002);
+            b.ElapsedSinceStart = TimeSpan.FromSeconds(5 + i * 0.0003);
+            _ = clock.CurrentPosition;
+        }
+    }
+
     private sealed class FakeClock : IPlaybackClock
     {
         public TimeSpan ElapsedSinceStart { get; set; }

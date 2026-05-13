@@ -45,6 +45,35 @@ public sealed class VideoRouterTests
     }
 
     [Fact]
+    public void FanOut_CpuNv12_ThreeSinks_InvokesBackingReleaseOnce()
+    {
+        using var router = new VideoRouter(null);
+        var s0 = new CapturingSink(PixelFormat.Nv12);
+        var s1 = new CapturingSink(PixelFormat.Nv12);
+        var s2 = new CapturingSink(PixelFormat.Nv12);
+        var o0 = router.AddOutput(s0, "o0");
+        var o1 = router.AddOutput(s1, "o1");
+        var o2 = router.AddOutput(s2, "o2");
+        var vin = router.AddInput(o0);
+        Assert.True(router.TryAddRoute(vin.Id, o1, out _));
+        Assert.True(router.TryAddRoute(vin.Id, o2, out _));
+
+        var vf = new VideoFormat(64, 64, PixelFormat.Nv12, new Rational(24, 1));
+        vin.Sink.Configure(vf);
+
+        var releaseCalls = 0;
+        var y = new byte[64 * 64];
+        var uv = new byte[64 * 32];
+        var frame = new VideoFrame(TimeSpan.Zero, vf, [y, uv], [64, 64], release: () => Interlocked.Increment(ref releaseCalls));
+        vin.Sink.Submit(frame);
+
+        Assert.Equal(1, s0.SubmitCount);
+        Assert.Equal(1, s1.SubmitCount);
+        Assert.Equal(1, s2.SubmitCount);
+        Assert.Equal(1, releaseCalls);
+    }
+
+    [Fact]
     public void FanOut_SubmitHitsAllRoutedSinks()
     {
         using var router = new VideoRouter(null);
@@ -119,6 +148,35 @@ public sealed class VideoRouterTests
         var uv = LinuxSyscall.dup(baseFd);
         var backing = new VideoDmabufNv12Backing(y, 0, 64, uv, 0, 64, 0, 0);
         var frame = VideoFrame.CreateNv12Dmabuf(TimeSpan.Zero, vfFormat, backing);
+        vin.Sink.Submit(frame);
+
+        Assert.Equal(1, primary.SubmitCount);
+        Assert.Equal(1, branch.SubmitCount);
+    }
+
+    [Fact]
+    public void FanOut_DmabufP016_HitsBothP016Sinks_OnLinux()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        using var router = new VideoRouter(null);
+        var primary = new CapturingSink(PixelFormat.P016);
+        var branch = new CapturingSink(PixelFormat.P016);
+        var op = router.AddOutput(primary, "p");
+        var ob = router.AddOutput(branch, "b");
+        var vin = router.AddInput(op);
+        Assert.True(router.TryAddRoute(vin.Id, ob, out _));
+
+        var vfFormat = new VideoFormat(64, 64, PixelFormat.P016, new Rational(24, 1));
+        vin.Sink.Configure(vfFormat);
+
+        using var h = File.OpenHandle("/dev/null", FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+        var baseFd = checked((int)h.DangerousGetHandle());
+        var y = LinuxSyscall.dup(baseFd);
+        var uv = LinuxSyscall.dup(baseFd);
+        var backing = new VideoDmabufP016Backing(y, 0, 4, uv, 0, 4, 0, 0);
+        var frame = VideoFrame.CreateP016Dmabuf(TimeSpan.Zero, vfFormat, backing);
         vin.Sink.Submit(frame);
 
         Assert.Equal(1, primary.SubmitCount);

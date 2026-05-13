@@ -1,10 +1,9 @@
 using System.Buffers;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using S.Media.Core.Audio;
 using S.Media.Core.Video;
-using S.Media.FFmpeg.Diagnostics;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video.Internal;
 
@@ -26,13 +25,15 @@ namespace S.Media.FFmpeg.Video;
 /// Hardware decode without Linux DRM dma-bufs or Windows D3D11 shared-handle export leaves <see cref="NativePixelFormats"/> empty until one
 /// transferred frame is probed at open time, so negotiation does not assume NV12 prematurely.
 /// Libav may use internal frame/slice threads on software decode when no hardware device context is active.
-/// Pass-through frames borrow pooled plane and stride descriptor arrays guarded by a single
-/// <see cref="Lock"/>; <c>Array.Clear</c> runs on the release path before the lock so pooled slots never retain
-/// stale plane views and the critical section only stack-pushes. A lock-free arena would be a future perf experiment only
-/// if profiling still shows contention here. Optional counters: set environment variable
-/// <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c> and read <see cref="PassThroughArenaProfiling"/> (lock hold time, not queue wait).
+/// Pass-through frames borrow pooled plane and stride descriptor arrays from a
+/// <see cref="PassThroughDescriptorArena"/> (per-plane-count Treiber free-list of fixed slots, bounded by <see cref="PassThroughDescriptorArena.PoolCap"/>).
+/// <c>Array.Clear</c> runs on the release path before returning slots so pooled arrays never retain
+/// stale plane views. Optional counters: set environment variable
+/// <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c> and read <see cref="PassThroughArenaProfiling"/> (rent/return/drain wall time).
+/// Further wait-free work is only for <strong>outer</strong> decode/release synchronization if profiling shows contention beyond the Treiber pools (Tier E **16**).
 /// </remarks>
-public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDisposable
+public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHardwareD3D11GlInteropSource,
+    ICooperativeVideoReadInterrupt, IDisposable
 {
     private AVFormatContext* _formatCtx;
     private AVCodecContext* _codecCtx;
@@ -51,6 +52,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
     private bool _eofReached;
     private bool _disposed;
     private bool _drainPacketSent;
+    private int _readYieldRequested;
     private VideoFrame? _primedAfterSeek;
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
@@ -62,10 +64,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
     /// Pooled arrays for libav pass-through <see cref="VideoFrame"/> metadata; returned when the frame
     /// <c>release</c> callback runs (dispose may occur off-thread vs <see cref="TryReadNextFrame"/>).
     /// </summary>
-    private readonly Lock _passThroughArena = new();
-
-    private readonly Dictionary<int, Stack<ReadOnlyMemory<byte>[]>> _passThroughPlaneStacks = new();
-    private readonly Dictionary<int, Stack<int[]>> _passThroughStrideStacks = new();
+    private readonly PassThroughDescriptorArena _passThroughArena = new();
 
     /// <remarks>Caches FFmpeg swscale pointer/strides — do not reorder across concurrent calls (<see cref="TryReadNextFrame"/> is single-threaded).</remarks>
     private readonly byte*[] _swScaleSrcLines = new byte*[8];
@@ -100,6 +99,15 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
             return false;
         deviceComPtr = _hwAccel.TryGetD3D11DeviceComPtr();
         return deviceComPtr != 0;
+    }
+
+    /// <inheritdoc cref="IHardwareD3D11GlInteropSource.TryGetHardwareD3D11AdapterLuid"/>
+    public bool TryGetHardwareD3D11AdapterLuid(out long adapterLuidPacked)
+    {
+        adapterLuidPacked = 0;
+        if (_disposed || _hwAccel == null)
+            return false;
+        return _hwAccel.TryGetD3D11AdapterLuid(out adapterLuidPacked);
     }
 
     private VideoFileDecoder() { }
@@ -139,6 +147,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
 
         while (true)
         {
+            if (Volatile.Read(ref _readYieldRequested) != 0)
+            {
+                frame = null!;
+                return false;
+            }
+
             var ret = avcodec_receive_frame(_codecCtx, _frame);
             if (ret == 0)
             {
@@ -179,9 +193,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
 
         if (_drmGpuNv12Path)
         {
-            if (format != PixelFormat.Nv12)
+            if (format is not (PixelFormat.Nv12 or PixelFormat.P010 or PixelFormat.P016))
                 throw new NotSupportedException(
-                    "DRM PRIME zero-copy decoding only supports PixelFormat.Nv12 output matching the GPU-exported NV12 dma-bufs.");
+                    "DRM PRIME zero-copy decoding only supports PixelFormat.Nv12, P010, or P016 output matching the GPU-exported semi-planar dma-bufs.");
             if (_outPixelFormat == format)
                 return;
             _passThrough = true;
@@ -235,6 +249,8 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(position));
 
+        ResetReadYield();
+
         var ts = (long)(position.TotalSeconds * _videoTimeBase.den / _videoTimeBase.num);
         var ret = av_seek_frame(_formatCtx, _videoStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
@@ -269,22 +285,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
         _hwAccel?.Dispose();
         _hwAccel = null;
 
-        var profileArena = PassThroughArenaProfiling.IsEnabled;
-        lock (_passThroughArena)
-        {
-            long t0 = 0;
-            if (profileArena) t0 = Stopwatch.GetTimestamp();
-            try
-            {
-                _passThroughPlaneStacks.Clear();
-                _passThroughStrideStacks.Clear();
-            }
-            finally
-            {
-                if (profileArena)
-                    PassThroughArenaProfiling.RecordClear(Stopwatch.GetTimestamp() - t0);
-            }
-        }
+        _passThroughArena.Dispose();
 
         if (_formatCtx != null) { var f = _formatCtx;  avformat_close_input(&f);    _formatCtx = null; }
     }
@@ -376,11 +377,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
         {
             if (_drmGpuNv12Path)
             {
+                var drmPass = InferDrmPrimeOutputPixelFormat(stream->codecpar);
                 _srcPixelFormat = AVPixelFormat.AV_PIX_FMT_DRM_PRIME;
-                _nativePixelFormat = PixelFormat.Nv12;
+                _nativePixelFormat = drmPass;
                 _passThrough = true;
-                _outPixelFormat = PixelFormat.Nv12;
-                _nativePixelFormats = [PixelFormat.Nv12];
+                _outPixelFormat = drmPass;
+                _nativePixelFormats = [drmPass];
             }
             else if (_d3d11GpuNv12Path)
             {
@@ -448,6 +450,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
     {
         while (true)
         {
+            if (Volatile.Read(ref _readYieldRequested) != 0)
+                return;
+
             av_packet_unref(_packet);
             var ret = av_read_frame(_formatCtx, _packet);
             if (ret == AVERROR_EOF)
@@ -510,14 +515,85 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
             : BuildConvertedFrame(work, pts, trc);
     }
 
-    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, AVColorTransferCharacteristic trc) =>
+        CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Format, trc);
+
+    internal static unsafe VideoFrame CreateVideoFrameFromLinuxDrmPrimeFrame(
+        AVFrame* drmFrame, TimeSpan pts, VideoFormat format, AVColorTransferCharacteristic trc)
     {
-        var backing = DrmPrimeNv12BackingFactory.TryCreateBacking(drmFrame);
-        if (backing == null)
+        var hint = MapTransferHint(trc);
+        var nv12 = DrmPrimeNv12BackingFactory.TryCreateBacking(drmFrame);
+        var p010 = DrmPrimeP010BackingFactory.TryCreateBacking(drmFrame);
+        var p016 = DrmPrimeP016BackingFactory.TryCreateBacking(drmFrame);
+
+        if (format.PixelFormat == PixelFormat.P016)
+        {
+            if (p016 != null)
+                return VideoFrame.CreateP016Dmabuf(pts, format, p016, hint);
+            if (p010 != null)
+                throw new InvalidOperationException(
+                    "DRM PRIME frame is P010 (DRM_FORMAT_P010) but the decoder negotiated P016 output. Re-open with a 12-bit profile or CPU decode.");
+            if (nv12 != null)
+                throw new InvalidOperationException(
+                    "DRM PRIME frame is NV12 (DRM_FORMAT_NV12) but the decoder negotiated P016 output. Re-open with a 12-bit profile or CPU decode.");
+            throw new InvalidOperationException(
+                "DRM PRIME frame could not be mapped to P016 dma-bufs (expected DRM_FORMAT_P016 two-plane descriptor). Disable decoder option RetainDmabufForGl or try NV12 / P010 / a CPU upload path.");
+        }
+
+        if (format.PixelFormat == PixelFormat.P010)
+        {
+            if (p010 != null)
+                return VideoFrame.CreateP010Dmabuf(pts, format, p010, hint);
+            if (p016 != null)
+                throw new InvalidOperationException(
+                    "DRM PRIME frame is P016 (DRM_FORMAT_P016) but the decoder negotiated P010 output. Re-open with a 10-bit profile or CPU decode.");
+            if (nv12 != null)
+                throw new InvalidOperationException(
+                    "DRM PRIME frame is NV12 (DRM_FORMAT_NV12) but the decoder negotiated P010 output. Re-open with a 10-bit profile or CPU decode.");
+            throw new InvalidOperationException(
+                "DRM PRIME frame could not be mapped to P010 dma-bufs (expected DRM_FORMAT_P010 two-plane descriptor). Disable decoder option RetainDmabufForGl or try NV12 / a CPU upload path.");
+        }
+
+        if (format.PixelFormat == PixelFormat.Nv12)
+        {
+            if (nv12 != null)
+                return VideoFrame.CreateNv12Dmabuf(pts, format, nv12, hint);
+            if (p016 != null)
+                throw new InvalidOperationException(
+                    "DRM PRIME frame is P016 (DRM_FORMAT_P016) but the decoder negotiated NV12 output. Re-open the source as 12-bit or select P016 for sinks.");
+            if (p010 != null)
+                throw new InvalidOperationException(
+                    "DRM PRIME frame is P010 (DRM_FORMAT_P010) but the decoder negotiated NV12 output. Re-open the source as 10-bit or select P010 for sinks.");
             throw new InvalidOperationException(
                 "DRM PRIME frame could not be mapped to NV12 dma-bufs. Disable decoder option RetainDmabufForGl or try a CPU upload path.");
+        }
 
-        return VideoFrame.CreateNv12Dmabuf(pts, Format, backing, MapTransferHint(trc));
+        throw new NotSupportedException(
+            $"DRM PRIME zero-copy is not wired for negotiated pixel format {format.PixelFormat}.");
+    }
+
+    /// <summary>Chooses NV12 vs P010 vs P016 for Linux <c>drm_prime</c> zero-copy before the first decoded frame.</summary>
+    internal static unsafe PixelFormat InferDrmPrimeOutputPixelFormat(AVCodecParameters* codecpar)
+    {
+        if (codecpar == null)
+            return PixelFormat.Nv12;
+
+        var mapped = MapNativePixelFormat((AVPixelFormat)codecpar->format);
+        if (mapped == PixelFormat.P016)
+            return PixelFormat.P016;
+        if (mapped == PixelFormat.P010)
+            return PixelFormat.P010;
+        if (mapped is PixelFormat.Yuv420P10Le or PixelFormat.Yuv422P10Le or PixelFormat.Yuv444P10Le)
+            return PixelFormat.P010;
+        if (mapped == PixelFormat.Yuv420P12Le)
+            return PixelFormat.P016;
+
+        if (codecpar->bits_per_raw_sample == 12)
+            return PixelFormat.P016;
+        if (codecpar->bits_per_raw_sample == 10)
+            return PixelFormat.P010;
+
+        return PixelFormat.Nv12;
     }
 
     private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
@@ -544,7 +620,17 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
         }
 
         var planeCount = PixelFormatInfo.PlaneCount(_outPixelFormat);
-        var (planes, strides) = RentPassThroughDescriptors(planeCount);
+        if (planeCount < 1 || planeCount > PassThroughDescriptorArena.MaxPlaneCount)
+        {
+            var c = clone;
+            av_frame_free(&c);
+            throw new NotSupportedException(
+                $"pass-through plane count {planeCount} is outside the pooled range 1..{PassThroughDescriptorArena.MaxPlaneCount}");
+        }
+
+        var passHandle = _passThroughArena.Rent(planeCount);
+        var planes = passHandle.Planes;
+        var strides = passHandle.Strides;
         var hint = MapTransferHint(trc);
         for (var i = 0; i < planeCount; i++)
         {
@@ -559,76 +645,11 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
         }
 
         var clonePtr = (nint)clone;
-        var pc = planeCount;
         return new VideoFrame(pts, Format, planes, strides, hint, release: () =>
         {
             FreeAVFrame(clonePtr);
-            ReturnPassThroughDescriptors(pc, planes, strides);
+            _passThroughArena.Return(in passHandle);
         });
-    }
-
-    private const int PassThroughDescriptorPoolCap = 32;
-
-    private (ReadOnlyMemory<byte>[] planes, int[] strides) RentPassThroughDescriptors(int planeCount)
-    {
-        var profile = PassThroughArenaProfiling.IsEnabled;
-        lock (_passThroughArena)
-        {
-            long t0 = 0;
-            if (profile) t0 = Stopwatch.GetTimestamp();
-            try
-            {
-                if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
-                {
-                    ps = new Stack<ReadOnlyMemory<byte>[]>();
-                    _passThroughPlaneStacks[planeCount] = ps;
-                }
-
-                if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
-                {
-                    ss = new Stack<int[]>();
-                    _passThroughStrideStacks[planeCount] = ss;
-                }
-
-                var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
-                var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
-                return (planes, strides);
-            }
-            finally
-            {
-                if (profile)
-                    PassThroughArenaProfiling.RecordRent(Stopwatch.GetTimestamp() - t0);
-            }
-        }
-    }
-
-    private void ReturnPassThroughDescriptors(int planeCount, ReadOnlyMemory<byte>[] planes, int[] strides)
-    {
-        // Runs after FreeAVFrame — exclusive ownership; clear before locking so we never pool (or abandon) stale views.
-        Array.Clear(planes);
-        Array.Clear(strides);
-
-        var profile = PassThroughArenaProfiling.IsEnabled;
-        lock (_passThroughArena)
-        {
-            long t0 = 0;
-            if (profile) t0 = Stopwatch.GetTimestamp();
-            try
-            {
-                if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
-                    ps.Count < PassThroughDescriptorPoolCap)
-                    ps.Push(planes);
-
-                if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
-                    ss.Count < PassThroughDescriptorPoolCap)
-                    ss.Push(strides);
-            }
-            finally
-            {
-                if (profile)
-                    PassThroughArenaProfiling.RecordReturn(Stopwatch.GetTimestamp() - t0);
-            }
-        }
     }
 
     private VideoFrame BuildConvertedFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
@@ -891,6 +912,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
 
     private TimeSpan PtsToTimeSpan(long pts)
         => TimeSpan.FromSeconds((double)pts * _videoTimeBase.num / _videoTimeBase.den);
+
+    private void ResetReadYield() => Volatile.Write(ref _readYieldRequested, 0);
+
+    void ICooperativeVideoReadInterrupt.RequestYieldBetweenReads() => Volatile.Write(ref _readYieldRequested, 1);
+
+    void ICooperativeVideoReadInterrupt.ClearYieldRequest() => ResetReadYield();
 
     internal static PixelFormat MapNativePixelFormat(AVPixelFormat src) => src switch
     {

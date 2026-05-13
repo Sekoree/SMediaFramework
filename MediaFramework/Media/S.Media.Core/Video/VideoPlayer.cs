@@ -34,6 +34,13 @@ namespace S.Media.Core.Video;
 /// <c>negotiatePixelFormats</c> predicate excludes pixel formats Core would
 /// otherwise pick). The source and sink agree on a format before <see cref="Play"/>.
 /// </para>
+/// <para>
+/// On <see cref="Pause"/> / <see cref="Dispose"/>, when the <see cref="IVideoSource"/> implements
+/// <see cref="ICooperativeVideoReadInterrupt"/>, a yield is requested before cancelling the decode loop so
+/// blocking reads (for example shared-demux FFmpeg) can return <c>false</c> promptly.
+/// The decode thread may be waiting on the presentation-queue semaphore when ticks stop; <see cref="Pause"/>
+/// drains the queue and recreates that semaphore before joining decode so shutdown cannot deadlock on a full queue.
+/// </para>
 /// </remarks>
 public sealed class VideoPlayer : IDisposable
 {
@@ -124,6 +131,8 @@ public sealed class VideoPlayer : IDisposable
         {
             if (_isRunning) return;
             CompletedNaturally = false;
+            if (_source is ICooperativeVideoReadInterrupt iv)
+                iv.ClearYieldRequest();
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
             _tickHandler = (_, _) => OnVideoTick();
@@ -184,6 +193,9 @@ public sealed class VideoPlayer : IDisposable
 
     private void StopInternal(CancellationToken cancellationToken = default)
     {
+        if (_source is ICooperativeVideoReadInterrupt iv)
+            iv.RequestYieldBetweenReads();
+
         Thread? toJoin;
         CancellationTokenSource? toDispose;
         EventHandler? handler;
@@ -202,6 +214,13 @@ public sealed class VideoPlayer : IDisposable
         if (handler is not null)
             _clock.VideoTick -= handler;
         toDispose?.Cancel();
+
+        // Once IsRunning is false, OnVideoTick returns without dequeuing — no more
+        // _slotsAvailable.Release() from the clock. Decode may be blocked on Wait
+        // for a slot while the queue still holds frames; dispose/recreate the
+        // semaphore so Wait throws ObjectDisposedException and the thread can exit.
+        DrainQueue();
+
         try
         {
             CooperativePlaybackJoin.JoinThreadWhileCancelable(toJoin, cancellationToken);
@@ -210,6 +229,9 @@ public sealed class VideoPlayer : IDisposable
         {
             toDispose?.Dispose();
         }
+
+        if (_source is ICooperativeVideoReadInterrupt clearYield)
+            clearYield.ClearYieldRequest();
 
         DrainQueue();
     }

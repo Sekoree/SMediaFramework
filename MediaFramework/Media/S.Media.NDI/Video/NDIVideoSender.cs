@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NDILib;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
 
@@ -30,7 +31,21 @@ namespace S.Media.NDI.Video;
 /// frames are packed into one contiguous staging buffer — Y plane first at
 /// the visible-width stride NDI declares via <c>LineStrideInBytes</c>;
 /// chroma planes follow at the layout NDI's docs prescribe (UV interleaved
-/// at full Y stride for NV12; U-then-V at half Y stride for I420).
+/// at full Y stride for NV12; U-then-V at half Y stride for I420). Contiguous
+/// source strides use bulk copies when they match the packed staging layout (NV12 and I420).
+/// </para>
+/// <para>
+/// <strong>Fan-out cost (SDL + NDI):</strong> when <c>VideoRouter</c> / <c>VideoOutputRouter</c> fan out negotiated CPU
+/// <see cref="PixelFormat.Nv12"/> without a per-branch <c>VideoCpuFrameConverter</c>, branches share one backing via
+/// <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> — the NDI path still packs into ping-pong staging here (one
+/// memcpy from that shared view plus SDK upload), but the router no longer deep-copies NV12 for each branch.
+/// Contiguous NV12 planes use bulk copies when strides match the packed layout to reduce per-row overhead.
+/// </para>
+/// <para>
+/// <strong>SDK vs host pacing:</strong> when <see cref="NDIOutput"/> is constructed with <c>clockVideo:false</c>,
+/// the NDI runtime does not clock video sends; <see cref="PaceBeforePack"/> (optional <c>minimumVideoSubmitSpacing</c>)
+/// is then the primary wall-clock throttle. With <c>clockVideo:true</c>, both may apply — see field notes in
+/// <c>VideoPlaybackSmoke --ndi-clock-video</c> / <c>--ndi-disable-wall-pace</c>.
 /// </para>
 /// </remarks>
 public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
@@ -182,9 +197,9 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
                     $"frame has {frame.PlaneCount} planes; {_format.PixelFormat} requires {expectedPlanes}",
                     nameof(frame));
 
-            if (frame.DmabufNv12 is not null || frame.Win32Nv12 is not null)
+            if (frame.DmabufNv12 is not null || frame.DmabufP010 is not null || frame.DmabufP016 is not null || frame.Win32Nv12 is not null)
                 throw new NotSupportedException(
-                    "NDIVideoSender requires CPU-backed pixel planes; GPU NV12 (Linux dma-buf or Windows D3D11 shared) has no readable bytes here. Use software decode or a CPU VideoFrame path.");
+                    "NDIVideoSender requires CPU-backed pixel planes; GPU NV12/P010/P016 (Linux dma-buf or Windows D3D11 shared) has no readable bytes here. Use software decode or a CPU VideoFrame path.");
 
             PaceBeforePack();
 
@@ -307,20 +322,32 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         var height = _format.Height;
         var ySrc = frame.Planes[0].Span;
         var ySrcStride = frame.Strides[0];
-        for (var row = 0; row < height; row++)
+        var yBytes = width * height;
+        if (ySrcStride == width && ySrc.Length >= yBytes)
+            ySrc.Slice(0, yBytes).CopyTo(new Span<byte>(dst, yBytes));
+        else
         {
-            var srcRow = ySrc.Slice(row * ySrcStride, width);
-            srcRow.CopyTo(new Span<byte>(dst + row * width, width));
+            for (var row = 0; row < height; row++)
+            {
+                var srcRow = ySrc.Slice(row * ySrcStride, width);
+                srcRow.CopyTo(new Span<byte>(dst + row * width, width));
+            }
         }
 
-        var uvDstBase = dst + width * height;
+        var uvDstBase = dst + yBytes;
         var uvSrc = frame.Planes[1].Span;
         var uvSrcStride = frame.Strides[1];
         var uvRows = height / 2;
-        for (var row = 0; row < uvRows; row++)
+        var uvBytes = width * uvRows;
+        if (uvSrcStride == width && uvSrc.Length >= uvBytes)
+            uvSrc.Slice(0, uvBytes).CopyTo(new Span<byte>(uvDstBase, uvBytes));
+        else
         {
-            var srcRow = uvSrc.Slice(row * uvSrcStride, width);
-            srcRow.CopyTo(new Span<byte>(uvDstBase + row * width, width));
+            for (var row = 0; row < uvRows; row++)
+            {
+                var srcRow = uvSrc.Slice(row * uvSrcStride, width);
+                srcRow.CopyTo(new Span<byte>(uvDstBase + row * width, width));
+            }
         }
     }
 
@@ -333,31 +360,46 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
         var ySrc = frame.Planes[0].Span;
         var ySrcStride = frame.Strides[0];
-        for (var row = 0; row < height; row++)
+        var yBytes = width * height;
+        if (ySrcStride == width && ySrc.Length >= yBytes)
+            ySrc.Slice(0, yBytes).CopyTo(new Span<byte>(dst, yBytes));
+        else
         {
-            ySrc.Slice(row * ySrcStride, width)
-                .CopyTo(new Span<byte>(dst + row * width, width));
+            for (var row = 0; row < height; row++)
+            {
+                ySrc.Slice(row * ySrcStride, width)
+                    .CopyTo(new Span<byte>(dst + row * width, width));
+            }
         }
 
-        var uDstBase = dst + width * height;
+        var uDstBase = dst + yBytes;
         var uSrc = frame.Planes[1].Span;
         var uSrcStride = frame.Strides[1];
-        for (var row = 0; row < chromaH; row++)
-        {
-            uSrc.Slice(row * uSrcStride, chromaW)
-                .CopyTo(new Span<byte>(uDstBase + row * chromaW, chromaW));
-        }
-
-        // V begins after the contiguous U bitmap (handles future strides that differ from half-visible width).
         var uPackedRowBytes = PixelFormatInfo.PlaneByteWidth(PixelFormat.I420, width, 1);
         var uPlaneByteCount = uPackedRowBytes * chromaH;
+        if (uSrcStride == chromaW && uSrc.Length >= chromaW * chromaH && uPackedRowBytes == chromaW)
+            uSrc.Slice(0, chromaW * chromaH).CopyTo(new Span<byte>(uDstBase, uPlaneByteCount));
+        else
+        {
+            for (var row = 0; row < chromaH; row++)
+            {
+                uSrc.Slice(row * uSrcStride, chromaW)
+                    .CopyTo(new Span<byte>(uDstBase + row * uPackedRowBytes, chromaW));
+            }
+        }
+
         var vDstBase = uDstBase + uPlaneByteCount;
         var vSrc = frame.Planes[2].Span;
         var vSrcStride = frame.Strides[2];
-        for (var row = 0; row < chromaH; row++)
+        if (vSrcStride == chromaW && vSrc.Length >= chromaW * chromaH && uPackedRowBytes == chromaW)
+            vSrc.Slice(0, chromaW * chromaH).CopyTo(new Span<byte>(vDstBase, uPlaneByteCount));
+        else
         {
-            vSrc.Slice(row * vSrcStride, chromaW)
-                .CopyTo(new Span<byte>(vDstBase + row * chromaW, chromaW));
+            for (var row = 0; row < chromaH; row++)
+            {
+                vSrc.Slice(row * vSrcStride, chromaW)
+                    .CopyTo(new Span<byte>(vDstBase + row * uPackedRowBytes, chromaW));
+            }
         }
     }
 
@@ -381,7 +423,12 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         // staging buffer before we free it.
         if (_hasInFlight)
         {
-            try { _sender.FlushAsync(); } catch { /* best effort */ }
+            try { _sender.FlushAsync(); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, "NDIVideoSender.Dispose: FlushAsync"); }
+#else
+            catch { /* best effort */ }
+#endif
             _hasInFlight = false;
         }
         for (var i = 0; i < _staging.Length; i++)

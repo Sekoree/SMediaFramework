@@ -1,9 +1,18 @@
 using System.Runtime.InteropServices;
 using S.Media.Core.Video;
+using Vortice;
+using Vortice.Direct3D11;
+using Vortice.DXGI;
 
 namespace S.Media.FFmpeg.Video;
 
 /// <summary>Optional flags for <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>.</summary>
+/// <remarks>
+/// <para>
+/// <see cref="DecoderThreadCount"/> configures one libav <c>AVCodecContext</c> (applied in <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>).
+/// Multi-instance decode, process-wide caps, or hardware vs software fan-out are host concerns (audio-side parallel notes: <c>AudioFileDecoderOpenOptions</c>, checklist Tier E **20**).
+/// </para>
+/// </remarks>
 public sealed class VideoDecoderOpenOptions
 {
     /// <summary>When true, try libav hardware acceleration before falling back to software decode (default).</summary>
@@ -131,6 +140,39 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
         var d3d = (AVD3D11VADeviceContext*)hw->hwctx;
         return (nint)d3d->device;
     }
+
+    /// <summary>DXGI adapter LUID for the libav D3D11 device (packed <see langword="long"/>), when D3D11VA is active.</summary>
+    internal bool TryGetD3D11AdapterLuid(out long adapterLuidPacked)
+    {
+        adapterLuidPacked = 0;
+        var p = TryGetD3D11DeviceComPtr();
+        if (p == 0)
+            return false;
+
+        try
+        {
+            using var dev = new global::Vortice.Direct3D11.ID3D11Device(p);
+            using var dxgiDevice = dev.QueryInterfaceOrNull<IDXGIDevice>();
+            if (dxgiDevice is null)
+                return false;
+
+            using var adapter = dxgiDevice.GetAdapter();
+            using var adapter1 = adapter.QueryInterfaceOrNull<IDXGIAdapter1>();
+            if (adapter1 is null)
+                return false;
+
+            var desc = adapter1.Description1;
+            adapterLuidPacked = PackLuid(desc.Luid);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static long PackLuid(Luid luid) =>
+        unchecked((long)(((ulong)(uint)luid.HighPart << 32) | luid.LowPart));
 
     private static IReadOnlyList<HardwareVideoDeviceType> DefaultDeviceOrder()
     {

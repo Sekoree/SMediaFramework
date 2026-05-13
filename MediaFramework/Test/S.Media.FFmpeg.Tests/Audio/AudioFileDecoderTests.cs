@@ -1,4 +1,7 @@
+using FFmpeg.AutoGen;
+using static FFmpeg.AutoGen.ffmpeg;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg.Audio;
 using Xunit;
 
@@ -21,7 +24,45 @@ public sealed class AudioFileDecoderTests : IDisposable
 
     public void Dispose()
     {
-        try { File.Delete(_wavPath); } catch { /* ignored */ }
+        try { File.Delete(_wavPath); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(AudioFileDecoderTests)}: temp wav delete"); }
+#else
+        catch { /* ignored */ }
+#endif
+    }
+
+    [Fact]
+    public void Open_WithCodecThreadCount_stillOpens()
+    {
+        using var decoder = AudioFileDecoder.Open(_wavPath, new AudioFileDecoderOpenOptions { CodecThreadCount = 2 });
+        Assert.Equal(new AudioFormat(SampleRate, Channels), decoder.Format);
+        Assert.Equal(2, decoder.CodecThreadCountOption);
+        AssertLibavThreadType(decoder.LibavCodecThreadType);
+    }
+
+    [Fact]
+    public void Open_WithCodecThreadCount_clampsToLibavRange()
+    {
+        using var decoder = AudioFileDecoder.Open(_wavPath, new AudioFileDecoderOpenOptions { CodecThreadCount = 10_000 });
+        Assert.Equal(new AudioFormat(SampleRate, Channels), decoder.Format);
+        Assert.Equal(64, decoder.CodecThreadCountOption);
+        AssertLibavThreadType(decoder.LibavCodecThreadType);
+    }
+
+    [Fact]
+    public void Open_Default_hasZeroCodecThreadOptions()
+    {
+        using var decoder = AudioFileDecoder.Open(_wavPath);
+        Assert.Equal(0, decoder.CodecThreadCountOption);
+        Assert.Equal(0, decoder.LibavCodecThreadType);
+    }
+
+    /// <summary>Libav leaves <c>thread_type</c> at 0 for codecs without threading caps; otherwise it is a subset of the frame/slice flags.</summary>
+    private static void AssertLibavThreadType(int threadType)
+    {
+        const int mask = (int)(FF_THREAD_FRAME | FF_THREAD_SLICE);
+        Assert.True(threadType == 0 || (threadType & ~mask) == 0, $"unexpected thread_type value {threadType}");
     }
 
     [Fact]

@@ -15,6 +15,7 @@
         <PackageReference Include="FFmpeg.AutoGen" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="Vortice.Direct3D11" />
+        <PackageReference Include="Vortice.DXGI" />
     </ItemGroup>
 
     <ItemGroup>

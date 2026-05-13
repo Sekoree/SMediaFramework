@@ -11,6 +11,7 @@ This document summarizes how the MFPlayer-style media DLLs hang together: clocks
 ## Negotiation & formats
 
 - **`VideoFormatNegotiator.Connect`** aligns **`IVideoSource.NativePixelFormats`** with **`IVideoSink.AcceptedPixelFormats`**, optionally filtered by **`negotiatePixelFormats`** predicate (keeps negotiator ignorant of GPU details).
+- On **Windows**, when **NV12** uses D3D11 shared handles, **`VideoFormatNegotiator`** can connect **`IVideoSinkD3D11GlBorrowSetup`** (e.g. **`SDL3GLVideoSink`**) to an **`IHardwareD3D11GlInteropSource`** so GL uses the same **`ID3D11Device`** as libav decode without the app manually calling **`TryGetHardwareD3D11DeviceForWin32Gl`**. **`D3D11InteropUtility`** validates COM device pointers (and **`ID3D11Texture2D`** when present); optional one-time DXGI adapter LUID diagnostics help catch multi-GPU mismatches between decode and GL. **`Nv12Win32SharedHandleGpuUploader`** uses **`OpenSharedResource`** on the NT handle, or wraps the libav **`ID3D11Texture2D`** COM pointer when **`VideoWin32Nv12Backing.LibavD3D11DeviceComPtr`** matches the uploader device (skips **`OpenSharedResource`**). For a **portable** libav-internal surface description (same **`ID3D11Texture2D`** + device COM pointers, no NT handle export), see **`WindowsNv12D3D11TextureInterop`** and **`HardwareVideoMemoryKind.Win32D3D11Nv12Texture`**.
 - **`PixelFormat`** and **`PixelFormatInfo`** encode plane counts, chroma rounding, strides, alpha, and bit depth helpers shared by FFmpeg, sinks, GL, and tests.
 - Decoder frames optionally carry **`VideoTransferHint`** inferred from libav **`AVFrame.color_trc`**.
 
@@ -18,6 +19,7 @@ This document summarizes how the MFPlayer-style media DLLs hang together: clocks
 
 - **`GlVideoFormatSupport`** is the authoritative map from **`PixelFormat`** to shader filenames, sampler names, plane sizes, **`GL`** internal formats, default bit scales, YUV-matrix flags.
 - **`YuvVideoRenderer`** owns textures, uploads (including **`Upload(ReadOnlySpan<nint>, ReadOnlySpan<int>)`** for unmanaged planes), mipmaps-on-Y where enabled, **`VideoHdrTransfer`** preview tonemap path, **`VideoViewportFit`**.
+- **Windows NV12 (D3D11 shared handles):** set **`MF_MEDIA_PROFILE_WIN32_NV12_UPLOAD=1`** to enable **`Nv12Win32SharedHandleGpuUploadProfiling`** counters on **`Nv12Win32SharedHandleGpuUploader.TryUpload`** (interop success, staging after interop miss, both paths failed). When decode and GL share the same device, the uploader may open the backing texture via libav COM pointers instead of **`OpenSharedResource`**.
 
 ## Routing & SIMD
 

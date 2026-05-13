@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Video;
 
@@ -30,10 +31,15 @@ public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, Pixe
 /// <para>
 /// <strong>DRM dma-buf NV12</strong> can fan out to multiple sinks when every
 /// branch accepts the same negotiated <see cref="PixelFormat.Nv12"/> (no
-/// per-branch <see cref="VideoCpuFrameConverter"/>). Each output receives an
-/// independent <see cref="VideoFrame"/> sharing refcounted file descriptors
-/// via <see cref="VideoFrame.CreateNv12DmabufSharedReference"/>. If any branch
-/// needs a different pixel format, use CPU decode or a single dma-buf output.
+/// per-branch <see cref="VideoCpuFrameConverter"/>). <strong>P010</strong> and <strong>P016</strong> dma-buf fan-out follow the same rule
+/// when every branch stays <see cref="PixelFormat.P010"/> or <see cref="PixelFormat.P016"/> via <see cref="VideoFrame.CreateP010DmabufSharedReference"/> or <see cref="VideoFrame.CreateP016DmabufSharedReference"/>.
+/// Each NV12 output receives an independent <see cref="VideoFrame"/> sharing refcounted fds via
+/// <see cref="VideoFrame.CreateNv12DmabufSharedReference"/>; each P010 output uses <see cref="VideoFrame.CreateP010DmabufSharedReference"/>; each P016 output uses <see cref="VideoFrame.CreateP016DmabufSharedReference"/>.
+/// <strong>CPU NV12</strong> with the same constraints uses <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> so every sink shares one backing instead of <see cref="VideoCpuFrameConverter.DuplicateCpuBacking"/>.
+/// If any branch needs a different pixel format, use CPU decode or a single dma-buf output.
+/// There is still <strong>no</strong> GPU→CPU readback for mixed dma-buf + CPU converter branches — that remains a research-sized extension.
+/// Configure-time cannot know whether NV12, P010, or P016 frames will be CPU-backed or hardware-backed; when hardware-backed semi-planar dma-buf frames are delivered,
+/// the router rejects fan-out with per-branch converters at submit time (see <see cref="VideoRouterInputSink.Submit"/> implementation).
 /// </para>
 /// <para>
 /// For slow sinks (NDI, remote encoders), pass <see cref="VideoSinkPumpAttachOptions"/> to
@@ -358,6 +364,16 @@ public sealed class VideoRouter : IDisposable
     private void RaisePumpPressure(string outputId, long droppedFramesTotal) =>
         _pumpPressure?.Invoke(this, new VideoRouterPumpPressureEventArgs(outputId, droppedFramesTotal));
 
+    private static void ApplyD3D11GlBorrowVideoSourceToSink(IVideoSink sink, IVideoSource? videoSource)
+    {
+        if (sink is not IVideoSinkD3D11GlBorrowSetup borrowSetup)
+            return;
+        if (videoSource is IHardwareD3D11GlInteropSource)
+            borrowSetup.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
+        else
+            borrowSetup.SetBorrowVideoSourceForWin32Nv12Gl(null);
+    }
+
     private void ReconfigureInputIfNeededLocked(InputRegistration reg)
     {
         if (!reg.Configured || reg.NegotiatedFormat is not { } fmt) return;
@@ -383,6 +399,8 @@ public sealed class VideoRouter : IDisposable
         public bool Configured { get; private set; }
         public VideoFormat? NegotiatedFormat { get; private set; }
         private readonly Dictionary<string, OutputPathState> _paths = new(StringComparer.Ordinal);
+        private IVideoSource? _borrowVideoSourceForWin32Nv12Gl;
+        private int _nv12FanoutCpuBranchWarned;
 
         public InputRegistration(VideoRouter owner, string id, string primaryOutputId, IReadOnlyList<PixelFormat> accepted)
         {
@@ -410,6 +428,7 @@ public sealed class VideoRouter : IDisposable
 
             NegotiatedFormat = negotiated;
             var primarySink = _owner._outputs[PrimaryOutputId].Sink;
+            VideoRouter.ApplyD3D11GlBorrowVideoSourceToSink(primarySink, _borrowVideoSourceForWin32Nv12Gl);
             primarySink.Configure(negotiated);
             _paths.Clear();
 
@@ -429,6 +448,25 @@ public sealed class VideoRouter : IDisposable
                 _paths[oid] = new OutputPathState(Converter: conv);
             }
 
+            if (RoutedOutputIds.Count > 1 && negotiated.PixelFormat is PixelFormat.Nv12 or PixelFormat.P010 or PixelFormat.P016)
+            {
+                for (var i = 1; i < RoutedOutputIds.Count; i++)
+                {
+                    var oid = RoutedOutputIds[i];
+                    if (_paths.TryGetValue(oid, out var st) && st.Converter != null)
+                    {
+                        if (Interlocked.Exchange(ref _nv12FanoutCpuBranchWarned, 1) == 0)
+                        {
+                            _owner._log?.LogWarning(
+                                "VideoRouter input {InputId}: NV12/P010/P016 fan-out includes branch output(s) that use a CPU pixel converter — if the decoder delivers DRM dma-buf NV12/P010/P016 or Win32 shared NV12 frames, Submit will reject until every branch matches the negotiated semi-planar format or you use a single output / CPU decode.",
+                                Id);
+                        }
+
+                        break;
+                    }
+                }
+            }
+
             Configured = true;
         }
 
@@ -441,6 +479,13 @@ public sealed class VideoRouter : IDisposable
             NegotiatedFormat = null;
         }
 
+        internal void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource)
+        {
+            _borrowVideoSourceForWin32Nv12Gl = videoSource;
+            var primarySink = _owner._outputs[PrimaryOutputId].Sink;
+            VideoRouter.ApplyD3D11GlBorrowVideoSourceToSink(primarySink, _borrowVideoSourceForWin32Nv12Gl);
+        }
+
         public void SubmitLocked(VideoFrame frame)
         {
             if (!Configured || NegotiatedFormat is null)
@@ -449,7 +494,7 @@ public sealed class VideoRouter : IDisposable
                 throw new InvalidOperationException($"VideoRouter input '{Id}'.Submit called before Configure");
             }
 
-            if (frame.DmabufNv12 is not null && RoutedOutputIds.Count > 1)
+            if ((frame.DmabufNv12 is not null || frame.DmabufP010 is not null || frame.DmabufP016 is not null) && RoutedOutputIds.Count > 1)
             {
                 for (var j = 1; j < RoutedOutputIds.Count; j++)
                 {
@@ -457,7 +502,7 @@ public sealed class VideoRouter : IDisposable
                     {
                         frame.Dispose();
                         throw new NotSupportedException(
-                            "VideoRouter cannot convert DRM dma-buf NV12 for a branch output — use NV12 sinks for all routes, a single output, or CPU decode.");
+                            $"VideoRouter input '{Id}': cannot convert DRM dma-buf semi-planar frames for a branch output — use matching sinks for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw) so frames are CPU-backed.");
                     }
                 }
             }
@@ -470,7 +515,7 @@ public sealed class VideoRouter : IDisposable
                     {
                         frame.Dispose();
                         throw new NotSupportedException(
-                            "VideoRouter cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 sinks for all routes, a single output, or CPU decode.");
+                            $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 sinks for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
                     }
                 }
             }
@@ -484,17 +529,52 @@ public sealed class VideoRouter : IDisposable
             VideoFrame?[] branchFrames = new VideoFrame?[RoutedOutputIds.Count - 1];
             try
             {
-                for (var i = 1; i < RoutedOutputIds.Count; i++)
+                var n = RoutedOutputIds.Count;
+                var negotiatedFmt = NegotiatedFormat!.Value;
+                var canNv12CpuFanOut = n > 1
+                    && negotiatedFmt.PixelFormat == PixelFormat.Nv12
+                    && frame.DmabufNv12 is null
+                    && frame.DmabufP010 is null
+                    && frame.DmabufP016 is null
+                    && frame.Win32Nv12 is null;
+                if (canNv12CpuFanOut)
                 {
-                    var oid = RoutedOutputIds[i];
-                    var path = _paths[oid];
-                    branchFrames[i - 1] = path.Converter != null
-                        ? path.Converter.Convert(frame, frame.ColorTransferHint)
-                        : frame.DmabufNv12 is not null
-                            ? VideoFrame.CreateNv12DmabufSharedReference(frame)
-                            : frame.Win32Nv12 is not null
-                                ? VideoFrame.CreateNv12Win32SharedReference(frame)
-                                : VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                    for (var j = 1; j < n; j++)
+                    {
+                        if (_paths[RoutedOutputIds[j]].Converter != null)
+                        {
+                            canNv12CpuFanOut = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (canNv12CpuFanOut &&
+                    VideoFrame.TryCreateNv12CpuFanOutViews(frame, n, frame.ColorTransferHint, out var fanViews))
+                {
+                    for (var i = 1; i < n; i++)
+                        branchFrames[i - 1] = fanViews[i];
+                    frame.Dispose();
+                    frame = fanViews[0];
+                }
+                else
+                {
+                    for (var i = 1; i < n; i++)
+                    {
+                        var oid = RoutedOutputIds[i];
+                        var path = _paths[oid];
+                        branchFrames[i - 1] = path.Converter != null
+                            ? path.Converter.Convert(frame, frame.ColorTransferHint)
+                            : frame.DmabufNv12 is not null
+                                ? VideoFrame.CreateNv12DmabufSharedReference(frame)
+                                : frame.DmabufP010 is not null
+                                    ? VideoFrame.CreateP010DmabufSharedReference(frame)
+                                    : frame.DmabufP016 is not null
+                                        ? VideoFrame.CreateP016DmabufSharedReference(frame)
+                                        : frame.Win32Nv12 is not null
+                                            ? VideoFrame.CreateNv12Win32SharedReference(frame)
+                                            : VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                    }
                 }
 
                 _owner._outputs[PrimaryOutputId].Sink.Submit(frame);
@@ -518,10 +598,10 @@ public sealed class VideoRouter : IDisposable
         }
     }
 
-    /// <param name="Converter">When null, branch uses <see cref="VideoCpuFrameConverter.DuplicateCpuBacking"/> (same pixel format as negotiated).</param>
+    /// <param name="Converter">When null, branch uses <see cref="VideoCpuFrameConverter.DuplicateCpuBacking"/> for CPU frames unless <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> applies (negotiated <see cref="PixelFormat.Nv12"/>, no dma-buf / Win32 backings, no branch converter).</param>
     private readonly record struct OutputPathState(VideoCpuFrameConverter? Converter);
 
-    private sealed class VideoRouterInputSink : IVideoSink
+    private sealed class VideoRouterInputSink : IVideoSink, IVideoSinkD3D11GlBorrowSetup
     {
         private readonly VideoRouter _owner;
         private readonly InputRegistration _reg;
@@ -561,6 +641,16 @@ public sealed class VideoRouter : IDisposable
                 ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
                 _reg.TearDownPaths();
                 _reg.ApplyConfigureLocked(format);
+            }
+        }
+
+        public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource)
+        {
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_sinkDisposed, this);
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                _reg.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
             }
         }
 

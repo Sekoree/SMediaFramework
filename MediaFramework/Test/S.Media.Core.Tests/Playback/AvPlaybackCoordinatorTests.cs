@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Playback;
 using S.Media.Core.Tests.Video;
@@ -104,5 +105,68 @@ public class AvPlaybackCoordinatorTests
 
         Assert.False(video.IsRunning);
         Assert.Equal(1, flushCalls);
+    }
+
+    [Fact]
+    public void MediaPlaybackSession_ImplementsIAvPlaybackSession_TimelineIsClock()
+    {
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var video = new VideoPlayer(src, sink, clock);
+        IAvPlaybackSession session = new MediaPlaybackSession(video, clock);
+
+        Assert.Same(video, session.Video);
+        Assert.Same(clock, session.Clock);
+        Assert.Null(session.Audio);
+        Assert.Same(clock, session.Timeline);
+        Assert.Equal(1.0, session.Timeline.PlaybackRate);
+    }
+
+    [Fact]
+    public void Pause_WhenAudioNull_StopsMediaClockDriver()
+    {
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        using var clock = new MediaClock();
+        using var video = new VideoPlayer(src, sink, clock);
+        clock.Start();
+        video.Play();
+        sink.WaitForConfigured();
+
+        AvPlaybackCoordinator.Pause(video, null, default, () => { });
+
+        Assert.False(clock.IsRunning);
+        Assert.False(video.IsRunning);
+    }
+
+    [Fact]
+    public void IAvPlaybackSession_SubscribePositionChanged_DisposeUnsubscribes()
+    {
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var video = new VideoPlayer(src, sink, clock);
+        IAvPlaybackSession session = new MediaPlaybackSession(video, clock);
+        var hits = 0;
+        void Handler(object? _, TimeSpan __) => System.Threading.Interlocked.Increment(ref hits);
+        using (session.SubscribePositionChanged(Handler))
+        {
+            clock.AdvanceTo(TimeSpan.FromSeconds(1));
+            Assert.True(hits >= 1);
+        }
+
+        var after = hits;
+        clock.AdvanceTo(TimeSpan.FromSeconds(2));
+        Assert.Equal(after, hits);
     }
 }

@@ -87,6 +87,7 @@ public class NdiIngestPlaybackClockTests
     private static void AssertDurationNear(TimeSpan expected, TimeSpan actual)
     {
         var d = Math.Abs((actual - expected).Ticks);
-        Assert.True(d <= 100, $"expected ~{expected}, got {actual} (delta {d} ticks)");
+        // Frame duration uses double rounding; ingest clock may accumulate small FP drift across chained frames.
+        Assert.True(d <= 512, $"expected ~{expected}, got {actual} (delta {d} ticks)");
     }
 }

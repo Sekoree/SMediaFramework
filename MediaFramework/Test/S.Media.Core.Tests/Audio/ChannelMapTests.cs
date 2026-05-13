@@ -227,6 +227,36 @@ public class ChannelMapTests
         }
     }
 
+    private static void ReferenceStereoGroupedAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int samplesPerChannel, float uniformGain)
+    {
+        for (var i = 0; i < samplesPerChannel * 2; i += 2)
+        {
+            var L = src[i] * uniformGain;
+            var R = src[i + 1] * uniformGain;
+            var dstBase = i * 2;
+            dst[dstBase + 0] += L;
+            dst[dstBase + 1] += L;
+            dst[dstBase + 2] += R;
+            dst[dstBase + 3] += R;
+        }
+    }
+
+    private static void ReferenceStereoGroupedSwappedAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int samplesPerChannel, float uniformGain)
+    {
+        for (var i = 0; i < samplesPerChannel * 2; i += 2)
+        {
+            var L = src[i] * uniformGain;
+            var R = src[i + 1] * uniformGain;
+            var dstBase = i * 2;
+            dst[dstBase + 0] += R;
+            dst[dstBase + 1] += R;
+            dst[dstBase + 2] += L;
+            dst[dstBase + 3] += L;
+        }
+    }
+
     private static void ReferenceStereoToNAccumulate(
         ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain)
     {
@@ -237,6 +267,17 @@ public class ChannelMapTests
             var b = s * nOut;
             for (var k = 0; k < nOut; k++)
                 dst[b + k] += (k & 1) == 0 ? L : R;
+        }
+    }
+
+    private static void ReferencePackedIdentityAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int channels, int samplesPerChannel, float uniformGain)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var b = s * channels;
+            for (var c = 0; c < channels; c++)
+                dst[b + c] += src[b + c] * uniformGain;
         }
     }
 
@@ -338,6 +379,105 @@ public class ChannelMapTests
             ReferenceStereoWideAccumulate(stereo, actual, samplesPerChannel, gain);
 
         Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(1f, 256)]
+    [InlineData(0.75f, 5)]
+    public void StereoDuplexGroupedSimd_AccumulatesLikeScalar(float gain, int samplesPerChannel)
+    {
+        var map = new ChannelMap([0, 0, 1, 1]);
+        var stereo = new float[samplesPerChannel * 2];
+        var rnd = new Random(54 + samplesPerChannel);
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = (float)(rnd.NextDouble() - 0.25);
+
+        var expected = new float[samplesPerChannel * 4];
+        ReferenceStereoGroupedAccumulate(stereo, expected, samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * 4];
+        if (!ChannelMap.TryAccumulateStereoDuplexGroupedInterleaved(stereo, 2, actual, 4, map, samplesPerChannel, gain))
+            ReferenceStereoGroupedAccumulate(stereo, actual, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(1f, 256)]
+    [InlineData(0.75f, 5)]
+    public void StereoDuplexGroupedSwappedSimd_AccumulatesLikeScalar(float gain, int samplesPerChannel)
+    {
+        var map = new ChannelMap([1, 1, 0, 0]);
+        var stereo = new float[samplesPerChannel * 2];
+        var rnd = new Random(55 + samplesPerChannel);
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = (float)(rnd.NextDouble() - 0.25);
+
+        var expected = new float[samplesPerChannel * 4];
+        ReferenceStereoGroupedSwappedAccumulate(stereo, expected, samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * 4];
+        if (!ChannelMap.TryAccumulateStereoDuplexGroupedSwappedInterleaved(stereo, 2, actual, 4, map, samplesPerChannel, gain))
+            ReferenceStereoGroupedSwappedAccumulate(stereo, actual, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed8Permutation_seeded_steps_match_naive()
+    {
+        var rnd = new Random(161_803);
+        const int spc = 24;
+        const int ch = 8;
+        var wiring = new int[ch];
+        for (var step = 0; step < 600; step++)
+        {
+            for (var k = 0; k < ch; k++)
+                wiring[k] = k;
+            for (var k = ch - 1; k > 0; k--)
+            {
+                var j = rnd.Next(k + 1);
+                (wiring[k], wiring[j]) = (wiring[j], wiring[k]);
+            }
+
+            var map = new ChannelMap(wiring);
+            var total = spc * ch;
+            var src = new float[total];
+            for (var i = 0; i < total; i++)
+                src[i] = (float)(rnd.NextDouble() * 2 - 1);
+
+            var expected = new float[total];
+            ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, spc);
+            var actual = new float[total];
+            map.ApplyAdditive(src, ch, actual, spc);
+            Assert.Equal(expected, actual);
+        }
+    }
+
+    [Fact]
+    public void ApplyAdditive_GroupedStereoQuad_seeded_steps_match_naive()
+    {
+        var rnd = new Random(265358);
+        for (var step = 0; step < 1200; step++)
+        {
+            const int spc = 48;
+            var stereo = new float[spc * 2];
+            for (var i = 0; i < stereo.Length; i++)
+                stereo[i] = (float)(rnd.NextDouble() * 2 - 1);
+
+            foreach (var map in new[] { new ChannelMap([0, 0, 1, 1]), new ChannelMap([1, 1, 0, 0]) })
+            {
+                var expected = new float[spc * 4];
+                if (map[0] == 0)
+                    ReferenceStereoGroupedAccumulate(stereo, expected, spc, 1f);
+                else
+                    ReferenceStereoGroupedSwappedAccumulate(stereo, expected, spc, 1f);
+
+                var actual = new float[spc * 4];
+                map.ApplyAdditive(stereo, 2, actual, spc);
+                Assert.Equal(expected, actual);
+            }
+        }
     }
 
     [Theory]
@@ -525,6 +665,204 @@ public class ChannelMapTests
     {
         var map = ChannelMap.StereoToNSwapped(5);
         Assert.Equal(new int[] { 1, 0, 1, 0, 1 }, map.AsSpan().ToArray());
+    }
+
+    [Theory]
+    [InlineData(3, 1f, 64)]
+    [InlineData(4, 0.5f, 3)]
+    [InlineData(6, -0.25f, 17)]
+    [InlineData(8, 1.25f, 1)]
+    [InlineData(12, 0.75f, 128)]
+    public void PackedIdentitySimd_AccumulatesLikeScalar(int channels, float gain, int samplesPerChannel)
+    {
+        var map = ChannelMap.Identity(channels);
+        var total = samplesPerChannel * channels;
+        var src = new float[total];
+        var rnd = new Random(91 + channels + samplesPerChannel);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)(rnd.NextDouble() * 2 - 1);
+
+        var expected = new float[total];
+        ReferencePackedIdentityAccumulate(src, expected, channels, samplesPerChannel, gain);
+
+        var actual = new float[total];
+        if (!ChannelMap.TryAccumulatePackedIdentityInterleaved(src, channels, actual, channels, map, samplesPerChannel, gain))
+            ReferencePackedIdentityAccumulate(src, actual, channels, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(3, 5)]
+    [InlineData(6, 11)]
+    public void ApplyAdditive_PackedIdentity_MatchesNaive(int channels, int samplesPerChannel)
+    {
+        var map = ChannelMap.Identity(channels);
+        var total = samplesPerChannel * channels;
+        var src = new float[total];
+        var rnd = new Random(92 + channels);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.03 - 0.1);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, channels, expected, channels, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, channels, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed4Permutation_MatchesNaive_case_a()
+    {
+        var map = new ChannelMap(new[] { 2, 0, 3, 1 });
+        const int ch = 4;
+        const int samplesPerChannel = 13;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(9042);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.017 - 0.05);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed4Permutation_MatchesNaive_case_b()
+    {
+        var map = new ChannelMap(new[] { 3, 2, 1, 0 });
+        const int ch = 4;
+        const int samplesPerChannel = 17;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(9043);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.019 - 0.07);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed3Permutation_MatchesNaive()
+    {
+        var wiring = new[] { 1, 2, 0 };
+        var map = new ChannelMap(wiring);
+        const int ch = 3;
+        const int samplesPerChannel = 19;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(40203);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.003 - 0.01);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed5Permutation_MatchesNaive()
+    {
+        var wiring = new[] { 2, 4, 0, 1, 3 };
+        var map = new ChannelMap(wiring);
+        const int ch = 5;
+        const int samplesPerChannel = 13;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(50205);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.013 - 0.03);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed8Permutation_MatchesNaive()
+    {
+        var wiring = new[] { 4, 2, 0, 6, 1, 5, 3, 7 };
+        var map = new ChannelMap(wiring);
+        const int ch = 8;
+        const int samplesPerChannel = 9;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(314159);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        primed[17] = 0.3f;
+        primed[22] = -1.1f;
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed6Permutation_MatchesNaive()
+    {
+        var wiring = new[] { 3, 5, 1, 0, 4, 2 };
+        var map = new ChannelMap(wiring);
+        const int ch = 6;
+        const int samplesPerChannel = 11;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(60206);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.011 - 0.02);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed7Permutation_MatchesNaive()
+    {
+        var wiring = new[] { 6, 3, 1, 0, 2, 5, 4 };
+        var map = new ChannelMap(wiring);
+        const int ch = 7;
+        const int samplesPerChannel = 10;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(70207);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.007 - 0.015);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
     }
 
     [Fact]

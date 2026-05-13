@@ -40,16 +40,12 @@ var videoDecoderOptions = new VideoDecoderOpenOptions
 using var media = MediaContainerDecoder.Open(opt.MediaPath, videoDecoderOptions);
 media.SeekPresentation(TimeSpan.Zero);
 
-nint borrowD3d = 0;
-if (OperatingSystem.IsWindows() && opt.WindowsD3d11SharedGl)
-    media.TryGetHardwareD3D11DeviceForWin32Gl(out borrowD3d);
-
 var videoSource = media.Video;
 var sdlGl = new SDL3GLVideoSink(
     title: Path.GetFileName(opt.MediaPath),
     initialWidth: Math.Min(videoSource.Format.Width, 1920),
     initialHeight: Math.Min(videoSource.Format.Height, 1080),
-    borrowD3D11DeviceComPtrForNv12Gl: borrowD3d);
+    createFallbackD3D11InteropDeviceForWin32Nv12: !(opt.WindowsD3d11SharedGl && opt.WindowsD3d11ZeroHostGl));
 
 VideoRouter? videoRouter = null;
 string? ndiVideoRouterInputId = null;
@@ -81,14 +77,17 @@ if (opt.NdiEnable)
     videoFront = mainIn.Sink;
 }
 
-AudioRouting? routing = AudioRouting.TryCreate(media, opt.AudioChunkSamples, opt.DeviceLatencyMs);
+MediaContainerPlaybackHost? audioHost = MediaContainerPlaybackHost.TryCreatePortAudioMain(
+    media, opt.AudioChunkSamples, opt.DeviceLatencyMs,
+    msg => Console.Error.WriteLine($"[audio] could not wire PortAudio/ffmpeg: {msg}"));
 using var freerunClock = new MediaClock();
 
-IMediaClock playClock = routing?.Player.Clock ?? freerunClock;
+IMediaClock playClock = audioHost?.Player.Clock ?? freerunClock;
 
 using VideoPlayer videoPlayer = new(videoSource, videoFront, playClock);
 LogVideoPixelRouting(videoSource, videoPlayer, videoRouter, ndiVideoRouterInputId);
-var playbackSession = new MediaPlaybackSession(videoPlayer, playClock, routing?.Player);
+var playback = new MediaContainerPlaybackGraph(media, videoPlayer, playClock, audioHost?.Player);
+var av = playback.Router;
 
 try
 {
@@ -96,7 +95,7 @@ try
         $"{Path.GetFileName(opt.MediaPath)}  video {videoSource.Format.Width}x{videoSource.Format.Height} " +
         $"{videoSource.Format.PixelFormat} @{videoSource.Format.FrameRate}");
 
-    if (routing is null)
+    if (audioHost is null)
         Console.WriteLine("[audio] not wired — see stderr above; using VideoPtsClock as MediaClock master.");
 
     if (opt.NdiEnable && !opt.NoHardwareDecode)
@@ -119,15 +118,15 @@ try
     };
     sdlGl.CloseRequested += (_, _) => cts.Cancel();
 
-    if (ndi is not null && routing is not null)
+    if (ndi is not null && audioHost is not null)
     {
-        IAudioSink ndAudio = ndi.EnableAudio(routing.AudioFormat);
+        IAudioSink ndAudio = ndi.EnableAudio(audioHost.AudioFormat);
         var agg = opt.NdiAudioAggregateSamples;
         if (agg < 0)
         {
             var fps = videoSource.Format.FrameRate.ToDouble();
             agg = fps > 0 && !double.IsNaN(fps)
-                ? (int)Math.Clamp(routing.AudioFormat.SampleRate / fps, 960, 8192)
+                ? (int)Math.Clamp(audioHost.AudioFormat.SampleRate / fps, 960, 8192)
                 : 2000;
         }
 
@@ -137,25 +136,27 @@ try
             ndAudio = ndiAudioAgg;
         }
 
-        ndiAudioSinkId = routing.Player.AddOutput(ndAudio, sinkPumpCapacityChunks: opt.NdiAudioPumpCapacityChunks);
+        ndiAudioSinkId = audioHost.Player.AddOutput(ndAudio, sinkPumpCapacityChunks: opt.NdiAudioPumpCapacityChunks);
 
-        routing.Player.Connect(routing.SourceId, ndiAudioSinkId,
-            ChannelMap.Identity(Math.Min(2, routing.AudioFormat.Channels)));
+        audioHost.Player.Connect(audioHost.SourceId, ndiAudioSinkId,
+            ChannelMap.Identity(Math.Min(2, audioHost.AudioFormat.Channels)));
 
         ndiMirrorPrefill = ndAudio;
     }
 
-    if (routing != null)
+    WaitForFirstNdiReceiverIfRequested(ndi, opt.NdiWaitFirstReceiverMs);
+
+    if (audioHost is not null)
     {
         // While PortAudio hasn't started, SinkSlavedRouterClock's WaitForCapacity() returns
         // unconditionally — the router would decode as fast as CPU allows, overfill the ring,
         // and Submit() would drop samples while mux audio Position still advanced
         // ("audio 7s ahead" in the HUD). Match PlaybackSmoke: prebuffer by reading the
         // shared decoder directly into the device ring, open the stream, then start the router.
-        routing.PrefillMainOutputDirectFromDecoder(TimeSpan.FromSeconds(3),
+        audioHost.PrefillMainOutputDirectFromDecoder(TimeSpan.FromSeconds(3),
             mirrorPackedFloats: ndiMirrorPrefill);
-        routing.StartHardwareOutput();
-        playbackSession.Play();
+        audioHost.StartHardwareOutput();
+        av.Play();
     }
     else
     {
@@ -175,7 +176,7 @@ try
             }
         };
         videoPlayer.FramePresentationTimePresented += videoPtsHook;
-        playbackSession.Play(videoOnlyMaster: videoPtsClock);
+        av.Play(videoOnlyMaster: videoPtsClock);
     }
 
     var ticker = System.Diagnostics.Stopwatch.StartNew();
@@ -191,20 +192,20 @@ try
             var nomFps = videoSource.Format.FrameRate.ToDouble();
             var nomFpsStr = nomFps > 0 && !double.IsNaN(nomFps) ? $"{nomFps:0.##}Hz" : "?Hz";
 
-            var aHeard = routing != null
-                ? TimeSpan.FromSeconds(routing.MainOutput.PlayedSamples / (double)routing.MainOutput.Format.SampleRate)
+            var aHeard = audioHost is not null
+                ? TimeSpan.FromSeconds(audioHost.MainOutput.PlayedSamples / (double)audioHost.MainOutput.Format.SampleRate)
                 : TimeSpan.Zero;
-            var aDeckDec = (routing?.Container.Audio as ISeekableSource)?.Position ?? TimeSpan.Zero;
+            var aDeckDec = (media.Audio as ISeekableSource)?.Position ?? TimeSpan.Zero;
             long pumpDr = 0, paUnd = 0, paDr = 0, ndiDr = 0;
             long ndiVidDr = 0;
             int ndiVidQ = 0;
-            if (routing != null)
+            if (audioHost is not null)
             {
-                pumpDr = routing.Player.Router.GetPumpStats(routing.PrimarySinkId).Dropped;
-                paUnd = routing.MainOutput.UnderrunSamples;
-                paDr = routing.MainOutput.DroppedSamples;
+                pumpDr = audioHost.Player.Router.GetPumpStats(audioHost.PrimarySinkId).Dropped;
+                paUnd = audioHost.MainOutput.UnderrunSamples;
+                paDr = audioHost.MainOutput.DroppedSamples;
                 if (ndiAudioSinkId is not null)
-                    ndiDr = routing.Player.Router.GetPumpStats(ndiAudioSinkId).Dropped;
+                    ndiDr = audioHost.Player.Router.GetPumpStats(ndiAudioSinkId).Dropped;
             }
 
             if (videoRouter is not null && ndiVideoOutputId is not null
@@ -226,8 +227,8 @@ try
             ticker.Restart();
         }
 
-        var audioNaturally = routing?.Player.Router.CompletedNaturally ?? true;
-        var routerEof = routing?.Player.Router.CompletedNaturally == true;
+        var audioNaturally = audioHost?.Player.Router.CompletedNaturally ?? true;
+        var routerEof = audioHost?.Player.Router.CompletedNaturally == true;
 
         if (videoSource.IsExhausted && audioNaturally &&
             (videoPlayer.CompletedNaturally || routerEof))
@@ -238,16 +239,24 @@ try
     }
 
     Console.WriteLine();
+    if (cts.IsCancellationRequested)
+        Console.Error.WriteLine("[smoke] interrupt: stopping playback…");
     try
     {
-        playbackSession.Pause(CancellationToken.None, media.FlushCodecPipelines);
+        // Ctrl+C: skip SeekPresentation/flush — it can block on demux/decoder while the UI thread
+        // is tearing down; EOF exit still flushes for a clean mux snapshot.
+        Action? flushMux = cts.IsCancellationRequested ? () => { } : null;
+        av.Pause(CancellationToken.None, flushMux);
     }
     catch (OperationCanceledException)
     {
         // Defensive: coordinator uses None today; keep smoke from dying on cooperative cancel.
     }
+
+    if (cts.IsCancellationRequested)
+        Console.Error.WriteLine("[smoke] av session paused.");
     videoPtsClock?.Pause();
-    if (routing is null)
+    if (audioHost is null)
         freerunClock.Stop(CancellationToken.None);
 }
 finally
@@ -256,7 +265,7 @@ finally
         videoPlayer.FramePresentationTimePresented -= videoPtsHook;
 
     ndiAudioAgg?.Dispose();
-    routing?.Dispose();
+    audioHost?.Dispose();
     videoRouter?.Dispose();
     if (videoRouter is null)
         sdlGl.Dispose();
@@ -349,102 +358,24 @@ static void LogVideoPixelRouting(
 static string FormatClock(TimeSpan t) =>
     $"{(int)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}.{t.Milliseconds:000}";
 
+/// <summary>Blocks until an NDI receiver attaches or the SDK times out (full-wire harness).</summary>
+static void WaitForFirstNdiReceiverIfRequested(NDIOutput? ndi, int maxWaitMs)
+{
+    if (ndi is null || maxWaitMs <= 0)
+        return;
+    var ms = (uint)maxWaitMs;
+    var n = ndi.GetReceiverConnectionCount(ms);
+    if (n < 1)
+        Console.Error.WriteLine($"[ndi] no receiver within {ms} ms — continuing (Monitor may still connect).");
+    else
+        Console.WriteLine($"[ndi] {n} receiver(s) connected (wait up to {ms} ms).");
+}
+
 static TimeSpan PaceBelowFramePeriod(VideoFormat fmt)
 {
     var fps = fmt.FrameRate.ToDouble();
     if (fps <= 0 || double.IsNaN(fps)) return TimeSpan.Zero;
     return TimeSpan.FromSeconds(1.0 / fps * 0.93);
-}
-
-file sealed class AudioRouting : IDisposable
-{
-    private readonly PortAudioOutput _mainOutput;
-
-    private AudioRouting(AudioPlayer player, MediaContainerDecoder container, string sourceId, PortAudioOutput mainOutput,
-                         string primarySinkId)
-    {
-        Player = player;
-        Container = container;
-        SourceId = sourceId;
-        AudioFormat = container.Audio.Format;
-        _mainOutput = mainOutput;
-        PrimarySinkId = primarySinkId;
-    }
-
-    internal AudioPlayer Player { get; }
-    /// <summary>Shared demux — audio is registered on <see cref="AudioPlayer.Router"/> without player ownership.</summary>
-    internal MediaContainerDecoder Container { get; }
-    internal string SourceId { get; }
-
-    internal AudioFormat AudioFormat { get; }
-
-    /// <summary>Router id of the main <see cref="PortAudioOutput"/> (for <see cref="AudioRouter.GetPumpStats"/>).</summary>
-    internal string PrimarySinkId { get; }
-
-    internal PortAudioOutput MainOutput => _mainOutput;
-
-    internal static AudioRouting? TryCreate(MediaContainerDecoder container, int chunkSamples, int? deviceLatencyMs = null)
-    {
-        try
-        {
-            var audioSource = container.Audio;
-            var player = new AudioPlayer(audioSource.Format.SampleRate, chunkSamples);
-
-            double? latencySec = deviceLatencyMs is > 0 ? deviceLatencyMs.Value / 1000.0 : null;
-            var output = new PortAudioOutput(
-                audioSource.Format,
-                deviceIndex: null,
-                suggestedLatency: latencySec,
-                framesPerBuffer: chunkSamples,
-                ringCapacityFrames: audioSource.Format.SampleRate);
-            // Target ~16 chunks (≈320 ms @ 960 samples / 48 kHz), capped at ring/3, floored at 4 chunks.
-            // Avoids Math.Clamp throwing when capacity/8 < 4*chunk and reduces mid-stream underruns vs a 160 ms cap.
-            var cap = output.CapacitySamples;
-            var floor = chunkSamples * 4;
-            var target = Math.Max(floor, Math.Min(chunkSamples * 16, cap / 3));
-            if (latencySec is { } s && s > 0)
-            {
-                var latencySamples = (int)(audioSource.Format.SampleRate * s);
-                target = Math.Max(target, Math.Min(latencySamples * 2, cap / 2));
-            }
-
-            output.TargetQueueSamples = target;
-
-            // Borrowed source: container owns mux/audio disposal; do not use AddOwnedSource.
-            string sourceId = player.Router.AddSource(audioSource);
-            string sinkMain = player.AddOutput(output); // pacing + playback clock wiring
-            player.Connect(sourceId, sinkMain);
-
-            return new AudioRouting(player, container, sourceId, output, sinkMain);
-        }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[audio] could not wire PortAudio/ffmpeg: {ex.Message}");
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Prefill the hardware ring by pulling from <see cref="MediaContainerDecoder.Audio"/> before any router thread runs
-    /// (same ordering as other smoke tools: prefill before router/device pacing). Delegates to
-    /// <see cref="AudioPlayerPortAudioExtensions.TryPrefillPrimaryPortAudio"/>.
-    /// Optionally mirrors the same PCM into <paramref name="mirrorPackedFloats"/>
-    /// (for example an <see cref="NDIAudioSink"/> wrapper) so NDI audio starts aligned with PortAudio prefill.
-    /// </summary>
-    internal void PrefillMainOutputDirectFromDecoder(TimeSpan timeout, IAudioSink? mirrorPackedFloats = null)
-    {
-        if (!Player.TryPrefillPrimaryPortAudio(Container.Audio, timeout, mirrorPackedFloats))
-            throw new InvalidOperationException("Primary sink must be PortAudio for hardware prefill.");
-    }
-
-    /// <summary>Opens the native PortAudio stream (after <see cref="PrefillMainOutputDirectFromDecoder"/>, before <see cref="AudioPlayer.Play"/>).</summary>
-    internal void StartHardwareOutput() => _mainOutput.Start();
-
-    public void Dispose()
-    {
-        Player.Dispose();
-        _mainOutput.Dispose();
-    }
 }
 
 internal readonly record struct PlaybackOptions(
@@ -454,6 +385,7 @@ internal readonly record struct PlaybackOptions(
     bool NoHardwareDecode,
     bool LinuxDrmDmabufGl,
     bool WindowsD3d11SharedGl,
+    bool WindowsD3d11ZeroHostGl,
     int AudioChunkSamples,
     int? DeviceLatencyMs,
     int NdiAudioAggregateSamples,
@@ -461,7 +393,8 @@ internal readonly record struct PlaybackOptions(
     bool NdiClockVideo,
     bool NdiDisableWallPace,
     int NdiVideoPumpFrames,
-    NDIVideoTimecodeMode NdiVideoTimecodeMode);
+    NDIVideoTimecodeMode NdiVideoTimecodeMode,
+    int NdiWaitFirstReceiverMs);
 
 file static class PlaybackCli
 {
@@ -476,10 +409,12 @@ file static class PlaybackCli
         bool ndiDisableWallPace = false;
         var ndiVideoPumpFrames = 8;
         var ndiVideoTc = NDIVideoTimecodeMode.PresentationRelativeTicks;
+        var ndiWaitFirstRxMs = 0;
 
         bool noHw = false;
         bool drmGl = false;
         bool d3d11Gl = false;
+        bool d3d11GlZeroHost = false;
         int chunkSamples = 960;
         int? deviceLatencyMs = null;
         int ndiAudioAggregateSamples = -1;
@@ -522,6 +457,9 @@ file static class PlaybackCli
                 case "--d3d11-gl":
                     d3d11Gl = true;
                     break;
+                case "--d3d11-gl-zero-host":
+                    d3d11GlZeroHost = true;
+                    break;
                 default:
                     if (TryParseKeyedInt(a, "--chunk-samples=", out var ck) && ck > 0)
                     {
@@ -554,6 +492,12 @@ file static class PlaybackCli
                         break;
                     }
 
+                    if (TryParseKeyedInt(a, "--ndi-wait-first-receiver-ms=", out var nwr) && nwr >= 0)
+                    {
+                        ndiWaitFirstRxMs = Math.Clamp(nwr, 0, 300_000);
+                        break;
+                    }
+
                     if (TryParseKeyedString(a, "--ndi-video-tc=", out var nvtc))
                     {
                         if (string.Equals(nvtc, "synth", StringComparison.OrdinalIgnoreCase))
@@ -580,12 +524,24 @@ file static class PlaybackCli
             return false;
         }
 
+        if (d3d11GlZeroHost && !d3d11Gl)
+        {
+            errorText = "--d3d11-gl-zero-host requires --d3d11-gl";
+            return false;
+        }
+
+        if (ndiWaitFirstRxMs > 0 && !ndi)
+        {
+            errorText = "--ndi-wait-first-receiver-ms requires --ndi";
+            return false;
+        }
+
         int? ndiPumpCap = !ndiPumpFromCli ? 24 : (ndiPumpCliValue < 2 ? null : ndiPumpCliValue);
 
         opt = new PlaybackOptions(positional[0], ndi, ndiName, noHw, OperatingSystem.IsLinux() && drmGl,
-            OperatingSystem.IsWindows() && d3d11Gl, chunkSamples,
+            OperatingSystem.IsWindows() && d3d11Gl, OperatingSystem.IsWindows() && d3d11Gl && d3d11GlZeroHost, chunkSamples,
             deviceLatencyMs, ndiAudioAggregateSamples, ndiPumpCap,
-            ndiClockVideo, ndiDisableWallPace, ndiVideoPumpFrames, ndiVideoTc);
+            ndiClockVideo, ndiDisableWallPace, ndiVideoPumpFrames, ndiVideoTc, ndiWaitFirstRxMs);
         return true;
     }
 
@@ -617,7 +573,8 @@ Smoke test for video + mastered audio clock (SDL3 GL by default).
   --ndi [name]        Mirror video/audio over NDI (forces software video decode so pixels are CPU-readable; do not combine with --drm-gl / --d3d11-gl).
   --no-hw             Force software video decode (default is hardware when --ndi is not used).
   --drm-gl            (Linux only) Prefer DRM PRIME EGL NV12 dma-bufs to GL (do not combine with --ndi).
-  --d3d11-gl          (Windows only) Prefer D3D11 NV12 shared handles + GL staging upload (do not combine with --ndi).
+  --d3d11-gl          (Windows only) Prefer D3D11 NV12 shared handles + GL upload (do not combine with --ndi).
+  --d3d11-gl-zero-host  (Windows, with --d3d11-gl) Do not create SDL's fallback D3D11GlInteropDeviceHost; bind the GL uploader from libav's ID3D11Device on the first decoded frame (true zero-host; requires LibavD3D11DeviceComPtr on Win32 NV12 backing or negotiator borrow).
 
   --chunk-samples=n   AudioRouter chunk span (default 960 ≈ 20 ms @ 48 kHz).
   --device-latency-ms=n  PortAudio suggested latency (ms) + larger TargetQueueSamples floor (JACK/ALSA-hw).
@@ -627,6 +584,9 @@ Smoke test for video + mastered audio clock (SDL3 GL by default).
   --ndi-disable-wall-pace Disable host wall throttle between NDI video submits (see NDIVideoSender).
   --ndi-video-pump-frames=n  NDI branch VideoSinkPump queue depth (default 8; was 4).
   --ndi-video-tc=pts|synth  Video timecode: pts = PresentationRelativeTicks (default); synth = SDK synthesize.
+  --ndi-wait-first-receiver-ms=n  (With --ndi) Block up to n ms for the first NDI receiver (NDIlib_send_get_no_connections); 0=off (default).
+
+Lab (NDI egress timeline soak, not this tool's runtime): RUN_NDI_EGRESS_SOAK=1, optional RUN_NDI_EGRESS_SOAK_ROUNDS=<n> (1k–10M), RUN_NDI_EGRESS_SOAK_STRESS=1 — NdiEgressPresentationTimelineTests. RUN_NDI_MUX_SOAK=1 — NdiEgressMuxPlayheadClockTests. RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.
 """);
     }
 }

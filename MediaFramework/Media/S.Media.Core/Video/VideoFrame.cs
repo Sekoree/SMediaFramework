@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace S.Media.Core.Video;
 
 /// <summary>
@@ -18,6 +20,8 @@ public sealed class VideoFrame : IDisposable
     private readonly ReadOnlyMemory<byte>[] _planes;
     private readonly int[] _strides;
     private readonly VideoDmabufNv12Backing? _dmabufNv12;
+    private readonly VideoDmabufP010Backing? _dmabufP010;
+    private readonly VideoDmabufP016Backing? _dmabufP016;
     private readonly VideoWin32Nv12Backing? _win32Nv12;
 
     public TimeSpan PresentationTime { get; }
@@ -30,6 +34,16 @@ public sealed class VideoFrame : IDisposable
     /// When set, <see cref="Planes"/> are empty stubs; upload via DMA-BUF / EGL instead of CPU memory.
     /// </summary>
     public VideoDmabufNv12Backing? DmabufNv12 => _dmabufNv12;
+
+    /// <summary>
+    /// When set, <see cref="Planes"/> are empty stubs; upload P010 via DMA-BUF / EGL instead of CPU memory.
+    /// </summary>
+    public VideoDmabufP010Backing? DmabufP010 => _dmabufP010;
+
+    /// <summary>
+    /// When set, <see cref="Planes"/> are empty stubs; upload P016 via DMA-BUF / EGL instead of CPU memory.
+    /// </summary>
+    public VideoDmabufP016Backing? DmabufP016 => _dmabufP016;
 
     /// <summary>
     /// When set, <see cref="Planes"/> are empty stubs; upload via D3D11 shared texture / GL interop on Windows.
@@ -66,6 +80,8 @@ public sealed class VideoFrame : IDisposable
         VideoTransferHint colorTransferHint = default,
         Action? release = null,
         VideoDmabufNv12Backing? dmaBufNv12 = null,
+        VideoDmabufP010Backing? dmaBufP010 = null,
+        VideoDmabufP016Backing? dmaBufP016 = null,
         VideoWin32Nv12Backing? win32Nv12 = null)
     {
         ArgumentNullException.ThrowIfNull(planes);
@@ -75,10 +91,22 @@ public sealed class VideoFrame : IDisposable
         ColorTransferHint = colorTransferHint;
         _release = release;
         _dmabufNv12 = dmaBufNv12;
+        _dmabufP010 = dmaBufP010;
+        _dmabufP016 = dmaBufP016;
         _win32Nv12 = win32Nv12;
 
+        if (dmaBufNv12 is not null && dmaBufP010 is not null)
+            throw new ArgumentException("A frame cannot combine NV12 and P010 DMA-BUF backings.", nameof(dmaBufP010));
+        if (dmaBufNv12 is not null && dmaBufP016 is not null)
+            throw new ArgumentException("A frame cannot combine NV12 and P016 DMA-BUF backings.", nameof(dmaBufP016));
         if (dmaBufNv12 is not null && win32Nv12 is not null)
             throw new ArgumentException("A frame cannot combine DMA-BUF and Win32 NV12 backings.", nameof(win32Nv12));
+        if (dmaBufP010 is not null && dmaBufP016 is not null)
+            throw new ArgumentException("A frame cannot combine P010 and P016 DMA-BUF backings.", nameof(dmaBufP016));
+        if (dmaBufP010 is not null && win32Nv12 is not null)
+            throw new ArgumentException("A frame cannot combine DMA-BUF P010 and Win32 NV12 backings.", nameof(win32Nv12));
+        if (dmaBufP016 is not null && win32Nv12 is not null)
+            throw new ArgumentException("A frame cannot combine DMA-BUF P016 and Win32 NV12 backings.", nameof(win32Nv12));
 
         if (dmaBufNv12 != null)
         {
@@ -99,6 +127,46 @@ public sealed class VideoFrame : IDisposable
                 if (strides[0] != dmaBufNv12.YPlanePitchBytes || strides[1] != dmaBufNv12.UvPlanePitchBytes)
                     throw new ArgumentException(
                         "strides must mirror VideoDmabufNv12Backing pitches for NV12 dma-buf frames.", nameof(strides));
+        }
+        else if (dmaBufP010 != null)
+        {
+            if (format.PixelFormat != PixelFormat.P010)
+                throw new ArgumentException("P010 DMA-BUF frames require PixelFormat.P010", nameof(format));
+            if (planes.Length != 2 || strides.Length != 2)
+                throw new ArgumentException("P010 DMA-BUF requires two planes and strides (often empty stubs).",
+                    nameof(planes));
+
+            foreach (var p in planes)
+            {
+                if (!p.IsEmpty)
+                    throw new ArgumentException(
+                        "CPU plane memory must be empty for DMA-BUF frames; use stub ReadOnlyMemory<byte>.Empty entries.",
+                        nameof(planes));
+            }
+
+            if (strides[0] != dmaBufP010.YPlanePitchBytes || strides[1] != dmaBufP010.UvPlanePitchBytes)
+                throw new ArgumentException(
+                    "strides must mirror VideoDmabufP010Backing pitches for P010 dma-buf frames.", nameof(strides));
+        }
+        else if (dmaBufP016 != null)
+        {
+            if (format.PixelFormat != PixelFormat.P016)
+                throw new ArgumentException("P016 DMA-BUF frames require PixelFormat.P016", nameof(format));
+            if (planes.Length != 2 || strides.Length != 2)
+                throw new ArgumentException("P016 DMA-BUF requires two planes and strides (often empty stubs).",
+                    nameof(planes));
+
+            foreach (var p in planes)
+            {
+                if (!p.IsEmpty)
+                    throw new ArgumentException(
+                        "CPU plane memory must be empty for DMA-BUF frames; use stub ReadOnlyMemory<byte>.Empty entries.",
+                        nameof(planes));
+            }
+
+            if (strides[0] != dmaBufP016.YPlanePitchBytes || strides[1] != dmaBufP016.UvPlanePitchBytes)
+                throw new ArgumentException(
+                    "strides must mirror VideoDmabufP016Backing pitches for P016 dma-buf frames.", nameof(strides));
         }
         else if (win32Nv12 != null)
         {
@@ -187,7 +255,101 @@ public sealed class VideoFrame : IDisposable
             additionalRelease: null);
     }
 
+    /// <summary>Builds a P010 <see cref="VideoFrame"/> wrapping Linux DRM PRIME dma-bufs (zero-copy).</summary>
+    public static VideoFrame CreateP010Dmabuf(
+        TimeSpan presentationTime,
+        VideoFormat format,
+        VideoDmabufP010Backing dmaBufP010Backing,
+        VideoTransferHint colorTransferHint = default,
+        Action? additionalRelease = null)
+    {
+        ArgumentNullException.ThrowIfNull(dmaBufP010Backing);
+        if (!OperatingSystem.IsLinux())
+            throw new PlatformNotSupportedException(CreateP010DmabufOnlyLinux);
+        Action? release = additionalRelease == null
+            ? dmaBufP010Backing.Dispose
+            : () =>
+            {
+                dmaBufP010Backing.Dispose();
+                additionalRelease();
+            };
+
+        ReadOnlyMemory<byte>[] planes = [default, default];
+        var strides = new[] { dmaBufP010Backing.YPlanePitchBytes, dmaBufP010Backing.UvPlanePitchBytes };
+        return new VideoFrame(presentationTime, format, planes, strides, colorTransferHint, release,
+            dmaBufNv12: null, dmaBufP010: dmaBufP010Backing, dmaBufP016: null);
+    }
+
+    /// <summary>Builds a P016 <see cref="VideoFrame"/> wrapping Linux DRM PRIME dma-bufs (zero-copy).</summary>
+    public static VideoFrame CreateP016Dmabuf(
+        TimeSpan presentationTime,
+        VideoFormat format,
+        VideoDmabufP016Backing dmaBufP016Backing,
+        VideoTransferHint colorTransferHint = default,
+        Action? additionalRelease = null)
+    {
+        ArgumentNullException.ThrowIfNull(dmaBufP016Backing);
+        if (!OperatingSystem.IsLinux())
+            throw new PlatformNotSupportedException(CreateP016DmabufOnlyLinux);
+        Action? release = additionalRelease == null
+            ? dmaBufP016Backing.Dispose
+            : () =>
+            {
+                dmaBufP016Backing.Dispose();
+                additionalRelease();
+            };
+
+        ReadOnlyMemory<byte>[] planes = [default, default];
+        var strides = new[] { dmaBufP016Backing.YPlanePitchBytes, dmaBufP016Backing.UvPlanePitchBytes };
+        return new VideoFrame(presentationTime, format, planes, strides, colorTransferHint, release,
+            dmaBufNv12: null, dmaBufP010: null, dmaBufP016: dmaBufP016Backing);
+    }
+
+    /// <summary>
+    /// Builds a second <see cref="VideoFrame"/> that shares <paramref name="source"/>'s
+    /// <see cref="VideoFrame.DmabufP016"/> backing (refcounted). Each frame must be disposed independently.
+    /// </summary>
+    public static VideoFrame CreateP016DmabufSharedReference(VideoFrame source, VideoTransferHint? colorTransferHint = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.DmabufP016 is null)
+            throw new ArgumentException("Source is not a P016 dma-buf frame.", nameof(source));
+        if (!OperatingSystem.IsLinux())
+            throw new PlatformNotSupportedException(CreateP016DmabufOnlyLinux);
+
+        source.DmabufP016.AddReference();
+        return CreateP016Dmabuf(
+            source.PresentationTime,
+            source.Format,
+            source.DmabufP016,
+            colorTransferHint ?? source.ColorTransferHint,
+            additionalRelease: null);
+    }
+
+    /// <summary>
+    /// Builds a second <see cref="VideoFrame"/> that shares <paramref name="source"/>'s
+    /// <see cref="VideoFrame.DmabufP010"/> backing (refcounted). Each frame must be disposed independently.
+    /// </summary>
+    public static VideoFrame CreateP010DmabufSharedReference(VideoFrame source, VideoTransferHint? colorTransferHint = null)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.DmabufP010 is null)
+            throw new ArgumentException("Source is not a P010 dma-buf frame.", nameof(source));
+        if (!OperatingSystem.IsLinux())
+            throw new PlatformNotSupportedException(CreateP010DmabufOnlyLinux);
+
+        source.DmabufP010.AddReference();
+        return CreateP010Dmabuf(
+            source.PresentationTime,
+            source.Format,
+            source.DmabufP010,
+            colorTransferHint ?? source.ColorTransferHint,
+            additionalRelease: null);
+    }
+
     internal const string CreateNv12DmabufOnlyLinux = "CreateNv12Dmabuf is supported on Linux only.";
+    internal const string CreateP010DmabufOnlyLinux = "CreateP010Dmabuf is supported on Linux only.";
+    internal const string CreateP016DmabufOnlyLinux = "CreateP016Dmabuf is supported on Linux only.";
 
     /// <summary>Builds an NV12 <see cref="VideoFrame"/> wrapping Windows DXGI/D3D11 NT shared handles (decoder export).</summary>
     public static VideoFrame CreateNv12Win32Shared(
@@ -236,6 +398,90 @@ public sealed class VideoFrame : IDisposable
     }
 
     internal const string CreateNv12Win32SharedOnlyWindows = "CreateNv12Win32Shared is supported on Windows only.";
+
+    /// <summary>
+    /// Builds <paramref name="viewCount"/> <see cref="VideoFrame"/> instances that share the same CPU NV12
+    /// plane memory and invoke the source backing <c>release</c> exactly once after all views are disposed.
+    /// On failure returns <c>false</c> and leaves <paramref name="source"/> usable (release restored when nothing was published).
+    /// </summary>
+    /// <remarks>
+    /// Callers must not mutate shared plane bytes while any view is alive. When this returns <c>false</c>,
+    /// fall back to a deep copy (for example <c>VideoCpuFrameConverter.DuplicateCpuBacking</c>).
+    /// </remarks>
+    public static bool TryCreateNv12CpuFanOutViews(
+        VideoFrame source,
+        int viewCount,
+        VideoTransferHint hint,
+        [NotNullWhen(true)] out VideoFrame[]? views)
+    {
+        views = null;
+        if (viewCount < 2 || !IsNv12CpuFanOutEligible(source))
+            return false;
+
+        var inner = Interlocked.Exchange(ref source._release, null);
+        if (inner is null)
+            return false;
+
+        var viewsLocal = new VideoFrame[viewCount];
+        var remaining = new[] { viewCount };
+        Action shared = () =>
+        {
+            if (Interlocked.Decrement(ref remaining[0]) == 0)
+                inner();
+        };
+
+        var created = 0;
+        try
+        {
+            for (; created < viewCount; created++)
+            {
+                viewsLocal[created] = new VideoFrame(
+                    source.PresentationTime,
+                    source.Format,
+                    source._planes,
+                    source._strides,
+                    hint,
+                    shared);
+            }
+
+            views = viewsLocal;
+            return true;
+        }
+        catch
+        {
+            if (created == 0)
+            {
+                if (Interlocked.CompareExchange(ref source._release, inner, null) is not null)
+                    inner();
+            }
+            else
+            {
+                Interlocked.Add(ref remaining[0], created - viewCount);
+                for (var j = 0; j < created; j++)
+                    viewsLocal[j].Dispose();
+            }
+
+            return false;
+        }
+    }
+
+    private static bool IsNv12CpuFanOutEligible(VideoFrame source)
+    {
+        if (source.Format.PixelFormat != PixelFormat.Nv12)
+            return false;
+        if (source._dmabufNv12 is not null || source._dmabufP010 is not null || source._dmabufP016 is not null ||
+            source._win32Nv12 is not null)
+            return false;
+        if (source._planes.Length != 2 || source._strides.Length != 2)
+            return false;
+        foreach (var p in source._planes)
+        {
+            if (p.IsEmpty)
+                return false;
+        }
+
+        return true;
+    }
 
     /// <summary>Convenience overload for single-plane (packed) formats like <see cref="PixelFormat.Bgra32"/>.</summary>
     public VideoFrame(

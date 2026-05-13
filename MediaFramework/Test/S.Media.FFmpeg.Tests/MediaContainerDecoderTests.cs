@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Video;
@@ -37,7 +38,12 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); } catch { /* ignored */ }
+            try { File.Delete(path); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
+#else
+            catch { /* ignored */ }
+#endif
         }
     }
 
@@ -59,7 +65,12 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); } catch { /* ignored */ }
+            try { File.Delete(path); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
+#else
+            catch { /* ignored */ }
+#endif
         }
     }
 
@@ -77,7 +88,12 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); } catch { /* ignored */ }
+            try { File.Delete(path); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
+#else
+            catch { /* ignored */ }
+#endif
         }
     }
 
@@ -111,7 +127,12 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); } catch { /* ignored */ }
+            try { File.Delete(path); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
+#else
+            catch { /* ignored */ }
+#endif
         }
     }
 

@@ -131,6 +131,11 @@ public struct NDIRecvCreateV3
     public nint PNDIRecvName;
 }
 
+/// <summary>Native <c>NDIlib_send_create_t</c> settings passed to <c>NDIlib_send_create</c>.</summary>
+/// <remarks>
+/// This binding intentionally mirrors the SDK fields MFPlayer uses today (name, groups, clock bits).
+/// If NewTek extends the native struct, extend this layout and <see cref="NDISender.Create"/> together.
+/// </remarks>
 [StructLayout(LayoutKind.Sequential)]
 public struct NDISendCreate
 {

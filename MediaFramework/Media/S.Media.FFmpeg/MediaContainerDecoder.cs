@@ -15,7 +15,7 @@ namespace S.Media.FFmpeg;
 /// <c>AVFormatContext</c>, a background demux thread with bounded per-stream packet queues, and
 /// independent audio/video decode locks so producers can run on different threads. Video follows
 /// <see cref="VideoDecoderOpenOptions"/>: hardware acceleration is attempted first (with software
-/// fallback inside the shared video codec setup), including Linux DRM PRIME NV12 when
+/// fallback inside the shared video codec setup), including Linux DRM PRIME semi-planar **NV12/P010** when
 /// <see cref="VideoDecoderOpenOptions.RetainDmabufForGl"/> is enabled and Windows D3D11 NV12 shared handles when
 /// <see cref="VideoDecoderOpenOptions.RetainD3D11SharedHandleForGl"/> is enabled.
 /// </para>
@@ -77,6 +77,10 @@ public sealed class MediaContainerDecoder : IDisposable
     /// <summary>When Windows D3D11VA NV12 shared-handle decode is active, libav's <c>ID3D11Device</c> COM pointer for GL upload.</summary>
     public bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr) =>
         _shared.TryGetHardwareD3D11DeviceForWin32Gl(out deviceComPtr);
+
+    /// <summary>When Windows D3D11VA NV12 shared-handle decode is active, DXGI adapter LUID (packed) for diagnostics.</summary>
+    public bool TryGetHardwareD3D11AdapterLuid(out long adapterLuidPacked) =>
+        _shared.TryGetHardwareD3D11AdapterLuid(out adapterLuidPacked);
 
     public void Dispose() => _shared.Dispose();
 }

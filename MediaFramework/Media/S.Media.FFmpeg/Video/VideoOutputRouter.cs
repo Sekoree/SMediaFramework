@@ -12,6 +12,10 @@ namespace S.Media.FFmpeg.Video;
 /// </summary>
 /// <remarks>
 /// <para>
+/// <strong>CPU NV12</strong> with no conversion uses <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> so the primary and branch
+/// share one plane copy (refcounted release) instead of <see cref="VideoCpuFrameConverter.DuplicateCpuBacking"/>.
+/// </para>
+/// <para>
 /// Negotiation uses only the primary sink's format list — the local GL/CPU
 /// window can keep high bit-depth YUV while the branch receives packed RGB
 /// or subsampled YUV depending on <see cref="IVideoSink.AcceptedPixelFormats"/>.
@@ -23,8 +27,9 @@ namespace S.Media.FFmpeg.Video;
 /// </para>
 /// <para>
 /// <strong>DRM dma-buf NV12</strong> is supported on both sinks when the branch
-/// negotiates the same <see cref="PixelFormat.Nv12"/> (no conversion). Otherwise
-/// use CPU decode or omit the branch.
+/// negotiates the same <see cref="PixelFormat.Nv12"/> (no conversion). The same applies to
+/// <see cref="PixelFormat.P010"/> and <see cref="PixelFormat.P016"/> when both sinks stay on that format.
+/// Otherwise use CPU decode or omit the branch.
 /// </para>
 /// </remarks>
 public sealed class VideoOutputRouter : IVideoSink, IDisposable
@@ -110,6 +115,62 @@ public sealed class VideoOutputRouter : IVideoSink, IDisposable
             return;
         }
 
+        if (frame.DmabufP010 is not null)
+        {
+            if (_needsConversion)
+            {
+                frame.Dispose();
+                throw new NotSupportedException(
+                    "VideoOutputRouter cannot convert DRM dma-buf P010 for the branch — use a branch that accepts P010 or CPU decode.");
+            }
+
+            VideoFrame? branchDma = null;
+            try
+            {
+                branchDma = VideoFrame.CreateP010DmabufSharedReference(frame, frame.ColorTransferHint);
+                _primary.Submit(frame);
+                frame = null!;
+                _branch.Submit(branchDma);
+                branchDma = null;
+            }
+            catch
+            {
+                branchDma?.Dispose();
+                frame?.Dispose();
+                throw;
+            }
+
+            return;
+        }
+
+        if (frame.DmabufP016 is not null)
+        {
+            if (_needsConversion)
+            {
+                frame.Dispose();
+                throw new NotSupportedException(
+                    "VideoOutputRouter cannot convert DRM dma-buf P016 for the branch — use a branch that accepts P016 or CPU decode.");
+            }
+
+            VideoFrame? branchDma = null;
+            try
+            {
+                branchDma = VideoFrame.CreateP016DmabufSharedReference(frame, frame.ColorTransferHint);
+                _primary.Submit(frame);
+                frame = null!;
+                _branch.Submit(branchDma);
+                branchDma = null;
+            }
+            catch
+            {
+                branchDma?.Dispose();
+                frame?.Dispose();
+                throw;
+            }
+
+            return;
+        }
+
         if (frame.Win32Nv12 is not null)
         {
             if (_needsConversion)
@@ -132,6 +193,31 @@ public sealed class VideoOutputRouter : IVideoSink, IDisposable
             {
                 branchWin?.Dispose();
                 frame?.Dispose();
+                throw;
+            }
+
+            return;
+        }
+
+        if (!_needsConversion
+            && frame.Format.PixelFormat == PixelFormat.Nv12
+            && frame.DmabufNv12 is null
+            && frame.DmabufP010 is null
+            && frame.DmabufP016 is null
+            && frame.Win32Nv12 is null
+            && VideoFrame.TryCreateNv12CpuFanOutViews(frame, 2, frame.ColorTransferHint, out var fanViews))
+        {
+            try
+            {
+                frame.Dispose();
+                frame = null!;
+                _primary.Submit(fanViews[0]);
+                _branch.Submit(fanViews[1]);
+            }
+            catch
+            {
+                fanViews[0].Dispose();
+                fanViews[1].Dispose();
                 throw;
             }
 

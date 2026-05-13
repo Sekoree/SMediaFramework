@@ -53,6 +53,9 @@ public sealed class AudioPlayer : IDisposable
     public AudioRouter Router => _router;
     public MediaClock Clock => _clock;
 
+    /// <summary>Same object as <see cref="Clock"/> — <see cref="IPlaybackTimeline"/> surface for strategy‑B consumers.</summary>
+    public IPlaybackTimeline Timeline => _clock;
+
     /// <summary>The playhead — derived from the master playback clock when one's attached.</summary>
     public TimeSpan Position => _clock.CurrentPosition;
 

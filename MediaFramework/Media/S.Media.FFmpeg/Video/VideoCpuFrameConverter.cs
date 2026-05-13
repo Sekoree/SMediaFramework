@@ -78,7 +78,7 @@ public sealed unsafe class VideoCpuFrameConverter : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(source);
-        if (source.DmabufNv12 is not null)
+        if (source.DmabufNv12 is not null || source.DmabufP010 is not null || source.DmabufP016 is not null)
             throw new NotSupportedException("VideoCpuFrameConverter does not accept DRM dma-buf frames.");
         if (source.Win32Nv12 is not null)
             throw new NotSupportedException("VideoCpuFrameConverter does not accept Win32 D3D11 shared-handle frames.");
@@ -178,7 +178,7 @@ public sealed unsafe class VideoCpuFrameConverter : IDisposable
     /// <summary>Deep-copies CPU plane bytes into pool-backed memories (same layout / format).</summary>
     public static VideoFrame DuplicateCpuBacking(VideoFrame source, VideoTransferHint hint)
     {
-        if (source.DmabufNv12 is not null)
+        if (source.DmabufNv12 is not null || source.DmabufP010 is not null || source.DmabufP016 is not null)
             throw new NotSupportedException("DuplicateCpuBacking does not support DRM dma-buf frames.");
         if (source.Win32Nv12 is not null)
             throw new NotSupportedException("DuplicateCpuBacking does not support Win32 D3D11 shared-handle frames.");

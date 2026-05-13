@@ -8,21 +8,26 @@ namespace S.Media.Core.Playback;
 /// Holds the usual <see cref="VideoPlayer"/> + <see cref="IMediaClock"/> (+ optional
 /// <see cref="AudioPlayer"/>) and forwards <see cref="Play"/>, <see cref="Pause"/>,
 /// <see cref="Seek"/>, and <see cref="SeekCoordinated"/> to <see cref="AvPlaybackCoordinator"/> with consistent ordering.
+/// Implements <see cref="IAvPlaybackSession"/> for hosts that want a single façade type.
 /// </summary>
 /// <remarks>
 /// <para>
 /// This type does not own disposal of the players — the host keeps existing
 /// <c>using</c> patterns on <see cref="VideoPlayer"/> and <see cref="AudioPlayer"/>.
-/// Tools such as <c>VideoPlaybackSmoke</c> construct a session after wiring PortAudio prefill,
-/// then call <see cref="Play"/> / <see cref="Pause"/> (optionally with a shared-mux flush delegate).
+/// Tools such as <c>VideoPlaybackSmoke</c> compose <c>S.Media.PortAudio.MediaContainerPlaybackHost</c> (mux → PortAudio),
+/// <c>S.Media.FFmpeg.AvRouter</c>, and this session so
+/// <c>S.Media.FFmpeg.MediaContainerDecoder.FlushCodecPipelines</c> runs after <see cref="Pause(CancellationToken, Action?)"/> by default.
 /// </para>
 /// <para>
 /// <strong>Lock order</strong>: avoid holding unrelated host mutexes across these calls.
 /// If your host mutates <see cref="AudioRouter"/> routes on the same thread as playback
 /// control, follow the synchronization assumptions documented on <see cref="AudioRouter.Pause"/>.
 /// </para>
+/// <para>
+/// Wiring <see cref="IMediaClock.SetMaster"/> / <see cref="MediaClockExtensions.SetMasterChain"/> here does not implement coordinated multi-sink master PPM or synchronized drop/repeat — that remains host-owned; see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/> remarks (checklist Tier E **18**).
+/// </para>
 /// </remarks>
-public sealed class MediaPlaybackSession
+public sealed class MediaPlaybackSession : IAvPlaybackSession
 {
     public MediaPlaybackSession(VideoPlayer video, IMediaClock clock, AudioPlayer? audio = null)
     {

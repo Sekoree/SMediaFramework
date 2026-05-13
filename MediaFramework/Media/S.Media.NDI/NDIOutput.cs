@@ -1,5 +1,6 @@
 using NDILib;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.NDI.Audio;
 using S.Media.NDI.Video;
 
@@ -24,7 +25,12 @@ namespace S.Media.NDI;
 /// <para>
 /// For SDK-level receiver feedback (tally, upstream metadata), use <see cref="TryGetReceiverTally"/>,
 /// <see cref="CaptureReceiverMetadata"/>, and <see cref="FreeReceiverMetadata"/> on a background thread
-/// with short timeouts so sends are not blocked.
+/// with short timeouts so sends are not blocked. Pair with <see cref="GetReceiverConnectionCount"/> when
+/// correlating tally changes with attach/detach in the field.
+/// </para>
+/// <para>
+/// Per-connection metadata advertised to new receivers uses <see cref="ClearConnectionMetadata"/> /
+/// <see cref="AddConnectionMetadata"/> (UTF-8 XML strings per NDI SDK rules).
 /// </para>
 /// </remarks>
 public sealed class NDIOutput : IDisposable
@@ -41,7 +47,15 @@ public sealed class NDIOutput : IDisposable
     private bool _disposed;
 
     public string SourceName { get; }
-    public int ConnectionCount => _sender.GetConnectionCount();
+
+    /// <summary>Receiver count with no wait (same as <c>NDIlib_send_get_no_connections(..., 0)</c>).</summary>
+    public int ConnectionCount => _sender.GetConnectionCount(0);
+
+    /// <summary>
+    /// Returns how many NDI receivers are connected to this sender.
+    /// Use a non-zero <paramref name="timeoutMs"/> to block until at least one receiver attaches (full-wire harnesses).
+    /// </summary>
+    public int GetReceiverConnectionCount(uint timeoutMs = 0) => _sender.GetConnectionCount(timeoutMs);
 
     /// <summary>
     /// Video sink — always available; format negotiated via
@@ -59,7 +73,8 @@ public sealed class NDIOutput : IDisposable
     /// <summary>
     /// Construct an NDI source. <paramref name="clockVideo"/> /
     /// <paramref name="clockAudio"/> tell the SDK to pace each stream against
-    /// its declared rate (typical for a self-driving sender).
+    /// its declared rate (typical for a self-driving sender). Use <see cref="GetReceiverConnectionCount"/>
+    /// with a short wait to detect the first receiver in harnesses.
     /// </summary>
     /// <param name="minimumVideoSubmitSpacing">
     /// Optional wall-clock throttle between video frames (<see cref="NDIVideoSender"/> submit path).
@@ -95,8 +110,11 @@ public sealed class NDIOutput : IDisposable
             if (rc != 0 || sender is null) throw new NDIException(rc, "NDISender.Create");
             _sender = sender;
         }
-        catch
+        catch (Exception ex)
         {
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "NDIOutput: NDISender.Create");
+#endif
             _runtime.Dispose();
             throw;
         }
@@ -175,14 +193,40 @@ public sealed class NDIOutput : IDisposable
         _sender.FreeMetadata(metadata);
     }
 
+    /// <summary>Clears strings previously registered with <see cref="AddConnectionMetadata"/>.</summary>
+    public void ClearConnectionMetadata()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _sender.ClearConnectionMetadata();
+    }
+
+    /// <summary>
+    /// Adds a UTF-8 XML metadata string the SDK sends to each new receiver connection (see NDI sender docs).
+    /// </summary>
+    public void AddConnectionMetadata(in NDIMetadataFrame metadata)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _sender.AddConnectionMetadata(metadata);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         // Tear down the video sink first so any in-flight async send is
         // flushed against a still-valid sender.
-        try { _videoSink?.Dispose(); } catch { /* best effort */ }
-        try { _audioSink?.Dispose(); } catch { /* best effort */ }
+        try { _videoSink?.Dispose(); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: video sink"); }
+#else
+        catch { /* best effort */ }
+#endif
+        try { _audioSink?.Dispose(); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: audio sink"); }
+#else
+        catch { /* best effort */ }
+#endif
         _sender.Dispose();
         _runtime.Dispose();
     }

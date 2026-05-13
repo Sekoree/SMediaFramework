@@ -18,6 +18,10 @@ namespace S.Media.Core.Playback;
 /// so the visible playhead matches.
 /// </para>
 /// <para>
+/// Coordinated graph-wide master PPM, synchronized multi-sink drop/repeat, or other timing policy beyond
+/// per-sink hints is <strong>not</strong> implemented here — see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/> remarks (checklist Tier E **18**).
+/// </para>
+/// <para>
 /// When both streams use <c>MediaContainerDecoder</c>, pass <c>decoder.FlushCodecPipelines</c> (or a lambda
 /// that calls it) as <c>flushSharedMuxAfterPause</c> on <see cref="Pause"/> / <see cref="SeekCoordinated"/>
 /// so libav delay is cleared after pumps stop — same contract as calling <c>FlushCodecPipelines</c> with no
@@ -73,8 +77,11 @@ public static class AvPlaybackCoordinator
 
     /// <summary>
     /// Pause/stop scheduling: <see cref="VideoPlayer"/> first, then
-    /// <see cref="AudioPlayer"/> (so the clock driver can wind down before
-    /// audio teardown), then an optional <paramref name="flushSharedMuxAfterPause"/> hook.
+    /// <see cref="AudioPlayer"/> when present (so the clock driver can wind down before
+    /// audio teardown). When <paramref name="audio"/> is <c>null</c>, pauses <see cref="VideoPlayer.Clock"/>
+    /// here so the media-clock driver cannot tick during the optional shared-mux flush hook
+    /// (audio-less hosts such as <c>VideoPlaybackSmoke</c> with <see cref="VideoPtsClock"/> otherwise left the driver running).
+    /// Finally runs <paramref name="flushSharedMuxAfterPause"/> when supplied.
     /// </summary>
     /// <param name="flushSharedMuxAfterPause">
     /// When using <c>S.Media.FFmpeg.MediaContainerDecoder</c>, pass <c>decoder.FlushCodecPipelines</c>
@@ -94,7 +101,11 @@ public static class AvPlaybackCoordinator
         }
         finally
         {
-            audio?.Pause();
+            if (audio is not null)
+                audio.Pause();
+            else
+                video.Clock.Pause(cancellationToken);
+
             flushSharedMuxAfterPause?.Invoke();
         }
     }

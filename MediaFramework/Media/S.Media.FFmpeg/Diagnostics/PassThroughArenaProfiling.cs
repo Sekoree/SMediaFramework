@@ -4,11 +4,12 @@ using System.Threading;
 namespace S.Media.FFmpeg.Diagnostics;
 
 /// <summary>
-/// Opt-in counters for pass-through descriptor arena lock hold times in <see cref="Video.VideoFileDecoder"/>
+/// Opt-in counters for pass-through descriptor arena operations in <see cref="Video.VideoFileDecoder"/>
 /// and <see cref="MediaContainerSharedDemux"/>. Set <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c> (or <c>true</c>) to enable.
-/// Measures time while the lock is held (critical-section duration), not queue wait.
-/// On the return path, <c>Array.Clear</c> on descriptor arrays runs immediately before entering the lock,
-/// so return lock ticks exclude that work.
+/// Measures wall time for <see cref="S.Media.FFmpeg.Video.PassThroughDescriptorArena"/> rent/return/clear paths:
+/// Treiber free-list CAS loops for rent/return (no <c>lock</c>); dispose records flag flip only.
+/// On the return path, <c>Array.Clear</c> on descriptor arrays runs before Treiber push / early-out,
+/// so return ticks exclude that work.
 /// </summary>
 public static class PassThroughArenaProfiling
 {

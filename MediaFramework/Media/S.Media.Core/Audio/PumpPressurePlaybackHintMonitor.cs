@@ -6,11 +6,19 @@ namespace S.Media.Core.Audio;
 /// slightly so the router produces fewer chunks ahead of a slow sink.
 /// </summary>
 /// <remarks>
+/// <para>
 /// This is intentionally minimal — no automatic clock wiring. Hosts subscribe to
 /// <see cref="HintPpmBiasChanged"/> or poll <see cref="HintPpmBias"/> and apply bias to
 /// <see cref="Clock.IPlaybackClock"/> (or logging / metrics) as they see fit.
 /// Use the overload with a sink id when several pumps are active so hints are not
 /// conflated across sinks.
+/// </para>
+/// <para>
+/// Checklist Tier E **18** (documentation scope, **§Tier F** **31** for a future coordination module): coordinated
+/// <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong>
+/// policies across multiple sinks are out of scope here — this type only derives a scalar hint from queue pressure.
+/// Per-sink rate nudging without retuning the whole graph lives in FFmpeg <c>AdaptiveRateAudioSink</c> instead.
+/// </para>
 /// </remarks>
 public sealed class PumpPressurePlaybackHintMonitor : IDisposable
 {

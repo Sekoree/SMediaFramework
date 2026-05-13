@@ -50,4 +50,25 @@ public sealed class NdiEgressMuxPlayheadClockTests
         c.NotifyPresentation(TimeSpan.FromHours(2) + TimeSpan.FromMilliseconds(500));
         Assert.Equal(TimeSpan.FromMilliseconds(500), c.ElapsedSinceStart);
     }
+
+    /// <summary>Optional lab: <c>RUN_NDI_MUX_SOAK=1</c> runs <c>120_000</c> rounds (default CI path uses <c>4_000</c>).</summary>
+    [Fact]
+    public void Soak_mux_playhead_max_pts_rounds()
+    {
+        var rounds = string.Equals(Environment.GetEnvironmentVariable("RUN_NDI_MUX_SOAK"), "1", StringComparison.Ordinal)
+            ? 120_000
+            : 4_000;
+        var c = new NdiEgressMuxPlayheadClock();
+        var t0 = TimeSpan.FromTicks(777_000);
+        for (var r = 0; r < rounds; r++)
+        {
+            c.Reset();
+            var o = t0 + TimeSpan.FromTicks(r * 13);
+            c.NotifyAudioPresentation(o);
+            c.NotifyVideoPresentation(o + TimeSpan.FromMilliseconds(16));
+            Assert.Equal(TimeSpan.FromMilliseconds(16), c.ElapsedSinceStart);
+            c.NotifyAudioPresentation(o + TimeSpan.FromMilliseconds(100));
+            Assert.Equal(TimeSpan.FromMilliseconds(100), c.ElapsedSinceStart);
+        }
+    }
 }

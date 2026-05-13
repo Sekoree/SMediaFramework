@@ -33,6 +33,12 @@ namespace S.Media.Core.Clock;
 /// elapsed time that accrued while paused (e.g. PortAudio still draining) so
 /// the playhead stays aligned with heard audio.
 /// </para>
+/// <para>
+/// Graph-wide coordinated master pitch (PPM), synchronized drop/repeat across multiple sinks, or other
+/// timing policy beyond what individual <see cref="IPlaybackClock"/> instances report is <strong>host-owned</strong>
+/// (see <see cref="Audio.AudioRouter"/> remarks, <see cref="Audio.PumpPressurePlaybackHintMonitor"/> for queue-drop hints,
+/// and the FFmpeg <c>AdaptiveRateAudioSink</c> adapter for optional per-sink resampling; checklist Tier E **18**).
+/// </para>
 /// </remarks>
 public sealed class MediaClock : IMediaClock, IDisposable
 {
@@ -93,6 +99,9 @@ public sealed class MediaClock : IMediaClock, IDisposable
     {
         get { lock (_gate) return _isRunning; }
     }
+
+    /// <inheritdoc cref="IPlaybackTimeline.PlaybackRate"/>
+    public double PlaybackRate => 1.0;
 
     public void Start()
     {

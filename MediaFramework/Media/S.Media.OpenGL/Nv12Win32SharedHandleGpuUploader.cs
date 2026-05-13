@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Threading;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
+using S.Media.OpenGL.Diagnostics;
 using S.Media.OpenGL.Internal;
 using Silk.NET.OpenGL;
 using Vortice.Direct3D11;
@@ -14,14 +16,18 @@ using GlTextureUnit = Silk.NET.OpenGL.TextureUnit;
 namespace S.Media.OpenGL;
 
 /// <summary>
-/// Windows-only: imports <see cref="VideoWin32Nv12Backing"/> via <c>OpenSharedResource</c>, then prefers
+/// Windows-only: imports <see cref="VideoWin32Nv12Backing"/> via DXGI NT shared <c>OpenSharedResource</c>
+/// or, when <see cref="VideoWin32Nv12Backing.LibavD3D11Texture2DComPtr"/> matches the uploader device,
+/// uses the libav-held <c>ID3D11Texture2D</c> COM pointer directly (no duplicate open).
 /// <see href="https://registry.khronos.org/OpenGL/extensions/NV/WGL_NV_DX_interop.txt">WGL_NV_DX_interop</see>
 /// (GPU path) and falls back to a D3D11 staging <c>Map</c> + <c>glTexSubImage2D</c> upload if interop is unavailable
-/// or registration fails.
+/// or registration fails. When the D3D11 texture exposes <see cref="Vortice.DXGI.IDXGIKeyedMutex"/>, uploads call
+/// <c>D3d11TextureKeyedMutexScope.TryAcquireForGpuRead</c> (key <c>0</c>, FFmpeg <c>d3d11va</c> convention); if acquire fails,
+/// both interop and staging paths abort for that frame. Optional: <c>WIN32_NV12_D3D11_KEYED_MUTEX_TIMEOUT_MS</c> (1–60000 ms).
 /// </summary>
 /// <remarks>
 /// Pass a borrowed <see cref="ID3D11Device"/> (COM pointer) created on the same adapter as the OpenGL context.
-/// The uploader does not dispose the device.
+/// <see cref="Dispose"/> releases the COM wrapper reference acquired in <see cref="TryCreate"/> (it does not tear down libav’s device while other references exist).
 /// </remarks>
 public sealed unsafe class Nv12Win32SharedHandleGpuUploader : IDisposable
 {
@@ -91,6 +97,27 @@ void main()
     private bool _uploadMechanismLogged;
     private bool _disposed;
 
+    private static int _keyedMutexAcquireFailLogged;
+
+    private static int KeyedMutexTimeoutMilliseconds()
+    {
+        var raw = Environment.GetEnvironmentVariable("WIN32_NV12_D3D11_KEYED_MUTEX_TIMEOUT_MS");
+        if (string.IsNullOrWhiteSpace(raw) || !int.TryParse(raw, out var v))
+            return 2000;
+        return Math.Clamp(v, 1, 60_000);
+    }
+
+    private static void LogKeyedMutexAcquireFailedOnce()
+    {
+        if (Interlocked.Exchange(ref _keyedMutexAcquireFailLogged, 1) != 0)
+            return;
+        MediaDiagnostics.LogWarning(
+            "{0}: IDXGIKeyedMutex.AcquireSync(0) failed or timed out; NV12 upload aborted. " +
+            "Ensure the producer released keyed mutex 0 before handing the frame to GL (libav d3d11va does in normal operation). " +
+            "Optional: set WIN32_NV12_D3D11_KEYED_MUTEX_TIMEOUT_MS (1–60000, default 2000).",
+            nameof(Nv12Win32SharedHandleGpuUploader));
+    }
+
     private Nv12Win32SharedHandleGpuUploader(GL gl, ID3D11Device device, ID3D11DeviceContext context)
     {
         _gl = gl;
@@ -103,6 +130,16 @@ void main()
     {
         if (!OperatingSystem.IsWindows() || d3d11DeviceComPtr == 0)
             return null;
+        if (!D3D11InteropUtility.TryValidateDeviceComPointer(d3d11DeviceComPtr, out var validateErr))
+        {
+            MediaDiagnostics.LogWarning(
+                "{0}.{1}: invalid D3D11 device pointer — {2}",
+                nameof(Nv12Win32SharedHandleGpuUploader),
+                nameof(TryCreate),
+                validateErr);
+            return null;
+        }
+
         try
         {
             var dev = new ID3D11Device(d3d11DeviceComPtr);
@@ -123,18 +160,25 @@ void main()
         if (format.PixelFormat != global::S.Media.Core.Video.PixelFormat.Nv12)
             return false;
 
+        Nv12Win32SharedHandleGpuUploadProfiling.RecordUploadAttempt();
+
         if (TryUploadInterop(texYId, texUvId, in format, backing))
         {
+            Nv12Win32SharedHandleGpuUploadProfiling.RecordInteropSuccess();
             LogUploadMechanismOnce(interop: true);
             return true;
         }
 
+        Nv12Win32SharedHandleGpuUploadProfiling.RecordInteropMissBeforeStaging();
+
         if (TryUploadStaging(texYId, texUvId, in format, backing))
         {
+            Nv12Win32SharedHandleGpuUploadProfiling.RecordStagingSuccess();
             LogUploadMechanismOnce(interop: false);
             return true;
         }
 
+        Nv12Win32SharedHandleGpuUploadProfiling.RecordBothPathsFailed();
         return false;
     }
 
@@ -153,6 +197,95 @@ void main()
             MediaDiagnostics.LogInformation(
                 "Nv12Win32SharedHandleGpuUploader: using D3D11 staging Map + glTexSubImage2D (CPU path) for NV12 shared-handle uploads " +
                 "(WGL_NV_DX_interop unavailable, failed to load, or registration failed).");
+        }
+    }
+
+    private static int _strictTextureAdapterMismatchLogged;
+
+    private static bool StrictTextureAdapterLuidEnabled() =>
+        OperatingSystem.IsWindows()
+        && string.Equals(Environment.GetEnvironmentVariable("WIN32_NV12_D3D11_STRICT_TEXTURE_ADAPTER_LUID"), "1",
+            StringComparison.Ordinal);
+
+    /// <summary>
+    /// When <c>WIN32_NV12_D3D11_STRICT_TEXTURE_ADAPTER_LUID=1</c>, rejects textures whose DXGI adapter LUID differs from the uploader device (multi-GPU guard).
+    /// </summary>
+    private bool AdapterLuidAllowsTextureOrDispose(ref ID3D11Texture2D? tex)
+    {
+        if (tex is null)
+            return false;
+        if (!StrictTextureAdapterLuidEnabled())
+            return true;
+        if (!D3D11InteropUtility.TryGetAdapterLuid(_device.NativePointer, out var uploadLuid)
+            || !D3D11InteropUtility.TryGetAdapterLuidFromTexture(tex.NativePointer, out var texLuid))
+            return true;
+        if (uploadLuid == texLuid)
+            return true;
+        if (Interlocked.Exchange(ref _strictTextureAdapterMismatchLogged, 1) == 0)
+        {
+            MediaDiagnostics.LogWarning(
+                "{0}: DXGI adapter LUID of ID3D11Texture2D (packed={1}) != uploader ID3D11Device LUID (packed={2}) — set WIN32_NV12_D3D11_STRICT_TEXTURE_ADAPTER_LUID=0 to allow (not recommended on multi-GPU).",
+                nameof(Nv12Win32SharedHandleGpuUploader),
+                texLuid,
+                uploadLuid);
+        }
+
+        tex.Dispose();
+        tex = null;
+        return false;
+    }
+
+    private bool TryOpenD3D11GpuTexture(VideoWin32Nv12Backing backing, out ID3D11Texture2D? gpuTex, out uint subresourceIndex)
+    {
+        gpuTex = null;
+        subresourceIndex = 0;
+
+        if (backing.LibavD3D11Texture2DComPtr != 0
+            && backing.LibavD3D11DeviceComPtr != 0
+            && backing.LibavD3D11DeviceComPtr == _device.NativePointer
+            && D3D11InteropUtility.TryValidateTexture2DComPointer(backing.LibavD3D11Texture2DComPtr, out _))
+        {
+            try
+            {
+                var t = new ID3D11Texture2D(backing.LibavD3D11Texture2DComPtr);
+                if (t.Device?.NativePointer != _device.NativePointer)
+                {
+                    t.Dispose();
+                    return false;
+                }
+
+                var desc = t.Description;
+                subresourceIndex = (uint)(backing.D3D11TextureArraySliceIndex * (int)desc.MipLevels);
+                gpuTex = t;
+                if (!AdapterLuidAllowsTextureOrDispose(ref gpuTex))
+                    return false;
+                return true;
+            }
+            catch
+            {
+                gpuTex?.Dispose();
+                gpuTex = null;
+                return false;
+            }
+        }
+
+        if (backing.LumaSharedNtHandle == 0)
+            return false;
+
+        try
+        {
+            gpuTex = _device.OpenSharedResource<ID3D11Texture2D>(backing.LumaSharedNtHandle);
+            var desc = gpuTex.Description;
+            subresourceIndex = (uint)(backing.D3D11TextureArraySliceIndex * (int)desc.MipLevels);
+            if (!AdapterLuidAllowsTextureOrDispose(ref gpuTex))
+                return false;
+            return true;
+        }
+        catch
+        {
+            gpuTex?.Dispose();
+            gpuTex = null;
+            return false;
         }
     }
 
@@ -244,58 +377,76 @@ void main()
 
         try
         {
-            using var gpuTex = _device.OpenSharedResource<ID3D11Texture2D>(backing.LumaSharedNtHandle);
-            var desc = gpuTex.Description;
-            var tw = (int)desc.Width;
-            var th = (int)desc.Height;
-            if (tw <= 0 || th <= 0)
+            if (!TryOpenD3D11GpuTexture(backing, out var gpuTex, out _))
                 return false;
 
-            ResizeInteropTexture(tw, th);
-
-            _wglRegisteredObject = _wgl.RegisterObject!.Invoke(_wglDeviceHandle, gpuTex.NativePointer, _interopGlTex,
-                WglNvDxInterop.Texture2DArb, WglNvDxInterop.AccessReadOnlyNv);
-            if (_wglRegisteredObject == 0)
-                return false;
-
-            var hObj = _wglRegisteredObject;
-            if (_wgl.LockObjects!.Invoke(_wglDeviceHandle, 1, &hObj) == 0)
+            using (gpuTex)
             {
-                _ = _wgl.UnregisterObject!.Invoke(_wglDeviceHandle, _wglRegisteredObject);
-                _wglRegisteredObject = 0;
-                return false;
-            }
+                if (!D3d11TextureKeyedMutexScope.TryAcquireForGpuRead(gpuTex!, out var keyedScope, KeyedMutexTimeoutMilliseconds()))
+                {
+                    LogKeyedMutexAcquireFailedOnce();
+                    return false;
+                }
 
-            try
-            {
-                SaveGlState(out var st);
                 try
                 {
-                    _gl.ActiveTexture(GlTextureUnit.Texture0 + 2);
-                    _gl.BindTexture(GlTextureTarget.Texture2D, _interopGlTex);
-                    _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _interopFbo);
-                    _gl.BindVertexArray(_interopVao);
+                    var desc = gpuTex!.Description;
+                    var tw = (int)desc.Width;
+                    var th = (int)desc.Height;
+                    if (tw <= 0 || th <= 0)
+                        return false;
 
-                    DrawYPlane(texYId, lumaW, lumaH);
-                    DrawUvPlane(texUvId, lumaH, chromaW, chromaH);
+                    ResizeInteropTexture(tw, th);
 
-                    _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)st.DrawFramebufferBinding);
+                    _wglRegisteredObject = _wgl.RegisterObject!.Invoke(_wglDeviceHandle, gpuTex.NativePointer, _interopGlTex,
+                        WglNvDxInterop.Texture2DArb, WglNvDxInterop.AccessReadOnlyNv);
+                    if (_wglRegisteredObject == 0)
+                        return false;
+
+                    var hObj = _wglRegisteredObject;
+                    if (_wgl.LockObjects!.Invoke(_wglDeviceHandle, 1, &hObj) == 0)
+                    {
+                        _ = _wgl.UnregisterObject!.Invoke(_wglDeviceHandle, _wglRegisteredObject);
+                        _wglRegisteredObject = 0;
+                        return false;
+                    }
+
+                    try
+                    {
+                        SaveGlState(out var st);
+                        try
+                        {
+                            _gl.ActiveTexture(GlTextureUnit.Texture0 + 2);
+                            _gl.BindTexture(GlTextureTarget.Texture2D, _interopGlTex);
+                            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _interopFbo);
+                            _gl.BindVertexArray(_interopVao);
+
+                            DrawYPlane(texYId, lumaW, lumaH);
+                            DrawUvPlane(texUvId, lumaH, chromaW, chromaH);
+
+                            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)st.DrawFramebufferBinding);
+                        }
+                        finally
+                        {
+                            RestoreGlState(in st);
+                        }
+
+                        return true;
+                    }
+                    finally
+                    {
+                        var h = _wglRegisteredObject;
+                        if (h != 0)
+                        {
+                            _ = _wgl.UnlockObjects!.Invoke(_wglDeviceHandle, 1, &h);
+                            _ = _wgl.UnregisterObject!.Invoke(_wglDeviceHandle, h);
+                            _wglRegisteredObject = 0;
+                        }
+                    }
                 }
                 finally
                 {
-                    RestoreGlState(in st);
-                }
-
-                return true;
-            }
-            finally
-            {
-                var h = _wglRegisteredObject;
-                if (h != 0)
-                {
-                    _ = _wgl.UnlockObjects!.Invoke(_wglDeviceHandle, 1, &h);
-                    _ = _wgl.UnregisterObject!.Invoke(_wglDeviceHandle, h);
-                    _wglRegisteredObject = 0;
+                    keyedScope?.Dispose();
                 }
             }
         }
@@ -447,35 +598,52 @@ void main()
 
         try
         {
-            using var gpuTex = _device.OpenSharedResource<ID3D11Texture2D>(backing.LumaSharedNtHandle);
-            var gpuDesc = gpuTex.Description;
-            var srcSub = (uint)(backing.D3D11TextureArraySliceIndex * (int)gpuDesc.MipLevels);
-
-            EnsureStaging(gpuDesc.Width, gpuDesc.Height);
-            if (_staging == null)
+            if (!TryOpenD3D11GpuTexture(backing, out var gpuTex, out var srcSub))
                 return false;
 
-            _context.CopySubresourceRegion(_staging, 0, 0, 0, 0, gpuTex, srcSub, null);
-
-            var mapped = _context.Map(_staging, 0, MapMode.Read, MapFlags.None);
-            try
+            using (gpuTex)
             {
-                var yPitch = (int)mapped.RowPitch;
-                if (yPitch <= 0)
+                if (!D3d11TextureKeyedMutexScope.TryAcquireForGpuRead(gpuTex!, out var keyedScope, KeyedMutexTimeoutMilliseconds()))
+                {
+                    LogKeyedMutexAcquireFailedOnce();
                     return false;
+                }
 
-                var yPtr = (byte*)mapped.DataPointer;
-                if (yPtr == null)
-                    return false;
+                try
+                {
+                    var gpuDesc = gpuTex!.Description;
 
-                var uvPtr = yPtr + yPitch * (nint)h;
-                UploadR8Plane(texYId, yPtr, yPitch, w, h);
-                UploadRgPlane(texUvId, uvPtr, yPitch, cw, ch);
-                return true;
-            }
-            finally
-            {
-                _context.Unmap(_staging, 0);
+                    EnsureStaging(gpuDesc.Width, gpuDesc.Height);
+                    if (_staging == null)
+                        return false;
+
+                    _context.CopySubresourceRegion(_staging, 0, 0, 0, 0, gpuTex, srcSub, null);
+
+                    var mapped = _context.Map(_staging, 0, MapMode.Read, MapFlags.None);
+                    try
+                    {
+                        var yPitch = (int)mapped.RowPitch;
+                        if (yPitch <= 0)
+                            return false;
+
+                        var yPtr = (byte*)mapped.DataPointer;
+                        if (yPtr == null)
+                            return false;
+
+                        var uvPtr = yPtr + yPitch * (nint)h;
+                        UploadR8Plane(texYId, yPtr, yPitch, w, h);
+                        UploadRgPlane(texUvId, uvPtr, yPitch, cw, ch);
+                        return true;
+                    }
+                    finally
+                    {
+                        _context.Unmap(_staging, 0);
+                    }
+                }
+                finally
+                {
+                    keyedScope?.Dispose();
+                }
             }
         }
         catch (Exception ex)
@@ -605,5 +773,13 @@ void main()
 
         _staging?.Dispose();
         _staging = null;
+
+        // Balance the COM reference taken by `new ID3D11Device(comPtr)` in TryCreate (borrowed or shared host pointer).
+        try { _device.Dispose(); }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, "Nv12Win32SharedHandleGpuUploader.Dispose: device"); }
+#else
+        catch { /* best effort */ }
+#endif
     }
 }

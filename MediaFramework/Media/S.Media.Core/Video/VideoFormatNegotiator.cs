@@ -90,8 +90,23 @@ public static class VideoFormatNegotiator
 
         var pf = Negotiate(source, sink, formatFilter);
         source.SelectOutputFormat(pf);
+        ApplyD3D11GlBorrowFromVideoSourceIfSupported(source, sink);
         sink.Configure(source.Format);
         return source.Format;
+    }
+
+    /// <summary>
+    /// When <paramref name="sink"/> supports <see cref="IVideoSinkD3D11GlBorrowSetup"/>, forwards the active
+    /// <paramref name="source"/> so Win32 NV12 GL sinks can resolve libav's <c>ID3D11Device</c> before <see cref="IVideoSink.Configure"/>.
+    /// </summary>
+    private static void ApplyD3D11GlBorrowFromVideoSourceIfSupported(IVideoSource source, IVideoSink sink)
+    {
+        if (sink is not IVideoSinkD3D11GlBorrowSetup borrowSink)
+            return;
+        if (source is IHardwareD3D11GlInteropSource)
+            borrowSink.SetBorrowVideoSourceForWin32Nv12Gl(source);
+        else
+            borrowSink.SetBorrowVideoSourceForWin32Nv12Gl(null);
     }
 
     private static bool Contains(IReadOnlyList<PixelFormat> list, PixelFormat fmt)
