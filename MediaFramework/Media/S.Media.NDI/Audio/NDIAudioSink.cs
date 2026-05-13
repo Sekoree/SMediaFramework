@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using NDILib;
 using S.Media.Core.Audio;
+using S.Media.NDI;
 
 namespace S.Media.NDI.Audio;
 
@@ -14,6 +15,13 @@ namespace S.Media.NDI.Audio;
 /// deinterleave + send in optimized native code). Lifetime is owned by
 /// <see cref="NDIOutput"/>; callers do not dispose this sink directly.
 /// <para>
+/// <see cref="Submit(in AudioFrame)"/> stamps NDI <c>Timecode</c> from
+/// <see cref="AudioFrame.PresentationTime"/> (100 ns ticks). When an <see cref="NDIOutput"/> uses
+/// <see cref="Video.NDIVideoTimecodeMode.PresentationRelativeTicks"/>, a shared egress timeline
+/// re-bases audio timecodes to the session anchor so they match video. Otherwise presentation time is sent as absolute mux ticks.
+/// <see cref="Submit(ReadOnlySpan{float})"/> uses a running sample counter when no frame PTS is available.
+/// </para>
+/// <para>
 /// A single native packed buffer is grown with headroom (at least double the
 /// prior capacity, rounded up to a power of two) so upstream chunk-size
 /// changes during the first seconds of a session rarely require more than one
@@ -24,6 +32,7 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
 {
     private readonly NDISender _sender;
     private readonly AudioFormat _format;
+    private readonly NdiEgressPresentationTimeline? _presentationTimeline;
     private byte* _packedBuffer;
     private int _packedCapacityBytes;
     private bool _disposed;
@@ -32,21 +41,26 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
 
     public AudioFormat Format => _format;
 
-    internal NDIAudioSink(NDISender sender, AudioFormat format)
+    internal NDIAudioSink(NDISender sender, AudioFormat format, NdiEgressPresentationTimeline? presentationTimeline = null)
     {
         ArgumentNullException.ThrowIfNull(sender);
         if (format.SampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(format), "sample rate must be positive");
         if (format.Channels <= 0) throw new ArgumentOutOfRangeException(nameof(format), "channel count must be positive");
         _sender = sender;
         _format = format;
+        _presentationTimeline = presentationTimeline;
     }
 
     public void Submit(in AudioFrame frame)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (frame.Format != _format)
             throw new ArgumentException(
                 $"frame format {frame.Format} does not match sender format {_format}", nameof(frame));
-        Submit(frame.Samples.Span);
+        var timecode100Ns = _presentationTimeline is not null
+            ? _presentationTimeline.TimecodeFromPresentationTime(frame.PresentationTime)
+            : frame.PresentationTime.Ticks;
+        SubmitCore(frame.Samples.Span, timecode100Ns);
     }
 
     public void Submit(ReadOnlySpan<float> packedSamples)
@@ -61,8 +75,19 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
         var samplesPerChannel = packedSamples.Length / channels;
         if (samplesPerChannel == 0) return;
 
-        // NDI timecode is 100 ns units; stamp the start sample of this packet so receivers can de-jitter.
+        // NDI timecode is 100 ns units — same as TimeSpan.Ticks.
         var timecode100Ns = _samplesSentPerChannel * 10_000_000L / _format.SampleRate;
+        SubmitCore(packedSamples, timecode100Ns);
+    }
+
+    /// <summary>
+    /// Packs and sends; <paramref name="timecode100Ns"/> is the NDI timecode for the first sample in this packet.
+    /// </summary>
+    private void SubmitCore(ReadOnlySpan<float> packedSamples, long timecode100Ns)
+    {
+        var channels = _format.Channels;
+        var samplesPerChannel = packedSamples.Length / channels;
+        if (samplesPerChannel == 0) return;
 
         var packedBytes = packedSamples.Length * sizeof(float);
         EnsurePackedCapacity(packedBytes);

@@ -1,8 +1,10 @@
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using S.Media.Core.Audio;
 using S.Media.Core.Video;
+using S.Media.FFmpeg.Diagnostics;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video.Internal;
 
@@ -25,9 +27,10 @@ namespace S.Media.FFmpeg.Video;
 /// transferred frame is probed at open time, so negotiation does not assume NV12 prematurely.
 /// Libav may use internal frame/slice threads on software decode when no hardware device context is active.
 /// Pass-through frames borrow pooled plane and stride descriptor arrays guarded by a single
-/// <see cref="Lock"/>; arrays are <c>Array.Clear</c>ed before returning them to the pool so release callbacks
-/// running off-thread do not observe stale plane views. A lock-free arena would be a future perf experiment only
-/// if profiling shows contention here (single-threaded decode today).
+/// <see cref="Lock"/>; <c>Array.Clear</c> runs on the release path before the lock so pooled slots never retain
+/// stale plane views and the critical section only stack-pushes. A lock-free arena would be a future perf experiment only
+/// if profiling still shows contention here. Optional counters: set environment variable
+/// <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c> and read <see cref="PassThroughArenaProfiling"/> (lock hold time, not queue wait).
 /// </remarks>
 public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDisposable
 {
@@ -266,10 +269,21 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
         _hwAccel?.Dispose();
         _hwAccel = null;
 
+        var profileArena = PassThroughArenaProfiling.IsEnabled;
         lock (_passThroughArena)
         {
-            _passThroughPlaneStacks.Clear();
-            _passThroughStrideStacks.Clear();
+            long t0 = 0;
+            if (profileArena) t0 = Stopwatch.GetTimestamp();
+            try
+            {
+                _passThroughPlaneStacks.Clear();
+                _passThroughStrideStacks.Clear();
+            }
+            finally
+            {
+                if (profileArena)
+                    PassThroughArenaProfiling.RecordClear(Stopwatch.GetTimestamp() - t0);
+            }
         }
 
         if (_formatCtx != null) { var f = _formatCtx;  avformat_close_input(&f);    _formatCtx = null; }
@@ -557,42 +571,62 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IDi
 
     private (ReadOnlyMemory<byte>[] planes, int[] strides) RentPassThroughDescriptors(int planeCount)
     {
+        var profile = PassThroughArenaProfiling.IsEnabled;
         lock (_passThroughArena)
         {
-            if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
+            long t0 = 0;
+            if (profile) t0 = Stopwatch.GetTimestamp();
+            try
             {
-                ps = new Stack<ReadOnlyMemory<byte>[]>();
-                _passThroughPlaneStacks[planeCount] = ps;
-            }
+                if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
+                {
+                    ps = new Stack<ReadOnlyMemory<byte>[]>();
+                    _passThroughPlaneStacks[planeCount] = ps;
+                }
 
-            if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
+                if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
+                {
+                    ss = new Stack<int[]>();
+                    _passThroughStrideStacks[planeCount] = ss;
+                }
+
+                var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
+                var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
+                return (planes, strides);
+            }
+            finally
             {
-                ss = new Stack<int[]>();
-                _passThroughStrideStacks[planeCount] = ss;
+                if (profile)
+                    PassThroughArenaProfiling.RecordRent(Stopwatch.GetTimestamp() - t0);
             }
-
-            var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
-            var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
-            return (planes, strides);
         }
     }
 
     private void ReturnPassThroughDescriptors(int planeCount, ReadOnlyMemory<byte>[] planes, int[] strides)
     {
+        // Runs after FreeAVFrame — exclusive ownership; clear before locking so we never pool (or abandon) stale views.
+        Array.Clear(planes);
+        Array.Clear(strides);
+
+        var profile = PassThroughArenaProfiling.IsEnabled;
         lock (_passThroughArena)
         {
-            if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
-                ps.Count < PassThroughDescriptorPoolCap)
+            long t0 = 0;
+            if (profile) t0 = Stopwatch.GetTimestamp();
+            try
             {
-                Array.Clear(planes);
-                ps.Push(planes);
-            }
+                if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
+                    ps.Count < PassThroughDescriptorPoolCap)
+                    ps.Push(planes);
 
-            if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
-                ss.Count < PassThroughDescriptorPoolCap)
+                if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
+                    ss.Count < PassThroughDescriptorPoolCap)
+                    ss.Push(strides);
+            }
+            finally
             {
-                Array.Clear(strides);
-                ss.Push(strides);
+                if (profile)
+                    PassThroughArenaProfiling.RecordReturn(Stopwatch.GetTimestamp() - t0);
             }
         }
     }

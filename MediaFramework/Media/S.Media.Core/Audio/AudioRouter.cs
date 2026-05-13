@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
@@ -41,6 +42,11 @@ namespace S.Media.Core.Audio;
 /// or any other sink; they only fill their own queue and eventually drop oldest chunks.
 /// Queue depth defaults to the router constructor's <c>pumpCapacityChunks</c>;
 /// <see cref="AddSink(IAudioSink, string?, int?)"/> can override depth per sink.
+/// </para>
+/// <para>
+/// Optional route-mix profiling: set <c>MF_MEDIA_PROFILE_CHANNEL_MAP=1</c> (global recording in apps), or use
+/// <see cref="ChannelRouteMixProfiling.SetTestOverride"/> with <see cref="ChannelRouteMixProfiling.EnterTestRecordingScope"/> in tests so parallel workers do not share counters.
+/// Read <see cref="ChannelRouteMixProfiling"/> to measure scalar versus SIMD fast-path channel mixing in the run loop.
 /// </para>
 /// <para>
 /// <strong>Pacing</strong>: the router is paced by an <see cref="IRouterClock"/>.
@@ -92,6 +98,10 @@ public sealed class AudioRouter : IDisposable
     private long _chunksProduced;
     private int _idCounter;
 
+    /// <summary>
+    /// Nominal mix sample rate in Hz — fixed for the lifetime of this <see cref="AudioRouter"/>.
+    /// </summary>
+    /// <remarks>Changing rate at runtime without rebuilding the graph is not supported; construct a new router.</remarks>
     public int SampleRate => _sampleRate;
     public int ChunkSamples => _chunkSamples;
 
@@ -711,65 +721,132 @@ public sealed class AudioRouter : IDisposable
 
     private void RunLoop(CancellationToken token)
     {
-        while (!token.IsCancellationRequested)
+        try
         {
-            // Tear down any pumps that were detached on the previous iteration.
-            // By now the previous chunk's enqueues are flushed (we're at the top
-            // of a new iteration), so the pump is safe to dispose.
-            while (_pumpsAwaitingDispose.TryDequeue(out var p)) p.Dispose();
-
-            if (!_clock.WaitForNextChunk(token)) break;
-
-            // Snapshot the immutable state at chunk start. Concurrent mutations
-            // replace the whole RouterState atomically; this loop sees a
-            // consistent view per chunk.
-            var snapshot = Volatile.Read(ref _state);
-
-            // "Empty source set" means the router never auto-stops — it just
-            // keeps producing silence. With sources present, we stop when every
-            // last one is exhausted.
-            var keepRunning = snapshot.Sources.IsEmpty;
-            foreach (var (_, src) in snapshot.Sources)
+            while (!token.IsCancellationRequested)
             {
-                var read = src.Source.ReadInto(src.Scratch);
-                if (read < src.Scratch.Length)
-                    src.Scratch.AsSpan(read).Clear(); // silence-pad partial reads
-                if (!src.Source.IsExhausted) keepRunning = true;
+                // Tear down any pumps that were detached on the previous iteration.
+                // By now the previous chunk's enqueues are flushed (we're at the top
+                // of a new iteration), so the pump is safe to dispose.
+                while (_pumpsAwaitingDispose.TryDequeue(out var p)) p.Dispose();
+
+                if (!_clock.WaitForNextChunk(token)) break;
+
+                // Snapshot the immutable state at chunk start. Concurrent mutations
+                // replace the whole RouterState atomically; this loop sees a
+                // consistent view per chunk.
+                var snapshot = Volatile.Read(ref _state);
+
+                // "Empty source set" means the router never auto-stops — it just
+                // keeps producing silence. With sources present, we stop when every
+                // last one is exhausted.
+                var keepRunning = snapshot.Sources.IsEmpty;
+                foreach (var (_, src) in snapshot.Sources)
+                {
+                    var read = src.Source.ReadInto(src.Scratch);
+                    if (read < src.Scratch.Length)
+                        src.Scratch.AsSpan(read).Clear(); // silence-pad partial reads
+                    if (!src.Source.IsExhausted) keepRunning = true;
+                }
+
+                // Per-sink working buffers come from each pump's free-pool. The
+                // router writes the mixed audio directly into them and Commit()s
+                // by reference — no second copy on the producer thread.
+                foreach (var (_, sink) in snapshot.Sinks)
+                    Array.Clear(sink.Pump.WorkingBuffer);
+
+                foreach (var route in snapshot.Routes)
+                {
+                    if (!snapshot.Sources.TryGetValue(route.SourceId, out var src)) continue;
+                    if (!snapshot.Sinks.TryGetValue(route.SinkId, out var sink)) continue;
+
+                    var rk = RouteGainDictionaryKey(route.SourceId, route.SinkId);
+                    var fromGain = _currentGains.GetValueOrDefault(rk, route.Gain);
+                    var toGain = _routeTargetGains.TryGetValue(rk, out var tg) ? tg : route.Gain;
+                    ApplyRoute(src.Scratch, src.Source.Format.Channels,
+                               sink.Pump.WorkingBuffer, sink.Sink.Format.Channels,
+                               route.Map, fromGain, toGain, _chunkSamples);
+                    if (fromGain != toGain) _currentGains[rk] = toGain;
+                }
+
+                // Publish each sink's mixed buffer to its pump (zero-copy hand-off);
+                // the drainer thread does the actual Submit so the run loop is
+                // never blocked by a slow sink.
+                foreach (var (_, sink) in snapshot.Sinks)
+                    sink.Pump.Commit();
+
+                Interlocked.Increment(ref _chunksProduced);
+
+                if (!keepRunning)
+                {
+                    CompletedNaturally = true;
+                    lock (_gate) _isRunning = false;
+                    break;
+                }
             }
+        }
+        finally
+        {
+            // When the loop exits on natural EOF, StopInternal was never called — release CTS,
+            // clear the thread field, drain pumps, and flush hardware sinks so Pause/Dispose and
+            // hosts (e.g. smoke tools) can shut down promptly.
+            FinishRunLoopThreadLifetime(naturalEof: CompletedNaturally);
+        }
+    }
 
-            // Per-sink working buffers come from each pump's free-pool. The
-            // router writes the mixed audio directly into them and Commit()s
-            // by reference — no second copy on the producer thread.
-            foreach (var (_, sink) in snapshot.Sinks)
-                Array.Clear(sink.Pump.WorkingBuffer);
+    /// <summary>
+    /// Runs on the router thread when <see cref="RunLoop"/> exits for any reason, unless
+    /// <see cref="StopInternal"/> already captured <see cref="_cts"/> (then this is a no-op).
+    /// </summary>
+    private void FinishRunLoopThreadLifetime(bool naturalEof)
+    {
+        CancellationTokenSource? cts;
+        SinkPump[] pumps;
+        IAudioSink[]? sinksForFlush = null;
+        lock (_gate)
+        {
+            cts = _cts;
+            if (cts is null)
+                return;
 
-            foreach (var route in snapshot.Routes)
+            _cts = null;
+            _thread = null;
+            _isRunning = false;
+            pumps = [.. _state.Sinks.Values.Select(e => e.Pump)];
+            if (naturalEof)
+                sinksForFlush = [.. _state.Sinks.Values.Select(e => e.Sink)];
+        }
+
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { /* racing StopInternal */ }
+        cts.Dispose();
+
+        foreach (var p in pumps)
+        {
+            try { p.WaitForIdle(TimeSpan.FromSeconds(2), CancellationToken.None); }
+            catch (Exception ex)
             {
-                if (!snapshot.Sources.TryGetValue(route.SourceId, out var src)) continue;
-                if (!snapshot.Sinks.TryGetValue(route.SinkId, out var sink)) continue;
-
-                var rk = RouteGainDictionaryKey(route.SourceId, route.SinkId);
-                var fromGain = _currentGains.GetValueOrDefault(rk, route.Gain);
-                var toGain = _routeTargetGains.TryGetValue(rk, out var tg) ? tg : route.Gain;
-                ApplyRoute(src.Scratch, src.Source.Format.Channels,
-                           sink.Pump.WorkingBuffer, sink.Sink.Format.Channels,
-                           route.Map, fromGain, toGain, _chunkSamples);
-                if (fromGain != toGain) _currentGains[rk] = toGain;
+                if (_log is { } l)
+                    l.LogWarning(ex, "AudioRouter: pump WaitForIdle after run loop exit");
+                else
+                    MediaDiagnostics.LogWarning("AudioRouter: pump WaitForIdle after run loop exit: {0}", ex.Message);
             }
+        }
 
-            // Publish each sink's mixed buffer to its pump (zero-copy hand-off);
-            // the drainer thread does the actual Submit so the run loop is
-            // never blocked by a slow sink.
-            foreach (var (_, sink) in snapshot.Sinks)
-                sink.Pump.Commit();
+        if (sinksForFlush is null) return;
 
-            Interlocked.Increment(ref _chunksProduced);
-
-            if (!keepRunning)
+        foreach (var s in sinksForFlush)
+        {
+            if (s is IFlushableSink f)
             {
-                CompletedNaturally = true;
-                lock (_gate) _isRunning = false;
-                break;
+                try { f.Flush(); }
+                catch (Exception ex)
+                {
+                    if (_log is { } l)
+                        l.LogError(ex, "IFlushableSink.Flush after natural router stop");
+                    else
+                        MediaDiagnostics.LogError(ex, "AudioRouter natural EOF Flush");
+                }
             }
         }
     }
@@ -779,6 +856,8 @@ public sealed class AudioRouter : IDisposable
         Span<float> dst, int dstChannels,
         ChannelMap map, float fromGain, float toGain, int samplesPerChannel)
     {
+        var profileRoutes = ChannelRouteMixProfiling.ShouldProfileApplyRoute();
+
         // Both ends silent — nothing to mix in.
         if (fromGain == 0f && toGain == 0f) return;
 
@@ -817,15 +896,34 @@ public sealed class AudioRouter : IDisposable
                     dst, dstChannels, map, samplesPerChannel, fromGain))
                 return;
 
+            if (ChannelMap.TryAccumulateStereoDuplexWideSwappedInterleaved(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
+            if (ChannelMap.TryAccumulateStereoToNInterleavedSwapped(src, srcChannels,
+                    dst, dstChannels, map, samplesPerChannel, fromGain))
+                return;
+
             if (ChannelMap.TryAccumulateStereoToNInterleaved(src, srcChannels,
                     dst, dstChannels, map, samplesPerChannel, fromGain))
                 return;
 
             if (fromGain == 1.0f)
             {
-                map.ApplyAdditive(src, srcChannels, dst, samplesPerChannel);
+                if (profileRoutes)
+                {
+                    var t0 = Stopwatch.GetTimestamp();
+                    map.ApplyAdditive(src, srcChannels, dst, samplesPerChannel);
+                    ChannelRouteMixProfiling.RecordApplyAdditive(Stopwatch.GetTimestamp() - t0);
+                }
+                else
+                    map.ApplyAdditive(src, srcChannels, dst, samplesPerChannel);
                 return;
             }
+
+            long tUniform = 0;
+            if (profileRoutes)
+                tUniform = Stopwatch.GetTimestamp();
             for (var s = 0; s < samplesPerChannel; s++)
             {
                 var srcBase = s * srcChannels;
@@ -836,6 +934,9 @@ public sealed class AudioRouter : IDisposable
                     if (ic >= 0) dst[dstBase + oc] += src[srcBase + ic] * fromGain;
                 }
             }
+
+            if (profileRoutes)
+                ChannelRouteMixProfiling.RecordScalarUniformGain(Stopwatch.GetTimestamp() - tUniform);
             return;
         }
 
@@ -844,6 +945,9 @@ public sealed class AudioRouter : IDisposable
         // is exactly (fromGain + toGain) / 2 — no DC drift.
         var step = (toGain - fromGain) / samplesPerChannel;
         var gain = fromGain + step * 0.5f;
+        long tRamp = 0;
+        if (profileRoutes)
+            tRamp = Stopwatch.GetTimestamp();
         for (var s = 0; s < samplesPerChannel; s++)
         {
             var srcBase = s * srcChannels;
@@ -855,6 +959,9 @@ public sealed class AudioRouter : IDisposable
             }
             gain += step;
         }
+
+        if (profileRoutes)
+            ChannelRouteMixProfiling.RecordScalarRamp(Stopwatch.GetTimestamp() - tRamp);
     }
 
     /// <summary>One side of a routing connection.</summary>

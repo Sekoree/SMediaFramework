@@ -81,6 +81,40 @@ public class MediaContainerDecoderTests
         }
     }
 
+    [Fact]
+    public void FlushCodecPipelines_AfterReads_ContinuesReading()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mc_flush_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateAudioVideo(path)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            c.SeekPresentation(TimeSpan.Zero);
+            Assert.True(c.Video.TryReadNextFrame(out var v1));
+            var t1 = v1.PresentationTime;
+            v1.Dispose();
+
+            c.FlushCodecPipelines();
+
+            Assert.True(c.Video.TryReadNextFrame(out var v2));
+            try
+            {
+                Assert.True(v2.PresentationTime >= t1);
+            }
+            finally
+            {
+                v2.Dispose();
+            }
+
+            var scratch = new float[c.Audio.Format.Channels * 512];
+            Assert.True(c.Audio.ReadInto(scratch) > 0);
+        }
+        finally
+        {
+            try { File.Delete(path); } catch { /* ignored */ }
+        }
+    }
+
     private static bool TryGenerateAudioVideo(string path)
     {
         try
@@ -95,6 +129,8 @@ public class MediaContainerDecoderTests
                     "-shortest",
                     "-c:a", "aac",
                     "-c:v", "libx264",
+                    "-g", "1",
+                    "-keyint_min", "1",
                     "-pix_fmt", "yuv420p",
                     "-loglevel", "error",
                     path,

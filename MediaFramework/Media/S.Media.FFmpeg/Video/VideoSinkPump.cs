@@ -1,8 +1,20 @@
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
 using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg.Video;
+
+/// <summary>
+/// Snapshot counters for a <see cref="VideoSinkPump"/> (video analogue of audio <c>SinkPumpStats</c>).
+/// <see cref="MaxQueueDepth"/> is configured capacity (oldest dropped when enqueue would exceed it).
+/// <see cref="CurrentQueuedDepth"/> is frames waiting on the pump thread (approximate under concurrency).
+/// </summary>
+public readonly record struct VideoSinkPumpMetrics(
+    long DroppedFrames,
+    long SubmittedFrames,
+    int MaxQueueDepth,
+    int CurrentQueuedDepth);
 
 /// <summary>Optional <see cref="VideoSinkPump"/> wrapping when registering an output on <see cref="VideoRouter"/>.</summary>
 /// <param name="MaxQueuedFrames">Queue depth before drop-oldest (must be ≥ 1).</param>
@@ -24,8 +36,10 @@ public readonly record struct VideoSinkPumpAttachOptions(
 /// </summary>
 /// <remarks>
 /// Intended for slow network encoders (for example NDI) so a blocking <see cref="IVideoSink.Submit"/>
-/// cannot stall upstream decode. This is the video analogue of audio <c>SinkPump</c> back-pressure,
-/// without integrating directly into <see cref="VideoRouter"/> yet.
+/// cannot stall upstream decode. This is the video analogue of audio <c>SinkPump</c> back-pressure;
+/// <see cref="VideoRouter.AddOutput"/> can attach a pump via <see cref="VideoSinkPumpAttachOptions"/>.
+/// Subscribe to <see cref="VideoSinkPump.PumpPressure"/> (or <see cref="VideoRouter.PumpPressure"/> when registered via the router)
+/// for per-drop callbacks on the <see cref="Submit"/> thread (same idea as <c>AudioRouter.PumpPressure</c>).
 /// </remarks>
 public sealed class VideoSinkPump : IVideoSink, IDisposable
 {
@@ -43,6 +57,8 @@ public sealed class VideoSinkPump : IVideoSink, IDisposable
     private bool _disposed;
     private long _dropped;
     private long _submitted;
+    private long _lastDropLogTicks;
+    private EventHandler<VideoSinkPumpPressureEventArgs>? _pumpPressure;
 
     public VideoSinkPump(IVideoSink inner, int maxQueuedFrames = 3, string name = "VideoSinkPump", ILogger? log = null,
         bool disposeInnerOnDispose = false)
@@ -58,6 +74,25 @@ public sealed class VideoSinkPump : IVideoSink, IDisposable
 
     public long DroppedFrames => Interlocked.Read(ref _dropped);
     public long SubmittedFrames => Interlocked.Read(ref _submitted);
+
+    /// <summary>Optional: raised on the <see cref="Submit"/> thread each time an oldest frame is dropped because the queue is full.</summary>
+    public event EventHandler<VideoSinkPumpPressureEventArgs>? PumpPressure
+    {
+        add => _pumpPressure += value;
+        remove => _pumpPressure -= value;
+    }
+
+    /// <summary>Configured queue depth before drop-oldest (same as <see cref="VideoSinkPumpAttachOptions.MaxQueuedFrames"/>).</summary>
+    public int MaxQueueDepth => _maxQueued;
+
+    /// <summary>Frames currently waiting for the drainer thread (snapshot under <see cref="Submit"/> / <c>Run</c> concurrency).</summary>
+    public int CurrentQueuedDepth
+    {
+        get
+        {
+            lock (_gate) return _queue.Count;
+        }
+    }
 
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _inner.AcceptedPixelFormats;
 
@@ -101,15 +136,36 @@ public sealed class VideoSinkPump : IVideoSink, IDisposable
             {
                 var victim = _queue.Dequeue();
                 victim.Dispose();
-                Interlocked.Increment(ref _dropped);
-                _log?.LogWarning("VideoSinkPump {Name}: queue full — dropped oldest frame (total drops {Drops})", _name,
-                    Interlocked.Read(ref _dropped));
+                var total = Interlocked.Increment(ref _dropped);
+                RaisePumpPressure(total);
+                ThrottledWarnQueueDrop();
             }
 
             _queue.Enqueue(frame);
         }
 
         _pending.Set();
+    }
+
+    private void RaisePumpPressure(long droppedFramesTotal) =>
+        _pumpPressure?.Invoke(this, new VideoSinkPumpPressureEventArgs(_name, droppedFramesTotal));
+
+    private void ThrottledWarnQueueDrop()
+    {
+        var now = Environment.TickCount64;
+        var prev = Volatile.Read(ref _lastDropLogTicks);
+        if (now - prev >= 2000 || prev == 0)
+        {
+            if (Interlocked.CompareExchange(ref _lastDropLogTicks, now, prev) == prev)
+            {
+                var total = Interlocked.Read(ref _dropped);
+                MediaDiagnostics.LogWarning(
+                    $"VideoSinkPump '{_name}': queue full — dropped oldest frame(s); total DroppedFrames={total}. " +
+                    "Increase MaxQueuedFrames on VideoSinkPumpAttachOptions or reduce sink Submit latency.");
+                if (_log is { } l && l.IsEnabled(LogLevel.Warning))
+                    l.LogWarning("VideoSinkPump {Name}: queue full drops (total {Total})", _name, total);
+            }
+        }
     }
 
     private void Run(CancellationToken token)
@@ -165,6 +221,7 @@ public sealed class VideoSinkPump : IVideoSink, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _pumpPressure = null;
         try
         {
             _cts?.Cancel();

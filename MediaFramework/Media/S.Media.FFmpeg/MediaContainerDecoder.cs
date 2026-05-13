@@ -55,6 +55,25 @@ public sealed class MediaContainerDecoder : IDisposable
     /// <summary>Seeks both streams to the same presentation timestamp.</summary>
     public void SeekPresentation(TimeSpan position) => _shared.SeekPresentation(position);
 
+    /// <summary>
+    /// Re-syncs libav decoders and the demuxer to the current mux playhead without changing the
+    /// logical timeline: <see cref="SeekPresentation"/> at <c>max(</c><see cref="Video.Position"/><c>, </c>
+    /// <see cref="Audio.Position"/><c>)</c>.
+    /// </summary>
+    /// <remarks>
+    /// Call only when no concurrent discrete-frame reads are in flight (same contract as <see cref="SeekPresentation"/>).
+    /// Prefer this name at pause boundaries when the intent is “drain internal delay” rather than “jump to a new time”.
+    /// </remarks>
+    public void FlushCodecPipelines()
+    {
+        var vp = Video is ISeekableSource vs ? vs.Position : TimeSpan.Zero;
+        var ap = Audio is ISeekableSource ais ? ais.Position : TimeSpan.Zero;
+        var resume = vp >= ap ? vp : ap;
+        if (resume < TimeSpan.Zero)
+            resume = TimeSpan.Zero;
+        SeekPresentation(resume);
+    }
+
     /// <summary>When Windows D3D11VA NV12 shared-handle decode is active, libav's <c>ID3D11Device</c> COM pointer for GL upload.</summary>
     public bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr) =>
         _shared.TryGetHardwareD3D11DeviceForWin32Gl(out deviceComPtr);

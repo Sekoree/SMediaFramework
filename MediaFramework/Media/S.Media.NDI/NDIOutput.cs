@@ -21,10 +21,18 @@ namespace S.Media.NDI;
 /// Lifetime: child sinks must not outlive this <see cref="NDIOutput"/>.
 /// They share the parent's sender; disposing the parent invalidates them.
 /// </para>
+/// <para>
+/// For SDK-level receiver feedback (tally, upstream metadata), use <see cref="TryGetReceiverTally"/>,
+/// <see cref="CaptureReceiverMetadata"/>, and <see cref="FreeReceiverMetadata"/> on a background thread
+/// with short timeouts so sends are not blocked.
+/// </para>
 /// </remarks>
 public sealed class NDIOutput : IDisposable
 {
     private readonly TimeSpan? _minimumVideoSubmitSpacing;
+    private readonly NDIVideoTimecodeMode _videoTimecodeMode;
+    /// <summary>When <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected, shared by video + audio sinks.</summary>
+    private readonly NdiEgressPresentationTimeline? _egressPresentationTimeline;
     private readonly NDIRuntime _runtime;
     private readonly NDISender _sender;
     private readonly object _gate = new();
@@ -57,8 +65,14 @@ public sealed class NDIOutput : IDisposable
     /// Optional wall-clock throttle between video frames (<see cref="NDIVideoSender"/> submit path).
     /// Use with <paramref name="clockVideo"/>:false when you want MFPlayer to pace instead of NDI timestamps.
     /// </param>
+    /// <param name="videoTimecodeMode">
+    /// How <see cref="NDIVideoSender"/> fills NDI video timecodes — use
+    /// <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> for an explicit timeline aligned with
+    /// <see cref="NDIAudioSink"/> when muxing file A/V.
+    /// </param>
     public NDIOutput(string sourceName, string? groups = null, bool clockVideo = true, bool clockAudio = true,
-                      TimeSpan? minimumVideoSubmitSpacing = null)
+                      TimeSpan? minimumVideoSubmitSpacing = null,
+                      NDIVideoTimecodeMode videoTimecodeMode = NDIVideoTimecodeMode.Synthesize)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceName);
         SourceName = sourceName;
@@ -66,6 +80,10 @@ public sealed class NDIOutput : IDisposable
         if (minimumVideoSubmitSpacing is { } spacing && spacing < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(minimumVideoSubmitSpacing));
         _minimumVideoSubmitSpacing = minimumVideoSubmitSpacing;
+        _videoTimecodeMode = videoTimecodeMode;
+        _egressPresentationTimeline = videoTimecodeMode == NDIVideoTimecodeMode.PresentationRelativeTicks
+            ? new NdiEgressPresentationTimeline()
+            : null;
 
         var rc = NDIRuntime.Create(out var rt);
         if (rc != 0 || rt is null) throw new NDIException(rc, "NDIRuntime.Create");
@@ -101,7 +119,7 @@ public sealed class NDIOutput : IDisposable
                         $"audio sink already configured with format {_audioSink.Format}; cannot reconfigure to {format}");
                 return _audioSink;
             }
-            _audioSink = new NDIAudioSink(_sender, format);
+            _audioSink = new NDIAudioSink(_sender, format, _egressPresentationTimeline);
             return _audioSink;
         }
     }
@@ -110,8 +128,51 @@ public sealed class NDIOutput : IDisposable
     {
         lock (_gate)
         {
-            return _videoSink ??= new NDIVideoSender(_sender, _minimumVideoSubmitSpacing);
+            return _videoSink ??= new NDIVideoSender(_sender, _minimumVideoSubmitSpacing, _videoTimecodeMode,
+                _egressPresentationTimeline);
         }
+    }
+
+    /// <summary>
+    /// Resets the presentation-time anchor used when <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/>
+    /// is active (for example after <see cref="S.Media.Core.Video.VideoPlayer.Seek"/>). Clears the shared
+    /// presentation anchor used by both <see cref="NDIVideoSender"/> and <see cref="NDIAudioSink"/> when
+    /// <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected on this output.
+    /// </summary>
+    public void ResetVideoPresentationTimecodeAnchor()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_gate)
+        {
+            _egressPresentationTimeline?.Reset();
+            _videoSink?.ResetPresentationTimecodeAnchor();
+        }
+    }
+
+    /// <summary>
+    /// Polls aggregate tally state from connected NDI receivers (<c>NDIlib_send_get_tally</c>).
+    /// </summary>
+    /// <returns><see langword="true"/> if the tally changed within the wait window.</returns>
+    public bool TryGetReceiverTally(out NDITally tally, uint timeoutMs = 0)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _sender.GetTally(out tally, timeoutMs);
+    }
+
+    /// <summary>
+    /// Captures metadata sent upstream by receivers (e.g. PTZ). Pair with <see cref="FreeReceiverMetadata"/>.
+    /// </summary>
+    public NDIFrameType CaptureReceiverMetadata(out NDIMetadataFrame metadata, uint timeoutMs = 0)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _sender.CaptureMetadata(out metadata, timeoutMs);
+    }
+
+    /// <summary>Frees a metadata frame returned from <see cref="CaptureReceiverMetadata"/>.</summary>
+    public void FreeReceiverMetadata(in NDIMetadataFrame metadata)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _sender.FreeMetadata(metadata);
     }
 
     public void Dispose()

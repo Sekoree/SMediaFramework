@@ -30,6 +30,8 @@ namespace S.Media.Core.Audio;
 /// <item><c>new ChannelMap([0, 0])</c> — duplicate L to both outputs (stereo source).</item>
 /// <item><c>new ChannelMap([1, 1])</c> — duplicate R to both outputs.</item>
 /// <item><c>new ChannelMap([-1, -1])</c> — both outputs silent (additive mix leaves dst unchanged).</item>
+/// <item><c>ChannelMap.StereoToNSwapped(4)</c> — same as <c>[1,0,1,0]</c> (R,L,R,L into quad).</item>
+/// </list>
 /// </para>
 /// </remarks>
 public readonly struct ChannelMap : IEquatable<ChannelMap>
@@ -153,6 +155,14 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
             return;
 
         if (TryAccumulateStereoDuplexWideInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateStereoDuplexWideSwappedInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateStereoToNInterleavedSwapped(src, srcChannels, dst, outChannels,
                 this, samplesPerChannel, uniformGain: 1f))
             return;
 
@@ -500,6 +510,43 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         }
     }
 
+    private static void RunStereoToNVectorSwapped(
+        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain, Span<float> scratch)
+    {
+        var vn = Vector<float>.Count;
+        var need = vn * nOut;
+        var s = 0;
+        var limit = samplesPerChannel - samplesPerChannel % vn;
+        for (; s < limit; s += vn)
+        {
+            for (var j = 0; j < vn; j++)
+            {
+                var L = src[(s + j) * 2] * uniformGain;
+                var R = src[(s + j) * 2 + 1] * uniformGain;
+                var vo = j * nOut;
+                for (var k = 0; k < nOut; k++)
+                    scratch[vo + k] = (k & 1) == 0 ? R : L;
+            }
+
+            var dstSlice = dst.Slice(s * nOut, need);
+            for (var off = 0; off < need; off += vn)
+            {
+                var dVec = MemoryMarshal.Cast<float, Vector<float>>(dstSlice.Slice(off, vn))[0];
+                var sVec = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(off, vn))[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dstSlice.Slice(off, vn))[0] = dVec + sVec;
+            }
+        }
+
+        for (; s < samplesPerChannel; s++)
+        {
+            var L = src[s * 2] * uniformGain;
+            var R = src[s * 2 + 1] * uniformGain;
+            var b = s * nOut;
+            for (var k = 0; k < nOut; k++)
+                dst[b + k] += (k & 1) == 0 ? R : L;
+        }
+    }
+
     private static bool RunStereoToNPooled(
         ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain)
     {
@@ -525,6 +572,39 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         try
         {
             RunStereoToNVector(src, dst, nOut, samplesPerChannel, uniformGain, rented.AsSpan(0, need));
+            return true;
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(rented);
+        }
+    }
+
+    private static bool RunStereoToNPooledSwapped(
+        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var vn = Vector<float>.Count;
+        if ((vn % 2) != 0)
+            return false;
+
+        var need = checked(vn * nOut);
+        if (need > PooledMonoDupScratchMaxFloats)
+            return false;
+
+        if (need <= AccumulateInterleaveScratchCap)
+        {
+            Span<float> scratch = stackalloc float[need];
+            RunStereoToNVectorSwapped(src, dst, nOut, samplesPerChannel, uniformGain, scratch);
+            return true;
+        }
+
+        var rented = ArrayPool<float>.Shared.Rent(need);
+        try
+        {
+            RunStereoToNVectorSwapped(src, dst, nOut, samplesPerChannel, uniformGain, rented.AsSpan(0, need));
             return true;
         }
         finally
@@ -763,6 +843,37 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
     }
 
     /// <summary>
+    /// Stereo interleaved → N outputs with <c>map[i] = 1 - (i &amp; 1)</c> (R,L,R,L,… — swapped <see cref="StereoToN"/>).
+    /// For <c>N == 4</c> and <c>[1,0,1,0]</c>, prefer <see cref="TryAccumulateStereoDuplexWideSwappedInterleaved"/> (call it first).
+    /// </summary>
+    internal static bool TryAccumulateStereoToNInterleavedSwapped(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        var nOut = dstChannels;
+        if (srcChannels != 2 || nOut < 3)
+            return false;
+        if (routing.Length != nOut)
+            return false;
+
+        for (var i = 0; i < nOut; i++)
+        {
+            if (routing[i] != 1 - (i & 1))
+                return false;
+        }
+
+        if (map.RequiredInputChannels != 2)
+            return false;
+
+        return RunStereoToNPooledSwapped(src, dst, nOut, samplesPerChannel, uniformGain);
+    }
+
+    /// <summary>
     /// Stereo interleaved → N outputs with <c>map[i] = i &amp; 1</c> (see <see cref="StereoToN"/>), <c>N ≥ 3</c>.
     /// For <c>N == 4</c> and <c>[0,1,0,1]</c>, prefer <see cref="TryAccumulateStereoDuplexWideInterleaved"/> (call it first).
     /// </summary>
@@ -917,6 +1028,131 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         return true;
     }
 
+    /// <summary>Stereo interleaved duplicated into 4‑channel quad (<c>[1,0,1,0]</c> — R,L,R,L), uniform gain.</summary>
+    internal static unsafe bool TryAccumulateStereoDuplexWideSwappedInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        if (!Vector.IsHardwareAccelerated || uniformGain == 0f)
+            return false;
+
+        var routing = map.AsSpan();
+        if (routing.Length != 4 || srcChannels != 2 || dstChannels != 4) return false;
+        if (routing[0] != 1 || routing[1] != 0 || routing[2] != 1 || routing[3] != 0) return false;
+        if (map.RequiredInputChannels != 2) return false;
+
+        var vn = Vector<float>.Count;
+        if ((vn % 2) != 0) return false;
+
+        var stereoFloats = samplesPerChannel * 2;
+
+        var g = new Vector<float>(uniformGain);
+
+        var i = 0;
+        var limit = stereoFloats - stereoFloats % vn;
+
+        if (Avx.IsSupported && vn == 16)
+        {
+            var g256 = Vector256.Create(uniformGain);
+            var limit16 = stereoFloats - stereoFloats % 16;
+            for (; i < limit16; i += 16)
+            {
+                for (var pass = 0; pass < 2; pass++)
+                {
+                    var off = pass * 8;
+                    fixed (float* pSrc = src.Slice(i + off))
+                    fixed (float* pDst = dst.Slice((i + off) * 2))
+                    {
+                        var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                        var lo = Sse.Shuffle(m.GetLower(), m.GetLower(), 0xB1);
+                        var hi = Sse.Shuffle(m.GetUpper(), m.GetUpper(), 0xB1);
+                        var expLo = Vector256.Create(Sse.Shuffle(lo, lo, 0x44), Sse.Shuffle(lo, lo, 0xEE));
+                        var expHi = Vector256.Create(Sse.Shuffle(hi, hi, 0x44), Sse.Shuffle(hi, hi, 0xEE));
+                        Avx.Store(pDst, Avx.Add(Avx.LoadVector256(pDst), expLo));
+                        Avx.Store(pDst + 8, Avx.Add(Avx.LoadVector256(pDst + 8), expHi));
+                    }
+                }
+            }
+        }
+        else if (Avx.IsSupported && vn == 8)
+        {
+            var g256 = Vector256.Create(uniformGain);
+            for (; i < limit; i += 8)
+            {
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Avx.Multiply(Avx.LoadVector256(pSrc), g256);
+                    var lo = Sse.Shuffle(m.GetLower(), m.GetLower(), 0xB1);
+                    var hi = Sse.Shuffle(m.GetUpper(), m.GetUpper(), 0xB1);
+                    var expLo = Vector256.Create(Sse.Shuffle(lo, lo, 0x44), Sse.Shuffle(lo, lo, 0xEE));
+                    var expHi = Vector256.Create(Sse.Shuffle(hi, hi, 0x44), Sse.Shuffle(hi, hi, 0xEE));
+                    Avx.Store(pDst, Avx.Add(Avx.LoadVector256(pDst), expLo));
+                    Avx.Store(pDst + 8, Avx.Add(Avx.LoadVector256(pDst + 8), expHi));
+                }
+            }
+        }
+        else if (Sse.IsSupported && vn == 4)
+        {
+            var g128 = Vector128.Create(uniformGain);
+            for (; i < limit; i += 4)
+            {
+                fixed (float* pSrc = src.Slice(i))
+                fixed (float* pDst = dst.Slice(i * 2))
+                {
+                    var m = Sse.Multiply(Sse.LoadVector128(pSrc), g128);
+                    m = Sse.Shuffle(m, m, 0xB1);
+                    var e0 = Sse.Shuffle(m, m, 0x44);
+                    var e1 = Sse.Shuffle(m, m, 0xEE);
+                    Sse.Store(pDst, Sse.Add(Sse.LoadVector128(pDst), e0));
+                    Sse.Store(pDst + 4, Sse.Add(Sse.LoadVector128(pDst + 4), e1));
+                }
+            }
+        }
+        else
+        {
+            Span<float> scratch = stackalloc float[vn * 2];
+            for (; i < limit; i += vn)
+            {
+                var m = MemoryMarshal.Cast<float, Vector<float>>(src.Slice(i, vn))[0] * g;
+                ref var sc = ref MemoryMarshal.GetReference(scratch);
+                for (var j = 0; j < vn; j += 2)
+                {
+                    var L = m[j];
+                    var R = m[j + 1];
+                    var p = j * 2;
+                    Unsafe.Add(ref sc, p) = R;
+                    Unsafe.Add(ref sc, p + 1) = L;
+                    Unsafe.Add(ref sc, p + 2) = R;
+                    Unsafe.Add(ref sc, p + 3) = L;
+                }
+
+                var dstBase = i * 2;
+                var d0 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0];
+                var s0 = MemoryMarshal.Cast<float, Vector<float>>(scratch[..vn])[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase, vn))[0] = d0 + s0;
+
+                var d1 = MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0];
+                var s1 = MemoryMarshal.Cast<float, Vector<float>>(scratch.Slice(vn, vn))[0];
+                MemoryMarshal.Cast<float, Vector<float>>(dst.Slice(dstBase + vn, vn))[0] = d1 + s1;
+            }
+        }
+
+        for (; i < stereoFloats; i += 2)
+        {
+            var L = src[i] * uniformGain;
+            var R = src[i + 1] * uniformGain;
+            var dstBase = i * 2;
+            dst[dstBase + 0] += R;
+            dst[dstBase + 1] += L;
+            dst[dstBase + 2] += R;
+            dst[dstBase + 3] += L;
+        }
+
+        return true;
+    }
+
     private static Vector<float> StereoSwapAdjacentChannels(Vector<float> v)
     {
         Span<float> buf = stackalloc float[Vector<float>.Count];
@@ -981,6 +1217,15 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         if (outputChannels <= 0) throw new ArgumentOutOfRangeException(nameof(outputChannels));
         Span<int> tmp = stackalloc int[outputChannels];
         for (var i = 0; i < outputChannels; i++) tmp[i] = i & 1;
+        return new ChannelMap(tmp);
+    }
+
+    /// <summary>Stereo into N channels by repeating R,L,R,L,… (swapped <see cref="StereoToN"/>).</summary>
+    public static ChannelMap StereoToNSwapped(int outputChannels)
+    {
+        if (outputChannels <= 0) throw new ArgumentOutOfRangeException(nameof(outputChannels));
+        Span<int> tmp = stackalloc int[outputChannels];
+        for (var i = 0; i < outputChannels; i++) tmp[i] = 1 - (i & 1);
         return new ChannelMap(tmp);
     }
 

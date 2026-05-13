@@ -98,7 +98,9 @@ public sealed unsafe class VideoCpuFrameConverter : IDisposable
         if (source.PlaneCount != nSrc || source.Strides.Length != nSrc)
             throw new ArgumentException("unexpected source plane layout", nameof(source));
 
-        var srcHandles = new GCHandle[nSrc];
+        // Pin arbitrary ReadOnlyMemory (managed arrays, pooled blocks, or unmanaged libav planes).
+        // Pass-through FFmpeg frames use UnmanagedMemoryManager — GCHandle on arrays would fail.
+        var srcPins = new MemoryHandle[nSrc];
         var srcLines = new byte*[8];
         var srcStride = new int[8];
         Array.Clear(srcStride);
@@ -106,10 +108,11 @@ public sealed unsafe class VideoCpuFrameConverter : IDisposable
         {
             for (var i = 0; i < nSrc; i++)
             {
-                if (!MemoryMarshal.TryGetArray(source.Planes[i], out var seg) || seg.Array is null)
-                    throw new ArgumentException($"plane[{i}] is not array-backed — cannot pin for swscale", nameof(source));
-                srcHandles[i] = GCHandle.Alloc(seg.Array, GCHandleType.Pinned);
-                srcLines[i] = (byte*)srcHandles[i].AddrOfPinnedObject() + seg.Offset;
+                srcPins[i] = source.Planes[i].Pin();
+                var p = (byte*)srcPins[i].Pointer;
+                if (p == null)
+                    throw new ArgumentException($"plane[{i}] could not be pinned for swscale", nameof(source));
+                srcLines[i] = p;
                 srcStride[i] = source.Strides[i];
             }
 
@@ -167,11 +170,8 @@ public sealed unsafe class VideoCpuFrameConverter : IDisposable
         }
         finally
         {
-            foreach (var h in srcHandles)
-            {
-                if (h.IsAllocated)
-                    h.Free();
-            }
+            foreach (var h in srcPins)
+                h.Dispose();
         }
     }
 

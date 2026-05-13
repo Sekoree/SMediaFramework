@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NDILib;
 using S.Media.Core.Video;
+using S.Media.NDI;
 
 namespace S.Media.NDI.Video;
 
@@ -16,6 +17,12 @@ namespace S.Media.NDI.Video;
 /// double-buffered unmanaged staging area (<see cref="NativeMemory"/>): the
 /// previously-sent buffer stays alive until the next send completes (NDI's
 /// contract), so we ping-pong two natively-allocated frames.
+/// </para>
+/// <para>
+/// When <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected via <see cref="NDIOutput"/>,
+/// video and <see cref="NDIAudioSink"/> share one internal presentation anchor so NDI timecodes
+/// match on both streams. Without that wiring (no shared timeline), the sender keeps a private anchor.
+/// <see cref="NDIVideoTimecodeMode.MuxerPresentationTicks"/> uses absolute mux PTS ticks on every frame.
 /// </para>
 /// <para>
 /// Pixel-format support (negotiation order — higher chroma first when multiple
@@ -53,7 +60,10 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
     private bool _hasInFlight;
     /// <summary>Wall-clock spacing between submits; zero disables pacing.</summary>
     private readonly TimeSpan _minimumSubmitSpacing;
+    private readonly NDIVideoTimecodeMode _timecodeMode;
+    private readonly NdiEgressPresentationTimeline? _sharedPresentationTimeline;
     private long _lastSubmitTimestamp;
+    private TimeSpan? _presentationAnchor;
 
     public VideoFormat Format
     {
@@ -67,13 +77,28 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats => AcceptedFormats;
 
-    internal NDIVideoSender(NDISender sender, TimeSpan? minimumSubmitSpacing = null)
+    internal NDIVideoSender(NDISender sender, TimeSpan? minimumSubmitSpacing = null,
+                            NDIVideoTimecodeMode timecodeMode = NDIVideoTimecodeMode.Synthesize,
+                            NdiEgressPresentationTimeline? sharedPresentationTimeline = null)
     {
         ArgumentNullException.ThrowIfNull(sender);
         _sender = sender;
         var spacing = minimumSubmitSpacing ?? TimeSpan.Zero;
         ArgumentOutOfRangeException.ThrowIfLessThan(spacing, TimeSpan.Zero);
         _minimumSubmitSpacing = spacing;
+        _timecodeMode = timecodeMode;
+        _sharedPresentationTimeline = sharedPresentationTimeline;
+    }
+
+    /// <summary>
+    /// Clears the presentation-time anchor used by <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/>.
+    /// Call after a seek or when starting a new session on the same sender instance.
+    /// (No effect for <see cref="NDIVideoTimecodeMode.MuxerPresentationTicks"/>.)
+    /// </summary>
+    public void ResetPresentationTimecodeAnchor()
+    {
+        if (_sharedPresentationTimeline is null)
+            _presentationAnchor = null;
     }
 
     private void PaceBeforePack()
@@ -89,13 +114,19 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
             if (wait > TimeSpan.Zero)
             {
                 var deadlineTicks = now + (long)(wait.TotalSeconds * Stopwatch.Frequency);
-                // Thread.Sleep resolves whole milliseconds (~±0.5 ms); coarse sleep then SpinWait remainder.
+                // Thread.Sleep resolves whole milliseconds (~±0.5 ms); coarse sleep then sleep remainder
+                // (avoid busy SpinWait on the async video pump thread).
                 var coarseMs = (int)Math.Truncate(wait.TotalMilliseconds);
                 if (coarseMs >= 2)
                     Thread.Sleep(coarseMs - 1);
 
-                while (Stopwatch.GetTimestamp() < deadlineTicks)
-                    Thread.SpinWait(32);
+                var t = Stopwatch.GetTimestamp();
+                if (t < deadlineTicks)
+                {
+                    var remainder = Stopwatch.GetElapsedTime(t, deadlineTicks);
+                    if (remainder > TimeSpan.Zero)
+                        Thread.Sleep(remainder);
+                }
 
                 now = Stopwatch.GetTimestamp();
             }
@@ -127,6 +158,8 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
                 nameof(format));
 
         _format = format;
+        _sharedPresentationTimeline?.Reset();
+        _presentationAnchor = null;
         _configured = true;
     }
 
@@ -149,6 +182,10 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
                     $"frame has {frame.PlaneCount} planes; {_format.PixelFormat} requires {expectedPlanes}",
                     nameof(frame));
 
+            if (frame.DmabufNv12 is not null || frame.Win32Nv12 is not null)
+                throw new NotSupportedException(
+                    "NDIVideoSender requires CPU-backed pixel planes; GPU NV12 (Linux dma-buf or Windows D3D11 shared) has no readable bytes here. Use software decode or a CPU VideoFrame path.");
+
             PaceBeforePack();
 
             var totalBytes = StagingBytes(_format);
@@ -156,6 +193,8 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
             var dstBase = _staging[_stagingIdx];
 
             PackInto(frame, dstBase);
+
+            var (timecode, timestamp) = BuildTimecode(frame);
 
             var native = new NDIVideoFrameV2
             {
@@ -166,11 +205,11 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
                 FrameRateD = _format.FrameRate.Denominator <= 0 ? 1 : _format.FrameRate.Denominator,
                 PictureAspectRatio = 0f, // 0 = derive from Xres/Yres (square pixels)
                 FrameFormatType = NDIFrameFormatType.Progressive,
-                Timecode = 0x7FFFFFFFFFFFFFFF, // synthesise: sender clocks itself
+                Timecode = timecode,
                 PData = (nint)dstBase,
                 LineStrideInBytes = LineStrideForFormat(_format),
                 PMetadata = nint.Zero,
-                Timestamp = 0,
+                Timestamp = timestamp,
             };
             _sender.SendVideoAsync(native);
             _hasInFlight = true;
@@ -179,6 +218,44 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         finally
         {
             frame.Dispose();
+        }
+    }
+
+    private (long timecode, long timestamp) BuildTimecode(VideoFrame frame)
+    {
+        switch (_timecodeMode)
+        {
+            case NDIVideoTimecodeMode.Synthesize:
+                return (NDIConstants.TimecodeSynthesize, 0);
+            case NDIVideoTimecodeMode.PresentationRelativeTicks:
+            {
+                if (_sharedPresentationTimeline is not null)
+                {
+                    var tc = _sharedPresentationTimeline.TimecodeFromPresentationTime(frame.PresentationTime);
+                    return (tc, NDIConstants.TimestampUndefined);
+                }
+
+                if (_presentationAnchor is null)
+                    _presentationAnchor = frame.PresentationTime;
+
+                var anchor = _presentationAnchor.Value;
+                var delta = frame.PresentationTime - anchor;
+                if (delta < TimeSpan.FromSeconds(-1))
+                {
+                    _presentationAnchor = frame.PresentationTime;
+                    delta = TimeSpan.Zero;
+                }
+
+                var tcLocal = delta < TimeSpan.Zero ? 0L : delta.Ticks;
+                return (tcLocal, NDIConstants.TimestampUndefined);
+            }
+            case NDIVideoTimecodeMode.MuxerPresentationTicks:
+            {
+                var t = frame.PresentationTime.Ticks;
+                return (t < 0 ? 0L : t, NDIConstants.TimestampUndefined);
+            }
+            default:
+                throw new InvalidOperationException($"unknown {nameof(NDIVideoTimecodeMode)} {_timecodeMode}");
         }
     }
 

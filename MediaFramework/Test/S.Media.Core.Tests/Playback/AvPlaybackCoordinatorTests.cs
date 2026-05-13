@@ -50,6 +50,26 @@ public class AvPlaybackCoordinatorTests
     }
 
     [Fact]
+    public void Pause_InvokesOptionalFlushAfterBothSidesPaused()
+    {
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var video = new VideoPlayer(src, sink, clock);
+        video.Play();
+        sink.WaitForConfigured();
+
+        var flushCalls = 0;
+        AvPlaybackCoordinator.Pause(video, null, default, () => flushCalls++);
+
+        Assert.False(video.IsRunning);
+        Assert.Equal(1, flushCalls);
+    }
+
+    [Fact]
     public void MediaPlaybackSession_DelegatesToCoordinator()
     {
         var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
@@ -65,5 +85,24 @@ public class AvPlaybackCoordinatorTests
             session.Play(verifyPrebufferAfterPrefill: () => false));
 
         Assert.Contains("verifyPrebufferAfterPrefill", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MediaPlaybackSession_Pause_forwards_flush_delegate()
+    {
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var video = new VideoPlayer(src, sink, clock);
+        var session = new MediaPlaybackSession(video, clock);
+
+        var flushCalls = 0;
+        session.Pause(default, () => flushCalls++);
+
+        Assert.False(video.IsRunning);
+        Assert.Equal(1, flushCalls);
     }
 }

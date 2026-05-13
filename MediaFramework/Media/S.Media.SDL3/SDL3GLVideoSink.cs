@@ -293,6 +293,11 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IDisposable
         if (_window == nint.Zero)
             throw new InvalidOperationException($"SDL_CreateWindow failed: {SDL.GetError()}");
 
+        if (!SDL.ShowWindow(_window))
+            MediaDiagnostics.LogWarning("SDL3GLVideoSink: SDL_ShowWindow failed: {0}", SDL.GetError());
+        if (!SDL.RaiseWindow(_window))
+            MediaDiagnostics.LogWarning("SDL3GLVideoSink: SDL_RaiseWindow failed: {0}", SDL.GetError());
+
         _glContext = SDL.GLCreateContext(_window);
         if (_glContext == nint.Zero)
             throw new InvalidOperationException($"SDL_GL_CreateContext failed: {SDL.GetError()}");

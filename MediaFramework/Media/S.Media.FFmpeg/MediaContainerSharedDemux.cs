@@ -1,8 +1,10 @@
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using S.Media.Core.Audio;
 using S.Media.Core.Video;
+using S.Media.FFmpeg.Diagnostics;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video;
 using S.Media.FFmpeg.Video.Internal;
@@ -35,6 +37,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private readonly Queue<nint> _audioPacketQ = new();
     private readonly Queue<nint> _videoPacketQ = new();
+
+    /// <summary>Packet dequeued but not yet accepted by <c>avcodec_send_packet</c> (EAGAIN) — must be retried.</summary>
+    private nint _aPendingPacket;
+    private nint _vPendingPacket;
 
     private int _aStream = -1;
     private AVRational _aTb;
@@ -303,6 +309,20 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         lock (_queueGate)
         {
+            if (_vPendingPacket != nint.Zero)
+            {
+                var p = (AVPacket*)_vPendingPacket;
+                av_packet_free(&p);
+                _vPendingPacket = nint.Zero;
+            }
+
+            if (_aPendingPacket != nint.Zero)
+            {
+                var p = (AVPacket*)_aPendingPacket;
+                av_packet_free(&p);
+                _aPendingPacket = nint.Zero;
+            }
+
             while (_audioPacketQ.Count > 0)
             {
                 var pkt = (AVPacket*)_audioPacketQ.Dequeue();
@@ -508,11 +528,19 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             AVPacket* pkt = null;
             lock (_queueGate)
             {
-                while (_audioPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
-                    Monitor.Wait(_queueGate, 50);
+                if (_aPendingPacket != nint.Zero)
+                {
+                    pkt = (AVPacket*)_aPendingPacket;
+                    _aPendingPacket = nint.Zero;
+                }
+                else
+                {
+                    while (_audioPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
+                        Monitor.Wait(_queueGate, 50);
 
-                if (_audioPacketQ.Count > 0)
-                    pkt = (AVPacket*)_audioPacketQ.Dequeue();
+                    if (_audioPacketQ.Count > 0)
+                        pkt = (AVPacket*)_audioPacketQ.Dequeue();
+                }
 
                 Monitor.PulseAll(_queueGate);
             }
@@ -520,13 +548,20 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (pkt != null)
             {
                 var ret = avcodec_send_packet(_aCtx, pkt);
-                av_packet_free(&pkt);
                 if (ret == 0)
                 {
+                    av_packet_free(&pkt);
                     _aDrainSent = false;
                     return;
                 }
-                if (ret == AVERROR(EAGAIN)) return;
+
+                if (ret == AVERROR(EAGAIN))
+                {
+                    _aPendingPacket = (nint)pkt;
+                    return;
+                }
+
+                av_packet_free(&pkt);
                 FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
                 return;
             }
@@ -598,11 +633,19 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             AVPacket* pkt = null;
             lock (_queueGate)
             {
-                while (_videoPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
-                    Monitor.Wait(_queueGate, 50);
+                if (_vPendingPacket != nint.Zero)
+                {
+                    pkt = (AVPacket*)_vPendingPacket;
+                    _vPendingPacket = nint.Zero;
+                }
+                else
+                {
+                    while (_videoPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
+                        Monitor.Wait(_queueGate, 50);
 
-                if (_videoPacketQ.Count > 0)
-                    pkt = (AVPacket*)_videoPacketQ.Dequeue();
+                    if (_videoPacketQ.Count > 0)
+                        pkt = (AVPacket*)_videoPacketQ.Dequeue();
+                }
 
                 Monitor.PulseAll(_queueGate);
             }
@@ -610,13 +653,20 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (pkt != null)
             {
                 var ret = avcodec_send_packet(_vCtx, pkt);
-                av_packet_free(&pkt);
                 if (ret == 0)
                 {
+                    av_packet_free(&pkt);
                     _vDrainSent = false;
                     return;
                 }
-                if (ret == AVERROR(EAGAIN)) return;
+
+                if (ret == AVERROR(EAGAIN))
+                {
+                    _vPendingPacket = (nint)pkt;
+                    return;
+                }
+
+                av_packet_free(&pkt);
                 FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
                 return;
             }
@@ -675,6 +725,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         if (format == PixelFormat.Unknown)
             throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
+
+        // SeekPresentation primes one frame with the previous output pixel format; negotiation
+        // (SelectOutputFormat) can change the sink path afterward — drop the stale prime.
+        if (format != Video.Format.PixelFormat)
+        {
+            _vPrimedAfterSeek?.Dispose();
+            _vPrimedAfterSeek = null;
+        }
 
         if (_drmGpuNv12Path)
         {
@@ -826,42 +884,61 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private (ReadOnlyMemory<byte>[] planes, int[] strides) RentPassThroughDescriptors(int planeCount)
     {
+        var profile = PassThroughArenaProfiling.IsEnabled;
         lock (_passThroughArena)
         {
-            if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
+            long t0 = 0;
+            if (profile) t0 = Stopwatch.GetTimestamp();
+            try
             {
-                ps = new Stack<ReadOnlyMemory<byte>[]>();
-                _passThroughPlaneStacks[planeCount] = ps;
-            }
+                if (!_passThroughPlaneStacks.TryGetValue(planeCount, out var ps))
+                {
+                    ps = new Stack<ReadOnlyMemory<byte>[]>();
+                    _passThroughPlaneStacks[planeCount] = ps;
+                }
 
-            if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
+                if (!_passThroughStrideStacks.TryGetValue(planeCount, out var ss))
+                {
+                    ss = new Stack<int[]>();
+                    _passThroughStrideStacks[planeCount] = ss;
+                }
+
+                var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
+                var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
+                return (planes, strides);
+            }
+            finally
             {
-                ss = new Stack<int[]>();
-                _passThroughStrideStacks[planeCount] = ss;
+                if (profile)
+                    PassThroughArenaProfiling.RecordRent(Stopwatch.GetTimestamp() - t0);
             }
-
-            var planes = ps.Count > 0 ? ps.Pop() : new ReadOnlyMemory<byte>[planeCount];
-            var strides = ss.Count > 0 ? ss.Pop() : new int[planeCount];
-            return (planes, strides);
         }
     }
 
     private void ReturnPassThroughDescriptors(int planeCount, ReadOnlyMemory<byte>[] planes, int[] strides)
     {
+        Array.Clear(planes);
+        Array.Clear(strides);
+
+        var profile = PassThroughArenaProfiling.IsEnabled;
         lock (_passThroughArena)
         {
-            if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
-                ps.Count < PassThroughDescriptorPoolCap)
+            long t0 = 0;
+            if (profile) t0 = Stopwatch.GetTimestamp();
+            try
             {
-                Array.Clear(planes);
-                ps.Push(planes);
-            }
+                if (_passThroughPlaneStacks.TryGetValue(planeCount, out var ps) &&
+                    ps.Count < PassThroughDescriptorPoolCap)
+                    ps.Push(planes);
 
-            if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
-                ss.Count < PassThroughDescriptorPoolCap)
+                if (_passThroughStrideStacks.TryGetValue(planeCount, out var ss) &&
+                    ss.Count < PassThroughDescriptorPoolCap)
+                    ss.Push(strides);
+            }
+            finally
             {
-                Array.Clear(strides);
-                ss.Push(strides);
+                if (profile)
+                    PassThroughArenaProfiling.RecordReturn(Stopwatch.GetTimestamp() - t0);
             }
         }
     }

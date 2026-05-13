@@ -240,6 +240,34 @@ public class ChannelMapTests
         }
     }
 
+    private static void ReferenceStereoWideSwappedAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int samplesPerChannel, float uniformGain)
+    {
+        for (var i = 0; i < samplesPerChannel * 2; i += 2)
+        {
+            var L = src[i] * uniformGain;
+            var R = src[i + 1] * uniformGain;
+            var dstBase = i * 2;
+            dst[dstBase + 0] += R;
+            dst[dstBase + 1] += L;
+            dst[dstBase + 2] += R;
+            dst[dstBase + 3] += L;
+        }
+    }
+
+    private static void ReferenceStereoToNSwappedAccumulate(
+        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain)
+    {
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var L = src[s * 2] * uniformGain;
+            var R = src[s * 2 + 1] * uniformGain;
+            var b = s * nOut;
+            for (var k = 0; k < nOut; k++)
+                dst[b + k] += (k & 1) == 0 ? R : L;
+        }
+    }
+
     private static void ReferenceStereoSilenceLrAccumulate(
         ReadOnlySpan<float> src, Span<float> dst, ReadOnlySpan<int> routing, int samplesPerChannel, float uniformGain)
     {
@@ -308,6 +336,27 @@ public class ChannelMapTests
         var actual = new float[samplesPerChannel * 4];
         if (!ChannelMap.TryAccumulateStereoDuplexWideInterleaved(stereo, 2, actual, 4, map, samplesPerChannel, gain))
             ReferenceStereoWideAccumulate(stereo, actual, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(1f, 256)]
+    [InlineData(0.75f, 5)]
+    public void StereoDuplexWideSwappedSimd_AccumulatesLikeScalar(float gain, int samplesPerChannel)
+    {
+        var map = new ChannelMap([1, 0, 1, 0]);
+        var stereo = new float[samplesPerChannel * 2];
+        var rnd = new Random(53 + samplesPerChannel);
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = (float)(rnd.NextDouble() - 0.25);
+
+        var expected = new float[samplesPerChannel * 4];
+        ReferenceStereoWideSwappedAccumulate(stereo, expected, samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * 4];
+        if (!ChannelMap.TryAccumulateStereoDuplexWideSwappedInterleaved(stereo, 2, actual, 4, map, samplesPerChannel, gain))
+            ReferenceStereoWideSwappedAccumulate(stereo, actual, samplesPerChannel, gain);
 
         Assert.Equal(expected, actual);
     }
@@ -442,6 +491,40 @@ public class ChannelMapTests
             ReferenceStereoToNAccumulate(stereo, actual, nOut, samplesPerChannel, gain);
 
         Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(3, 1f, 180)]
+    [InlineData(5, 0.25f, 11)]
+    [InlineData(6, -0.5f, 33)]
+    [InlineData(4, 0.75f, 128)]
+    [InlineData(120, 0.5f, 8)]
+    public void StereoToNSwappedSimd_AccumulatesLikeScalar(int nOut, float gain, int samplesPerChannel)
+    {
+        var map = ChannelMap.StereoToNSwapped(nOut);
+        var stereo = new float[samplesPerChannel * 2];
+        var rnd = new Random(63 + nOut + samplesPerChannel);
+        for (var i = 0; i < stereo.Length; i++)
+            stereo[i] = (float)(rnd.NextDouble() - 0.25);
+
+        var expected = new float[samplesPerChannel * nOut];
+        ReferenceStereoToNSwappedAccumulate(stereo, expected, nOut, samplesPerChannel, gain);
+
+        var actual = new float[samplesPerChannel * nOut];
+        var ok = nOut == 4
+            ? ChannelMap.TryAccumulateStereoDuplexWideSwappedInterleaved(stereo, 2, actual, 4, map, samplesPerChannel, gain)
+            : ChannelMap.TryAccumulateStereoToNInterleavedSwapped(stereo, 2, actual, nOut, map, samplesPerChannel, gain);
+        if (!ok)
+            ReferenceStereoToNSwappedAccumulate(stereo, actual, nOut, samplesPerChannel, gain);
+
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void StereoToNSwapped_RepeatsRl()
+    {
+        var map = ChannelMap.StereoToNSwapped(5);
+        Assert.Equal(new int[] { 1, 0, 1, 0, 1 }, map.AsSpan().ToArray());
     }
 
     [Fact]

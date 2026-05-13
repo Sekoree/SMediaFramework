@@ -9,8 +9,10 @@ namespace S.Media.FFmpeg.Video;
 public static class VideoSinkFanoutFormats
 {
     /// <summary>
-    /// Prefer 4:2:2 UYVY when the sink supports it (better chroma than 4:2:0 for 422 sources),
-    /// then packed RGB, then NV12 / I420.
+    /// When the negotiated pixel format is not accepted by a branch, prefer 4:2:2 UYVY
+    /// (better chroma than 4:2:0 for 422 sources), then packed RGB, then NV12 / I420.
+    /// If the branch already accepts the negotiated format, that format is used first so
+    /// fan-out avoids a CPU swscale path (required for DRM dma-buf / D3D11 shared NV12).
     /// </summary>
     private static readonly PixelFormat[] BranchFormatPreference =
     [
@@ -35,6 +37,13 @@ public static class VideoSinkFanoutFormats
                 if (list[i] == p) return true;
             return false;
         }
+
+        // Prefer the negotiated format whenever the branch accepts it. Walking
+        // BranchFormatPreference first would pick UYVY for NV12→UYVY swscale even
+        // though both are 4:2:0 — that forces a per-branch converter and breaks
+        // multi-output routes on GPU-backed NV12 frames.
+        if (SinkHas(branchAccepted, src))
+            return src;
 
         foreach (var pref in BranchFormatPreference)
         {

@@ -13,6 +13,8 @@ namespace S.Media.Core.Playback;
 /// <para>
 /// This type does not own disposal of the players — the host keeps existing
 /// <c>using</c> patterns on <see cref="VideoPlayer"/> and <see cref="AudioPlayer"/>.
+/// Tools such as <c>VideoPlaybackSmoke</c> construct a session after wiring PortAudio prefill,
+/// then call <see cref="Play"/> / <see cref="Pause"/> (optionally with a shared-mux flush delegate).
 /// </para>
 /// <para>
 /// <strong>Lock order</strong>: avoid holding unrelated host mutexes across these calls.
@@ -42,14 +44,15 @@ public sealed class MediaPlaybackSession
         AvPlaybackCoordinator.Play(Video, Audio, prefillBeforeHardware, startHardware, videoOnlyMaster,
             verifyPrebufferAfterPrefill);
 
-    /// <inheritdoc cref="AvPlaybackCoordinator.Pause(VideoPlayer, AudioPlayer?, CancellationToken)"/>
-    public void Pause(CancellationToken cancellationToken = default) =>
-        AvPlaybackCoordinator.Pause(Video, Audio, cancellationToken);
+    /// <inheritdoc cref="AvPlaybackCoordinator.Pause(VideoPlayer, AudioPlayer?, CancellationToken, Action?)"/>
+    public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
+        AvPlaybackCoordinator.Pause(Video, Audio, cancellationToken, flushSharedMuxAfterPause);
 
     /// <inheritdoc cref="AvPlaybackCoordinator.Seek(VideoPlayer, AudioPlayer, TimeSpan)"/>
     public void Seek(TimeSpan position) => AvPlaybackCoordinator.Seek(Video, Audio, position);
 
-    /// <inheritdoc cref="AvPlaybackCoordinator.SeekCoordinated(VideoPlayer, AudioPlayer?, TimeSpan, CancellationToken)"/>
-    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default) =>
-        AvPlaybackCoordinator.SeekCoordinated(Video, Audio, position, cancellationToken);
+    /// <inheritdoc cref="AvPlaybackCoordinator.SeekCoordinated(VideoPlayer, AudioPlayer?, TimeSpan, CancellationToken, Action?)"/>
+    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
+        Action? flushSharedMuxAfterPause = null) =>
+        AvPlaybackCoordinator.SeekCoordinated(Video, Audio, position, cancellationToken, flushSharedMuxAfterPause);
 }

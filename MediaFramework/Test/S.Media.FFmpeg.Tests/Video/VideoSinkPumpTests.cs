@@ -30,6 +30,85 @@ public class VideoSinkPumpTests
         Assert.True(pump.SubmittedFrames >= 3);
     }
 
+    [Fact]
+    public void Metrics_max_depth_and_slow_inner_allow_queued_depth()
+    {
+        var inner = new SlowSink([PixelFormat.I420], delayMs: 60);
+        using var pump = new VideoSinkPump(inner, maxQueuedFrames: 3, disposeInnerOnDispose: true);
+        var vf = new VideoFormat(32, 32, PixelFormat.I420, new Rational(24, 1));
+        pump.Configure(vf);
+        Assert.Equal(3, pump.MaxQueueDepth);
+
+        var y = new byte[32 * 32];
+        var u = new byte[16 * 16];
+        var v = new byte[16 * 16];
+        for (var i = 0; i < 8; i++)
+        {
+            var f = new VideoFrame(TimeSpan.FromMilliseconds(i * 40), vf, [y, u, v], [32, 16, 16]);
+            pump.Submit(f);
+        }
+
+        Thread.Sleep(120);
+        Assert.InRange(pump.CurrentQueuedDepth, 0, 3);
+        Assert.True(pump.DroppedFrames >= 0);
+        Thread.Sleep(800);
+        Assert.Equal(0, pump.CurrentQueuedDepth);
+    }
+
+    [Fact]
+    public void PumpPressure_fires_on_drop_with_monotonic_total_and_pump_name()
+    {
+        var inner = new SlowSink([PixelFormat.I420], delayMs: 80);
+        using var pump = new VideoSinkPump(inner, maxQueuedFrames: 2, name: "probe-pump", disposeInnerOnDispose: true);
+        var totals = new List<long>();
+        pump.PumpPressure += (_, e) =>
+        {
+            Assert.Equal("probe-pump", e.PumpName);
+            totals.Add(e.DroppedFramesTotal);
+        };
+
+        var vf = new VideoFormat(32, 32, PixelFormat.I420, new Rational(24, 1));
+        pump.Configure(vf);
+        var y = new byte[32 * 32];
+        var u = new byte[16 * 16];
+        var v = new byte[16 * 16];
+        for (var i = 0; i < 16; i++)
+        {
+            var f = new VideoFrame(TimeSpan.FromMilliseconds(i * 5), vf, [y, u, v], [32, 16, 16]);
+            pump.Submit(f);
+        }
+
+        Thread.Sleep(400);
+        Assert.NotEmpty(totals);
+        for (var i = 1; i < totals.Count; i++)
+            Assert.True(totals[i] >= totals[i - 1]);
+        Assert.True(pump.DroppedFrames >= totals[^1]);
+    }
+
+    private sealed class SlowSink : IVideoSink
+    {
+        private readonly PixelFormat[] _acc;
+        private readonly int _delayMs;
+
+        public SlowSink(PixelFormat[] acc, int delayMs)
+        {
+            _acc = acc;
+            _delayMs = delayMs;
+        }
+
+        public int SubmitCount { get; private set; }
+        public VideoFormat Format { get; private set; }
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _acc;
+        public void Configure(VideoFormat format) => Format = format;
+
+        public void Submit(VideoFrame frame)
+        {
+            Thread.Sleep(_delayMs);
+            SubmitCount++;
+            frame.Dispose();
+        }
+    }
+
     private sealed class CountingSink : IVideoSink
     {
         private readonly PixelFormat[] _acc;

@@ -5,6 +5,16 @@ using S.Media.Core.Video;
 namespace S.Media.FFmpeg.Video;
 
 /// <summary>
+/// Pixel format delivered to one <see cref="VideoRouter"/> output after negotiation and fan-out
+/// configuration (see <see cref="VideoRouter.TryGetInputFanOutPixelFormats"/>).
+/// </summary>
+/// <param name="UsesRouterCpuConverter">
+/// True when this branch uses <see cref="VideoCpuFrameConverter"/> to convert from the negotiated stream format.
+/// Always false for the primary output.
+/// </param>
+public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, PixelFormat PixelFormat, bool UsesRouterCpuConverter);
+
+/// <summary>
 /// Routes one or more logical video inputs to many <see cref="IVideoSink"/> outputs.
 /// Each <strong>output</strong> may receive from <strong>at most one</strong> input at a time
 /// (unlike <see cref="Audio.AudioRouter"/>, which sums many sources into one sink).
@@ -28,6 +38,8 @@ namespace S.Media.FFmpeg.Video;
 /// <para>
 /// For slow sinks (NDI, remote encoders), pass <see cref="VideoSinkPumpAttachOptions"/> to
 /// <see cref="AddOutput"/> or wrap the sink in <see cref="VideoSinkPump"/> before registering.
+/// Use <see cref="TryGetVideoSinkPumpMetrics(string, out VideoSinkPumpMetrics)"/> for queue depth, drops, and capacity.
+/// Subscribe to <see cref="PumpPressure"/> when an output uses <see cref="VideoSinkPumpAttachOptions"/> to react to queue-full drops without polling metrics (same role as <see cref="S.Media.Core.Audio.AudioRouter.PumpPressure"/> for audio).
 /// </para>
 /// </remarks>
 public sealed class VideoRouter : IDisposable
@@ -40,8 +52,16 @@ public sealed class VideoRouter : IDisposable
     private readonly Dictionary<string, string> _outputOwner = new(StringComparer.Ordinal);
     private int _idCounter;
     private bool _disposed;
+    private EventHandler<VideoRouterPumpPressureEventArgs>? _pumpPressure;
 
     public VideoRouter(ILogger? logger = null) => _log = logger;
+
+    /// <summary>Optional: raised when an async <see cref="VideoSinkPump"/> on an output drops an oldest frame; arguments include <see cref="VideoRouterPumpPressureEventArgs.OutputId"/> and cumulative drops. Handler runs on the pump's <see cref="IVideoSink.Submit"/> caller thread (typically the router input path).</summary>
+    public event EventHandler<VideoRouterPumpPressureEventArgs>? PumpPressure
+    {
+        add => _pumpPressure += value;
+        remove => _pumpPressure -= value;
+    }
 
     /// <summary>Registers a sink. <paramref name="id"/> defaults to <c>vout_1</c>, <c>vout_2</c>, …</summary>
     /// <param name="asyncPump">
@@ -64,8 +84,11 @@ public sealed class VideoRouter : IDisposable
                 if (ap.MaxQueuedFrames < 1)
                     throw new ArgumentOutOfRangeException(nameof(asyncPump), "MaxQueuedFrames must be >= 1");
                 var pumpName = ap.ThreadName ?? $"VideoSinkPump-{id}";
-                sink = new VideoSinkPump(sink, ap.MaxQueuedFrames, pumpName, ap.Logger,
+                var pump = new VideoSinkPump(sink, ap.MaxQueuedFrames, pumpName, ap.Logger,
                     disposeInnerOnDispose: ap.DisposeInnerSinkWhenPumpDisposes);
+                var outputId = id;
+                pump.PumpPressure += (_, e) => RaisePumpPressure(outputId, e.DroppedFramesTotal);
+                sink = pump;
                 disposeSinkOnRouterDispose = true;
             }
 
@@ -235,10 +258,47 @@ public sealed class VideoRouter : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// When <paramref name="inputId"/> is configured, returns the negotiated stream <see cref="VideoFormat"/> and
+    /// each routed output's sink pixel format in route order (primary output first).
+    /// </summary>
+    /// <returns>
+    /// False when <paramref name="inputId"/> is unknown or not yet configured. On false, <paramref name="negotiated"/> is
+    /// <c>default</c> and <paramref name="perOutput"/> is null.
+    /// </returns>
+    public bool TryGetInputFanOutPixelFormats(
+        string inputId,
+        out VideoFormat negotiated,
+        [NotNullWhen(true)] out IReadOnlyList<VideoRouterFanOutPixelFormat>? perOutput)
+    {
+        negotiated = default;
+        perOutput = null;
+        ArgumentException.ThrowIfNullOrEmpty(inputId);
+        lock (_gate)
+        {
+            if (!_inputs.TryGetValue(inputId, out var reg) || !reg.Configured || reg.NegotiatedFormat is not { } nf)
+                return false;
+
+            negotiated = nf;
+            var list = new List<VideoRouterFanOutPixelFormat>(reg.RoutedOutputIds.Count);
+            foreach (var oid in reg.RoutedOutputIds)
+            {
+                if (!_outputs.TryGetValue(oid, out var oreg))
+                    continue;
+                var px = oreg.Sink.Format.PixelFormat;
+                list.Add(new VideoRouterFanOutPixelFormat(oid, px, reg.BranchUsesCpuConverter(oid)));
+            }
+
+            perOutput = list;
+            return true;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+        _pumpPressure = null;
         lock (_gate)
         {
             foreach (var reg in _inputs.Values)
@@ -258,10 +318,9 @@ public sealed class VideoRouter : IDisposable
     }
 
     /// <summary>When <paramref name="outputId"/> was registered with an async <see cref="VideoSinkPump"/>, returns its counters.</summary>
-    public bool TryGetVideoSinkPumpMetrics(string outputId, out long droppedFrames, out long submittedFrames)
+    public bool TryGetVideoSinkPumpMetrics(string outputId, out VideoSinkPumpMetrics metrics)
     {
-        droppedFrames = 0;
-        submittedFrames = 0;
+        metrics = default;
         ArgumentException.ThrowIfNullOrEmpty(outputId);
         lock (_gate)
         {
@@ -269,14 +328,35 @@ public sealed class VideoRouter : IDisposable
                 return false;
             if (reg.Sink is VideoSinkPump pump)
             {
-                droppedFrames = pump.DroppedFrames;
-                submittedFrames = pump.SubmittedFrames;
+                metrics = new VideoSinkPumpMetrics(
+                    pump.DroppedFrames,
+                    pump.SubmittedFrames,
+                    pump.MaxQueueDepth,
+                    pump.CurrentQueuedDepth);
                 return true;
             }
         }
 
         return false;
     }
+
+    /// <summary>When <paramref name="outputId"/> was registered with an async <see cref="VideoSinkPump"/>, returns dropped and submitted counts.</summary>
+    public bool TryGetVideoSinkPumpMetrics(string outputId, out long droppedFrames, out long submittedFrames)
+    {
+        if (!TryGetVideoSinkPumpMetrics(outputId, out var m))
+        {
+            droppedFrames = 0;
+            submittedFrames = 0;
+            return false;
+        }
+
+        droppedFrames = m.DroppedFrames;
+        submittedFrames = m.SubmittedFrames;
+        return true;
+    }
+
+    private void RaisePumpPressure(string outputId, long droppedFramesTotal) =>
+        _pumpPressure?.Invoke(this, new VideoRouterPumpPressureEventArgs(outputId, droppedFramesTotal));
 
     private void ReconfigureInputIfNeededLocked(InputRegistration reg)
     {
@@ -318,6 +398,9 @@ public sealed class VideoRouter : IDisposable
             RoutedOutputIds.Remove(outputId);
             return true;
         }
+
+        public bool BranchUsesCpuConverter(string outputId) =>
+            outputId != PrimaryOutputId && _paths.TryGetValue(outputId, out var st) && st.Converter != null;
 
         public void ApplyConfigureLocked(VideoFormat negotiated)
         {

@@ -26,4 +26,14 @@ public sealed class VideoSinkFanoutFormatsTests
         var p = VideoSinkFanoutFormats.PickBranchPixelFormat(negotiated, noUyvy);
         Assert.Equal(PixelFormat.Bgra32, p);
     }
+
+    [Fact]
+    public void PickBranchPixelFormat_keeps_negotiated_nv12_when_sink_accepts_nv12_even_if_uyvy_convertible()
+    {
+        FFmpegRuntime.EnsureInitialized();
+        var negotiated = new VideoFormat(1280, 720, PixelFormat.Nv12, new Rational(24, 1));
+        PixelFormat[] ndiLike = [PixelFormat.Uyvy, PixelFormat.Bgra32, PixelFormat.Nv12, PixelFormat.I420];
+        var p = VideoSinkFanoutFormats.PickBranchPixelFormat(negotiated, ndiLike);
+        Assert.Equal(PixelFormat.Nv12, p);
+    }
 }

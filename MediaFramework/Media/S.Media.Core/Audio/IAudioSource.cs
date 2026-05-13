@@ -18,6 +18,17 @@ public interface IAudioSource
     bool IsExhausted { get; }
 
     /// <summary>
+    /// When supported (file demux), returns the next decoded block with mux
+    /// <see cref="AudioFrame.PresentationTime"/>; otherwise returns <see langword="false"/>
+    /// (use <see cref="ReadInto"/> for chunk-based pulls).
+    /// </summary>
+    bool TryReadNextFrame(out AudioFrame frame)
+    {
+        frame = default;
+        return false;
+    }
+
+    /// <summary>
     /// Fill <paramref name="destination"/> with packed (interleaved) float
     /// samples — channel-count must match <see cref="Format"/>'s and
     /// <c>destination.Length</c> must be a multiple of it. Returns the number

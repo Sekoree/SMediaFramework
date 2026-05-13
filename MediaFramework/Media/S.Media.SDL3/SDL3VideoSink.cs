@@ -305,6 +305,11 @@ public sealed unsafe class SDL3VideoSink : IVideoSink, IDisposable
                 SDL.WindowFlags.Resizable, out _window, out _renderer))
             throw new InvalidOperationException($"SDL_CreateWindowAndRenderer failed: {SDL.GetError()}");
 
+        if (!SDL.ShowWindow(_window))
+            MediaDiagnostics.LogWarning("SDL3VideoSink: SDL_ShowWindow failed: {0}", SDL.GetError());
+        if (!SDL.RaiseWindow(_window))
+            MediaDiagnostics.LogWarning("SDL3VideoSink: SDL_RaiseWindow failed: {0}", SDL.GetError());
+
         SDL.SetRenderVSync(_renderer, _vsync ? 1 : 0);
 
         var sdlFormat = ToSdlPixelFormat(_format.PixelFormat);

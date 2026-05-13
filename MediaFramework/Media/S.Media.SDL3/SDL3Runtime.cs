@@ -25,6 +25,8 @@ public static class SDL3Runtime
         {
             if (_refCount == 0)
             {
+                // Ask the WM to activate the window when SDL_RaiseWindow is used (helps Linux/Wayland + smoke tools).
+                SDL.SetHint(SDL.Hints.WindowActivateWhenRaised, "1");
                 if (!SDL.Init(SDL.InitFlags.Video))
                     throw new InvalidOperationException(
                         $"SDL_Init(VIDEO) failed: {SDL.GetError()}");

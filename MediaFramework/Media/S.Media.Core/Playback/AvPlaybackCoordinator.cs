@@ -17,6 +17,12 @@ namespace S.Media.Core.Playback;
 /// call <see cref="MediaClock.Seek(TimeSpan)"/> (or <see cref="AudioPlayer.Seek"/>, which updates the clock)
 /// so the visible playhead matches.
 /// </para>
+/// <para>
+/// When both streams use <c>MediaContainerDecoder</c>, pass <c>decoder.FlushCodecPipelines</c> (or a lambda
+/// that calls it) as <c>flushSharedMuxAfterPause</c> on <see cref="Pause"/> / <see cref="SeekCoordinated"/>
+/// so libav delay is cleared after pumps stop — same contract as calling <c>FlushCodecPipelines</c> with no
+/// concurrent reads (see that API's remarks).
+/// </para>
 /// </remarks>
 public static class AvPlaybackCoordinator
 {
@@ -68,12 +74,18 @@ public static class AvPlaybackCoordinator
     /// <summary>
     /// Pause/stop scheduling: <see cref="VideoPlayer"/> first, then
     /// <see cref="AudioPlayer"/> (so the clock driver can wind down before
-    /// audio teardown).
+    /// audio teardown), then an optional <paramref name="flushSharedMuxAfterPause"/> hook.
     /// </summary>
+    /// <param name="flushSharedMuxAfterPause">
+    /// When using <c>S.Media.FFmpeg.MediaContainerDecoder</c>, pass <c>decoder.FlushCodecPipelines</c>
+    /// (or an equivalent delegate) so both libav codecs and the demuxer are re-synced at the current mux
+    /// playhead after both sides are paused. Omit when decoders are separate or the container is not shared.
+    /// </param>
     public static void Pause(
         VideoPlayer video,
         AudioPlayer? audio = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? flushSharedMuxAfterPause = null)
     {
         ArgumentNullException.ThrowIfNull(video);
         try
@@ -83,6 +95,7 @@ public static class AvPlaybackCoordinator
         finally
         {
             audio?.Pause();
+            flushSharedMuxAfterPause?.Invoke();
         }
     }
 
@@ -90,8 +103,9 @@ public static class AvPlaybackCoordinator
     public static void Stop(
         VideoPlayer video,
         AudioPlayer? audio = null,
-        CancellationToken cancellationToken = default) =>
-        Pause(video, audio, cancellationToken);
+        CancellationToken cancellationToken = default,
+        Action? flushSharedMuxAfterPause = null) =>
+        Pause(video, audio, cancellationToken, flushSharedMuxAfterPause);
 
     /// <summary>
     /// Seeks audio (and its media clock) when present, otherwise seeks the video player's clock,
@@ -124,10 +138,15 @@ public static class AvPlaybackCoordinator
     /// <c>AVFormatContext</c>, then <see cref="MediaClock.Seek(TimeSpan)"/> (or <see cref="AudioPlayer.Seek"/>)
     /// before <see cref="Play"/>.
     /// </remarks>
+    /// <param name="flushSharedMuxAfterPause">
+    /// Forwarded to <see cref="Pause"/> — use <c>MediaContainerDecoder.FlushCodecPipelines</c> when audio and
+    /// video share one <c>AVFormatContext</c>.
+    /// </param>
     public static void SeekCoordinated(VideoPlayer video, AudioPlayer? audio, TimeSpan position,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? flushSharedMuxAfterPause = null)
     {
-        Pause(video, audio, cancellationToken);
+        Pause(video, audio, cancellationToken, flushSharedMuxAfterPause);
         Seek(video, audio, position);
     }
 }

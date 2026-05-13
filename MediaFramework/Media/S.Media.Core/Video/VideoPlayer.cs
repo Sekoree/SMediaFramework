@@ -202,8 +202,14 @@ public sealed class VideoPlayer : IDisposable
         if (handler is not null)
             _clock.VideoTick -= handler;
         toDispose?.Cancel();
-        CooperativePlaybackJoin.JoinThreadWhileCancelable(toJoin, cancellationToken);
-        toDispose?.Dispose();
+        try
+        {
+            CooperativePlaybackJoin.JoinThreadWhileCancelable(toJoin, cancellationToken);
+        }
+        finally
+        {
+            toDispose?.Dispose();
+        }
 
         DrainQueue();
     }
