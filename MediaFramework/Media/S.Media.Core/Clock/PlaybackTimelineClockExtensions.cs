@@ -5,9 +5,20 @@ namespace S.Media.Core.Clock;
 /// <summary>
 /// Strategy‑B helpers: <see cref="IPlaybackTimeline"/> does not carry tick events — use <see cref="IMediaClock"/>
 /// (or this type's extensions) to subscribe to <see cref="IMediaClock.PositionChanged"/>.
+/// Use <see cref="AsPlayhead"/> when a consumer should not see <see cref="IPlaybackTimeline.Seek"/>.
 /// </summary>
 public static class PlaybackTimelineClockExtensions
 {
+    /// <summary>
+    /// Returns a seek-free view of <paramref name="timeline"/> (same <see cref="IPlaybackTimeline.CurrentPosition"/> /
+    /// <see cref="IPlaybackTimeline.IsRunning"/> / <see cref="IPlaybackTimeline.PlaybackRate"/> instance).
+    /// </summary>
+    public static IPlaybackPlayhead AsPlayhead(this IPlaybackTimeline timeline)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        return new PlaybackPlayheadAdapter(timeline);
+    }
+
     /// <summary>
     /// Subscribes <paramref name="handler"/> to <see cref="IAvPlaybackSession.Clock"/> <see cref="IMediaClock.PositionChanged"/>.
     /// </summary>
@@ -45,5 +56,14 @@ public static class PlaybackTimelineClockExtensions
             if (c is null) return;
             c.PositionChanged -= _handler;
         }
+    }
+
+    private sealed class PlaybackPlayheadAdapter(IPlaybackTimeline inner) : IPlaybackPlayhead
+    {
+        public TimeSpan CurrentPosition => inner.CurrentPosition;
+
+        public bool IsRunning => inner.IsRunning;
+
+        public double PlaybackRate => inner.PlaybackRate;
     }
 }

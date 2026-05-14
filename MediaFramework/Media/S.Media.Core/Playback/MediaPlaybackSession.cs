@@ -14,6 +14,7 @@ namespace S.Media.Core.Playback;
 /// <para>
 /// This type does not own disposal of the players — the host keeps existing
 /// <c>using</c> patterns on <see cref="VideoPlayer"/> and <see cref="AudioPlayer"/>.
+/// It is <strong>not</strong> <see cref="IDisposable"/> (no composite <c>Dispose</c> on the session itself).
 /// Tools such as <c>VideoPlaybackSmoke</c> compose <c>S.Media.PortAudio.MediaContainerPlaybackHost</c> (mux → PortAudio),
 /// <c>S.Media.FFmpeg.AvRouter</c>, and this session so
 /// <c>S.Media.FFmpeg.MediaContainerDecoder.FlushCodecPipelines</c> runs after <see cref="Pause(CancellationToken, Action?)"/> by default.
@@ -25,6 +26,9 @@ namespace S.Media.Core.Playback;
 /// </para>
 /// <para>
 /// Wiring <see cref="IMediaClock.SetMaster"/> / <see cref="MediaClockExtensions.SetMasterChain"/> here does not implement coordinated multi-sink master PPM or synchronized drop/repeat — that remains host-owned; see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/> remarks (checklist Tier E **18**).
+/// </para>
+/// <para>
+/// For a seek-free view of <see cref="IAvPlaybackSession.Timeline"/>, use <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/>.
 /// </para>
 /// </remarks>
 public sealed class MediaPlaybackSession : IAvPlaybackSession

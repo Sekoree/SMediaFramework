@@ -172,7 +172,7 @@ static void WriteUsage()
     Console.WriteLine("  --no-wall-pace   Disable realtime wall pacing (decode/send as fast as CPU allows).");
     Console.WriteLine("  --no-wall-drift-correct  Disable wall-anchor nudging (default: on with wall pace).");
     Console.WriteLine("  --ndi-wait-first-receiver-ms=n  Block up to n ms for first NDI receiver (0=off, max 300000).");
-    Console.WriteLine("  Lab (dotnet test, not runtime): RUN_NDI_EGRESS_SOAK=1, RUN_NDI_EGRESS_SOAK_ROUNDS=<n>, RUN_NDI_EGRESS_SOAK_STRESS=1 — NdiEgressPresentationTimelineTests; RUN_NDI_MUX_SOAK=1 — NdiEgressMuxPlayheadClockTests; RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.");
+    Console.WriteLine("  Lab (dotnet test, not runtime): RUN_NDI_EGRESS_SOAK=1, RUN_NDI_EGRESS_SOAK_ROUNDS=<n>, RUN_NDI_EGRESS_SOAK_STRESS=1 — NdiEgressPresentationTimelineTests; RUN_NDI_MUX_SOAK=1 — NdiEgressMuxPlayheadClockTests; RUN_NDI_MEMORY_PRESSURE=1, optional RUN_NDI_MEMORY_PRESSURE_ROUNDS=<n> (200–100k, or 200–2M with RUN_NDI_MEMORY_PRESSURE_LONG=1), optional RUN_NDI_MEMORY_PRESSURE_HEAP=1, optional RUN_NDI_MEMORY_PRESSURE_HEAP_STRICT=1 (requires HEAP=1) — NdiOutputLifecycleMemoryTests; RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.");
     Console.WriteLine("  Shared-mux pause (app hosts): after stopping pumps, call MediaContainerDecoder.FlushCodecPipelines()");
     Console.WriteLine("    or pass decoder.FlushCodecPipelines to AvPlaybackCoordinator.Pause(..., flushSharedMuxAfterPause).");
 }
@@ -219,8 +219,11 @@ static void DebugHudLoop(NDIOutput ndi, MediaContainerDecoder dec, NdiDebugState
         var nomFps = dec.Video.Format.FrameRate.ToDouble();
         var nomFpsStr = nomFps > 0 && !double.IsNaN(nomFps) ? $"{nomFps:0.##}" : "?";
 
+        var fus = ndi.TryPollMonitorReceiverPumpFusion(0, false, 0, 0, 0, 0, 0);
+
         Console.Error.WriteLine(
             $"[ndi-debug] t={wall.Elapsed:mm\\:ss\\.fff}  ndiRx={ndi.ConnectionCount}  " +
+            $"tallyP={fus.ReceiverTally.OnProgram} tallyV={fus.ReceiverTally.OnPreview} tallyΔ={(fus.TallyChangedInThisPoll ? 1 : 0)}  " +
             $"vFrames={vf} vFps~{vFps:0.#} nomFps={nomFpsStr}  vPTS={vPts:hh\\:mm\\:ss\\.fff}  " +
             $"aPTS={aPts:hh\\:mm\\:ss\\.fff}  driftMs={driftMs:0}  " +
             $"aChunks={af} (~{aChunksPerSec:0.#}/s) lastAuSpc={lastChunk}" +

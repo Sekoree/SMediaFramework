@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Threading;
+using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg.Diagnostics;
 
 namespace S.Media.FFmpeg.Video;
@@ -41,12 +42,16 @@ internal readonly struct PassThroughRentHandle
 /// </para>
 /// <para>
 /// <see cref="Dispose"/> sets a flag so <see cref="Return"/> becomes a no-op after clearing (no push); <see cref="Rent"/> throws
-/// <see cref="ObjectDisposedException"/>.
+/// <see cref="ObjectDisposedException"/>. On the rare path where the dispose transition or profiling bookkeeping throws,
+/// <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/>; <strong>Release</strong> builds continue best-effort
+/// (same policy as <see cref="VideoRouter.Dispose"/> teardown).
 /// </para>
 /// <para>
-/// Tier E / §Tier F: the fixed-pool free lists are already Treiber stacks (no mutex on pop/push). Any further “lock-free” work
-/// is limited to <strong>outer</strong> synchronization around arena use if <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c>
-/// shows contention beyond these stacks (see <see cref="VideoFileDecoder"/> remarks).
+/// Checklist **Tier E** **16** — **§Tier F** row **29** **`[x]`** (registry mirror): the fixed-pool free lists are already Treiber stacks (no mutex on pop/push).
+/// <strong>Open</strong> (profiling-gated): optional Treiber-only tuning via <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c>
+/// (<see cref="PassThroughArenaProfiling.TreiberCasRetries"/> / wall timers). If contention persists, set
+/// <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c> to take a per-arena mutex around rent/return/dispose ordering
+/// (<see cref="PassThroughArenaSerialization"/>) — trades throughput for determinism.
 /// </para>
 /// </remarks>
 internal sealed class PassThroughDescriptorArena : IDisposable
@@ -58,6 +63,7 @@ internal sealed class PassThroughDescriptorArena : IDisposable
 
     private readonly PlaneCountPool?[] _pools = new PlaneCountPool?[MaxPlaneCount + 1];
     private int _disposed;
+    private readonly object _serializationGate = new();
 
     public PassThroughDescriptorArena()
     {
@@ -75,26 +81,13 @@ internal sealed class PassThroughDescriptorArena : IDisposable
             t0 = Stopwatch.GetTimestamp();
         try
         {
-            if (Volatile.Read(ref _disposed) != 0)
-                throw new ObjectDisposedException(nameof(PassThroughDescriptorArena));
-
-            var pool = _pools[planeCount]!;
-            if (pool.TryPop(out var slotIndex))
+            if (PassThroughArenaSerialization.IsEnabled)
             {
-                return new PassThroughRentHandle(
-                    planeCount,
-                    pool.GetPlanes(slotIndex),
-                    pool.GetStrides(slotIndex),
-                    fromFixedPool: true,
-                    (byte)slotIndex);
+                lock (_serializationGate)
+                    return RentUnlocked(planeCount, profile);
             }
 
-            return new PassThroughRentHandle(
-                planeCount,
-                new ReadOnlyMemory<byte>[planeCount],
-                new int[planeCount],
-                fromFixedPool: false,
-                slotIndex: 0);
+            return RentUnlocked(planeCount, profile);
         }
         finally
         {
@@ -114,14 +107,13 @@ internal sealed class PassThroughDescriptorArena : IDisposable
             t0 = Stopwatch.GetTimestamp();
         try
         {
-            if (Volatile.Read(ref _disposed) != 0)
-                return;
-
-            if (!handle.FromFixedPool)
-                return;
-
-            ValidatePlaneCount(handle.PlaneCount);
-            _pools[handle.PlaneCount]!.Push(handle.SlotIndex);
+            if (PassThroughArenaSerialization.IsEnabled)
+            {
+                lock (_serializationGate)
+                    ReturnUnlocked(in handle, profile);
+            }
+            else
+                ReturnUnlocked(in handle, profile);
         }
         finally
         {
@@ -138,14 +130,97 @@ internal sealed class PassThroughDescriptorArena : IDisposable
             t0 = Stopwatch.GetTimestamp();
         try
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
-                return;
+            if (PassThroughArenaSerialization.IsEnabled)
+            {
+                lock (_serializationGate)
+                {
+                    if (!TryAcquireDisposeTransition())
+                        return;
+                }
+            }
+            else
+            {
+                if (!TryAcquireDisposeTransition())
+                    return;
+            }
         }
         finally
         {
             if (profile)
-                PassThroughArenaProfiling.RecordClear(Stopwatch.GetTimestamp() - t0);
+            {
+                try
+                {
+                    PassThroughArenaProfiling.RecordClear(Stopwatch.GetTimestamp() - t0);
+                }
+#if DEBUG
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, "PassThroughDescriptorArena.Dispose: RecordClear");
+                }
+#else
+                catch
+                {
+                    // best effort — profiling must not block arena shutdown bookkeeping
+                }
+#endif
+            }
         }
+    }
+
+    private bool TryAcquireDisposeTransition()
+    {
+        try
+        {
+            return Interlocked.Exchange(ref _disposed, 1) == 0;
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "PassThroughDescriptorArena.Dispose: dispose transition");
+            return false;
+        }
+#else
+        catch
+        {
+            return false;
+        }
+#endif
+    }
+
+    private PassThroughRentHandle RentUnlocked(int planeCount, bool profile)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            throw new ObjectDisposedException(nameof(PassThroughDescriptorArena));
+
+        var pool = _pools[planeCount]!;
+        if (pool.TryPop(out var slotIndex, profile))
+        {
+            return new PassThroughRentHandle(
+                planeCount,
+                pool.GetPlanes(slotIndex),
+                pool.GetStrides(slotIndex),
+                fromFixedPool: true,
+                (byte)slotIndex);
+        }
+
+        return new PassThroughRentHandle(
+            planeCount,
+            new ReadOnlyMemory<byte>[planeCount],
+            new int[planeCount],
+            fromFixedPool: false,
+            slotIndex: 0);
+    }
+
+    private void ReturnUnlocked(in PassThroughRentHandle handle, bool profile)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
+
+        if (!handle.FromFixedPool)
+            return;
+
+        ValidatePlaneCount(handle.PlaneCount);
+        _pools[handle.PlaneCount]!.Push(handle.SlotIndex, profile);
     }
 
     private static void ValidatePlaneCount(int planeCount)
@@ -180,7 +255,7 @@ internal sealed class PassThroughDescriptorArena : IDisposable
 
         public int[] GetStrides(int index) => _slots[index].Strides;
 
-        public bool TryPop(out int slotIndex)
+        public bool TryPop(out int slotIndex, bool recordCasRetries)
         {
             while (true)
             {
@@ -197,10 +272,13 @@ internal sealed class PassThroughDescriptorArena : IDisposable
                     slotIndex = head;
                     return true;
                 }
+
+                if (recordCasRetries)
+                    PassThroughArenaProfiling.RecordTreiberCasRetry();
             }
         }
 
-        public void Push(int slotIndex)
+        public void Push(int slotIndex, bool recordCasRetries)
         {
             ref var slot = ref _slots[slotIndex];
             while (true)
@@ -209,6 +287,9 @@ internal sealed class PassThroughDescriptorArena : IDisposable
                 slot.NextFree = head;
                 if (Interlocked.CompareExchange(ref _freeHead, slotIndex, head) == head)
                     return;
+
+                if (recordCasRetries)
+                    PassThroughArenaProfiling.RecordTreiberCasRetry();
             }
         }
     }

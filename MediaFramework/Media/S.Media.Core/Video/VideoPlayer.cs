@@ -223,7 +223,10 @@ public sealed class VideoPlayer : IDisposable
 
         try
         {
-            CooperativePlaybackJoin.JoinThreadWhileCancelable(toJoin, cancellationToken);
+            // Never join the decode thread without a wall-clock cap: with CancellationToken.None,
+            // JoinThreadWhileCancelable would spin until the thread exits — if TryReadNextFrame blocks
+            // in native code, Pause/Dispose can hang for minutes. Bounded join + cancelled CTS unblocks Wait.
+            CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(12), cancellationToken);
         }
         finally
         {

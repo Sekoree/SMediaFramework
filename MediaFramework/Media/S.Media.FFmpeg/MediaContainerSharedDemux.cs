@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video;
@@ -17,13 +18,17 @@ namespace S.Media.FFmpeg;
 /// </summary>
 /// <remarks>
 /// Pass-through libav video uses <see cref="PassThroughDescriptorArena"/> the same way as <see cref="VideoFileDecoder"/> (Treiber-stack pooled descriptor arrays, <c>Array.Clear</c> on return).
-/// <c>Rent</c>/<c>Return</c> run under the normal video decode serialization for this demux — there is no extra mutex around the arena itself (Tier E **16**).
+/// <c>Rent</c>/<c>Return</c> run under the normal video decode serialization for this demux — there is no extra mutex around the arena itself (checklist **Tier E** **16**; **§Tier F** row **29** **`[x]`**).
+/// On teardown, selected managed disposals (<see cref="PassThroughDescriptorArena"/>, hardware acceleration, primed-seek holder) are wrapped so <strong>Debug</strong> builds log via <see cref="S.Media.Core.Diagnostics.MediaDiagnostics.LogError"/> and <strong>Release</strong> builds continue best-effort (same policy as <see cref="VideoRouter.Dispose"/>).
 /// </remarks>
 internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 {
     private const long AvTimeBase = 1_000_000L;
     private const int MaxAudioPacketsQueued = 192;
     private const int MaxVideoPacketsQueued = 384;
+
+    /// <summary><c>AV_DISPOSITION_ATTACHED_PIC</c> — album art / cover; must not be chosen over a real video track.</summary>
+    private const int AvDispositionAttachedPic = 1024;
 
     private readonly object _lifecycleLock = new();
     private readonly Lock _audioDecodeLock = new();
@@ -72,6 +77,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
     private bool _d3d11GpuNv12Path;
+    private bool _win32Nv12SharedHandleOnly;
 
     private readonly PassThroughDescriptorArena _passThroughArena = new();
 
@@ -120,6 +126,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         return _hwAccel?.TryGetD3D11AdapterLuid(out adapterLuidPacked) == true;
     }
 
+    /// <summary>True when D3D11 NV12 backing is built without libav D3D11 COM pointers (DXGI shared handle path only).</summary>
+    internal bool Win32Nv12SharedHandleOnlyActive => _win32Nv12SharedHandleOnly;
+
     private void OpenInternal(string path, VideoDecoderOpenOptions? videoOptions)
     {
         AVFormatContext* fmt = null;
@@ -136,7 +145,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             throw new FFmpegException(_aStream, "no decodable audio stream found");
 
         AVCodec* vCodec = null;
-        _vStream = av_find_best_stream(_fmt, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, _aStream, &vCodec, 0);
+        _vStream = PickVideoStreamIndex(_fmt, _aStream, &vCodec);
         if (_vStream < 0 || vCodec == null)
             throw new FFmpegException(_vStream, "no decodable video stream found");
 
@@ -178,6 +187,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         var tryHw = videoOptions?.TryHardwareAcceleration ?? true;
         var retainDmabuf = videoOptions?.RetainDmabufForGl ?? false;
         var retainD3D11 = videoOptions?.RetainD3D11SharedHandleForGl ?? false;
+        _win32Nv12SharedHandleOnly = retainD3D11 && VideoDecoderOpenOptions.IsWin32Nv12SharedHandleOnlyRequested(videoOptions);
         var preferredDevices = videoOptions?.PreferredDeviceTypes ?? [];
 
         VideoHardwareDecodeContext? hw = null;
@@ -251,7 +261,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         var fps = vSt->avg_frame_rate;
         if (fps.num <= 0 || fps.den <= 0) fps = vSt->r_frame_rate;
-        var frameRate = new Rational(fps.num, Math.Max(fps.den, 1));
+        var frameRate = NormalizeVideoFrameRate(fps, vSt->disposition);
+
+        if (_vCtx->width <= 0 || _vCtx->height <= 0 || _vCtx->width > 7680 || _vCtx->height > 4320 ||
+            (long)_vCtx->width * _vCtx->height > 32_000_000L)
+        {
+            throw new FFmpegException(0,
+                $"video dimensions are unusable ({_vCtx->width}×{_vCtx->height}). " +
+                "If this is audio with a broken embedded cover stream, re-encode or strip the cover.");
+        }
 
         Video.Format = new VideoFormat(_vCtx->width, _vCtx->height, _vOutPixFmt, frameRate);
 
@@ -280,6 +298,72 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         if (_vFrame == null) throw new OutOfMemoryException("video av_frame_alloc returned NULL");
 
         StartDemuxerThread();
+    }
+
+    private static bool VideoCodecparDimensionsLookSane(AVCodecParameters* cp)
+    {
+        if (cp == null)
+            return false;
+        var w = cp->width;
+        var h = cp->height;
+        if (w <= 0 || h <= 0)
+            return false;
+        if (w > 7680 || h > 4320)
+            return false;
+        if ((long)w * h > 32_000_000L)
+            return false;
+        return true;
+    }
+
+    private static int PickVideoStreamIndex(AVFormatContext* fmt, int relatedAudioStream, AVCodec** decoderRet)
+    {
+        *decoderRet = null;
+        for (var i = 0; i < fmt->nb_streams; i++)
+        {
+            var st = fmt->streams[i];
+            if (st->codecpar->codec_type != AVMediaType.AVMEDIA_TYPE_VIDEO)
+                continue;
+            if ((st->disposition & AvDispositionAttachedPic) != 0)
+                continue;
+            if (!VideoCodecparDimensionsLookSane(st->codecpar))
+                continue;
+
+            AVCodec* c = null;
+            var idx = av_find_best_stream(fmt, AVMediaType.AVMEDIA_TYPE_VIDEO, i, relatedAudioStream, &c, 0);
+            if (idx == i && c != null)
+            {
+                *decoderRet = c;
+                return i;
+            }
+        }
+
+        return av_find_best_stream(fmt, AVMediaType.AVMEDIA_TYPE_VIDEO, -1, relatedAudioStream, decoderRet, 0);
+    }
+
+    private static Rational NormalizeVideoFrameRate(AVRational ffmpegRat, int streamDisposition)
+    {
+        var num = ffmpegRat.num;
+        var den = Math.Max(ffmpegRat.den, 1);
+        if (num <= 0)
+            return new Rational(1, 1);
+
+        var r = new Rational(num, den);
+        var d = r.ToDouble();
+        var attached = (streamDisposition & AvDispositionAttachedPic) != 0;
+
+        if (attached)
+            return new Rational(1, 1);
+
+        if (double.IsNaN(d) || double.IsInfinity(d) || d <= 0)
+            return new Rational(30, 1);
+
+        if (d < 0.05 || d > 120.0)
+            return new Rational(30, 1);
+
+        if (den >= 5000 && d < 2.0)
+            return new Rational(30, 1);
+
+        return r;
     }
 
     private void StartDemuxerThread()
@@ -465,7 +549,20 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
             StopDemuxerAndDrainQueues();
 
-            _vPrimedAfterSeek?.Dispose();
+            try
+            {
+                _vPrimedAfterSeek?.Dispose();
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "MediaContainerSharedDemux.Dispose: _vPrimedAfterSeek");
+            }
+#else
+            catch
+            {
+            }
+#endif
             _vPrimedAfterSeek = null;
 
             if (_demuxPkt != null) { var p = _demuxPkt; av_packet_free(&p); _demuxPkt = null; }
@@ -484,10 +581,36 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 _vCtx = null;
             }
 
-            _hwAccel?.Dispose();
+            try
+            {
+                _hwAccel?.Dispose();
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "MediaContainerSharedDemux.Dispose: _hwAccel");
+            }
+#else
+            catch
+            {
+            }
+#endif
             _hwAccel = null;
 
-            _passThroughArena.Dispose();
+            try
+            {
+                _passThroughArena.Dispose();
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "MediaContainerSharedDemux.Dispose: _passThroughArena");
+            }
+#else
+            catch
+            {
+            }
+#endif
 
             if (_fmt != null) { var f = _fmt; avformat_close_input(&f); _fmt = null; }
         }
@@ -856,7 +979,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
     {
-        var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame);
+        var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame, _win32Nv12SharedHandleOnly);
         if (backing == null)
             throw new InvalidOperationException(
                 "D3D11 frame could not be exported to NT shared handles. Disable decoder option RetainD3D11SharedHandleForGl or try a CPU upload path.");

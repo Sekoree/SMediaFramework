@@ -28,6 +28,10 @@ namespace S.Media.NDI.Audio;
 /// <see cref="Volatile.Write{T}"/>; the in-flight chunk on the abandoned
 /// snapshot is discarded (acceptable for the rare format-change event).
 /// </para>
+/// <para>
+/// <see cref="Dispose"/> tears down capture, join, clock notification, and native receiver/runtime in order; each step is wrapped so
+/// <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> builds continue best-effort.
+/// </para>
 /// </remarks>
 public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 {
@@ -110,6 +114,8 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         {
 #if DEBUG
             MediaDiagnostics.LogError(ex, "NDIAudioReceiver: NDIReceiver.Create/Connect");
+#else
+            _ = ex;
 #endif
             _runtime.Dispose();
             throw;
@@ -265,12 +271,90 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _cts.Cancel();
-        CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2));
-        _ingestClock?.NotifyCaptureStopped();
-        _cts.Dispose();
-        _receiver.Dispose();
-        _runtime.Dispose();
+        try
+        {
+            _cts.Cancel();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver.Dispose: Cancel");
+        }
+#else
+        catch
+        {
+        }
+#endif
+        try
+        {
+            CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2));
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver.Dispose: JoinThread");
+        }
+#else
+        catch
+        {
+        }
+#endif
+        try
+        {
+            _ingestClock?.NotifyCaptureStopped();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver.Dispose: NotifyCaptureStopped");
+        }
+#else
+        catch
+        {
+        }
+#endif
+        try
+        {
+            _cts.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver.Dispose: CancellationTokenSource.Dispose");
+        }
+#else
+        catch
+        {
+        }
+#endif
+        try
+        {
+            _receiver.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver.Dispose: NDIReceiver");
+        }
+#else
+        catch
+        {
+        }
+#endif
+        try
+        {
+            _runtime.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver.Dispose: NDIRuntime");
+        }
+#else
+        catch
+        {
+        }
+#endif
     }
 
     /// <summary>

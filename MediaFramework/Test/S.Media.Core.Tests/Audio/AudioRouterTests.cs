@@ -59,6 +59,34 @@ public class AudioRouterTests
     }
 
     [Fact]
+    public void GetAggregatePumpStats_with_no_sinks_is_zeroed()
+    {
+        using var r = new AudioRouter(SampleRate);
+        var a = r.GetAggregatePumpStats();
+        Assert.Equal(0, a.SinkCount);
+        Assert.Equal(0, a.TotalEnqueued);
+        Assert.Equal(0, a.TotalProcessed);
+        Assert.Equal(0, a.TotalDropped);
+        Assert.Equal(0, a.MaxPumpCapacityChunks);
+    }
+
+    [Fact]
+    public void GetAggregatePumpStats_matches_sum_of_GetPumpStats_per_sink()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480, pumpCapacityChunks: 8);
+        r.AddSink(new TestSink(Stereo), "narrow", pumpCapacityChunks: 8);
+        r.AddSink(new TestSink(Stereo), "wide", pumpCapacityChunks: 40);
+        var agg = r.GetAggregatePumpStats();
+        Assert.Equal(2, agg.SinkCount);
+        Assert.Equal(40, agg.MaxPumpCapacityChunks);
+        var n = r.GetPumpStats("narrow");
+        var w = r.GetPumpStats("wide");
+        Assert.Equal(n.Enqueued + w.Enqueued, agg.TotalEnqueued);
+        Assert.Equal(n.Processed + w.Processed, agg.TotalProcessed);
+        Assert.Equal(n.Dropped + w.Dropped, agg.TotalDropped);
+    }
+
+    [Fact]
     public void AddSink_PumpCapacityBelow2_Throws()
     {
         using var r = new AudioRouter(SampleRate);

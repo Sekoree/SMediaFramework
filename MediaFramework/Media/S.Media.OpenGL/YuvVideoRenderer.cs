@@ -334,7 +334,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             if (!EnsureNv12UploaderForWin32Backing(frame.Win32Nv12))
             {
                 var hint = _allowLazyWin32Nv12UploaderFromDecodedFrame
-                    ? "First Win32 NV12 frame must carry LibavD3D11DeviceComPtr on the backing (D3D11VA decode), or configure VideoFormatNegotiator / pass win32D3D11DeviceComPtrForNv12 when only NT shared handles are available."
+                    ? "First Win32 NV12 frame must carry LibavD3D11DeviceComPtr on the backing (D3D11VA decode), or configure VideoFormatNegotiator / pass win32D3D11DeviceComPtrForNv12 when only NT shared handles are available. If Win32Nv12SharedHandleOnlyExport is enabled, bind SDL D3D11GlInteropDeviceHost or a negotiator device before the first frame."
                     : "Pass a non-zero win32D3D11DeviceComPtrForNv12 when constructing YuvVideoRenderer, or enable SDL3GLVideoSink deferred libav binding for true zero-host.";
                 throw new InvalidOperationException(
                     "NV12 Win32 D3D11 upload has no ID3D11Device yet. " + hint);

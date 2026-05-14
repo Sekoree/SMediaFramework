@@ -9,6 +9,7 @@ namespace S.Media.FFmpeg;
 /// Small factory for the usual <see cref="MediaContainerDecoder"/> + <see cref="MediaPlaybackSession"/> + <see cref="AvRouter"/>
 /// wiring (strategy C stepping stone — one place to construct the pair with matching session).
 /// For a named holder of decoder + player + router references, see <see cref="MediaContainerPlaybackGraph"/>.
+/// For a single-owner lifecycle wrapper (Tier F row 24 stepping stone), see <see cref="MediaContainerMegaPlaybackHost"/>.
 /// </summary>
 public static class MediaContainerAvRouter
 {

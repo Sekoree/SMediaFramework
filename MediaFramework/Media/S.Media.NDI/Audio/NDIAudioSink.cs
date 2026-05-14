@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using NDILib;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.NDI;
 
 namespace S.Media.NDI.Audio;
@@ -31,6 +32,9 @@ namespace S.Media.NDI.Audio;
 /// prior capacity, rounded up to a power of two) so upstream chunk-size
 /// changes during the first seconds of a session rarely require more than one
 /// or two reallocations on the pump thread.
+/// </para>
+/// <para>
+/// <see cref="Dispose"/> frees the native packed buffer; <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/>.
 /// </para>
 /// </remarks>
 public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
@@ -130,7 +134,20 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
         _disposed = true;
         if (_packedBuffer != null)
         {
-            NativeMemory.Free(_packedBuffer);
+            try
+            {
+                NativeMemory.Free(_packedBuffer);
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "NDIAudioSink.Dispose: packed buffer");
+            }
+#else
+            catch
+            {
+            }
+#endif
             _packedBuffer = null;
             _packedCapacityBytes = 0;
         }

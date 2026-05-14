@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video.Internal;
@@ -18,6 +19,7 @@ namespace S.Media.FFmpeg.Video;
 /// context if a different format is requested.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Not thread-safe. <see cref="VideoFrame"/>s returned by <see cref="TryReadNextFrame"/>
 /// must be <see cref="VideoFrame.Dispose"/>d — the release callback either
 /// unrefs a cloned <c>AVFrame</c> (pass-through) or returns nothing
@@ -29,8 +31,17 @@ namespace S.Media.FFmpeg.Video;
 /// <see cref="PassThroughDescriptorArena"/> (per-plane-count Treiber free-list of fixed slots, bounded by <see cref="PassThroughDescriptorArena.PoolCap"/>).
 /// <c>Array.Clear</c> runs on the release path before returning slots so pooled arrays never retain
 /// stale plane views. Optional counters: set environment variable
-/// <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c> and read <see cref="PassThroughArenaProfiling"/> (rent/return/drain wall time).
-/// Further wait-free work is only for <strong>outer</strong> decode/release synchronization if profiling shows contention beyond the Treiber pools (Tier E **16**).
+/// <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c> and read <see cref="PassThroughArenaProfiling"/> (rent/return wall time and
+/// <see cref="PassThroughArenaProfiling.TreiberCasRetries"/> — failed Treiber <c>CompareExchange</c> attempts on the free lists).
+/// If profiling shows sustained retries, set <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c> for a per-arena mutex around
+/// rent/return/dispose (<see cref="PassThroughArenaSerialization"/>).
+/// Further wait-free work is only for <strong>outer</strong> decode/release synchronization if profiling shows sustained retries,
+/// wall-time outliers, or contention beyond the Treiber pools (checklist **Tier E** **16**; **§Tier F** row **29** **`[x]`** — profiling-gated <strong>Open</strong> tail).
+/// </para>
+/// <para>
+/// <see cref="Dispose"/> wraps managed teardown (<see cref="PassThroughDescriptorArena"/>, hardware acceleration, primed-seek holder)
+/// so <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> and <strong>Release</strong> builds continue best-effort
+/// (same policy as <see cref="VideoRouter.Dispose"/>).
 /// </remarks>
 public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHardwareD3D11GlInteropSource,
     ICooperativeVideoReadInterrupt, IDisposable
@@ -57,6 +68,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
     private bool _d3d11GpuNv12Path;
+    private bool _win32Nv12SharedHandleOnly;
 
     private const int SwsResizeFilter = (int)SwsFlags.SWS_BICUBIC;
 
@@ -109,6 +121,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             return false;
         return _hwAccel.TryGetD3D11AdapterLuid(out adapterLuidPacked);
     }
+
+    /// <summary>True when D3D11 NV12 backing omits libav D3D11 COM pointers (shared-handle-only export).</summary>
+    public bool Win32Nv12SharedHandleOnlyActive => _win32Nv12SharedHandleOnly;
 
     private VideoFileDecoder() { }
 
@@ -268,7 +283,20 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (_disposed) return;
         _disposed = true;
 
-        _primedAfterSeek?.Dispose();
+        try
+        {
+            _primedAfterSeek?.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "VideoFileDecoder.Dispose: _primedAfterSeek");
+        }
+#else
+        catch
+        {
+        }
+#endif
         _primedAfterSeek = null;
 
         if (_packet != null)    { var p = _packet;     av_packet_free(&p);          _packet = null; }
@@ -282,10 +310,36 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             _codecCtx = null;
         }
 
-        _hwAccel?.Dispose();
+        try
+        {
+            _hwAccel?.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "VideoFileDecoder.Dispose: _hwAccel");
+        }
+#else
+        catch
+        {
+        }
+#endif
         _hwAccel = null;
 
-        _passThroughArena.Dispose();
+        try
+        {
+            _passThroughArena.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "VideoFileDecoder.Dispose: _passThroughArena");
+        }
+#else
+        catch
+        {
+        }
+#endif
 
         if (_formatCtx != null) { var f = _formatCtx;  avformat_close_input(&f);    _formatCtx = null; }
     }
@@ -338,6 +392,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         var tryHw = options?.TryHardwareAcceleration ?? true;
         var retainDmabuf = options?.RetainDmabufForGl ?? false;
         var retainD3D11 = options?.RetainD3D11SharedHandleForGl ?? false;
+        _win32Nv12SharedHandleOnly = retainD3D11 && VideoDecoderOpenOptions.IsWin32Nv12SharedHandleOnlyRequested(options);
         var preferredDevices = options?.PreferredDeviceTypes ?? [];
 
         VideoHardwareDecodeContext? hw = null;
@@ -598,7 +653,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
     private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
     {
-        var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame);
+        var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame, _win32Nv12SharedHandleOnly);
         if (backing == null)
             throw new InvalidOperationException(
                 "D3D11 frame could not be exported to NT shared handles. Disable decoder option RetainD3D11SharedHandleForGl or try a CPU upload path.");

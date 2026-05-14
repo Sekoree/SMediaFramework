@@ -1,3 +1,4 @@
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 
 namespace S.Media.FFmpeg.Video;
@@ -29,7 +30,12 @@ namespace S.Media.FFmpeg.Video;
 /// <strong>DRM dma-buf NV12</strong> is supported on both sinks when the branch
 /// negotiates the same <see cref="PixelFormat.Nv12"/> (no conversion). The same applies to
 /// <see cref="PixelFormat.P010"/> and <see cref="PixelFormat.P016"/> when both sinks stay on that format.
-/// Otherwise use CPU decode or omit the branch.
+/// When the branch needs conversion, Linux uses <see cref="VideoDmabufCpuReadback"/> (mmap readback) then <see cref="VideoCpuFrameConverter"/>.
+/// <strong>Win32</strong> shared NV12 with branch conversion remains unsupported.
+/// </para>
+/// <para>
+/// <see cref="Dispose"/> disposes the optional <see cref="VideoCpuFrameConverter"/>, the branch when <see cref="disposeBranch"/> is <see langword="true"/>,
+/// then the primary sink. In <c>DEBUG</c> builds, failures are logged via <see cref="MediaDiagnostics"/> and teardown continues; <c>Release</c> remains best-effort silent.
 /// </para>
 /// </remarks>
 public sealed class VideoOutputRouter : IVideoSink, IDisposable
@@ -91,9 +97,37 @@ public sealed class VideoOutputRouter : IVideoSink, IDisposable
         {
             if (_needsConversion)
             {
-                frame.Dispose();
-                throw new NotSupportedException(
-                    "VideoOutputRouter cannot convert DRM dma-buf NV12 for the branch — use a branch that accepts NV12 or CPU decode.");
+                if (!VideoDmabufCpuReadback.TryCreateNv12CpuCopy(frame, out var readback))
+                {
+                    frame.Dispose();
+                    throw new NotSupportedException(
+                        "VideoOutputRouter could not mmap-read DRM dma-buf NV12 for the branch — use a branch that accepts NV12 or CPU decode.");
+                }
+
+                try
+                {
+                    VideoFrame? readbackBranch = null;
+                    try
+                    {
+                        readbackBranch = _converter!.Convert(readback, frame.ColorTransferHint);
+                        _primary.Submit(frame);
+                        frame = null!;
+                        _branch.Submit(readbackBranch);
+                        readbackBranch = null;
+                    }
+                    catch
+                    {
+                        readbackBranch?.Dispose();
+                        frame?.Dispose();
+                        throw;
+                    }
+                }
+                finally
+                {
+                    readback.Dispose();
+                }
+
+                return;
             }
 
             VideoFrame? branchDma = null;
@@ -119,9 +153,37 @@ public sealed class VideoOutputRouter : IVideoSink, IDisposable
         {
             if (_needsConversion)
             {
-                frame.Dispose();
-                throw new NotSupportedException(
-                    "VideoOutputRouter cannot convert DRM dma-buf P010 for the branch — use a branch that accepts P010 or CPU decode.");
+                if (!VideoDmabufCpuReadback.TryCreateP010CpuCopy(frame, out var readback))
+                {
+                    frame.Dispose();
+                    throw new NotSupportedException(
+                        "VideoOutputRouter could not mmap-read DRM dma-buf P010 for the branch — use a branch that accepts P010 or CPU decode.");
+                }
+
+                try
+                {
+                    VideoFrame? readbackBranch = null;
+                    try
+                    {
+                        readbackBranch = _converter!.Convert(readback, frame.ColorTransferHint);
+                        _primary.Submit(frame);
+                        frame = null!;
+                        _branch.Submit(readbackBranch);
+                        readbackBranch = null;
+                    }
+                    catch
+                    {
+                        readbackBranch?.Dispose();
+                        frame?.Dispose();
+                        throw;
+                    }
+                }
+                finally
+                {
+                    readback.Dispose();
+                }
+
+                return;
             }
 
             VideoFrame? branchDma = null;
@@ -147,9 +209,37 @@ public sealed class VideoOutputRouter : IVideoSink, IDisposable
         {
             if (_needsConversion)
             {
-                frame.Dispose();
-                throw new NotSupportedException(
-                    "VideoOutputRouter cannot convert DRM dma-buf P016 for the branch — use a branch that accepts P016 or CPU decode.");
+                if (!VideoDmabufCpuReadback.TryCreateP016CpuCopy(frame, out var readback))
+                {
+                    frame.Dispose();
+                    throw new NotSupportedException(
+                        "VideoOutputRouter could not mmap-read DRM dma-buf P016 for the branch — use a branch that accepts P016 or CPU decode.");
+                }
+
+                try
+                {
+                    VideoFrame? readbackBranch = null;
+                    try
+                    {
+                        readbackBranch = _converter!.Convert(readback, frame.ColorTransferHint);
+                        _primary.Submit(frame);
+                        frame = null!;
+                        _branch.Submit(readbackBranch);
+                        readbackBranch = null;
+                    }
+                    catch
+                    {
+                        readbackBranch?.Dispose();
+                        frame?.Dispose();
+                        throw;
+                    }
+                }
+                finally
+                {
+                    readback.Dispose();
+                }
+
+                return;
             }
 
             VideoFrame? branchDma = null;
@@ -248,10 +338,29 @@ public sealed class VideoOutputRouter : IVideoSink, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        _converter?.Dispose();
-        if (_disposeBranch && _branch is IDisposable d)
-            d.Dispose();
+        TryDisposeOwned(() => _converter?.Dispose(), "VideoOutputRouter.Dispose: converter");
+        if (_disposeBranch && _branch is IDisposable bd)
+            TryDisposeOwned(() => bd.Dispose(), "VideoOutputRouter.Dispose: branch");
         if (_primary is IDisposable p)
-            p.Dispose();
+            TryDisposeOwned(() => p.Dispose(), "VideoOutputRouter.Dispose: primary");
+    }
+
+    private static void TryDisposeOwned(Action dispose, string debugLabel)
+    {
+        try
+        {
+            dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, debugLabel);
+        }
+#else
+        catch
+        {
+            // best effort — continue router teardown
+        }
+#endif
     }
 }

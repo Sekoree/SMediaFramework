@@ -331,6 +331,65 @@ public sealed class HardwareVideoInteropTests
     }
 
     [Fact]
+    public void HardwareVideoWin32Nv12_TryCreateWin32Nv12Backing_SharedHandle_RejectsNonZeroD3D11DeviceComPtr()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var d = new HardwareVideoSurfaceDescriptor
+        {
+            WidthPixels = 64,
+            HeightPixels = 64,
+            PlaneCount = 2,
+            D3D11DeviceComPtr = (nint)0x1234,
+            Plane0 = new HardwareVideoPlaneDescriptor
+            {
+                Kind = HardwareVideoMemoryKind.Win32SharedHandle,
+                HandleOrDescriptor = (nint)0x100,
+                RowPitchBytes = 64,
+            },
+            Plane1 = new HardwareVideoPlaneDescriptor
+            {
+                Kind = HardwareVideoMemoryKind.Win32SharedHandle,
+                HandleOrDescriptor = 0,
+                RowPitchBytes = 64,
+            },
+        };
+
+        Assert.False(HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing(in d, out var backing, out var err));
+        Assert.Null(backing);
+        Assert.Contains("D3D11DeviceComPtr", err, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HardwareVideoWin32Nv12_FromSharedHandleInteropDescriptor_RoundTripsWithZeroDeviceComPtr()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var token = WindowsNv12SharedHandleInterop.AllocToken((nint)101, (nint)202, 1280, 720, 1280, 640);
+        try
+        {
+            IHardwareVideoInterop h = new WindowsNv12SharedHandleInterop();
+            Assert.True(h.TryDescribeImportedSurface(token, out var d));
+            Assert.Equal(0, (nint)d.D3D11DeviceComPtr);
+            Assert.True(HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing(in d, out var backing, out var msg), msg);
+            Assert.NotNull(backing);
+            using (backing!)
+            {
+                Assert.Equal(0, backing.LibavD3D11DeviceComPtr);
+                Assert.Equal(0, backing.LibavD3D11Texture2DComPtr);
+                Assert.Equal((nint)101, backing.LumaSharedNtHandle);
+                Assert.Equal((nint)202, backing.ChromaSharedNtHandle);
+            }
+        }
+        finally
+        {
+            WindowsNv12SharedHandleInterop.FreeToken(token);
+        }
+    }
+
+    [Fact]
     public void VulkanExternalNv12Interop_WhenUnsupportedOs_DisablesImports()
     {
         if (IsVulkanInteropTestHost())

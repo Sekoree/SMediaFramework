@@ -4,6 +4,7 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests.Diagnostics;
 
+[Collection(nameof(PassThroughArenaDiagnosticsCollection))]
 public sealed class PassThroughArenaProfilingTests
 {
     [Fact]
@@ -61,6 +62,31 @@ public sealed class PassThroughArenaProfilingTests
 
             Assert.True(PassThroughArenaProfiling.RentLockCalls >= cycles);
             Assert.True(PassThroughArenaProfiling.ReturnLockCalls >= cycles);
+        }
+        finally
+        {
+            PassThroughArenaProfiling.SetTestOverride(null);
+        }
+    }
+
+    [Fact]
+    public void Parallel_rent_return_underProfiling_can_record_treiber_cas_retries()
+    {
+        PassThroughArenaProfiling.ResetCounters();
+        PassThroughArenaSerialization.SetTestOverride(false);
+        PassThroughArenaProfiling.SetTestOverride(true);
+        try
+        {
+            using var arena = new PassThroughDescriptorArena();
+            const int total = 200_000;
+            Parallel.For(0, total, _ => {
+                var h = arena.Rent(1);
+                arena.Return(in h);
+            });
+
+            Assert.True(PassThroughArenaProfiling.RentLockCalls >= total);
+            Assert.True(PassThroughArenaProfiling.ReturnLockCalls >= total);
+            Assert.True(PassThroughArenaProfiling.TreiberCasRetries > 0);
         }
         finally
         {

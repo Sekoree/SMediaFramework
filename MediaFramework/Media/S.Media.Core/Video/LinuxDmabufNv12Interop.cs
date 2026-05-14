@@ -8,6 +8,10 @@ namespace S.Media.Core.Video;
 /// (type <see cref="GCHandleType.Normal"/>) to <see cref="DmabufNv12InteropToken"/>.
 /// Call <see cref="FreeToken"/> when the descriptor is no longer needed.
 /// </summary>
+/// <remarks>
+/// Linux drm_prime decode→GL uses <see cref="HardwareVideoMemoryKind.LinuxDmabufFd"/> planes (no <see cref="HardwareVideoMemoryKind.Win32D3D11Nv12Texture"/> on <see cref="HardwareVideoSurfaceDescriptor"/>).
+/// Deferred scope for Windows and extra PRIME layouts: <c>Doc/Todo.md</c> §Tier F rows 35–36.
+/// </remarks>
 public sealed class LinuxDmabufNv12Interop : IHardwareVideoInterop
 {
     /// <inheritdoc />

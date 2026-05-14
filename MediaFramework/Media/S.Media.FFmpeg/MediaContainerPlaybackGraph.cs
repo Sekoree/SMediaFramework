@@ -12,8 +12,10 @@ namespace S.Media.FFmpeg;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Disposal is unchanged from ad-hoc wiring: release <see cref="Video"/>, <see cref="Audio"/> (if any),
+/// This holder is <strong>not</strong> <see cref="IDisposable"/> (no composite <c>Dispose</c>); disposal is unchanged from ad-hoc wiring: release <see cref="Video"/>, <see cref="Audio"/> (if any),
 /// <see cref="Decoder"/>, and any shared resources in an order consistent with your graph; this type only groups references.
+/// For a single <see cref="IDisposable"/> owner with a fixed mux-safe teardown order and per-step <strong>Debug</strong>
+/// <see cref="S.Media.Core.Diagnostics.MediaDiagnostics"/> logging on owned parts, see <see cref="MediaContainerMegaPlaybackHost"/>.
 /// </para>
 /// <para>
 /// Graph-wide master-clock PPM, synchronized multi-sink drop/repeat, or other coordinated timing policy is not implemented

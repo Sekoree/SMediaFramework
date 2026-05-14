@@ -10,6 +10,10 @@ namespace S.Media.FFmpeg.Diagnostics;
 /// Treiber free-list CAS loops for rent/return (no <c>lock</c>); dispose records flag flip only.
 /// On the return path, <c>Array.Clear</c> on descriptor arrays runs before Treiber push / early-out,
 /// so return ticks exclude that work.
+/// When enabled, failed <c>CompareExchange</c> attempts on the Treiber stacks increment
+/// <see cref="TreiberCasRetries"/> (lab signal for whether an outer lock / structural change is worth pursuing).
+/// For a deterministic per-arena mutex (no Treiber contention on a single arena), set <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c>
+/// — see <see cref="PassThroughArenaSerialization"/>.
 /// </summary>
 public static class PassThroughArenaProfiling
 {
@@ -34,6 +38,9 @@ public static class PassThroughArenaProfiling
     public static long ClearLockCalls => Volatile.Read(ref _clearCalls);
     public static long ClearLockTicksTotal => Volatile.Read(ref _clearTicksTotal);
 
+    /// <summary>Failed Treiber <c>CompareExchange</c> attempts (pop + push) while profiling is enabled.</summary>
+    public static long TreiberCasRetries => Volatile.Read(ref _treiberCasRetries);
+
     private static long _rentCalls;
     private static long _rentTicksTotal;
     private static long _rentMaxTicks;
@@ -42,6 +49,7 @@ public static class PassThroughArenaProfiling
     private static long _returnMaxTicks;
     private static long _clearCalls;
     private static long _clearTicksTotal;
+    private static long _treiberCasRetries;
 
     private static bool ReadEnvFlag(string name)
     {
@@ -62,6 +70,7 @@ public static class PassThroughArenaProfiling
         Interlocked.Exchange(ref _returnMaxTicks, 0);
         Interlocked.Exchange(ref _clearCalls, 0);
         Interlocked.Exchange(ref _clearTicksTotal, 0);
+        Interlocked.Exchange(ref _treiberCasRetries, 0);
     }
 
     public static void SetTestOverride(bool? enabled) =>
@@ -86,6 +95,8 @@ public static class PassThroughArenaProfiling
         Interlocked.Increment(ref _clearCalls);
         Interlocked.Add(ref _clearTicksTotal, ticks);
     }
+
+    internal static void RecordTreiberCasRetry() => Interlocked.Increment(ref _treiberCasRetries);
 
     private static void UpdateMax(ref long maxField, long value)
     {

@@ -71,6 +71,23 @@ public sealed class NdiEgressPresentationTimelineTests
         Assert.Equal(0L, t.TimecodeFromPresentationTime(a + TimeSpan.FromSeconds(2)));
     }
 
+    [Fact]
+    public void Alloc_reset_churn_many_short_timelines_completes()
+    {
+        // Always-on: pure managed allocation churn (no NDI SDK). Complements optional native churn in
+        // NdiOutputLifecycleMemoryTests (Tier F / §Tier C egress harness).
+        const int rounds = 16_000;
+        for (var r = 0; r < rounds; r++)
+        {
+            var t = new NdiEgressPresentationTimeline();
+            var o = TimeSpan.FromTicks(1_009_039L + r * 997);
+            Assert.Equal(0L, t.TimecodeFromPresentationTime(o));
+            Assert.Equal(500, t.TimecodeFromPresentationTime(o + TimeSpan.FromTicks(500)));
+            t.Reset();
+            Assert.Equal(0L, t.TimecodeFromPresentationTime(o + TimeSpan.FromTicks(10_000)));
+        }
+    }
+
     /// <summary>
     /// Optional heavier run: set environment variable <c>RUN_NDI_EGRESS_SOAK=1</c> (same pattern as
     /// <c>RUN_MEDIA_SOAK=1</c> for shared-demux soak tests). Optional <c>RUN_NDI_EGRESS_SOAK_ROUNDS=&lt;n&gt;</c>

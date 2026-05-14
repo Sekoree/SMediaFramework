@@ -22,6 +22,12 @@ public sealed class YuvDmabufEglInterop
 /// Linux EGL/GL upload for NV12, P010, and P016 DRM PRIME dma-bufs (split-plane EGL import). Other decoded layouts are not imported here — see
 /// <see cref="LinuxDmabufGlHardwareFormats.IsSupportedForPrimeGlImport"/>.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="Dispose"/> only marks the instance disposed: EGLImages are created and destroyed inside each
+/// <c>TryUpload*</c> path (no long-lived KHR image or texture owned at the field level). There is therefore no separate native teardown step here beyond the contract gate.
+/// </para>
+/// </remarks>
 public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
 {
     private const int EGL_NONE = 0x3038;
@@ -373,6 +379,7 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
+        // Per-upload paths call eglDestroyImageKHR; no persistent EGLImages between calls.
         _disposed = true;
     }
 }

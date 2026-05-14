@@ -26,19 +26,27 @@ namespace S.Media.NDI;
 /// For SDK-level receiver feedback (tally, upstream metadata), use <see cref="TryGetReceiverTally"/>,
 /// <see cref="CaptureReceiverMetadata"/>, and <see cref="FreeReceiverMetadata"/> on a background thread
 /// with short timeouts so sends are not blocked. Pair with <see cref="GetReceiverConnectionCount"/> when
-/// correlating tally changes with attach/detach in the field.
+/// correlating tally changes with attach/detach in the field. For a single poll that also carries host
+/// router pump counters (NDI Monitor style health beside <c>PumpPressure</c>), use
+/// <see cref="TryPollMonitorReceiverPumpFusion"/>.
 /// </para>
 /// <para>
 /// Per-connection metadata advertised to new receivers uses <see cref="ClearConnectionMetadata"/> /
 /// <see cref="AddConnectionMetadata"/> (UTF-8 XML strings per NDI SDK rules).
+/// </para>
+/// <para>
+/// <see cref="Dispose"/> tears down video sink, audio sink, <see cref="NDISender"/>, then <see cref="NDIRuntime"/>; each step is wrapped so
+/// <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
 /// </para>
 /// </remarks>
 public sealed class NDIOutput : IDisposable
 {
     private readonly TimeSpan? _minimumVideoSubmitSpacing;
     private readonly NDIVideoTimecodeMode _videoTimecodeMode;
+
     /// <summary>When <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected, shared by video + audio sinks.</summary>
     private readonly NdiEgressPresentationTimeline? _egressPresentationTimeline;
+
     private readonly NDIRuntime _runtime;
     private readonly NDISender _sender;
     private readonly object _gate = new();
@@ -86,8 +94,8 @@ public sealed class NDIOutput : IDisposable
     /// <see cref="NDIAudioSink"/> when muxing file A/V.
     /// </param>
     public NDIOutput(string sourceName, string? groups = null, bool clockVideo = true, bool clockAudio = true,
-                      TimeSpan? minimumVideoSubmitSpacing = null,
-                      NDIVideoTimecodeMode videoTimecodeMode = NDIVideoTimecodeMode.Synthesize)
+        TimeSpan? minimumVideoSubmitSpacing = null,
+        NDIVideoTimecodeMode videoTimecodeMode = NDIVideoTimecodeMode.Synthesize)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceName);
         SourceName = sourceName;
@@ -114,6 +122,8 @@ public sealed class NDIOutput : IDisposable
         {
 #if DEBUG
             MediaDiagnostics.LogError(ex, "NDIOutput: NDISender.Create");
+#else
+            _ = ex;
 #endif
             _runtime.Dispose();
             throw;
@@ -137,6 +147,7 @@ public sealed class NDIOutput : IDisposable
                         $"audio sink already configured with format {_audioSink.Format}; cannot reconfigure to {format}");
                 return _audioSink;
             }
+
             _audioSink = new NDIAudioSink(_sender, format, _egressPresentationTimeline);
             return _audioSink;
         }
@@ -193,6 +204,52 @@ public sealed class NDIOutput : IDisposable
         _sender.FreeMetadata(metadata);
     }
 
+    /// <summary>
+    /// Polls receiver count, tally, optional one-shot upstream metadata drain, and copies host pump counters
+    /// into one struct for HUDs (NDI Monitor program/preview vs local drops). Prefer a background thread and
+    /// <paramref name="tallyWaitMs"/> = 0 (or a few ms) so the send path is not wedged.
+    /// </summary>
+    /// <param name="tallyWaitMs">Wait window for <see cref="TryGetReceiverTally"/> (SDK tally change API).</param>
+    /// <param name="drainOneUpstreamMetadataFrame">
+    /// When true and <see cref="GetReceiverConnectionCount"/> (0) reports at least one receiver, performs a single
+    /// non-blocking <see cref="CaptureReceiverMetadata"/>; frees the frame when the SDK returns
+    /// <see cref="NDIFrameType.Metadata"/>.
+    /// </param>
+    public NdiMonitorReceiverPumpFusion TryPollMonitorReceiverPumpFusion(
+        uint tallyWaitMs,
+        bool drainOneUpstreamMetadataFrame,
+        long ndiVideoPumpDropped,
+        long ndiVideoPumpSubmitted,
+        int ndiVideoPumpMaxQueueDepth,
+        int ndiVideoPumpCurrentQueuedDepth,
+        long ndiAudioPumpDropped)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var connections = GetReceiverConnectionCount(0);
+        var tallyChanged = TryGetReceiverTally(out var tally, tallyWaitMs);
+        var drained = false;
+        if (drainOneUpstreamMetadataFrame && connections > 0)
+        {
+            var frameType = CaptureReceiverMetadata(out var meta, 0);
+            if (frameType == NDIFrameType.Metadata)
+            {
+                FreeReceiverMetadata(meta);
+                drained = true;
+            }
+        }
+
+        return new NdiMonitorReceiverPumpFusion(
+            connections,
+            tally,
+            tallyChanged,
+            drained,
+            ndiVideoPumpDropped,
+            ndiVideoPumpSubmitted,
+            ndiVideoPumpMaxQueueDepth,
+            ndiVideoPumpCurrentQueuedDepth,
+            ndiAudioPumpDropped);
+    }
+
     /// <summary>Clears strings previously registered with <see cref="AddConnectionMetadata"/>.</summary>
     public void ClearConnectionMetadata()
     {
@@ -215,19 +272,53 @@ public sealed class NDIOutput : IDisposable
         _disposed = true;
         // Tear down the video sink first so any in-flight async send is
         // flushed against a still-valid sender.
-        try { _videoSink?.Dispose(); }
+        try
+        {
+            _videoSink?.Dispose();
+        }
 #if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: video sink"); }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: video sink");
+        }
 #else
         catch { /* best effort */ }
 #endif
-        try { _audioSink?.Dispose(); }
+        try
+        {
+            _audioSink?.Dispose();
+        }
 #if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: audio sink"); }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: audio sink");
+        }
 #else
         catch { /* best effort */ }
 #endif
-        _sender.Dispose();
-        _runtime.Dispose();
+        try
+        {
+            _sender.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: NDISender");
+        }
+#else
+        catch { /* best effort */ }
+#endif
+        try
+        {
+            _runtime.Dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: NDIRuntime");
+        }
+#else
+        catch { /* best effort */ }
+#endif
     }
 }

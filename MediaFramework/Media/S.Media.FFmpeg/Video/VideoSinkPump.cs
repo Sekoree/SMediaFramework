@@ -33,6 +33,8 @@ public readonly record struct VideoSinkPumpAttachOptions(
 /// Bounded asynchronous delivery to an <see cref="IVideoSink"/>: <see cref="Submit"/> returns quickly
 /// after enqueueing; a drainer thread calls <see cref="IVideoSink.Submit"/>. When the queue is full,
 /// the <strong>oldest</strong> frame is disposed and replaced (drop-late policy).
+/// <see cref="Dispose"/> performs best-effort cooperative shutdown; in <c>DEBUG</c> builds, cancel/join or inner-sink
+/// disposal failures are logged via <see cref="MediaDiagnostics"/>.
 /// </summary>
 /// <remarks>
 /// Intended for slow network encoders (for example NDI) so a blocking <see cref="IVideoSink.Submit"/>
@@ -240,6 +242,11 @@ public sealed class VideoSinkPump : IVideoSink, IVideoSinkD3D11GlBorrowSetup, ID
             if (_thread is { } t)
                 CooperativePlaybackJoin.JoinThread(t, TimeSpan.FromSeconds(30), CancellationToken.None);
         }
+#if DEBUG
+        catch (Exception ex) { MediaDiagnostics.LogError(ex, $"VideoSinkPump.Dispose: cooperative shutdown ({_name})"); }
+#else
+        catch { /* best effort */ }
+#endif
         finally
         {
             _cts?.Dispose();
@@ -251,7 +258,14 @@ public sealed class VideoSinkPump : IVideoSink, IVideoSinkD3D11GlBorrowSetup, ID
             }
 
             if (_disposeInner && _inner is IDisposable d)
-                d.Dispose();
+            {
+                try { d.Dispose(); }
+#if DEBUG
+                catch (Exception ex) { MediaDiagnostics.LogError(ex, $"VideoSinkPump.Dispose: inner sink ({_name})"); }
+#else
+                catch { /* best effort */ }
+#endif
+            }
         }
     }
 }

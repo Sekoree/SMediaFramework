@@ -1,0 +1,43 @@
+using S.Media.FFmpeg;
+using S.Media.FFmpeg.Video;
+
+namespace S.Media.Playback;
+
+/// <summary>Decoder and audio-router flags for <see cref="MediaPlayer.TryOpen"/> — no sink libraries.</summary>
+public readonly record struct MediaPlayerOpenOptions(
+    bool TryHardwareAcceleration = true,
+    bool RetainDmabufForGl = false,
+    bool RetainD3D11SharedHandleForGl = false,
+    bool Win32Nv12SharedHandleOnlyExport = false,
+    /// <summary>When true with <see cref="Win32Nv12SharedHandleOnlyExport"/>, decode open fails (Win32 handle-only needs a GL host device).</summary>
+    bool WindowsD3d11ZeroHostGl = false,
+    int AudioChunkSamples = 480,
+    bool IncludeAudioRouter = true)
+{
+    /// <summary>Baseline: hardware decode on, GL decode flags off, standard audio chunking.</summary>
+    public static MediaPlayerOpenOptions Default => new();
+
+    /// <summary>Rejects the Win32 NV12 shared-handle-only + zero-host GL combination (smoke tool parity).</summary>
+    public bool ValidateWin32Nv12Flags(out string? errorMessage)
+    {
+        errorMessage = null;
+        if (Win32Nv12SharedHandleOnlyExport && WindowsD3d11ZeroHostGl)
+        {
+            errorMessage =
+                "Win32 NV12 shared-handle-only export conflicts with zero-host GL (handle-only needs SDL D3D11GlInteropDeviceHost or a pre-bound negotiator device).";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Maps to <see cref="VideoDecoderOpenOptions"/> for <see cref="MediaContainerDecoder.Open"/>.</summary>
+    public VideoDecoderOpenOptions ToVideoDecoderOpenOptions() =>
+        new()
+        {
+            TryHardwareAcceleration = TryHardwareAcceleration,
+            RetainDmabufForGl = RetainDmabufForGl,
+            RetainD3D11SharedHandleForGl = RetainD3D11SharedHandleForGl,
+            Win32Nv12SharedHandleOnlyExport = Win32Nv12SharedHandleOnlyExport,
+        };
+}

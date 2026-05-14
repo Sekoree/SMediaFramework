@@ -51,11 +51,53 @@ public sealed class LinuxDmabufGlHardwareFormatsTests
     }
 
     [Fact]
+    public void GetPrimeGlImportBlocker_Gray8_LumaPath()
+    {
+        var s = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(PixelFormat.Gray8);
+        Assert.NotNull(s);
+        Assert.Contains("luma", s, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetPrimeGlImportBlocker_Unknown()
+    {
+        var s = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(PixelFormat.Unknown);
+        Assert.NotNull(s);
+        Assert.Contains("Unknown", s, StringComparison.Ordinal);
+        Assert.Contains("NV12", s, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetPrimeGlImportBlocker_Yuyv_PackedPath()
+    {
+        var s = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(PixelFormat.Yuyv);
+        Assert.NotNull(s);
+        Assert.Contains("Packed", s, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("P016", s, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GetPrimeGlImportBlocker_I420_PlanarPath()
     {
         var s = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(PixelFormat.I420);
         Assert.NotNull(s);
         Assert.Contains("planar", s, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetPrimeGlImportBlocker_Uyvy_PackedPath()
+    {
+        var s = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(PixelFormat.Uyvy);
+        Assert.NotNull(s);
+        Assert.Contains("Packed", s, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetPrimeGlImportBlocker_Yuv420P10Le_10bitBranch()
+    {
+        var s = LinuxDmabufGlHardwareFormats.GetPrimeGlImportBlocker(PixelFormat.Yuv420P10Le);
+        Assert.NotNull(s);
+        Assert.Contains("10/12-bit", s, StringComparison.Ordinal);
     }
 
     [Fact]

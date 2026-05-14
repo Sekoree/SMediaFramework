@@ -12,10 +12,15 @@ namespace S.Media.PortAudio;
 /// callback drains an SPSC ring buffer and fills silence on underrun.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Single-producer / single-consumer: the producer is whoever owns the
 /// decoder/mixer thread; the consumer is PortAudio's internal audio thread.
 /// The ring buffer is a power-of-two float array indexed via mask. Reads and
 /// writes are <see cref="Volatile"/>-ordered around two monotonic counters.
+/// </para>
+/// <para>
+/// <see cref="Dispose"/> calls <see cref="Stop"/> then <see cref="PortAudioRuntime.Release"/>; each step is wrapped so <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
+/// </para>
 /// </remarks>
 public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushableSink, IPlaybackClock, IDisposable
 {
@@ -484,7 +489,33 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     {
         if (_disposed) return;
         _disposed = true;
-        Stop();
-        PortAudioRuntime.Release();
+        try
+        {
+            Stop();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "PortAudioOutput.Dispose: Stop");
+        }
+#else
+        catch
+        {
+        }
+#endif
+        try
+        {
+            PortAudioRuntime.Release();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "PortAudioOutput.Dispose: PortAudioRuntime.Release");
+        }
+#else
+        catch
+        {
+        }
+#endif
     }
 }

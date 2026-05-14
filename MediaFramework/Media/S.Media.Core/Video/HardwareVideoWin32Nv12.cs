@@ -6,6 +6,14 @@ namespace S.Media.Core.Video;
 /// Builds <see cref="VideoWin32Nv12Backing"/> from a <see cref="HardwareVideoSurfaceDescriptor"/> so GL / upload
 /// hosts can import NV12 without constructing a full <see cref="VideoFrame"/>.
 /// </summary>
+/// <remarks>
+/// <see cref="HardwareVideoMemoryKind.Win32SharedHandle"/> descriptors produced by
+/// <see cref="WindowsNv12SharedHandleInterop"/> carry DXGI NT handles only (<see cref="HardwareVideoSurfaceDescriptor.D3D11DeviceComPtr"/>
+/// must be zero). That clears libav COM from the portable descriptor and from <see cref="VideoWin32Nv12Backing"/>
+/// for the handle-only decode export path; the GL stack still binds a consumer <c>ID3D11Device</c> (negotiated borrow,
+/// SDL interop host, or lazy creation from a decoded COM-backed frame) to call <c>OpenSharedResource</c> on those handles.
+/// Full “zero COM on the descriptor” including removing that consumer-device dependency is **PO-01** (<c>Doc/Todo.md</c>).
+/// </remarks>
 public static class HardwareVideoWin32Nv12
 {
     /// <summary>

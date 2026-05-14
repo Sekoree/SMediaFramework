@@ -50,7 +50,11 @@ public readonly struct HardwareVideoSurfaceDescriptor
     /// <summary>
     /// When planes use <see cref="HardwareVideoMemoryKind.Win32D3D11Nv12Texture"/>, the libav / decode
     /// <c>ID3D11Device</c> COM pointer (non-owning) that owns the texture in <see cref="Plane0"/> / <see cref="Plane1"/>.
-    /// Otherwise <c>0</c>.
+    /// For <see cref="HardwareVideoMemoryKind.Win32SharedHandle"/> NV12, callers must leave this <c>0</c> (see
+    /// <see cref="HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing"/>); the GL importer still uses a separate
+    /// consumer <c>ID3D11Device</c> for <c>OpenSharedResource</c> on those NT handles — that device is not part
+    /// of this descriptor. Eliminating decode-path and consumer-device COM from the portable descriptor while
+    /// retaining safe DXGI import is product backlog (**PO-01**, <c>Doc/Todo.md</c> §Tier F row 34 <c>Open</c> tail).
     /// </summary>
     public nint D3D11DeviceComPtr { get; init; }
     public HardwareVideoPlaneDescriptor Plane0 { get; init; }

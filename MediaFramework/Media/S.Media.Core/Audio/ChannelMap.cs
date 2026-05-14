@@ -30,17 +30,25 @@ namespace S.Media.Core.Audio;
 /// <item><c>new ChannelMap([0, 0])</c> — duplicate L to both outputs (stereo source).</item>
 /// <item><c>new ChannelMap([1, 1])</c> — duplicate R to both outputs.</item>
 /// <item><c>new ChannelMap([-1, -1])</c> — both outputs silent (additive mix leaves dst unchanged).</item>
+/// <item><c>new ChannelMap([0])</c> / <c>[1]</c> — stereo source downmix to mono left or right only (additive).</item>
+/// <item><c>new ChannelMap([p])</c> from a **wider** packed source — one mono output taken from channel <c>p</c> each frame (additive).</item>
+/// <item><c>new ChannelMap([0, 1])</c> / <c>[2, 3]</c> / <c>[4, 5]</c> with a **wider** packed source — take one consecutive L/R pair per frame, drop unmapped channels (additive).</item>
+/// <item><c>new ChannelMap([0, 0])</c> / <c>[1, 1]</c> from a **wider** source — duplicate one packed channel to both stereo outputs (additive).</item>
 /// <item><c>ChannelMap.StereoToNSwapped(4)</c> — same as <c>[1,0,1,0]</c> (R,L,R,L into quad).</item>
 /// </list>
 /// </para>
 /// <para>
-/// Checklist **Tier E** **15** shipped SIMD for same-width packed permutations (<c>N ∈ {3, 4, 5, 6, 7, 8}</c> via
-/// <see cref="TryAccumulatePackedPermutationInterleaved"/>; <c>N = 4</c>: SSE <c>SHUFPS</c>; <c>N ∈ {3, 5, 6, 7, 8}</c>: AVX2),
+/// Checklist **Tier E** **15** shipped SIMD for same-width packed gathers with indices in <c>0..N-1</c> (<c>N ∈ {3, 4, 5, 6, 7, 8}</c> via
+/// <see cref="TryAccumulatePackedPermutationInterleaved"/> — bijective permutations and duplicate-lane gathers, no silence; <c>N = 4</c>: SSE <c>SHUFPS</c>; <c>N ∈ {3, 5, 6, 7, 8}</c>: AVX2 <c>PermuteVar8x32</c>),
 /// stereo → quad paired duplicates (<c>[0,0,1,1]</c>, <c>[1,1,0,0]</c> via
 /// <see cref="TryAccumulateStereoDuplexGroupedInterleaved"/> / <see cref="TryAccumulateStereoDuplexGroupedSwappedInterleaved"/>),
 /// and stereo routes using only L/R/silence (<see cref="TryAccumulateStereoSilenceOrZeroDupInterleaved"/>, e.g. <c>[-1,0,0,-1]</c>),
+/// stereo → mono single-output (<c>[0]</c>/<c>[1]</c> via <see cref="TryAccumulateStereoToMonoSingleOutputInterleaved"/>),
+/// wide interleaved → mono single packed channel <c>[p]</c> (<see cref="TryAccumulateWideSourceMonoSingleOutputInterleaved"/>),
+/// wide interleaved → stereo duplicate single channel <c>[p,p]</c> (<see cref="TryAccumulateWideSourceSingleChannelDupStereoInterleaved"/>),
+/// wide interleaved → stereo consecutive pair <c>[p,p+1]</c> (<see cref="TryAccumulateWideSourceStereoConsecutivePairInterleaved"/>),
 /// plus the other SIMD paths ordered in <see cref="ApplyAdditive"/> before its scalar fallback.
-/// Maps that do not match any of those fast paths use the scalar accumulation loop; new specialized kernels are profile-driven only — **§Tier F** row **28**.
+/// Maps that do not match any of those fast paths use the scalar accumulation loop — **§Tier F** row **28** **`[x]`** (registry mirror of completed **Tier E** **15**); **§Historical #2** tail closed at the same documentation boundary.
 /// </para>
 /// </remarks>
 public readonly struct ChannelMap : IEquatable<ChannelMap>
@@ -70,6 +78,7 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
                     $"map[{i}] = {src}; valid values are non-negative source channel indices or {Silence} (silence)");
             if (src > maxIn) maxIn = src;
         }
+
         RequiredInputChannels = maxIn + 1;
     }
 
@@ -143,7 +152,23 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
                 this, samplesPerChannel, uniformGain: 1f))
             return;
 
+        if (TryAccumulateWideSourceStereoConsecutivePairInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateWideSourceSingleChannelDupStereoInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
         if (TryAccumulateStereoDupSingleChannelInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateStereoToMonoSingleOutputInterleaved(src, srcChannels, dst, outChannels,
+                this, samplesPerChannel, uniformGain: 1f))
+            return;
+
+        if (TryAccumulateWideSourceMonoSingleOutputInterleaved(src, srcChannels, dst, outChannels,
                 this, samplesPerChannel, uniformGain: 1f))
             return;
 
@@ -231,6 +256,161 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
     }
 
     /// <summary>
+    /// Wider interleaved source → stereo: take one consecutive L/R pair per frame (<c>[p,p+1]</c> with <c>p ≥ 0</c>),
+    /// <see cref="RequiredInputChannels"/> == <c>p + 2</c>, and <c>srcChannels</c> strictly wider than stereo when <c>p == 0</c>
+    /// (so <see cref="TryAccumulateStereoIdentityInterleaved"/> still owns true 2×2 identity). Uses an AVX2 permute when
+    /// <c>srcChannels == 4</c>, <c>p + 1 &lt; 4</c> (both samples of the pair lie in one quad frame), and at least two output samples remain;
+    /// otherwise a compact per-frame scalar loop (still avoids the generic map loop).
+    /// </summary>
+    internal static unsafe bool TryAccumulateWideSourceStereoConsecutivePairInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        var routing = map.AsSpan();
+        if (routing.Length != 2 || dstChannels != 2 || srcChannels < 1)
+            return false;
+
+        var p = routing[0];
+        if (routing[1] != p + 1)
+            return false;
+
+        if (p < 0)
+            return false;
+
+        if (map.RequiredInputChannels != p + 2)
+            return false;
+
+        if (srcChannels < map.RequiredInputChannels)
+            return false;
+
+        // True stereo identity [0,1] @ 2ch is handled earlier by TryAccumulateStereoIdentityInterleaved.
+        if (p == 0 && srcChannels == 2)
+            return false;
+
+        if (uniformGain == 0f)
+            return true;
+
+        if (Avx2.IsSupported && srcChannels == 4 && p + 1 < 4 && samplesPerChannel >= 2)
+        {
+            var idx = Vector256.Create(p, p + 1, p + 4, p + 5, p, p + 1, p + 4, p + 5);
+            var g128 = Vector128.Create(uniformGain);
+            var s = 0;
+            var limit = samplesPerChannel - samplesPerChannel % 2;
+            for (; s < limit; s += 2)
+            {
+                fixed (float* pSrc = src.Slice(s * 4))
+                fixed (float* pDst = dst.Slice(s * 2))
+                {
+                    var vec = Avx.LoadVector256(pSrc);
+                    var perm = Avx2.PermuteVar8x32(vec, idx);
+                    var stereo4 = perm.GetLower();
+                    var scaled = Sse.Multiply(stereo4, g128);
+                    var acc = Sse.LoadVector128(pDst);
+                    Sse.Store(pDst, Sse.Add(acc, scaled));
+                }
+            }
+
+            for (; s < samplesPerChannel; s++)
+            {
+                var sb = s * srcChannels;
+                var db = s * 2;
+                dst[db] += src[sb + p] * uniformGain;
+                dst[db + 1] += src[sb + p + 1] * uniformGain;
+            }
+
+            return true;
+        }
+
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var sb = s * srcChannels;
+            var db = s * 2;
+            dst[db] += src[sb + p] * uniformGain;
+            dst[db + 1] += src[sb + p + 1] * uniformGain;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Wider interleaved source → stereo duplicate of one channel (<c>[p,p]</c>), <see cref="RequiredInputChannels"/> == <c>p + 1</c>.
+    /// Excludes <c>srcChannels == 2</c> with <c>p ∈ {0,1}</c> so <see cref="TryAccumulateStereoDupSingleChannelInterleaved"/> keeps stereo SIMD dup.
+    /// Uses an AVX2 permute when <c>srcChannels == 4</c>, <c>p &lt; 4</c>, and at least two samples remain; otherwise a compact per-frame scalar loop.
+    /// </summary>
+    internal static unsafe bool TryAccumulateWideSourceSingleChannelDupStereoInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        var routing = map.AsSpan();
+        if (routing.Length != 2 || dstChannels != 2 || srcChannels < 1)
+            return false;
+
+        var p = routing[0];
+        if (routing[1] != p)
+            return false;
+
+        if (p < 0)
+            return false;
+
+        if (map.RequiredInputChannels != p + 1)
+            return false;
+
+        if (srcChannels < map.RequiredInputChannels)
+            return false;
+
+        if (srcChannels == 2 && p <= 1)
+            return false;
+
+        if (uniformGain == 0f)
+            return true;
+
+        if (Avx2.IsSupported && srcChannels == 4 && p < 4 && samplesPerChannel >= 2)
+        {
+            var idx = Vector256.Create(p, p, p + 4, p + 4, p, p, p + 4, p + 4);
+            var g128 = Vector128.Create(uniformGain);
+            var s = 0;
+            var limit = samplesPerChannel - samplesPerChannel % 2;
+            for (; s < limit; s += 2)
+            {
+                fixed (float* pSrc = src.Slice(s * 4))
+                fixed (float* pDst = dst.Slice(s * 2))
+                {
+                    var vec = Avx.LoadVector256(pSrc);
+                    var perm = Avx2.PermuteVar8x32(vec, idx);
+                    var stereo4 = perm.GetLower();
+                    var scaled = Sse.Multiply(stereo4, g128);
+                    var acc = Sse.LoadVector128(pDst);
+                    Sse.Store(pDst, Sse.Add(acc, scaled));
+                }
+            }
+
+            for (; s < samplesPerChannel; s++)
+            {
+                var sb = s * srcChannels;
+                var db = s * 2;
+                var v = src[sb + p] * uniformGain;
+                dst[db] += v;
+                dst[db + 1] += v;
+            }
+
+            return true;
+        }
+
+        for (var s = 0; s < samplesPerChannel; s++)
+        {
+            var sb = s * srcChannels;
+            var db = s * 2;
+            var v = src[sb + p] * uniformGain;
+            dst[db] += v;
+            dst[db + 1] += v;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// SIMD fast path for stereo → stereo duplicate of one channel: <c>[0,0]</c> (L to both) or <c>[1,1]</c> (R to both).
     /// </summary>
     internal static bool TryAccumulateStereoDupSingleChannelInterleaved(
@@ -285,6 +465,101 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
             dst[i] += v;
             dst[i + 1] += v;
         }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Stereo → one output channel: <c>[0]</c> (left only) or <c>[1]</c> (right only). Narrows the scalar fallback for
+    /// mismatched <c>srcChannels</c>/<c>dstChannels</c> when hardware supports AVX2 permutes; otherwise uses a compact scalar loop.
+    /// </summary>
+    internal static unsafe bool TryAccumulateStereoToMonoSingleOutputInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        var routing = map.AsSpan();
+        if (routing.Length != 1 || srcChannels != 2 || dstChannels != 1)
+            return false;
+
+        var pick = routing[0];
+        if (pick is not (0 or 1))
+            return false;
+
+        if (map.RequiredInputChannels > 2)
+            return false;
+
+        if (uniformGain == 0f)
+            return true;
+
+        if (Avx2.IsSupported && samplesPerChannel >= 8)
+        {
+            var idx = pick == 0
+                ? Vector256.Create(0, 2, 4, 6, 0, 0, 0, 0)
+                : Vector256.Create(1, 3, 5, 7, 1, 1, 1, 1);
+            var g128 = Vector128.Create(uniformGain);
+            var s = 0;
+            var limit = samplesPerChannel - samplesPerChannel % 8;
+            for (; s < limit; s += 8)
+            {
+                fixed (float* pSrc = src.Slice(s * 2))
+                fixed (float* pDst = dst.Slice(s))
+                {
+                    for (var b = 0; b < 2; b++)
+                    {
+                        var vec = Avx.LoadVector256(pSrc + b * 8);
+                        var perm = Avx2.PermuteVar8x32(vec, idx);
+                        var lane = perm.GetLower();
+                        var scaled = Sse.Multiply(lane, g128);
+                        var acc = Sse.LoadVector128(pDst + b * 4);
+                        Sse.Store(pDst + b * 4, Sse.Add(acc, scaled));
+                    }
+                }
+            }
+
+            for (; s < samplesPerChannel; s++)
+                dst[s] += src[s * 2 + pick] * uniformGain;
+
+            return true;
+        }
+
+        for (var s = 0; s < samplesPerChannel; s++)
+            dst[s] += src[s * 2 + pick] * uniformGain;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Wider interleaved source → mono: single packed channel <c>[p]</c>, <see cref="RequiredInputChannels"/> == <c>p + 1</c>.
+    /// Excludes <c>srcChannels == 2</c> with <c>p ∈ {0,1}</c> so <see cref="TryAccumulateStereoToMonoSingleOutputInterleaved"/> keeps stereo SIMD downmix.
+    /// </summary>
+    internal static bool TryAccumulateWideSourceMonoSingleOutputInterleaved(
+        ReadOnlySpan<float> src, int srcChannels,
+        Span<float> dst, int dstChannels,
+        in ChannelMap map, int samplesPerChannel, float uniformGain)
+    {
+        var routing = map.AsSpan();
+        if (routing.Length != 1 || dstChannels != 1 || srcChannels < 1)
+            return false;
+
+        var p = routing[0];
+        if (p < 0)
+            return false;
+
+        if (map.RequiredInputChannels != p + 1)
+            return false;
+
+        if (srcChannels < map.RequiredInputChannels)
+            return false;
+
+        if (srcChannels == 2 && p <= 1)
+            return false;
+
+        if (uniformGain == 0f)
+            return true;
+
+        for (var s = 0; s < samplesPerChannel; s++)
+            dst[s] += src[s * srcChannels + p] * uniformGain;
 
         return true;
     }
@@ -499,7 +774,8 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
     }
 
     private static void RunStereoToNVector(
-        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain, Span<float> scratch)
+        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain,
+        Span<float> scratch)
     {
         var vn = Vector<float>.Count;
         var need = vn * nOut;
@@ -536,7 +812,8 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
     }
 
     private static void RunStereoToNVectorSwapped(
-        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain, Span<float> scratch)
+        ReadOnlySpan<float> src, Span<float> dst, int nOut, int samplesPerChannel, float uniformGain,
+        Span<float> scratch)
     {
         var vn = Vector<float>.Count;
         var need = vn * nOut;
@@ -977,8 +1254,9 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
     }
 
     /// <summary>
-    /// Packed interleaved same-width permutation: <c>srcChannels == dstChannels == N</c> for <c>N ∈ {3, 4, 5, 6, 7, 8}</c>,
-    /// <c>map</c> is a bijection on <c>0..N-1</c>, uniform gain (any finite value).
+    /// Packed interleaved same-width gather: <c>srcChannels == dstChannels == N</c> for <c>N ∈ {3, 4, 5, 6, 7, 8}</c>,
+    /// each <c>map[i] ∈ {0,..,N-1}</c> (no silence), uniform gain (any finite value). Bijective permutations and
+    /// duplicate-lane gathers (multiple outputs read the same source channel) share the same shuffle / <c>PermuteVar8x32</c> kernels.
     /// </summary>
     internal static unsafe bool TryAccumulatePackedPermutationInterleaved(
         ReadOnlySpan<float> src, int srcChannels,
@@ -993,10 +1271,7 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         if (ch is not (3 or 4 or 5 or 6 or 7 or 8) || srcChannels != ch || dstChannels != ch)
             return false;
 
-        if (map.RequiredInputChannels != ch)
-            return false;
-
-        if (!IsPackedPermutationRouting(routing, ch))
+        if (!IsPackedGatherIndicesInRange(routing, ch))
             return false;
 
         var total = samplesPerChannel * ch;
@@ -1197,21 +1472,17 @@ public readonly struct ChannelMap : IEquatable<ChannelMap>
         return true;
     }
 
-    private static bool IsPackedPermutationRouting(ReadOnlySpan<int> routing, int n)
+    /// <summary>Every output maps to a non-silence source index in <c>0..n-1</c> (duplicates allowed).</summary>
+    private static bool IsPackedGatherIndicesInRange(ReadOnlySpan<int> routing, int n)
     {
         if (routing.Length != n || n > 16)
             return false;
 
-        Span<int> mark = stackalloc int[16];
-        mark.Clear();
         for (var i = 0; i < n; i++)
         {
             var c = routing[i];
-            if ((uint)c >= (uint)n)
+            if (c < 0 || c >= n)
                 return false;
-            if (mark[c] != 0)
-                return false;
-            mark[c] = 1;
         }
 
         return true;

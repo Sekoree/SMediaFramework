@@ -39,6 +39,38 @@ public sealed class MediaContainerPlaybackHostTests
         }
     }
 
+    [Fact]
+    public void TryCreatePortAudioMain_CallerDisposesPlayer_PlayerDisposeThenHostDispose_DoesNotThrow()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mcp_caller_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateAudioVideo(path))
+            return;
+        try
+        {
+            using var dec = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            var host = MediaContainerPlaybackHost.TryCreatePortAudioMain(
+                dec,
+                480,
+                null,
+                _ => { },
+                MediaContainerPlaybackHostPlayerOwnership.CallerDisposesPlayer);
+            if (host is null)
+                return;
+            host.Player.Dispose();
+            host.Dispose();
+            host.Dispose();
+        }
+        finally
+        {
+            try { File.Delete(path); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerPlaybackHostTests)}: temp media delete"); }
+#else
+            catch { /* ignored */ }
+#endif
+        }
+    }
+
     private static bool TryGenerateAudioVideo(string path)
     {
         try

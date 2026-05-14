@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.PortAudio;
 
@@ -9,6 +10,11 @@ namespace S.Media.PortAudio;
 /// callback writes packed float32 samples into an SPSC ring buffer; consumers
 /// pull frames via <see cref="TryReadFrame"/>.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="Dispose"/> calls <see cref="Stop"/> then <see cref="PortAudioRuntime.Release"/>; each step is wrapped so <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
+/// </para>
+/// </remarks>
 public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
 {
     private static readonly delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>
@@ -272,7 +278,33 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        Stop();
-        PortAudioRuntime.Release();
+        try
+        {
+            Stop();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "PortAudioInput.Dispose: Stop");
+        }
+#else
+        catch
+        {
+        }
+#endif
+        try
+        {
+            PortAudioRuntime.Release();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "PortAudioInput.Dispose: PortAudioRuntime.Release");
+        }
+#else
+        catch
+        {
+        }
+#endif
     }
 }

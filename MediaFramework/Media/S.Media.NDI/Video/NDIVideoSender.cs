@@ -47,6 +47,10 @@ namespace S.Media.NDI.Video;
 /// is then the primary wall-clock throttle. With <c>clockVideo:true</c>, both may apply — see field notes in
 /// <c>VideoPlaybackSmoke --ndi-clock-video</c> / <c>--ndi-disable-wall-pace</c>.
 /// </para>
+/// <para>
+/// <see cref="Dispose"/> flushes in-flight async video when needed, then frees each staging slot; failures on individual slots log in
+/// <strong>Debug</strong> via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues freeing remaining slots.
+/// </para>
 /// </remarks>
 public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 {
@@ -434,7 +438,18 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         for (var i = 0; i < _staging.Length; i++)
         {
             if (_staging[i] == null) continue;
-            NativeMemory.Free(_staging[i]);
+            try
+            {
+                NativeMemory.Free(_staging[i]);
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, $"NDIVideoSender.Dispose: staging[{i}]");
+            }
+#else
+            catch { /* best effort */ }
+#endif
             _staging[i] = null;
             _stagingCapacity[i] = 0;
         }

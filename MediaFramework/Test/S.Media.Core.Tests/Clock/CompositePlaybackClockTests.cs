@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using S.Media.Core.Clock;
 using Xunit;
 
@@ -242,6 +243,125 @@ public class CompositePlaybackClockTests
             else
                 Assert.Equal(low.ElapsedSinceStart, e);
         }
+    }
+
+    [Fact]
+    public void HandoffCrossFade_zero_duration_matches_snap_for_two_advancing()
+    {
+        var low = new MutableStubPlaybackClock { IsAdvancing = true, ElapsedSinceStart = TimeSpan.FromSeconds(1) };
+        var high = new MutableStubPlaybackClock { IsAdvancing = true, ElapsedSinceStart = TimeSpan.FromSeconds(99) };
+        var snap = new CompositePlaybackClock(
+            new PlaybackClockCandidate(low, 1),
+            new PlaybackClockCandidate(high, 100));
+        var blended = new CompositePlaybackClock(
+            new CompositePlaybackClockBlend { HandoffCrossFade = TimeSpan.Zero },
+            new PlaybackClockCandidate(low, 1),
+            new PlaybackClockCandidate(high, 100));
+        Assert.Equal(snap.ElapsedSinceStart, blended.ElapsedSinceStart);
+    }
+
+    [Fact]
+    public void HandoffCrossFade_lerps_when_advancing_winner_promotes()
+    {
+        var simTicks = 0L;
+        long Now() => simTicks;
+
+        var low = new MutableStubPlaybackClock { IsAdvancing = true, ElapsedSinceStart = TimeSpan.FromSeconds(10) };
+        var high = new MutableStubPlaybackClock { IsAdvancing = false, ElapsedSinceStart = TimeSpan.FromSeconds(90) };
+        var blend = new CompositePlaybackClockBlend { HandoffCrossFade = TimeSpan.FromSeconds(2) };
+        var c = new CompositePlaybackClock(blend, Now,
+            new PlaybackClockCandidate(low, 1),
+            new PlaybackClockCandidate(high, 100));
+
+        Assert.Equal(TimeSpan.FromSeconds(10), c.ElapsedSinceStart);
+
+        high.IsAdvancing = true;
+        Assert.Equal(TimeSpan.FromSeconds(10), c.ElapsedSinceStart);
+
+        simTicks += Stopwatch.Frequency / 2;
+        var mid = c.ElapsedSinceStart;
+        Assert.True(mid > TimeSpan.FromSeconds(10));
+        Assert.True(mid < TimeSpan.FromSeconds(90));
+
+        simTicks += Stopwatch.Frequency * 4;
+        Assert.Equal(TimeSpan.FromSeconds(90), c.ElapsedSinceStart);
+    }
+
+    [Fact]
+    public void CoAdvanceSmoothing_EMA_toward_leader_when_two_stay_advancing()
+    {
+        long sim = 0;
+        long Now() => sim;
+        var low = new MutableStubPlaybackClock { IsAdvancing = true, ElapsedSinceStart = TimeSpan.FromSeconds(10) };
+        var high = new MutableStubPlaybackClock { IsAdvancing = true, ElapsedSinceStart = TimeSpan.FromSeconds(20) };
+        var blend = new CompositePlaybackClockBlend { CoAdvanceSmoothingTau = TimeSpan.FromSeconds(1) };
+        var c = new CompositePlaybackClock(blend, Now, new PlaybackClockCandidate(low, 1), new PlaybackClockCandidate(high, 100));
+
+        Assert.Equal(TimeSpan.FromSeconds(20), c.ElapsedSinceStart);
+
+        high.ElapsedSinceStart = TimeSpan.FromSeconds(100);
+        sim += Stopwatch.Frequency;
+        var step1 = c.ElapsedSinceStart;
+        Assert.True(step1 > TimeSpan.FromSeconds(20));
+        Assert.True(step1 < TimeSpan.FromSeconds(100));
+
+        for (var k = 0; k < 50; k++)
+        {
+            sim += Stopwatch.Frequency * 2;
+            _ = c.ElapsedSinceStart;
+        }
+
+        Assert.True(c.ElapsedSinceStart > TimeSpan.FromSeconds(99));
+    }
+
+    [Fact]
+    public void CoAdvanceSmoothing_bypasses_when_only_one_candidate_advances()
+    {
+        long sim = 0;
+        long Now() => sim;
+        var low = new MutableStubPlaybackClock { IsAdvancing = true, ElapsedSinceStart = TimeSpan.FromSeconds(5) };
+        var high = new MutableStubPlaybackClock { IsAdvancing = false, ElapsedSinceStart = TimeSpan.FromSeconds(999) };
+        var blend = new CompositePlaybackClockBlend { CoAdvanceSmoothingTau = TimeSpan.FromSeconds(2) };
+        var c = new CompositePlaybackClock(blend, Now, new PlaybackClockCandidate(low, 1), new PlaybackClockCandidate(high, 10));
+
+        Assert.Equal(TimeSpan.FromSeconds(5), c.ElapsedSinceStart);
+
+        low.ElapsedSinceStart = TimeSpan.FromSeconds(50);
+        sim += Stopwatch.Frequency;
+        Assert.Equal(TimeSpan.FromSeconds(50), c.ElapsedSinceStart);
+    }
+
+    [Fact]
+    public void HandoffCrossFade_deferred_until_complete_then_CoAdvance_can_smooth_joint_advances()
+    {
+        long sim = 0;
+        long Now() => sim;
+        var low = new MutableStubPlaybackClock { IsAdvancing = true, ElapsedSinceStart = TimeSpan.FromSeconds(10) };
+        var high = new MutableStubPlaybackClock { IsAdvancing = false, ElapsedSinceStart = TimeSpan.FromSeconds(200) };
+        var blend = new CompositePlaybackClockBlend
+        {
+            HandoffCrossFade = TimeSpan.FromSeconds(2),
+            CoAdvanceSmoothingTau = TimeSpan.FromSeconds(1),
+        };
+        var c = new CompositePlaybackClock(blend, Now, new PlaybackClockCandidate(low, 1), new PlaybackClockCandidate(high, 100));
+
+        Assert.Equal(TimeSpan.FromSeconds(10), c.ElapsedSinceStart);
+
+        high.IsAdvancing = true;
+        Assert.Equal(TimeSpan.FromSeconds(10), c.ElapsedSinceStart);
+
+        sim += Stopwatch.Frequency / 2;
+        var midHandoff = c.ElapsedSinceStart;
+        Assert.InRange(midHandoff.TotalSeconds, 12, 120);
+
+        sim += Stopwatch.Frequency * 4;
+        Assert.True(c.ElapsedSinceStart >= TimeSpan.FromSeconds(195));
+
+        high.ElapsedSinceStart = TimeSpan.FromSeconds(220);
+        sim += Stopwatch.Frequency;
+        var afterJump = c.ElapsedSinceStart;
+        Assert.True(afterJump < TimeSpan.FromSeconds(219));
+        Assert.True(afterJump > TimeSpan.FromSeconds(190));
     }
 
     private sealed class MutableStubPlaybackClock : IPlaybackClock

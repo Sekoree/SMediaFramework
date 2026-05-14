@@ -1,0 +1,18 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:views="using:HaPlay.Views"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="520"
+             x:Class="HaPlay.Views.MainView"
+             x:DataType="vm:MainViewModel">
+  <TabControl Margin="8">
+    <TabItem Header="Outputs">
+      <views:OutputManagementView DataContext="{Binding OutputManagement}" />
+    </TabItem>
+    <TabItem Header="Media player">
+      <views:MediaPlayerView DataContext="{Binding MediaPlayer}" />
+    </TabItem>
+  </TabControl>
+</UserControl>

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video.Internal;
@@ -10,6 +11,9 @@ namespace S.Media.FFmpeg.Video;
 /// Converts CPU-backed <see cref="VideoFrame"/> instances between pixel formats using
 /// FFmpeg <c>sws_scale</c> (for example high bit-depth YUV → <see cref="PixelFormat.Nv12"/> for NDI).
 /// </summary>
+/// <remarks>
+/// <see cref="Dispose"/> frees the <c>sws</c> context; <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/>.
+/// </remarks>
 public sealed unsafe class VideoCpuFrameConverter : IDisposable
 {
     private SwsContext* _ctx;
@@ -231,6 +235,19 @@ public sealed unsafe class VideoCpuFrameConverter : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        ReleaseCtx();
+        try
+        {
+            ReleaseCtx();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "VideoCpuFrameConverter.Dispose");
+        }
+#else
+        catch
+        {
+        }
+#endif
     }
 }

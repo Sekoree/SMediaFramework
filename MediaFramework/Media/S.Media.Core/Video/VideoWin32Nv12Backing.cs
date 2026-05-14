@@ -13,6 +13,10 @@ namespace S.Media.Core.Video;
 /// For D3D11 surfaces that use <c>IDXGIKeyedMutex</c> (e.g. <c>SharedKeyedMutex</c> textures), the decode path should
 /// release keyed mutex key <c>0</c> for the NV12 texture before the <see cref="VideoFrame"/> is handed to sinks;
 /// the Windows GL upload path in <c>S.Media.OpenGL</c> acquires that key for the duration of D3D11 copy / WGL interop.
+/// Handle-only instances (non-zero NT handles, zero COM pointers) align the shipped DXGI export path with a
+/// zero-libav-COM <see cref="HardwareVideoSurfaceDescriptor"/>; a separate consumer <c>ID3D11Device</c> for
+/// <c>OpenSharedResource</c> remains GL-host-owned until product backlog **PO-01** closes the full descriptor story
+/// (<c>Doc/Todo.md</c> §Tier F row 34 <c>Open</c> tail).
 /// </remarks>
 public sealed class VideoWin32Nv12Backing : IDisposable
 {

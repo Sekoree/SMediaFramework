@@ -12,6 +12,9 @@ namespace S.Media.Core.Video;
 /// This type only fills <see cref="HardwareVideoSurfaceDescriptor"/> — it does not open
 /// DXGI devices or duplicate handles. A host that owns a decoded D3D resource duplicates
 /// or exports handles before calling <see cref="AllocToken"/>.
+/// Descriptors omit <see cref="HardwareVideoSurfaceDescriptor.D3D11DeviceComPtr"/> (zero); GL import still uses a
+/// consumer <c>ID3D11Device</c> for <c>OpenSharedResource</c> on the NT handles until product backlog **PO-01**
+/// (<c>Doc/Todo.md</c>) closes the full “zero COM on the descriptor” story.
 /// When luma and chroma live in one shared resource, pass the same NT handle for both
 /// planes or pass <c>0</c> for <paramref name="sharedChromaNtHandle"/> to alias the luma handle.
 /// </remarks>

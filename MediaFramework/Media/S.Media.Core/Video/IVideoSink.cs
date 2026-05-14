@@ -1,8 +1,8 @@
 namespace S.Media.Core.Video;
 
 /// <summary>
-/// Push-based video consumer. Sinks include displays (Avalonia / SDL3), file
-/// muxers, and network senders (NDI).
+/// Push-based video consumer. Sinks include displays (<see cref="S.Media.SDL3.SDL3GLVideoSink"/>, <see cref="S.Media.Avalonia.VideoOpenGlControl"/>), file
+/// muxers, and network senders (NDI). Multi-sink hosts (for example <c>S.Media.Playback.MediaPlayer</c> with <see cref="S.Media.FFmpeg.Video.VideoRouter"/>) route frames to any implementation the app references.
 /// </summary>
 /// <remarks>
 /// <para>

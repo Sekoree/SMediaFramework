@@ -1,8 +1,9 @@
 namespace S.Media.OpenGL;
 
 /// <summary>
-/// Reports which decoded pixel formats can use the shipped DRM PRIME dma-buf → EGL/GL import path today.
-/// Additional FOURCCs and multi-planar FFmpeg → GL paths remain future work (see project backlog).
+/// Reports which decoded pixel formats can use the shipped DRM PRIME dma-buf → EGL/GL import path today
+/// (<see cref="S.Media.Core.Video.PixelFormat.Nv12"/>, <see cref="S.Media.Core.Video.PixelFormat.P010"/>, <see cref="S.Media.Core.Video.PixelFormat.P016"/>).
+/// Additional FOURCCs and multi-planar FFmpeg → GL paths remain deferred (see <c>Doc/Todo.md</c> §Tier F row 36, partial).
 /// </summary>
 public static class LinuxDmabufGlHardwareFormats
 {
@@ -22,15 +23,15 @@ public static class LinuxDmabufGlHardwareFormats
                 or S.Media.Core.Video.PixelFormat.Bgr24 or S.Media.Core.Video.PixelFormat.Rgb24
                 or S.Media.Core.Video.PixelFormat.Argb32 or S.Media.Core.Video.PixelFormat.Abgr32
                 or S.Media.Core.Video.PixelFormat.Uyvy or S.Media.Core.Video.PixelFormat.Yuyv
-                => "Packed / interleaved RGB or YUV DRM PRIME → EGL/GL is not implemented; NV12 is the only shipped PRIME path.",
+                => "Packed / interleaved RGB or YUV DRM PRIME → EGL/GL is not implemented; shipped paths are semi-planar NV12, P010, and P016.",
             S.Media.Core.Video.PixelFormat.I420 or S.Media.Core.Video.PixelFormat.Yv12
                 or S.Media.Core.Video.PixelFormat.Nv21 or S.Media.Core.Video.PixelFormat.Yuv422P
                 or S.Media.Core.Video.PixelFormat.Yuv444P or S.Media.Core.Video.PixelFormat.Yuva420p
-                => "Multi-plane planar YUV DRM PRIME → EGL/GL (other than NV12) is not implemented; use NV12 or a CPU path.",
+                => "Multi-plane planar YUV DRM PRIME → EGL/GL (other than semi-planar NV12 / P010 / P016) is not implemented; use NV12/P010/P016 decode or a CPU path.",
             S.Media.Core.Video.PixelFormat.Gray8 or S.Media.Core.Video.PixelFormat.Gray16
-                => "Single-plane luma DRM PRIME → EGL/GL is not implemented; use NV12 or a CPU path.",
+                => "Single-plane luma DRM PRIME → EGL/GL is not implemented; use NV12/P010/P016 decode or a CPU path.",
             S.Media.Core.Video.PixelFormat.Unknown
-                => "Unknown pixel layout — cannot use PRIME NV12 EGL dma-buf import.",
+                => "Unknown pixel layout — cannot use shipped PRIME EGL dma-buf import (NV12, P010, P016).",
             _ => "EGL dma-buf hardware upload supports DRM PRIME semi-planar NV12, P010, and P016 in this build; use CPU decode or extend LinuxDmabufGlHardwareFormats / Nv12DmabufGpuUploader.",
         };
     }

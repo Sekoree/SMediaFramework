@@ -4,6 +4,7 @@ namespace S.Media.Core.Clock;
 /// Minimal playhead surface (architecture roadmap <b>strategy B</b>): position, running state, nominal rate, and seek.
 /// <see cref="IMediaClock"/> extends this with tick events, cooperative stop/pause, optional <see cref="IPlaybackClock"/> mastering,
 /// and <see cref="IMediaClock.PositionChanged"/> for playhead updates (~30 Hz from the driver — see <see cref="MediaClock"/> remarks).
+/// For a seek-free dependency surface, use <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/> / <see cref="IPlaybackPlayhead"/>.
 /// </summary>
 public interface IPlaybackTimeline
 {

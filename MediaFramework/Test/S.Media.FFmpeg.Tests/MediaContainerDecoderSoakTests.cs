@@ -15,7 +15,7 @@ namespace S.Media.FFmpeg.Tests;
 /// decode from two threads — avoids demux/queue edge cases in CI).
 /// Set environment variable <c>RUN_MEDIA_SOAK=1</c> to multiply seek/drain rounds for a longer
 /// local stress pass (still bounded; not a multi-hour soak). Optional <c>RUN_MEDIA_SOAK_ROUNDS=&lt;n&gt;</c>
-/// overrides the soak round count when <c>RUN_MEDIA_SOAK=1</c> (clamped <c>8</c>–<c>10_000</c>; default <c>64</c> when unset).
+/// overrides the soak round count when <c>RUN_MEDIA_SOAK=1</c> (clamped <c>8</c>–<c>10_000</c> by default; <c>8</c>–<c>100_000</c> when <c>RUN_MEDIA_SOAK_LONG=1</c>; default <c>64</c> when unset).
 /// </summary>
 public sealed class MediaContainerDecoderSoakTests : IDisposable
 {
@@ -29,6 +29,9 @@ public sealed class MediaContainerDecoderSoakTests : IDisposable
     private static bool LongSoak =>
         string.Equals(Environment.GetEnvironmentVariable("RUN_MEDIA_SOAK"), "1", StringComparison.Ordinal);
 
+    private static bool LongSoakExtendedClamp =>
+        string.Equals(Environment.GetEnvironmentVariable("RUN_MEDIA_SOAK_LONG"), "1", StringComparison.Ordinal);
+
     /// <summary>Round count for <see cref="SharedDemux_Soak_RandomSeeksInterleavedDrainAndSequentialPlayThrough_NoThrow"/> when soak mode is on.</summary>
     public static int ResolveSoakRoundsForTests()
     {
@@ -37,7 +40,8 @@ public sealed class MediaContainerDecoderSoakTests : IDisposable
         var raw = Environment.GetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS");
         if (string.IsNullOrWhiteSpace(raw) || !int.TryParse(raw, out var n))
             return 64;
-        return Math.Clamp(n, 8, 10_000);
+        var max = LongSoakExtendedClamp ? 100_000 : 10_000;
+        return Math.Clamp(n, 8, max);
     }
 
     private static int SoakRounds => ResolveSoakRoundsForTests();
@@ -74,13 +78,16 @@ public sealed class MediaContainerDecoderSoakTests : IDisposable
     {
         var oldSoak = Environment.GetEnvironmentVariable("RUN_MEDIA_SOAK");
         var oldRounds = Environment.GetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS");
+        var oldLong = Environment.GetEnvironmentVariable("RUN_MEDIA_SOAK_LONG");
         try
         {
             Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK", null);
+            Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_LONG", null);
             Assert.Equal(8, MediaContainerDecoderSoakTests.ResolveSoakRoundsForTests());
 
             Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK", "1");
             Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS", null);
+            Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_LONG", null);
             Assert.Equal(64, MediaContainerDecoderSoakTests.ResolveSoakRoundsForTests());
 
             Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS", "500");
@@ -91,6 +98,10 @@ public sealed class MediaContainerDecoderSoakTests : IDisposable
 
             Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS", "999999");
             Assert.Equal(10_000, MediaContainerDecoderSoakTests.ResolveSoakRoundsForTests());
+
+            Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_LONG", "1");
+            Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS", "999999");
+            Assert.Equal(100_000, MediaContainerDecoderSoakTests.ResolveSoakRoundsForTests());
         }
         finally
         {
@@ -98,6 +109,8 @@ public sealed class MediaContainerDecoderSoakTests : IDisposable
             else Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK", oldSoak);
             if (oldRounds is null) Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS", null);
             else Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_ROUNDS", oldRounds);
+            if (oldLong is null) Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_LONG", null);
+            else Environment.SetEnvironmentVariable("RUN_MEDIA_SOAK_LONG", oldLong);
         }
     }
 

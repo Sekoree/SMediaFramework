@@ -127,6 +127,17 @@ public class AvPlaybackCoordinatorTests
     }
 
     [Fact]
+    public void IPlaybackTimeline_AsPlayhead_mirrors_position_rate_running()
+    {
+        using var clock = new MediaClock();
+        IPlaybackTimeline t = clock;
+        var ph = t.AsPlayhead();
+        Assert.Equal(clock.CurrentPosition, ph.CurrentPosition);
+        Assert.Equal(clock.IsRunning, ph.IsRunning);
+        Assert.Equal(clock.PlaybackRate, ph.PlaybackRate);
+    }
+
+    [Fact]
     public void Pause_WhenAudioNull_StopsMediaClockDriver()
     {
         var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));

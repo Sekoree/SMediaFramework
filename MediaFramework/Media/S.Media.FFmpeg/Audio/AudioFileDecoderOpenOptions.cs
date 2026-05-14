@@ -3,7 +3,10 @@ namespace S.Media.FFmpeg.Audio;
 /// <summary>Optional settings for <see cref="AudioFileDecoder.Open(string, AudioFileDecoderOpenOptions)"/>.</summary>
 /// <remarks>
 /// <para>
-/// <see cref="CodecThreadCount"/> configures a single libav <c>AVCodecContext</c>. Frame vs slice <c>thread_type</c> is chosen automatically from codec capabilities when <see cref="CodecThreadCount"/> is non-zero (see <see cref="AudioFileDecoder.LibavCodecThreadType"/>). Policies such as multiple decoder instances per stream or demuxer affinity remain host-owned (checklist Tier E **20** / §Tier F **33**).
+/// <see cref="CodecThreadCount"/> configures a single libav <c>AVCodecContext</c>. When non-zero, <c>thread_type</c> follows
+/// <see cref="LibavThreadTypePreference"/> when the codec advertises both frame and slice threading; otherwise the single
+/// supported kind wins (see <see cref="AudioFileDecoder.LibavCodecThreadType"/>). Policies such as multiple decoder instances
+/// per stream or demuxer affinity remain host-owned (checklist **Tier E** **20** — **§Tier F** row **33** **`[x]`**; **Open** tail).
 /// </para>
 /// </remarks>
 public readonly record struct AudioFileDecoderOpenOptions
@@ -14,4 +17,10 @@ public readonly record struct AudioFileDecoderOpenOptions
     /// When non-zero, <see cref="AudioFileDecoder"/> clamps the value to <strong>1…64</strong> before assignment.
     /// </summary>
     public int CodecThreadCount { get; init; }
+
+    /// <summary>
+    /// When <see cref="CodecThreadCount"/> is non-zero, selects frame vs slice <c>thread_type</c> when the codec supports both.
+    /// Default <see cref="AudioDecoderLibavThreadTypePreference.FrameFirst"/> matches the historical precedence.
+    /// </summary>
+    public AudioDecoderLibavThreadTypePreference LibavThreadTypePreference { get; init; }
 }

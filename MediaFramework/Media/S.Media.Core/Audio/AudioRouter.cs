@@ -24,9 +24,10 @@ namespace S.Media.Core.Audio;
 /// </para>
 /// <para>
 /// All sources and sinks must agree on the router's nominal sample rate for
-/// routing and mixing. While <see cref="IsRunning"/> is <see langword="true"/>, that nominal rate does not change.
-/// When stopped, <see cref="ReconfigureSampleRate"/> can move <see cref="SampleRate"/> if every registered source and sink
-/// already matches the new rate (see method remarks). Optional per-leaf wrappers (e.g. FFmpeg
+/// routing and mixing. While <see cref="IsRunning"/> is <see langword="true"/>, the nominal rate is fixed unless the host calls
+/// <see cref="ReconfigureSampleRateWhileRunning"/> after every registered source and sink already reports the new rate on
+/// <see cref="AudioFormat.SampleRate"/> (see that method's remarks). When stopped, <see cref="ReconfigureSampleRate"/> performs the same
+/// validation and clock rebuild without requiring a running loop. Optional per-leaf wrappers (e.g. FFmpeg
 /// <c>AdaptiveRateAudioSink</c>) may apply a tiny rate tweak only on the path
 /// into that sink without changing the router's graph rate.
 /// </para>
@@ -75,9 +76,10 @@ namespace S.Media.Core.Audio;
 /// slow sink without retuning the master clock, wrap that sink with the FFmpeg
 /// <c>AdaptiveRateAudioSink</c> (per-sink <c>swresample</c> driven by
 /// <see cref="PumpPressurePlaybackHintMonitor"/> filtered to that sink id).
+/// <see cref="GetAggregatePumpStats"/> sums per-sink <see cref="SinkPumpStats"/> for HUD/logging only — it does not synthesize a global master clock or coordinated drop policy.
 /// </para>
 /// <para>
-/// Checklist (Tier E **18** / §Tier F **31**): a single coordinated <strong>master</strong> clock ppm policy plus synchronized <strong>drop/repeat</strong>
+/// Checklist **Tier E** **18** — **§Tier F** row **31** **`[x]`** (registry mirror): a single coordinated <strong>master</strong> clock ppm policy plus synchronized <strong>drop/repeat</strong>
 /// across every sink is not implemented in this type — hosts combine <see cref="PumpPressure"/> telemetry, <see cref="PumpPressurePlaybackHintMonitor"/>, and per-sink
 /// FFmpeg <c>AdaptiveRateAudioSink</c> as needed.
 /// </para>
@@ -107,11 +109,12 @@ public sealed class AudioRouter : IDisposable
     private int _idCounter;
 
     /// <summary>
-    /// Nominal mix sample rate in Hz — unchanged while <see cref="IsRunning"/> is <see langword="true"/>.
+    /// Nominal mix sample rate in Hz.
     /// </summary>
     /// <remarks>
-    /// When stopped, <see cref="ReconfigureSampleRate"/> may change the nominal rate if every source and sink already matches.
-    /// For per-leaf drift at a fixed nominal graph rate without replacing the router, wrap sinks with FFmpeg <c>AdaptiveRateAudioSink</c>.
+    /// While <see cref="IsRunning"/> is <see langword="true"/>, use <see cref="ReconfigureSampleRateWhileRunning"/> to move this value
+    /// (every source/sink must already match the new rate). When stopped, <see cref="ReconfigureSampleRate"/> applies the same rule.
+    /// For per-leaf drift at a fixed nominal graph rate without retuning the router, wrap sinks with FFmpeg <c>AdaptiveRateAudioSink</c>.
     /// </remarks>
     public int SampleRate => _sampleRate;
     public int ChunkSamples => _chunkSamples;
@@ -399,6 +402,39 @@ public sealed class AudioRouter : IDisposable
         }
     }
 
+    /// <summary>
+    /// Sums <see cref="SinkPumpStats"/> for every registered sink under one lock. For operator HUD / logging — not a
+    /// multi-output master clock or automatic PPM policy (see class <see cref="AudioRouter"/> remarks).
+    /// </summary>
+    public AudioRouterAggregatePumpStats GetAggregatePumpStats()
+    {
+        lock (_gate)
+        {
+            long totalEnqueued = 0;
+            long totalProcessed = 0;
+            long totalDropped = 0;
+            var maxPumpCapacityChunks = 0;
+            var sinkCount = 0;
+            foreach (var kv in _state.Sinks)
+            {
+                var st = kv.Value.Pump.Stats;
+                totalEnqueued += st.Enqueued;
+                totalProcessed += st.Processed;
+                totalDropped += st.Dropped;
+                if (st.PumpCapacityChunks > maxPumpCapacityChunks)
+                    maxPumpCapacityChunks = st.PumpCapacityChunks;
+                sinkCount++;
+            }
+
+            return new AudioRouterAggregatePumpStats(
+                totalEnqueued,
+                totalProcessed,
+                totalDropped,
+                maxPumpCapacityChunks,
+                sinkCount);
+        }
+    }
+
     /// <summary>Try to resolve a live sink instance by id (for capability checks outside the router).</summary>
     public bool TryGetSink(string sinkId, out IAudioSink? sink)
     {
@@ -467,38 +503,70 @@ public sealed class AudioRouter : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_isRunning)
                 throw new InvalidOperationException("ReconfigureSampleRate requires a stopped router.");
-
-            foreach (var kv in _state.Sources)
-            {
-                if (kv.Value.Source.Format.SampleRate != newSampleRate)
-                    throw new InvalidOperationException(
-                        $"source '{kv.Key}' is {kv.Value.Source.Format.SampleRate} Hz; all sources must already match {newSampleRate} Hz before reconfiguration.");
-            }
-
-            foreach (var kv in _state.Sinks)
-            {
-                if (kv.Value.Sink.Format.SampleRate != newSampleRate)
-                    throw new InvalidOperationException(
-                        $"sink '{kv.Key}' is {kv.Value.Sink.Format.SampleRate} Hz; all sinks must already match {newSampleRate} Hz before reconfiguration.");
-            }
-
-            _sampleRate = newSampleRate;
-            if (_slaveClockSinkId is { } sid)
-            {
-                if (!_state.Sinks.ContainsKey(sid))
-                    throw new InvalidOperationException($"slaved sink '{sid}' is no longer registered.");
-                _clock = new SinkSlavedRouterClock(newSampleRate, _chunkSamples, () => ResolveClockedSink(sid));
-            }
-            else if (_clock is WallClockRouterClock)
-            {
-                _clock = new WallClockRouterClock(newSampleRate, _chunkSamples);
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    "ReconfigureSampleRate: clock must be WallClockRouterClock (default) or SinkSlavedRouterClock from SlaveTo / RetargetSlaveClock. Install a known clock with SetClock first.");
-            }
+            ApplySampleRateChangeLocked(newSampleRate);
         }
+    }
+
+    /// <summary>
+    /// Same contract as <see cref="ReconfigureSampleRate"/> (every registered source and sink must already report
+    /// <paramref name="newSampleRate"/> on <see cref="AudioFormat.SampleRate"/>), but allowed while <see cref="IsRunning"/> is
+    /// <see langword="true"/>. The router lock is held for the validation and clock swap; pacing restarts from
+    /// <see cref="IRouterClock.Reset"/> on the rebuilt clock so the next chunk uses the new wall duration.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The router does not resample: update or replace every <see cref="IAudioSource"/> and <see cref="IAudioSink"/> so their
+    /// <see cref="AudioFormat"/> matches <paramref name="newSampleRate"/> before calling this method. Chunk length in samples
+    /// (<see cref="ChunkSamples"/>) is unchanged — only the nominal Hz and pacing interval change.
+    /// </para>
+    /// </remarks>
+    public void ReconfigureSampleRateWhileRunning(int newSampleRate)
+    {
+        if (newSampleRate <= 0)
+            throw new ArgumentOutOfRangeException(nameof(newSampleRate));
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_isRunning)
+                throw new InvalidOperationException("ReconfigureSampleRateWhileRunning requires a started router; use ReconfigureSampleRate while stopped.");
+            ApplySampleRateChangeLocked(newSampleRate);
+        }
+    }
+
+    private void ApplySampleRateChangeLocked(int newSampleRate)
+    {
+        foreach (var kv in _state.Sources)
+        {
+            if (kv.Value.Source.Format.SampleRate != newSampleRate)
+                throw new InvalidOperationException(
+                    $"source '{kv.Key}' is {kv.Value.Source.Format.SampleRate} Hz; all sources must already match {newSampleRate} Hz before reconfiguration.");
+        }
+
+        foreach (var kv in _state.Sinks)
+        {
+            if (kv.Value.Sink.Format.SampleRate != newSampleRate)
+                throw new InvalidOperationException(
+                    $"sink '{kv.Key}' is {kv.Value.Sink.Format.SampleRate} Hz; all sinks must already match {newSampleRate} Hz before reconfiguration.");
+        }
+
+        _sampleRate = newSampleRate;
+        if (_slaveClockSinkId is { } sid)
+        {
+            if (!_state.Sinks.ContainsKey(sid))
+                throw new InvalidOperationException($"slaved sink '{sid}' is no longer registered.");
+            _clock = new SinkSlavedRouterClock(newSampleRate, _chunkSamples, () => ResolveClockedSink(sid));
+        }
+        else if (_clock is WallClockRouterClock)
+        {
+            _clock = new WallClockRouterClock(newSampleRate, _chunkSamples);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                "Sample rate reconfiguration: clock must be WallClockRouterClock (default) or SinkSlavedRouterClock from SlaveTo / RetargetSlaveClock. Install a known clock with SetClock first.");
+        }
+
+        _clock.Reset();
     }
 
     /// <summary>
@@ -988,6 +1056,17 @@ public sealed class AudioRouter : IDisposable
 
     /// <summary>Snapshot of pump throughput stats.</summary>
     public readonly record struct SinkPumpStats(long Enqueued, long Processed, long Dropped, int PumpCapacityChunks);
+
+    /// <summary>
+    /// Single snapshot of summed per-sink pump counters from <see cref="AudioRouter.GetAggregatePumpStats"/>. Hints only — hosts still own
+    /// any coordinated multi-output clock or drop policy.
+    /// </summary>
+    public readonly record struct AudioRouterAggregatePumpStats(
+        long TotalEnqueued,
+        long TotalProcessed,
+        long TotalDropped,
+        int MaxPumpCapacityChunks,
+        int SinkCount);
 
     private sealed record SourceEntry(string Id, IAudioSource Source, float[] Scratch);
     private sealed record SinkEntry(string Id, IAudioSink Sink, SinkPump Pump);

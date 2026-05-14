@@ -10,8 +10,8 @@ namespace S.Media.FFmpeg.Video.Internal;
 /// <summary>
 /// Maps libav <see cref="AVPixelFormat.AV_PIX_FMT_D3D11"/> frames (see libavutil
 /// <c>hwcontext_d3d11va.h</c> — <c>AVFrame.data[0]</c> texture, <c>data[1]</c> array index)
-/// into <see cref="VideoWin32Nv12Backing"/> via DXGI shared NT handles, and records libav
-/// <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers for same-device GL upload (no <c>OpenSharedResource</c>).
+/// into <see cref="VideoWin32Nv12Backing"/> via DXGI shared NT handles. When <paramref name="sharedHandleOnly"/> is false,
+/// also records libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers for same-device GL upload (no <c>OpenSharedResource</c>).
 /// </summary>
 /// <remarks>
 /// For a <b>Core-only</b> portable descriptor of the same libav-held <c>ID3D11Texture2D</c> (no NT handle
@@ -22,7 +22,7 @@ namespace S.Media.FFmpeg.Video.Internal;
 /// </remarks>
 internal static unsafe class D3D11VaNv12BackingFactory
 {
-    internal static VideoWin32Nv12Backing? TryCreateBacking(AVFrame* frame)
+    internal static VideoWin32Nv12Backing? TryCreateBacking(AVFrame* frame, bool sharedHandleOnly)
     {
         if (!OperatingSystem.IsWindows() || frame == null)
             return null;
@@ -59,6 +59,9 @@ internal static unsafe class D3D11VaNv12BackingFactory
                 _ = Kernel32.CloseHandle(sharedHandle);
                 return null;
             }
+
+            if (sharedHandleOnly)
+                return new VideoWin32Nv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, 0, 0);
 
             return new VideoWin32Nv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, deviceComPtr, (nint)pTex);
         }

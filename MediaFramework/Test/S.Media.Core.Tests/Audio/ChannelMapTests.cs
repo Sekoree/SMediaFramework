@@ -113,6 +113,218 @@ public class ChannelMapTests
     }
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void ApplyAdditive_StereoToMonoSingleChannel_matches_naive(int takeChannel)
+    {
+        var map = new ChannelMap(new[] { takeChannel });
+        const int spc = 65;
+        var src = new float[2 * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = i * 0.02f + 0.1f;
+
+        var expected = new float[spc];
+        var actual = new float[spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, 2, expected, 1, spc);
+        map.ApplyAdditive(src, 2, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void ApplyAdditive_StereoToMonoSingleChannel_additive_into_primmed_dst(int takeChannel)
+    {
+        var map = new ChannelMap(new[] { takeChannel });
+        const int spc = 12;
+        var src = new float[2 * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = 0.5f;
+
+        var expected = new float[spc];
+        var actual = new float[spc];
+        for (var i = 0; i < spc; i++)
+        {
+            expected[i] = 3f;
+            actual[i] = 3f;
+        }
+
+        ApplyAdditivePackedNaive(map.AsSpan(), src, 2, expected, 1, spc);
+        map.ApplyAdditive(src, 2, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_QuadToStereoLeadingIdentity_matches_naive()
+    {
+        var map = new ChannelMap([0, 1]);
+        const int spc = 33;
+        const int srcCh = 4;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = i * 0.03f - 0.7f;
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_SixChannelToStereoLeadingIdentity_matches_naive()
+    {
+        var map = new ChannelMap([0, 1]);
+        const int spc = 17;
+        const int srcCh = 6;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)Math.Sin(i * 0.11);
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_QuadToStereoRearPair_matches_naive()
+    {
+        var map = new ChannelMap([2, 3]);
+        const int spc = 31;
+        const int srcCh = 4;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = i * 0.07f - 0.2f;
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_FiveChannelToStereoMiddlePair_matches_naive()
+    {
+        var map = new ChannelMap([1, 2]);
+        const int spc = 19;
+        const int srcCh = 5;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)Math.Cos(i * 0.09);
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_SixChannelToStereoRearSurroundPair_matches_naive()
+    {
+        var map = new ChannelMap([4, 5]);
+        const int spc = 23;
+        const int srcCh = 6;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)(i % 7) * 0.125f;
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_QuadToStereoDupChannel0_matches_naive()
+    {
+        var map = new ChannelMap([0, 0]);
+        const int spc = 29;
+        const int srcCh = 4;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = i * 0.05f + 0.3f;
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_QuadToStereoDupChannel1_matches_naive()
+    {
+        var map = new ChannelMap([1, 1]);
+        const int spc = 27;
+        const int srcCh = 4;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)Math.Sin(i * 0.13);
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_SixChannelToStereoDupChannel2_matches_naive()
+    {
+        var map = new ChannelMap([2, 2]);
+        const int spc = 21;
+        const int srcCh = 6;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)(i % 5) * 0.2f - 0.4f;
+
+        var expected = new float[2 * spc];
+        var actual = new float[2 * spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 2, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_QuadToMonoChannel2_matches_naive()
+    {
+        var map = new ChannelMap([2]);
+        const int spc = 26;
+        const int srcCh = 4;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = i * 0.04f - 1f;
+
+        var expected = new float[spc];
+        var actual = new float[spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 1, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_FiveChannelToMonoChannel3_matches_naive()
+    {
+        var map = new ChannelMap([3]);
+        const int spc = 18;
+        const int srcCh = 5;
+        var src = new float[srcCh * spc];
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)Math.Cos(i * 0.17);
+
+        var expected = new float[spc];
+        var actual = new float[spc];
+        ApplyAdditivePackedNaive(map.AsSpan(), src, srcCh, expected, 1, spc);
+        map.ApplyAdditive(src, srcCh, actual, spc);
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
     [InlineData(0.25f, 512)]
     [InlineData(1f, 9)]
     [InlineData(-0.5f, 64)]
@@ -778,6 +990,69 @@ public class ChannelMapTests
     }
 
     [Fact]
+    public void ApplyAdditive_Packed3GatherDuplicateSourceIndices_MatchesNaive()
+    {
+        var map = new ChannelMap(new[] { 0, 0, 2 });
+        const int ch = 3;
+        const int samplesPerChannel = 23;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(314159);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.011 - 0.02);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed4GatherDuplicateSourceIndices_MatchesNaive()
+    {
+        var map = new ChannelMap(new[] { 0, 0, 1, 2 });
+        const int ch = 4;
+        const int samplesPerChannel = 29;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(271828);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.007 - 0.015);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ApplyAdditive_Packed8GatherDuplicateSourceIndices_MatchesNaive()
+    {
+        var map = new ChannelMap(new[] { 0, 0, 7, 3, 3, 5, 5, 1 });
+        const int ch = 8;
+        const int samplesPerChannel = 11;
+        var total = ch * samplesPerChannel;
+        var src = new float[total];
+        var rnd = new Random(1618033);
+        for (var i = 0; i < src.Length; i++)
+            src[i] = (float)rnd.NextDouble();
+        var primed = new float[total];
+        for (var i = 0; i < total; i++)
+            primed[i] = (float)(i * 0.005 - 0.012);
+        var expected = (float[])primed.Clone();
+        ApplyAdditivePackedNaive(map.AsSpan(), src, ch, expected, ch, samplesPerChannel);
+        var actual = (float[])primed.Clone();
+        map.ApplyAdditive(src, ch, actual, samplesPerChannel);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
     public void ApplyAdditive_Packed5Permutation_MatchesNaive()
     {
         var wiring = new[] { 2, 4, 0, 1, 3 };
@@ -902,8 +1177,8 @@ public class ChannelMapTests
     [Fact]
     public void ApplyAndApplyAdditive_MultiChannelRandomLayouts_MatchNaive()
     {
-        // Sources with ≥3 channels exercise routing indices beyond mono/stereo L–R against the
-        // generic scalar paths (SIMD fast paths are not required here).
+        // Sources with ≥3 channels exercise routing indices beyond mono/stereo L–R against SIMD
+        // or scalar paths (see **`ApplyAdditive_Packed*Gather*`** and **`ApplyAndApplyAdditive_MultiChannelRandomLayouts_MatchNaive`**).
         var rnd = new Random(926_535);
         var wiring = Array.Empty<int>();
         for (var n = 0; n < 450; n++)

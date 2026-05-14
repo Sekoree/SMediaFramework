@@ -12,8 +12,9 @@
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
-        <ProjectReference Include="..\..\Media\S.Media.OpenGL\S.Media.OpenGL.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.NDI\S.Media.NDI.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.OpenGL\S.Media.OpenGL.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.PortAudio\S.Media.PortAudio.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.SDL3\S.Media.SDL3.csproj" />
     </ItemGroup>

@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg.Internal;
 
 namespace S.Media.FFmpeg.Audio;
@@ -7,7 +8,10 @@ namespace S.Media.FFmpeg.Audio;
 /// <summary>
 /// Reusable <c>swresample</c> converter for packed 32‑bit float, interleaved audio.
 /// </summary>
-/// <remarks>Not thread-safe — one instance per concurrent pipeline.</remarks>
+/// <remarks>
+/// <para>Not thread-safe — one instance per concurrent pipeline.</para>
+/// <para><see cref="Dispose"/> frees the <c>swresample</c> context; <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/>.</para>
+/// </remarks>
 public sealed unsafe class AudioResampler : IDisposable
 {
     private SwrContext* _swr;
@@ -113,8 +117,21 @@ public sealed unsafe class AudioResampler : IDisposable
         if (_disposed) return;
         _disposed = true;
         if (_swr == null) return;
-        var s = _swr;
-        swr_free(&s);
+        try
+        {
+            var s = _swr;
+            swr_free(&s);
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, "AudioResampler.Dispose");
+        }
+#else
+        catch
+        {
+        }
+#endif
         _swr = null;
     }
 }

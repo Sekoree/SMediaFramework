@@ -12,5 +12,6 @@ internal static class ProfilingTestProcessDefaults
     internal static void DisablePassThroughArenaProfilingUnlessTestOptsIn()
     {
         PassThroughArenaProfiling.SetTestOverride(false);
+        PassThroughArenaSerialization.SetTestOverride(false);
     }
 }

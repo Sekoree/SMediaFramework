@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.NDI.Audio;
 
@@ -7,6 +8,12 @@ namespace S.Media.NDI.Audio;
 /// in multiples of <paramref name="targetSamplesPerChannel"/> so NDI packets align with a stable
 /// cadence (for example ~1 video frame of audio at 48 kHz).
 /// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="Dispose"/> may flush a partial final block to the inner sink; <strong>Debug</strong> builds log a failed final
+/// <see cref="IAudioSink.Submit"/> via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues.
+/// </para>
+/// </remarks>
 public sealed class NdiAudioAggregatingSink : IAudioSink, IDisposable
 {
     private readonly IAudioSink _inner;
@@ -64,7 +71,22 @@ public sealed class NdiAudioAggregatingSink : IAudioSink, IDisposable
         if (_disposed) return;
         _disposed = true;
         if (_filledFloats > 0 && _filledFloats % Format.Channels == 0)
-            _inner.Submit(_buffer.AsSpan(0, _filledFloats));
+        {
+            try
+            {
+                _inner.Submit(_buffer.AsSpan(0, _filledFloats));
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "NdiAudioAggregatingSink.Dispose: final Submit");
+            }
+#else
+            catch
+            {
+            }
+#endif
+        }
         _filledFloats = 0;
     }
 }

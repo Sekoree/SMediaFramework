@@ -33,6 +33,19 @@ public sealed class AudioFileDecoderTests : IDisposable
     }
 
     [Fact]
+    public void Open_WithLibavThreadTypePreference_slice_first_still_opens_for_pcm_wav()
+    {
+        using var decoder = AudioFileDecoder.Open(_wavPath, new AudioFileDecoderOpenOptions
+        {
+            CodecThreadCount = 2,
+            LibavThreadTypePreference = AudioDecoderLibavThreadTypePreference.SliceFirst,
+        });
+        Assert.Equal(new AudioFormat(SampleRate, Channels), decoder.Format);
+        Assert.Equal(2, decoder.CodecThreadCountOption);
+        AssertLibavThreadType(decoder.LibavCodecThreadType);
+    }
+
+    [Fact]
     public void Open_WithCodecThreadCount_stillOpens()
     {
         using var decoder = AudioFileDecoder.Open(_wavPath, new AudioFileDecoderOpenOptions { CodecThreadCount = 2 });

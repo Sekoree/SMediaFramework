@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using Vortice;
 using Vortice.Direct3D11;
@@ -10,7 +11,7 @@ namespace S.Media.FFmpeg.Video;
 /// <remarks>
 /// <para>
 /// <see cref="DecoderThreadCount"/> configures one libav <c>AVCodecContext</c> (applied in <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>).
-/// Multi-instance decode, process-wide caps, or hardware vs software fan-out are host concerns (audio-side parallel notes: <c>AudioFileDecoderOpenOptions</c>, checklist Tier E **20**).
+/// Multi-instance decode, process-wide caps, or hardware vs software fan-out are host concerns (audio-side parallel notes: <c>AudioFileDecoderOpenOptions</c>; checklist **Tier E** **20** — **§Tier F** row **33** **`[x]`**).
 /// </para>
 /// </remarks>
 public sealed class VideoDecoderOpenOptions
@@ -41,6 +42,31 @@ public sealed class VideoDecoderOpenOptions
     /// <c>AV_PIX_FMT_D3D11</c>, keep libav output on D3D11 surfaces and export DXGI NT shared handles for GL / interop.
     /// </summary>
     public bool RetainD3D11SharedHandleForGl { get; init; }
+
+    /// <summary>
+    /// When true together with <see cref="RetainD3D11SharedHandleForGl"/>, build <see cref="VideoWin32Nv12Backing"/>
+    /// from DXGI NT shared handles only (omit non-owning libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers on the backing).
+    /// GL import then uses <c>OpenSharedResource</c> on a host-owned D3D11 device (e.g. SDL <c>D3D11GlInteropDeviceHost</c> or
+    /// <see cref="IVideoSinkD3D11GlBorrowSetup"/>). Incompatible with lazy true zero-host that binds the uploader solely from the first frame's
+    /// <c>LibavD3D11DeviceComPtr</c> — keep SDL's interop device or a pre-bound renderer device when this is enabled.
+    /// </summary>
+    /// <remarks>
+    /// Same behavior when the environment variable <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> is <c>1</c> or <c>true</c> (with
+    /// <see cref="RetainD3D11SharedHandleForGl"/>); see <see cref="IsWin32Nv12SharedHandleOnlyRequested"/>.
+    /// </remarks>
+    public bool Win32Nv12SharedHandleOnlyExport { get; init; }
+
+    /// <summary>
+    /// Returns whether shared-handle-only Win32 NV12 export is requested via <see cref="Win32Nv12SharedHandleOnlyExport"/> or
+    /// <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> (<c>1</c> / <c>true</c>). Callers still require <see cref="RetainD3D11SharedHandleForGl"/>.
+    /// </summary>
+    public static bool IsWin32Nv12SharedHandleOnlyRequested(VideoDecoderOpenOptions? options)
+    {
+        if (options?.Win32Nv12SharedHandleOnlyExport == true)
+            return true;
+        var v = Environment.GetEnvironmentVariable("MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY");
+        return v is not null && (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+    }
 }
 
 /// <summary>Portable hardware device enum (mirrors <see cref="AVHWDeviceType"/>).</summary>
@@ -55,6 +81,13 @@ public enum HardwareVideoDeviceType
 }
 
 /// <summary>Libav hardware decode helper: device context, <c>get_format</c> hook, and CPU transfer scratch.</summary>
+/// <remarks>
+/// <para>
+/// <see cref="Dispose"/> frees the scratch <c>AVFrame</c>, hardware device buffer ref, and the pinning <see cref="GCHandle"/> in order.
+/// <strong>Debug</strong> builds log per-step failures via <see cref="MediaDiagnostics.LogError"/>; <strong>Release</strong> continues best-effort
+/// (same policy as <see cref="VideoRouter.Dispose"/>).
+/// </para>
+/// </remarks>
 internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
 {
     // AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX
@@ -286,19 +319,60 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
 
         if (_swScratch != null)
         {
-            var f = _swScratch;
-            av_frame_free(&f);
+            try
+            {
+                var f = _swScratch;
+                av_frame_free(&f);
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "VideoHardwareDecodeContext.Dispose: scratch AVFrame");
+            }
+#else
+            catch
+            {
+            }
+#endif
             _swScratch = null;
         }
 
         if (_deviceRef != null)
         {
-            var dev = _deviceRef;
-            av_buffer_unref(&dev);
+            try
+            {
+                var dev = _deviceRef;
+                av_buffer_unref(&dev);
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "VideoHardwareDecodeContext.Dispose: device AVBufferRef");
+            }
+#else
+            catch
+            {
+            }
+#endif
             _deviceRef = null;
         }
 
         if (_self.IsAllocated)
-            _self.Free();
+        {
+            try
+            {
+                _self.Free();
+            }
+#if DEBUG
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogError(ex, "VideoHardwareDecodeContext.Dispose: GCHandle.Free");
+            }
+#else
+            catch
+            {
+            }
+#endif
+        }
     }
 }

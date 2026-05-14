@@ -17,7 +17,8 @@ namespace S.Media.FFmpeg;
 /// <see cref="VideoDecoderOpenOptions"/>: hardware acceleration is attempted first (with software
 /// fallback inside the shared video codec setup), including Linux DRM PRIME semi-planar **NV12/P010** when
 /// <see cref="VideoDecoderOpenOptions.RetainDmabufForGl"/> is enabled and Windows D3D11 NV12 shared handles when
-/// <see cref="VideoDecoderOpenOptions.RetainD3D11SharedHandleForGl"/> is enabled.
+/// <see cref="VideoDecoderOpenOptions.RetainD3D11SharedHandleForGl"/> is enabled. Optional
+/// <see cref="VideoDecoderOpenOptions.Win32Nv12SharedHandleOnlyExport"/> (or <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c>) omits libav D3D11 COM pointers on Win32 NV12 backing.
 /// </para>
 /// </remarks>
 public sealed class MediaContainerDecoder : IDisposable
@@ -34,6 +35,13 @@ public sealed class MediaContainerDecoder : IDisposable
 
     /// <summary>Always true for this implementation.</summary>
     public bool UsesSharedDemux => true;
+
+    /// <summary>
+    /// True when Windows D3D11 NV12 decode exports <see cref="VideoWin32Nv12Backing"/> with DXGI NT shared handle only
+    /// (no libav <c>ID3D11Device</c>/<c>ID3D11Texture2D</c> COM pointers on the backing). See
+    /// <see cref="VideoDecoderOpenOptions.Win32Nv12SharedHandleOnlyExport"/> and <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c>.
+    /// </summary>
+    public bool Win32Nv12SharedHandleOnlyActive => _shared.Win32Nv12SharedHandleOnlyActive;
 
     /// <summary>Reserved for API stability; always <c>null</c> (no dual <c>AVFormatContext</c> path).</summary>
     public AudioFileDecoder? LegacyAudio => null;

@@ -17,7 +17,8 @@ namespace S.Media.OpenGL;
 
 /// <summary>
 /// Windows-only: imports <see cref="VideoWin32Nv12Backing"/> via DXGI NT shared <c>OpenSharedResource</c>
-/// or, when <see cref="VideoWin32Nv12Backing.LibavD3D11Texture2DComPtr"/> matches the uploader device,
+/// (using this instance’s consumer <see cref="ID3D11Device"/> from <see cref="TryCreate"/>) when only NT handles
+/// are populated on the backing, or, when <see cref="VideoWin32Nv12Backing.LibavD3D11Texture2DComPtr"/> matches the uploader device,
 /// uses the libav-held <c>ID3D11Texture2D</c> COM pointer directly (no duplicate open).
 /// <see href="https://registry.khronos.org/OpenGL/extensions/NV/WGL_NV_DX_interop.txt">WGL_NV_DX_interop</see>
 /// (GPU path) and falls back to a D3D11 staging <c>Map</c> + <c>glTexSubImage2D</c> upload if interop is unavailable
@@ -28,6 +29,9 @@ namespace S.Media.OpenGL;
 /// <remarks>
 /// Pass a borrowed <see cref="ID3D11Device"/> (COM pointer) created on the same adapter as the OpenGL context.
 /// <see cref="Dispose"/> releases the COM wrapper reference acquired in <see cref="TryCreate"/> (it does not tear down libav’s device while other references exist).
+/// Decode frames may omit libav device/texture COM on the backing (DXGI shared-handle export); this uploader’s device
+/// is still required for <c>OpenSharedResource</c> on those handles. Product backlog **PO-01** tracks removing that
+/// consumer-device requirement from the end-to-end “zero COM on <see cref="S.Media.Core.Video.HardwareVideoSurfaceDescriptor"/>” story (<c>Doc/Todo.md</c>).
 /// </remarks>
 public sealed unsafe class Nv12Win32SharedHandleGpuUploader : IDisposable
 {

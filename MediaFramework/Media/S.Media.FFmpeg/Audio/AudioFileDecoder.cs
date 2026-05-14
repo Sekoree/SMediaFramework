@@ -25,8 +25,8 @@ namespace S.Media.FFmpeg.Audio;
 /// <para>
 /// Optional <see cref="AudioFileDecoderOpenOptions.CodecThreadCount"/> forwards to libav
 /// <c>AVCodecContext.thread_count</c> before <c>avcodec_open2</c> (non-zero values clamped to 1…64). When the codec advertises frame or slice threading,
-/// <c>thread_type</c> is set to <c>FF_THREAD_FRAME</c> or <c>FF_THREAD_SLICE</c> respectively (same precedence as <see cref="VideoFileDecoder.ApplyDecoderThreading"/>); otherwise only <c>thread_count</c> is set and libav may ignore it. Many audio decoders still run effectively single-threaded.
-/// Splitting one stream across several libav contexts, pinning work to CPU cores, or other “second decoder” strategies are not built in — see <see cref="AudioFileDecoderOpenOptions"/> remarks and checklist Tier E **20** / §Tier F **33**.
+/// <c>thread_type</c> is set from <see cref="AudioFileDecoderOpenOptions.LibavThreadTypePreference"/> when the codec advertises both frame and slice threading; otherwise the single supported kind wins (same default precedence as <see cref="VideoFileDecoder.ApplyDecoderThreading"/> for the frame-first case). Otherwise only <c>thread_count</c> is set and libav may ignore it. Many audio decoders still run effectively single-threaded.
+/// Splitting one stream across several libav contexts, pinning work to CPU cores, or other “second decoder” strategies are not built in — see <see cref="AudioFileDecoderOpenOptions"/> remarks and checklist **Tier E** **20** — **§Tier F** row **33** **`[x]`** (registry mirror; **Open:** multi-context host policy).
 /// </para>
 /// </remarks>
 public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDisposable
@@ -232,10 +232,25 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         {
             CodecThreadCountOption = Math.Clamp(options.CodecThreadCount, 1, 64);
             _codecCtx->thread_count = CodecThreadCountOption;
-            if ((codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0)
-                _codecCtx->thread_type = (int)FF_THREAD_FRAME;
-            else if ((codec->capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0)
-                _codecCtx->thread_type = (int)FF_THREAD_SLICE;
+            var frameOk = (codec->capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0;
+            var sliceOk = (codec->capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0;
+            if (frameOk || sliceOk)
+            {
+                if (options.LibavThreadTypePreference == AudioDecoderLibavThreadTypePreference.SliceFirst)
+                {
+                    if (sliceOk)
+                        _codecCtx->thread_type = (int)FF_THREAD_SLICE;
+                    else if (frameOk)
+                        _codecCtx->thread_type = (int)FF_THREAD_FRAME;
+                }
+                else
+                {
+                    if (frameOk)
+                        _codecCtx->thread_type = (int)FF_THREAD_FRAME;
+                    else if (sliceOk)
+                        _codecCtx->thread_type = (int)FF_THREAD_SLICE;
+                }
+            }
         }
 
         ret = avcodec_open2(_codecCtx, codec, null);

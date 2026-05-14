@@ -10,6 +10,7 @@ namespace S.Media.Core.Playback;
 /// <c>S.Media.FFmpeg.AvRouter</c> when using <c>MediaContainerDecoder</c> for shared-mux flush defaults.
 /// A future full <c>AvRouter</c> graph (single owner of demux + audio routes + dynamic video) can implement the same contract.
 /// Use <see cref="PlaybackTimelineClockExtensions.SubscribePositionChanged(S.Media.Core.Playback.IAvPlaybackSession, EventHandler{TimeSpan})"/> to subscribe to <see cref="IMediaClock.PositionChanged"/> without holding a separate <see cref="IMediaClock"/> reference.
+/// Use <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/> on <see cref="IPlaybackTimeline"/> for a seek-free read model (strategy B).
 /// </summary>
 /// <remarks>
 /// <para>

@@ -113,12 +113,23 @@ public sealed class NDIFinder : IDisposable
 }
 
 // ------------------------------------------------------------------
-// NDIReceiver settings
+// NDIReceiver settings (maps to native NDIRecvCreateV3 / NDIlib_recv_create_v3)
 // ------------------------------------------------------------------
 
+/// <summary>
+/// Optional creation-time settings for <see cref="NDIReceiver.Create"/> — maps field-for-field onto the SDK’s
+/// <c>NDIRecvCreateV3</c> block (see vendor <c>Processing.NDI.Lib.h</c> / equivalent).
+/// </summary>
+/// <remarks>
+/// Defaults favor low-latency tool use (<see cref="Bandwidth"/> = highest, <see cref="ColorFormat"/> = fastest).
+/// When the NDI SDK adds receiver options, extend this type and <see cref="NDIReceiver.Create"/> together so hosts
+/// can opt in without forked native calls.
+/// </remarks>
 public sealed class NDIReceiverSettings
 {
+    /// <summary>Receiver video colour conversion preference (native <c>NDIRecvCreateV3.ColorFormat</c>).</summary>
     public NDIRecvColorFormat ColorFormat    { get; init; } = NDIRecvColorFormat.Fastest;
+    /// <summary>Receiver bandwidth / quality trade-off (native <c>NDIRecvCreateV3.Bandwidth</c>).</summary>
     public NDIRecvBandwidth   Bandwidth      { get; init; } = NDIRecvBandwidth.Highest;
     /// <summary>
     /// Whether the receiver accepts interlaced/fielded video. §3.47j / N23: defaults
@@ -128,6 +139,7 @@ public sealed class NDIReceiverSettings
     /// receiver and consuming fielded content.
     /// </summary>
     public bool               AllowVideoFields { get; init; } = false;
+    /// <summary>Optional UTF-8 receiver instance name for logs and SDK registration (native <c>NDIRecvCreateV3.p_ndi_recv_name</c>).</summary>
     public string?            ReceiverName   { get; init; }
 }
 

@@ -329,6 +329,70 @@ public class AudioRouterControlTests
         Assert.Equal(48000, r.SampleRate);
     }
 
+    [Fact]
+    public void ReconfigureSampleRateWhileRunning_WhenStopped_Throws()
+    {
+        using var r = new AudioRouter(48000, chunkSamples: 64);
+        var f = new AudioFormat(48000, 2);
+        r.AddSource(new TestSource(f), "s");
+        r.AddSink(new FlushableSink(f), "o");
+        r.AddRoute("s", "o", ChannelMap.Identity(2));
+        Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRateWhileRunning(44100));
+    }
+
+    [Fact]
+    public void ReconfigureSampleRateWhileRunning_MatchingFormats_UpdatesSampleRate()
+    {
+        using var r = new AudioRouter(48000, chunkSamples: 64);
+        var src = new SwitchableSource(new AudioFormat(48000, 2));
+        var sink = new SwitchableSink(new AudioFormat(48000, 2));
+        r.AddSource(src, "s");
+        r.AddSink(sink, "o");
+        r.AddRoute("s", "o", ChannelMap.Identity(2));
+        r.Start();
+        Thread.Sleep(30);
+        src.FormatValue = new AudioFormat(44100, 2);
+        sink.FormatValue = new AudioFormat(44100, 2);
+        r.ReconfigureSampleRateWhileRunning(44100);
+        Assert.Equal(44100, r.SampleRate);
+        Thread.Sleep(30);
+        r.Stop();
+    }
+
+    [Fact]
+    public void ReconfigureSampleRateWhileRunning_MismatchedSource_Throws()
+    {
+        using var r = new AudioRouter(48000, chunkSamples: 64);
+        var src = new SwitchableSource(new AudioFormat(48000, 2));
+        var sink = new SwitchableSink(new AudioFormat(48000, 2));
+        r.AddSource(src, "s");
+        r.AddSink(sink, "o");
+        r.AddRoute("s", "o", ChannelMap.Identity(2));
+        r.Start();
+        sink.FormatValue = new AudioFormat(44100, 2);
+        Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRateWhileRunning(44100));
+        r.Stop();
+    }
+
+    [Fact]
+    public void ReconfigureSampleRateWhileRunning_WithSlavedClock()
+    {
+        using var r = new AudioRouter(48000, chunkSamples: 64);
+        var src = new SwitchableSource(new AudioFormat(48000, 2));
+        var sink = new SwitchableClockedSink(new AudioFormat(48000, 2));
+        r.AddSource(src, "s");
+        r.AddSink(sink, "p");
+        r.AddRoute("s", "p", ChannelMap.Identity(2));
+        r.SlaveTo("p");
+        r.Start();
+        Thread.Sleep(25);
+        src.FormatValue = new AudioFormat(44100, 2);
+        sink.FormatValue = new AudioFormat(44100, 2);
+        r.ReconfigureSampleRateWhileRunning(44100);
+        Assert.Equal(44100, r.SampleRate);
+        r.Stop();
+    }
+
     // --- helpers ----------------------------------------------------------
 
     private sealed class TestSource(AudioFormat fmt, Func<int, float>? perChannelValue = null) : IAudioSource
@@ -430,6 +494,34 @@ public class AudioRouterControlTests
     private sealed class ImmediateClockedSink(AudioFormat fmt) : IAudioSink, IClockedSink
     {
         public AudioFormat Format { get; } = fmt;
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+        public bool WaitForCapacity(int chunkSamples, CancellationToken token) => !token.IsCancellationRequested;
+    }
+
+    private sealed class SwitchableSource(AudioFormat initial) : IAudioSource
+    {
+        public AudioFormat FormatValue { get; set; } = initial;
+        public AudioFormat Format => FormatValue;
+        public bool IsExhausted => false;
+
+        public int ReadInto(Span<float> dst)
+        {
+            dst.Fill(0.125f);
+            return dst.Length;
+        }
+    }
+
+    private sealed class SwitchableSink(AudioFormat initial) : IAudioSink
+    {
+        public AudioFormat FormatValue { get; set; } = initial;
+        public AudioFormat Format => FormatValue;
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+    }
+
+    private sealed class SwitchableClockedSink(AudioFormat initial) : IAudioSink, IClockedSink
+    {
+        public AudioFormat FormatValue { get; set; } = initial;
+        public AudioFormat Format => FormatValue;
         public void Submit(ReadOnlySpan<float> packedSamples) { }
         public bool WaitForCapacity(int chunkSamples, CancellationToken token) => !token.IsCancellationRequested;
     }

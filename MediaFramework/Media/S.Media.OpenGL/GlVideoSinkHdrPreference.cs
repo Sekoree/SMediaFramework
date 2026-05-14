@@ -1,8 +1,8 @@
-namespace S.Media.SDL3;
+namespace S.Media.OpenGL;
 
 /// <summary>
-/// How <see cref="SDL3GLVideoSink"/> maps per-frame <see cref="S.Media.Core.Video.VideoFrame.ColorTransferHint"/>
-/// into <see cref="S.Media.OpenGL.YuvVideoRenderer.HdrTransfer"/>.
+/// How GL-backed video sinks map per-frame <see cref="S.Media.Core.Video.VideoFrame.ColorTransferHint"/>
+/// into <see cref="YuvVideoRenderer.HdrTransfer"/>.
 /// </summary>
 public enum GlVideoSinkHdrPreference
 {
