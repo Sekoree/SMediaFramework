@@ -10,6 +10,8 @@ using HaPlay.Models;
 using HaPlay.OutputPreview;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
+using S.Media.Core.Video;
+using S.Media.NDI;
 
 namespace HaPlay.ViewModels;
 
@@ -19,6 +21,7 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
     private readonly Dictionary<OutputLineViewModel, NdiOutputPreviewRuntime> _ndiOutputs = new();
+    private readonly Lock _ndiOutputsGate = new();
 
     private void Remove(OutputLineViewModel line)
     {
@@ -96,17 +99,21 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     internal void StopPreviewsForPlayback(IEnumerable<OutputLineViewModel> lines)
     {
+        // NDI carriers stay alive across playback — playback acquires the existing sender via
+        // TryAcquireNdiCarrier so receivers don't have to re-discover. Only local previews are torn down here.
         foreach (var line in lines)
-        {
             StopLocalPreview(line);
-            StopNdiOutput(line);
-        }
     }
 
     private void StopNdiOutput(OutputLineViewModel line)
     {
-        if (!_ndiOutputs.Remove(line, out var rt))
-            return;
+        NdiOutputPreviewRuntime? rt;
+        lock (_ndiOutputsGate)
+        {
+            if (!_ndiOutputs.Remove(line, out rt))
+                return;
+        }
+
         try
         {
             rt.Dispose();
@@ -115,6 +122,53 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             /* best effort */
         }
+    }
+
+    /// <summary>
+    /// Pauses the persistent NDI carrier for <paramref name="line"/> and returns the live
+    /// <see cref="NDIOutput"/> so a playback session can wire its sinks onto the existing sender (no
+    /// receiver re-discovery). Returns <c>null</c> if no carrier is running or another acquirer holds it.
+    /// Callers MUST pair every successful acquire with <see cref="ReleaseNdiCarrierForPlayback"/>.
+    /// </summary>
+    internal NDIOutput? TryAcquireNdiCarrierForPlayback(OutputLineViewModel line)
+    {
+        NdiOutputPreviewRuntime? rt;
+        lock (_ndiOutputsGate)
+        {
+            if (!_ndiOutputs.TryGetValue(line, out rt))
+                return null;
+        }
+
+        return rt.AcquireForPlayback();
+    }
+
+    /// <summary>Resumes the carrier paused by <see cref="TryAcquireNdiCarrierForPlayback"/>.</summary>
+    internal void ReleaseNdiCarrierForPlayback(OutputLineViewModel line)
+    {
+        NdiOutputPreviewRuntime? rt;
+        lock (_ndiOutputsGate)
+        {
+            if (!_ndiOutputs.TryGetValue(line, out rt))
+                return;
+        }
+
+        rt.ReleaseFromPlayback();
+    }
+
+    /// <summary>Installs a logo template on every NDI carrier (idle-slate path). Pass <c>null</c> to revert to black.</summary>
+    internal void SetNdiCarrierLogo(OutputLineViewModel line, VideoFrame? logoFrame)
+    {
+        NdiOutputPreviewRuntime? rt;
+        lock (_ndiOutputsGate)
+        {
+            if (!_ndiOutputs.TryGetValue(line, out rt))
+            {
+                logoFrame?.Dispose();
+                return;
+            }
+        }
+
+        rt.SetLogoTemplate(logoFrame);
     }
 
     [RelayCommand]
@@ -174,7 +228,11 @@ public partial class OutputManagementViewModel : ViewModelBase
                 return r;
             }, cancellationToken).ConfigureAwait(false);
 
-            await Dispatcher.UIThread.InvokeAsync(() => _ndiOutputs[line] = runtime);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                lock (_ndiOutputsGate)
+                    _ndiOutputs[line] = runtime;
+            });
         }
         catch (Exception ex)
         {

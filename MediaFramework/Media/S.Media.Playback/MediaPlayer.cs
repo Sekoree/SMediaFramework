@@ -236,7 +236,7 @@ public sealed class MediaPlayer : IDisposable
 
         try
         {
-            if (options.IncludeAudioRouter)
+            if (options.IncludeAudioRouter && media.HasAudio)
             {
                 audioPlayer = new AudioPlayer(media.Audio.Format.SampleRate, options.AudioChunkSamples);
                 audioSourceId = audioPlayer.AddOwnedSource(media.Audio);
@@ -244,6 +244,9 @@ public sealed class MediaPlayer : IDisposable
             }
             else
             {
+                // No AudioPlayer either because the caller asked for video-only routing or because the
+                // container has no audio stream. Drive the visible clock from a freerun MediaClock that
+                // <see cref="AvPlaybackCoordinator.Play"/> starts manually when there's no audio master.
                 freerun = new MediaClock();
                 playClock = freerun;
             }

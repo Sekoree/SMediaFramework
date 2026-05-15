@@ -19,16 +19,18 @@ namespace HaPlay.Playback;
 internal sealed class HaPlayPlaybackSession : IDisposable
 {
     private readonly List<LogoFallbackVideoSink> _logoSinks = new();
-    private readonly Dictionary<Guid, NDIOutput> _ndiByDefinitionId = new();
+    private readonly List<OutputLineViewModel> _acquiredCarriers = new();
+    private readonly OutputManagementViewModel _outputs;
     private readonly List<PortAudioOutput> _portAudioOutputs = new();
     private readonly List<ResamplingAudioSink> _ndiAudioResamplers = new();
     private readonly List<NDIAudioSink> _ndiAudioSinks = new();
     private bool _disposed;
 
-    private HaPlayPlaybackSession(MediaPlayer player, AvRouter router)
+    private HaPlayPlaybackSession(MediaPlayer player, AvRouter router, OutputManagementViewModel outputs)
     {
         Player = player;
         Router = router;
+        _outputs = outputs;
     }
 
     public MediaPlayer Player { get; }
@@ -39,7 +41,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     public static bool TryCreate(
         string mediaPath,
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
-        OutputManagementViewModel _,
+        OutputManagementViewModel outputs,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
         out string? errorMessage)
     {
@@ -53,14 +55,27 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             TryHardwareAcceleration: !anyNdi,
             IncludeAudioRouter: true);
 
-        var ndiById = new Dictionary<Guid, NDIOutput>();
+        // Acquire the persistent NDI carrier for every NDI output line we'll route to. Carriers pause their
+        // black + silence pump while acquired; on Dispose we release them so the carrier resumes.
+        var ndiByDefinitionId = new Dictionary<Guid, NDIOutput>();
+        var acquired = new List<OutputLineViewModel>();
         foreach (var line in lines)
         {
             if (line.Definition is not NdiOutputDefinition nd)
                 continue;
-            if (ndiById.ContainsKey(nd.Id))
+            if (ndiByDefinitionId.ContainsKey(nd.Id))
                 continue;
-            ndiById[nd.Id] = CreateNdiOutput(nd);
+
+            var ndi = outputs.TryAcquireNdiCarrierForPlayback(line);
+            if (ndi is null)
+            {
+                ReleaseAcquiredCarriers(outputs, acquired);
+                errorMessage = $"NDI output '{nd.DisplayName}' has no live carrier (was it just removed, or is another player using it?).";
+                return false;
+            }
+
+            ndiByDefinitionId[nd.Id] = ndi;
+            acquired.Add(line);
         }
 
         var videoChains = new List<(string Id, IVideoSink Sink)>();
@@ -78,7 +93,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                 }
                 case NdiOutputDefinition nd when nd.StreamMode != NdiOutputStreamMode.AudioOnly:
                 {
-                    var ndi = ndiById[nd.Id];
+                    var ndi = ndiByDefinitionId[nd.Id];
                     var pump = new VideoSinkPump(ndi.VideoSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}", log: null,
                         disposeInnerOnDispose: false);
                     var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
@@ -92,12 +107,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         if (!MediaPlayer.TryOpen(mediaPath, mpOpt, lead, disposeNegotiationLead: true, out var player, out errorMessage))
         {
-            foreach (var ndi in ndiById.Values)
-            {
-                try { ndi.Dispose(); }
-                catch { /* best effort */ }
-            }
-
+            ReleaseAcquiredCarriers(outputs, acquired);
             return false;
         }
 
@@ -115,15 +125,14 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             }
 
             var av = player.Av;
-            pendingPlayback = new HaPlayPlaybackSession(player, av);
+            pendingPlayback = new HaPlayPlaybackSession(player, av, outputs);
 
             foreach (var sink in videoChains.Select(t => t.Sink).OfType<LogoFallbackVideoSink>())
                 pendingPlayback._logoSinks.Add(sink);
 
-            foreach (var kv in ndiById)
-                pendingPlayback._ndiByDefinitionId[kv.Key] = kv.Value;
+            pendingPlayback._acquiredCarriers.AddRange(acquired);
 
-            WireAudio(lines, player, pendingPlayback);
+            WireAudio(lines, ndiByDefinitionId, player, pendingPlayback);
             session = pendingPlayback;
             pendingPlayback = null;
             return true;
@@ -133,29 +142,22 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             errorMessage = ex.Message;
             pendingPlayback?.DisposePartialBeforePlayerDispose();
             player.Dispose();
-            foreach (var ndi in ndiById.Values)
-            {
-                try { ndi.Dispose(); }
-                catch { /* best effort */ }
-            }
-
+            ReleaseAcquiredCarriers(outputs, acquired);
             return false;
         }
     }
 
-    private static NDIOutput CreateNdiOutput(NdiOutputDefinition nd)
+    private static void ReleaseAcquiredCarriers(OutputManagementViewModel outputs, List<OutputLineViewModel> acquired)
     {
-        var mode = nd.StreamMode;
-        var clockV = mode != NdiOutputStreamMode.AudioOnly;
-        var clockA = mode != NdiOutputStreamMode.VideoOnly;
-        var tc = mode == NdiOutputStreamMode.VideoAndAudio
-            ? NDIVideoTimecodeMode.PresentationRelativeTicks
-            : NDIVideoTimecodeMode.Synthesize;
-        var groups = string.IsNullOrWhiteSpace(nd.Groups) ? null : nd.Groups;
-        return new NDIOutput(nd.SourceName, groups, clockV, clockA, null, tc);
+        foreach (var line in acquired)
+        {
+            try { outputs.ReleaseNdiCarrierForPlayback(line); }
+            catch { /* best effort */ }
+        }
     }
 
-    private static void WireAudio(List<OutputLineViewModel> lines, MediaPlayer player, HaPlayPlaybackSession playback)
+    private static void WireAudio(List<OutputLineViewModel> lines, Dictionary<Guid, NDIOutput> ndiByDefinitionId,
+        MediaPlayer player, HaPlayPlaybackSession playback)
     {
         if (player.Audio is null || string.IsNullOrEmpty(player.AudioSourceId))
             return;
@@ -180,8 +182,10 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                 }
                 case NdiOutputDefinition nd when nd.StreamMode != NdiOutputStreamMode.VideoOnly:
                 {
-                    if (!playback._ndiByDefinitionId.TryGetValue(nd.Id, out var ndi))
+                    if (!ndiByDefinitionId.TryGetValue(nd.Id, out var ndi))
                         continue;
+                    // Match the carrier's audio format exactly (sampleRate from definition, 2 channels) so
+                    // EnableAudio's idempotent return path hands back the carrier's existing sink.
                     var ndiAudioFmt = new AudioFormat(nd.AudioSampleRate, 2);
                     var ndiSink = ndi.EnableAudio(ndiAudioFmt);
                     playback._ndiAudioSinks.Add(ndiSink);
@@ -279,6 +283,20 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     {
         foreach (var l in _logoSinks)
             l.SetHoldFallback(hold);
+    }
+
+    /// <summary>
+    /// Re-shows the most recent decoded frame on every logo branch at <paramref name="presentationTime"/>.
+    /// Called after the user toggles hold-fallback off so single-frame sources (cover art) come back —
+    /// no-op for sinks whose cache is empty or for GPU-backed frames that couldn't be CPU-cached.
+    /// </summary>
+    public void ResubmitLastCachedFramesAt(TimeSpan presentationTime)
+    {
+        foreach (var l in _logoSinks)
+        {
+            try { l.ResubmitLastCachedAt(presentationTime); }
+            catch { /* best effort */ }
+        }
     }
 
     /// <summary>Pushes the hold template at <paramref name="presentationTime"/> on every logo sink (playback timer).</summary>
@@ -395,6 +413,10 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         _disposed = true;
         try
         {
+            // Player.Dispose tears down VideoRouter (and its outputs / pumps) and AudioRouter (and SinkPumps).
+            // The NDIVideoSender / NDIAudioSink inside each NDIOutput survive — VideoSinkPump and SinkPump
+            // are constructed with disposeInner=false so the underlying NDI sender stays alive for the
+            // carrier to resume.
             Player.Dispose();
         }
         catch
@@ -404,25 +426,19 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         foreach (var r in _ndiAudioResamplers)
         {
-            try
-            {
-                r.Dispose();
-            }
-            catch
-            {
-                /* best effort */
-            }
+            try { r.Dispose(); }
+            catch { /* best effort */ }
         }
 
         _ndiAudioResamplers.Clear();
 
-        foreach (var ndi in _ndiByDefinitionId.Values)
+        foreach (var line in _acquiredCarriers)
         {
-            try { ndi.Dispose(); }
+            try { _outputs.ReleaseNdiCarrierForPlayback(line); }
             catch { /* best effort */ }
         }
 
-        _ndiByDefinitionId.Clear();
+        _acquiredCarriers.Clear();
         _ndiAudioSinks.Clear();
         _logoSinks.Clear();
         _portAudioOutputs.Clear();

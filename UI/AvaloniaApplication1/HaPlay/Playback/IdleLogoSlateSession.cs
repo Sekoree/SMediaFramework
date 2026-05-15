@@ -4,32 +4,33 @@ using Avalonia.Threading;
 using HaPlay.Models;
 using HaPlay.ViewModels;
 using S.Media.Core.Video;
-using S.Media.FFmpeg.Video;
-using S.Media.NDI;
-using S.Media.NDI.Video;
 using S.Media.SDL3;
 
 namespace HaPlay.Playback;
 
 /// <summary>
-/// Shows the fallback image on selected video outputs when no <see cref="MediaPlayer"/> session is open
-/// (NDI + SDL3 OpenGL, same routing rules as playback).
+/// Shows the user-supplied fallback image on selected video outputs when no <see cref="MediaPlayer"/> session
+/// is open. For NDI outputs, the image is installed on the persistent <c>NdiOutputPreviewRuntime</c> carrier
+/// (via <see cref="OutputManagementViewModel.SetNdiCarrierLogo"/>) so receivers see the slate over the same
+/// sender they were already locked onto — no NDI re-discovery. For SDL3 OpenGL outputs, a dedicated logo
+/// sink + pump is created here.
 /// </summary>
 internal sealed class IdleLogoSlateSession : IDisposable
 {
-    private readonly List<LogoFallbackVideoSink> _logos = new();
-    private readonly Dictionary<Guid, NDIOutput> _ndiByDefinitionId = new();
+    private readonly List<LogoFallbackVideoSink> _sdlLogos = new();
+    private readonly List<OutputLineViewModel> _ndiLines = new();
+    private readonly OutputManagementViewModel _outputs;
     private readonly DispatcherTimer _timer;
     private readonly TimeSpan _frameDuration;
     private long _frameIndex;
     private bool _disposed;
 
-    private IdleLogoSlateSession(IReadOnlyList<LogoFallbackVideoSink> logos, Dictionary<Guid, NDIOutput> ndiById,
-        TimeSpan frameDuration)
+    private IdleLogoSlateSession(IReadOnlyList<LogoFallbackVideoSink> sdlLogos, IReadOnlyList<OutputLineViewModel> ndiLines,
+        OutputManagementViewModel outputs, TimeSpan frameDuration)
     {
-        _logos.AddRange(logos);
-        foreach (var kv in ndiById)
-            _ndiByDefinitionId[kv.Key] = kv.Value;
+        _sdlLogos.AddRange(sdlLogos);
+        _ndiLines.AddRange(ndiLines);
+        _outputs = outputs;
         _frameDuration = frameDuration;
         _timer = new DispatcherTimer { Interval = frameDuration };
         _timer.Tick += OnTick;
@@ -42,7 +43,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
             return;
         _frameIndex++;
         var pt = TimeSpan.FromTicks(checked(_frameIndex * _frameDuration.Ticks));
-        foreach (var logo in _logos)
+        foreach (var logo in _sdlLogos)
         {
             try
             {
@@ -76,15 +77,16 @@ internal sealed class IdleLogoSlateSession : IDisposable
             return false;
         }
 
-        var hasNdi = lines.Exists(static l =>
-            l.Definition is NdiOutputDefinition nd && nd.StreamMode != NdiOutputStreamMode.AudioOnly);
+        var ndiLines = lines
+            .Where(static l => l.Definition is NdiOutputDefinition nd && nd.StreamMode != NdiOutputStreamMode.AudioOnly)
+            .ToList();
 
+        // Build the NDI logo template once at the carrier's negotiated format (1920×1080 BGRA32 to match
+        // NdiOutputPreviewRuntime). Each carrier owns its own template copy via SetNdiCarrierLogo.
         VideoFrame? ndiProto = null;
-        var ndiVideoFormat = new VideoFormat(1920, 1080, PixelFormat.Bgra32, new Rational(60, 1));
-        if (hasNdi)
+        if (ndiLines.Count > 0)
         {
-            var (w, h) = DefaultNdiSlateSize(lines);
-            ndiVideoFormat = new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(60, 1));
+            var ndiVideoFormat = new VideoFormat(1920, 1080, PixelFormat.Bgra32, new Rational(30, 1));
             ndiProto = FallbackImageLoader.TryBuildHoldCpuFrame(ndiVideoFormat, imagePath);
             if (ndiProto is null)
             {
@@ -93,19 +95,8 @@ internal sealed class IdleLogoSlateSession : IDisposable
             }
         }
 
-        var ndiById = new Dictionary<Guid, NDIOutput>();
-        foreach (var line in lines)
-        {
-            if (line.Definition is not NdiOutputDefinition nd)
-                continue;
-            if (nd.StreamMode == NdiOutputStreamMode.AudioOnly)
-                continue;
-            if (ndiById.ContainsKey(nd.Id))
-                continue;
-            ndiById[nd.Id] = CreateNdiOutput(nd);
-        }
-
-        var logos = new List<LogoFallbackVideoSink>();
+        var sdlLogos = new List<LogoFallbackVideoSink>();
+        var ndiInstalled = new List<OutputLineViewModel>();
         try
         {
             foreach (var line in lines)
@@ -131,71 +122,42 @@ internal sealed class IdleLogoSlateSession : IDisposable
                             sdlProto.Dispose();
                         }
 
-                        logos.Add(logo);
+                        sdlLogos.Add(logo);
                         break;
                     }
                     case NdiOutputDefinition nd when nd.StreamMode != NdiOutputStreamMode.AudioOnly:
                     {
-                        var ndi = ndiById[nd.Id];
-                        var pump = new VideoSinkPump(ndi.VideoSink, maxQueuedFrames: 8, name: $"idle-ndi-{nd.Id:N}",
-                            log: null, disposeInnerOnDispose: false);
-                        var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
-                        logo.Configure(ndiVideoFormat);
-                        logo.TrySetHoldTemplate(FallbackImageLoader.CloneHoldTemplate(ndiProto!));
-                        logos.Add(logo);
+                        repository.SetNdiCarrierLogo(line, FallbackImageLoader.CloneHoldTemplate(ndiProto!));
+                        ndiInstalled.Add(line);
                         break;
                     }
                 }
             }
 
-            if (logos.Count == 0)
+            if (sdlLogos.Count == 0 && ndiInstalled.Count == 0)
             {
                 errorMessage = "No NDI or SDL3 video outputs are selected.";
-                foreach (var ndi in ndiById.Values)
-                {
-                    try
-                    {
-                        ndi.Dispose();
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-                }
-
                 ndiProto?.Dispose();
                 return false;
             }
 
             ndiProto?.Dispose();
-            session = new IdleLogoSlateSession(logos, ndiById, TimeSpan.FromSeconds(1.0 / 30.0));
+            session = new IdleLogoSlateSession(sdlLogos, ndiInstalled, repository, TimeSpan.FromSeconds(1.0 / 30.0));
             return true;
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
-            foreach (var logo in logos)
+            foreach (var logo in sdlLogos)
             {
-                try
-                {
-                    logo.Dispose();
-                }
-                catch
-                {
-                    /* best effort */
-                }
+                try { logo.Dispose(); }
+                catch { /* best effort */ }
             }
 
-            foreach (var ndi in ndiById.Values)
+            foreach (var line in ndiInstalled)
             {
-                try
-                {
-                    ndi.Dispose();
-                }
-                catch
-                {
-                    /* best effort */
-                }
+                try { repository.SetNdiCarrierLogo(line, null); }
+                catch { /* best effort */ }
             }
 
             ndiProto?.Dispose();
@@ -221,34 +183,11 @@ internal sealed class IdleLogoSlateSession : IDisposable
         return sb.ToString();
     }
 
-    private static (int W, int H) DefaultNdiSlateSize(List<OutputLineViewModel> lines)
-    {
-        foreach (var line in lines)
-        {
-            if (line.Definition is LocalVideoOutputDefinition lv && lv.Engine == VideoOutputEngine.SdlOpenGl)
-                return InitialSdlSize(lv);
-        }
-
-        return (1920, 1080);
-    }
-
     private static (int W, int H) InitialSdlSize(LocalVideoOutputDefinition d)
     {
         if (d.SurfaceMode == VideoSurfaceMode.Windowed && d.WindowWidth is { } w && d.WindowHeight is { } h)
             return (w, h);
         return (1280, 720);
-    }
-
-    private static NDIOutput CreateNdiOutput(NdiOutputDefinition nd)
-    {
-        var mode = nd.StreamMode;
-        var clockV = mode != NdiOutputStreamMode.AudioOnly;
-        var clockA = mode != NdiOutputStreamMode.VideoOnly;
-        var tc = mode == NdiOutputStreamMode.VideoAndAudio
-            ? NDIVideoTimecodeMode.PresentationRelativeTicks
-            : NDIVideoTimecodeMode.Synthesize;
-        var groups = string.IsNullOrWhiteSpace(nd.Groups) ? null : nd.Groups;
-        return new NDIOutput(nd.SourceName, groups, clockV, clockA, null, tc);
     }
 
     public void Dispose()
@@ -266,32 +205,20 @@ internal sealed class IdleLogoSlateSession : IDisposable
             /* best effort */
         }
 
-        foreach (var logo in _logos)
+        foreach (var logo in _sdlLogos)
         {
-            try
-            {
-                logo.Dispose();
-            }
-            catch
-            {
-                /* best effort */
-            }
+            try { logo.Dispose(); }
+            catch { /* best effort */ }
         }
 
-        _logos.Clear();
+        _sdlLogos.Clear();
 
-        foreach (var ndi in _ndiByDefinitionId.Values)
+        foreach (var line in _ndiLines)
         {
-            try
-            {
-                ndi.Dispose();
-            }
-            catch
-            {
-                /* best effort */
-            }
+            try { _outputs.SetNdiCarrierLogo(line, null); }
+            catch { /* best effort */ }
         }
 
-        _ndiByDefinitionId.Clear();
+        _ndiLines.Clear();
     }
 }

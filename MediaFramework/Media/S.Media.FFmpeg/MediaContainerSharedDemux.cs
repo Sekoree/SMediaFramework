@@ -51,6 +51,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private nint _vPendingPacket;
 
     private int _aStream = -1;
+    private bool _hasAudio;
     private AVRational _aTb;
     private AVCodecContext* _aCtx;
     private SwrContext* _swr;
@@ -92,6 +93,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     public string AudioCodecName { get; private set; } = "";
     public string VideoCodecName { get; private set; } = "";
     public TimeSpan Duration { get; private set; }
+
+    /// <summary>True when the container exposed a decodable audio stream — false for video-only files.</summary>
+    public bool HasAudio => _hasAudio;
 
     private MediaContainerSharedDemux()
     {
@@ -141,39 +145,54 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         AVCodec* aCodec = null;
         _aStream = av_find_best_stream(_fmt, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &aCodec, 0);
-        if (_aStream < 0 || aCodec == null)
-            throw new FFmpegException(_aStream, "no decodable audio stream found");
+        _hasAudio = _aStream >= 0 && aCodec != null;
+        if (!_hasAudio)
+            _aStream = -1;
 
         AVCodec* vCodec = null;
         _vStream = PickVideoStreamIndex(_fmt, _aStream, &vCodec);
         if (_vStream < 0 || vCodec == null)
-            throw new FFmpegException(_vStream, "no decodable video stream found");
+            throw new FFmpegException(_vStream, _hasAudio
+                ? "no decodable video stream found"
+                : "no decodable audio or video stream found");
 
-        var aSt = _fmt->streams[_aStream];
-        _aTb = aSt->time_base;
-        AudioCodecName = Marshal.PtrToStringAnsi((IntPtr)aCodec->name) ?? "unknown";
+        AVStream* aSt = null;
+        if (_hasAudio)
+        {
+            aSt = _fmt->streams[_aStream];
+            _aTb = aSt->time_base;
+            AudioCodecName = Marshal.PtrToStringAnsi((IntPtr)aCodec->name) ?? "unknown";
 
-        _aCtx = avcodec_alloc_context3(aCodec);
-        if (_aCtx == null) throw new OutOfMemoryException("audio avcodec_alloc_context3 returned NULL");
-        ret = avcodec_parameters_to_context(_aCtx, aSt->codecpar);
-        FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
-        ret = avcodec_open2(_aCtx, aCodec, null);
-        FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
+            _aCtx = avcodec_alloc_context3(aCodec);
+            if (_aCtx == null) throw new OutOfMemoryException("audio avcodec_alloc_context3 returned NULL");
+            ret = avcodec_parameters_to_context(_aCtx, aSt->codecpar);
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
+            ret = avcodec_open2(_aCtx, aCodec, null);
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
 
-        Audio.Format = new AudioFormat(_aCtx->sample_rate, _aCtx->ch_layout.nb_channels);
+            Audio.Format = new AudioFormat(_aCtx->sample_rate, _aCtx->ch_layout.nb_channels);
 
-        AVChannelLayout outLayout;
-        av_channel_layout_default(&outLayout, Audio.Format.Channels);
-        SwrContext* swr = null;
-        ret = swr_alloc_set_opts2(&swr,
-            &outLayout, AVSampleFormat.AV_SAMPLE_FMT_FLT, Audio.Format.SampleRate,
-            &_aCtx->ch_layout, _aCtx->sample_fmt, _aCtx->sample_rate,
-            0, null);
-        av_channel_layout_uninit(&outLayout);
-        FFmpegException.ThrowIfError(ret, nameof(swr_alloc_set_opts2));
-        _swr = swr;
-        ret = swr_init(_swr);
-        FFmpegException.ThrowIfError(ret, nameof(swr_init));
+            AVChannelLayout outLayout;
+            av_channel_layout_default(&outLayout, Audio.Format.Channels);
+            SwrContext* swr = null;
+            ret = swr_alloc_set_opts2(&swr,
+                &outLayout, AVSampleFormat.AV_SAMPLE_FMT_FLT, Audio.Format.SampleRate,
+                &_aCtx->ch_layout, _aCtx->sample_fmt, _aCtx->sample_rate,
+                0, null);
+            av_channel_layout_uninit(&outLayout);
+            FFmpegException.ThrowIfError(ret, nameof(swr_alloc_set_opts2));
+            _swr = swr;
+            ret = swr_init(_swr);
+            FFmpegException.ThrowIfError(ret, nameof(swr_init));
+        }
+        else
+        {
+            // Sentinel format for video-only files: 0 channels signals "no audio" to consumers.
+            // The 48000 Hz rate is a placeholder for clock-math fallback paths that never run when
+            // MediaContainerDecoder.HasAudio is false (MediaPlayer skips AudioPlayer creation).
+            AudioCodecName = "";
+            Audio.Format = new AudioFormat(48000, 0);
+        }
 
         var vSt = _fmt->streams[_vStream];
         _vTb = vSt->time_base;
@@ -271,9 +290,28 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 "If this is audio with a broken embedded cover stream, re-encode or strip the cover.");
         }
 
-        Video.Format = new VideoFormat(_vCtx->width, _vCtx->height, _vOutPixFmt, frameRate);
+        // Some streams (notably attached_pic / album cover art) report odd dimensions. Pixel formats with
+        // chroma subsampling (I420 / NV12 over NDI) require even W and H, and BGRA / RGBA / UYVY require
+        // even W. Round up to the next even multiple here and route through the sws-to-BGRA32 path so
+        // downstream sinks always see even dimensions. The visible difference is at most one row/column
+        // of sub-pixel rescaling — imperceptible for a static cover image.
+        var outWidth = _vCtx->width + (_vCtx->width & 1);
+        var outHeight = _vCtx->height + (_vCtx->height & 1);
+        var dimensionsRounded = outWidth != _vCtx->width || outHeight != _vCtx->height;
 
-        if (aSt->duration > 0)
+        if (dimensionsRounded && hw is null)
+        {
+            // Force the sws-to-BGRA32 path so the destination buffer matches Video.Format dims.
+            _vSrcPixFmt = _vCtx->pix_fmt;
+            _vNativePixFmt = PixelFormat.Bgra32;
+            _vPassThrough = false;
+            _vOutPixFmt = PixelFormat.Bgra32;
+            _vNativePixFormats = [];
+        }
+
+        Video.Format = new VideoFormat(outWidth, outHeight, _vOutPixFmt, frameRate);
+
+        if (aSt is not null && aSt->duration > 0)
             Duration = PtsToTimeSpanAudio(aSt->duration);
         else if (vSt->duration > 0)
             Duration = PtsToTimeSpanVideo(vSt->duration);
@@ -284,7 +322,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         {
             _swsCtx = sws_getCachedContext(null,
                 _vCtx->width, _vCtx->height, _vSrcPixFmt,
-                _vCtx->width, _vCtx->height, AVPixelFormat.AV_PIX_FMT_BGRA,
+                outWidth, outHeight, AVPixelFormat.AV_PIX_FMT_BGRA,
                 (int)SwsFlags.SWS_BICUBIC, null, null, null);
             if (_swsCtx == null)
                 throw new FFmpegException(0, "sws_getCachedContext returned NULL");
@@ -292,8 +330,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         _demuxPkt = av_packet_alloc();
         if (_demuxPkt == null) throw new OutOfMemoryException("demux av_packet_alloc returned NULL");
-        _aFrame = av_frame_alloc();
-        if (_aFrame == null) throw new OutOfMemoryException("audio av_frame_alloc returned NULL");
+        if (_hasAudio)
+        {
+            _aFrame = av_frame_alloc();
+            if (_aFrame == null) throw new OutOfMemoryException("audio av_frame_alloc returned NULL");
+        }
         _vFrame = av_frame_alloc();
         if (_vFrame == null) throw new OutOfMemoryException("video av_frame_alloc returned NULL");
 
@@ -508,20 +549,24 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
             }
 
-            avcodec_flush_buffers(_aCtx);
+            if (_hasAudio)
+                avcodec_flush_buffers(_aCtx);
             avcodec_flush_buffers(_vCtx);
 
             av_packet_unref(_demuxPkt);
-            av_frame_unref(_aFrame);
+            if (_hasAudio)
+            {
+                av_frame_unref(_aFrame);
+                swr_close(_swr);
+                ret = swr_init(_swr);
+                FFmpegException.ThrowIfError(ret, nameof(swr_init));
+            }
             av_frame_unref(_vFrame);
-            swr_close(_swr);
-            ret = swr_init(_swr);
-            FFmpegException.ThrowIfError(ret, nameof(swr_init));
 
             _aEof = false;
             _aDrainSent = false;
             _aDrainedTail = false;
-            _aSamplesEmitted = (long)(position.TotalSeconds * Audio.Format.SampleRate);
+            _aSamplesEmitted = _hasAudio ? (long)(position.TotalSeconds * Audio.Format.SampleRate) : 0;
             Audio.Position = position;
 
             _vEof = false;
@@ -932,7 +977,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             ReleaseSws();
             _swsCtx = sws_getCachedContext(null,
                 _vCtx->width, _vCtx->height, _vSrcPixFmt,
-                _vCtx->width, _vCtx->height, avTarget,
+                Video.Format.Width, Video.Format.Height, avTarget,
                 (int)SwsFlags.SWS_BICUBIC, null, null, null);
             if (_swsCtx == null)
                 throw new FFmpegException(0, $"sws_getCachedContext for {format} returned NULL");
@@ -1037,6 +1082,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         var width = Video.Format.Width;
         var height = Video.Format.Height;
+        // sws_scale's srcSliceH is the SOURCE slice height — must match the decoder's actual frame
+        // height even when we're upscaling to even output dimensions (attached_pic / odd-dim path).
+        var srcHeight = _vCtx->height;
         var bytesPerPixel = VideoFileDecoder.BytesPerPackedPixel(_vOutPixFmt);
         if (bytesPerPixel == 0)
             throw new NotSupportedException(
@@ -1071,7 +1119,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             Array.Clear(_swDstStride);
             _swDstStride[0] = stride;
 
-            var sret = sws_scale(_swsCtx, _swSrcLines, _swSrcStride, 0, height, _swDstLines, _swDstStride);
+            var sret = sws_scale(_swsCtx, _swSrcLines, _swSrcStride, 0, srcHeight, _swDstLines, _swDstStride);
             if (sret < 0) FFmpegException.ThrowIfError(sret, nameof(sws_scale));
         }
 
@@ -1133,12 +1181,13 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public string CodecName => _o.AudioCodecName;
         public TimeSpan Duration => _o.Duration;
         public TimeSpan Position { get; internal set; }
-        public bool IsAtEnd => _o._aEof;
-        public bool IsExhausted => _o._aEof && _o._aDrainedTail;
+        public bool IsAtEnd => !_o._hasAudio || _o._aEof;
+        public bool IsExhausted => !_o._hasAudio || (_o._aEof && _o._aDrainedTail);
 
         public int ReadInto(Span<float> dst)
         {
             ObjectDisposedException.ThrowIf(_o._disposed, this);
+            if (!_o._hasAudio) return 0;
             if (dst.Length % Format.Channels != 0)
                 throw new ArgumentException(
                     $"destination length {dst.Length} is not a multiple of channel count {Format.Channels}", nameof(dst));
@@ -1193,6 +1242,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public bool TryReadNextFrame(out AudioFrame frame)
         {
             ObjectDisposedException.ThrowIf(_o._disposed, this);
+            if (!_o._hasAudio)
+            {
+                frame = default;
+                return false;
+            }
             lock (_o._audioDecodeLock)
             {
                 _o.ThrowIfDisposedUnsafe();

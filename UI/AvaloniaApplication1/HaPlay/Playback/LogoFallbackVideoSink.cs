@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using S.Media.Core.Video;
+using S.Media.FFmpeg.Video;
 
 namespace HaPlay.Playback;
 
@@ -8,6 +9,9 @@ namespace HaPlay.Playback;
 /// Template pixels match the negotiated <see cref="VideoFormat"/> (including NV12 / UYVY, not only BGRA).
 /// When hold is on and a template is set, decoded frames are dropped and the UI pumps
 /// <see cref="SubmitTemplateFrame"/> so outputs stay live from the play clock alone.
+/// Also keeps a deep-copied cache of the most recent real frame so <see cref="ResubmitLastCachedAt"/>
+/// can restore the source after the user toggles hold off — important for single-frame sources
+/// (audio with cover art) where the decoder doesn't produce more frames on its own.
 /// </summary>
 internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
 {
@@ -18,6 +22,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     private bool _configured;
     private volatile bool _holdFallback;
     private VideoFrame? _holdTemplate;
+    private VideoFrame? _lastRealFrameCache;
     private bool _disposed;
 
     public LogoFallbackVideoSink(IVideoSink inner, bool disposeInnerOnDispose = true)
@@ -101,7 +106,62 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             }
         }
 
+        // Deep-copy each pass-through frame into a pool-backed cache so we can restore the visible
+        // pixels after a hold-off toggle. Without this, single-frame sources (attached_pic / album
+        // cover art) leave the receiver stuck on the no-longer-pumped template once hold turns off.
+        try
+        {
+            var copy = VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+            lock (_logoGate)
+            {
+                _lastRealFrameCache?.Dispose();
+                _lastRealFrameCache = copy;
+            }
+        }
+        catch
+        {
+            // GPU-backed frames (DRM PRIME / D3D11 shared) can't be CPU-duplicated. The toggle-off
+            // re-submit silently won't fire for those — real video paths refresh on the next decode tick.
+        }
+
         _inner.Submit(frame);
+    }
+
+    /// <summary>
+    /// Submits an alias of the cached last real frame at <paramref name="presentationTime"/>. Use after
+    /// toggling hold off so receivers see the source content again at the current playhead (cover art
+    /// re-show without re-decoding).
+    /// </summary>
+    public void ResubmitLastCachedAt(TimeSpan presentationTime)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        VideoFrame? cache;
+        lock (_logoGate)
+        {
+            cache = _lastRealFrameCache;
+        }
+
+        if (cache is null)
+            return;
+
+        // Alias the cached planes (release: null) — the cache stays alive and owns the buffers; the
+        // alias is consumed by inner (NDI deep-copies into staging, then Dispose runs the no-op release).
+        var alias = new VideoFrame(
+            presentationTime,
+            cache.Format,
+            cache.Planes,
+            cache.Strides,
+            cache.ColorTransferHint,
+            release: null);
+
+        try
+        {
+            _inner.Submit(alias);
+        }
+        catch
+        {
+            alias.Dispose();
+        }
     }
 
     public void Dispose()
@@ -113,6 +173,8 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
         {
             _holdTemplate?.Dispose();
             _holdTemplate = null;
+            _lastRealFrameCache?.Dispose();
+            _lastRealFrameCache = null;
         }
 
         if (_disposeInner && _inner is IDisposable d)

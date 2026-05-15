@@ -27,11 +27,16 @@ public sealed class MediaContainerDecoder : IDisposable
 
     private MediaContainerDecoder(MediaContainerSharedDemux shared) => _shared = shared;
 
-    /// <summary>Audio side — <see cref="ISeekableSource"/> for coordinated seeks.</summary>
+    /// <summary>Audio side — <see cref="ISeekableSource"/> for coordinated seeks. For video-only
+    /// files <see cref="HasAudio"/> is <c>false</c> and this source reports <c>IsExhausted = true</c>
+    /// immediately; consumers should check <see cref="HasAudio"/> before wiring an audio path.</summary>
     public IAudioSource Audio => _shared.Audio;
 
     /// <summary>Video side — <see cref="ISeekableSource"/>.</summary>
     public IVideoSource Video => _shared.Video;
+
+    /// <summary>True when the container exposed a decodable audio stream — false for video-only files.</summary>
+    public bool HasAudio => _shared.HasAudio;
 
     /// <summary>Always true for this implementation.</summary>
     public bool UsesSharedDemux => true;

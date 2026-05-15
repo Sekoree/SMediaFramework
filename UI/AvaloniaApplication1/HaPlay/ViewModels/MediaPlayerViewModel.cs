@@ -200,9 +200,25 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (_session is not null && IsMediaLoaded)
         {
             if (value)
+            {
                 StartHoldPumpTimer();
+            }
             else
+            {
                 StopHoldPumpTimer();
+                // Restore the last real decoded frame at the current playhead so single-frame sources
+                // (attached_pic / album cover art) come back instead of leaving receivers stuck on the
+                // no-longer-pumped template.
+                try
+                {
+                    var pt = _session.Player.PlayClock.CurrentPosition;
+                    _session.ResubmitLastCachedFramesAt(pt);
+                }
+                catch
+                {
+                    /* best effort */
+                }
+            }
         }
 
         SyncIdleSlate();
