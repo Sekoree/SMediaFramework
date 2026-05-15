@@ -250,26 +250,65 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand]
     private async Task AddFilesToPlaylistAsync()
     {
-        var top = TryGetMainWindow();
-        if (top is null) return;
-        var opts = new FilePickerOpenOptions { Title = "Add files to playlist", AllowMultiple = true };
-        opts.FileTypeFilter =
-        [
-            new FilePickerFileType("Media") { Patterns = ["*.mp4", "*.mkv", "*.mov", "*.webm", "*.m4v", "*.avi", "*.mp3", "*.wav", "*.flac", "*.aac", "*.m4a", "*.ogg"] },
-            new FilePickerFileType("All files") { Patterns = ["*"] },
-        ];
-        var files = await top.StorageProvider.OpenFilePickerAsync(opts);
-        foreach (var file in files)
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        Log("enter");
+        try
         {
-            var path = file.TryGetLocalPath();
-            if (string.IsNullOrEmpty(path) || !File.Exists(path))
-                continue;
-            if (!PlaylistPaths.Contains(path, StringComparer.Ordinal))
-                PlaylistPaths.Add(path);
+            var top = TryGetMainWindow();
+            if (top is null) { Log("no main window — abort"); return; }
+
+            var opts = new FilePickerOpenOptions { Title = "Add files to playlist", AllowMultiple = true };
+            opts.FileTypeFilter =
+            [
+                new FilePickerFileType("Media") { Patterns = ["*.mp4", "*.mkv", "*.mov", "*.webm", "*.m4v", "*.avi", "*.mp3", "*.wav", "*.flac", "*.aac", "*.m4a", "*.ogg"] },
+                new FilePickerFileType("All files") { Patterns = ["*"] },
+            ];
+
+            Log("calling OpenFilePickerAsync");
+            var files = await top.StorageProvider.OpenFilePickerAsync(opts);
+            Log($"picker returned count={files.Count}");
+
+            int added = 0, skipped = 0;
+            foreach (var file in files)
+            {
+                var path = file.TryGetLocalPath();
+                Log($"file path='{path}'");
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                {
+                    skipped++;
+                    continue;
+                }
+                if (!PlaylistPaths.Contains(path, StringComparer.Ordinal))
+                {
+                    PlaylistPaths.Add(path);
+                    added++;
+                }
+                else
+                {
+                    skipped++;
+                }
+            }
+            Log($"foreach done added={added} skipped={skipped} count={PlaylistPaths.Count}");
+
+            if (SelectedPlaylistPath is null && PlaylistPaths.Count > 0)
+            {
+                Log("setting initial SelectedPlaylistPath");
+                SelectedPlaylistPath = PlaylistPaths[0];
+                Log("set initial SelectedPlaylistPath done");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"EXCEPTION {ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
+        finally
+        {
+            Log("exit");
         }
 
-        if (SelectedPlaylistPath is null && PlaylistPaths.Count > 0)
-            SelectedPlaylistPath = PlaylistPaths[0];
+        void Log(string msg) =>
+            Console.WriteLine($"[AddFiles {sw.ElapsedMilliseconds,5}ms tid={Environment.CurrentManagedThreadId} ui={Dispatcher.UIThread.CheckAccess()}] {msg}");
     }
 
     [RelayCommand(CanExecute = nameof(CanRemovePlaylistItem))]
