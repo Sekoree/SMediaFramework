@@ -240,7 +240,11 @@ public sealed class VideoSinkPump : IVideoSink, IVideoSinkD3D11GlBorrowSetup, ID
             _cts?.Cancel();
             _pending.Set();
             if (_thread is { } t)
-                CooperativePlaybackJoin.JoinThread(t, TimeSpan.FromSeconds(30), CancellationToken.None);
+                // Drainer is parked at most one SDK-paced Submit (typically ≤33 ms at the negotiated frame
+                // rate). A 2 s cap covers slow sinks while keeping Pause / Stop / unload responsive — the
+                // previous 30 s cap could stack into multi-second freezes when the drainer was held up
+                // inside a paced send (most visible with attached_pic streams that declared 1 FPS).
+                CooperativePlaybackJoin.JoinThread(t, TimeSpan.FromSeconds(2), CancellationToken.None);
         }
 #if DEBUG
         catch (Exception ex) { MediaDiagnostics.LogError(ex, $"VideoSinkPump.Dispose: cooperative shutdown ({_name})"); }

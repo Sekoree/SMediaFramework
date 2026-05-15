@@ -125,12 +125,13 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Pauses the persistent NDI carrier for <paramref name="line"/> and returns the live
-    /// <see cref="NDIOutput"/> so a playback session can wire its sinks onto the existing sender (no
-    /// receiver re-discovery). Returns <c>null</c> if no carrier is running or another acquirer holds it.
-    /// Callers MUST pair every successful acquire with <see cref="ReleaseNdiCarrierForPlayback"/>.
+    /// Pauses only the carrier sides playback actually needs and returns the live <see cref="NDIOutput"/>
+    /// so the playback session can wire onto the existing sender. Other carrier sides keep emitting
+    /// (e.g. audio-only file on a VideoAndAudio NDI: carrier video stays running). Returns <c>null</c>
+    /// when no carrier is running, when neither side is requested, or when another acquirer holds one of
+    /// the requested sides. Callers MUST pair every successful acquire with <see cref="ReleaseNdiCarrierForPlayback"/>.
     /// </summary>
-    internal NDIOutput? TryAcquireNdiCarrierForPlayback(OutputLineViewModel line)
+    internal NDIOutput? TryAcquireNdiCarrierForPlayback(OutputLineViewModel line, bool needsVideo, bool needsAudio)
     {
         NdiOutputPreviewRuntime? rt;
         lock (_ndiOutputsGate)
@@ -139,7 +140,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 return null;
         }
 
-        return rt.AcquireForPlayback();
+        return rt.AcquireForPlayback(needsVideo, needsAudio);
     }
 
     /// <summary>Resumes the carrier paused by <see cref="TryAcquireNdiCarrierForPlayback"/>.</summary>

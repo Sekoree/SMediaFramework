@@ -62,6 +62,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private bool _aDrainedTail;
 
     private int _vStream = -1;
+    private bool _hasVideo;
     private AVRational _vTb;
     private AVCodecContext* _vCtx;
     private SwsContext* _swsCtx;
@@ -96,6 +97,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     /// <summary>True when the container exposed a decodable audio stream — false for video-only files.</summary>
     public bool HasAudio => _hasAudio;
+
+    /// <summary>True when the container exposed a decodable video stream — false for audio-only files
+    /// (the <see cref="VideoTrack"/> is a stub that reports <c>IsExhausted = true</c> immediately).</summary>
+    public bool HasVideo => _hasVideo;
 
     private MediaContainerSharedDemux()
     {
@@ -151,10 +156,13 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         AVCodec* vCodec = null;
         _vStream = PickVideoStreamIndex(_fmt, _aStream, &vCodec);
-        if (_vStream < 0 || vCodec == null)
-            throw new FFmpegException(_vStream, _hasAudio
-                ? "no decodable video stream found"
-                : "no decodable audio or video stream found");
+        _hasVideo = _vStream >= 0 && vCodec != null;
+        if (!_hasVideo)
+        {
+            _vStream = -1;
+            if (!_hasAudio)
+                throw new FFmpegException(_vStream, "no decodable audio or video stream found");
+        }
 
         AVStream* aSt = null;
         if (_hasAudio)
@@ -194,7 +202,40 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             Audio.Format = new AudioFormat(48000, 0);
         }
 
-        var vSt = _fmt->streams[_vStream];
+        AVStream* vSt = null;
+        if (!_hasVideo)
+        {
+            // No decodable video stream — audio-only file (e.g. MP3 with no cover art).
+            // Provide a stub VideoFormat so format negotiation between the stub IVideoSource and a
+            // permissive sink (DiscardingVideoSink, or any sink with at least one accepted format)
+            // succeeds. The decode loop never produces frames because VideoTrack.IsExhausted is true.
+            VideoCodecName = "";
+            _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+            _vNativePixFmt = PixelFormat.Bgra32;
+            _vPassThrough = false;
+            _vOutPixFmt = PixelFormat.Bgra32;
+            _vNativePixFormats = [PixelFormat.Bgra32];
+            Video.Format = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+
+            // Duration falls back to audio (already populated above) or to the container duration.
+            if (_hasAudio && aSt is not null && aSt->duration > 0)
+                Duration = PtsToTimeSpanAudio(aSt->duration);
+            else if (_fmt->duration > 0)
+                Duration = TimeSpan.FromMicroseconds(_fmt->duration);
+
+            _demuxPkt = av_packet_alloc();
+            if (_demuxPkt == null) throw new OutOfMemoryException("demux av_packet_alloc returned NULL");
+            if (_hasAudio)
+            {
+                _aFrame = av_frame_alloc();
+                if (_aFrame == null) throw new OutOfMemoryException("audio av_frame_alloc returned NULL");
+            }
+
+            StartDemuxerThread();
+            return;
+        }
+
+        vSt = _fmt->streams[_vStream];
         _vTb = vSt->time_base;
         VideoCodecName = Marshal.PtrToStringAnsi((IntPtr)vCodec->name) ?? "unknown";
 
@@ -393,7 +434,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         var attached = (streamDisposition & AvDispositionAttachedPic) != 0;
 
         if (attached)
-            return new Rational(1, 1);
+            // attached_pic streams are conceptually 1 FPS (one still for the whole file), but downstream
+            // sinks with SDK-paced video clocks (NDI's clockVideo:true paces NDIlib_send_send_video_async_v2
+            // at the declared rate) would then block sender threads for one second per frame — making prime
+            // / hold-toggle / cover-art appearance take 10+ seconds in practice. Declare 30 FPS so the SDK
+            // paces at ~33 ms per send; we still only emit a single decoded frame, receivers just hold it.
+            return new Rational(30, 1);
 
         if (double.IsNaN(d) || double.IsInfinity(d) || d <= 0)
             return new Rational(30, 1);
@@ -544,14 +590,28 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             var ret = avformat_seek_file(_fmt, -1, long.MinValue, timestampUs, long.MaxValue, AVSEEK_FLAG_BACKWARD);
             if (ret < 0)
             {
-                var vTs = (long)(position.TotalSeconds * _vTb.den / _vTb.num);
-                ret = av_seek_frame(_fmt, _vStream, vTs, AVSEEK_FLAG_BACKWARD);
-                FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
+                if (_hasVideo)
+                {
+                    var vTs = (long)(position.TotalSeconds * _vTb.den / _vTb.num);
+                    ret = av_seek_frame(_fmt, _vStream, vTs, AVSEEK_FLAG_BACKWARD);
+                    FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
+                }
+                else if (_hasAudio)
+                {
+                    var aTs = (long)(position.TotalSeconds * _aTb.den / _aTb.num);
+                    ret = av_seek_frame(_fmt, _aStream, aTs, AVSEEK_FLAG_BACKWARD);
+                    FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
+                }
+                else
+                {
+                    FFmpegException.ThrowIfError(ret, nameof(avformat_seek_file));
+                }
             }
 
             if (_hasAudio)
                 avcodec_flush_buffers(_aCtx);
-            avcodec_flush_buffers(_vCtx);
+            if (_hasVideo)
+                avcodec_flush_buffers(_vCtx);
 
             av_packet_unref(_demuxPkt);
             if (_hasAudio)
@@ -561,7 +621,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 ret = swr_init(_swr);
                 FFmpegException.ThrowIfError(ret, nameof(swr_init));
             }
-            av_frame_unref(_vFrame);
+            if (_hasVideo)
+                av_frame_unref(_vFrame);
 
             _aEof = false;
             _aDrainSent = false;
@@ -578,8 +639,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             _fileReadCompleted = false;
             StartDemuxerThread();
 
-            lock (_videoDecodeLock)
-                ConsumeDecoderUntilPts(position);
+            if (_hasVideo)
+            {
+                lock (_videoDecodeLock)
+                    ConsumeDecoderUntilPts(position);
+            }
         }
     }
 
@@ -1281,8 +1345,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public string CodecName => _o.VideoCodecName;
         public TimeSpan Duration => _o.Duration;
         public TimeSpan Position { get; internal set; }
-        public bool IsAtEnd => _o._vEof;
-        public bool IsExhausted => _o._vEof;
+        public bool IsAtEnd => !_o._hasVideo || _o._vEof;
+        public bool IsExhausted => !_o._hasVideo || _o._vEof;
         public IReadOnlyList<PixelFormat> NativePixelFormats => _o._vNativePixFormats;
 
         public void SelectOutputFormat(PixelFormat format)
@@ -1290,6 +1354,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             ObjectDisposedException.ThrowIf(_o._disposed, this);
             if (format == PixelFormat.Unknown)
                 throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
+
+            if (!_o._hasVideo)
+            {
+                // No real video stream — just record the negotiated output format on the stub so the
+                // sink's Configure(Format) call sees a coherent VideoFormat. The decode path is inert.
+                Format = Format with { PixelFormat = format };
+                _o._vOutPixFmt = format;
+                return;
+            }
 
             lock (_o._videoDecodeLock)
             {
@@ -1301,6 +1374,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public bool TryReadNextFrame(out VideoFrame frame)
         {
             ObjectDisposedException.ThrowIf(_o._disposed, this);
+            if (!_o._hasVideo)
+            {
+                frame = null!;
+                return false;
+            }
             lock (_o._videoDecodeLock)
             {
                 _o.ThrowIfDisposedUnsafe();

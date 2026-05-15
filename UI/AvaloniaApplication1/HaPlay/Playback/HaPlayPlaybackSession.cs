@@ -55,8 +55,25 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             TryHardwareAcceleration: !anyNdi,
             IncludeAudioRouter: true);
 
-        // Acquire the persistent NDI carrier for every NDI output line we'll route to. Carriers pause their
-        // black + silence pump while acquired; on Dispose we release them so the carrier resumes.
+        // Pre-probe the container so we know HasVideo / HasAudio before we decide which carrier sides to
+        // acquire. Without this we'd have to acquire both sides always, which would pause carrier video
+        // during audio-only-source playback and flash NDI receivers to a stub format with no frames.
+        MediaContainerDecoder? decoder;
+        try
+        {
+            decoder = MediaContainerDecoder.Open(mediaPath, mpOpt.ToVideoDecoderOpenOptions());
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            return false;
+        }
+
+        var hasVideo = decoder.HasVideo;
+        var hasAudio = decoder.HasAudio;
+
+        // Acquire each NDI carrier with only the sides playback actually drives — keeps the other side's
+        // black/silence flowing so receivers don't see resolution flicker or audio-format flicker.
         var ndiByDefinitionId = new Dictionary<Guid, NDIOutput>();
         var acquired = new List<OutputLineViewModel>();
         foreach (var line in lines)
@@ -66,10 +83,16 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             if (ndiByDefinitionId.ContainsKey(nd.Id))
                 continue;
 
-            var ndi = outputs.TryAcquireNdiCarrierForPlayback(line);
+            var needsVideo = hasVideo && nd.StreamMode != NdiOutputStreamMode.AudioOnly;
+            var needsAudio = hasAudio && nd.StreamMode != NdiOutputStreamMode.VideoOnly;
+            if (!needsVideo && !needsAudio)
+                continue; // nothing playback will wire — leave the carrier alone
+
+            var ndi = outputs.TryAcquireNdiCarrierForPlayback(line, needsVideo, needsAudio);
             if (ndi is null)
             {
                 ReleaseAcquiredCarriers(outputs, acquired);
+                decoder.Dispose();
                 errorMessage = $"NDI output '{nd.DisplayName}' has no live carrier (was it just removed, or is another player using it?).";
                 return false;
             }
@@ -79,34 +102,40 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         var videoChains = new List<(string Id, IVideoSink Sink)>();
-        foreach (var line in lines)
+        if (hasVideo)
         {
-            switch (line.Definition)
+            foreach (var line in lines)
             {
-                case LocalVideoOutputDefinition lv when lv.Engine == VideoOutputEngine.SdlOpenGl:
+                switch (line.Definition)
                 {
-                    var (w, h) = InitialSdlSize(lv);
-                    var sdl = new SDL3GLVideoSink(lv.DisplayName, w, h);
-                    var logo = new LogoFallbackVideoSink(sdl, disposeInnerOnDispose: true);
-                    videoChains.Add(($"sdl_{lv.Id:N}", logo));
-                    break;
-                }
-                case NdiOutputDefinition nd when nd.StreamMode != NdiOutputStreamMode.AudioOnly:
-                {
-                    var ndi = ndiByDefinitionId[nd.Id];
-                    var pump = new VideoSinkPump(ndi.VideoSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}", log: null,
-                        disposeInnerOnDispose: false);
-                    var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
-                    videoChains.Add(($"ndi_{nd.Id:N}", logo));
-                    break;
+                    case LocalVideoOutputDefinition lv when lv.Engine == VideoOutputEngine.SdlOpenGl:
+                    {
+                        var (w, h) = InitialSdlSize(lv);
+                        var sdl = new SDL3GLVideoSink(lv.DisplayName, w, h);
+                        var logo = new LogoFallbackVideoSink(sdl, disposeInnerOnDispose: true);
+                        videoChains.Add(($"sdl_{lv.Id:N}", logo));
+                        break;
+                    }
+                    case NdiOutputDefinition nd when nd.StreamMode != NdiOutputStreamMode.AudioOnly:
+                    {
+                        if (!ndiByDefinitionId.TryGetValue(nd.Id, out var ndi))
+                            continue;
+                        var pump = new VideoSinkPump(ndi.VideoSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}", log: null,
+                            disposeInnerOnDispose: false);
+                        var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
+                        videoChains.Add(($"ndi_{nd.Id:N}", logo));
+                        break;
+                    }
                 }
             }
         }
 
         var lead = videoChains.Count > 0 ? videoChains[0].Sink : null;
 
-        if (!MediaPlayer.TryOpen(mediaPath, mpOpt, lead, disposeNegotiationLead: true, out var player, out errorMessage))
+        if (!MediaPlayer.TryOpen(decoder, mpOpt, lead, disposeNegotiationLead: true,
+                MediaPlayerDecoderOwnership.BundleDisposesDecoder, out var player, out errorMessage))
         {
+            // BundleDisposesDecoder disposes the decoder for us on failure.
             ReleaseAcquiredCarriers(outputs, acquired);
             return false;
         }
@@ -252,6 +281,11 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     {
         if (holdFallbackShowsImage || _logoSinks.Count == 0)
             return;
+        // Audio-only sources (no real video stream) negotiate to a stub format the sink doesn't care
+        // about — priming black frames at the stub resolution would just glitch NDI receivers between
+        // the carrier's real size and the stub size. Skip when there's no decodable video.
+        if (!Player.Decoder.HasVideo)
+            return;
         var fmt = Player.Video.Format;
         for (var i = 0; i < frameCount; i++)
         {
@@ -324,51 +358,13 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
     }
 
-    /// <summary>Combines video priming and (optionally) NDI audio warmup — call right before <see cref="AvRouter.Play"/>.</summary>
+    /// <summary>Primes the video logo branches with a few black frames before <see cref="AvRouter.Play"/>
+    /// so SDL / NDI sinks have a configured frame in flight at the negotiated format. NDI audio side no
+    /// longer needs a silence warmup here — the persistent <c>NdiOutputPreviewRuntime</c> carrier keeps
+    /// receivers locked continuously, so audio just starts at the next router chunk boundary.</summary>
     /// <param name="holdFallbackShowsImage">When true, skip black-frame priming (the hold image already paints the output).</param>
-    /// <param name="ndiAudioLeadIn">
-    /// How much silence to push into NDI audio sinks first. Set to a non-zero value (e.g. 500 ms) when receivers
-    /// may not be locked on yet (initial Play after Load, after Stop, on playlist advance). Use <see cref="TimeSpan.Zero"/>
-    /// for in-playback transitions (seek, loop wrap) where extra silence would be audible at the new position.
-    /// </param>
-    public void PrepareOutputsBeforePlay(bool holdFallbackShowsImage, TimeSpan ndiAudioLeadIn)
-    {
+    public void PrepareOutputsBeforePlay(bool holdFallbackShowsImage) =>
         PrimeVideoOutputsBeforePlay(holdFallbackShowsImage);
-        if (ndiAudioLeadIn > TimeSpan.Zero)
-            WarmupNdiBeforePlay(ndiAudioLeadIn);
-    }
-
-    /// <summary>
-    /// Pre-rolls every NDI audio sink with <paramref name="leadIn"/> of silence and pushes extra primer frames
-    /// through the video chains. Most NDI receivers buffer 200–500 ms before output and don't lock onto a source
-    /// until they see the first audio packet, so the first chunks of real audio are lost to discovery / buffer fill.
-    /// Sending silence ahead of <see cref="AvRouter.Play"/> announces the format, lets receivers fill their buffers,
-    /// and avoids the missing-first-second symptom on real audio.
-    /// </summary>
-    /// <param name="leadIn">How much silence to send. ~600 ms covers most receiver buffer depths.</param>
-    public void WarmupNdiBeforePlay(TimeSpan leadIn)
-    {
-        if (leadIn <= TimeSpan.Zero) return;
-
-        foreach (var sink in _ndiAudioSinks)
-        {
-            var sampleRate = sink.Format.SampleRate;
-            var channels = sink.Format.Channels;
-            if (sampleRate <= 0 || channels <= 0) continue;
-
-            // 10 ms silence chunks — small enough to land in receiver buffers smoothly, large enough that we
-            // submit ~60 packets for 600 ms (cheap, but enough for discovery + buffer fill on slow receivers).
-            var samplesPerChunk = Math.Max(1, sampleRate / 100);
-            var totalChunks = Math.Max(1, (int)(leadIn.TotalMilliseconds / 10));
-            var buffer = new float[samplesPerChunk * channels];
-
-            for (var i = 0; i < totalChunks; i++)
-            {
-                try { sink.Submit(buffer); }
-                catch { /* best effort — receiver will catch up on real audio */ }
-            }
-        }
-    }
 
     /// <summary>
     /// Releases sinks we own when <see cref="TryCreate"/> fails after partial <see cref="WireAudio"/> work.

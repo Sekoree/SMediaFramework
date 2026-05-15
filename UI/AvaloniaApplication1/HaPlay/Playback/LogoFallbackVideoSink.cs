@@ -21,6 +21,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     private VideoFormat _format;
     private bool _configured;
     private volatile bool _holdFallback;
+    private volatile bool _holdEverEngaged;
     private VideoFrame? _holdTemplate;
     private VideoFrame? _lastRealFrameCache;
     private bool _disposed;
@@ -43,7 +44,12 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
         _configured = true;
     }
 
-    public void SetHoldFallback(bool hold) => _holdFallback = hold;
+    public void SetHoldFallback(bool hold)
+    {
+        if (hold)
+            _holdEverEngaged = true;
+        _holdFallback = hold;
+    }
 
     /// <summary>
     /// Pushes the configured template at <paramref name="presentationTime"/> (idle slate / no mux decode).
@@ -106,22 +112,33 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             }
         }
 
-        // Deep-copy each pass-through frame into a pool-backed cache so we can restore the visible
-        // pixels after a hold-off toggle. Without this, single-frame sources (attached_pic / album
-        // cover art) leave the receiver stuck on the no-longer-pumped template once hold turns off.
-        try
+        // Lazy cache strategy: always snapshot the FIRST pass-through frame so single-frame sources
+        // (audio + cover art) survive a future hold toggle. Once SetHoldFallback(true) has fired this
+        // session, refresh the cache on every submit so a subsequent toggle has a current frame.
+        // Sessions that never engage hold pay one deep-copy per session — not 8 MB × frame-rate forever.
+        var shouldCache = _holdEverEngaged;
+        if (!shouldCache)
         {
-            var copy = VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint);
             lock (_logoGate)
-            {
-                _lastRealFrameCache?.Dispose();
-                _lastRealFrameCache = copy;
-            }
+                shouldCache = _lastRealFrameCache is null;
         }
-        catch
+
+        if (shouldCache)
         {
-            // GPU-backed frames (DRM PRIME / D3D11 shared) can't be CPU-duplicated. The toggle-off
-            // re-submit silently won't fire for those — real video paths refresh on the next decode tick.
+            try
+            {
+                var copy = VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                lock (_logoGate)
+                {
+                    _lastRealFrameCache?.Dispose();
+                    _lastRealFrameCache = copy;
+                }
+            }
+            catch
+            {
+                // GPU-backed frames (DRM PRIME / D3D11 shared) can't be CPU-duplicated. The toggle-off
+                // re-submit won't fire for those — real video paths refresh on the next decode tick.
+            }
         }
 
         _inner.Submit(frame);

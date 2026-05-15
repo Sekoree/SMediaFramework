@@ -38,6 +38,11 @@ public sealed class MediaContainerDecoder : IDisposable
     /// <summary>True when the container exposed a decodable audio stream — false for video-only files.</summary>
     public bool HasAudio => _shared.HasAudio;
 
+    /// <summary>True when the container exposed a decodable video stream — false for audio-only files
+    /// (e.g. an MP3 without cover art). <see cref="Video"/> stays non-null but its source reports
+    /// <c>IsExhausted = true</c> immediately, so the negotiated video pipeline runs but never produces frames.</summary>
+    public bool HasVideo => _shared.HasVideo;
+
     /// <summary>Always true for this implementation.</summary>
     public bool UsesSharedDemux => true;
 

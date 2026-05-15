@@ -470,7 +470,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 var hf = holdFbAfterOpen;
                 var ok = await RunBoundedAsync(() =>
                 {
-                    s.PrepareOutputsBeforePlay(hf, NdiInitialLeadIn);
+                    s.PrepareOutputsBeforePlay(hf);
                     s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
                 }, TimeSpan.FromSeconds(8));
 
@@ -486,11 +486,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 await Dispatcher.UIThread.InvokeAsync(StartHoldPumpTimer);
         }).ConfigureAwait(false);
     }
-
-    /// <summary>NDI receivers typically buffer 200–500 ms and need a moment to lock onto a source. Push silence
-    /// for this long before the first audio frame so the first real samples aren't lost to discovery/buffer-fill.
-    /// In-playback transitions (seek, loop wrap) use <see cref="TimeSpan.Zero"/> to avoid an audible silence gap.</summary>
-    private static readonly TimeSpan NdiInitialLeadIn = TimeSpan.FromMilliseconds(600);
 
     private void EnsureLoopTimerStarted()
     {
@@ -591,13 +586,18 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
             if (IsLooping)
             {
-                if (!session.Player.Video.CompletedNaturally) return;
+                // Use audio's natural completion when an audio router is present (covers both audio-only
+                // and audio+video sources). Falls back to video for video-only files where audio is null.
+                var loopReady = session.Player.Audio?.Router is { } loopAr
+                    ? !loopAr.IsRunning && loopAr.CompletedNaturally
+                    : session.Player.Video.CompletedNaturally;
+                if (!loopReady) return;
                 await RunBoundedCancelableAsync(ct =>
                     {
                         session.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, ct);
                         // No NDI warmup on loop wrap — receivers are already locked on and a silence gap would
                         // be audible between the last and first samples of the loop.
-                        session.PrepareOutputsBeforePlay(holdFb, TimeSpan.Zero);
+                        session.PrepareOutputsBeforePlay(holdFb);
                         session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
                     },
                     innerTimeout: TimeSpan.FromSeconds(3),
@@ -649,7 +649,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             var ok = await RunBoundedAsync(() =>
             {
                 // Playlist advance — receivers may have drained between tracks.
-                s.PrepareOutputsBeforePlay(holdForPrime, NdiInitialLeadIn);
+                s.PrepareOutputsBeforePlay(holdForPrime);
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
             }, TimeSpan.FromSeconds(6));
 
@@ -689,7 +689,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 // Play from a non-playing state — NDI receivers may have drained their buffers since the last
                 // Pause/Stop, so push silence ahead of the first real samples.
-                s.PrepareOutputsBeforePlay(holdFb, NdiInitialLeadIn);
+                s.PrepareOutputsBeforePlay(holdFb);
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
             }, TimeSpan.FromSeconds(6));
 
@@ -827,7 +827,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     if (playing)
                     {
                         // No NDI warmup on seek — silence at the seek target would be obviously wrong audio.
-                        session.PrepareOutputsBeforePlay(holdFb, TimeSpan.Zero);
+                        session.PrepareOutputsBeforePlay(holdFb);
                         session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
                     }
                 },

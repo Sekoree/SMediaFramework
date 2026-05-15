@@ -14,9 +14,9 @@ namespace HaPlay.OutputPreview;
 /// <summary>
 /// Holds an <see cref="NDIOutput"/> open for the lifetime of an NDI <see cref="OutputLineViewModel"/>,
 /// continuously emitting black video and silent audio so receivers stay locked on across idle ↔ playback
-/// transitions. Playback temporarily acquires the underlying <see cref="NDIOutput"/> via
-/// <see cref="AcquireForPlayback"/> and returns it via <see cref="ReleaseFromPlayback"/>; the carrier
-/// pauses while playback owns the sender and resumes on release.
+/// transitions. Playback temporarily acquires part of the underlying <see cref="NDIOutput"/> via
+/// <see cref="AcquireForPlayback"/> — only the side that's actually being wired pauses, so e.g. an
+/// audio-only file on a VideoAndAudio NDI keeps the carrier's black video going while playback drives audio.
 /// </summary>
 internal sealed class NdiOutputPreviewRuntime : IDisposable
 {
@@ -25,6 +25,7 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
     private const int CarrierVideoFpsNumerator = 30;
     private const int CarrierVideoFpsDenominator = 1;
     private const int CarrierAudioChannels = 2;
+    private const int CarrierAudioChunkHz = 50;
 
     private readonly NdiOutputDefinition _definition;
     private readonly object _gate = new();
@@ -37,7 +38,8 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
     private long _audioSamplePosition;
     private nint _connectionMetadataUtf8;
     private bool _disposed;
-    private bool _acquired;
+    private bool _videoAcquired;
+    private bool _audioAcquired;
     private bool _disposeOnRelease;
     private VideoFrame? _logoTemplate;
 
@@ -72,17 +74,16 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
         {
             _output = output;
 
-            if (mode is NdiOutputStreamMode.VideoAndAudio or NdiOutputStreamMode.VideoOnly)
+            if (HasVideoStream(mode))
             {
                 output.VideoSink.Configure(CarrierVideoFormat);
                 StartVideoTimerLocked();
             }
 
-            if (mode is NdiOutputStreamMode.VideoAndAudio or NdiOutputStreamMode.AudioOnly)
+            if (HasAudioStream(mode))
             {
                 _audio = output.EnableAudio(CarrierAudioFormat);
-                if (mode == NdiOutputStreamMode.AudioOnly)
-                    StartAudioOnlyTimerLocked();
+                StartAudioTimerLocked();
             }
         }
     }
@@ -105,27 +106,37 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
     }
 
     /// <summary>
-    /// Pauses the carrier pump and returns the live <see cref="NDIOutput"/> so playback can wire its sinks
-    /// onto the existing sender (receivers stay locked). Caller must invoke <see cref="ReleaseFromPlayback"/>
-    /// when finished. Returns <c>null</c> if already acquired or disposed.
+    /// Pauses only the timers playback actually needs (so audio-only files on a VideoAndAudio NDI keep
+    /// the carrier's video going) and returns the live <see cref="NDIOutput"/>. Returns <c>null</c> if
+    /// disposed, never started, or another acquirer already owns one of the requested sides.
     /// </summary>
-    public NDIOutput? AcquireForPlayback()
+    public NDIOutput? AcquireForPlayback(bool needsVideo, bool needsAudio)
     {
+        if (!needsVideo && !needsAudio)
+            return null;
+
         lock (_gate)
         {
-            if (_disposed || _output is null || _acquired)
+            if (_disposed || _output is null)
                 return null;
+            if (needsVideo && _videoAcquired) return null;
+            if (needsAudio && _audioAcquired) return null;
 
-            _acquired = true;
-            StopTimersLocked();
-            // Drop any in-flight presentation anchor so playback PTS becomes the new baseline timecode.
-            try
+            var mode = _definition.StreamMode;
+            if (needsVideo && HasVideoStream(mode))
             {
-                _output.VideoSink.ResetPresentationTimecodeAnchor();
+                _videoAcquired = true;
+                _videoTimer?.Dispose();
+                _videoTimer = null;
+                try { _output.VideoSink.ResetPresentationTimecodeAnchor(); }
+                catch { /* best effort */ }
             }
-            catch
+
+            if (needsAudio && HasAudioStream(mode))
             {
-                /* best effort */
+                _audioAcquired = true;
+                _audioTimer?.Dispose();
+                _audioTimer = null;
             }
 
             return _output;
@@ -133,27 +144,30 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
     }
 
     /// <summary>
-    /// Resumes the carrier after playback has finished using the sender. Reconfigures the video sink back
-    /// to the carrier format so the next frame matches the timer's rate, and restarts the pump.
+    /// Resumes whichever carrier timers were paused by <see cref="AcquireForPlayback"/>. For video, also
+    /// reconfigures the sender back to the carrier format so the next frame matches the timer's rate.
     /// </summary>
     public void ReleaseFromPlayback()
     {
         bool dispose;
         lock (_gate)
         {
-            if (!_acquired)
+            var wasVideo = _videoAcquired;
+            var wasAudio = _audioAcquired;
+            if (!wasVideo && !wasAudio)
                 return;
-            _acquired = false;
+
+            _videoAcquired = false;
+            _audioAcquired = false;
             dispose = _disposeOnRelease;
             _disposeOnRelease = false;
 
             if (!dispose && !_disposed && _output is not null)
             {
-                // Playback may have left the NDI sender configured for a different size / pixel format.
-                // Re-configure to carrier defaults before resuming so receivers see one consistent stream.
                 var mode = _definition.StreamMode;
-                if (mode is NdiOutputStreamMode.VideoAndAudio or NdiOutputStreamMode.VideoOnly)
+                if (wasVideo && HasVideoStream(mode))
                 {
+                    // Playback may have left the NDI sender configured for a different size / pixel format.
                     try
                     {
                         _output.VideoSink.Configure(CarrierVideoFormat);
@@ -167,8 +181,8 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
                     StartVideoTimerLocked();
                 }
 
-                if (mode == NdiOutputStreamMode.AudioOnly)
-                    StartAudioOnlyTimerLocked();
+                if (wasAudio && HasAudioStream(mode))
+                    StartAudioTimerLocked();
             }
         }
 
@@ -199,43 +213,35 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
         _videoTimer = new Timer(OnVideoTick, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(periodMs));
     }
 
-    private void StartAudioOnlyTimerLocked()
+    private void StartAudioTimerLocked()
     {
+        var periodMs = Math.Max(1, 1000 / CarrierAudioChunkHz);
         _audioTimer?.Dispose();
-        _audioTimer = new Timer(OnAudioOnlyTick, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(20));
+        _audioTimer = new Timer(OnAudioTick, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(periodMs));
     }
 
-    private void StopTimersLocked()
-    {
-        _videoTimer?.Dispose();
-        _videoTimer = null;
-        _audioTimer?.Dispose();
-        _audioTimer = null;
-    }
+    private static bool HasVideoStream(NdiOutputStreamMode mode) =>
+        mode is NdiOutputStreamMode.VideoAndAudio or NdiOutputStreamMode.VideoOnly;
+
+    private static bool HasAudioStream(NdiOutputStreamMode mode) =>
+        mode is NdiOutputStreamMode.VideoAndAudio or NdiOutputStreamMode.AudioOnly;
 
     private void OnVideoTick(object? _)
     {
         lock (_gate)
         {
-            if (_disposed || _acquired || _output is null)
+            if (_disposed || _videoAcquired || _output is null)
                 return;
 
             try
             {
-                var mode = _definition.StreamMode;
                 var idx = _videoOrdinal++;
                 var pt = TimeSpan.FromTicks(idx * TimeSpan.TicksPerSecond * CarrierVideoFpsDenominator / CarrierVideoFpsNumerator);
 
-                if (mode is NdiOutputStreamMode.VideoAndAudio or NdiOutputStreamMode.VideoOnly)
-                {
-                    var frame = _logoTemplate is { } tpl
-                        ? CloneLogoFrame(tpl, pt)
-                        : PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat, pt);
-                    _output.VideoSink.Submit(frame);
-                }
-
-                if (mode == NdiOutputStreamMode.VideoAndAudio)
-                    SubmitSilence(pt);
+                var frame = _logoTemplate is { } tpl
+                    ? CloneLogoFrame(tpl, pt)
+                    : PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat, pt);
+                _output.VideoSink.Submit(frame);
             }
             catch (Exception ex)
             {
@@ -248,17 +254,19 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
         new(presentationTime, template.Format, template.Planes, template.Strides,
             template.ColorTransferHint, release: null);
 
-    private void OnAudioOnlyTick(object? _)
+    private void OnAudioTick(object? _)
     {
         lock (_gate)
         {
-            if (_disposed || _acquired || _output is null || _audio is null)
+            if (_disposed || _audioAcquired || _output is null || _audio is null)
                 return;
 
             try
             {
                 var rate = _definition.AudioSampleRate;
-                var spc = Math.Max(1, rate / 50);
+                if (rate <= 0)
+                    return;
+                var spc = Math.Max(1, rate / CarrierAudioChunkHz);
                 var pt = TimeSpan.FromTicks(_audioSamplePosition * TimeSpan.TicksPerSecond / rate);
                 _audioSamplePosition += spc;
                 SubmitSilence(pt, spc);
@@ -270,24 +278,24 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
         }
     }
 
-    private void SubmitSilence(TimeSpan presentationTime, int? samplesPerChannelOverride = null)
+    private void SubmitSilence(TimeSpan presentationTime, int samplesPerChannel)
     {
         if (_audio is null)
             return;
 
         var channels = CarrierAudioChannels;
         var rate = _definition.AudioSampleRate;
-        var spc = samplesPerChannelOverride ?? (int)Math.Round(rate * (double)CarrierVideoFpsDenominator / CarrierVideoFpsNumerator);
-        if (spc <= 0)
+        var need = samplesPerChannel * channels;
+        if (need <= 0)
             return;
 
-        var need = spc * channels;
         if (_silenceScratch is null || _silenceScratch.Length < need)
             _silenceScratch = new float[need];
+        else
+            Array.Clear(_silenceScratch, 0, need);
 
-        Array.Clear(_silenceScratch, 0, need);
         var fmt = new AudioFormat(rate, channels);
-        _audio.Submit(new AudioFrame(presentationTime, fmt, spc, _silenceScratch.AsMemory(0, need)));
+        _audio.Submit(new AudioFrame(presentationTime, fmt, samplesPerChannel, _silenceScratch.AsMemory(0, need)));
     }
 
     private static VideoFormat CarrierVideoFormat => new(
@@ -303,15 +311,18 @@ internal sealed class NdiOutputPreviewRuntime : IDisposable
         {
             if (_disposed)
                 return;
-            if (_acquired)
+            if (_videoAcquired || _audioAcquired)
             {
-                // Playback still owns the sender — defer teardown so we don't yank it mid-stream.
+                // Playback still owns part of the sender — defer teardown so we don't yank it mid-stream.
                 _disposeOnRelease = true;
                 return;
             }
 
             _disposed = true;
-            StopTimersLocked();
+            _videoTimer?.Dispose();
+            _videoTimer = null;
+            _audioTimer?.Dispose();
+            _audioTimer = null;
             logoToDispose = _logoTemplate;
             _logoTemplate = null;
             try
