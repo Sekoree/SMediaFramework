@@ -4,15 +4,38 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:views="using:HaPlay.Views"
-             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="520"
+             mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
              x:Class="HaPlay.Views.MainView"
              x:DataType="vm:MainViewModel">
-  <TabControl Margin="8">
+
+  <TabControl Margin="0">
+
+    <TabItem Header="Players">
+      <DockPanel Margin="8">
+
+        <!-- Player switcher strip + Add button -->
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+          <TabStrip Grid.Column="0"
+                    ItemsSource="{Binding Players}"
+                    SelectedItem="{Binding SelectedPlayer}">
+            <TabStrip.ItemTemplate>
+              <DataTemplate DataType="vm:MediaPlayerViewModel">
+                <TextBlock Text="{Binding Name}" VerticalAlignment="Center" Padding="2,0" />
+              </DataTemplate>
+            </TabStrip.ItemTemplate>
+          </TabStrip>
+          <Button Grid.Column="1" Content="+ Add player"
+                  Command="{Binding AddPlayerCommand}"
+                  VerticalAlignment="Center" Margin="6,0,0,0" />
+        </Grid>
+
+        <!-- Selected player content (rendered via DataTemplate in App.axaml) -->
+        <ContentControl Content="{Binding SelectedPlayer}" />
+      </DockPanel>
+    </TabItem>
+
     <TabItem Header="Outputs">
       <views:OutputManagementView DataContext="{Binding OutputManagement}" />
-    </TabItem>
-    <TabItem Header="Media player">
-      <views:MediaPlayerView DataContext="{Binding MediaPlayer}" />
     </TabItem>
   </TabControl>
 </UserControl>

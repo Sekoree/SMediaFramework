@@ -24,9 +24,6 @@ public partial class OutputLineViewModel : ViewModelBase
     public bool SupportsMediaPlayerRouting =>
         Definition is not LocalVideoOutputDefinition v || v.Engine == VideoOutputEngine.SdlOpenGl;
 
-    [ObservableProperty]
-    private bool _useInMediaPlayer;
-
     public bool IsLocalVideo => Definition is LocalVideoOutputDefinition;
 
     public bool IsNotLocalVideo => Definition is not LocalVideoOutputDefinition;

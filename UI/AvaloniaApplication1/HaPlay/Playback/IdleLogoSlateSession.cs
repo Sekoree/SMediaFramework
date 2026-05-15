@@ -67,7 +67,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
         repository.StopPreviewsForPlayback(selectedOutputs);
 
         var lines = selectedOutputs
-            .Where(static l => l.UseInMediaPlayer && l.SupportsMediaPlayerRouting)
+            .Where(static l => l.SupportsMediaPlayerRouting)
             .ToList();
 
         if (lines.Count == 0)
@@ -207,15 +207,15 @@ internal sealed class IdleLogoSlateSession : IDisposable
     public static string BuildSignature(
         bool holdFallback,
         string? fallbackPath,
-        IEnumerable<OutputLineViewModel> outputs)
+        IEnumerable<OutputLineViewModel> selectedOutputs)
     {
         var sb = new StringBuilder();
         sb.Append(holdFallback ? '1' : '0').Append('|').Append(fallbackPath).Append('|');
-        foreach (var line in outputs)
+        foreach (var line in selectedOutputs)
         {
             if (!line.SupportsMediaPlayerRouting)
                 continue;
-            sb.Append(line.Definition.Id).Append('=').Append(line.UseInMediaPlayer ? '1' : '0').Append(';');
+            sb.Append(line.Definition.Id).Append(';');
         }
 
         return sb.ToString();

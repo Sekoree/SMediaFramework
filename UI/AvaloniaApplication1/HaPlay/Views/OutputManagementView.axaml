@@ -3,22 +3,44 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
-             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="520"
+             mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="640"
              x:Class="HaPlay.Views.OutputManagementView"
              x:DataType="vm:OutputManagementViewModel">
-  <DockPanel Margin="16">
-    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
-      <TextBlock Text="Outputs" FontSize="22" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,16,0" />
-      <Button Content="Add PortAudio…" Command="{Binding AddPortAudioCommand}" />
-      <Button Content="Add local video (SDL / Avalonia)…" Command="{Binding AddLocalVideoCommand}" />
-      <Button Content="Add NDI…" Command="{Binding AddNdiCommand}" />
-    </StackPanel>
 
-    <Border BorderBrush="#33000000" BorderThickness="1" CornerRadius="4" Padding="8">
+  <UserControl.Styles>
+    <Style Selector="Border.card">
+      <Setter Property="BorderBrush" Value="#22808080" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="6" />
+      <Setter Property="Background" Value="#08808080" />
+    </Style>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="Opacity" Value="0.65" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel Margin="16">
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+      <StackPanel Grid.Column="0" Spacing="2">
+        <TextBlock Text="Outputs" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock Classes="hint"
+                   Text="Configured audio / video destinations. Right-click a local-video row for preview controls." />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+        <Button Content="Add PortAudio…" Command="{Binding AddPortAudioCommand}" />
+        <Button Content="Add local video…" Command="{Binding AddLocalVideoCommand}" />
+        <Button Content="Add NDI…" Command="{Binding AddNdiCommand}" />
+      </StackPanel>
+    </Grid>
+
+    <Border Classes="card">
       <ListBox ItemsSource="{Binding Outputs}" Background="Transparent">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:OutputLineViewModel">
-            <Grid ColumnDefinitions="*,Auto" Margin="0,6">
+            <Grid ColumnDefinitions="*,Auto" Margin="0,4">
               <Grid.ContextFlyout>
                 <MenuFlyout>
                   <MenuItem Header="No preview actions for this output type."
@@ -41,10 +63,10 @@
               <StackPanel Grid.Column="0" Spacing="4">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold" />
-                  <TextBlock Text="—" VerticalAlignment="Center" />
+                  <TextBlock Text="—" Opacity="0.5" />
                   <TextBlock Text="{Binding Definition.DisplayName}" FontWeight="SemiBold" />
                 </StackPanel>
-                <TextBlock Text="{Binding Summary}" Opacity="0.75" TextWrapping="Wrap" />
+                <TextBlock Classes="hint" Text="{Binding Summary}" />
               </StackPanel>
               <Button Grid.Column="1" VerticalAlignment="Top" Content="Remove" Command="{Binding RemoveCommand}" />
             </Grid>

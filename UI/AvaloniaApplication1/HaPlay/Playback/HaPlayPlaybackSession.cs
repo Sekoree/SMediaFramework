@@ -8,6 +8,7 @@ using S.Media.FFmpeg;
 using S.Media.FFmpeg.Audio;
 using S.Media.FFmpeg.Video;
 using S.Media.NDI;
+using S.Media.NDI.Audio;
 using S.Media.NDI.Video;
 using S.Media.Playback;
 using S.Media.PortAudio;
@@ -21,6 +22,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     private readonly Dictionary<Guid, NDIOutput> _ndiByDefinitionId = new();
     private readonly List<PortAudioOutput> _portAudioOutputs = new();
     private readonly List<ResamplingAudioSink> _ndiAudioResamplers = new();
+    private readonly List<NDIAudioSink> _ndiAudioSinks = new();
     private bool _disposed;
 
     private HaPlayPlaybackSession(MediaPlayer player, AvRouter router)
@@ -45,7 +47,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         errorMessage = null;
         // Caller must stop output previews on the UI thread before TryCreate (previews touch bound controls / SDL).
 
-        var lines = selectedOutputs.Where(static l => l.UseInMediaPlayer).ToList();
+        var lines = selectedOutputs.ToList();
         var anyNdi = lines.Exists(static l => l.Definition is NdiOutputDefinition);
         var mpOpt = new MediaPlayerOpenOptions(
             TryHardwareAcceleration: !anyNdi,
@@ -182,6 +184,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         continue;
                     var ndiAudioFmt = new AudioFormat(nd.AudioSampleRate, 2);
                     var ndiSink = ndi.EnableAudio(ndiAudioFmt);
+                    playback._ndiAudioSinks.Add(ndiSink);
                     IAudioSink routerSink = ndiSink;
                     if (ndiAudioFmt.SampleRate != dec.SampleRate)
                     {
@@ -303,6 +306,52 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
     }
 
+    /// <summary>Combines video priming and (optionally) NDI audio warmup — call right before <see cref="AvRouter.Play"/>.</summary>
+    /// <param name="holdFallbackShowsImage">When true, skip black-frame priming (the hold image already paints the output).</param>
+    /// <param name="ndiAudioLeadIn">
+    /// How much silence to push into NDI audio sinks first. Set to a non-zero value (e.g. 500 ms) when receivers
+    /// may not be locked on yet (initial Play after Load, after Stop, on playlist advance). Use <see cref="TimeSpan.Zero"/>
+    /// for in-playback transitions (seek, loop wrap) where extra silence would be audible at the new position.
+    /// </param>
+    public void PrepareOutputsBeforePlay(bool holdFallbackShowsImage, TimeSpan ndiAudioLeadIn)
+    {
+        PrimeVideoOutputsBeforePlay(holdFallbackShowsImage);
+        if (ndiAudioLeadIn > TimeSpan.Zero)
+            WarmupNdiBeforePlay(ndiAudioLeadIn);
+    }
+
+    /// <summary>
+    /// Pre-rolls every NDI audio sink with <paramref name="leadIn"/> of silence and pushes extra primer frames
+    /// through the video chains. Most NDI receivers buffer 200–500 ms before output and don't lock onto a source
+    /// until they see the first audio packet, so the first chunks of real audio are lost to discovery / buffer fill.
+    /// Sending silence ahead of <see cref="AvRouter.Play"/> announces the format, lets receivers fill their buffers,
+    /// and avoids the missing-first-second symptom on real audio.
+    /// </summary>
+    /// <param name="leadIn">How much silence to send. ~600 ms covers most receiver buffer depths.</param>
+    public void WarmupNdiBeforePlay(TimeSpan leadIn)
+    {
+        if (leadIn <= TimeSpan.Zero) return;
+
+        foreach (var sink in _ndiAudioSinks)
+        {
+            var sampleRate = sink.Format.SampleRate;
+            var channels = sink.Format.Channels;
+            if (sampleRate <= 0 || channels <= 0) continue;
+
+            // 10 ms silence chunks — small enough to land in receiver buffers smoothly, large enough that we
+            // submit ~60 packets for 600 ms (cheap, but enough for discovery + buffer fill on slow receivers).
+            var samplesPerChunk = Math.Max(1, sampleRate / 100);
+            var totalChunks = Math.Max(1, (int)(leadIn.TotalMilliseconds / 10));
+            var buffer = new float[samplesPerChunk * channels];
+
+            for (var i = 0; i < totalChunks; i++)
+            {
+                try { sink.Submit(buffer); }
+                catch { /* best effort — receiver will catch up on real audio */ }
+            }
+        }
+    }
+
     /// <summary>
     /// Releases sinks we own when <see cref="TryCreate"/> fails after partial <see cref="WireAudio"/> work.
     /// Does not dispose <see cref="Player"/> or NDI senders.
@@ -336,6 +385,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         _portAudioOutputs.Clear();
+        _ndiAudioSinks.Clear();
     }
 
     public void Dispose()
@@ -373,6 +423,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         _ndiByDefinitionId.Clear();
+        _ndiAudioSinks.Clear();
         _logoSinks.Clear();
         _portAudioOutputs.Clear();
     }

@@ -17,6 +17,7 @@ namespace HaPlay.ViewModels;
 public partial class MediaPlayerViewModel : ViewModelBase
 {
     private readonly OutputManagementViewModel _outputs;
+    private readonly Action<MediaPlayerViewModel>? _requestRemove;
     private HaPlayPlaybackSession? _session;
     private DispatcherTimer? _loopTimer;
     private IdleLogoSlateSession? _idleSlate;
@@ -40,10 +41,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
-    public MediaPlayerViewModel(OutputManagementViewModel outputs)
+    public MediaPlayerViewModel(OutputManagementViewModel outputs, string name,
+        Action<MediaPlayerViewModel>? requestRemove = null)
     {
         _outputs = outputs;
-        _outputs.Outputs.CollectionChanged += OnOutputsCollectionChanged;
+        _requestRemove = requestRemove;
+        Name = name;
+        SyncOutputsCollection();
+        _outputs.Outputs.CollectionChanged += OnSharedOutputsCollectionChanged;
         _idleSlateSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _idleSlateSyncTimer.Tick += (_, _) => SyncIdleSlate();
         _idleSlateSyncTimer.Start();
@@ -56,15 +61,29 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
         MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
         MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
+        PlayCommand.NotifyCanExecuteChanged();
     }
 
-    private void OnOutputsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
-        Dispatcher.UIThread.Post(SyncIdleSlate);
+    private void OnSharedOutputsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            SyncOutputsCollection();
+            SyncIdleSlate();
+        });
+    }
 
     public OutputManagementViewModel OutputsRepository => _outputs;
 
+    /// <summary>Per-player checkbox bindings. Each player tracks its own selection so two players can route
+    /// to overlapping subsets of outputs (e.g. main → NDI, preview → local SDL).</summary>
+    public ObservableCollection<PlayerOutputBinding> Outputs { get; } = new();
+
     /// <summary>Paths queued for sequential playback after the current file ends.</summary>
     public ObservableCollection<string> PlaylistPaths { get; } = new();
+
+    [ObservableProperty]
+    private string _name = "Player";
 
     [ObservableProperty]
     private string? _mediaFilePath;
@@ -99,15 +118,22 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _statusMessage;
 
-    partial void OnMediaFilePathChanged(string? value)
-    {
-        _ = value;
-        LoadMediaCommand.NotifyCanExecuteChanged();
-    }
+    public TimeSpan RemainingTime =>
+        Duration > CurrentPosition ? Duration - CurrentPosition : TimeSpan.Zero;
+
+    /// <summary>Pre-formatted text bound by the view — Avalonia's <c>StringFormat=-{}{0:...}</c> with a leading minus
+    /// is fragile (the binding silently fails). Formatting in the VM avoids the trap.</summary>
+    public string CurrentPositionText => FormatClock(CurrentPosition);
+    public string RemainingTimeText => "-" + FormatClock(RemainingTime);
+    public string DurationText => FormatClock(Duration);
+
+    private static string FormatClock(TimeSpan t) =>
+        t.TotalHours >= 1 ? t.ToString(@"hh\:mm\:ss") : t.ToString(@"mm\:ss");
+
+    public bool CanRemove => _requestRemove is not null;
 
     partial void OnIsMediaLoadedChanged(bool value)
     {
-        _ = value;
         PlayCommand.NotifyCanExecuteChanged();
         PauseCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
@@ -120,7 +146,53 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         _ = value;
         SeekToSliderCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(RemainingTime));
+        OnPropertyChanged(nameof(RemainingTimeText));
+        OnPropertyChanged(nameof(DurationText));
     }
+
+    partial void OnCurrentPositionChanged(TimeSpan value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(RemainingTime));
+        OnPropertyChanged(nameof(RemainingTimeText));
+        OnPropertyChanged(nameof(CurrentPositionText));
+    }
+
+    partial void OnSelectedPlaylistPathChanged(string? value)
+    {
+        _ = value;
+        RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
+        MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
+        MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
+        PlayCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Mirror the shared outputs list into per-player bindings, preserving selection on the survivors.</summary>
+    private void SyncOutputsCollection()
+    {
+        var keep = Outputs.ToDictionary(b => b.Line);
+        Outputs.Clear();
+        foreach (var line in _outputs.Outputs)
+        {
+            if (!keep.TryGetValue(line, out var binding))
+                binding = new PlayerOutputBinding(line);
+            Outputs.Add(binding);
+        }
+    }
+
+    private IReadOnlyList<OutputLineViewModel> SelectedOutputLines() =>
+        Outputs.Where(b => b.IsSelected).Select(b => b.Line).ToList();
+
+    [RelayCommand(CanExecute = nameof(CanRemovePlayer))]
+    private void RemovePlayer()
+    {
+        if (_requestRemove is null) return;
+        _ = CloseSessionAsync();
+        _requestRemove(this);
+    }
+
+    private bool CanRemovePlayer() => _requestRemove is not null;
 
     partial void OnHoldFallbackVideoChanged(bool value)
     {
@@ -158,32 +230,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private async Task BrowseMediaAsync()
-    {
-        var top = TryGetMainWindow();
-        if (top is null)
-            return;
-        var opts = new FilePickerOpenOptions { Title = "Open media file", AllowMultiple = false };
-        opts.FileTypeFilter =
-        [
-            new FilePickerFileType("Media") { Patterns = ["*.mp4", "*.mkv", "*.mov", "*.webm", "*.m4v", "*.avi", "*.mp3", "*.wav", "*.flac", "*.aac", "*.m4a", "*.ogg"] },
-            new FilePickerFileType("All files") { Patterns = ["*"] },
-        ];
-        var files = await top.StorageProvider.OpenFilePickerAsync(opts);
-        var f = files.FirstOrDefault();
-        if (f is null)
-            return;
-        var path = f.TryGetLocalPath();
-        if (!string.IsNullOrEmpty(path))
-            MediaFilePath = path;
-    }
-
-    [RelayCommand]
     private async Task AddFilesToPlaylistAsync()
     {
         var top = TryGetMainWindow();
-        if (top is null)
-            return;
+        if (top is null) return;
         var opts = new FilePickerOpenOptions { Title = "Add files to playlist", AllowMultiple = true };
         opts.FileTypeFilter =
         [
@@ -199,6 +249,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (!PlaylistPaths.Contains(path, StringComparer.Ordinal))
                 PlaylistPaths.Add(path);
         }
+
+        if (SelectedPlaylistPath is null && PlaylistPaths.Count > 0)
+            SelectedPlaylistPath = PlaylistPaths[0];
     }
 
     [RelayCommand(CanExecute = nameof(CanRemovePlaylistItem))]
@@ -207,8 +260,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (string.IsNullOrEmpty(SelectedPlaylistPath))
             return;
         var i = PlaylistPaths.IndexOf(SelectedPlaylistPath);
-        if (i < 0)
-            return;
+        if (i < 0) return;
         PlaylistPaths.RemoveAt(i);
         SelectedPlaylistPath = PlaylistPaths.Count > 0
             ? PlaylistPaths[Math.Min(i, PlaylistPaths.Count - 1)]
@@ -219,23 +271,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private bool CanRemovePlaylistItem() =>
         !string.IsNullOrEmpty(SelectedPlaylistPath) && PlaylistPaths.Contains(SelectedPlaylistPath);
 
-    partial void OnSelectedPlaylistPathChanged(string? value)
-    {
-        _ = value;
-        RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
-        MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
-        MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
-    }
-
     [RelayCommand(CanExecute = nameof(CanMovePlaylistItemUp))]
     private void MovePlaylistItemUp()
     {
         var path = SelectedPlaylistPath;
-        if (string.IsNullOrEmpty(path))
-            return;
+        if (string.IsNullOrEmpty(path)) return;
         var i = PlaylistPaths.IndexOf(path);
-        if (i <= 0)
-            return;
+        if (i <= 0) return;
         (PlaylistPaths[i - 1], PlaylistPaths[i]) = (PlaylistPaths[i], PlaylistPaths[i - 1]);
         SelectedPlaylistPath = path;
     }
@@ -247,38 +289,36 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void MovePlaylistItemDown()
     {
         var path = SelectedPlaylistPath;
-        if (string.IsNullOrEmpty(path))
-            return;
+        if (string.IsNullOrEmpty(path)) return;
         var i = PlaylistPaths.IndexOf(path);
-        if (i < 0 || i >= PlaylistPaths.Count - 1)
-            return;
+        if (i < 0 || i >= PlaylistPaths.Count - 1) return;
         (PlaylistPaths[i + 1], PlaylistPaths[i]) = (PlaylistPaths[i], PlaylistPaths[i + 1]);
         SelectedPlaylistPath = path;
     }
 
     private bool CanMovePlaylistItemDown()
     {
-        if (string.IsNullOrEmpty(SelectedPlaylistPath))
-            return false;
+        if (string.IsNullOrEmpty(SelectedPlaylistPath)) return false;
         var idx = PlaylistPaths.IndexOf(SelectedPlaylistPath);
         return idx >= 0 && idx < PlaylistPaths.Count - 1;
     }
 
-    [RelayCommand]
-    private Task LoadSelectedPlaylistItemAsync()
+    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing.</summary>
+    public async Task PlayPlaylistItemAsync(string path)
     {
-        if (string.IsNullOrEmpty(SelectedPlaylistPath) || !File.Exists(SelectedPlaylistPath))
-            return Task.CompletedTask;
-        MediaFilePath = SelectedPlaylistPath;
-        return OpenOrReloadAsync();
+        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+        SelectedPlaylistPath = path;
+        MediaFilePath = path;
+        await OpenOrReloadAsync().ConfigureAwait(false);
+        if (_session is not null && !IsPlaying)
+            await StartPlaybackAsync().ConfigureAwait(false);
     }
 
     [RelayCommand]
     private async Task BrowseFallbackAsync()
     {
         var top = TryGetMainWindow();
-        if (top is null)
-            return;
+        if (top is null) return;
         var opts = new FilePickerOpenOptions { Title = "Fallback image (PNG / JPEG)", AllowMultiple = false };
         opts.FileTypeFilter =
         [
@@ -287,220 +327,154 @@ public partial class MediaPlayerViewModel : ViewModelBase
         ];
         var files = await top.StorageProvider.OpenFilePickerAsync(opts);
         var f = files.FirstOrDefault();
-        if (f is null)
-            return;
+        if (f is null) return;
         var path = f.TryGetLocalPath();
         if (!string.IsNullOrEmpty(path))
             FallbackImagePath = path;
     }
 
-    [RelayCommand(CanExecute = nameof(CanLoadMedia))]
-    private Task LoadMediaAsync() => OpenOrReloadAsync();
-
-    private bool CanLoadMedia() =>
-        !string.IsNullOrWhiteSpace(MediaFilePath) && File.Exists(MediaFilePath!);
-
     private async Task CloseSessionCoreInnerAsync(bool deferIdleSync, bool resetPlayingUi = true)
     {
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        var snapshot = await Dispatcher.UIThread.InvokeAsync(() =>
         {
             StopHoldPumpTimer();
             _loopTimer?.Stop();
             _loopTimer = null;
-        });
-
-        HaPlayPlaybackSession? snapshot = null;
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            snapshot = _session;
-            if (_session is not null)
+            var snap = _session;
+            if (snap is not null)
             {
-                try
-                {
-                    _session.Player.PlayClock.PositionChanged -= OnClockPositionChanged;
-                }
-                catch
-                {
-                    /* best effort */
-                }
-
+                try { snap.Player.PlayClock.PositionChanged -= OnClockPositionChanged; }
+                catch { /* best effort */ }
                 _session = null;
             }
+            return snap;
         });
 
         if (snapshot is not null)
         {
-            try
+            // Two-tier wall: 2s inner ct keeps Pause from hanging; 8s outer wall lets Dispose finish even on slow
+            // sinks. A previous 50s outer cap would freeze the UI for nearly a minute if a sink blocked.
+            await RunBoundedAsync(() =>
             {
-                await Task.Run(() =>
+                try
                 {
-                    try
-                    {
-                        using (var pauseCts = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
-                        {
-                            try
-                            {
-                                snapshot.Router.PauseSkippingSharedMuxFlush(pauseCts.Token);
-                            }
-                            catch (OperationCanceledException)
-                            {
-                                /* bounded pause — continue to Dispose */
-                            }
-                            catch (ObjectDisposedException)
-                            {
-                                /* already torn down */
-                            }
-                            catch
-                            {
-                                /* best effort */
-                            }
-                        }
+                    using var pauseCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+                    try { snapshot.Router.PauseSkippingSharedMuxFlush(pauseCts.Token); }
+                    catch (OperationCanceledException) { /* bounded */ }
+                    catch (ObjectDisposedException) { /* already torn down */ }
+                }
+                catch { /* best effort */ }
 
-                        snapshot.Dispose();
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-                }).WaitAsync(TimeSpan.FromSeconds(50)).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                /* Dispose may still be running on the pool; do not call Dispose again here. */
-            }
+                try { snapshot.Dispose(); }
+                catch { /* best effort */ }
+            }, TimeSpan.FromSeconds(8));
         }
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             IsMediaLoaded = false;
-            if (resetPlayingUi)
-                IsPlaying = false;
+            if (resetPlayingUi) IsPlaying = false;
             CurrentPosition = TimeSpan.Zero;
             Duration = TimeSpan.Zero;
             SeekSliderValue = 0;
-            LoadMediaCommand.NotifyCanExecuteChanged();
             PlayCommand.NotifyCanExecuteChanged();
             PauseCommand.NotifyCanExecuteChanged();
             StopCommand.NotifyCanExecuteChanged();
             SeekToSliderCommand.NotifyCanExecuteChanged();
-            if (!deferIdleSync)
-                SyncIdleSlate();
+            if (!deferIdleSync) SyncIdleSlate();
         });
     }
+
+    private bool CanLoadMedia() =>
+        !string.IsNullOrWhiteSpace(MediaFilePath) && File.Exists(MediaFilePath!);
 
     private async Task OpenOrReloadAsync()
     {
         if (!CanLoadMedia())
             return;
 
-        var resumeAfterOpen = false;
-        await Dispatcher.UIThread.InvokeAsync(() => resumeAfterOpen = IsPlaying);
+        var resumeAfterOpen = await Dispatcher.UIThread.InvokeAsync(() => IsPlaying);
 
         await WithPlaybackArcAsync(async () =>
         {
             await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: !resumeAfterOpen);
-            await Dispatcher.UIThread.InvokeAsync(StopIdleSlate);
 
-            var openCtx = await Dispatcher.UIThread.InvokeAsync(() =>
+            var (path, selected) = await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                var path = MediaFilePath!;
-                var selected = _outputs.Outputs.ToList();
-                _outputs.StopPreviewsForPlayback(selected);
-                return (Path: path, Selected: selected, Repo: _outputs);
+                StopIdleSlate();
+                var lines = SelectedOutputLines();
+                _outputs.StopPreviewsForPlayback(lines);
+                return (MediaFilePath!, lines);
             });
 
             HaPlayPlaybackSession? created = null;
             string? createErr = null;
             await Task.Run(() =>
             {
-                if (!HaPlayPlaybackSession.TryCreate(openCtx.Path, openCtx.Selected, openCtx.Repo, out created,
-                        out createErr))
+                if (!HaPlayPlaybackSession.TryCreate(path, selected, _outputs, out created, out createErr))
                     created = null;
             }).ConfigureAwait(false);
 
             // Never use InvokeAsync(async () => await Task.Run(...)): the UI dispatcher can deadlock with the
             // threadpool continuation that is waiting for InvokeAsync to complete.
-            HaPlayPlaybackSession? sessionForResume = null;
-            var holdFbAfterOpen = false;
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            var holdFbAfterOpen = await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (created is null)
                 {
                     StatusMessage = createErr ?? "Failed to open media.";
                     SyncIdleSlate();
-                    return;
+                    return false;
                 }
 
                 _session = created;
                 IsMediaLoaded = true;
                 StatusMessage = null;
-                if (created.Player.Decoder.Audio is ISeekableSource a)
-                    Duration = a.Duration;
-                else
-                    Duration = TimeSpan.Zero;
+                Duration = created.Player.Decoder.Audio is ISeekableSource a ? a.Duration : TimeSpan.Zero;
 
                 created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
                 if (!string.IsNullOrWhiteSpace(FallbackImagePath))
                     created.ApplyFallbackImage(FallbackImagePath);
                 created.SetHoldFallback(HoldFallbackVideo);
 
-                holdFbAfterOpen = HoldFallbackVideo;
-                if (holdFbAfterOpen)
+                if (HoldFallbackVideo)
                 {
-                    try
-                    {
-                        created.PumpHoldFrames(created.Player.PlayClock.CurrentPosition);
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
+                    try { created.PumpHoldFrames(created.Player.PlayClock.CurrentPosition); }
+                    catch { /* best effort */ }
                 }
 
                 EnsureLoopTimerStarted();
-                LoadMediaCommand.NotifyCanExecuteChanged();
-                sessionForResume = created;
+                return HoldFallbackVideo;
             });
 
-            if (sessionForResume is null)
-                return;
+            if (created is null) return;
 
             if (resumeAfterOpen)
             {
-                var s = sessionForResume;
+                var s = created;
                 var hf = holdFbAfterOpen;
-                try
+                var ok = await RunBoundedAsync(() =>
                 {
-                    await Task.Run(() =>
-                    {
-                        s.PrimeVideoOutputsBeforePlay(hf);
-                        s.Router.Play(
-                            prefillBeforeHardware: null,
-                            startHardware: () => s.StartAllPortAudio());
-                    }).WaitAsync(TimeSpan.FromSeconds(25)).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    await Dispatcher.UIThread.InvokeAsync(() =>
-                    {
-                        IsPlaying = false;
-                        StatusMessage = "Playback failed to resume after loading (timed out).";
-                    });
-                }
-                catch
-                {
+                    s.PrepareOutputsBeforePlay(hf, NdiInitialLeadIn);
+                    s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
+                }, TimeSpan.FromSeconds(8));
+
+                if (!ok)
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
                         IsPlaying = false;
                         StatusMessage = "Playback failed to resume after loading.";
                     });
-                }
             }
 
             if (holdFbAfterOpen)
                 await Dispatcher.UIThread.InvokeAsync(StartHoldPumpTimer);
         }).ConfigureAwait(false);
     }
+
+    /// <summary>NDI receivers typically buffer 200–500 ms and need a moment to lock onto a source. Push silence
+    /// for this long before the first audio frame so the first real samples aren't lost to discovery/buffer-fill.
+    /// In-playback transitions (seek, loop wrap) use <see cref="TimeSpan.Zero"/> to avoid an audible silence gap.</summary>
+    private static readonly TimeSpan NdiInitialLeadIn = TimeSpan.FromMilliseconds(600);
 
     private void EnsureLoopTimerStarted()
     {
@@ -597,36 +571,23 @@ public partial class MediaPlayerViewModel : ViewModelBase
         try
         {
             var session = _session;
-            if (session is null)
-                return;
+            if (session is null) return;
 
             if (IsLooping)
             {
-                if (!session.Player.Video.CompletedNaturally)
-                    return;
-                try
-                {
-                    await Task.Run(() =>
+                if (!session.Player.Video.CompletedNaturally) return;
+                await RunBoundedCancelableAsync(ct =>
                     {
-                        using var seekCts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
-                        session.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, seekCts.Token);
-                        session.PrimeVideoOutputsBeforePlay(holdFb);
-                        session.Router.Play(
-                            prefillBeforeHardware: null,
-                            startHardware: () => session.StartAllPortAudio());
-                    }).WaitAsync(TimeSpan.FromSeconds(18)).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    /* do not hold _playbackArc indefinitely */
-                }
-                catch
-                {
-                    /* best effort */
-                }
+                        session.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, ct);
+                        // No NDI warmup on loop wrap — receivers are already locked on and a silence gap would
+                        // be audible between the last and first samples of the loop.
+                        session.PrepareOutputsBeforePlay(holdFb, TimeSpan.Zero);
+                        session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
+                    },
+                    innerTimeout: TimeSpan.FromSeconds(3),
+                    outerTimeout: TimeSpan.FromSeconds(5));
 
-                if (HoldFallbackVideo)
-                    StartHoldPumpTimer();
+                if (HoldFallbackVideo) StartHoldPumpTimer();
                 EnsureLoopTimerStarted();
                 return;
             }
@@ -634,200 +595,119 @@ public partial class MediaPlayerViewModel : ViewModelBase
             var fileEnded = session.Player.Audio?.Router is { } ar
                 ? !ar.IsRunning && ar.CompletedNaturally
                 : session.Player.Video.CompletedNaturally;
-
-            if (!fileEnded)
-                return;
+            if (!fileEnded) return;
 
             resumePlayForPlaylist = IsPlaying;
             advancePlaylist = true;
-            try
-            {
-                await Task.Run(() =>
-                {
-                    try
-                    {
-                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-                        session.Router.PauseSkippingSharedMuxFlush(cts.Token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        /* bounded pause */
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-                }).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                /* bounded pause */
-            }
-            catch
-            {
-                /* best effort */
-            }
+            await RunBoundedCancelableAsync(session.Router.PauseSkippingSharedMuxFlush,
+                innerTimeout: TimeSpan.FromSeconds(1.5),
+                outerTimeout: TimeSpan.FromSeconds(2.5));
         }
         finally
         {
             _playbackArc.Release();
         }
 
-        if (!advancePlaylist)
-            return;
+        if (!advancePlaylist) return;
 
-        var shouldLoadNext = false;
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        var shouldLoadNext = await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            if (_session is null || !IsMediaLoaded)
-                return;
+            if (_session is null || !IsMediaLoaded) return false;
             IsPlaying = false;
-            if (!TryGetNextPlaylistPath(out var nextPath))
-                return;
-            shouldLoadNext = true;
+            if (!TryGetNextPlaylistPath(out var nextPath)) return false;
             MediaFilePath = nextPath;
             SelectedPlaylistPath = nextPath;
+            return true;
         });
-
-        if (!shouldLoadNext)
-            return;
+        if (!shouldLoadNext) return;
 
         await OpenOrReloadAsync();
 
-        if (!resumePlayForPlaylist)
-            return;
-
-        var holdForPrime = false;
-        await Dispatcher.UIThread.InvokeAsync(() => { holdForPrime = HoldFallbackVideo; });
+        if (!resumePlayForPlaylist) return;
 
         await WithPlaybackArcAsync(async () =>
         {
-            HaPlayPlaybackSession? s = null;
-            await Dispatcher.UIThread.InvokeAsync(() => { s = _session; });
-            if (s is null)
-                return;
+            var (s, holdForPrime) = await Dispatcher.UIThread.InvokeAsync(() => (_session, HoldFallbackVideo));
+            if (s is null) return;
 
-            var playStarted = false;
-            try
+            var ok = await RunBoundedAsync(() =>
             {
-                await Task.Run(() =>
-                {
-                    s.PrimeVideoOutputsBeforePlay(holdForPrime);
-                    s.Router.Play(
-                        prefillBeforeHardware: null,
-                        startHardware: () => s.StartAllPortAudio());
-                }).WaitAsync(TimeSpan.FromSeconds(25)).ConfigureAwait(false);
-                playStarted = true;
-            }
-            catch (TimeoutException)
-            {
-                /* best effort */
-            }
-            catch
-            {
-                /* best effort */
-            }
+                // Playlist advance — receivers may have drained between tracks.
+                s.PrepareOutputsBeforePlay(holdForPrime, NdiInitialLeadIn);
+                s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
+            }, TimeSpan.FromSeconds(6));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (!playStarted)
-                    return;
+                if (!ok) return;
                 IsPlaying = true;
-                if (HoldFallbackVideo)
-                    StartHoldPumpTimer();
+                if (HoldFallbackVideo) StartHoldPumpTimer();
                 EnsureLoopTimerStarted();
             });
         }).ConfigureAwait(false);
     }
 
-    [RelayCommand(CanExecute = nameof(CanTransport))]
+    [RelayCommand(CanExecute = nameof(CanPlay))]
     private async Task PlayAsync()
+    {
+        // Auto-load: if nothing's loaded yet but the user has selected a playlist row, load + play in one click.
+        if (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath) && File.Exists(SelectedPlaylistPath))
+        {
+            MediaFilePath = SelectedPlaylistPath;
+            IsPlaying = true; // signals OpenOrReloadAsync to resume after open
+            await OpenOrReloadAsync().ConfigureAwait(false);
+            return;
+        }
+
+        await StartPlaybackAsync().ConfigureAwait(false);
+    }
+
+    private async Task StartPlaybackAsync()
     {
         await WithPlaybackArcAsync(async () =>
         {
-            HaPlayPlaybackSession? s = null;
-            var holdFb = false;
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                s = _session;
-                holdFb = HoldFallbackVideo;
-            });
-            if (s is null)
-                return;
+            var (s, holdFb) = await Dispatcher.UIThread.InvokeAsync(() => (_session, HoldFallbackVideo));
+            if (s is null) return;
 
-            var playStarted = false;
-            try
+            var ok = await RunBoundedAsync(() =>
             {
-                await Task.Run(() =>
-                {
-                    s.PrimeVideoOutputsBeforePlay(holdFb);
-                    s.Router.Play(
-                        prefillBeforeHardware: null,
-                        startHardware: () => s.StartAllPortAudio());
-                }).WaitAsync(TimeSpan.FromSeconds(25)).ConfigureAwait(false);
-                playStarted = true;
-            }
-            catch (TimeoutException)
-            {
-                /* best effort */
-            }
-            catch
-            {
-                /* best effort */
-            }
+                // Play from a non-playing state — NDI receivers may have drained their buffers since the last
+                // Pause/Stop, so push silence ahead of the first real samples.
+                s.PrepareOutputsBeforePlay(holdFb, NdiInitialLeadIn);
+                s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
+            }, TimeSpan.FromSeconds(6));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (!playStarted)
-                    return;
+                if (!ok) return;
                 IsPlaying = true;
-                if (HoldFallbackVideo)
-                    StartHoldPumpTimer();
+                if (HoldFallbackVideo) StartHoldPumpTimer();
                 EnsureLoopTimerStarted();
             });
         }).ConfigureAwait(false);
     }
+
+    private bool CanPlay() =>
+        (_session is not null && IsMediaLoaded) ||
+        (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath));
 
     [RelayCommand(CanExecute = nameof(CanTransport))]
     private async Task PauseAsync()
     {
         await WithPlaybackArcAsync(async () =>
         {
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            var s = await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (!HoldFallbackVideo)
-                    StopHoldPumpTimer();
+                if (!HoldFallbackVideo) StopHoldPumpTimer();
+                return _session;
             });
-            HaPlayPlaybackSession? s = null;
-            await Dispatcher.UIThread.InvokeAsync(() => { s = _session; });
-            if (s is null)
-                return;
+            if (s is null) return;
 
-            try
-            {
-                await Task.Run(() =>
-                {
-                    try
-                    {
-                        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                        s.Router.PauseSkippingSharedMuxFlush(cts.Token);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        /* bounded pause */
-                    }
-                    catch
-                    {
-                        /* best effort */
-                    }
-                }).WaitAsync(TimeSpan.FromSeconds(14)).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                /* best effort */
-            }
+            await RunBoundedCancelableAsync(s.Router.PauseSkippingSharedMuxFlush,
+                innerTimeout: TimeSpan.FromSeconds(1.5),
+                outerTimeout: TimeSpan.FromSeconds(2.5));
 
-            await Dispatcher.UIThread.InvokeAsync(() => { IsPlaying = false; });
+            await Dispatcher.UIThread.InvokeAsync(() => IsPlaying = false);
         }).ConfigureAwait(false);
     }
 
@@ -836,109 +716,78 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         await WithPlaybackArcAsync(async () =>
         {
-            var pumpHoldAfterStop = false;
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            var (snap, doPump) = await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopHoldPumpTimer();
                 _loopTimer?.Stop();
                 _loopTimer = null;
                 IsPlaying = false;
-                pumpHoldAfterStop = HoldFallbackVideo;
+                return (_session, HoldFallbackVideo);
             });
+            if (snap is null) return;
 
-            HaPlayPlaybackSession? snap = null;
-            await Dispatcher.UIThread.InvokeAsync(() => { snap = _session; });
-            if (snap is null)
-                return;
-
-            var doPump = pumpHoldAfterStop;
-            try
-            {
-                await Task.Run(() =>
+            // One coordinated pause+seek so the freeze never exceeds the outer cap. Three nested
+            // Task.Run/.WaitAsync blocks (the previous shape) could stack to ~11s on slow codecs.
+            await RunBoundedCancelableAsync(ct =>
                 {
-                    using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2.5));
-                    snap.Router.PauseSkippingSharedMuxFlush(cts.Token);
-                }).WaitAsync(TimeSpan.FromSeconds(3));
-            }
-            catch (TimeoutException)
-            {
-                /* bounded pause */
-            }
-            catch (OperationCanceledException)
-            {
-                /* bounded pause */
-            }
-            catch
-            {
-                /* best effort */
-            }
-
-            // Never bundle PlayClock.Seek with a long demux seek behind one WaitAsync: if the seek times out,
-            // the clock never resets and the UI/playhead stay at the old time.
-            try
-            {
-                await Task.Run(() => snap.Player.PlayClock.Seek(TimeSpan.Zero)).WaitAsync(TimeSpan.FromSeconds(2));
-            }
-            catch (TimeoutException)
-            {
-                /* extremely unlikely */
-            }
-            catch (ObjectDisposedException)
-            {
-                /* session closed */
-            }
-            catch
-            {
-                /* best effort */
-            }
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (_session != snap)
-                    return;
-                CurrentPosition = TimeSpan.Zero;
-                SeekSliderValue = 0;
-            });
-
-            try
-            {
-                await Task.Run(() =>
-                {
-                    snap.Router.Seek(TimeSpan.Zero);
+                    snap.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, ct);
                     if (doPump)
                     {
-                        try
-                        {
-                            snap.PumpHoldFrames(TimeSpan.Zero);
-                        }
-                        catch
-                        {
-                            /* best effort */
-                        }
+                        try { snap.PumpHoldFrames(TimeSpan.Zero); }
+                        catch { /* best effort */ }
                     }
-                }).WaitAsync(TimeSpan.FromSeconds(6));
-            }
-            catch (TimeoutException)
-            {
-                /* best effort */
-            }
-            catch (ObjectDisposedException)
-            {
-                /* session closed */
-            }
-            catch
-            {
-                /* best effort */
-            }
+                },
+                innerTimeout: TimeSpan.FromSeconds(2),
+                outerTimeout: TimeSpan.FromSeconds(3));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (_session != snap)
-                    return;
+                if (_session != snap) return;
                 CurrentPosition = TimeSpan.Zero;
                 SeekSliderValue = 0;
             });
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on the thread pool with a hard <paramref name="outerTimeout"/> wall. Returns
+    /// true when the action completed within the budget. Swallows transport teardown noise — the caller decides
+    /// what to do based on the result, never on exceptions.
+    /// </summary>
+    private static async Task<bool> RunBoundedAsync(Action action, TimeSpan outerTimeout)
+    {
+        try
+        {
+            await Task.Run(action).WaitAsync(outerTimeout).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Two-tier timeout: pass <paramref name="innerTimeout"/> as a CancellationToken to <paramref name="action"/> (so framework
+    /// joins exit cooperatively), then enforce <paramref name="outerTimeout"/> with <see cref="Task.WaitAsync(TimeSpan)"/> as a
+    /// last-resort wall. Without the outer wall, a stuck native call would freeze the UI indefinitely.
+    /// </summary>
+    private static async Task<bool> RunBoundedCancelableAsync(Action<CancellationToken> action, TimeSpan innerTimeout, TimeSpan outerTimeout)
+    {
+        try
+        {
+            await Task.Run(() =>
+            {
+                using var cts = new CancellationTokenSource(innerTimeout);
+                try { action(cts.Token); }
+                catch (OperationCanceledException) { /* bounded */ }
+            }).WaitAsync(outerTimeout).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private bool CanTransport() => _session is not null && IsMediaLoaded;
@@ -948,54 +797,34 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         if (_session is null || Duration <= TimeSpan.Zero)
             return;
-        if (!await _playbackArc.WaitAsync(TimeSpan.FromSeconds(60)).ConfigureAwait(false))
-            return;
-        try
+        await WithPlaybackArcAsync(async () =>
         {
-            var t = TimeSpan.FromTicks((long)(SeekSliderValue * Duration.Ticks / 1000.0));
-            var playing = false;
-            var holdFb = false;
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                playing = IsPlaying;
-                holdFb = HoldFallbackVideo;
-            });
-            var session = _session;
-            if (session is null)
-                return;
+            var (session, playing, holdFb, sliderValue) = await Dispatcher.UIThread.InvokeAsync(() =>
+                (_session, IsPlaying, HoldFallbackVideo, SeekSliderValue));
+            if (session is null) return;
 
-            try
-            {
-                await Task.Run(() =>
+            var t = TimeSpan.FromTicks((long)(sliderValue * Duration.Ticks / 1000.0));
+
+            await RunBoundedCancelableAsync(ct =>
                 {
-                    using var seekCts = new CancellationTokenSource(TimeSpan.FromSeconds(12));
-                    session.Router.SeekCoordinatedSkippingSharedMuxFlush(t, seekCts.Token);
+                    session.Router.SeekCoordinatedSkippingSharedMuxFlush(t, ct);
                     if (playing)
                     {
-                        session.PrimeVideoOutputsBeforePlay(holdFb);
-                        session.Router.Play(
-                            prefillBeforeHardware: null,
-                            startHardware: () => session.StartAllPortAudio());
+                        // No NDI warmup on seek — silence at the seek target would be obviously wrong audio.
+                        session.PrepareOutputsBeforePlay(holdFb, TimeSpan.Zero);
+                        session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
                     }
-                }).WaitAsync(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                /* release arc — otherwise Load stays disabled forever */
-            }
+                },
+                innerTimeout: TimeSpan.FromSeconds(3),
+                outerTimeout: TimeSpan.FromSeconds(5));
 
+            if (!playing) return;
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (HoldFallbackVideo && playing)
-                    StartHoldPumpTimer();
-                if (playing)
-                    EnsureLoopTimerStarted();
+                if (HoldFallbackVideo) StartHoldPumpTimer();
+                EnsureLoopTimerStarted();
             });
-        }
-        finally
-        {
-            _playbackArc.Release();
-        }
+        }).ConfigureAwait(false);
     }
 
     private bool CanSeek() => _session is not null && IsMediaLoaded && Duration > TimeSpan.Zero;
@@ -1040,18 +869,18 @@ public partial class MediaPlayerViewModel : ViewModelBase
             return;
         }
 
-        var sig = IdleLogoSlateSession.BuildSignature(HoldFallbackVideo, FallbackImagePath, _outputs.Outputs);
+        var selected = SelectedOutputLines();
+        var sig = IdleLogoSlateSession.BuildSignature(HoldFallbackVideo, FallbackImagePath, selected);
         if (_idleSlate is not null && _idleSlateSig == sig)
             return;
 
         StopIdleSlate();
 
         if (!HoldFallbackVideo || string.IsNullOrWhiteSpace(FallbackImagePath) ||
-            !File.Exists(FallbackImagePath!))
+            !File.Exists(FallbackImagePath!) || selected.Count == 0)
             return;
 
-        if (!IdleLogoSlateSession.TryStart(_outputs.Outputs.ToList(), _outputs, FallbackImagePath!, out var slate,
-                out var err))
+        if (!IdleLogoSlateSession.TryStart(selected, _outputs, FallbackImagePath!, out var slate, out var err))
         {
             if (!string.IsNullOrWhiteSpace(err))
                 StatusMessage = err;
