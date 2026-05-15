@@ -1,0 +1,46 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.AddLocalVideoOutputDialog"
+        x:DataType="vm:AddLocalVideoOutputDialogViewModel"
+        Title="Add local video output"
+        Width="520" Height="520"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="OK" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
+
+        <TextBlock Text="Display name" FontWeight="SemiBold" />
+        <TextBox Text="{Binding DisplayName}" />
+
+        <TextBlock Text="Engine" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Engines}" SelectedItem="{Binding Engine}" />
+
+        <TextBlock Text="Presentation" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding SurfaceModes}" SelectedItem="{Binding SurfaceMode}" />
+
+        <TextBlock Text="Screen" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Screens}" SelectedItem="{Binding SelectedScreen}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:ScreenListItem">
+              <TextBlock Text="{Binding Label}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="Window width / height (windowed only)" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,8,*" IsEnabled="{Binding WindowMetricsEnabled}">
+          <NumericUpDown Grid.Column="0" Minimum="320" Maximum="7680" Value="{Binding WindowWidth}" />
+          <NumericUpDown Grid.Column="2" Minimum="240" Maximum="4320" Value="{Binding WindowHeight}" />
+        </Grid>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

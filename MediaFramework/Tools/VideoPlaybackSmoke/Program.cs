@@ -42,12 +42,12 @@ var media = session.Media;
 var videoSource = media.Video;
 var windowSink = session.WindowSink;
 var videoRouter = session.VideoRouter;
-var ndi = session.Ndi;
-var ndiVideoRouterInputId = session.NdiVideoRouterInputId;
-var ndiVideoOutputId = session.NdiVideoOutputId;
-var ndiAudioAgg = session.NdiAudioAggregatingSink;
-var ndiMirrorPrefill = session.NdiMirrorPrefill;
-var ndiAudioSinkId = session.NdiAudioSinkId;
+var ndi = session.NDI;
+var ndiVideoRouterInputId = session.NDIVideoRouterInputId;
+var ndiVideoOutputId = session.NDIVideoOutputId;
+var ndiAudioAgg = session.NDIAudioAggregatingSink;
+var ndiMirrorPrefill = session.NDIMirrorPrefill;
+var ndiAudioSinkId = session.NDIAudioSinkId;
 var audioHost = session.AudioHost;
 IMediaClock playClock = session.PlayClock;
 var videoPlayer = session.VideoPlayer;
@@ -66,13 +66,13 @@ try
     if (audioHost is null)
         Console.WriteLine("[audio] not wired — see stderr above; using VideoPtsClock as MediaClock master.");
 
-    if (opt.NdiEnable && !opt.NoHardwareDecode)
+    if (opt.NDIEnable && !opt.NoHardwareDecode)
         Console.WriteLine("[ndi] Software video decode is used with --ndi so NDI can read pixel bytes (GPU NV12 has no CPU path here).");
 
-    if (opt.NdiEnable && opt.LinuxDrmDmabufGl)
+    if (opt.NDIEnable && opt.LinuxDrmDmabufGl)
         Console.WriteLine("[ndi] DRM dma-buf decode + NDI branch routing is unsupported — omit --ndi or disable --drm-gl.");
 
-    if (opt.NdiEnable && opt.WindowsD3d11SharedGl)
+    if (opt.NDIEnable && opt.WindowsD3d11SharedGl)
         Console.WriteLine("[ndi] D3D11 shared-handle NV12 decode + NDI branch routing is unsupported — omit --ndi or disable --d3d11-gl.");
 
     if (media.Win32Nv12SharedHandleOnlyActive)
@@ -81,14 +81,14 @@ try
             (opt.WindowsD3d11GlSharedHandleOnly ? "--d3d11-gl-shared-handle-only" : "MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY / options") +
             "); SDL D3D11GlInteropDeviceHost supplies the D3D11 device for OpenSharedResource.");
 
-    if (opt.NdiEnable)
+    if (opt.NDIEnable)
         Console.WriteLine("[ndi] SDL mirrors local video; PortAudio still plays to the default device — use the HUD show/decoded counts if the window stays blank.");
 
     using CancellationTokenSource cts = new();
     VideoPlaybackSmokeSession.AttachConsoleCancelKeyPress(cts);
     session.AttachWindowCloseToCancel(cts);
 
-    ndi?.WaitForFirstReceiverIfRequested(opt.NdiWaitFirstReceiverMs,
+    ndi?.WaitForFirstReceiverIfRequested(opt.NDIWaitFirstReceiverMs,
         Console.Error.WriteLine, Console.WriteLine);
 
     if (audioHost is not null)
@@ -189,10 +189,10 @@ file static class PlaybackCli
         errorText = null;
 
         bool ndi = false;
-        string ndiName = SmokeDefaults.DefaultNdiOutputName;
+        string ndiName = SmokeDefaults.DefaultNDIOutputName;
         bool ndiClockVideo = false;
         bool ndiDisableWallPace = false;
-        var ndiVideoPumpFrames = SmokeDefaults.DefaultNdiVideoPumpFrames;
+        var ndiVideoPumpFrames = SmokeDefaults.DefaultNDIVideoPumpFrames;
         var ndiVideoTc = NDIVideoTimecodeMode.PresentationRelativeTicks;
         var ndiWaitFirstRxMs = 0;
 
@@ -283,7 +283,7 @@ file static class PlaybackCli
 
                     if (TryParseKeyedInt(a, "--ndi-wait-first-receiver-ms=", out var nwr) && nwr >= 0)
                     {
-                        ndiWaitFirstRxMs = Math.Clamp(nwr, 0, SmokeDefaults.MaxNdiWaitFirstReceiverMs);
+                        ndiWaitFirstRxMs = Math.Clamp(nwr, 0, SmokeDefaults.MaxNDIWaitFirstReceiverMs);
                         break;
                     }
 
@@ -337,7 +337,7 @@ file static class PlaybackCli
             return false;
         }
 
-        int? ndiPumpCap = !ndiPumpFromCli ? SmokeDefaults.DefaultNdiAudioSinkPumpCapacityChunks : (ndiPumpCliValue < 2 ? null : ndiPumpCliValue);
+        int? ndiPumpCap = !ndiPumpFromCli ? SmokeDefaults.DefaultNDIAudioSinkPumpCapacityChunks : (ndiPumpCliValue < 2 ? null : ndiPumpCliValue);
 
         opt = new SmokeToolOptions(positional[0], ndi, ndiName, noHw, OperatingSystem.IsLinux() && drmGl,
             OperatingSystem.IsWindows() && d3d11Gl, OperatingSystem.IsWindows() && d3d11Gl && d3d11GlZeroHost,
@@ -389,7 +389,7 @@ Smoke test for video + mastered audio clock (SDL3 GL by default).
   --ndi-video-tc=pts|synth  Video timecode: pts = PresentationRelativeTicks (default); synth = SDK synthesize.
   --ndi-wait-first-receiver-ms=n  (With --ndi) Block up to n ms for the first NDI receiver (NDIlib_send_get_no_connections); 0=off (default).
 
-Lab (NDI egress timeline soak, not this tool's runtime): RUN_NDI_EGRESS_SOAK=1, optional RUN_NDI_EGRESS_SOAK_ROUNDS=<n> (1k–10M), RUN_NDI_EGRESS_SOAK_STRESS=1 — NdiEgressPresentationTimelineTests. RUN_NDI_MUX_SOAK=1 — NdiEgressMuxPlayheadClockTests. RUN_NDI_MEMORY_PRESSURE=1, optional RUN_NDI_MEMORY_PRESSURE_ROUNDS=<n> (200–100k, or 200–2M with RUN_NDI_MEMORY_PRESSURE_LONG=1), optional RUN_NDI_MEMORY_PRESSURE_HEAP=1, optional RUN_NDI_MEMORY_PRESSURE_HEAP_STRICT=1 (requires HEAP=1) — NdiOutputLifecycleMemoryTests. RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.
+Lab (NDI egress timeline soak, not this tool's runtime): RUN_NDI_EGRESS_SOAK=1, optional RUN_NDI_EGRESS_SOAK_ROUNDS=<n> (1k–10M), RUN_NDI_EGRESS_SOAK_STRESS=1 — NDIEgressPresentationTimelineTests. RUN_NDI_MUX_SOAK=1 — NDIEgressMuxPlayheadClockTests. RUN_NDI_MEMORY_PRESSURE=1, optional RUN_NDI_MEMORY_PRESSURE_ROUNDS=<n> (200–100k, or 200–2M with RUN_NDI_MEMORY_PRESSURE_LONG=1), optional RUN_NDI_MEMORY_PRESSURE_HEAP=1, optional RUN_NDI_MEMORY_PRESSURE_HEAP_STRICT=1 (requires HEAP=1) — NDIOutputLifecycleMemoryTests. RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.
 """);
     }
 }

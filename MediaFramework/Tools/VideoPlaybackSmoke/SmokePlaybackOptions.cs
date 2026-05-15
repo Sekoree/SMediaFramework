@@ -4,8 +4,8 @@ namespace VideoPlaybackSmoke;
 
 /// <summary>Library defaults without embedding the media path.</summary>
 public readonly record struct SmokePlaybackOptions(
-    bool NdiEnable = false,
-    string NdiName = SmokeDefaults.DefaultNdiOutputName,
+    bool NDIEnable = false,
+    string NDIName = SmokeDefaults.DefaultNDIOutputName,
     bool NoHardwareDecode = false,
     bool LinuxDrmDmabufGl = false,
     bool WindowsD3d11SharedGl = false,
@@ -13,23 +13,23 @@ public readonly record struct SmokePlaybackOptions(
     bool WindowsD3d11GlSharedHandleOnly = false,
     int AudioChunkSamples = SmokeDefaults.DefaultAudioChunkSamples,
     int? DeviceLatencyMs = null,
-    int NdiAudioAggregateSamples = -1,
-    int? NdiAudioPumpCapacityChunks = null,
-    bool NdiClockVideo = false,
-    bool NdiDisableWallPace = false,
-    int NdiVideoPumpFrames = SmokeDefaults.DefaultNdiVideoPumpFrames,
-    NDIVideoTimecodeMode NdiVideoTimecodeMode = NDIVideoTimecodeMode.PresentationRelativeTicks,
-    int NdiWaitFirstReceiverMs = 0)
+    int NDIAudioAggregateSamples = -1,
+    int? NDIAudioPumpCapacityChunks = null,
+    bool NDIClockVideo = false,
+    bool NDIDisableWallPace = false,
+    int NDIVideoPumpFrames = SmokeDefaults.DefaultNDIVideoPumpFrames,
+    NDIVideoTimecodeMode NDIVideoTimecodeMode = NDIVideoTimecodeMode.PresentationRelativeTicks,
+    int NDIWaitFirstReceiverMs = 0)
 {
-    public static SmokePlaybackOptions Default => new(NdiName: SmokeDefaults.DefaultNdiOutputName);
+    public static SmokePlaybackOptions Default => new(NDIName: SmokeDefaults.DefaultNDIOutputName);
 
     public SmokeToolOptions ToToolOptions(string mediaPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaPath);
         return new SmokeToolOptions(
             mediaPath,
-            NdiEnable,
-            NdiName,
+            NDIEnable,
+            NDIName,
             NoHardwareDecode,
             LinuxDrmDmabufGl,
             WindowsD3d11SharedGl,
@@ -37,12 +37,12 @@ public readonly record struct SmokePlaybackOptions(
             WindowsD3d11GlSharedHandleOnly,
             AudioChunkSamples,
             DeviceLatencyMs,
-            NdiAudioAggregateSamples,
-            NdiAudioPumpCapacityChunks,
-            NdiClockVideo,
-            NdiDisableWallPace,
-            NdiVideoPumpFrames,
-            NdiVideoTimecodeMode,
-            NdiWaitFirstReceiverMs);
+            NDIAudioAggregateSamples,
+            NDIAudioPumpCapacityChunks,
+            NDIClockVideo,
+            NDIDisableWallPace,
+            NDIVideoPumpFrames,
+            NDIVideoTimecodeMode,
+            NDIWaitFirstReceiverMs);
     }
 }

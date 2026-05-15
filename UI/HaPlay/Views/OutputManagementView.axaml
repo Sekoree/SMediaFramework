@@ -1,0 +1,78 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="640"
+             x:Class="HaPlay.Views.OutputManagementView"
+             x:DataType="vm:OutputManagementViewModel">
+
+  <UserControl.Styles>
+    <Style Selector="Border.card">
+      <Setter Property="BorderBrush" Value="#22808080" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="6" />
+      <Setter Property="Background" Value="#08808080" />
+    </Style>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="Opacity" Value="0.65" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel Margin="16">
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+      <StackPanel Grid.Column="0" Spacing="2">
+        <TextBlock Text="Outputs" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock Classes="hint"
+                   Text="Configured audio / video destinations. Right-click a local-video row for preview controls." />
+      </StackPanel>
+      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+        <Button Content="Add PortAudio…" Command="{Binding AddPortAudioCommand}" />
+        <Button Content="Add local video…" Command="{Binding AddLocalVideoCommand}" />
+        <Button Content="Add NDI…" Command="{Binding AddNDICommand}" />
+      </StackPanel>
+    </Grid>
+
+    <Border Classes="card">
+      <ListBox ItemsSource="{Binding Outputs}" Background="Transparent">
+        <ListBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:OutputLineViewModel">
+            <Grid ColumnDefinitions="*,Auto" Margin="0,4">
+              <Grid.ContextFlyout>
+                <MenuFlyout>
+                  <MenuItem Header="No preview actions for this output type."
+                            IsVisible="{Binding IsNotLocalVideo}"
+                            IsEnabled="False" />
+                  <MenuItem Header="Start preview window"
+                            Command="{Binding StartPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                  <MenuItem Header="Stop preview window"
+                            Command="{Binding StopPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                  <MenuItem Header="Fullscreen preview"
+                            Command="{Binding FullscreenPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                  <MenuItem Header="Windowed preview"
+                            Command="{Binding WindowedPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                </MenuFlyout>
+              </Grid.ContextFlyout>
+              <StackPanel Grid.Column="0" Spacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold" />
+                  <TextBlock Text="—" Opacity="0.5" />
+                  <TextBlock Text="{Binding Definition.DisplayName}" FontWeight="SemiBold" />
+                </StackPanel>
+                <TextBlock Classes="hint" Text="{Binding Summary}" />
+              </StackPanel>
+              <Button Grid.Column="1" VerticalAlignment="Top" Content="Remove" Command="{Binding RemoveCommand}" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
+  </DockPanel>
+</UserControl>

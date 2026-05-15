@@ -13,13 +13,13 @@ public readonly record struct PlaybackHudSnapshot(
     long DroppedLate,
     long DroppedDrain,
     long GlDroppedNewer,
-    long NdiVidDr,
-    int NdiVidQ,
+    long NDIVidDr,
+    int NDIVidQ,
     long PaUnd,
     long PaDr,
     long PumpDr,
-    long NdiAuDr,
-    string NdiMonitorTail);
+    long NDIAuDr,
+    string NDIMonitorTail);
 
 /// <summary>Formats playback HUD text without referencing SDL, NDI, or PortAudio.</summary>
 public static class PlaybackHud
@@ -34,5 +34,5 @@ public static class PlaybackHud
         $"aHeard {s.AudioHeard:mm\\:ss\\.fff}  aDec {s.AudioDeckDecode:mm\\:ss\\.fff}  " +
         $"show {s.DisplayedCount}/{s.DecodedCount}  vFps~{s.VFpsEstimate:0.#}  nom {s.NominalFpsLabel}  " +
         $"mux shared  vLate {s.DroppedLate}  vDrn {s.DroppedDrain}  " +
-        $"glDr {s.GlDroppedNewer}  ndiVidDr {s.NdiVidDr}  ndiVidQ {s.NdiVidQ}  paUnd {s.PaUnd}  paDr {s.PaDr}  pumpDr {s.PumpDr}  ndiAuDr {s.NdiAuDr}{s.NdiMonitorTail}";
+        $"glDr {s.GlDroppedNewer}  ndiVidDr {s.NDIVidDr}  ndiVidQ {s.NDIVidQ}  paUnd {s.PaUnd}  paDr {s.PaDr}  pumpDr {s.PumpDr}  ndiAuDr {s.NDIAuDr}{s.NDIMonitorTail}";
 }

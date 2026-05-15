@@ -29,13 +29,13 @@ public sealed class MediaPlayerTests
             DroppedLate: 1,
             DroppedDrain: 2,
             GlDroppedNewer: 3,
-            NdiVidDr: 4,
-            NdiVidQ: 5,
+            NDIVidDr: 4,
+            NDIVidQ: 5,
             PaUnd: 6,
             PaDr: 7,
             PumpDr: 8,
-            NdiAuDr: 9,
-            NdiMonitorTail: "  ndiRx2 P0V1 tallyΔ1");
+            NDIAuDr: 9,
+            NDIMonitorTail: "  ndiRx2 P0V1 tallyΔ1");
 
         var line = PlaybackHud.FormatLine(snap);
 

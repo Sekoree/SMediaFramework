@@ -45,7 +45,7 @@ public sealed class NDIOutput : IDisposable
     private readonly NDIVideoTimecodeMode _videoTimecodeMode;
 
     /// <summary>When <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected, shared by video + audio sinks.</summary>
-    private readonly NdiEgressPresentationTimeline? _egressPresentationTimeline;
+    private readonly NDIEgressPresentationTimeline? _egressPresentationTimeline;
 
     private readonly NDIRuntime _runtime;
     private readonly NDISender _sender;
@@ -105,7 +105,7 @@ public sealed class NDIOutput : IDisposable
         _minimumVideoSubmitSpacing = minimumVideoSubmitSpacing;
         _videoTimecodeMode = videoTimecodeMode;
         _egressPresentationTimeline = videoTimecodeMode == NDIVideoTimecodeMode.PresentationRelativeTicks
-            ? new NdiEgressPresentationTimeline()
+            ? new NDIEgressPresentationTimeline()
             : null;
 
         var rc = NDIRuntime.Create(out var rt);
@@ -215,7 +215,7 @@ public sealed class NDIOutput : IDisposable
     /// non-blocking <see cref="CaptureReceiverMetadata"/>; frees the frame when the SDK returns
     /// <see cref="NDIFrameType.Metadata"/>.
     /// </param>
-    public NdiMonitorReceiverPumpFusion TryPollMonitorReceiverPumpFusion(
+    public NDIMonitorReceiverPumpFusion TryPollMonitorReceiverPumpFusion(
         uint tallyWaitMs,
         bool drainOneUpstreamMetadataFrame,
         long ndiVideoPumpDropped,
@@ -238,7 +238,7 @@ public sealed class NDIOutput : IDisposable
             }
         }
 
-        return new NdiMonitorReceiverPumpFusion(
+        return new NDIMonitorReceiverPumpFusion(
             connections,
             tally,
             tallyChanged,

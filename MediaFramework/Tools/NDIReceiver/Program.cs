@@ -1,6 +1,6 @@
 using System.Text;
 using NDILib;
-using NdiReceiver = NDILib.NDIReceiver;
+using NDIReceiver = NDILib.NDIReceiver;
 
 Console.OutputEncoding = Encoding.UTF8;
 
@@ -48,7 +48,7 @@ using (rt!)
         Console.WriteLine($"Connecting to: {picked.Value.Name}");
         Console.WriteLine($"  URL: {picked.Value.UrlAddress}");
 
-        NdiReceiver.Create(out var recv).ThrowIfNonZero("NDIReceiver.Create");
+        NDIReceiver.Create(out var recv).ThrowIfNonZero("NDIReceiver.Create");
         using (recv!)
         {
             recv!.Connect(picked.Value);
@@ -93,7 +93,7 @@ using (rt!)
 
 return 0;
 
-internal static class NdiRcExtensions
+internal static class NDIRcExtensions
 {
     public static void ThrowIfNonZero(this int rc, string what)
     {

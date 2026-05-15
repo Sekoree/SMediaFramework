@@ -29,20 +29,20 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         NDIOutput? ndi,
         string? ndiVideoOutputId,
         MediaContainerPlaybackHost? audioHost,
-        NdiAudioAggregatingSink? ndiAudioAgg,
+        NDIAudioAggregatingSink? ndiAudioAgg,
         IAudioSink? ndiMirrorPrefill,
         string? ndiAudioSinkId,
         bool win32Nv12SharedHandleOnlyRequested)
     {
         Core = core;
         GlWindowSink = glWindowSink;
-        Ndi = ndi;
-        NdiVideoRouterInputId = core.VideoRouterInputId;
-        NdiVideoOutputId = ndiVideoOutputId;
+        NDI = ndi;
+        NDIVideoRouterInputId = core.VideoRouterInputId;
+        NDIVideoOutputId = ndiVideoOutputId;
         AudioHost = audioHost;
-        NdiAudioAggregatingSink = ndiAudioAgg;
-        NdiMirrorPrefill = ndiMirrorPrefill;
-        NdiAudioSinkId = ndiAudioSinkId;
+        NDIAudioAggregatingSink = ndiAudioAgg;
+        NDIMirrorPrefill = ndiMirrorPrefill;
+        NDIAudioSinkId = ndiAudioSinkId;
         Win32Nv12SharedHandleOnlyRequested = win32Nv12SharedHandleOnlyRequested;
     }
 
@@ -54,15 +54,15 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     public SDL3GLVideoSink GlWindowSink { get; }
 
-    public IVideoSink? NdiProgramVideoSink => Ndi?.VideoSink;
+    public IVideoSink? NDIProgramVideoSink => NDI?.VideoSink;
 
     public VideoRouter VideoRouter => Core.VideoRouter;
 
-    public NDIOutput? Ndi { get; }
+    public NDIOutput? NDI { get; }
 
-    public string NdiVideoRouterInputId { get; }
+    public string NDIVideoRouterInputId { get; }
 
-    public string? NdiVideoOutputId { get; }
+    public string? NDIVideoOutputId { get; }
 
     public MediaContainerPlaybackHost? AudioHost { get; }
 
@@ -76,11 +76,11 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     public AvRouter Av => Core.Av;
 
-    public NdiAudioAggregatingSink? NdiAudioAggregatingSink { get; }
+    public NDIAudioAggregatingSink? NDIAudioAggregatingSink { get; }
 
-    public IAudioSink? NdiMirrorPrefill { get; }
+    public IAudioSink? NDIMirrorPrefill { get; }
 
-    public string? NdiAudioSinkId { get; }
+    public string? NDIAudioSinkId { get; }
 
     public bool Win32Nv12SharedHandleOnlyRequested { get; }
 
@@ -103,7 +103,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         if (AudioHost is null)
             throw new InvalidOperationException("PortAudio path is not active; use AV routing without this helper.");
         var prefill = prefillDuration ?? SmokeDefaults.AudioPrefillDuration;
-        AudioHost.PrefillMainOutputDirectFromDecoder(prefill, NdiMirrorPrefill);
+        AudioHost.PrefillMainOutputDirectFromDecoder(prefill, NDIMirrorPrefill);
         AudioHost.StartHardwareOutput();
         Av.Play();
     }
@@ -169,7 +169,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         NDIOutput? ndi = null;
         string? ndiVideoOutputId = null;
         MediaContainerPlaybackHost? audioHost = null;
-        NdiAudioAggregatingSink? ndiAudioAgg = null;
+        NDIAudioAggregatingSink? ndiAudioAgg = null;
         IAudioSink? ndiMirrorPrefill = null;
         string? ndiAudioSinkId = null;
 
@@ -197,7 +197,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         {
             var videoDecoderOptions = new VideoDecoderOpenOptions
             {
-                TryHardwareAcceleration = !opt.NoHardwareDecode && !opt.NdiEnable,
+                TryHardwareAcceleration = !opt.NoHardwareDecode && !opt.NDIEnable,
                 RetainDmabufForGl = opt.LinuxDrmDmabufGl,
                 RetainD3D11SharedHandleForGl = opt.WindowsD3d11SharedGl,
                 Win32Nv12SharedHandleOnlyExport = opt.WindowsD3d11GlSharedHandleOnly,
@@ -226,7 +226,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                     || !(opt.WindowsD3d11SharedGl && opt.WindowsD3d11ZeroHostGl));
 
             var mpOpt = new MediaPlayerOpenOptions(
-                TryHardwareAcceleration: !opt.NoHardwareDecode && !opt.NdiEnable,
+                TryHardwareAcceleration: !opt.NoHardwareDecode && !opt.NDIEnable,
                 RetainDmabufForGl: opt.LinuxDrmDmabufGl,
                 RetainD3D11SharedHandleForGl: opt.WindowsD3d11SharedGl,
                 Win32Nv12SharedHandleOnlyExport: opt.WindowsD3d11GlSharedHandleOnly,
@@ -252,15 +252,15 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
             media = null;
 
-            if (opt.NdiEnable)
+            if (opt.NDIEnable)
             {
-                var wallPace = opt.NdiDisableWallPace ? (TimeSpan?)null : VideoFormatPacing.PaceBelowFramePeriod(videoSource.Format);
-                ndi = new NDIOutput(opt.NdiName, clockVideo: opt.NdiClockVideo, clockAudio: true,
+                var wallPace = opt.NDIDisableWallPace ? (TimeSpan?)null : VideoFormatPacing.PaceBelowFramePeriod(videoSource.Format);
+                ndi = new NDIOutput(opt.NDIName, clockVideo: opt.NDIClockVideo, clockAudio: true,
                     minimumVideoSubmitSpacing: wallPace,
-                    videoTimecodeMode: opt.NdiVideoTimecodeMode);
+                    videoTimecodeMode: opt.NDIVideoTimecodeMode);
 
                 ndiVideoOutputId = core!.VideoRouter.AddOutput(ndi.VideoSink, "ndi", disposeSinkOnRouterDispose: true,
-                    asyncPump: new VideoSinkPumpAttachOptions(opt.NdiVideoPumpFrames, "ndi-video", null,
+                    asyncPump: new VideoSinkPumpAttachOptions(opt.NDIVideoPumpFrames, "ndi-video", null,
                         DisposeInnerSinkWhenPumpDisposes: false));
                 if (!core.VideoRouter.TryAddRoute(core.VideoRouterInputId, ndiVideoOutputId, out var routeErr))
                     throw new InvalidOperationException(routeErr ?? "VideoRouter.TryAddRoute(ndi) failed");
@@ -278,7 +278,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
             if (ndi is not null && audioHost is not null)
             {
                 IAudioSink ndAudio = ndi.EnableAudio(audioHost.AudioFormat);
-                var agg = opt.NdiAudioAggregateSamples;
+                var agg = opt.NDIAudioAggregateSamples;
                 if (agg < 0)
                 {
                     var fps = videoSource.Format.FrameRate.ToDouble();
@@ -289,12 +289,12 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
                 if (agg > 0)
                 {
-                    ndiAudioAgg = new NdiAudioAggregatingSink(ndAudio, agg);
+                    ndiAudioAgg = new NDIAudioAggregatingSink(ndAudio, agg);
                     ndAudio = ndiAudioAgg;
                 }
 
                 ndiAudioSinkId = audioHost.Player.AddOutput(ndAudio,
-                    sinkPumpCapacityChunks: opt.NdiAudioPumpCapacityChunks);
+                    sinkPumpCapacityChunks: opt.NDIAudioPumpCapacityChunks);
 
                 audioHost.Player.Connect(audioHost.SourceId, ndiAudioSinkId,
                     ChannelMap.Identity(Math.Min(2, audioHost.AudioFormat.Channels)));
@@ -332,9 +332,9 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
             _sdlCloseForCancel = null;
         }
 
-        NdiAudioAggregatingSink?.Dispose();
+        NDIAudioAggregatingSink?.Dispose();
         Core.Dispose();
         AudioHost?.Dispose();
-        Ndi?.Dispose();
+        NDI?.Dispose();
     }
 }

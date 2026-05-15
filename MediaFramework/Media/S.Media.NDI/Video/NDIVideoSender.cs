@@ -80,7 +80,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
     /// <summary>Wall-clock spacing between submits; zero disables pacing.</summary>
     private readonly TimeSpan _minimumSubmitSpacing;
     private readonly NDIVideoTimecodeMode _timecodeMode;
-    private readonly NdiEgressPresentationTimeline? _sharedPresentationTimeline;
+    private readonly NDIEgressPresentationTimeline? _sharedPresentationTimeline;
     private long _lastSubmitTimestamp;
     private TimeSpan? _presentationAnchor;
 
@@ -98,7 +98,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
 
     internal NDIVideoSender(NDISender sender, TimeSpan? minimumSubmitSpacing = null,
                             NDIVideoTimecodeMode timecodeMode = NDIVideoTimecodeMode.Synthesize,
-                            NdiEgressPresentationTimeline? sharedPresentationTimeline = null)
+                            NDIEgressPresentationTimeline? sharedPresentationTimeline = null)
     {
         ArgumentNullException.ThrowIfNull(sender);
         _sender = sender;

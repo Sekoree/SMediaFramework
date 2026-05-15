@@ -74,9 +74,9 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Media.Playback.Tests", "M
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "UI", "UI", "{C6556449-15D9-4C0B-82EE-07C8CBD06D9A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HaPlay", "UI\AvaloniaApplication1\HaPlay\HaPlay.csproj", "{B1302D16-690E-47EB-9096-521F08347E0C}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HaPlay", "UI\HaPlay\HaPlay.csproj", "{B1302D16-690E-47EB-9096-521F08347E0C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HaPlay.Desktop", "UI\AvaloniaApplication1\HaPlay.Desktop\HaPlay.Desktop.csproj", "{7146B01D-1A8E-4A34-BD7F-5E517505407A}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HaPlay.Desktop", "UI\HaPlay.Desktop\HaPlay.Desktop.csproj", "{7146B01D-1A8E-4A34-BD7F-5E517505407A}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

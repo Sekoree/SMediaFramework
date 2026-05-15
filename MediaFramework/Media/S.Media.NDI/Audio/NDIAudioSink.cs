@@ -41,7 +41,7 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
 {
     private readonly NDISender _sender;
     private readonly AudioFormat _format;
-    private readonly NdiEgressPresentationTimeline? _presentationTimeline;
+    private readonly NDIEgressPresentationTimeline? _presentationTimeline;
     private byte* _packedBuffer;
     private int _packedCapacityBytes;
     private bool _disposed;
@@ -50,7 +50,7 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
 
     public AudioFormat Format => _format;
 
-    internal NDIAudioSink(NDISender sender, AudioFormat format, NdiEgressPresentationTimeline? presentationTimeline = null)
+    internal NDIAudioSink(NDISender sender, AudioFormat format, NDIEgressPresentationTimeline? presentationTimeline = null)
     {
         ArgumentNullException.ThrowIfNull(sender);
         if (format.SampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(format), "sample rate must be positive");

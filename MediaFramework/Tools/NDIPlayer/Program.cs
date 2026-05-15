@@ -38,9 +38,9 @@ using var ndi = new NDIOutput(ndiName, clockVideo: false, clockAudio: true,
     minimumVideoSubmitSpacing: null,
     videoTimecodeMode: NDIVideoTimecodeMode.MuxerPresentationTicks);
 
-if (opt.NdiWaitFirstReceiverMs > 0)
+if (opt.NDIWaitFirstReceiverMs > 0)
 {
-    var ms = (uint)opt.NdiWaitFirstReceiverMs;
+    var ms = (uint)opt.NDIWaitFirstReceiverMs;
     var n = ndi.GetReceiverConnectionCount(ms);
     if (opt.Verbose)
         Console.Error.WriteLine($"[ndi-debug] waited up to {ms} ms for first receiver — count={n}");
@@ -52,7 +52,7 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 // Single-threaded mux pump when both streams — never call Audio+Video TryReadNextFrame concurrently.
 var pumpCount = (!opt.AudioOnly || !opt.VideoOnly) ? 1 : 0;
 using var pumpsFinished = pumpCount > 0 ? new CountdownEvent(pumpCount) : null;
-var dbg = opt.Verbose ? new NdiDebugState() : null;
+var dbg = opt.Verbose ? new NDIDebugState() : null;
 Task? hudTask = null;
 if (dbg is not null && pumpsFinished is not null)
 {
@@ -172,13 +172,13 @@ static void WriteUsage()
     Console.WriteLine("  --no-wall-pace   Disable realtime wall pacing (decode/send as fast as CPU allows).");
     Console.WriteLine("  --no-wall-drift-correct  Disable wall-anchor nudging (default: on with wall pace).");
     Console.WriteLine("  --ndi-wait-first-receiver-ms=n  Block up to n ms for first NDI receiver (0=off, max 300000).");
-    Console.WriteLine("  Lab (dotnet test, not runtime): RUN_NDI_EGRESS_SOAK=1, RUN_NDI_EGRESS_SOAK_ROUNDS=<n>, RUN_NDI_EGRESS_SOAK_STRESS=1 — NdiEgressPresentationTimelineTests; RUN_NDI_MUX_SOAK=1 — NdiEgressMuxPlayheadClockTests; RUN_NDI_MEMORY_PRESSURE=1, optional RUN_NDI_MEMORY_PRESSURE_ROUNDS=<n> (200–100k, or 200–2M with RUN_NDI_MEMORY_PRESSURE_LONG=1), optional RUN_NDI_MEMORY_PRESSURE_HEAP=1, optional RUN_NDI_MEMORY_PRESSURE_HEAP_STRICT=1 (requires HEAP=1) — NdiOutputLifecycleMemoryTests; RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.");
+    Console.WriteLine("  Lab (dotnet test, not runtime): RUN_NDI_EGRESS_SOAK=1, RUN_NDI_EGRESS_SOAK_ROUNDS=<n>, RUN_NDI_EGRESS_SOAK_STRESS=1 — NDIEgressPresentationTimelineTests; RUN_NDI_MUX_SOAK=1 — NDIEgressMuxPlayheadClockTests; RUN_NDI_MEMORY_PRESSURE=1, optional RUN_NDI_MEMORY_PRESSURE_ROUNDS=<n> (200–100k, or 200–2M with RUN_NDI_MEMORY_PRESSURE_LONG=1), optional RUN_NDI_MEMORY_PRESSURE_HEAP=1, optional RUN_NDI_MEMORY_PRESSURE_HEAP_STRICT=1 (requires HEAP=1) — NDIOutputLifecycleMemoryTests; RUN_MEDIA_SOAK=1, optional RUN_MEDIA_SOAK_ROUNDS=<n> (8–10000) — MediaContainerDecoderSoakTests.");
     Console.WriteLine("  Shared-mux pause (app hosts): after stopping pumps, call MediaContainerDecoder.FlushCodecPipelines()");
     Console.WriteLine("    or pass decoder.FlushCodecPipelines to AvPlaybackCoordinator.Pause(..., flushSharedMuxAfterPause).");
 }
 
 static void WriteStartupDiagnostics(string mediaPath, string ndiName, MediaContainerDecoder dec, NDIOutput ndi,
-    NdiPlayerCliOptions opt)
+    NDIPlayerCliOptions opt)
 {
     var v = dec.Video.Format;
     var a = dec.Audio.Format;
@@ -192,7 +192,7 @@ static void WriteStartupDiagnostics(string mediaPath, string ndiName, MediaConta
         (opt.WallPace ? "on" : "off") + "; wallDriftCorrect=" + (opt.WallDriftCorrect ? "on" : "off") + ".");
 }
 
-static void DebugHudLoop(NDIOutput ndi, MediaContainerDecoder dec, NdiDebugState dbg, CountdownEvent pumpsFinished,
+static void DebugHudLoop(NDIOutput ndi, MediaContainerDecoder dec, NDIDebugState dbg, CountdownEvent pumpsFinished,
     int intervalMs, CancellationToken ct)
 {
     var intervalMsClamped = (int)Math.Clamp(intervalMs, 100, 10_000);
@@ -248,7 +248,7 @@ static void PumpMuxOrdered(
     MediaContainerDecoder dec,
     IVideoSink videoSink,
     NDIAudioSink audioSink,
-    NdiDebugState? dbg,
+    NDIDebugState? dbg,
     CountdownEvent? pumpsFinished,
     ref long wallAnchorTicks,
     bool wallPace,
@@ -326,7 +326,7 @@ static void PumpMuxOrdered(
     }
 }
 
-static void PumpVideo(IVideoSource src, IVideoSink sink, NdiDebugState? dbg, CountdownEvent? pumpsFinished,
+static void PumpVideo(IVideoSource src, IVideoSink sink, NDIDebugState? dbg, CountdownEvent? pumpsFinished,
     ref long wallAnchorTicks, bool wallPace, bool wallDriftCorrect, CancellationToken ct)
 {
     try
@@ -354,7 +354,7 @@ static void PumpVideo(IVideoSource src, IVideoSink sink, NdiDebugState? dbg, Cou
     }
 }
 
-static void PumpAudio(IAudioSource src, NDIAudioSink sink, NdiDebugState? dbg, CountdownEvent? pumpsFinished,
+static void PumpAudio(IAudioSource src, NDIAudioSink sink, NDIDebugState? dbg, CountdownEvent? pumpsFinished,
     ref long wallAnchorTicks, bool wallPace, bool wallDriftCorrect, CancellationToken ct)
 {
     try
@@ -375,7 +375,7 @@ static void PumpAudio(IAudioSource src, NDIAudioSink sink, NdiDebugState? dbg, C
     }
 }
 
-static bool TryParseArgs(string[] args, out NdiPlayerCliOptions opt, out string mediaPath, out string ndiName)
+static bool TryParseArgs(string[] args, out NDIPlayerCliOptions opt, out string mediaPath, out string ndiName)
 {
     opt = default;
     mediaPath = "";
@@ -434,7 +434,7 @@ static bool TryParseArgs(string[] args, out NdiPlayerCliOptions opt, out string 
         return false;
     if (rest.Count != 2)
         return false;
-    opt = new NdiPlayerCliOptions(videoOnly, audioOnly, noHw, verbose, debugMs, wallPace, wallDriftCorrect,
+    opt = new NDIPlayerCliOptions(videoOnly, audioOnly, noHw, verbose, debugMs, wallPace, wallDriftCorrect,
         ndiWaitFirstRxMs);
     mediaPath = rest[0];
     ndiName = rest[1];
@@ -449,7 +449,7 @@ static bool TryParseKeyedInt(string arg, string prefix, out int value)
     return int.TryParse(arg.AsSpan(prefix.Length), out value);
 }
 
-file readonly record struct NdiPlayerCliOptions(
+file readonly record struct NDIPlayerCliOptions(
     bool VideoOnly,
     bool AudioOnly,
     bool NoHw,
@@ -457,10 +457,10 @@ file readonly record struct NdiPlayerCliOptions(
     int DebugIntervalMs,
     bool WallPace,
     bool WallDriftCorrect,
-    int NdiWaitFirstReceiverMs);
+    int NDIWaitFirstReceiverMs);
 
 /// <summary>Cross-thread counters for <see cref="DebugHudLoop"/>.</summary>
-file sealed class NdiDebugState
+file sealed class NDIDebugState
 {
     private long _videoFramesSubmitted;
     private long _lastVideoPresentationTicks;

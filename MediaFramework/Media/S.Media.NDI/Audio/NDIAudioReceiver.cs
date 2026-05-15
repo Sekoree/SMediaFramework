@@ -37,7 +37,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 {
     private readonly NDIRuntime _runtime;
     private readonly NDIReceiver _receiver;
-    private readonly NdiIngestPlaybackClock? _ingestClock;
+    private readonly NDIIngestPlaybackClock? _ingestClock;
     private readonly Thread _captureThread;
     private readonly CancellationTokenSource _cts = new();
     private readonly int _capacityFrames;
@@ -88,7 +88,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         NDIDiscoveredSource source,
         string? receiverName = null,
         int ringCapacityFrames = 96000,
-        NdiIngestPlaybackClock? ingestClock = null)
+        NDIIngestPlaybackClock? ingestClock = null)
     {
         if (ringCapacityFrames < 1024)
             throw new ArgumentOutOfRangeException(nameof(ringCapacityFrames), "must be >= 1024");
