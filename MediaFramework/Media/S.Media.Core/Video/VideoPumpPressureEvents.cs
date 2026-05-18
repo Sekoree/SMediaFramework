@@ -1,4 +1,4 @@
-namespace S.Media.FFmpeg.Video;
+namespace S.Media.Core.Video;
 
 /// <summary>
 /// Raised by <see cref="VideoSinkPump"/> when the bounded queue drops an oldest frame (video analogue of

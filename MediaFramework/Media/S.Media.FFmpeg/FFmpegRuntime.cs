@@ -1,7 +1,9 @@
 using System.Threading;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Video;
 using S.Media.FFmpeg.Audio;
+using S.Media.FFmpeg.Video;
 
 namespace S.Media.FFmpeg;
 
@@ -65,6 +67,12 @@ public static class FFmpegRuntime
             // (if any) can replace it after FFmpegRuntime.EnsureInitialized() returns.
             AudioRouterAutoResample.SourceWrapper ??=
                 (inner, targetRate) => new ResamplingAudioSource(inner, targetRate, disposeInnerWhenDisposed: false);
+
+            // Install the swscale-backed CPU video converter so the Core VideoRouter can do branch
+            // pixel conversion without referencing FFmpeg. Last write wins on the static slots —
+            // other packages can replace these after FFmpegRuntime.EnsureInitialized() returns.
+            VideoCpuFrameConverterRegistry.Factory ??= () => new VideoCpuFrameConverter();
+            VideoCpuFrameConverterRegistry.CanConvertProbe ??= VideoCpuFrameConverter.CanConvert;
 
             _initialized = true;
         }

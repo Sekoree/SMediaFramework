@@ -16,7 +16,7 @@ namespace S.Media.PortAudio;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Video routing (<see cref="S.Media.FFmpeg.Video.VideoRouter"/>), GL sinks, and NDI remain caller-owned; use
+/// Video routing (<see cref="S.Media.Core.Video.VideoRouter"/>), GL sinks, and NDI remain caller-owned; use
 /// <see cref="CreateContainerSession"/> with an <see cref="IAvPlaybackSession"/> built from the same
 /// <see cref="MediaContainerDecoder"/> and <see cref="AudioPlayer.Clock"/> graph. For optional single-<see cref="IDisposable.Dispose"/>
 /// of the decoder plus <see cref="VideoPlayer"/> / optional <see cref="VideoRouter"/> / freerun <see cref="MediaClock"/>

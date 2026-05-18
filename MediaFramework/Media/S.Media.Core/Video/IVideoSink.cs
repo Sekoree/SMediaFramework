@@ -2,7 +2,7 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Push-based video consumer. Sinks include displays (<see cref="S.Media.SDL3.SDL3GLVideoSink"/>, <see cref="S.Media.Avalonia.VideoOpenGlControl"/>), file
-/// muxers, and network senders (NDI). Multi-sink hosts (for example <c>S.Media.Playback.MediaPlayer</c> with <see cref="S.Media.FFmpeg.Video.VideoRouter"/>) route frames to any implementation the app references.
+/// muxers, and network senders (NDI). Multi-sink hosts (for example <c>S.Media.Playback.MediaPlayer</c> with <see cref="S.Media.Core.Video.VideoRouter"/>) route frames to any implementation the app references.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -53,9 +53,9 @@ public interface IVideoSink
     /// </para>
     /// <para>
     /// For slow sinks that cannot guarantee promptness, wrap with
-    /// <see cref="S.Media.FFmpeg.Video.VideoSinkPump"/> (or register via
-    /// <see cref="S.Media.FFmpeg.Video.VideoRouter.AddOutput"/> with
-    /// <see cref="S.Media.FFmpeg.Video.VideoSinkPumpAttachOptions"/>) so submissions are
+    /// <see cref="S.Media.Core.Video.VideoSinkPump"/> (or register via
+    /// <see cref="S.Media.Core.Video.VideoRouter.AddOutput"/> with
+    /// <see cref="S.Media.Core.Video.VideoSinkPumpAttachOptions"/>) so submissions are
     /// queued and drained on a background thread.
     /// </para>
     /// </remarks>

@@ -14,7 +14,7 @@ namespace S.Media.FFmpeg.Video;
 /// <remarks>
 /// <see cref="Dispose"/> frees the <c>sws</c> context; <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/>.
 /// </remarks>
-public sealed unsafe class VideoCpuFrameConverter : IDisposable
+public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDisposable
 {
     private SwsContext* _ctx;
     private int _width;
@@ -180,49 +180,14 @@ public sealed unsafe class VideoCpuFrameConverter : IDisposable
     }
 
     /// <summary>Deep-copies CPU plane bytes into pool-backed memories (same layout / format).</summary>
-    public static VideoFrame DuplicateCpuBacking(VideoFrame source, VideoTransferHint hint)
-    {
-        if (source.DmabufNv12 is not null || source.DmabufP010 is not null || source.DmabufP016 is not null)
-            throw new NotSupportedException("DuplicateCpuBacking does not support DRM dma-buf frames.");
-        if (source.Win32Nv12 is not null)
-            throw new NotSupportedException("DuplicateCpuBacking does not support Win32 D3D11 shared-handle frames.");
-        var fmt = source.Format.PixelFormat;
-        var fw = source.Format.Width;
-        var fh = source.Format.Height;
-        var n = PixelFormatInfo.PlaneCount(fmt);
-        var stridesOut = new int[n];
-        var planes = new ReadOnlyMemory<byte>[n];
-        List<byte[]> rentedBuffers = [];
-        try
-        {
-            for (var i = 0; i < n; i++)
-            {
-                var stride = source.Strides[i];
-                stridesOut[i] = stride;
-                var totalBytes = PixelFormatInfo.PlanePitchBufferLength(fmt, fw, fh, i, stride);
-                var planeSrc = source.Planes[i];
-                if (planeSrc.Length < totalBytes)
-                    throw new ArgumentException($"plane[{i}] shorter than contiguous pitch buffer", nameof(source));
-
-                var buf = ArrayPool<byte>.Shared.Rent(totalBytes);
-                rentedBuffers.Add(buf);
-                planeSrc.Span[..totalBytes].CopyTo(buf);
-                planes[i] = buf.AsMemory(0, totalBytes);
-            }
-
-            return new VideoFrame(source.PresentationTime, source.Format, planes, stridesOut, hint, release: () =>
-            {
-                foreach (var b in rentedBuffers)
-                    ArrayPool<byte>.Shared.Return(b);
-            });
-        }
-        catch
-        {
-            foreach (var b in rentedBuffers)
-                ArrayPool<byte>.Shared.Return(b);
-            throw;
-        }
-    }
+    /// <summary>
+    /// Back-compat forwarder to <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/>. The body moved
+    /// into Core during the Phase 3 P3.8 split; this wrapper keeps the original
+    /// <c>VideoCpuFrameConverter.DuplicateCpuBacking</c> call sites working without a using-statement
+    /// change.
+    /// </summary>
+    public static VideoFrame DuplicateCpuBacking(VideoFrame source, VideoTransferHint hint) =>
+        VideoFrameCpuClone.DuplicateCpuBacking(source, hint);
 
     private void ReleaseCtx()
     {

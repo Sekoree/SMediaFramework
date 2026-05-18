@@ -2,16 +2,15 @@ using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
-using S.Media.Core.Video;
 
-namespace S.Media.FFmpeg.Video;
+namespace S.Media.Core.Video;
 
 /// <summary>
 /// Pixel format delivered to one <see cref="VideoRouter"/> output after negotiation and fan-out
 /// configuration (see <see cref="VideoRouter.TryGetInputFanOutPixelFormats"/>).
 /// </summary>
 /// <param name="UsesRouterCpuConverter">
-/// True when this branch uses <see cref="VideoCpuFrameConverter"/> to convert from the negotiated stream format.
+/// True when this branch uses <see cref="IVideoCpuFrameConverter"/> to convert from the negotiated stream format.
 /// Always false for the primary output.
 /// </param>
 public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, PixelFormat PixelFormat, bool UsesRouterCpuConverter);
@@ -27,17 +26,18 @@ public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, Pixe
 /// Pixel negotiation uses the <strong>primary</strong> output registered with
 /// <see cref="AddInput"/> — its <see cref="IVideoSink.AcceptedPixelFormats"/> are re-exposed
 /// on the returned <see cref="IVideoSink"/>. Branch outputs receive
-/// <see cref="VideoCpuFrameConverter"/> conversion when needed, mirroring <see cref="VideoOutputRouter"/>.
+/// <see cref="IVideoCpuFrameConverter"/> conversion (via <see cref="VideoCpuFrameConverterRegistry"/>)
+/// when needed; the shipping converter is FFmpeg's swscale-backed implementation.
 /// </para>
 /// <para>
 /// <strong>DRM dma-buf NV12</strong> can fan out to multiple sinks when every
 /// branch accepts the same negotiated <see cref="PixelFormat.Nv12"/> (no
-/// per-branch <see cref="VideoCpuFrameConverter"/>). <strong>P010</strong> and <strong>P016</strong> dma-buf fan-out follow the same rule
+/// per-branch <see cref="IVideoCpuFrameConverter"/>). <strong>P010</strong> and <strong>P016</strong> dma-buf fan-out follow the same rule
 /// when every branch stays <see cref="PixelFormat.P010"/> or <see cref="PixelFormat.P016"/> via <see cref="VideoFrame.CreateP010DmabufSharedReference"/> or <see cref="VideoFrame.CreateP016DmabufSharedReference"/>.
 /// Each NV12 output receives an independent <see cref="VideoFrame"/> sharing refcounted fds via
 /// <see cref="VideoFrame.CreateNv12DmabufSharedReference"/>; each P010 output uses <see cref="VideoFrame.CreateP010DmabufSharedReference"/>; each P016 output uses <see cref="VideoFrame.CreateP016DmabufSharedReference"/>.
-/// <strong>CPU NV12</strong> with the same constraints uses <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> so every sink shares one backing instead of <see cref="VideoCpuFrameConverter.DuplicateCpuBacking"/>.
-/// When a branch needs a different pixel format and the input is Linux DRM dma-buf semi-planar, <see cref="VideoDmabufCpuReadback"/> performs a best-effort <c>mmap</c> copy into CPU memory for that branch’s <see cref="VideoCpuFrameConverter"/> (may fail for tiled / protected buffers — see that type).
+/// <strong>CPU NV12</strong> with the same constraints uses <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> so every sink shares one backing instead of <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/>.
+/// When a branch needs a different pixel format and the input is Linux DRM dma-buf semi-planar, <see cref="VideoDmabufCpuReadback"/> performs a best-effort <c>mmap</c> copy into CPU memory for that branch’s <see cref="IVideoCpuFrameConverter"/> (may fail for tiled / protected buffers — see that type).
 /// <strong>Win32</strong> shared NV12 with a branch CPU converter remains unsupported at <see cref="IVideoSink.Submit"/> time.
 /// Configure-time cannot know whether NV12, P010, or P016 frames will be CPU-backed or hardware-backed; when hardware-backed semi-planar dma-buf frames are delivered,
 /// the router logs a warning if any branch uses a CPU converter (see <see cref="InputRegistration.ApplyConfigureLocked"/>).
@@ -504,10 +504,10 @@ public sealed class VideoRouter : IDisposable
                 var branchSink = _owner._outputs[oid].Sink;
                 var branchFmt = VideoSinkFanoutFormats.PickBranchPixelFormat(negotiated, branchSink.AcceptedPixelFormats);
                 var needsConversion = branchFmt != negotiated.PixelFormat;
-                VideoCpuFrameConverter? conv = null;
+                IVideoCpuFrameConverter? conv = null;
                 if (needsConversion)
                 {
-                    conv = new VideoCpuFrameConverter();
+                    conv = VideoCpuFrameConverterRegistry.Create();
                     conv.Configure(negotiated.PixelFormat, branchFmt, negotiated.Width, negotiated.Height);
                 }
                 branchSink.Configure(new VideoFormat(negotiated.Width, negotiated.Height, branchFmt, negotiated.FrameRate));
@@ -666,7 +666,7 @@ public sealed class VideoRouter : IDisposable
                                         ? VideoFrame.CreateP016DmabufSharedReference(frame)
                                         : frame.Win32Nv12 is not null
                                             ? VideoFrame.CreateNv12Win32SharedReference(frame)
-                                            : VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                                            : VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
                     }
                 }
 
@@ -695,8 +695,8 @@ public sealed class VideoRouter : IDisposable
         }
     }
 
-    /// <param name="Converter">When null, branch uses <see cref="VideoCpuFrameConverter.DuplicateCpuBacking"/> for CPU frames unless <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> applies (negotiated <see cref="PixelFormat.Nv12"/>, no dma-buf / Win32 backings, no branch converter).</param>
-    private readonly record struct OutputPathState(VideoCpuFrameConverter? Converter);
+    /// <param name="Converter">When null, branch uses <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/> for CPU frames unless <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> applies (negotiated <see cref="PixelFormat.Nv12"/>, no dma-buf / Win32 backings, no branch converter).</param>
+    private readonly record struct OutputPathState(IVideoCpuFrameConverter? Converter);
 
     private sealed class VideoRouterInputSink : IVideoSink, IVideoSinkD3D11GlBorrowSetup
     {

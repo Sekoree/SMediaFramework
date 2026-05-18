@@ -1,6 +1,4 @@
-using S.Media.Core.Video;
-
-namespace S.Media.FFmpeg.Video;
+namespace S.Media.Core.Video;
 
 /// <summary>
 /// Picks a concrete pixel format for a fan-out branch given a negotiated stream
@@ -48,14 +46,14 @@ public static class VideoSinkFanoutFormats
         foreach (var pref in BranchFormatPreference)
         {
             if (!SinkHas(branchAccepted, pref)) continue;
-            if (VideoCpuFrameConverter.CanConvert(src, pref, w, h))
+            if (VideoCpuFrameConverterRegistry.CanConvert(src, pref, w, h))
                 return pref;
         }
 
         for (var i = 0; i < branchAccepted.Count; i++)
         {
             var p = branchAccepted[i];
-            if (p == src || VideoCpuFrameConverter.CanConvert(src, p, w, h))
+            if (p == src || VideoCpuFrameConverterRegistry.CanConvert(src, p, w, h))
                 return p;
         }
 

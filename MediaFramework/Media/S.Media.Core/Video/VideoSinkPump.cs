@@ -1,9 +1,8 @@
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
-using S.Media.Core.Video;
 
-namespace S.Media.FFmpeg.Video;
+namespace S.Media.Core.Video;
 
 /// <summary>
 /// Snapshot counters for a <see cref="VideoSinkPump"/> (video analogue of audio <c>SinkPumpStats</c>).

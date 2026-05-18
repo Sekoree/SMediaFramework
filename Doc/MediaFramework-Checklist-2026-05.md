@@ -4,7 +4,7 @@ Derived from `Doc/MediaFramework-Review-2026-05.md`. Ordered to minimize wasted 
 
 Legend: **size** = XS (<1 h) · S (<½ day) · M (1–2 days) · L (1 week) · XL (multi-week feature). **breaks** = which downstream code likely needs updates.
 
-**Status (updated 2026-05-18):** Phase 0 complete. Phase 1 complete. Phase 2 complete. Phase 3 mostly complete (7/8 — P3.8 VideoRouter→Core refactor deferred as a focused follow-up). Phase 4 is the next planned batch.
+**Status (updated 2026-05-18):** Phase 0 complete. Phase 1 complete. Phase 2 complete. Phase 3 complete (8/8 — P3.8 VideoRouter→Core refactor landed). Phase 4 is the next planned batch.
 
 ---
 
@@ -149,7 +149,7 @@ MediaFramework/Test/S.Media.FFmpeg.Tests/Video/VideoRouterTests.cs  (AddSyncOutp
 
 ---
 
-## Phase 3 — Foundational features ✅ MOSTLY COMPLETE (2026-05-18, 7/8)
+## Phase 3 — Foundational features ✅ COMPLETE (2026-05-18, 8/8)
 
 These unblock the *primary product surfaces*: cue players, soundboards, image triggers, **and full video playback** (the user clarified 2026-05-18 that moving video is first-class — static images are the complementary case, not a replacement).
 
@@ -167,9 +167,9 @@ These unblock the *primary product surfaces*: cue players, soundboards, image tr
 
 - [x] **`MediaContainerSharedDemux` packet queue depth as options field.** `MediaPlayerOpenOptions.AudioPacketQueueDepth` / `VideoPacketQueueDepth` (and matching `VideoDecoderOpenOptions` init properties) forward into the demux. `0` keeps the existing defaults (192 / 384). **Size:** XS.
 
-- [ ] **Move `VideoRouter` skeleton into `S.Media.Core`** — *deferred to a focused follow-up PR.* The refactor would touch every `using S.Media.FFmpeg.Video` site (HaPlay, smoke tools, decoder tests, MediaPlayer wiring), require an abstraction for `VideoCpuFrameConverter` so the moved router can still do branch conversion, and produce a churn diff worth reviewing in isolation. **Size:** M.
+- [x] **Move `VideoRouter` skeleton into `S.Media.Core`.** `VideoRouter`, `VideoSinkPump`, `VideoSinkFanoutFormats`, `VideoPumpPressureEvents` now live in `S.Media.Core/Video/` (namespace `S.Media.Core.Video`). New abstraction `IVideoCpuFrameConverter` + `VideoCpuFrameConverterRegistry` (factory + `CanConvertProbe`) lets Core do branch pixel conversion without referencing FFmpeg; the swscale-backed `VideoCpuFrameConverter` in `S.Media.FFmpeg` now implements that interface and is registered by `FFmpegRuntime.EnsureInitialized()`. The pure-managed plane-duplication helper moved to `VideoFrameCpuClone.DuplicateCpuBacking` (Core); `VideoCpuFrameConverter.DuplicateCpuBacking` stayed as a back-compat forwarder so HaPlay / smoke tools / older test sites kept compiling without changes. Build clean and 521/522 tests still pass (same single pre-existing flaky NDI clock test). **Size:** M.
 
-**Phase exit:** the framework now demonstrably backs a working soundboard / cue player loop — mixed-rate clips, static images held indefinitely, single-call file open with PortAudio + GL window, fluent route wiring, sub-mix bus, and tunable demux for deep B-frame streams. Only the architectural move-VideoRouter-to-Core item is outstanding.
+**Phase exit:** the framework demonstrably backs a working soundboard / cue player loop — mixed-rate clips, static images held indefinitely, single-call file open with PortAudio + GL window, fluent route wiring, sub-mix bus, tunable demux for deep B-frame streams — **and** `VideoRouter` is now a Core type so consumers can wire video pipelines without pulling in FFmpeg. ✅
 
 **Outcomes:**
 - Build: clean (0 warnings / 0 errors) across all 25 projects (added `S.Media.SkiaSharp`, `S.Media.SkiaSharp.Tests`, `S.Media.Quick`).
@@ -196,6 +196,20 @@ MediaFramework/Test/S.Media.Core.Tests/Video/VideoPlayerTests.cs            (hol
 MediaFramework/Test/S.Media.SkiaSharp.Tests/S.Media.SkiaSharp.Tests.csproj  (new project)
 MediaFramework/Test/S.Media.SkiaSharp.Tests/ImageFileSourceTests.cs         (new)
 MFPlayer.sln                                                                (added the 3 new projects)
+```
+
+**P3.8 follow-up files (commit-after-Phase-3-batch):**
+```
+MediaFramework/Media/S.Media.Core/Video/IVideoCpuFrameConverter.cs          (new — interface + registry + VideoFrameCpuClone)
+MediaFramework/Media/S.Media.Core/Video/VideoRouter.cs                      (git-mv from S.Media.FFmpeg/Video, namespace S.Media.Core.Video, switched to IVideoCpuFrameConverter)
+MediaFramework/Media/S.Media.Core/Video/VideoSinkPump.cs                    (git-mv, namespace bump)
+MediaFramework/Media/S.Media.Core/Video/VideoSinkFanoutFormats.cs           (git-mv, namespace bump, uses CanConvertProbe)
+MediaFramework/Media/S.Media.Core/Video/VideoPumpPressureEvents.cs          (git-mv, namespace bump)
+MediaFramework/Media/S.Media.Core/Video/DiscardingVideoSink.cs              (cref → S.Media.Core.Video.VideoRouter)
+MediaFramework/Media/S.Media.Core/Video/IVideoSink.cs                       (cref → S.Media.Core.Video.{VideoRouter,VideoSinkPump,VideoSinkPumpAttachOptions})
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoCpuFrameConverter.cs         (implements IVideoCpuFrameConverter; DuplicateCpuBacking now forwards)
+MediaFramework/Media/S.Media.FFmpeg/FFmpegRuntime.cs                        (installs Factory + CanConvertProbe)
+MediaFramework/Media/S.Media.PortAudio/PortAudioPlaybackHost.cs             (cref bump)
 ```
 
 ---
