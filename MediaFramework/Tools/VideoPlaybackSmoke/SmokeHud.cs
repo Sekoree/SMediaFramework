@@ -29,7 +29,7 @@ public static class SmokeHud
         VideoPlayer videoPlayer,
         MediaContainerDecoder media,
         IVideoSink windowPresentationSink,
-        MediaContainerPlaybackHost? audioHost,
+        PortAudioPlaybackHost? audioHost,
         string? ndiAudioSinkId,
         VideoRouter videoRouter,
         string? ndiVideoOutputId,

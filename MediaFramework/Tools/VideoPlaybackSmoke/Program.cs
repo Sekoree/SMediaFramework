@@ -51,7 +51,7 @@ var ndiAudioSinkId = session.NDIAudioSinkId;
 var audioHost = session.AudioHost;
 IMediaClock playClock = session.PlayClock;
 var videoPlayer = session.VideoPlayer;
-var av = session.Av;
+var containerSession = session.Session;
 VideoPtsClock? videoPtsClock = null;
 Action<TimeSpan>? videoPtsHook = null;
 
@@ -118,7 +118,7 @@ try
             }
         };
         videoPlayer.FramePresentationTimePresented += videoPtsHook;
-        av.Play(videoOnlyMaster: videoPtsClock);
+        containerSession.Play(videoOnlyMaster: videoPtsClock);
     }
 
     var ticker = System.Diagnostics.Stopwatch.StartNew();
@@ -157,7 +157,7 @@ try
         // Ctrl+C: skip SeekPresentation/flush — it can block on demux/decoder while the UI thread
         // is tearing down; EOF exit still flushes for a clean mux snapshot.
         Action? flushMux = cts.IsCancellationRequested ? () => { } : null;
-        av.Pause(CancellationToken.None, flushMux);
+        containerSession.Pause(CancellationToken.None, flushMux);
     }
     catch (OperationCanceledException)
     {

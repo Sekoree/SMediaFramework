@@ -3,7 +3,7 @@ namespace S.Media.OpenGL;
 /// <summary>
 /// Reports which decoded pixel formats can use the shipped DRM PRIME dma-buf → EGL/GL import path today
 /// (<see cref="S.Media.Core.Video.PixelFormat.Nv12"/>, <see cref="S.Media.Core.Video.PixelFormat.P010"/>, <see cref="S.Media.Core.Video.PixelFormat.P016"/>).
-/// Additional FOURCCs and multi-planar FFmpeg → GL paths remain deferred (see <c>Doc/Todo.md</c> §Tier F row 36, partial).
+/// Additional FOURCCs and multi-planar FFmpeg → GL paths remain deferred (product backlog).
 /// </summary>
 public static class LinuxDmabufGlHardwareFormats
 {

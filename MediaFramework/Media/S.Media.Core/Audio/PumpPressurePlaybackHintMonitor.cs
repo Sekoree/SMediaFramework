@@ -16,10 +16,8 @@ namespace S.Media.Core.Audio;
 /// conflated across sinks.
 /// </para>
 /// <para>
-/// Checklist **Tier E** **18** — **§Tier F** row **31** **`[x]`** (registry mirror; <strong>Open</strong>: first-party coordination module): coordinated
-/// <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong>
-/// policies across multiple sinks are out of scope here — this type only derives a scalar hint from queue pressure.
-/// Per-sink rate nudging without retuning the whole graph lives in FFmpeg <c>AdaptiveRateAudioSink</c> instead.
+/// Coordinated <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong> policies across multiple sinks are out of scope here —
+/// this type only derives a scalar hint from queue pressure. Per-sink rate nudging without retuning the whole graph lives in FFmpeg <c>AdaptiveRateAudioSink</c> instead.
 /// </para>
 /// <para>
 /// <see cref="Dispose"/> unsubscribes from <see cref="AudioRouter.PumpPressure"/>; <strong>Debug</strong> builds log a failed unsubscribe via <see cref="MediaDiagnostics.LogError"/>.

@@ -10,7 +10,7 @@ namespace S.Media.Core.Video;
 /// </summary>
 /// <remarks>
 /// Linux drm_prime decode→GL uses <see cref="HardwareVideoMemoryKind.LinuxDmabufFd"/> planes (no <see cref="HardwareVideoMemoryKind.Win32D3D11Nv12Texture"/> on <see cref="HardwareVideoSurfaceDescriptor"/>).
-/// Deferred scope for Windows and extra PRIME layouts: <c>Doc/Todo.md</c> §Tier F rows 35–36.
+/// Deferred scope for Windows and extra PRIME layouts (product backlog).
 /// </remarks>
 public sealed class LinuxDmabufNv12Interop : IHardwareVideoInterop
 {

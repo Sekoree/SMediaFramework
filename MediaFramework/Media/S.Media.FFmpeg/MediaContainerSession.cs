@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Playback;
 using S.Media.Core.Video;
@@ -5,41 +6,53 @@ using S.Media.Core.Video;
 namespace S.Media.FFmpeg;
 
 /// <summary>
-/// Thin façade pairing one <see cref="MediaContainerDecoder"/> with an <see cref="IAvPlaybackSession"/>.
-/// Centralizes shared-demux <see cref="MediaContainerDecoder.FlushCodecPipelines"/> at pause boundaries and
-/// on coordinated seeks — the usual wiring for file sources built on <see cref="MediaContainerSharedDemux"/>.
-/// Prefer constructing via <see cref="MediaContainerAvRouter.Create"/> when the session is a plain <see cref="MediaPlaybackSession"/>,
-/// or <see cref="MediaContainerPlaybackGraph"/> when you want decoder + clock + players grouped with the same router.
-/// For optional single-<c>Dispose</c> ownership of the decoder + players + optional <see cref="Video.VideoRouter"/>, see <see cref="MediaContainerMegaPlaybackHost"/>.
+/// Pairs one <see cref="MediaContainerDecoder"/> with an <see cref="IAvPlaybackSession"/> and adds shared-mux flush
+/// coordination at pause / coordinated-seek boundaries (the usual wiring for file sources built on
+/// <see cref="MediaContainerSharedDemux"/>). Distinct from the generic <see cref="MediaPlaybackSession"/> in core:
+/// this type understands the FFmpeg-specific container and calls <see cref="MediaContainerDecoder.FlushCodecPipelines"/>
+/// at the right moments.
 /// </summary>
 /// <remarks>
 /// <para>
-/// This type does <strong>not</strong> own the decoder or the session: keep existing <c>using</c> / host
-/// disposal order on <see cref="MediaContainerDecoder"/> and on <see cref="VideoPlayer"/> /
-/// <see cref="AudioPlayer"/> held by the session. It is <strong>not</strong> <see cref="IDisposable"/> — there is no
-/// composite <c>Dispose</c> here; for one-shot mux-safe teardown with per-step <strong>Debug</strong>
-/// <see cref="S.Media.Core.Diagnostics.MediaDiagnostics"/> logging on owned parts, see <see cref="MediaContainerMegaPlaybackHost"/>.
+/// This type does <strong>not</strong> own the decoder or the underlying session — keep existing <c>using</c>
+/// scopes on <see cref="MediaContainerDecoder"/> and on the <see cref="VideoPlayer"/> / <see cref="AudioPlayer"/>
+/// held by the session. It is <strong>not</strong> <see cref="IDisposable"/>. For one-shot mux-safe teardown of the whole
+/// graph with per-step <strong>Debug</strong> logging via <see cref="S.Media.Core.Diagnostics.MediaDiagnostics"/>,
+/// see <see cref="MediaContainerPlaybackBundle"/>.
 /// </para>
 /// <para>
 /// For <see cref="Pause(CancellationToken, Action?)"/> and <see cref="SeekCoordinated(TimeSpan, CancellationToken, Action?)"/>,
-/// the optional <c>flushSharedMuxAfterPause</c> argument defaults to <see cref="MediaContainerDecoder.FlushCodecPipelines"/> when
-/// omitted or <c>null</c> is coalesced via <c>??</c> in the forwarding overload — use <see cref="PauseSkippingSharedMuxFlush"/> /
-/// <see cref="SeekCoordinatedSkippingSharedMuxFlush"/> when that flush can deadlock (decode thread still inside libav while the
-/// flush tries to take the same demux locks). Pass an empty <c>static () => { }</c> delegate to <see cref="Pause(CancellationToken, Action?)"/>
-/// if you need a custom no-op without adding these helpers.
+/// the optional <c>flushSharedMuxAfterPause</c> argument defaults to <see cref="MediaContainerDecoder.FlushCodecPipelines"/>
+/// when omitted (and <c>null</c> is coalesced via <c>??</c>) — use <see cref="PauseSkippingSharedMuxFlush"/> /
+/// <see cref="SeekCoordinatedSkippingSharedMuxFlush"/> when that flush can deadlock (decode thread still inside libav
+/// while the flush tries to take the same demux locks). Pass an empty <c>static () => { }</c> delegate to
+/// <see cref="Pause(CancellationToken, Action?)"/> if you need a custom no-op without adding these helpers.
 /// </para>
 /// <para>
-/// Graph-wide master-clock PPM, synchronized multi-sink drop/repeat, or other coordinated timing policy is
-/// <strong>not</strong> implemented here — see <see cref="MediaClock"/> / <see cref="MediaClockExtensions.SetMasterChain"/>,
-/// <see cref="S.Media.Core.Audio.AudioRouter"/>, and checklist Tier E **18** (per-sink resampling hints: <see cref="Audio.AdaptiveRateAudioSink"/>).
+/// Graph-wide master-clock PPM correction and synchronized multi-sink drop/repeat are <strong>not</strong> implemented
+/// here — see <see cref="MediaClock"/> / <see cref="MediaClockExtensions.SetMasterChain"/>,
+/// <see cref="S.Media.Core.Audio.AudioRouter"/>, and per-sink resampling hints
+/// (<see cref="Audio.AdaptiveRateAudioSink"/>).
 /// </para>
 /// </remarks>
-public sealed class AvRouter
+public sealed class MediaContainerSession
 {
-    public AvRouter(MediaContainerDecoder container, IAvPlaybackSession session)
+    public MediaContainerSession(MediaContainerDecoder container, IAvPlaybackSession session)
     {
         Container = container ?? throw new ArgumentNullException(nameof(container));
         Session = session ?? throw new ArgumentNullException(nameof(session));
+    }
+
+    /// <summary>
+    /// Pairs <paramref name="decoder"/> with a new <see cref="MediaPlaybackSession"/>. The simplest way to build a
+    /// <see cref="MediaContainerSession"/> when callers don't already have an <see cref="IAvPlaybackSession"/> handle.
+    /// </summary>
+    public static MediaContainerSession Create(MediaContainerDecoder decoder, VideoPlayer video, IMediaClock clock, AudioPlayer? audio = null)
+    {
+        ArgumentNullException.ThrowIfNull(decoder);
+        ArgumentNullException.ThrowIfNull(video);
+        ArgumentNullException.ThrowIfNull(clock);
+        return new MediaContainerSession(decoder, new MediaPlaybackSession(video, clock, audio));
     }
 
     public MediaContainerDecoder Container { get; }

@@ -10,7 +10,7 @@ namespace S.Media.NDI;
 /// <remarks>
 /// The NDI SDK does not guarantee atomicity across <c>NDIlib_send_get_no_connections</c>,
 /// <c>NDIlib_send_get_tally</c>, and <c>NDIlib_send_capture</c>; treat this struct as a best-effort snapshot
-/// for operators correlating tally/program state with local drop counters (§Tier F row 26).
+/// for operators correlating tally/program state with local drop counters. See <c>Doc/NDI-Terminology.md</c>.
 /// </remarks>
 public readonly record struct NDIMonitorReceiverPumpFusion(
     int ReceiverConnectionCount,

@@ -36,7 +36,7 @@ namespace S.Media.FFmpeg.Video;
 /// If profiling shows sustained retries, set <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c> for a per-arena mutex around
 /// rent/return/dispose (<see cref="PassThroughArenaSerialization"/>).
 /// Further wait-free work is only for <strong>outer</strong> decode/release synchronization if profiling shows sustained retries,
-/// wall-time outliers, or contention beyond the Treiber pools (checklist **Tier E** **16**; **§Tier F** row **29** **`[x]`** — profiling-gated <strong>Open</strong> tail).
+/// wall-time outliers, or contention beyond the Treiber pools (profiling-gated; see environment variables above).
 /// </para>
 /// <para>
 /// <see cref="Dispose"/> wraps managed teardown (<see cref="PassThroughDescriptorArena"/>, hardware acceleration, primed-seek holder)

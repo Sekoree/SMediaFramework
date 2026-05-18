@@ -5,7 +5,7 @@ using Xunit;
 
 namespace S.Media.NDI.Tests;
 
-/// <summary>§Tier F row 26 — <see cref="NDIOutput.TryPollMonitorReceiverPumpFusion"/> snapshot wiring.</summary>
+/// <summary><see cref="NDIOutput.TryPollMonitorReceiverPumpFusion"/> snapshot wiring.</summary>
 public sealed class NDIMonitorReceiverPumpFusionTests
 {
     private static bool TryProbeNDI(out string? failReason)

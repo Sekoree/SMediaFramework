@@ -47,8 +47,7 @@ internal readonly struct PassThroughRentHandle
 /// (same policy as <see cref="VideoRouter.Dispose"/> teardown).
 /// </para>
 /// <para>
-/// Checklist **Tier E** **16** — **§Tier F** row **29** **`[x]`** (registry mirror): the fixed-pool free lists are already Treiber stacks (no mutex on pop/push).
-/// <strong>Open</strong> (profiling-gated): optional Treiber-only tuning via <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c>
+/// The fixed-pool free lists are Treiber stacks (no mutex on pop/push). Optional profiling via <c>MF_MEDIA_PROFILE_PASS_THROUGH_ARENA=1</c>
 /// (<see cref="PassThroughArenaProfiling.TreiberCasRetries"/> / wall timers). If contention persists, set
 /// <c>MF_MEDIA_PASS_THROUGH_ARENA_SERIALIZE=1</c> to take a per-arena mutex around rent/return/dispose ordering
 /// (<see cref="PassThroughArenaSerialization"/>) — trades throughput for determinism.

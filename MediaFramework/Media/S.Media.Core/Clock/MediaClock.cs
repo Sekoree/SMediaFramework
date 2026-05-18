@@ -37,7 +37,7 @@ namespace S.Media.Core.Clock;
 /// Graph-wide coordinated master pitch (PPM), synchronized drop/repeat across multiple sinks, or other
 /// timing policy beyond what individual <see cref="IPlaybackClock"/> instances report is <strong>host-owned</strong>
 /// (see <see cref="Audio.AudioRouter"/> remarks, <see cref="Audio.PumpPressurePlaybackHintMonitor"/> for queue-drop hints,
-/// and the FFmpeg <c>AdaptiveRateAudioSink</c> adapter for optional per-sink resampling; checklist Tier E **18**).
+/// and the FFmpeg <c>AdaptiveRateAudioSink</c> adapter for optional per-sink resampling).
 /// </para>
 /// </remarks>
 public sealed class MediaClock : IMediaClock, IDisposable

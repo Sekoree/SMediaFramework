@@ -27,7 +27,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     private readonly List<NDIAudioSink> _ndiAudioSinks = new();
     private bool _disposed;
 
-    private HaPlayPlaybackSession(MediaPlayer player, AvRouter router, OutputManagementViewModel outputs)
+    private HaPlayPlaybackSession(MediaPlayer player, MediaContainerSession router, OutputManagementViewModel outputs)
     {
         Player = player;
         Router = router;
@@ -35,7 +35,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     }
 
     public MediaPlayer Player { get; }
-    public AvRouter Router { get; }
+    public MediaContainerSession Router { get; }
 
     public IReadOnlyList<LogoFallbackVideoSink> LogoSinks => _logoSinks;
 
@@ -162,8 +162,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     throw new InvalidOperationException(routeErr ?? "TryAddRoute failed");
             }
 
-            var av = player.Av;
-            pendingPlayback = new HaPlayPlaybackSession(player, av, outputs);
+            var containerSession = player.Session;
+            pendingPlayback = new HaPlayPlaybackSession(player, containerSession, outputs);
 
             var isSingleFrameVideo = decoder.HasVideo && decoder.VideoIsAttachedPicture;
             foreach (var sink in videoChains.Select(t => t.Sink).OfType<LogoFallbackVideoSink>())
@@ -332,7 +332,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     }
 
     /// <summary>
-    /// Pushes several black frames through each logo branch so NDI/SDL receivers stabilize before <see cref="AvRouter.Play"/>.
+    /// Pushes several black frames through each logo branch so NDI/SDL receivers stabilize before <see cref="MediaContainerSession.Play"/>.
     /// Must be called with the session paused and before the hold pump timer runs.
     /// </summary>
     /// <param name="holdFallbackShowsImage">When true, decoded pixels are not shown — priming is skipped.</param>
@@ -426,12 +426,12 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     {
         // PortAudio streams are owned by OutputManagementViewModel's persistent runtimes and stay
         // running across sessions. Nothing to start here per-session — kept as a no-op so the
-        // AvRouter.Play(startHardware: ...) callback signature is unchanged.
+        // MediaContainerSession.Play(startHardware: ...) callback signature is unchanged.
     }
 
     private int _primedOnce;
 
-    /// <summary>Primes the video logo branches with a few black frames before <see cref="AvRouter.Play"/>
+    /// <summary>Primes the video logo branches with a few black frames before <see cref="MediaContainerSession.Play"/>
     /// so SDL / NDI sinks have a configured frame in flight at the negotiated format. NDI audio side no
     /// longer needs a silence warmup here — the persistent <c>NDIOutputPreviewRuntime</c> carrier keeps
     /// receivers locked continuously, so audio just starts at the next router chunk boundary.

@@ -17,7 +17,7 @@ namespace S.Media.Core.Clock;
 /// When several candidates have <see cref="IPlaybackClock.IsAdvancing"/> <c>true</c> at once,
 /// <see cref="ElapsedSinceStart"/> is driven by the single highest-<see cref="PlaybackClockCandidate.Priority"/> entry,
 /// optionally smoothed: <see cref="CompositePlaybackClockBlend.HandoffCrossFade"/> on winner changes,
-/// <see cref="CompositePlaybackClockBlend.CoAdvanceSmoothingTau"/> while multiple clocks keep advancing (checklist **§Tier F** row **21**).
+/// <see cref="CompositePlaybackClockBlend.CoAdvanceSmoothingTau"/> while multiple clocks keep advancing.
 /// </para>
 /// <para>
 /// Use with <see cref="MediaClockExtensions.SetMasterChain"/> to feed <see cref="MediaClock"/> from several
@@ -30,7 +30,7 @@ namespace S.Media.Core.Clock;
 /// <para>
 /// Priority merge affects <see cref="IPlaybackClock.ElapsedSinceStart"/> / <see cref="IPlaybackClock.IsAdvancing"/> only;
 /// graph-wide coordinated master PPM and synchronized multi-sink drop/repeat remain host-owned — see
-/// <see cref="MediaClock"/> and <see cref="S.Media.Core.Audio.AudioRouter"/> remarks (checklist **Tier E** **18**; **§Tier F** row **31** **`[x]`** — <strong>Open</strong>: first-party coordination module).
+/// <see cref="MediaClock"/> and <see cref="S.Media.Core.Audio.AudioRouter"/>.
 /// </para>
 /// </remarks>
 public sealed class CompositePlaybackClock : IPlaybackClock

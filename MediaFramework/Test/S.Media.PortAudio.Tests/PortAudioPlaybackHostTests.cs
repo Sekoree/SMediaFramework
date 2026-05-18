@@ -8,9 +8,9 @@ using Xunit;
 
 namespace S.Media.PortAudio.Tests;
 
-public sealed class MediaContainerPlaybackHostTests
+public sealed class PortAudioPlaybackHostTests
 {
-    public MediaContainerPlaybackHostTests() => FFmpegRuntime.EnsureInitialized();
+    public PortAudioPlaybackHostTests() => FFmpegRuntime.EnsureInitialized();
 
     [Fact]
     public void TryCreatePortAudioMain_WiresSourceAndSink()
@@ -21,7 +21,7 @@ public sealed class MediaContainerPlaybackHostTests
         try
         {
             using var dec = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
-            using var host = MediaContainerPlaybackHost.TryCreatePortAudioMain(dec, 480, null, _ => { });
+            using var host = PortAudioPlaybackHost.TryCreatePortAudioMain(dec, 480, null, _ => { });
             Assert.NotNull(host);
             Assert.Same(dec, host.Container);
             Assert.False(string.IsNullOrEmpty(host.SourceId));
@@ -32,7 +32,7 @@ public sealed class MediaContainerPlaybackHostTests
         {
             try { File.Delete(path); }
 #if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerPlaybackHostTests)}: temp media delete"); }
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(PortAudioPlaybackHostTests)}: temp media delete"); }
 #else
             catch { /* ignored */ }
 #endif
@@ -48,12 +48,12 @@ public sealed class MediaContainerPlaybackHostTests
         try
         {
             using var dec = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
-            var host = MediaContainerPlaybackHost.TryCreatePortAudioMain(
+            var host = PortAudioPlaybackHost.TryCreatePortAudioMain(
                 dec,
                 480,
                 null,
                 _ => { },
-                MediaContainerPlaybackHostPlayerOwnership.CallerDisposesPlayer);
+                PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer);
             if (host is null)
                 return;
             host.Player.Dispose();
@@ -64,7 +64,7 @@ public sealed class MediaContainerPlaybackHostTests
         {
             try { File.Delete(path); }
 #if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerPlaybackHostTests)}: temp media delete"); }
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(PortAudioPlaybackHostTests)}: temp media delete"); }
 #else
             catch { /* ignored */ }
 #endif

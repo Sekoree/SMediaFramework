@@ -7,7 +7,7 @@ using Xunit;
 namespace S.Media.NDI.Tests;
 
 /// <summary>
-/// Tier F row 25 stepping stone: bounded create/dispose churn for <see cref="NDIOutput"/> (native sender + runtime)
+/// Bounded create/dispose churn for <see cref="NDIOutput"/> (native sender + runtime)
 /// under optional lab env <c>RUN_NDI_MEMORY_PRESSURE=1</c>. Optional <c>RUN_NDI_MEMORY_PRESSURE_HEAP=1</c> (requires
 /// <c>RUN_NDI_MEMORY_PRESSURE=1</c>) runs a loose post-GC managed heap cap after a capped round count (catches gross
 /// regressions only). Optional <c>RUN_NDI_MEMORY_PRESSURE_LONG=1</c> raises the lab round clamp to <c>2_000_000</c>

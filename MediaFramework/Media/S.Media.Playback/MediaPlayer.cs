@@ -11,7 +11,7 @@ namespace S.Media.Playback;
 /// <summary>
 /// Opens a shared-mux <see cref="MediaContainerDecoder"/> with a <see cref="VideoRouter"/> (always),
 /// optional <see cref="AudioPlayer"/> wired to decoder audio (no PortAudio / SDL / NDI — add sinks from optional packages),
-/// and <see cref="S.Media.FFmpeg.MediaContainerMegaPlaybackHost"/> for safe teardown.
+/// and <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/> for safe teardown.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,14 +27,14 @@ namespace S.Media.Playback;
 /// </remarks>
 public sealed class MediaPlayer : IDisposable
 {
-    private readonly MediaContainerMegaPlaybackHost _bundle;
+    private readonly MediaContainerPlaybackBundle _bundle;
     private readonly string _videoRouterInputId;
     private readonly string? _audioSourceId;
     private readonly MediaClock? _freerun;
     private bool _disposed;
 
     private MediaPlayer(
-        MediaContainerMegaPlaybackHost bundle,
+        MediaContainerPlaybackBundle bundle,
         string videoRouterInputId,
         string? audioSourceId,
         MediaClock? freerun)
@@ -65,9 +65,9 @@ public sealed class MediaPlayer : IDisposable
     /// <summary>Non-null only when there was no <see cref="AudioPlayer"/> (video clocked from a freerun <see cref="MediaClock"/>).</summary>
     public MediaClock? FreerunClock => _freerun;
 
-    public MediaContainerMegaPlaybackHost Bundle => _bundle;
+    public MediaContainerPlaybackBundle Bundle => _bundle;
 
-    public AvRouter Av => _bundle.Router;
+    public MediaContainerSession Session => _bundle.Session;
 
     public void Dispose()
     {
@@ -210,14 +210,14 @@ public sealed class MediaPlayer : IDisposable
         IMediaClock playClock;
         VideoRouter? router = null;
         VideoPlayer? videoPlayer = null;
-        MediaContainerMegaPlaybackHost? mega = null;
+        MediaContainerPlaybackBundle? bundle = null;
 
         void FailDispose()
         {
-            if (mega is not null)
+            if (bundle is not null)
             {
-                mega.Dispose();
-                mega = null;
+                bundle.Dispose();
+                bundle = null;
             }
             else
             {
@@ -270,18 +270,18 @@ public sealed class MediaPlayer : IDisposable
             videoPlayer = new VideoPlayer(media.Video, vin.Sink, playClock);
 
             var ownDecoder = decoderOwnership == MediaPlayerDecoderOwnership.BundleDisposesDecoder;
-            var megaOwned = ComputeOwnedParts(ownDecoder: ownDecoder, hasFreerun: freerun is not null, hasAudio: audioPlayer is not null);
+            var bundleOwned = ComputeOwnedParts(ownDecoder: ownDecoder, hasFreerun: freerun is not null, hasAudio: audioPlayer is not null);
 
-            mega = new MediaContainerMegaPlaybackHost(
+            bundle = new MediaContainerPlaybackBundle(
                 media,
                 videoPlayer,
                 playClock,
                 audioPlayer,
                 router,
                 freerun,
-                megaOwned);
+                bundleOwned);
 
-            player = new MediaPlayer(mega, vin.Id, audioSourceId, audioPlayer is null ? freerun : null);
+            player = new MediaPlayer(bundle, vin.Id, audioSourceId, audioPlayer is null ? freerun : null);
             return true;
         }
         catch (Exception ex)
@@ -292,15 +292,15 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    private static MediaContainerMegaPlaybackOwnedParts ComputeOwnedParts(bool ownDecoder, bool hasFreerun, bool hasAudio)
+    private static MediaContainerPlaybackBundleOwnedParts ComputeOwnedParts(bool ownDecoder, bool hasFreerun, bool hasAudio)
     {
-        var o = MediaContainerMegaPlaybackOwnedParts.VideoPlayer | MediaContainerMegaPlaybackOwnedParts.VideoRouter;
+        var o = MediaContainerPlaybackBundleOwnedParts.VideoPlayer | MediaContainerPlaybackBundleOwnedParts.VideoRouter;
         if (ownDecoder)
-            o |= MediaContainerMegaPlaybackOwnedParts.Decoder;
+            o |= MediaContainerPlaybackBundleOwnedParts.Decoder;
         if (hasFreerun)
-            o |= MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock;
+            o |= MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock;
         if (hasAudio)
-            o |= MediaContainerMegaPlaybackOwnedParts.AudioPlayer;
+            o |= MediaContainerPlaybackBundleOwnedParts.AudioPlayer;
         return o;
     }
 }

@@ -38,7 +38,7 @@ namespace S.Media.Core.Audio;
 /// </list>
 /// </para>
 /// <para>
-/// Checklist **Tier E** **15** shipped SIMD for same-width packed gathers with indices in <c>0..N-1</c> (<c>N ∈ {3, 4, 5, 6, 7, 8}</c> via
+/// SIMD fast paths cover same-width packed gathers with indices in <c>0..N-1</c> (<c>N ∈ {3, 4, 5, 6, 7, 8}</c> via
 /// <see cref="TryAccumulatePackedPermutationInterleaved"/> — bijective permutations and duplicate-lane gathers, no silence; <c>N = 4</c>: SSE <c>SHUFPS</c>; <c>N ∈ {3, 5, 6, 7, 8}</c>: AVX2 <c>PermuteVar8x32</c>),
 /// stereo → quad paired duplicates (<c>[0,0,1,1]</c>, <c>[1,1,0,0]</c> via
 /// <see cref="TryAccumulateStereoDuplexGroupedInterleaved"/> / <see cref="TryAccumulateStereoDuplexGroupedSwappedInterleaved"/>),
@@ -48,7 +48,7 @@ namespace S.Media.Core.Audio;
 /// wide interleaved → stereo duplicate single channel <c>[p,p]</c> (<see cref="TryAccumulateWideSourceSingleChannelDupStereoInterleaved"/>),
 /// wide interleaved → stereo consecutive pair <c>[p,p+1]</c> (<see cref="TryAccumulateWideSourceStereoConsecutivePairInterleaved"/>),
 /// plus the other SIMD paths ordered in <see cref="ApplyAdditive"/> before its scalar fallback.
-/// Maps that do not match any of those fast paths use the scalar accumulation loop — **§Tier F** row **28** **`[x]`** (registry mirror of completed **Tier E** **15**); **§Historical #2** tail closed at the same documentation boundary.
+/// Maps that do not match any of those fast paths use the scalar accumulation loop.
 /// </para>
 /// </remarks>
 public readonly struct ChannelMap : IEquatable<ChannelMap>

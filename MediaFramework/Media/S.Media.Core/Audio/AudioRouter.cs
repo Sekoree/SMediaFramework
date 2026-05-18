@@ -79,9 +79,8 @@ namespace S.Media.Core.Audio;
 /// <see cref="GetAggregatePumpStats"/> sums per-sink <see cref="SinkPumpStats"/> for HUD/logging only — it does not synthesize a global master clock or coordinated drop policy.
 /// </para>
 /// <para>
-/// Checklist **Tier E** **18** — **§Tier F** row **31** **`[x]`** (registry mirror): a single coordinated <strong>master</strong> clock ppm policy plus synchronized <strong>drop/repeat</strong>
-/// across every sink is not implemented in this type — hosts combine <see cref="PumpPressure"/> telemetry, <see cref="PumpPressurePlaybackHintMonitor"/>, and per-sink
-/// FFmpeg <c>AdaptiveRateAudioSink</c> as needed.
+/// A single coordinated <strong>master</strong> clock ppm policy plus synchronized <strong>drop/repeat</strong> across every sink is not implemented in this type —
+/// hosts combine <see cref="PumpPressure"/> telemetry, <see cref="PumpPressurePlaybackHintMonitor"/>, and per-sink FFmpeg <c>AdaptiveRateAudioSink</c> as needed.
 /// </para>
 /// </remarks>
 public sealed class AudioRouter : IDisposable
@@ -206,18 +205,9 @@ public sealed class AudioRouter : IDisposable
 
     /// <param name="pumpCapacityChunks">
     /// Bounded depth of this sink's background chunk queue (see remarks on
-    /// <see cref="AudioRouter"/>). <c>null</c> uses the router constructor default
-    /// (8 chunks at the constructor default <c>chunkSamples</c>, i.e. ~80 ms at 480 samples / 48 kHz).
+    /// <see cref="AudioRouter"/>). <c>null</c> uses the router constructor default.
     /// When set, must be at least 2.
     /// </param>
-    /// <remarks>
-    /// Each pump chunk is <c>chunkSamples</c> samples per channel, so the pump adds
-    /// <c>pumpCapacityChunks × chunkSamples</c> samples of headroom on the path to the sink.
-    /// For hardware sinks that already maintain their own ring (PortAudio output, ASIO),
-    /// 2–4 chunks is usually enough; the default of 8 is sized for network senders (NDI)
-    /// whose absolute timing budget is looser. Passing a high number trades latency for
-    /// robustness under producer jitter.
-    /// </remarks>
     public string AddSink(IAudioSink sink, string? id = null, int? pumpCapacityChunks = null)
     {
         ArgumentNullException.ThrowIfNull(sink);
@@ -468,11 +458,6 @@ public sealed class AudioRouter : IDisposable
     public void RetargetSlaveClock(string sinkId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sinkId);
-        // Construct the new clock outside the lock — the constructor only captures a closure
-        // today, but keeping clock instantiation off the critical section means any future
-        // initialization (event subscriptions, allocations, calls back into the router) cannot
-        // re-enter and deadlock on _gate.
-        var newClock = new SinkSlavedRouterClock(_sampleRate, _chunkSamples, () => ResolveClockedSink(sinkId));
         lock (_gate)
         {
             if (!_state.Sinks.TryGetValue(sinkId, out var entry))
@@ -481,7 +466,7 @@ public sealed class AudioRouter : IDisposable
                 throw new ArgumentException($"sink '{sinkId}' does not implement IClockedSink", nameof(sinkId));
 
             _slaveClockSinkId = sinkId;
-            _clock = newClock;
+            _clock = new SinkSlavedRouterClock(_sampleRate, _chunkSamples, () => ResolveClockedSink(sinkId));
         }
     }
 

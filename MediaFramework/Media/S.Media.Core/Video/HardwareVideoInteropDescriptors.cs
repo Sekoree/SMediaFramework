@@ -54,7 +54,7 @@ public readonly struct HardwareVideoSurfaceDescriptor
     /// <see cref="HardwareVideoWin32Nv12.TryCreateWin32Nv12Backing"/>); the GL importer still uses a separate
     /// consumer <c>ID3D11Device</c> for <c>OpenSharedResource</c> on those NT handles — that device is not part
     /// of this descriptor. Eliminating decode-path and consumer-device COM from the portable descriptor while
-    /// retaining safe DXGI import is product backlog (**PO-01**, <c>Doc/Todo.md</c> §Tier F row 34 <c>Open</c> tail).
+    /// retaining safe DXGI import is product backlog (**PO-01**).
     /// </summary>
     public nint D3D11DeviceComPtr { get; init; }
     public HardwareVideoPlaneDescriptor Plane0 { get; init; }

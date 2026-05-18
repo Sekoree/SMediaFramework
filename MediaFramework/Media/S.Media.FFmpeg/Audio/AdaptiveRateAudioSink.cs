@@ -27,11 +27,9 @@ namespace S.Media.FFmpeg.Audio;
 /// wrapper (after <see cref="AudioRouter.RemoveSink"/>) so the pressure monitor unsubscribes.
 /// </para>
 /// <para>
-/// Checklist **Tier E** **18** — **§Tier F** row **31** **`[x]`** (registry mirror): this wrapper applies <see cref="PumpPressurePlaybackHintMonitor"/> hints per sink only.
-/// Coordinated multi-sink master-clock ppm and explicit drop/repeat scheduling remain a host concern; composite master
-/// selection lives on <see cref="S.Media.Core.Clock.MediaClock"/> via <see cref="S.Media.Core.Clock.MediaClockExtensions.SetMasterChain"/>,
-/// and session-level coordination is described on <see cref="S.Media.Core.Playback.AvPlaybackCoordinator"/>.
-/// <strong>Open</strong> (same row): first-party graph-wide coordination <strong>module</strong> / wiring.
+/// This wrapper applies <see cref="PumpPressurePlaybackHintMonitor"/> hints per sink only. Coordinated multi-sink master-clock ppm and explicit
+/// drop/repeat scheduling remain a host concern; composite master selection lives on <see cref="S.Media.Core.Clock.MediaClock"/> via
+/// <see cref="S.Media.Core.Clock.MediaClockExtensions.SetMasterChain"/>, and session-level coordination is described on <see cref="S.Media.Core.Playback.AvPlaybackCoordinator"/>.
 /// </para>
 /// <para>
 /// <see cref="Dispose"/> tears down the optional <see cref="PumpPressurePlaybackHintMonitor"/> and the libav <see cref="AudioResampler"/> under the resample lock; each step logs in <strong>Debug</strong> via <see cref="MediaDiagnostics.LogError"/> on failure while <strong>Release</strong> continues.

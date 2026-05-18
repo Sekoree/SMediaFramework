@@ -4,7 +4,7 @@ Derived from `Doc/MediaFramework-Review-2026-05.md`. Ordered to minimize wasted 
 
 Legend: **size** = XS (<1 h) · S (<½ day) · M (1–2 days) · L (1 week) · XL (multi-week feature). **breaks** = which downstream code likely needs updates.
 
-**Status (updated 2026-05-18):** Phase 0 complete. Phase 1 is the next planned batch.
+**Status (updated 2026-05-18):** Phase 0 complete. Phase 1 complete. Phase 2 is the next planned batch.
 
 ---
 
@@ -56,23 +56,43 @@ MediaFramework/Tools/NDIPlayer/Program.cs                         (C3 follow-up:
 
 ---
 
-## Phase 1 — Names that will anchor everything else (do before adding new code)
+## Phase 1 — Names that will anchor everything else ✅ COMPLETE (2026-05-18)
 
 These are mechanical but produce big diffs. Doing them early means new code in Phase 3+ uses the correct names from the start.
 
-- [ ] **Rename `AvRouter` → `MediaSession` (or `AvCoordinator` — pick one).** `S.Media.FFmpeg/AvRouter.cs` and call sites. It is not a router; it's a session coordination façade. Update XML docs accordingly. **Size:** S. **Breaks:** `MediaPlayer.Av`, the smoke tools, every Test that references `AvRouter`.
+- [x] **Rename `AvRouter` → `MediaContainerSession`.** Chose `MediaContainerSession` over bare `MediaSession` so the type sits with `MediaContainerDecoder` / `MediaContainerPlaybackBundle`. `MediaContainerAvRouter` static factory folded into `MediaContainerSession.Create`. `MediaPlayer.Av` → `MediaPlayer.Session`. Tests: `MediaContainerSessionTests` (was `AvRouterTests`). **Size:** S.
 
-- [ ] **Rename `MediaContainerMegaPlaybackHost` → `MediaContainerPlaybackBundle`.** "Mega" reads as placeholder. **Size:** S. **Breaks:** `MediaPlayer._bundle`, smoke tools.
+- [x] **Rename `MediaContainerMegaPlaybackHost` → `MediaContainerPlaybackBundle`.** `MediaContainerMegaPlaybackOwnedParts` → `MediaContainerPlaybackBundleOwnedParts`. **Size:** S.
 
-- [ ] **Delete `MediaContainerPlaybackGraph`** (`S.Media.FFmpeg/MediaContainerPlaybackGraph.cs`). It's a non-disposable bag that the `Bundle` (post-rename) covers with `MediaContainerMegaPlaybackOwnedParts.None`. **Size:** XS. **Breaks:** anything that constructs it directly; check with grep.
+- [x] **Delete `MediaContainerPlaybackGraph`.** No in-tree callers remained; non-disposable grouping is covered by the bundle with `OwnedParts.None` when needed. **Size:** XS.
 
-- [ ] **Rename `S.Media.PortAudio.MediaContainerPlaybackHost`.** Name collides with the FFmpeg "Mega" type (both are "containers" + "hosts"). Suggest `PortAudioPlaybackWiring` or fold the statics into `AudioPlayerPortAudioExtensions`. **Size:** S. **Breaks:** smoke tools.
+- [x] **Rename `S.Media.PortAudio.MediaContainerPlaybackHost` → `PortAudioPlaybackHost`.** `MediaContainerPlaybackHostPlayerOwnership` → `PortAudioPlaybackHostPlayerOwnership`. Kept a dedicated type (vs folding into `AudioPlayerPortAudioExtensions`) because PortAudio wiring + ownership flags are substantial. **Size:** S.
 
-- [ ] **Drop the "Tier E / Tier F / row N" annotations** sprinkled across `AudioRouter.cs:82`, `AvRouter.cs:34`, `MediaContainerMegaPlaybackHost.cs:40`, `VideoFileDecoder.cs:39`, etc. They reference an external checklist that isn't in the repo. Either commit the checklist to `Doc/` and link it, or strip them. **Size:** S.
+- [x] **Drop the "Tier E / Tier F / row N" annotations.** Stripped checklist row references from MediaFramework XML/docs; kept technical substance. `Doc/MediaFramework-Checklist-2026-05.md` is now the canonical checklist in-repo. **Size:** S.
 
-- [ ] **Rename / clean up dense NDI jargon** (Egress, Ingest, Mux, Fusion, Aggregating, Pump) **only if you decide to.** Defensible as broadcast terms; if you keep them, add `Doc/NDI-Terminology.md`. **Size:** S (glossary) or L (rename pass).
+- [x] **NDI jargon — keep names, add glossary.** Added `Doc/NDI-Terminology.md`; NDI types unchanged. **Size:** XS.
 
-**Phase exit:** the public taxonomy is internally consistent and new readers don't trip on "Mega" / "PlaybackHost ambiguity" / "Tier F".
+**Phase exit:** public taxonomy is consistent — no "Mega", no `AvRouter` misnomer, PortAudio vs FFmpeg lifecycle types are distinct. ✅
+
+**Outcomes:**
+- Build: clean (0 warnings / 0 errors) across full `MFPlayer.sln` including HaPlay.
+- Tests: 503/504 pass. The one failure (`NDIIngestPlaybackClockTests.Timestamp_UsedWhenTimecodeSynthesize`) is the same pre-existing flaky FP-tolerance test noted in Phase 0.
+- Fix during finish: restored `MediaContainerSharedDemux.VideoIsAttachedPicture` (property referenced by `MediaContainerDecoder` / HaPlay but missing from demux — blocked compile).
+
+**Files touched (representative):**
+```
+MediaFramework/Media/S.Media.FFmpeg/MediaContainerSession.cs              (new; replaces AvRouter)
+MediaFramework/Media/S.Media.FFmpeg/MediaContainerPlaybackBundle.cs     (new; replaces MegaPlaybackHost)
+MediaFramework/Media/S.Media.PortAudio/PortAudioPlaybackHost.cs         (new; replaces MediaContainerPlaybackHost)
+MediaFramework/Media/S.Media.Playback/MediaPlayer.cs                    (Session, Bundle)
+MediaFramework/Tools/VideoPlaybackSmoke/*                               (smoke wiring)
+UI/HaPlay/Playback/HaPlayPlaybackSession.cs                           (MediaContainerSession)
+MediaFramework/Test/.../MediaContainerSessionTests.cs                   (renamed)
+MediaFramework/Test/.../MediaContainerPlaybackBundleTests.cs            (renamed)
+MediaFramework/Test/.../PortAudioPlaybackHostTests.cs                   (renamed)
+Doc/NDI-Terminology.md                                                  (new)
++ Tier-annotation cleanup across Core / FFmpeg / NDI XML remarks
+```
 
 ---
 
@@ -162,13 +182,13 @@ Quality-of-life. No correctness or feature consequences; can be opportunistic.
 
 - [ ] **Split `ChannelMap.cs` (2106 lines)** into `ChannelMap.cs` (data + small ops) + `ChannelMap.SimdAccumulate.cs` (14 SIMD shortcut methods, partial class). **Size:** S.
 
-- [ ] **Move long-form XML `<remarks>` into `Doc/` files**, leave 3–4 lines of IntelliSense doc on the type. Worst offenders: `AvRouter.cs` (post-rename), `AudioRouter.cs:1-86`, `MediaContainerMegaPlaybackHost.cs:39-66`. **Size:** S (per type).
+- [ ] **Move long-form XML `<remarks>` into `Doc/` files**, leave 3–4 lines of IntelliSense doc on the type. Worst offenders: `MediaContainerSession.cs`, `AudioRouter.cs:1-86`, `MediaContainerPlaybackBundle.cs:39-66`. **Size:** S (per type).
 
 - [ ] **Refresh project memory** (`~/.claude/projects/-home-seko-RiderProjects-MFPlayer/memory/project_overview.md`). The 2026-05-10 snapshot predates `S.Media.Playback`, `VideoRouter`, `MediaContainerSharedDemux`, the NDI clock zoo. **Size:** XS.
 
 - [ ] **Clean up untracked files in tree.** `git status` claims `Doc/HaPlay-Review-2026-05.md` is untracked but it doesn't exist; `UI/HaPlay/OutputPreview/PortAudioOutputRuntime.cs` is genuinely new. Either commit or delete. **Size:** XS.
 
-- [ ] **Add `Doc/NDI-Terminology.md` glossary** (Egress, Ingest, Mux, Fusion, Aggregating, Pump) if you kept the names. **Size:** XS.
+- [x] **Add `Doc/NDI-Terminology.md` glossary** (Egress, Ingest, Mux, Fusion, Aggregating, Pump) if you kept the names. **Size:** XS. *(Done in Phase 1.)*
 
 - [ ] **CI smoke-test the `Tools/` projects.** They double as documentation; make sure `dotnet build` + a no-arg run is part of CI so they don't bitrot. **Size:** S.
 

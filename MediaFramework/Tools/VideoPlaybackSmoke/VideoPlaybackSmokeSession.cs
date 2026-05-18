@@ -16,7 +16,7 @@ namespace VideoPlaybackSmoke;
 
 /// <summary>
 /// <c>VideoPlaybackSmoke</c> graph: <see cref="S.Media.Playback.MediaPlayer"/> (mux + router + audio router),
-/// SDL window, optional NDI, optional PortAudio via <see cref="MediaContainerPlaybackHost"/>.
+/// SDL window, optional NDI, optional PortAudio via <see cref="PortAudioPlaybackHost"/>.
 /// </summary>
 public sealed class VideoPlaybackSmokeSession : IDisposable
 {
@@ -28,7 +28,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         SDL3GLVideoSink glWindowSink,
         NDIOutput? ndi,
         string? ndiVideoOutputId,
-        MediaContainerPlaybackHost? audioHost,
+        PortAudioPlaybackHost? audioHost,
         NDIAudioAggregatingSink? ndiAudioAgg,
         IAudioSink? ndiMirrorPrefill,
         string? ndiAudioSinkId,
@@ -64,7 +64,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     public string? NDIVideoOutputId { get; }
 
-    public MediaContainerPlaybackHost? AudioHost { get; }
+    public PortAudioPlaybackHost? AudioHost { get; }
 
     public MediaClock? FreerunClock => Core.FreerunClock;
 
@@ -72,9 +72,9 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     public VideoPlayer VideoPlayer => Core.Video;
 
-    public MediaContainerMegaPlaybackHost Mega => Core.Bundle;
+    public MediaContainerPlaybackBundle Bundle => Core.Bundle;
 
-    public AvRouter Av => Core.Av;
+    public MediaContainerSession Session => Core.Session;
 
     public NDIAudioAggregatingSink? NDIAudioAggregatingSink { get; }
 
@@ -105,7 +105,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         var prefill = prefillDuration ?? SmokeDefaults.AudioPrefillDuration;
         AudioHost.PrefillMainOutputDirectFromDecoder(prefill, NDIMirrorPrefill);
         AudioHost.StartHardwareOutput();
-        Av.Play();
+        Session.Play();
     }
 
     public static bool TryCreate(
@@ -168,7 +168,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         S.Media.Playback.MediaPlayer? core = null;
         NDIOutput? ndi = null;
         string? ndiVideoOutputId = null;
-        MediaContainerPlaybackHost? audioHost = null;
+        PortAudioPlaybackHost? audioHost = null;
         NDIAudioAggregatingSink? ndiAudioAgg = null;
         IAudioSink? ndiMirrorPrefill = null;
         string? ndiAudioSinkId = null;
@@ -266,14 +266,14 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                     throw new InvalidOperationException(routeErr ?? "VideoRouter.TryAddRoute(ndi) failed");
             }
 
-            audioHost = MediaContainerPlaybackHost.TryWirePortAudioMainForPlayer(
+            audioHost = PortAudioPlaybackHost.TryWirePortAudioMainForPlayer(
                 core!.Decoder,
                 core.Audio!,
                 core.AudioSourceId!,
                 opt.AudioChunkSamples,
                 opt.DeviceLatencyMs,
                 onAudioWireFailedMessage,
-                MediaContainerPlaybackHostPlayerOwnership.CallerDisposesPlayer);
+                PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer);
 
             if (ndi is not null && audioHost is not null)
             {

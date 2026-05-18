@@ -8,31 +8,31 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests;
 
-public sealed class MediaContainerMegaPlaybackHostTests
+public sealed class MediaContainerPlaybackBundleTests
 {
-    public MediaContainerMegaPlaybackHostTests() => FFmpegRuntime.EnsureInitialized();
+    public MediaContainerPlaybackBundleTests() => FFmpegRuntime.EnsureInitialized();
 
     [Fact]
     public void SmokeToolDefaultOwnership_matches_video_router_and_freerun_presence()
     {
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(hasVideoRouter: false, hasFreerunMediaClock: false));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(hasVideoRouter: false, hasFreerunMediaClock: false));
 
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-            | MediaContainerMegaPlaybackOwnedParts.VideoRouter,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(hasVideoRouter: true, hasFreerunMediaClock: false));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+            | MediaContainerPlaybackBundleOwnedParts.VideoRouter,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(hasVideoRouter: true, hasFreerunMediaClock: false));
 
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-            | MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(hasVideoRouter: false, hasFreerunMediaClock: true));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+            | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(hasVideoRouter: false, hasFreerunMediaClock: true));
 
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-            | MediaContainerMegaPlaybackOwnedParts.VideoRouter | MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(hasVideoRouter: true, hasFreerunMediaClock: true));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+            | MediaContainerPlaybackBundleOwnedParts.VideoRouter | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(hasVideoRouter: true, hasFreerunMediaClock: true));
     }
 
     [Fact]
@@ -43,33 +43,33 @@ public sealed class MediaContainerMegaPlaybackHostTests
         foreach (var ap in new[] { false, true })
         {
             Assert.Equal(
-                MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(vr, fr, ap),
-                MediaContainerMegaPlaybackHost.DefaultBundledHostOwnership(vr, fr, ap));
+                MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(vr, fr, ap),
+                MediaContainerPlaybackBundle.DefaultBundledHostOwnership(vr, fr, ap));
         }
     }
 
     [Fact]
     public void SmokeToolDefaultOwnership_includes_AudioPlayer_when_true()
     {
-        var audio = MediaContainerMegaPlaybackOwnedParts.AudioPlayer;
+        var audio = MediaContainerPlaybackBundleOwnedParts.AudioPlayer;
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer | audio,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(false, false, hasAudioPlayer: true));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer | audio,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(false, false, hasAudioPlayer: true));
 
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-            | MediaContainerMegaPlaybackOwnedParts.VideoRouter | audio,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(true, false, hasAudioPlayer: true));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+            | MediaContainerPlaybackBundleOwnedParts.VideoRouter | audio,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(true, false, hasAudioPlayer: true));
 
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-            | MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock | audio,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(false, true, hasAudioPlayer: true));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+            | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock | audio,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(false, true, hasAudioPlayer: true));
 
         Assert.Equal(
-            MediaContainerMegaPlaybackOwnedParts.Decoder | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-            | MediaContainerMegaPlaybackOwnedParts.VideoRouter | MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock | audio,
-            MediaContainerMegaPlaybackHost.SmokeToolDefaultOwnership(true, true, hasAudioPlayer: true));
+            MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+            | MediaContainerPlaybackBundleOwnedParts.VideoRouter | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock | audio,
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(true, true, hasAudioPlayer: true));
     }
 
     [Fact]
@@ -86,14 +86,14 @@ public sealed class MediaContainerMegaPlaybackHostTests
                 using var clock = new MediaClock();
                 var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
                 using var video = new VideoPlayer(dec.Video, sink, clock);
-                var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerMegaPlaybackHost(
+                var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerPlaybackBundle(
                     dec,
                     video,
                     clock,
                     audio: null,
                     videoRouter: null,
                     freerunClockToDispose: null,
-                    MediaContainerMegaPlaybackOwnedParts.AudioPlayer));
+                    MediaContainerPlaybackBundleOwnedParts.AudioPlayer));
                 Assert.Contains("audio", ex.ParamName ?? "", StringComparison.Ordinal);
             }
             finally
@@ -121,14 +121,14 @@ public sealed class MediaContainerMegaPlaybackHostTests
                 using var clock = new MediaClock();
                 var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
                 using var video = new VideoPlayer(dec.Video, sink, clock);
-                var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerMegaPlaybackHost(
+                var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerPlaybackBundle(
                     dec,
                     video,
                     clock,
                     audio: null,
                     videoRouter: null,
                     freerunClockToDispose: null,
-                    MediaContainerMegaPlaybackOwnedParts.VideoRouter));
+                    MediaContainerPlaybackBundleOwnedParts.VideoRouter));
                 Assert.Contains("videoRouter", ex.ParamName ?? "", StringComparison.Ordinal);
             }
             finally
@@ -156,14 +156,14 @@ public sealed class MediaContainerMegaPlaybackHostTests
                 using var clock = new MediaClock();
                 var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
                 using var video = new VideoPlayer(dec.Video, sink, clock);
-                var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerMegaPlaybackHost(
+                var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerPlaybackBundle(
                     dec,
                     video,
                     clock,
                     audio: null,
                     videoRouter: null,
                     freerunClockToDispose: null,
-                    MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock));
+                    MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock));
                 Assert.Contains("freerunClockToDispose", ex.ParamName ?? "", StringComparison.Ordinal);
             }
             finally
@@ -189,54 +189,19 @@ public sealed class MediaContainerMegaPlaybackHostTests
             var clock = new MediaClock();
             var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
             var video = new VideoPlayer(dec.Video, sink, clock);
-            var mega = new MediaContainerMegaPlaybackHost(
+            var mega = new MediaContainerPlaybackBundle(
                 dec,
                 video,
                 clock,
                 audio: null,
                 videoRouter: null,
                 freerunClockToDispose: clock,
-                MediaContainerMegaPlaybackOwnedParts.Decoder
-                    | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-                    | MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock);
+                MediaContainerPlaybackBundleOwnedParts.Decoder
+                    | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+                    | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock);
 
             mega.Dispose();
             mega.Dispose();
-        }
-        finally
-        {
-            TryDelete(path);
-        }
-    }
-
-    [Fact]
-    public void AsPlaybackGraph_DecoderMatchesRouterContainer()
-    {
-        var path = Path.Combine(Path.GetTempPath(), $"mega_graph_{Guid.NewGuid():N}.mp4");
-        if (!TryGenerateAudioVideo(path))
-            return;
-        try
-        {
-            var dec = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
-            var clock = new MediaClock();
-            var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
-            var video = new VideoPlayer(dec.Video, sink, clock);
-            using var mega = new MediaContainerMegaPlaybackHost(
-                dec,
-                video,
-                clock,
-                audio: null,
-                videoRouter: null,
-                freerunClockToDispose: clock,
-                MediaContainerMegaPlaybackOwnedParts.Decoder
-                    | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-                    | MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock);
-
-            var graph = mega.AsPlaybackGraph();
-            Assert.Same(dec, graph.Decoder);
-            Assert.Same(dec, mega.Router.Container);
-            Assert.Same(dec, graph.Router.Container);
-            Assert.Same(video, graph.Video);
         }
         finally
         {
@@ -259,17 +224,17 @@ public sealed class MediaContainerMegaPlaybackHostTests
             var outId = router.AddOutput(sink, "o", disposeSinkOnRouterDispose: true);
             var vin = router.AddInput(outId);
             var video = new VideoPlayer(dec.Video, vin.Sink, clock);
-            using var mega = new MediaContainerMegaPlaybackHost(
+            using var mega = new MediaContainerPlaybackBundle(
                 dec,
                 video,
                 clock,
                 audio: null,
                 videoRouter: router,
                 freerunClockToDispose: clock,
-                MediaContainerMegaPlaybackOwnedParts.Decoder
-                    | MediaContainerMegaPlaybackOwnedParts.VideoPlayer
-                    | MediaContainerMegaPlaybackOwnedParts.VideoRouter
-                    | MediaContainerMegaPlaybackOwnedParts.FreerunMediaClock);
+                MediaContainerPlaybackBundleOwnedParts.Decoder
+                    | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
+                    | MediaContainerPlaybackBundleOwnedParts.VideoRouter
+                    | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock);
 
             mega.Dispose();
         }
@@ -288,7 +253,7 @@ public sealed class MediaContainerMegaPlaybackHostTests
 #if DEBUG
         catch (Exception ex)
         {
-            MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerMegaPlaybackHostTests)}: temp media delete");
+            MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerPlaybackBundleTests)}: temp media delete");
         }
 #else
         catch { /* ignored */ }

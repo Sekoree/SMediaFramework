@@ -75,7 +75,7 @@ public sealed class NDIEgressPresentationTimelineTests
     public void Alloc_reset_churn_many_short_timelines_completes()
     {
         // Always-on: pure managed allocation churn (no NDI SDK). Complements optional native churn in
-        // NDIOutputLifecycleMemoryTests (Tier F / §Tier C egress harness).
+        // NDIOutputLifecycleMemoryTests (egress lifecycle harness).
         const int rounds = 16_000;
         for (var r = 0; r < rounds; r++)
         {

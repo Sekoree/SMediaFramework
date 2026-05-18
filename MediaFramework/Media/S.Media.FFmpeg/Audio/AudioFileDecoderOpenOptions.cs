@@ -6,7 +6,7 @@ namespace S.Media.FFmpeg.Audio;
 /// <see cref="CodecThreadCount"/> configures a single libav <c>AVCodecContext</c>. When non-zero, <c>thread_type</c> follows
 /// <see cref="LibavThreadTypePreference"/> when the codec advertises both frame and slice threading; otherwise the single
 /// supported kind wins (see <see cref="AudioFileDecoder.LibavCodecThreadType"/>). Policies such as multiple decoder instances
-/// per stream or demuxer affinity remain host-owned (checklist **Tier E** **20** — **§Tier F** row **33** **`[x]`**; **Open** tail).
+/// per stream or demuxer affinity remain host-owned.
 /// </para>
 /// </remarks>
 public readonly record struct AudioFileDecoderOpenOptions

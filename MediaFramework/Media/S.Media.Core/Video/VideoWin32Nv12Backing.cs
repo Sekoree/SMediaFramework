@@ -16,12 +16,13 @@ namespace S.Media.Core.Video;
 /// Handle-only instances (non-zero NT handles, zero COM pointers) align the shipped DXGI export path with a
 /// zero-libav-COM <see cref="HardwareVideoSurfaceDescriptor"/>; a separate consumer <c>ID3D11Device</c> for
 /// <c>OpenSharedResource</c> remains GL-host-owned until product backlog **PO-01** closes the full descriptor story
-/// (<c>Doc/Todo.md</c> §Tier F row 34 <c>Open</c> tail).
+/// (product backlog <strong>PO-01</strong>).
 /// </remarks>
 public sealed class VideoWin32Nv12Backing : IDisposable
 {
     private nint _lumaNtHandle;
     private nint _chromaNtHandle;
+    private int _closed;
     private int _refCount = 1;
 
     /// <param name="d3d11TextureArraySliceIndex">Array slice for D3D11VA pool textures; 0 for non-array.</param>
@@ -76,32 +77,23 @@ public sealed class VideoWin32Nv12Backing : IDisposable
 
     public bool UsesDistinctSharedObjects => _lumaNtHandle != _chromaNtHandle;
 
-    /// <summary>Atomic against a racing <see cref="Dispose"/> that would otherwise close the handles between a disposed-check and the increment.</summary>
-    /// <exception cref="ObjectDisposedException">Backing handles are already closed.</exception>
     public void AddReference()
     {
-        while (true)
-        {
-            var n = Volatile.Read(ref _refCount);
-            if (n <= 0)
-                throw new ObjectDisposedException(nameof(VideoWin32Nv12Backing));
-            if (Interlocked.CompareExchange(ref _refCount, n + 1, n) == n)
-                return;
-        }
+        if (Volatile.Read(ref _closed) != 0)
+            throw new ObjectDisposedException(nameof(VideoWin32Nv12Backing));
+        Interlocked.Increment(ref _refCount);
     }
 
     public void Dispose()
     {
-        while (true)
-        {
-            var n = Volatile.Read(ref _refCount);
-            if (n <= 0) return;
-            if (Interlocked.CompareExchange(ref _refCount, n - 1, n) == n)
-            {
-                if (n - 1 > 0) return;
-                break;
-            }
-        }
+        var remaining = Interlocked.Decrement(ref _refCount);
+        if (remaining > 0)
+            return;
+        if (remaining < 0)
+            return;
+
+        if (Interlocked.Exchange(ref _closed, 1) != 0)
+            return;
 
         var l = _lumaNtHandle;
         var c = _chromaNtHandle;

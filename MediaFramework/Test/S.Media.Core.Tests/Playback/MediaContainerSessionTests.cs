@@ -10,9 +10,9 @@ using Xunit;
 
 namespace S.Media.Core.Tests.Playback;
 
-public sealed class AvRouterTests
+public sealed class MediaContainerSessionTests
 {
-    public AvRouterTests() => FFmpegRuntime.EnsureInitialized();
+    public MediaContainerSessionTests() => FFmpegRuntime.EnsureInitialized();
 
     [Fact]
     public void Ctor_NullContainer_Throws()
@@ -26,7 +26,7 @@ public sealed class AvRouterTests
         using var video = new VideoPlayer(src, sink, clock);
         var session = new MediaPlaybackSession(video, clock);
 
-        Assert.Throws<ArgumentNullException>(() => new AvRouter(null!, session));
+        Assert.Throws<ArgumentNullException>(() => new MediaContainerSession(null!, session));
     }
 
     [Fact]
@@ -38,13 +38,13 @@ public sealed class AvRouterTests
         try
         {
             using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
-            Assert.Throws<ArgumentNullException>(() => new AvRouter(c, null!));
+            Assert.Throws<ArgumentNullException>(() => new MediaContainerSession(c, null!));
         }
         finally
         {
             try { File.Delete(path); }
 #if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(AvRouterTests)}: temp media delete"); }
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerSessionTests)}: temp media delete"); }
 #else
             catch { /* ignored */ }
 #endif
@@ -64,7 +64,7 @@ public sealed class AvRouterTests
             var sink = new FakeVideoSink(c.Video.NativePixelFormats.ToArray());
             using var video = new VideoPlayer(c.Video, sink, clock);
             var session = new MediaPlaybackSession(video, clock);
-            var router = new AvRouter(c, session);
+            var router = new MediaContainerSession(c, session);
 
             router.Play();
             sink.WaitForConfigured();
@@ -82,7 +82,7 @@ public sealed class AvRouterTests
         {
             try { File.Delete(path); }
 #if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(AvRouterTests)}: temp media delete"); }
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerSessionTests)}: temp media delete"); }
 #else
             catch { /* ignored */ }
 #endif

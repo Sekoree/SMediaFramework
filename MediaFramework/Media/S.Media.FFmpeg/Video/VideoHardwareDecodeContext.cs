@@ -11,7 +11,7 @@ namespace S.Media.FFmpeg.Video;
 /// <remarks>
 /// <para>
 /// <see cref="DecoderThreadCount"/> configures one libav <c>AVCodecContext</c> (applied in <see cref="VideoFileDecoder.Open(string, VideoDecoderOpenOptions?)"/>).
-/// Multi-instance decode, process-wide caps, or hardware vs software fan-out are host concerns (audio-side parallel notes: <c>AudioFileDecoderOpenOptions</c>; checklist **Tier E** **20** — **§Tier F** row **33** **`[x]`**).
+/// Multi-instance decode, process-wide caps, or hardware vs software fan-out are host concerns (audio-side parallel notes: <c>AudioFileDecoderOpenOptions</c>).
 /// </para>
 /// </remarks>
 public sealed class VideoDecoderOpenOptions
