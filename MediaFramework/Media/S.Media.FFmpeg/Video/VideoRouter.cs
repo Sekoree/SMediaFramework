@@ -77,14 +77,43 @@ public sealed class VideoRouter : IDisposable
 
     /// <summary>Registers a sink. <paramref name="id"/> defaults to <c>vout_1</c>, <c>vout_2</c>, …</summary>
     /// <param name="asyncPump">
-    /// When set, the sink is wrapped in a <see cref="VideoSinkPump"/> so <see cref="IVideoSink.Submit"/> does not block
-    /// the router. The router always disposes the pump on <see cref="Dispose"/> (the pump is the registered sink).
+    /// Explicit <see cref="VideoSinkPump"/> attach options. Overrides the default pump-by-default path
+    /// described under <paramref name="synchronous"/>. The router always disposes the pump on
+    /// <see cref="Dispose"/> (the pump is the registered sink); the pump itself disposes the inner sink
+    /// only when <see cref="VideoSinkPumpAttachOptions.DisposeInnerSinkWhenPumpDisposes"/> is set.
+    /// </param>
+    /// <param name="synchronous">
+    /// When <c>true</c>, the sink is registered as-is — <see cref="IVideoSink.Submit"/> runs on the
+    /// clock-driver thread. Use this for sinks that are guaranteed to return promptly
+    /// (e.g. <see cref="DiscardingVideoSink"/>) or that manage their own threading. Mutually exclusive
+    /// with <paramref name="asyncPump"/>; passing both throws <see cref="ArgumentException"/>.
+    ///
+    /// When <c>false</c> (default) <strong>and</strong> <paramref name="asyncPump"/> is <c>null</c>,
+    /// the sink is wrapped in a <see cref="VideoSinkPump"/> with default capacity so a slow
+    /// <see cref="IVideoSink.Submit"/> cannot stall the clock thread. The pump propagates dispose to
+    /// the inner sink only when <paramref name="disposeSinkOnRouterDispose"/> is <c>true</c>; the pump
+    /// itself is always disposed with the router.
     /// </param>
     public string AddOutput(IVideoSink sink, string? id = null, bool disposeSinkOnRouterDispose = false,
-        VideoSinkPumpAttachOptions? asyncPump = null)
+        VideoSinkPumpAttachOptions? asyncPump = null, bool synchronous = false)
     {
         ArgumentNullException.ThrowIfNull(sink);
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (synchronous && asyncPump is not null)
+            throw new ArgumentException(
+                "synchronous: true is mutually exclusive with asyncPump — pick one.",
+                nameof(synchronous));
+
+        // Default ergonomics (Phase 2): pump-by-default so new sinks don't silently stall the clock
+        // thread on a slow Submit. Callers that know their sink is prompt opt out with synchronous: true;
+        // callers that want a tuned pump pass asyncPump explicitly.
+        if (!synchronous && asyncPump is null)
+        {
+            asyncPump = new VideoSinkPumpAttachOptions(
+                DisposeInnerSinkWhenPumpDisposes: disposeSinkOnRouterDispose);
+        }
+
         lock (_gate)
         {
             id ??= $"vout_{++_idCounter}";

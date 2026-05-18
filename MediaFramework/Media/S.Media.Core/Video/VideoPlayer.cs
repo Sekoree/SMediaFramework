@@ -65,6 +65,17 @@ public sealed class VideoPlayer : IDisposable
     private long _droppedQueueDrain;
 
     /// <summary>
+    /// Frozen plane data captured from the final submitted frame when <see cref="HoldLastFrameAtEnd"/> is on.
+    /// Read/written only on the clock-driver thread inside <see cref="OnVideoTick"/>.
+    /// </summary>
+    private ReadOnlyMemory<byte>[]? _heldPlanes;
+    private int[]? _heldStrides;
+    private VideoFormat _heldFormat;
+    private VideoTransferHint _heldTransferHint;
+    private TimeSpan _heldOriginalPts;
+    private long _holdSubmitCount;
+
+    /// <summary>
     /// Raised after a frame is successfully submitted to the sink with its
     /// <see cref="VideoFrame.PresentationTime"/> (for example to feed a
     /// <see cref="VideoPtsClock"/>).
@@ -102,6 +113,35 @@ public sealed class VideoPlayer : IDisposable
     /// </summary>
     public TimeSpan EarlyTolerance { get; set; } = TimeSpan.FromMilliseconds(8);
 
+    /// <summary>
+    /// When <c>true</c>, the player freezes the last successfully submitted frame's plane data and
+    /// keeps re-submitting it on every <see cref="IMediaClock.VideoTick"/> after the source is
+    /// exhausted, instead of going dark and signalling <see cref="CompletedNaturally"/>. Use for
+    /// image cues, "hold the final frame" transitions, and NDI senders that need a frame stream to
+    /// keep their session alive.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only CPU-backed frames are supported today — hardware backings (DMA-BUF NV12/P010/P016,
+    /// Win32 D3D11 shared NV12) fall through to natural completion since their lifetime is bound
+    /// to the source's release callback. Wrap the source in a CPU-readback path (or pre-decode
+    /// images via SkiaSharp) if you need hold-last with HW frames.
+    /// </para>
+    /// <para>
+    /// Setting this to <c>false</c> after a hold has started releases the captured planes on the
+    /// next tick; calling <see cref="Play"/> or <see cref="Seek"/> also resets the held state.
+    /// Held frames advance their PTS with the playhead so the sink keeps receiving monotonically
+    /// timestamped frames (matches the live-decode contract).
+    /// </para>
+    /// </remarks>
+    public bool HoldLastFrameAtEnd { get; set; }
+
+    /// <summary>Number of held frames re-submitted since the last hold transition. Diagnostic / test hook.</summary>
+    public long HeldFrameSubmitCount => Volatile.Read(ref _holdSubmitCount);
+
+    /// <summary>True when the player has frozen a final frame and is re-submitting it under <see cref="HoldLastFrameAtEnd"/>.</summary>
+    public bool IsHoldingLastFrame => _heldPlanes is not null;
+
     public VideoPlayer(IVideoSource source, IVideoSink sink, IMediaClock clock,
                        int queueCapacity = 4, TimeSpan? decodePollInterval = null,
                        Func<PixelFormat, bool>? negotiatePixelFormats = null)
@@ -131,6 +171,7 @@ public sealed class VideoPlayer : IDisposable
         {
             if (_isRunning) return;
             CompletedNaturally = false;
+            ReleaseHeldFrame();
             if (_source is ICooperativeVideoReadInterrupt iv)
                 iv.ClearYieldRequest();
             _cts = new CancellationTokenSource();
@@ -237,6 +278,7 @@ public sealed class VideoPlayer : IDisposable
             clearYield.ClearYieldRequest();
 
         DrainQueue();
+        ReleaseHeldFrame();
     }
 
     private void DrainQueue()
@@ -330,6 +372,19 @@ public sealed class VideoPlayer : IDisposable
 
         if (toShow is not null)
         {
+            // Capture a managed snapshot of the last-frame plane data the moment we know this
+            // is the final frame the source will produce — must happen before _sink.Submit takes
+            // ownership (the sink may free the underlying buffers via the frame's release).
+            // Skipped for hardware-backed frames: their lifetime is tied to the source's release
+            // and there's no portable way to fork an additional refcounted view here.
+            if (HoldLastFrameAtEnd && _heldPlanes is null
+                && _source.IsExhausted && _queue.IsEmpty
+                && toShow.DmabufNv12 is null && toShow.DmabufP010 is null
+                && toShow.DmabufP016 is null && toShow.Win32Nv12 is null)
+            {
+                CaptureHeldFrame(toShow);
+            }
+
             try
             {
                 _sink.Submit(toShow);
@@ -354,7 +409,93 @@ public sealed class VideoPlayer : IDisposable
         }
         else if (_source.IsExhausted && _queue.IsEmpty)
         {
-            CompletedNaturally = true;
+            if (HoldLastFrameAtEnd && _heldPlanes is not null)
+            {
+                TrySubmitHeldFrame(playhead);
+            }
+            else
+            {
+                CompletedNaturally = true;
+                ReleaseHeldFrame();
+            }
         }
+        else if (!HoldLastFrameAtEnd && _heldPlanes is not null)
+        {
+            // Property toggled off mid-hold — drop the snapshot.
+            ReleaseHeldFrame();
+        }
+    }
+
+    private void CaptureHeldFrame(VideoFrame source)
+    {
+        var planeCount = source.PlaneCount;
+        var planes = new ReadOnlyMemory<byte>[planeCount];
+        for (var i = 0; i < planeCount; i++)
+        {
+            var managed = source.Planes[i].ToArray();
+            planes[i] = managed;
+        }
+        _heldPlanes = planes;
+        _heldStrides = (int[])source.Strides.Clone();
+        _heldFormat = source.Format;
+        _heldTransferHint = source.ColorTransferHint;
+        _heldOriginalPts = source.PresentationTime;
+        Volatile.Write(ref _holdSubmitCount, 0);
+    }
+
+    private void TrySubmitHeldFrame(TimeSpan playhead)
+    {
+        if (_heldPlanes is null || _heldStrides is null) return;
+        var resubmitPts = playhead > _heldOriginalPts ? playhead : _heldOriginalPts;
+        VideoFrame frame;
+        try
+        {
+            frame = new VideoFrame(
+                resubmitPts,
+                _heldFormat,
+                _heldPlanes,
+                _heldStrides,
+                _heldTransferHint,
+                release: null);
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "VideoPlayer.TrySubmitHeldFrame: VideoFrame ctor");
+#else
+            _ = ex;
+#endif
+            ReleaseHeldFrame();
+            CompletedNaturally = true;
+            return;
+        }
+
+        try
+        {
+            _sink.Submit(frame);
+            Interlocked.Increment(ref _displayed);
+            Interlocked.Increment(ref _holdSubmitCount);
+            FramePresentationTimePresented?.Invoke(resubmitPts);
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "VideoPlayer.TrySubmitHeldFrame: sink Submit");
+#else
+            _ = ex;
+#endif
+            try { frame.Dispose(); }
+            catch { /* best effort */ }
+        }
+    }
+
+    private void ReleaseHeldFrame()
+    {
+        _heldPlanes = null;
+        _heldStrides = null;
+        _heldFormat = default;
+        _heldTransferHint = default;
+        _heldOriginalPts = TimeSpan.Zero;
+        Volatile.Write(ref _holdSubmitCount, 0);
     }
 }

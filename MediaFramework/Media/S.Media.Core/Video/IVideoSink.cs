@@ -43,5 +43,21 @@ public interface IVideoSink
     /// of the frame and is responsible for calling <see cref="VideoFrame.Dispose"/>
     /// once it's done with the underlying buffer.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <strong>Thread contract:</strong> <c>Submit</c> is invoked on the clock-driver thread that
+    /// fires <see cref="S.Media.Core.Clock.IMediaClock.VideoTick"/> (typically the audio callback
+    /// or wall-clock pacer). It must return promptly — implementations that do real work (uploads,
+    /// network encodes, file writes) should hand the frame off to a worker thread of their own.
+    /// A slow <c>Submit</c> delays every other subscriber on the same clock.
+    /// </para>
+    /// <para>
+    /// For slow sinks that cannot guarantee promptness, wrap with
+    /// <see cref="S.Media.FFmpeg.Video.VideoSinkPump"/> (or register via
+    /// <see cref="S.Media.FFmpeg.Video.VideoRouter.AddOutput"/> with
+    /// <see cref="S.Media.FFmpeg.Video.VideoSinkPumpAttachOptions"/>) so submissions are
+    /// queued and drained on a background thread.
+    /// </para>
+    /// </remarks>
     void Submit(VideoFrame frame);
 }

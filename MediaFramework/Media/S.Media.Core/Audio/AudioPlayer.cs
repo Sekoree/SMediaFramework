@@ -72,7 +72,13 @@ public sealed class AudioPlayer : IDisposable
     /// </summary>
     public bool AutoWirePrimary { get; set; } = true;
 
-    public AudioPlayer(int sampleRate = 48000, int chunkSamples = 480)
+    /// <param name="sampleRate">
+    /// Router nominal sample rate. No baked-in default — callers must declare the rate explicitly
+    /// (typically the decoder's <c>Format.SampleRate</c>) so format mismatches surface at wire-up
+    /// time rather than as silent resamples or output garbling.
+    /// </param>
+    /// <param name="chunkSamples">Per-channel chunk size used by the router pump (default 480 = 10 ms @ 48 kHz).</param>
+    public AudioPlayer(int sampleRate, int chunkSamples = 480)
     {
         _router = new AudioRouter(sampleRate, chunkSamples);
         _clock = new MediaClock();
@@ -165,12 +171,20 @@ public sealed class AudioPlayer : IDisposable
     /// open the decoder yourself and pass it here:
     /// <code>player.AddOwnedSource(AudioFileDecoder.Open(path));</code>
     /// </summary>
-    public string AddOwnedSource(IAudioSource source, string? id = null)
+    /// <param name="autoResample">
+    /// Forwarded to <see cref="AudioRouter.AddSource(IAudioSource, string?, bool)"/>. When
+    /// <c>true</c> and the source rate doesn't match the router's nominal rate, the router
+    /// transparently wraps the source via the resampler factory installed by
+    /// <c>S.Media.FFmpeg</c>'s <c>FFmpegRuntime.EnsureInitialized</c>. The wrapper is owned by the
+    /// router; the player only tracks the original (added to <c>_ownedDisposables</c> when it
+    /// implements <see cref="IDisposable"/>).
+    /// </param>
+    public string AddOwnedSource(IAudioSource source, string? id = null, bool autoResample = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var sourceId = _router.AddSource(source, id);
+        var sourceId = _router.AddSource(source, id, autoResample);
         if (source is IDisposable d)
         {
             lock (_gate)

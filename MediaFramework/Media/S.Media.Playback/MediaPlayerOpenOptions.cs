@@ -12,7 +12,11 @@ public readonly record struct MediaPlayerOpenOptions(
     /// <summary>When true with <see cref="Win32Nv12SharedHandleOnlyExport"/>, decode open fails (Win32 handle-only needs a GL host device).</summary>
     bool WindowsD3d11ZeroHostGl = false,
     int AudioChunkSamples = 480,
-    bool IncludeAudioRouter = true)
+    bool IncludeAudioRouter = true,
+    /// <summary>Max demuxed audio packets buffered ahead of the audio decoder. <c>0</c> = use the demuxer default (192). Raise for HEVC 4K B-frame reorder.</summary>
+    int AudioPacketQueueDepth = 0,
+    /// <summary>Max demuxed video packets buffered ahead of the video decoder. <c>0</c> = use the demuxer default (384). Raise for HEVC 4K B-frame reorder.</summary>
+    int VideoPacketQueueDepth = 0)
 {
     /// <summary>Baseline: hardware decode on, GL decode flags off, standard audio chunking.</summary>
     public static MediaPlayerOpenOptions Default => new();
@@ -39,5 +43,7 @@ public readonly record struct MediaPlayerOpenOptions(
             RetainDmabufForGl = RetainDmabufForGl,
             RetainD3D11SharedHandleForGl = RetainD3D11SharedHandleForGl,
             Win32Nv12SharedHandleOnlyExport = Win32Nv12SharedHandleOnlyExport,
+            AudioPacketQueueDepth = AudioPacketQueueDepth,
+            VideoPacketQueueDepth = VideoPacketQueueDepth,
         };
 }

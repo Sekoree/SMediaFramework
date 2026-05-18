@@ -221,7 +221,7 @@ public sealed class MediaContainerPlaybackBundleTests
             var clock = new MediaClock();
             var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
             var router = new VideoRouter(null);
-            var outId = router.AddOutput(sink, "o", disposeSinkOnRouterDispose: true);
+            var outId = router.AddOutput(sink, "o", disposeSinkOnRouterDispose: true, synchronous: true);
             var vin = router.AddInput(outId);
             var video = new VideoPlayer(dec.Video, vin.Sink, clock);
             using var mega = new MediaContainerPlaybackBundle(

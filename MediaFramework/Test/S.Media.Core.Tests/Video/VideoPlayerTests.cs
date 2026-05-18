@@ -107,6 +107,81 @@ public class VideoPlayerTests
     }
 
     [Fact]
+    public void HoldLastFrameAtEnd_KeepsResubmittingFinalFrameAfterExhaustion()
+    {
+        var src = new FakeVideoSource(VideoFmt(16, 16),
+            Frame(0, 16, 16), Frame(40, 16, 16), Frame(80, 16, 16));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 4)
+        {
+            EarlyTolerance = TimeSpan.FromMilliseconds(2),
+            LateThreshold = TimeSpan.FromMilliseconds(500),
+            HoldLastFrameAtEnd = true,
+        };
+        player.Play();
+        sink.WaitForConfigured();
+        WaitFor(() => src.Reads >= 3, TimeSpan.FromSeconds(1));
+
+        // Tick well past every frame so the last (80ms) is the chosen submission AND
+        // the source has already exhausted by the time we tick.
+        WaitFor(() => src.IsExhausted, TimeSpan.FromSeconds(1));
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(100));
+        clock.RaiseVideoTick();
+
+        WaitFor(() => sink.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
+        Assert.True(player.IsHoldingLastFrame, "captured a held frame on the last-frame submission");
+        var baselineSubmissions = sink.Submitted.Count;
+
+        // Additional ticks past exhaustion should keep delivering frames (the held one) —
+        // not signal CompletedNaturally.
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(500));
+        clock.RaiseVideoTick();
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(1000));
+        clock.RaiseVideoTick();
+        WaitFor(() => sink.Submitted.Count >= baselineSubmissions + 2, TimeSpan.FromSeconds(1));
+
+        Assert.False(player.CompletedNaturally);
+        Assert.True(player.HeldFrameSubmitCount >= 2);
+        // Held frames advance PTS with the playhead.
+        var lastPts = sink.Submitted[^1].PresentationTime;
+        Assert.True(lastPts >= TimeSpan.FromMilliseconds(500),
+            $"held frame PTS should track the playhead; got {lastPts}");
+    }
+
+    [Fact]
+    public void HoldLastFrameAtEnd_Off_StillSignalsCompletedNaturally()
+    {
+        var src = new FakeVideoSource(VideoFmt(16, 16),
+            Frame(0, 16, 16), Frame(40, 16, 16));
+        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 4)
+        {
+            LateThreshold = TimeSpan.FromMilliseconds(500),
+            HoldLastFrameAtEnd = false,
+        };
+        player.Play();
+        sink.WaitForConfigured();
+        WaitFor(() => src.Reads >= 2, TimeSpan.FromSeconds(1));
+        WaitFor(() => src.IsExhausted, TimeSpan.FromSeconds(1));
+
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(100));
+        clock.RaiseVideoTick();
+        WaitFor(() => sink.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
+
+        // A second tick after exhaustion — without HoldLastFrameAtEnd, completes naturally.
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(500));
+        clock.RaiseVideoTick();
+        WaitFor(() => player.CompletedNaturally, TimeSpan.FromSeconds(1));
+
+        Assert.False(player.IsHoldingLastFrame);
+        Assert.Equal(0, player.HeldFrameSubmitCount);
+    }
+
+    [Fact]
     public void Stop_Drains_Queue_And_Disposes_Frames()
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(40, 16, 16),

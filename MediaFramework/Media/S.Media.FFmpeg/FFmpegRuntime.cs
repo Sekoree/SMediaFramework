@@ -1,5 +1,7 @@
 using System.Threading;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
+using S.Media.FFmpeg.Audio;
 
 namespace S.Media.FFmpeg;
 
@@ -54,6 +56,16 @@ public static class FFmpegRuntime
                 ffmpeg.RootPath = "";
 
             DynamicallyLoadedBindings.Initialize();
+
+            // Install the swresample-backed wrapper for AudioRouter.AddSource(autoResample: true).
+            // The factory contract is that the caller (the router) owns the wrapper's lifecycle,
+            // but the original source belongs to whoever passed it in — pass
+            // disposeInnerWhenDisposed: false so the router-disposed wrapper never reaches into
+            // the caller's source. Last write wins on the static slot; other resampler packages
+            // (if any) can replace it after FFmpegRuntime.EnsureInitialized() returns.
+            AudioRouterAutoResample.SourceWrapper ??=
+                (inner, targetRate) => new ResamplingAudioSource(inner, targetRate, disposeInnerWhenDisposed: false);
+
             _initialized = true;
         }
     }

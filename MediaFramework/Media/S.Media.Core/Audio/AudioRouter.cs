@@ -158,14 +158,38 @@ public sealed class AudioRouter : IDisposable
     /// value (<c>src_1</c>, <c>src_2</c>, …) — pass an explicit ID to make
     /// route definitions self-documenting.
     /// </summary>
-    public string AddSource(IAudioSource source, string? id = null)
+    /// <param name="autoResample">
+    /// When <c>true</c> and <paramref name="source"/>'s rate doesn't match the router's nominal rate,
+    /// the source is transparently wrapped via <see cref="AudioRouterAutoResample.SourceWrapper"/>
+    /// (installed by <c>S.Media.FFmpeg</c>'s <c>FFmpegRuntime.EnsureInitialized</c>). The wrapper takes
+    /// ownership of the original source, so callers using <see cref="AudioPlayer.AddOwnedSource"/> get a
+    /// clean dispose chain. Throws <see cref="InvalidOperationException"/> when a rate mismatch is
+    /// observed but no resampler factory is registered.
+    /// </param>
+    public string AddSource(IAudioSource source, string? id = null, bool autoResample = false)
     {
         ArgumentNullException.ThrowIfNull(source);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        source.Format.Validate(nameof(source));
+        IDisposable? ownedWrapper = null;
         if (source.Format.SampleRate != _sampleRate)
-            throw new InvalidOperationException(
-                $"source sample rate {source.Format.SampleRate} doesn't match router's {_sampleRate} (resampling not implemented)");
+        {
+            if (!autoResample)
+                throw new InvalidOperationException(
+                    $"source sample rate {source.Format.SampleRate} doesn't match router's {_sampleRate} (pass autoResample: true to wrap, or resample upstream)");
+            if (AudioRouterAutoResample.SourceWrapper is not { } factory)
+                throw new InvalidOperationException(
+                    "AudioRouter.AddSource: autoResample requested but no resampler factory is installed " +
+                    "(reference S.Media.FFmpeg and call FFmpegRuntime.EnsureInitialized() to install the default swresample wrapper).");
+            var wrapped = factory(source, _sampleRate);
+            wrapped.Format.Validate(nameof(source));
+            if (wrapped.Format.SampleRate != _sampleRate)
+                throw new InvalidOperationException(
+                    $"AudioRouter.AddSource: resampler wrapper produced format {wrapped.Format} which still doesn't match router rate {_sampleRate}.");
+            source = wrapped;
+            ownedWrapper = wrapped as IDisposable;
+        }
 
         lock (_gate)
         {
@@ -174,7 +198,7 @@ public sealed class AudioRouter : IDisposable
             if (_state.Sources.ContainsKey(id))
                 throw new ArgumentException($"source ID '{id}' is already registered", nameof(id));
 
-            var entry = new SourceEntry(id, source, new float[_chunkSamples * source.Format.Channels]);
+            var entry = new SourceEntry(id, source, new float[_chunkSamples * source.Format.Channels], ownedWrapper);
             Volatile.Write(ref _state, _state with { Sources = _state.Sources.Add(id, entry) });
             return id;
         }
@@ -184,9 +208,11 @@ public sealed class AudioRouter : IDisposable
     public bool RemoveSource(string id)
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
+        IDisposable? ownedWrapper;
         lock (_gate)
         {
-            if (!_state.Sources.ContainsKey(id)) return false;
+            if (!_state.Sources.TryGetValue(id, out var entry)) return false;
+            ownedWrapper = entry.OwnedWrapper;
             foreach (var r in _state.Routes)
                 if (r.SourceId == id)
                 {
@@ -199,8 +225,17 @@ public sealed class AudioRouter : IDisposable
                 Sources = _state.Sources.Remove(id),
                 Routes = _state.Routes.RemoveAll(r => r.SourceId == id),
             });
-            return true;
         }
+        if (ownedWrapper is not null)
+        {
+            try { ownedWrapper.Dispose(); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, "AudioRouter.RemoveSource: owned wrapper"); }
+#else
+            catch { /* best effort */ }
+#endif
+        }
+        return true;
     }
 
     /// <param name="pumpCapacityChunks">
@@ -213,6 +248,7 @@ public sealed class AudioRouter : IDisposable
         ArgumentNullException.ThrowIfNull(sink);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        sink.Format.Validate(nameof(sink));
         if (sink.Format.SampleRate != _sampleRate)
             throw new InvalidOperationException(
                 $"sink sample rate {sink.Format.SampleRate} doesn't match router's {_sampleRate}");
@@ -775,6 +811,26 @@ public sealed class AudioRouter : IDisposable
 #endif
             }
 
+            foreach (var (_, entry) in _state.Sources)
+            {
+                if (entry.OwnedWrapper is null) continue;
+                try
+                {
+                    entry.OwnedWrapper.Dispose();
+                }
+#if DEBUG
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, "AudioRouter.Dispose: owned source wrapper");
+                }
+#else
+                catch
+                {
+                    // best-effort shutdown
+                }
+#endif
+            }
+
             _state = RouterState.Empty;
         }
     }
@@ -1067,7 +1123,13 @@ public sealed class AudioRouter : IDisposable
         int MaxPumpCapacityChunks,
         int SinkCount);
 
-    private sealed record SourceEntry(string Id, IAudioSource Source, float[] Scratch);
+    /// <param name="OwnedWrapper">
+    /// When the router created an internal wrapper for this source (currently only
+    /// <c>autoResample: true</c>), this holds the wrapper as <see cref="IDisposable"/> so
+    /// <see cref="RemoveSource"/> / <see cref="Dispose"/> can clean it up. The caller's original
+    /// source is never disposed by the router.
+    /// </param>
+    private sealed record SourceEntry(string Id, IAudioSource Source, float[] Scratch, IDisposable? OwnedWrapper = null);
     private sealed record SinkEntry(string Id, IAudioSink Sink, SinkPump Pump);
 
     private sealed record RouterState(

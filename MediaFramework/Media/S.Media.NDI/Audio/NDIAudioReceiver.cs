@@ -40,7 +40,9 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     private readonly NDIIngestPlaybackClock? _ingestClock;
     private readonly Thread _captureThread;
     private readonly CancellationTokenSource _cts = new();
-    private readonly int _capacityFrames;
+    private readonly TimeSpan _capacityDuration;
+    /// <summary>Hard floor in frames-per-channel; mirrors the pre-2026-05 minimum to keep tiny durations from producing pathological rings.</summary>
+    private const int MinCapacityFrames = 1024;
 
     private FormatSnapshot? _state;
     private long _overflowSamples;
@@ -82,16 +84,23 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     /// </summary>
     /// <param name="source">A discovered source from <see cref="NDIFinder"/>.</param>
     /// <param name="receiverName">Optional human-readable receiver name.</param>
-    /// <param name="ringCapacityFrames">Upper bound on samples-per-channel buffered (default 96000 = ~2 s @ 48 kHz).</param>
+    /// <param name="ringCapacityDuration">
+    /// Upper bound on buffered audio expressed as a <see cref="TimeSpan"/> (default 2 s). The frame count
+    /// is computed from the first observed sample rate, so the ring is right-sized whether the source
+    /// sends 44.1, 48 or 96 kHz. A floor of <c>1024</c> frames is enforced so very short durations at low
+    /// sample rates still yield a usable ring (matches the pre-<see cref="TimeSpan"/> minimum).
+    /// </param>
     /// <param name="ingestClock">Optional <see cref="S.Media.Core.Clock.IPlaybackClock"/> implementation updated from this receiver's capture thread.</param>
     public NDIAudioReceiver(
         NDIDiscoveredSource source,
         string? receiverName = null,
-        int ringCapacityFrames = 96000,
+        TimeSpan ringCapacityDuration = default,
         NDIIngestPlaybackClock? ingestClock = null)
     {
-        if (ringCapacityFrames < 1024)
-            throw new ArgumentOutOfRangeException(nameof(ringCapacityFrames), "must be >= 1024");
+        if (ringCapacityDuration == default)
+            ringCapacityDuration = TimeSpan.FromSeconds(2);
+        if (ringCapacityDuration <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(ringCapacityDuration), "must be > 0");
 
         _ingestClock = ingestClock;
         _ingestClock?.AttachReceiver();
@@ -121,7 +130,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
             throw;
         }
 
-        _capacityFrames = ringCapacityFrames;
+        _capacityDuration = ringCapacityDuration;
 
         _captureThread = new Thread(() => CaptureLoop(_cts.Token))
         {
@@ -240,7 +249,8 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         // GC'd once the reader's local goes out of scope; that's acceptable
         // — format changes are rare and a brief discontinuity at the
         // boundary is preferable to copying state across.
-        var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), _capacityFrames);
+        var capacityFrames = Math.Max(MinCapacityFrames, (int)(_capacityDuration.TotalSeconds * sampleRate));
+        var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames);
         Volatile.Write(ref _state, snap);
         return snap;
     }

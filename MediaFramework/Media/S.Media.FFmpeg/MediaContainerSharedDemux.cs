@@ -24,8 +24,12 @@ namespace S.Media.FFmpeg;
 internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 {
     private const long AvTimeBase = 1_000_000L;
-    private const int MaxAudioPacketsQueued = 192;
-    private const int MaxVideoPacketsQueued = 384;
+    private const int DefaultAudioPacketsQueued = 192;
+    private const int DefaultVideoPacketsQueued = 384;
+
+    /// <summary>Configured from <see cref="VideoDecoderOpenOptions"/>; tight defaults for sane streams, raise for HEVC 4K B-frame reorder.</summary>
+    private int _maxAudioPacketsQueued = DefaultAudioPacketsQueued;
+    private int _maxVideoPacketsQueued = DefaultVideoPacketsQueued;
 
     /// <summary><c>AV_DISPOSITION_ATTACHED_PIC</c> — album art / cover; must not be chosen over a real video track.</summary>
     private const int AvDispositionAttachedPic = 1024;
@@ -144,6 +148,13 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private void OpenInternal(string path, VideoDecoderOpenOptions? videoOptions)
     {
+        var aDepth = videoOptions?.AudioPacketQueueDepth ?? 0;
+        var vDepth = videoOptions?.VideoPacketQueueDepth ?? 0;
+        if (aDepth < 0) throw new ArgumentOutOfRangeException(nameof(videoOptions), "AudioPacketQueueDepth must be >= 0");
+        if (vDepth < 0) throw new ArgumentOutOfRangeException(nameof(videoOptions), "VideoPacketQueueDepth must be >= 0");
+        if (aDepth > 0) _maxAudioPacketsQueued = aDepth;
+        if (vDepth > 0) _maxVideoPacketsQueued = vDepth;
+
         AVFormatContext* fmt = null;
         var ret = avformat_open_input(&fmt, path, null, null);
         FFmpegException.ThrowIfError(ret, nameof(avformat_open_input));
@@ -545,9 +556,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             }
 
             if (_demuxPkt->stream_index == _aStream)
-                EnqueuePacketCopy(_audioPacketQ, MaxAudioPacketsQueued);
+                EnqueuePacketCopy(_audioPacketQ, _maxAudioPacketsQueued);
             else if (_demuxPkt->stream_index == _vStream)
-                EnqueuePacketCopy(_videoPacketQ, MaxVideoPacketsQueued);
+                EnqueuePacketCopy(_videoPacketQ, _maxVideoPacketsQueued);
         }
     }
 

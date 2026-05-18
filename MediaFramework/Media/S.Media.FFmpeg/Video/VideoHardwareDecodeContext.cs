@@ -57,6 +57,20 @@ public sealed class VideoDecoderOpenOptions
     public bool Win32Nv12SharedHandleOnlyExport { get; init; }
 
     /// <summary>
+    /// Maximum demuxed audio packets buffered ahead of the audio decoder. Default 192 — enough for
+    /// well-behaved containers; raise for HEVC 4K with deep B-frame reorder buffers when the demux
+    /// thread otherwise blocks waiting for the video queue to drain. <c>0</c> falls back to the default.
+    /// </summary>
+    public int AudioPacketQueueDepth { get; init; }
+
+    /// <summary>
+    /// Maximum demuxed video packets buffered ahead of the video decoder. Default 384 — tight for
+    /// some HEVC 4K streams with 16+ reference frames; raise if the demuxer pauses noticeably while
+    /// the decoder works through a long GOP. <c>0</c> falls back to the default.
+    /// </summary>
+    public int VideoPacketQueueDepth { get; init; }
+
+    /// <summary>
     /// Returns whether shared-handle-only Win32 NV12 export is requested via <see cref="Win32Nv12SharedHandleOnlyExport"/> or
     /// <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> (<c>1</c> / <c>true</c>). Callers still require <see cref="RetainD3D11SharedHandleForGl"/>.
     /// </summary>

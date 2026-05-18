@@ -255,11 +255,16 @@ public sealed class MediaPlayer : IDisposable
             string primaryOutputId;
             if (videoNegotiationLead is null)
             {
+                // DiscardingVideoSink drops the frame immediately — no Submit work to offload to a pump,
+                // so register synchronously and avoid spinning up a drainer thread for nothing.
                 var discard = new DiscardingVideoSink();
-                primaryOutputId = router.AddOutput(discard, "_discard", disposeSinkOnRouterDispose: true);
+                primaryOutputId = router.AddOutput(discard, "_discard",
+                    disposeSinkOnRouterDispose: true, synchronous: true);
             }
             else
             {
+                // End-user video sinks (Avalonia / SDL3 GL surfaces, encoders, …) get the Phase 2
+                // pump-by-default treatment so a stutter on Submit can't back-pressure the clock thread.
                 primaryOutputId = router.AddOutput(
                     videoNegotiationLead,
                     "_primary",

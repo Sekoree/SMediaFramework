@@ -4,7 +4,7 @@ Derived from `Doc/MediaFramework-Review-2026-05.md`. Ordered to minimize wasted 
 
 Legend: **size** = XS (<1 h) · S (<½ day) · M (1–2 days) · L (1 week) · XL (multi-week feature). **breaks** = which downstream code likely needs updates.
 
-**Status (updated 2026-05-18):** Phase 0 complete. Phase 1 complete. Phase 2 is the next planned batch.
+**Status (updated 2026-05-18):** Phase 0 complete. Phase 1 complete. Phase 2 complete. Phase 3 mostly complete (7/8 — P3.8 VideoRouter→Core refactor deferred as a focused follow-up). Phase 4 is the next planned batch.
 
 ---
 
@@ -96,49 +96,107 @@ Doc/NDI-Terminology.md                                                  (new)
 
 ---
 
-## Phase 2 — Defaults & ergonomics (do before features)
+## Phase 2 — Defaults & ergonomics ✅ COMPLETE (2026-05-18)
 
 Small changes that improve the API consumers will use. Doing these before Phase 3 means new high-level helpers inherit good defaults instead of papering over bad ones.
 
-- [ ] **Drop the `48000` default on `AudioPlayer`.** `S.Media.Core/Audio/AudioPlayer.cs:75`. Either remove the default (force callers to be explicit) or add an overload that accepts an `IAudioSource` and infers. **Size:** XS. **Breaks:** every test that calls `new AudioPlayer()` (several in `S.Media.Core.Tests`). Easy mechanical fix.
+- [x] **Drop the `48000` default on `AudioPlayer`.** Removed the default; ctor now requires `sampleRate` explicitly. All in-tree callers already passed one. **Size:** XS.
 
-- [ ] **`NDIAudioReceiver` ring capacity in time, not samples.** `S.Media.NDI/Audio/NDIAudioReceiver.cs:90`. Change the ctor param from `int ringCapacityFrames = 96000` to `TimeSpan ringCapacityDuration = TimeSpan.FromSeconds(2)`; compute frames from the first observed format. **Size:** XS. **Breaks:** any caller passing the int; in-tree probably only tests.
+- [x] **`NDIAudioReceiver` ring capacity in time, not samples.** Ctor switched to `TimeSpan ringCapacityDuration = default (→ 2 s)`. Frame count computed in `EnsureFormat` from the first observed sample rate; `MinCapacityFrames = 1024` floor preserved. **Size:** XS.
 
-- [ ] **Default video sinks behind a `VideoSinkPump`.** Today `IVideoSink.Submit` runs on the clock-driver thread — `VideoPlayer.cs:24-29`. New sinks block by default and only learn this from a stutter. Make `VideoRouter.AddOutput` wrap in a pump unless `asyncPump: false` (or a new `synchronous: true` flag). **Size:** S. **Breaks:** `MediaPlayer.TryOpen` discarding-sink path, smoke tools that wire a sink directly; both fine to update.
+- [x] **Default video sinks behind a `VideoSinkPump`.** `VideoRouter.AddOutput` now wraps in a pump by default. New `synchronous: true` flag opts out (used for `DiscardingVideoSink` and the test sinks that assert immediate receipt). Mutually exclusive with explicit `asyncPump`. Tests updated via a `AddSyncOutput` helper. **Size:** S.
 
-- [ ] **Document `IVideoSink.Submit`'s thread contract on the interface itself**, not just in `VideoPlayer` remarks. One sentence in XML doc. **Size:** XS.
+- [x] **Document `IVideoSink.Submit`'s thread contract on the interface itself.** XML doc on `IVideoSink.Submit` now states the clock-driver-thread contract and points to `VideoSinkPump` for slow sinks. **Size:** XS.
 
-- [ ] **`AudioRouter.AddSource(autoResample: true)`** option. When set and the source's rate differs from the router's nominal rate, transparently wrap with `ResamplingAudioSink` (currently `S.Media.FFmpeg/Audio/ResamplingAudioSink.cs`). Required for soundboard use cases where clips have mixed rates. **Size:** M. **Breaks:** rate-mismatch today throws — autoResample changes the call site contract.
+- [x] **`AudioRouter.AddSource(autoResample: true)`** option.
+  - New `ResamplingAudioSource` in `S.Media.FFmpeg/Audio/` (libswresample wrapper with optional inner-ownership).
+  - New `AudioRouterAutoResample.SourceWrapper` static factory hook in `S.Media.Core` so Core stays FFmpeg-free.
+  - `FFmpegRuntime.EnsureInitialized` installs the default wrapper with `disposeInnerWhenDisposed: false` so caller-owned inner sources are never disposed by the router.
+  - `AudioRouter.AddSource` accepts `autoResample: bool`; the router itself owns the wrapper (new `SourceEntry.OwnedWrapper`) and disposes it on `RemoveSource` / `Dispose`.
+  - `AudioPlayer.AddOwnedSource` gained an `autoResample` forward.
+  - 3 new tests in `ResamplingAudioSourceTests.cs`. **Size:** M.
 
-- [ ] **`AudioFormat` validation.** `S.Media.Core/Audio/AudioFormat.cs:13` is a `record struct(int, int)` with no validation. Today nothing stops `AudioFormat(-1, 99999)`. Add a single `Validate()` helper and call it at every public constructor / setter on AudioPlayer / Router / Sinks. **Size:** XS.
+- [x] **`AudioFormat` validation.** New `AudioFormat.IsValid` and `AudioFormat.Validate(paramName?)`; called at every public surface that plumbs a format into a live pipeline (`AudioRouter.AddSource`, `AudioRouter.AddSink`, `ResamplingAudioSink` ctor, `ResamplingAudioSource` ctor). `AudioFormat(0, 0)` sentinel remains valid as a value (no in-ctor validation) — guarded with `HasAudio` on the consumer side. **Size:** XS.
 
-- [ ] **Convert `*PumpPressureEventArgs` to `readonly record struct`.** `S.Media.Core/Audio/AudioRouterEvents.cs`, `S.Media.FFmpeg/Video/VideoPumpPressureEvents.cs`. Keeps the otherwise-zero-alloc steady state intact under heavy pressure. **Size:** S. **Breaks:** any handler that captures `EventArgs` (probably none externally; rebuild and follow compiler errors).
+- [x] **Convert `*PumpPressureEventArgs` to `readonly record struct`.** `AudioRouterPumpPressureEventArgs`, `VideoSinkPumpPressureEventArgs`, `VideoRouterPumpPressureEventArgs` are now `readonly record struct`s. `EventHandler<T>` has no `: EventArgs` constraint since .NET Core, and all in-tree handlers receive by value. Sink-error args stayed a class (carries `Exception`; cold path). **Size:** S.
 
-**Phase exit:** the framework's defaults stop surprising consumers; the most likely API ergonomics complaints (rate mismatch rejection, blocking sinks, baked-in 48000) are gone.
+**Phase exit:** the framework's defaults stop surprising consumers; the most likely API ergonomics complaints (rate mismatch rejection, blocking sinks, baked-in 48000) are gone. ✅
+
+**Outcomes:**
+- Build: clean (0 warnings / 0 errors) across the full `MFPlayer.sln`.
+- Tests: 501/502 pass. The one failure is the same pre-existing flaky `NDIIngestPlaybackClockTests.Timestamp_UsedWhenTimecodeSynthesize` (FP-tolerance, ~2700 ticks delta) noted in Phase 0 and Phase 1 — unrelated to Phase 2.
+- 3 new tests added (`ResamplingAudioSourceTests`).
+
+**Files touched:**
+```
+MediaFramework/Media/S.Media.Core/Audio/AudioFormat.cs              (Validate + IsValid)
+MediaFramework/Media/S.Media.Core/Audio/AudioPlayer.cs              (no-default ctor + autoResample forward)
+MediaFramework/Media/S.Media.Core/Audio/AudioRouter.cs              (autoResample, validation, SourceEntry.OwnedWrapper, dispose chain)
+MediaFramework/Media/S.Media.Core/Audio/AudioRouterAutoResample.cs  (new — static factory hook)
+MediaFramework/Media/S.Media.Core/Audio/AudioRouterEvents.cs        (pressure args → record struct)
+MediaFramework/Media/S.Media.Core/Video/IVideoSink.cs               (thread-contract docs)
+MediaFramework/Media/S.Media.FFmpeg/Audio/ResamplingAudioSink.cs    (uses AudioFormat.Validate)
+MediaFramework/Media/S.Media.FFmpeg/Audio/ResamplingAudioSource.cs  (new — source-side wrapper)
+MediaFramework/Media/S.Media.FFmpeg/FFmpegRuntime.cs                (installs SourceWrapper factory)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoPumpPressureEvents.cs (pressure args → record struct)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoRouter.cs            (pump-by-default + synchronous flag)
+MediaFramework/Media/S.Media.NDI/Audio/NDIAudioReceiver.cs          (TimeSpan ring capacity)
+MediaFramework/Media/S.Media.Playback/MediaPlayer.cs                (discarding sink synchronous: true)
+MediaFramework/Test/S.Media.FFmpeg.Tests/Audio/ResamplingAudioSourceTests.cs (new)
+MediaFramework/Test/S.Media.FFmpeg.Tests/MediaContainerPlaybackBundleTests.cs (synchronous: true)
+MediaFramework/Test/S.Media.FFmpeg.Tests/Video/VideoRouterTests.cs  (AddSyncOutput helper, async-pump sites kept)
+```
 
 ---
 
-## Phase 3 — Foundational features blocking product use cases
+## Phase 3 — Foundational features ✅ MOSTLY COMPLETE (2026-05-18, 7/8)
 
-These unblock the *primary product surfaces* you named: cue players, soundboards, image triggers. Bigger pieces, build them once Phase 0–2 are solid.
+These unblock the *primary product surfaces*: cue players, soundboards, image triggers, **and full video playback** (the user clarified 2026-05-18 that moving video is first-class — static images are the complementary case, not a replacement).
 
-- [ ] **`StaticFrameSource : IVideoSource`** in `S.Media.Core`. Wraps a single pre-built `VideoFrame` and replays it forever. No external deps. **Size:** XS. Unlocks "hold last frame at EOF" patterns immediately.
+- [x] **`StaticFrameSource : IVideoSource`** in `S.Media.Core/Video/StaticFrameSource.cs`. Wraps any `ReadOnlyMemory<byte>[]` plane data and re-emits it on every read with PTS spaced at `format.FrameRate`. No external deps. 4 tests. **Size:** XS.
 
-- [ ] **`ImageFileSource : IVideoSource`** in a new project (`S.Media.Image` or `S.Media.SkiaSharp`). Loads PNG/JPEG/WebP into a `VideoFrame` once. SkiaSharp is the obvious dependency; `StbImageSharp` is the dependency-light alternative. **Size:** M. **Breaks:** nothing — new code. **Blocks:** soundboard "image trigger", cue-player static cues.
+- [x] **`ImageFileSource : IVideoSource`** in new project `S.Media.SkiaSharp` (Linux native assets included). Decodes PNG / JPEG / WebP / BMP / GIF once via SkiaSharp's codec stack into premul BGRA8888; emits frames forever via `ReadOnlyMemory<byte>` over a pooled buffer (returned on `Dispose`). 4 tests; SkiaSharp + `SkiaSharp.NativeAssets.Linux` were already in `Directory.Packages.props`. **Size:** M.
 
-- [ ] **`VideoPlayer` "hold last frame at EOF" mode.** `S.Media.Core/Video/VideoPlayer.cs:81`. New `HoldLastFrameAtEnd: bool` property — when source `IsExhausted` and queue drains, the player keeps the last frame on screen instead of falling silent. **Size:** S.
+- [x] **`VideoPlayer.HoldLastFrameAtEnd`** in `S.Media.Core/Video/VideoPlayer.cs`. When set, the player snapshots the last successfully submitted frame's plane data (managed `byte[]` copies) right before submit, then re-emits it on every subsequent video tick with PTS tracking the playhead — keeps NDI senders / GL renderers alive and the on-screen image stable instead of going dark. Hardware-backed frames (DMA-BUF / Win32 NV12) fall back to natural completion; CPU paths work today. 2 tests. **Size:** S.
 
-- [ ] **`MediaPlayer.Quick`** facade in `S.Media.Playback`. One-method open + play with sensible defaults (PortAudio default device, GL window, audio resample-as-needed). Hides routers, clocks, ownership flags. Power users still use `MediaPlayer.TryOpen`. **Size:** M. **Breaks:** nothing — additive. **Depends on:** Phase 2 auto-resample + pump-by-default.
+- [x] **`MediaPlayer.Quick`** facade in new project `S.Media.Quick`. `QuickPlayer.Open(path)` returns a `QuickPlayback` handle with `Play()` / `Pause()` / `Stop()` / `Dispose()`. Auto-detects image vs media by extension; image path uses `ImageFileSource` + `HoldLastFrameAtEnd: true`; media path uses `MediaPlayer.TryOpen` + `PortAudioPlaybackHost` + `SDL3GLVideoSink`. Builds on Phase 2 auto-resample and pump-by-default. **Size:** M.
 
-- [ ] **`AudioGraphBuilder`** fluent helper for declaring routes. Today every consumer writes `AddSource → AddSink → AddRoute(channelMap)` manually. A fluent builder collapses common cases (`From(source).To(sink).Channels(stereo)` etc.). **Size:** M. **Breaks:** nothing — additive.
+- [x] **`AudioGraphBuilder`** fluent helper in `S.Media.Core/Audio/AudioGraphBuilder.cs`. Chains `AddSource → AddSink → Connect`; tracks `LastSourceId` / `LastSinkId` so the one-source/one-sink case collapses to `.ConnectLast()`. Default `Connect` map is `ChannelMap.Identity` sized to the sink. 4 tests. **Size:** M.
 
-- [ ] **`AudioRouter` sub-mix bus.** A `BusSink` that is both `IAudioSink` and `IAudioSource`. Routes summing into the bus feed a downstream chain; lets you build mixer-style "drum group → comp/limiter → master out". Today the only path is direct source→sink and adding the bus must be done by the consumer. **Size:** M. **Breaks:** nothing — additive.
+- [x] **`BusSink` (sub-mix bus)** in `S.Media.Core/Audio/BusSink.cs`. Implements both `IAudioSink` and `IAudioSource`; lets the router pump mixed audio into the bus and pull it out the other side as a regular source. Lock-free SPSC ring (~80 ms default capacity) — same pattern as `NDIAudioReceiver`. `OverflowFloats` / `UnderflowFloats` counters for diagnostics. 5 tests. **Size:** M.
 
-- [ ] **Move `VideoRouter` skeleton into `S.Media.Core`**, leave only `VideoCpuFrameConverter` and the FFmpeg-specific glue in `S.Media.FFmpeg`. Today consumers cannot use the video router without pulling in `FFmpeg.AutoGen`. **Size:** M. **Breaks:** the FFmpeg project's namespace, several test refs. Worth the disruption.
+- [x] **`MediaContainerSharedDemux` packet queue depth as options field.** `MediaPlayerOpenOptions.AudioPacketQueueDepth` / `VideoPacketQueueDepth` (and matching `VideoDecoderOpenOptions` init properties) forward into the demux. `0` keeps the existing defaults (192 / 384). **Size:** XS.
 
-- [ ] **`MediaContainerSharedDemux` packet queue depth as `MediaPlayerOpenOptions` field.** Currently hardcoded at audio=192, video=384 (cs:27-28). Tight for some HEVC 4K B-frame streams. **Size:** XS.
+- [ ] **Move `VideoRouter` skeleton into `S.Media.Core`** — *deferred to a focused follow-up PR.* The refactor would touch every `using S.Media.FFmpeg.Video` site (HaPlay, smoke tools, decoder tests, MediaPlayer wiring), require an abstraction for `VideoCpuFrameConverter` so the moved router can still do branch conversion, and produce a churn diff worth reviewing in isolation. **Size:** M.
 
-**Phase exit:** the framework can demonstrably back a working soundboard (mixed clip rates, static images, click-free triggers) and a basic cue player without consumers fighting it.
+**Phase exit:** the framework now demonstrably backs a working soundboard / cue player loop — mixed-rate clips, static images held indefinitely, single-call file open with PortAudio + GL window, fluent route wiring, sub-mix bus, and tunable demux for deep B-frame streams. Only the architectural move-VideoRouter-to-Core item is outstanding.
+
+**Outcomes:**
+- Build: clean (0 warnings / 0 errors) across all 25 projects (added `S.Media.SkiaSharp`, `S.Media.SkiaSharp.Tests`, `S.Media.Quick`).
+- Tests: 521/522 pass. Single failure is the same pre-existing flaky `NDIIngestPlaybackClockTests.Timestamp_UsedWhenTimecodeSynthesize` (FP-tolerance, ~2300 ticks delta) seen in Phase 0/1/2 — unrelated.
+- 19 new tests added across StaticFrameSource (4), VideoPlayer.HoldLastFrameAtEnd (2), AudioGraphBuilder (4), BusSink (5), ImageFileSource (4).
+
+**Files touched / added:**
+```
+MediaFramework/Media/S.Media.Core/Audio/AudioGraphBuilder.cs                (new)
+MediaFramework/Media/S.Media.Core/Audio/BusSink.cs                          (new)
+MediaFramework/Media/S.Media.Core/Video/StaticFrameSource.cs                (new)
+MediaFramework/Media/S.Media.Core/Video/VideoPlayer.cs                      (HoldLastFrameAtEnd)
+MediaFramework/Media/S.Media.FFmpeg/MediaContainerSharedDemux.cs            (packet queue fields)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoHardwareDecodeContext.cs     (queue depth options)
+MediaFramework/Media/S.Media.Playback/MediaPlayerOpenOptions.cs             (queue depth forward)
+MediaFramework/Media/S.Media.SkiaSharp/S.Media.SkiaSharp.csproj             (new project)
+MediaFramework/Media/S.Media.SkiaSharp/ImageFileSource.cs                   (new)
+MediaFramework/Media/S.Media.Quick/S.Media.Quick.csproj                     (new project)
+MediaFramework/Media/S.Media.Quick/QuickPlayer.cs                           (new)
+MediaFramework/Test/S.Media.Core.Tests/Audio/AudioGraphBuilderTests.cs      (new)
+MediaFramework/Test/S.Media.Core.Tests/Audio/BusSinkTests.cs                (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/StaticFrameSourceTests.cs      (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/VideoPlayerTests.cs            (hold-last tests)
+MediaFramework/Test/S.Media.SkiaSharp.Tests/S.Media.SkiaSharp.Tests.csproj  (new project)
+MediaFramework/Test/S.Media.SkiaSharp.Tests/ImageFileSourceTests.cs         (new)
+MFPlayer.sln                                                                (added the 3 new projects)
+```
 
 ---
 

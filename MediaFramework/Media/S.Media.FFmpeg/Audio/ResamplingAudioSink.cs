@@ -31,12 +31,10 @@ public sealed class ResamplingAudioSink : IAudioSink, IFlushableSink, IDisposabl
     public ResamplingAudioSink(IAudioSink inner, AudioFormat routerFormat)
     {
         ArgumentNullException.ThrowIfNull(inner);
-        if (routerFormat.SampleRate <= 0 || routerFormat.Channels <= 0)
-            throw new ArgumentOutOfRangeException(nameof(routerFormat));
+        routerFormat.Validate(nameof(routerFormat));
+        inner.Format.Validate(nameof(inner));
         if (inner.Format.Channels != routerFormat.Channels)
             throw new ArgumentException("Inner sink channel count must match router format channels.", nameof(inner));
-        if (inner.Format.SampleRate <= 0)
-            throw new ArgumentException("Inner sink must declare a positive sample rate.", nameof(inner));
 
         _inner = inner;
         _routerFormat = routerFormat;

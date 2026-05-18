@@ -33,12 +33,21 @@ public sealed class VideoRouterTests
 
     public VideoRouterTests() => FFmpegRuntime.EnsureInitialized();
 
+    /// <summary>
+    /// Tests use synchronous output registration so <see cref="VideoRouterInputSink.Submit"/> delivers
+    /// straight to the test sink (no <see cref="VideoSinkPump"/> drainer thread to race with assertions).
+    /// Sites that explicitly exercise the async-pump path keep their <c>asyncPump:</c> argument.
+    /// </summary>
+    private static string AddSyncOutput(VideoRouter router, IVideoSink sink, string id,
+        bool disposeSinkOnRouterDispose = false) =>
+        router.AddOutput(sink, id, disposeSinkOnRouterDispose: disposeSinkOnRouterDispose, synchronous: true);
+
     [Fact]
     public void AddInput_ThrowsWhenPrimaryOutputAlreadyRouted()
     {
         using var router = new VideoRouter(null);
         var a = new CapturingSink(PixelFormat.I420);
-        var oa = router.AddOutput(a, "a");
+        var oa = AddSyncOutput(router, a, "a");
         _ = router.AddInput(oa);
         var ex = Assert.Throws<InvalidOperationException>(() => router.AddInput(oa));
         Assert.Contains("already routed", ex.Message, StringComparison.OrdinalIgnoreCase);
@@ -51,9 +60,9 @@ public sealed class VideoRouterTests
         var s1 = new CapturingSink(PixelFormat.I420);
         var s2 = new CapturingSink(PixelFormat.I420);
         var s3 = new CapturingSink(PixelFormat.I420);
-        var o1 = router.AddOutput(s1, "o1");
-        var o2 = router.AddOutput(s2, "o2");
-        var o3 = router.AddOutput(s3, "o3");
+        var o1 = AddSyncOutput(router, s1, "o1");
+        var o2 = AddSyncOutput(router, s2, "o2");
+        var o3 = AddSyncOutput(router, s3, "o3");
         var inA = router.AddInput(o1);
         Assert.True(router.TryAddRoute(inA.Id, o2, out _));
         var inB = router.AddInput(o3);
@@ -69,9 +78,9 @@ public sealed class VideoRouterTests
         var s0 = new CapturingSink(PixelFormat.Nv12);
         var s1 = new CapturingSink(PixelFormat.Nv12);
         var s2 = new CapturingSink(PixelFormat.Nv12);
-        var o0 = router.AddOutput(s0, "o0");
-        var o1 = router.AddOutput(s1, "o1");
-        var o2 = router.AddOutput(s2, "o2");
+        var o0 = AddSyncOutput(router, s0, "o0");
+        var o1 = AddSyncOutput(router, s1, "o1");
+        var o2 = AddSyncOutput(router, s2, "o2");
         var vin = router.AddInput(o0);
         Assert.True(router.TryAddRoute(vin.Id, o1, out _));
         Assert.True(router.TryAddRoute(vin.Id, o2, out _));
@@ -97,8 +106,8 @@ public sealed class VideoRouterTests
         using var router = new VideoRouter(null);
         var primary = new CapturingSink(PixelFormat.I420);
         var branch = new CapturingSink(PixelFormat.I420);
-        var op = router.AddOutput(primary, "p");
-        var ob = router.AddOutput(branch, "b");
+        var op = AddSyncOutput(router, primary, "p");
+        var ob = AddSyncOutput(router, branch, "b");
         var vin = router.AddInput(op);
         Assert.True(router.TryAddRoute(vin.Id, ob, out _));
 
@@ -123,8 +132,8 @@ public sealed class VideoRouterTests
         using var router = new VideoRouter(null);
         var primary = new CapturingSink(PixelFormat.Yuv422P10Le);
         var branch = new CapturingSink(PixelFormat.Uyvy, PixelFormat.Bgra32, PixelFormat.Nv12);
-        var op = router.AddOutput(primary, "p");
-        var ob = router.AddOutput(branch, "b");
+        var op = AddSyncOutput(router, primary, "p");
+        var ob = AddSyncOutput(router, branch, "b");
         var vin = router.AddInput(op);
         Assert.True(router.TryAddRoute(vin.Id, ob, out _));
 
@@ -152,8 +161,8 @@ public sealed class VideoRouterTests
         using var router = new VideoRouter(null);
         var primary = new CapturingSink(PixelFormat.Nv12);
         var branch = new CapturingSink(PixelFormat.Nv12);
-        var op = router.AddOutput(primary, "p");
-        var ob = router.AddOutput(branch, "b");
+        var op = AddSyncOutput(router, primary, "p");
+        var ob = AddSyncOutput(router, branch, "b");
         var vin = router.AddInput(op);
         Assert.True(router.TryAddRoute(vin.Id, ob, out _));
 
@@ -181,8 +190,8 @@ public sealed class VideoRouterTests
         using var router = new VideoRouter(null);
         var primary = new CapturingSink(PixelFormat.P016);
         var branch = new CapturingSink(PixelFormat.P016);
-        var op = router.AddOutput(primary, "p");
-        var ob = router.AddOutput(branch, "b");
+        var op = AddSyncOutput(router, primary, "p");
+        var ob = AddSyncOutput(router, branch, "b");
         var vin = router.AddInput(op);
         Assert.True(router.TryAddRoute(vin.Id, ob, out _));
 
@@ -244,8 +253,8 @@ public sealed class VideoRouterTests
         using var router = new VideoRouter(null);
         var primary = new CapturingSink(PixelFormat.Nv12);
         var branch = new CapturingSink(PixelFormat.Bgra32);
-        var op = router.AddOutput(primary, "p");
-        var ob = router.AddOutput(branch, "b");
+        var op = AddSyncOutput(router, primary, "p");
+        var ob = AddSyncOutput(router, branch, "b");
         var vin = router.AddInput(op);
         Assert.True(router.TryAddRoute(vin.Id, ob, out _));
 
@@ -269,8 +278,8 @@ public sealed class VideoRouterTests
         using var router = new VideoRouter(null);
         var primary = new CapturingSink(PixelFormat.Nv12);
         var branch = new CapturingSink(PixelFormat.Bgra32);
-        var op = router.AddOutput(primary, "p");
-        var ob = router.AddOutput(branch, "b");
+        var op = AddSyncOutput(router, primary, "p");
+        var ob = AddSyncOutput(router, branch, "b");
         var vin = router.AddInput(op);
         Assert.True(router.TryAddRoute(vin.Id, ob, out _));
 
@@ -332,7 +341,7 @@ public sealed class VideoRouterTests
         using var router = new VideoRouter(null);
         var primary = new CapturingSink(PixelFormat.I420);
         var branchInner = new RouterSlowSink(PixelFormat.I420, delayMs: 80);
-        var op = router.AddOutput(primary, "p");
+        var op = AddSyncOutput(router, primary, "p");
         var ob = router.AddOutput(branchInner, "b", disposeSinkOnRouterDispose: true,
             asyncPump: new VideoSinkPumpAttachOptions(2, "pump-b", null, DisposeInnerSinkWhenPumpDisposes: true));
         var vin = router.AddInput(op);
