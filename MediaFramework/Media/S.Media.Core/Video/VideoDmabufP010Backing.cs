@@ -10,7 +10,6 @@ public sealed class VideoDmabufP010Backing : IDisposable
 {
     private int _yFd;
     private int _uvFd;
-    private int _closed;
     private int _refCount = 1;
 
     public VideoDmabufP010Backing(
@@ -53,23 +52,32 @@ public sealed class VideoDmabufP010Backing : IDisposable
     public int YPlaneFd => _yFd;
     public int UvPlaneFd => _uvFd;
 
+    /// <summary>Atomic against a racing <see cref="Dispose"/> that would otherwise close the fds between a disposed-check and the increment.</summary>
+    /// <exception cref="ObjectDisposedException">Backing file descriptors are already closed.</exception>
     public void AddReference()
     {
-        if (Volatile.Read(ref _closed) != 0)
-            throw new ObjectDisposedException(nameof(VideoDmabufP010Backing));
-        Interlocked.Increment(ref _refCount);
+        while (true)
+        {
+            var n = Volatile.Read(ref _refCount);
+            if (n <= 0)
+                throw new ObjectDisposedException(nameof(VideoDmabufP010Backing));
+            if (Interlocked.CompareExchange(ref _refCount, n + 1, n) == n)
+                return;
+        }
     }
 
     public void Dispose()
     {
-        var remaining = Interlocked.Decrement(ref _refCount);
-        if (remaining > 0)
-            return;
-        if (remaining < 0)
-            return;
-
-        if (Interlocked.Exchange(ref _closed, 1) != 0)
-            return;
+        while (true)
+        {
+            var n = Volatile.Read(ref _refCount);
+            if (n <= 0) return;
+            if (Interlocked.CompareExchange(ref _refCount, n - 1, n) == n)
+            {
+                if (n - 1 > 0) return;
+                break;
+            }
+        }
 
         if (_yFd >= 0)
         {

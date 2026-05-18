@@ -168,10 +168,15 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 if (wasVideo && HasVideoStream(mode))
                 {
                     // Playback may have left the NDI sender configured for a different size / pixel format.
+                    // Phase 2A: skip the reconfigure when the sender's current format already matches the
+                    // carrier — saves an unnecessary format flip (which receivers can see as a glitch).
                     try
                     {
-                        _output.VideoSink.Configure(CarrierVideoFormat);
-                        _output.VideoSink.ResetPresentationTimecodeAnchor();
+                        if (!CurrentSinkFormatMatchesCarrier(_output.VideoSink))
+                        {
+                            _output.VideoSink.Configure(CarrierVideoFormat);
+                            _output.VideoSink.ResetPresentationTimecodeAnchor();
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -218,6 +223,20 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         var periodMs = Math.Max(1, 1000 / CarrierAudioChunkHz);
         _audioTimer?.Dispose();
         _audioTimer = new Timer(OnAudioTick, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(periodMs));
+    }
+
+    private static bool CurrentSinkFormatMatchesCarrier(NDIVideoSender sink)
+    {
+        try
+        {
+            var f = sink.Format;
+            var c = CarrierVideoFormat;
+            return f.Width == c.Width && f.Height == c.Height && f.PixelFormat == c.PixelFormat;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool HasVideoStream(NDIOutputStreamMode mode) =>

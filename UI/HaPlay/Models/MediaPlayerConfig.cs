@@ -24,6 +24,8 @@ public sealed record MediaPlayerConfig
 
     public bool IsLooping { get; init; }
 
+    public bool AutoAdvancePlaylist { get; init; }
+
     public bool HoldFallbackVideo { get; init; }
 
     /// <summary>Display names of output lines that were checked for this player when the config was saved.</summary>

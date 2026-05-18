@@ -71,10 +71,10 @@ if (!opt.AudioOnly)
     VideoFormatNegotiator.Connect(dec.Video, ndi.VideoSink);
     sessionStartTs = Stopwatch.GetTimestamp();
 
-    if (!opt.VideoOnly)
+    if (!opt.VideoOnly && dec.HasAudio)
         ndAudio = ndi.EnableAudio(dec.Audio.Format);
 
-    if (opt.VideoOnly)
+    if (opt.VideoOnly || !dec.HasAudio)
         PumpVideo(dec.Video, ndi.VideoSink, dbg, pumpsFinished, ref sessionStartTs, opt.WallPace, opt.WallDriftCorrect,
             cts.Token);
     else if (ndAudio is not null)
@@ -83,6 +83,11 @@ if (!opt.AudioOnly)
 }
 else if (!opt.VideoOnly)
 {
+    if (!dec.HasAudio)
+    {
+        Console.Error.WriteLine("audio-only requested but media has no audio stream");
+        return 4;
+    }
     ndAudio = ndi.EnableAudio(dec.Audio.Format);
     sessionStartTs = Stopwatch.GetTimestamp();
     PumpAudio(dec.Audio, ndAudio, dbg, pumpsFinished, ref sessionStartTs, opt.WallPace, opt.WallDriftCorrect,
@@ -181,11 +186,12 @@ static void WriteStartupDiagnostics(string mediaPath, string ndiName, MediaConta
     NDIPlayerCliOptions opt)
 {
     var v = dec.Video.Format;
-    var a = dec.Audio.Format;
+    var a = dec.HasAudio ? dec.Audio.Format : default;
     Console.Error.WriteLine(
         $"[ndi-debug] media={mediaPath} ndiName={ndiName} ndiConnections={ndi.ConnectionCount}");
     Console.Error.WriteLine(
-        $"[ndi-debug] video {v.Width}x{v.Height} {v.PixelFormat} @{v.FrameRate}  audio {a.SampleRate}Hz ch={a.Channels}");
+        $"[ndi-debug] video {v.Width}x{v.Height} {v.PixelFormat} @{v.FrameRate}  audio "
+        + (dec.HasAudio ? $"{a.SampleRate}Hz ch={a.Channels}" : "(none)"));
     Console.Error.WriteLine(
         "[ndi-debug] SeekPresentation(0); A+V uses one-thread mux-ordered TryReadNextFrame (PTS); " +
         "NDI video MuxerPresentationTicks; audio timecodes from mux PTS; wallPace=" +

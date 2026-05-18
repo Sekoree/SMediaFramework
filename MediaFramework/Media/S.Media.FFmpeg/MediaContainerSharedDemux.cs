@@ -75,6 +75,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private long _vFramesEmitted;
     private bool _vEof;
     private bool _vDrainSent;
+    /// <summary>
+    /// True when the chosen video stream is <c>AV_DISPOSITION_ATTACHED_PIC</c> (cover art on an audio file).
+    /// These streams emit exactly one packet per file, so the video pipeline can finish well before the audio
+    /// demuxer reaches EOF — without this hint the video decode loop would hot-spin on EAGAIN until the entire
+    /// audio file is read, blocking pause/seek on <c>_videoDecodeLock</c> for several seconds.
+    /// </summary>
+    private bool _vIsAttachedPic;
+    /// <summary>Set after the demuxer has emitted the one attached_pic packet; reset on seek.</summary>
+    private volatile bool _vAttachedPicEmitted;
     private VideoFrame? _vPrimedAfterSeek;
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
@@ -101,6 +110,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     /// <summary>True when the container exposed a decodable video stream — false for audio-only files
     /// (the <see cref="VideoTrack"/> is a stub that reports <c>IsExhausted = true</c> immediately).</summary>
     public bool HasVideo => _hasVideo;
+
+    /// <summary>True when the chosen video stream is <c>AV_DISPOSITION_ATTACHED_PIC</c> (album cover art).
+    /// Single-frame for the entire file; downstream players can use this to opt into a hold-frame cache.</summary>
+    public bool VideoIsAttachedPicture => _vIsAttachedPic;
 
     private MediaContainerSharedDemux()
     {
@@ -163,6 +176,21 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (!_hasAudio)
                 throw new FFmpegException(_vStream, "no decodable audio or video stream found");
         }
+        else if (_hasAudio && IsAttachedPicStream(_fmt->streams[_vStream]) &&
+                 !VideoCodecparDimensionsLookSane(_fmt->streams[_vStream]->codecpar))
+        {
+            // Cover art with broken dimensions on an audio file. Skip the video side entirely so the
+            // audio still plays — the cover would be unrenderable anyway.
+            MediaDiagnostics.LogWarning(
+                "MediaContainerSharedDemux: ignoring corrupt attached_pic cover art stream {0} " +
+                "(dimensions {1}×{2}); playing audio only.",
+                _vStream,
+                _fmt->streams[_vStream]->codecpar->width,
+                _fmt->streams[_vStream]->codecpar->height);
+            _hasVideo = false;
+            _vStream = -1;
+            vCodec = null;
+        }
 
         AVStream* aSt = null;
         if (_hasAudio)
@@ -195,11 +223,13 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
         else
         {
-            // Sentinel format for video-only files: 0 channels signals "no audio" to consumers.
-            // The 48000 Hz rate is a placeholder for clock-math fallback paths that never run when
-            // MediaContainerDecoder.HasAudio is false (MediaPlayer skips AudioPlayer creation).
+            // Sentinel format for video-only files: 0 channels AND 0 sample rate both signal
+            // "no audio" to consumers. A nonzero sample rate here used to look like a real
+            // value to any code path that read SampleRate without also checking
+            // MediaContainerDecoder.HasAudio (or Channels > 0); zero makes the sentinel
+            // obviously invalid and fail-fast at AudioRouter sample-rate validation.
             AudioCodecName = "";
-            Audio.Format = new AudioFormat(48000, 0);
+            Audio.Format = new AudioFormat(0, 0);
         }
 
         AVStream* vSt = null;
@@ -237,6 +267,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         vSt = _fmt->streams[_vStream];
         _vTb = vSt->time_base;
+        _vIsAttachedPic = (vSt->disposition & AvDispositionAttachedPic) != 0
+            // Standalone image files (PNG, JPEG, BMP, WebP, …) are demuxed via FFmpeg's *_pipe / image2
+            // demuxers. They behave like cover art: one packet, one decoded frame, no audio. Treat them
+            // as attached_pic so the decode loop drains promptly, framerate normalizes to 30 FPS, and
+            // downstream sinks render the still as a sustained image instead of ending after one frame.
+            || IsStandaloneImageContainer(_fmt, _hasAudio);
         VideoCodecName = Marshal.PtrToStringAnsi((IntPtr)vCodec->name) ?? "unknown";
 
         _vCtx = avcodec_alloc_context3(vCodec);
@@ -276,6 +312,46 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             ret = avcodec_open2(_vCtx, vCodec, null);
         }
         FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
+
+        // Pre-negotiation HW probe: actually run one packet through the decoder so libav can fail
+        // hwaccel setup (e.g. VAAPI driver missing, surface format unsupported) BEFORE consumers
+        // negotiate the sink format. On failure we rebuild the codec as software and seek the format
+        // context back to the start. This is the fix for "Failed setup for format vaapi: hwaccel
+        // initialisation returned error" + the subsequent avcodec_send_packet INVALIDDATA throw.
+        if (hw != null)
+        {
+            var hwOk = TryProbeHardwareDecode(vCodec);
+
+            // The probe consumes packets either way; rewind the format context so the demuxer thread
+            // re-reads from position 0 below.
+            var rewind = avformat_seek_file(_fmt, -1, long.MinValue, 0, long.MaxValue, AVSEEK_FLAG_BACKWARD);
+            if (rewind < 0)
+                av_seek_frame(_fmt, _vStream, 0, AVSEEK_FLAG_BACKWARD);
+
+            if (!hwOk)
+            {
+                hw.DetachFromCodec(_vCtx);
+                hw.Dispose();
+                hw = null;
+
+                // Rebuild a clean codec context — libav can leave internal hwaccel state behind that
+                // taints subsequent software decode on the same context.
+                var toFree = _vCtx;
+                avcodec_free_context(&toFree);
+                _vCtx = null;
+                _vCtx = avcodec_alloc_context3(vCodec);
+                if (_vCtx == null) throw new OutOfMemoryException("video avcodec_alloc_context3 (hw fallback) returned NULL");
+                ret = avcodec_parameters_to_context(_vCtx, vSt->codecpar);
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
+                VideoFileDecoder.ApplyDecoderThreading(vCodec, _vCtx, videoOptions);
+                ret = avcodec_open2(_vCtx, vCodec, null);
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
+
+                MediaDiagnostics.LogWarning(
+                    "MediaContainerSharedDemux: hardware decode probe failed for codec '{0}' — falling back to software.",
+                    VideoCodecName);
+            }
+        }
 
         _hwAccel = hw;
         _drmGpuNv12Path = hw?.OutputsDrmPrimeGpuFrame == true;
@@ -328,7 +404,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         {
             throw new FFmpegException(0,
                 $"video dimensions are unusable ({_vCtx->width}×{_vCtx->height}). " +
-                "If this is audio with a broken embedded cover stream, re-encode or strip the cover.");
+                "The video stream is probably corrupt.");
         }
 
         // Some streams (notably attached_pic / album cover art) report odd dimensions. Pixel formats with
@@ -380,6 +456,30 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         if (_vFrame == null) throw new OutOfMemoryException("video av_frame_alloc returned NULL");
 
         StartDemuxerThread();
+    }
+
+    private static bool IsAttachedPicStream(AVStream* st) =>
+        st != null && (st->disposition & AvDispositionAttachedPic) != 0;
+
+    /// <summary>
+    /// Heuristic: an <c>AVFormatContext</c> backed by FFmpeg's image2 / *_pipe demuxers and carrying
+    /// no audio is a standalone image file (PNG, JPEG, BMP, WebP, GIF still). We treat these like
+    /// album cover art so the decode loop ends after the single frame and downstream sinks present
+    /// the still.
+    /// </summary>
+    private static bool IsStandaloneImageContainer(AVFormatContext* fmt, bool hasAudio)
+    {
+        if (hasAudio || fmt == null || fmt->iformat == null)
+            return false;
+        var name = Marshal.PtrToStringAnsi((IntPtr)fmt->iformat->name);
+        if (string.IsNullOrEmpty(name))
+            return false;
+        // FFmpeg names every still-image demuxer either "image2" / "image2pipe" or "<codec>_pipe".
+        if (name == "image2" || name == "image2pipe")
+            return true;
+        if (name.EndsWith("_pipe", StringComparison.Ordinal))
+            return true;
+        return false;
     }
 
     private static bool VideoCodecparDimensionsLookSane(AVCodecParameters* cp)
@@ -515,6 +615,80 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
     }
 
+    /// <summary>
+    /// Sends a small batch of video packets through the freshly-opened codec to force libav to actually
+    /// run hwaccel setup. Returns <c>false</c> on the first non-EAGAIN/non-EOF error from <c>send_packet</c>
+    /// or <c>receive_frame</c> so callers can rebuild the decoder as software. On success, the consumed
+    /// packets are discarded and the format context is rewound below by the caller so the demuxer thread
+    /// starts on a fresh state. Allocates temporary <c>AVPacket</c> / <c>AVFrame</c> locally so the
+    /// post-probe flush is independent of <c>_demuxPkt</c> / <c>_vFrame</c> (which are allocated later).
+    /// </summary>
+    private bool TryProbeHardwareDecode(AVCodec* vCodec)
+    {
+        _ = vCodec;
+        const int maxPacketsToPump = 8;
+
+        AVPacket* probePkt = av_packet_alloc();
+        AVFrame* probeFrame = av_frame_alloc();
+        if (probePkt == null || probeFrame == null)
+        {
+            if (probePkt != null) av_packet_free(&probePkt);
+            if (probeFrame != null) av_frame_free(&probeFrame);
+            return true; // can't probe; trust the open and let normal decode surface any error
+        }
+
+        var ok = true;
+        try
+        {
+            for (var i = 0; i < maxPacketsToPump && ok; i++)
+            {
+                av_packet_unref(probePkt);
+                var readRet = av_read_frame(_fmt, probePkt);
+                if (readRet == AVERROR_EOF)
+                    break;
+                if (readRet < 0)
+                    return true; // demux issue, not a HW problem — surface during real decode
+                if (probePkt->stream_index != _vStream)
+                    continue;
+
+                var sendRet = avcodec_send_packet(_vCtx, probePkt);
+                if (sendRet < 0 && sendRet != AVERROR(EAGAIN))
+                {
+                    ok = false;
+                    break;
+                }
+
+                var recvRet = avcodec_receive_frame(_vCtx, probeFrame);
+                if (recvRet == 0)
+                {
+                    av_frame_unref(probeFrame);
+                    // Got a frame — HW is healthy.
+                    return true;
+                }
+                if (recvRet == AVERROR(EAGAIN))
+                    continue; // need more packets
+                if (recvRet == AVERROR_EOF)
+                    return true;
+
+                // Real decode error (this is what VAAPI / D3D11VA init failures look like here).
+                ok = false;
+                break;
+            }
+
+            return ok;
+        }
+        finally
+        {
+            av_packet_unref(probePkt);
+            av_packet_free(&probePkt);
+            av_frame_unref(probeFrame);
+            av_frame_free(&probeFrame);
+
+            // Always reset codec state — even on success the probe consumed packets we won't deliver.
+            avcodec_flush_buffers(_vCtx);
+        }
+    }
+
     private void DemuxerThreadProc()
     {
         while (true)
@@ -542,7 +716,19 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (_demuxPkt->stream_index == _aStream)
                 EnqueuePacketCopy(_audioPacketQ, MaxAudioPacketsQueued);
             else if (_demuxPkt->stream_index == _vStream)
+            {
                 EnqueuePacketCopy(_videoPacketQ, MaxVideoPacketsQueued);
+                if (_vIsAttachedPic)
+                {
+                    // attached_pic streams emit exactly one packet — flip the flag so FeedVideoFromQueue
+                    // treats the empty queue as drain time instead of waiting for _fileReadCompleted.
+                    lock (_queueGate)
+                    {
+                        _vAttachedPicEmitted = true;
+                        Monitor.PulseAll(_queueGate);
+                    }
+                }
+            }
         }
     }
 
@@ -632,6 +818,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
             _vEof = false;
             _vDrainSent = false;
+            _vAttachedPicEmitted = false;
             _vPrimedAfterSeek?.Dispose();
             _vPrimedAfterSeek = null;
             Video.Position = position;
@@ -898,7 +1085,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 }
                 else
                 {
-                    while (_videoPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
+                    // attached_pic streams emit exactly one packet, so once we've seen it we shouldn't wait
+                    // for more — fall through to the drain path. The yield flag also breaks the wait so
+                    // pause/seek don't get stuck holding _videoDecodeLock waiting for packets that will
+                    // never arrive (was a multi-second hang on audio files with cover art).
+                    while (_videoPacketQ.Count == 0
+                           && !_fileReadCompleted
+                           && !_demuxerStopRequest
+                           && !(_vIsAttachedPic && _vAttachedPicEmitted)
+                           && Volatile.Read(ref _videoDecodeYieldRequested) == 0)
                         Monitor.Wait(_queueGate, 50);
 
                     if (_videoPacketQ.Count > 0)
@@ -929,7 +1124,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 return;
             }
 
-            if (_fileReadCompleted)
+            // Drain when the file is done OR when attached_pic has emitted its single packet.
+            // Without the attached_pic branch we'd hot-spin on EAGAIN until the audio side finishes
+            // demuxing the entire file (potentially minutes).
+            if (_fileReadCompleted || (_vIsAttachedPic && _vAttachedPicEmitted))
             {
                 if (_vDrainSent) return;
                 var ret = avcodec_send_packet(_vCtx, null);
@@ -1149,15 +1347,29 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         // sws_scale's srcSliceH is the SOURCE slice height — must match the decoder's actual frame
         // height even when we're upscaling to even output dimensions (attached_pic / odd-dim path).
         var srcHeight = _vCtx->height;
-        var bytesPerPixel = VideoFileDecoder.BytesPerPackedPixel(_vOutPixFmt);
-        if (bytesPerPixel == 0)
-            throw new NotSupportedException(
-                $"sws conversion to {_vOutPixFmt} (multi-plane / non-packed) is not implemented");
 
-        var stride = width * bytesPerPixel;
-        var contiguous = stride * height;
-        var rented = ArrayPool<byte>.Shared.Rent(contiguous);
-        var dstMem = rented.AsMemory(0, contiguous);
+        var planeCount = PixelFormatInfo.PlaneCount(_vOutPixFmt);
+        if (planeCount < 1 || planeCount > 8)
+            throw new NotSupportedException(
+                $"sws conversion plane count {planeCount} for {_vOutPixFmt} is outside the supported range.");
+
+        // One pooled byte[] holds all planes back-to-back. Per-plane strides come from PixelFormatInfo
+        // (visible byte width, no padding — sws handles row stride). This path serves both single-plane
+        // packed (BGRA/UYVY/...) and multi-plane planar / semi-planar (NV12/P010/Yuv422P10Le/...) targets.
+        Span<int> strides = stackalloc int[8];
+        Span<int> planeOffsets = stackalloc int[8];
+        var totalBytes = 0;
+        for (var i = 0; i < planeCount; i++)
+        {
+            var planeWidth = PixelFormatInfo.PlaneByteWidth(_vOutPixFmt, width, i);
+            var planeHeight = PixelFormatInfo.PlaneHeight(_vOutPixFmt, height, i);
+            strides[i] = planeWidth;
+            planeOffsets[i] = totalBytes;
+            totalBytes += planeWidth * planeHeight;
+        }
+
+        var rented = ArrayPool<byte>.Shared.Rent(totalBytes);
+        var dstMem = rented.AsMemory(0, totalBytes);
 
         _swSrcLines[0] = work->data[0];
         _swSrcLines[1] = work->data[1];
@@ -1178,10 +1390,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         fixed (byte* dstPtr = dstMem.Span)
         {
-            _swDstLines[0] = dstPtr;
-            for (var i = 1; i < 8; i++) _swDstLines[i] = null;
-            Array.Clear(_swDstStride);
-            _swDstStride[0] = stride;
+            for (var i = 0; i < 8; i++)
+            {
+                _swDstLines[i] = i < planeCount ? dstPtr + planeOffsets[i] : null;
+                _swDstStride[i] = i < planeCount ? strides[i] : 0;
+            }
 
             var sret = sws_scale(_swsCtx, _swSrcLines, _swSrcStride, 0, srcHeight, _swDstLines, _swDstStride);
             if (sret < 0) FFmpegException.ThrowIfError(sret, nameof(sws_scale));
@@ -1189,7 +1402,24 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         var hint = VideoFileDecoder.MapTransferHint(trc);
         byte[] pooled = rented;
-        return new VideoFrame(pts, Video.Format, dstMem, stride, hint,
+
+        if (planeCount == 1)
+        {
+            // Preserve the single-plane VideoFrame ctor — same shape sinks expected before this widening.
+            return new VideoFrame(pts, Video.Format, dstMem, strides[0], hint,
+                release: () => ArrayPool<byte>.Shared.Return(pooled));
+        }
+
+        var planes = new ReadOnlyMemory<byte>[planeCount];
+        var planeStrides = new int[planeCount];
+        for (var i = 0; i < planeCount; i++)
+        {
+            var planeHeight = PixelFormatInfo.PlaneHeight(_vOutPixFmt, height, i);
+            planes[i] = rented.AsMemory(planeOffsets[i], strides[i] * planeHeight);
+            planeStrides[i] = strides[i];
+        }
+
+        return new VideoFrame(pts, Video.Format, planes, planeStrides, hint,
             release: () => ArrayPool<byte>.Shared.Return(pooled));
     }
 
@@ -1224,7 +1454,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             SyncVideoPixelFormatIfNeeded(workFrame);
             var trc = _vFrame->color_trc;
             var pts = ResolveVideoPts(workFrame);
-            if (pts >= targetPresentationTime)
+            // attached_pic is a single still that represents the whole timeline — prime it regardless of
+            // pts (which is always 0) so seeks past the start still show the cover, instead of leaving the
+            // primed slot null and the decode loop racing toward EOF.
+            if (pts >= targetPresentationTime || _vIsAttachedPic)
             {
                 _vPrimedAfterSeek = BuildVideoFrame(workFrame, trc);
                 av_frame_unref(_vFrame);

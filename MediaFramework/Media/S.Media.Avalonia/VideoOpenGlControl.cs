@@ -43,6 +43,12 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
     private SilkGl? _gl;
     private YuvVideoRenderer? _renderer;
     private bool _hasUploadedOnce;
+    /// <summary>
+    /// Flipped to true by <see cref="Configure"/> when called with a format different from the current one.
+    /// The next <see cref="OnOpenGlRender"/> tick tears down the renderer (GL-thread only) and rebuilds it
+    /// for the new format. Lets a single control host successive playback sessions with different formats.
+    /// </summary>
+    private volatile bool _rendererNeedsRebuild;
 
     private VideoFrame? _pendingFrame;
     private readonly object _frameLock = new();
@@ -85,19 +91,40 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
     public void Configure(VideoFormat format)
     {
         ObjectDisposedException.ThrowIf(_sinkDisposed, this);
+        VideoFrame? droppedPending = null;
         lock (_configureLock)
         {
-            if (_configured)
-                throw new InvalidOperationException($"{nameof(VideoOpenGlControl)} is already configured");
             if (Array.IndexOf(AcceptedFormats, format.PixelFormat) < 0)
                 throw new NotSupportedException(
                     $"{nameof(VideoOpenGlControl)} does not accept pixel format {format.PixelFormat}; supported: {string.Join(", ", AcceptedFormats)}");
             if (format.Width <= 0 || format.Height <= 0)
                 throw new ArgumentException("video format must have positive dimensions", nameof(format));
 
+            // Idempotent for the same format so back-to-back negotiations on a persistent control are cheap.
+            if (_configured && _format == format)
+                return;
+
+            if (_configured)
+            {
+                // Reconfigure: the next GL render will dispose the old YuvVideoRenderer (GL resources must
+                // be released on the GL thread) and rebuild for the new format. Any frame queued under the
+                // old format is dropped here to avoid the Submit format-mismatch guard rejecting it.
+                _rendererNeedsRebuild = true;
+                _hasUploadedOnce = false;
+                lock (_frameLock)
+                {
+                    droppedPending = _pendingFrame;
+                    _pendingFrame = null;
+                }
+            }
+
             _format = format;
             _configured = true;
         }
+
+        droppedPending?.Dispose();
+        if (_rendererNeedsRebuild)
+            PostRequestNextFrame();
 
         PostRequestNextFrame();
     }
@@ -122,6 +149,15 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
         VideoFrame? prev;
         lock (_frameLock)
         {
+            // Re-check inside the lock: OnDetachedFromVisualTree sets _sinkDisposed
+            // and then drains _pendingFrame. Without this re-check a Submit that passed
+            // the line-above guard can race detach and end up parking the new frame in
+            // _pendingFrame with no future OnOpenGlRender callback to drain it (leak).
+            if (_sinkDisposed)
+            {
+                frame.Dispose();
+                throw new ObjectDisposedException(nameof(VideoOpenGlControl));
+            }
             prev = _pendingFrame;
             _pendingFrame = frame;
         }
@@ -265,7 +301,22 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
 
         lock (_configureLock)
         {
-            if (!_configured || _renderer is not null)
+            if (!_configured)
+                return;
+
+            if (_rendererNeedsRebuild && _renderer is not null)
+            {
+                try { _renderer.Dispose(); }
+#if DEBUG
+                catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(VideoOpenGlControl)}: renderer dispose during reconfigure"); }
+#else
+                catch { /* best effort */ }
+#endif
+                _renderer = null;
+                _rendererNeedsRebuild = false;
+            }
+
+            if (_renderer is not null)
                 return;
 
             nint win32D3d11DevicePtr = 0;

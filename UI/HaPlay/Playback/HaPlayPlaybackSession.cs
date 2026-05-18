@@ -12,7 +12,6 @@ using S.Media.NDI.Audio;
 using S.Media.NDI.Video;
 using S.Media.Playback;
 using S.Media.PortAudio;
-using S.Media.SDL3;
 
 namespace HaPlay.Playback;
 
@@ -20,8 +19,10 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 {
     private readonly List<LogoFallbackVideoSink> _logoSinks = new();
     private readonly List<OutputLineViewModel> _acquiredCarriers = new();
+    private readonly List<OutputLineViewModel> _acquiredLocalVideoLines = new();
+    private readonly List<OutputLineViewModel> _acquiredPortAudioLines = new();
     private readonly OutputManagementViewModel _outputs;
-    private readonly List<PortAudioOutput> _portAudioOutputs = new();
+    private readonly List<ResamplingAudioSink> _portAudioResamplers = new();
     private readonly List<ResamplingAudioSink> _ndiAudioResamplers = new();
     private readonly List<NDIAudioSink> _ndiAudioSinks = new();
     private bool _disposed;
@@ -102,18 +103,25 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         var videoChains = new List<(string Id, IVideoSink Sink)>();
+        var acquiredLocalLines = new List<OutputLineViewModel>();
         if (hasVideo)
         {
             foreach (var line in lines)
             {
                 switch (line.Definition)
                 {
-                    case LocalVideoOutputDefinition lv when lv.Engine == VideoOutputEngine.SdlOpenGl:
+                    case LocalVideoOutputDefinition lv:
                     {
-                        var (w, h) = InitialSdlSize(lv);
-                        var sdl = new SDL3GLVideoSink(lv.DisplayName, w, h);
-                        var logo = new LogoFallbackVideoSink(sdl, disposeInnerOnDispose: true);
-                        videoChains.Add(($"sdl_{lv.Id:N}", logo));
+                        // Persistent window: acquire the sink from the preview runtime so a single window
+                        // serves successive media without being recreated. disposeInner=false keeps the
+                        // sink alive when the router tears down its wrappers; Dispose releases the line.
+                        var sink = outputs.TryAcquireLocalVideoSinkForPlayback(line);
+                        if (sink is null)
+                            continue;
+                        acquiredLocalLines.Add(line);
+                        var prefix = lv.Engine == VideoOutputEngine.SdlOpenGl ? "sdl" : "ava";
+                        var logo = new LogoFallbackVideoSink(sink, disposeInnerOnDispose: false);
+                        videoChains.Add(($"{prefix}_{lv.Id:N}", logo));
                         break;
                     }
                     case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.AudioOnly:
@@ -136,6 +144,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                 MediaPlayerDecoderOwnership.BundleDisposesDecoder, out var player, out errorMessage))
         {
             // BundleDisposesDecoder disposes the decoder for us on failure.
+            ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
             ReleaseAcquiredCarriers(outputs, acquired);
             return false;
         }
@@ -156,12 +165,17 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             var av = player.Av;
             pendingPlayback = new HaPlayPlaybackSession(player, av, outputs);
 
+            var isSingleFrameVideo = decoder.HasVideo && decoder.VideoIsAttachedPicture;
             foreach (var sink in videoChains.Select(t => t.Sink).OfType<LogoFallbackVideoSink>())
+            {
+                sink.SetSingleFrameSourceMode(isSingleFrameVideo);
                 pendingPlayback._logoSinks.Add(sink);
+            }
 
             pendingPlayback._acquiredCarriers.AddRange(acquired);
+            pendingPlayback._acquiredLocalVideoLines.AddRange(acquiredLocalLines);
 
-            WireAudio(lines, ndiByDefinitionId, player, pendingPlayback);
+            WireAudio(lines, ndiByDefinitionId, player, pendingPlayback, outputs);
             session = pendingPlayback;
             pendingPlayback = null;
             return true;
@@ -171,6 +185,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             errorMessage = ex.Message;
             pendingPlayback?.DisposePartialBeforePlayerDispose();
             player.Dispose();
+            ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
             ReleaseAcquiredCarriers(outputs, acquired);
             return false;
         }
@@ -185,8 +200,17 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
     }
 
+    private static void ReleaseAcquiredLocalVideoLines(OutputManagementViewModel outputs, List<OutputLineViewModel> acquired)
+    {
+        foreach (var line in acquired)
+        {
+            try { outputs.ReleaseLocalVideoSinkForPlayback(line); }
+            catch { /* best effort */ }
+        }
+    }
+
     private static void WireAudio(List<OutputLineViewModel> lines, Dictionary<Guid, NDIOutput> ndiByDefinitionId,
-        MediaPlayer player, HaPlayPlaybackSession playback)
+        MediaPlayer player, HaPlayPlaybackSession playback, OutputManagementViewModel outputs)
     {
         if (player.Audio is null || string.IsNullOrEmpty(player.AudioSourceId))
             return;
@@ -194,7 +218,6 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         var dec = player.Decoder.Audio.Format;
         var stereoFmt = new AudioFormat(dec.SampleRate, 2);
         var map = StereoDownmix(dec.Channels);
-        const int chunk = 480;
 
         foreach (var line in lines)
         {
@@ -202,10 +225,25 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             {
                 case PortAudioOutputDefinition pa:
                 {
-                    var outDev = new PortAudioOutput(stereoFmt, pa.GlobalDeviceIndex, null, chunk,
-                        ringCapacityFrames: dec.SampleRate);
-                    playback._portAudioOutputs.Add(outDev);
-                    var sinkId = player.Audio.AddOutput(outDev);
+                    // Acquire the persistent PortAudio output owned by OutputManagementViewModel —
+                    // the stream stays open across sessions so receivers don't see Pa_OpenStream cost
+                    // on every track change. Different decoder sample rates flow through a per-session
+                    // ResamplingAudioSink (the wrapper drops IClockedSink/IPlaybackClock, so the router
+                    // pacing falls back to its wall clock — acceptable for our chunk sizes).
+                    var outDev = outputs.TryAcquirePortAudioForPlayback(line);
+                    if (outDev is null)
+                        continue;
+                    playback._acquiredPortAudioLines.Add(line);
+
+                    IAudioSink routerSink = outDev;
+                    if (outDev.Format.SampleRate != dec.SampleRate || outDev.Format.Channels != stereoFmt.Channels)
+                    {
+                        var resampler = new ResamplingAudioSink(outDev, stereoFmt);
+                        playback._portAudioResamplers.Add(resampler);
+                        routerSink = resampler;
+                    }
+
+                    var sinkId = player.Audio.AddOutput(routerSink);
                     player.Audio.Connect(player.AudioSourceId!, sinkId, map);
                     break;
                 }
@@ -237,12 +275,6 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     private static ChannelMap StereoDownmix(int sourceChannels) =>
         sourceChannels >= 2 ? ChannelMap.Identity(2) : new ChannelMap([0, 0]);
 
-    private static (int W, int H) InitialSdlSize(LocalVideoOutputDefinition d)
-    {
-        if (d.SurfaceMode == VideoSurfaceMode.Windowed && d.WindowWidth is { } w && d.WindowHeight is { } h)
-            return (w, h);
-        return (1280, 720);
-    }
 
     public void ApplyFallbackImage(string? path)
     {
@@ -251,22 +283,51 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         if (string.IsNullOrWhiteSpace(path))
         {
             foreach (var l in _logoSinks)
+            {
                 l.TrySetHoldTemplate(null);
+                l.ApplyImageOverrideFormat(null);
+            }
+            RestoreLocalVideoWindowSizes();
             return;
         }
 
-        var fmt = Player.Video.Format;
-        var proto = FallbackImageLoader.TryBuildHoldCpuFrame(fmt, path);
+        // Phase 3 — load the image at its native dimensions and use it both as the output format
+        // and the template. The output is resized to the image (not the image scaled into the output).
+        var fr = Player.Video.Format.FrameRate;
+        var proto = FallbackImageLoader.TryBuildHoldFrameAtImageSize(path, fr);
         if (proto is null)
             return;
         try
         {
             foreach (var l in _logoSinks)
+            {
+                l.ApplyImageOverrideFormat(proto.Format);
                 l.TrySetHoldTemplate(FallbackImageLoader.CloneHoldTemplate(proto));
+            }
+
+            ApplyLocalVideoWindowSizes(proto.Format.Width, proto.Format.Height);
         }
         finally
         {
             proto.Dispose();
+        }
+    }
+
+    private void ApplyLocalVideoWindowSizes(int width, int height)
+    {
+        foreach (var line in _acquiredLocalVideoLines)
+        {
+            try { _outputs.ApplyHoldImageWindowSize(line, width, height); }
+            catch { /* best effort */ }
+        }
+    }
+
+    private void RestoreLocalVideoWindowSizes()
+    {
+        foreach (var line in _acquiredLocalVideoLines)
+        {
+            try { _outputs.ApplyHoldImageWindowSize(line, null, null); }
+            catch { /* best effort */ }
         }
     }
 
@@ -317,6 +378,18 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     {
         foreach (var l in _logoSinks)
             l.SetHoldFallback(hold);
+        if (!hold)
+        {
+            // Drop the image-format override so decoded frames resume at the decoder's negotiated size.
+            foreach (var l in _logoSinks)
+            {
+                try { l.ApplyImageOverrideFormat(null); }
+                catch { /* best effort */ }
+            }
+
+            // Restore each local video window to its user-defined size so the decoded image fills it again.
+            RestoreLocalVideoWindowSizes();
+        }
     }
 
     /// <summary>
@@ -351,20 +424,28 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
     public void StartAllPortAudio()
     {
-        foreach (var o in _portAudioOutputs)
-        {
-            try { o.Start(); }
-            catch { /* best effort */ }
-        }
+        // PortAudio streams are owned by OutputManagementViewModel's persistent runtimes and stay
+        // running across sessions. Nothing to start here per-session — kept as a no-op so the
+        // AvRouter.Play(startHardware: ...) callback signature is unchanged.
     }
+
+    private int _primedOnce;
 
     /// <summary>Primes the video logo branches with a few black frames before <see cref="AvRouter.Play"/>
     /// so SDL / NDI sinks have a configured frame in flight at the negotiated format. NDI audio side no
     /// longer needs a silence warmup here — the persistent <c>NDIOutputPreviewRuntime</c> carrier keeps
-    /// receivers locked continuously, so audio just starts at the next router chunk boundary.</summary>
+    /// receivers locked continuously, so audio just starts at the next router chunk boundary.
+    ///
+    /// Phase 2A: priming runs ONCE per session (the first Play after open). Subsequent Play / Seek / loop-wrap
+    /// calls skip it — the sink already has a configured frame in flight and the NDI carrier keeps emitting.
+    /// Saves the per-click ~24 ms wall the previous always-prime path imposed.</summary>
     /// <param name="holdFallbackShowsImage">When true, skip black-frame priming (the hold image already paints the output).</param>
-    public void PrepareOutputsBeforePlay(bool holdFallbackShowsImage) =>
+    public void PrepareOutputsBeforePlay(bool holdFallbackShowsImage)
+    {
+        if (Interlocked.CompareExchange(ref _primedOnce, 1, 0) != 0)
+            return;
         PrimeVideoOutputsBeforePlay(holdFallbackShowsImage);
+    }
 
     /// <summary>
     /// Releases sinks we own when <see cref="TryCreate"/> fails after partial <see cref="WireAudio"/> work.
@@ -374,31 +455,27 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     {
         foreach (var r in _ndiAudioResamplers)
         {
-            try
-            {
-                r.Dispose();
-            }
-            catch
-            {
-                /* best effort */
-            }
+            try { r.Dispose(); }
+            catch { /* best effort */ }
         }
 
         _ndiAudioResamplers.Clear();
 
-        foreach (var o in _portAudioOutputs)
+        foreach (var r in _portAudioResamplers)
         {
-            try
-            {
-                o.Dispose();
-            }
-            catch
-            {
-                /* best effort */
-            }
+            try { r.Dispose(); }
+            catch { /* best effort */ }
         }
 
-        _portAudioOutputs.Clear();
+        _portAudioResamplers.Clear();
+
+        foreach (var line in _acquiredPortAudioLines)
+        {
+            try { _outputs.ReleasePortAudioForPlayback(line); }
+            catch { /* best effort */ }
+        }
+
+        _acquiredPortAudioLines.Clear();
         _ndiAudioSinks.Clear();
     }
 
@@ -428,6 +505,22 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         _ndiAudioResamplers.Clear();
 
+        foreach (var r in _portAudioResamplers)
+        {
+            try { r.Dispose(); }
+            catch { /* best effort */ }
+        }
+
+        _portAudioResamplers.Clear();
+
+        foreach (var line in _acquiredPortAudioLines)
+        {
+            try { _outputs.ReleasePortAudioForPlayback(line); }
+            catch { /* best effort */ }
+        }
+
+        _acquiredPortAudioLines.Clear();
+
         foreach (var line in _acquiredCarriers)
         {
             try { _outputs.ReleaseNDICarrierForPlayback(line); }
@@ -435,8 +528,17 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         _acquiredCarriers.Clear();
+
+        // Reset the persistent local-video sinks back to idle preview so the windows stay alive but
+        // stop showing the just-played media's last frame.
+        foreach (var line in _acquiredLocalVideoLines)
+        {
+            try { _outputs.ReleaseLocalVideoSinkForPlayback(line); }
+            catch { /* best effort */ }
+        }
+
+        _acquiredLocalVideoLines.Clear();
         _ndiAudioSinks.Clear();
         _logoSinks.Clear();
-        _portAudioOutputs.Clear();
     }
 }

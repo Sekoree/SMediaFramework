@@ -116,4 +116,47 @@ internal static class FallbackImageLoader
     /// <summary>Deep-copies a template so each sink can own its own instance.</summary>
     public static VideoFrame CloneHoldTemplate(VideoFrame template) =>
         VideoCpuFrameConverter.DuplicateCpuBacking(template, template.ColorTransferHint);
+
+    /// <summary>
+    /// Loads an image at its <strong>native</strong> dimensions as BGRA32 and returns a CPU video frame
+    /// at that resolution + framerate hint. Used by the "Hold image" feature so video outputs can be
+    /// resized to the image instead of the image being letterboxed into the media's negotiated format.
+    /// Returns <c>null</c> on load / format failure.
+    /// </summary>
+    public static VideoFrame? TryBuildHoldFrameAtImageSize(string path, S.Media.Core.Video.Rational frameRate)
+    {
+        try
+        {
+            FFmpegRuntime.EnsureInitialized();
+            using var img = Image.Load<Rgba32>(path);
+            var width = img.Width;
+            var height = img.Height;
+            var fmt = new VideoFormat(width, height, PixelFormat.Bgra32, frameRate);
+            var stride = width * 4;
+            var bgra = new byte[stride * height];
+            img.ProcessPixelRows(accessor =>
+            {
+                for (var y = 0; y < accessor.Height; y++)
+                {
+                    var row = accessor.GetRowSpan(y);
+                    var dst = bgra.AsSpan(y * stride, stride);
+                    for (var x = 0; x < row.Length; x++)
+                    {
+                        var p = row[x];
+                        var o = x * 4;
+                        dst[o] = p.B;
+                        dst[o + 1] = p.G;
+                        dst[o + 2] = p.R;
+                        dst[o + 3] = p.A;
+                    }
+                }
+            });
+            using var bgraFrame = new VideoFrame(TimeSpan.Zero, fmt, bgra, stride, release: null);
+            return VideoCpuFrameConverter.DuplicateCpuBacking(bgraFrame, default);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

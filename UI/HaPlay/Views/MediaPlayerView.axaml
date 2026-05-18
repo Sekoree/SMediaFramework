@@ -4,7 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:views="using:HaPlay.Views"
-             mc:Ignorable="d" d:DesignWidth="1040" d:DesignHeight="660"
+             mc:Ignorable="d" d:DesignWidth="780" d:DesignHeight="900"
              x:Class="HaPlay.Views.MediaPlayerView"
              x:DataType="vm:MediaPlayerViewModel">
 
@@ -35,57 +35,72 @@
       <Setter Property="Background" Value="#08808080" />
     </Style>
     <Style Selector="Button.transport">
-      <Setter Property="MinWidth" Value="80" />
-      <Setter Property="Padding" Value="14,8" />
+      <Setter Property="MinWidth" Value="56" />
+      <Setter Property="Padding" Value="12,8" />
     </Style>
-    <Style Selector="Button.primary">
+    <Style Selector="Button.play-pause">
+      <Setter Property="MinWidth" Value="96" />
+      <Setter Property="Padding" Value="14,8" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
   </UserControl.Styles>
 
-  <DockPanel Margin="14">
+  <ScrollViewer HorizontalScrollBarVisibility="Disabled" Padding="14">
+    <DockPanel LastChildFill="True">
 
-    <!-- Status banner -->
-    <Border DockPanel.Dock="Top"
-            IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-            Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
-            CornerRadius="4" Padding="10,6" Margin="0,0,0,12">
-      <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
-    </Border>
+      <!-- Status banner -->
+      <Border DockPanel.Dock="Top"
+              IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+              Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
+              CornerRadius="4" Padding="10,6" Margin="0,0,0,12">
+        <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
+      </Border>
 
-    <!-- Two-column body: controls left, playlist right -->
-    <Grid ColumnDefinitions="*,12,360">
+      <StackPanel Spacing="12">
 
-      <!-- Left column: controls -->
-      <DockPanel Grid.Column="0">
-
-        <!-- Top: now-playing / transport card -->
-        <Border DockPanel.Dock="Top" Classes="card" Margin="0,0,0,12">
+        <!-- Now-playing / transport card -->
+        <Border Classes="card">
           <StackPanel Spacing="12">
+
+            <!-- Header: player name + settings flyout -->
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Grid.Column="0" FontWeight="SemiBold" FontSize="16"
+                         VerticalAlignment="Center" Text="{Binding Name}" />
+              <Button Grid.Column="1" Padding="8,4" Content="⚙ Settings"
+                      ToolTip.Tip="Save / load this player's configuration, or remove the player.">
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="Save player config…" Command="{Binding SavePlayerConfigCommand}" />
+                    <MenuItem Header="Load player config…" Command="{Binding LoadPlayerConfigCommand}" />
+                    <Separator />
+                    <MenuItem Header="Unload current session"
+                              Command="{Binding CloseSessionCommand}" />
+                    <MenuItem Header="Remove this player"
+                              Command="{Binding RemovePlayerCommand}"
+                              IsVisible="{Binding CanRemove}" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+            </Grid>
+
+            <!-- Current source -->
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock FontWeight="SemiBold" FontSize="16" VerticalAlignment="Center"
-                         Text="{Binding Name}" />
-              <Button Content="Save…"
-                      Command="{Binding SavePlayerConfigCommand}"
-                      ToolTip.Tip="Save this player's name, playlist, fallback image, transport flags, and selected outputs."
-                      Padding="8,2" />
-              <Button Content="Load…"
-                      Command="{Binding LoadPlayerConfigCommand}"
-                      ToolTip.Tip="Replace this player's state with a saved configuration file."
-                      Padding="8,2" />
-              <Button Content="Remove player"
-                      Command="{Binding RemovePlayerCommand}"
-                      IsVisible="{Binding CanRemove}"
-                      Padding="8,2" />
+              <Border Background="#22808080" CornerRadius="3" Padding="6,2"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="What the loaded source contains.">
+                <TextBlock FontSize="11" FontWeight="SemiBold"
+                           Text="{Binding SourceKindLabel}" />
+              </Border>
+              <TextBlock Opacity="0.75" FontSize="12" TextTrimming="CharacterEllipsis"
+                         VerticalAlignment="Center"
+                         Text="{Binding MediaFilePath, FallbackValue='No media loaded — pick a file from the playlist below.', TargetNullValue='No media loaded — pick a file from the playlist below.'}"
+                         ToolTip.Tip="{Binding MediaFilePath}" />
             </StackPanel>
 
-            <TextBlock Opacity="0.65" FontSize="12" TextTrimming="CharacterEllipsis"
-                       Text="{Binding MediaFilePath, FallbackValue='No media loaded — pick a file from the playlist.', TargetNullValue='No media loaded — pick a file from the playlist.'}"
-                       ToolTip.Tip="{Binding MediaFilePath}" />
-
-            <!-- Scrubber -->
-            <Slider Minimum="0" Maximum="1000"
-                    Value="{Binding SeekSliderValue}"
+            <!-- Scrubber: TwoWay binding for visual tracking; commit on PointerReleased (code-behind) -->
+            <Slider Name="SeekSlider"
+                    Minimum="0" Maximum="1000"
+                    Value="{Binding SeekSliderValue, Mode=TwoWay}"
                     IsEnabled="{Binding IsMediaLoaded}" />
 
             <!-- Three times: position / remaining / total -->
@@ -107,120 +122,145 @@
               </StackPanel>
             </Grid>
 
-            <!-- Transport row -->
-            <DockPanel>
-              <ToggleButton DockPanel.Dock="Right" Content="Loop"
-                            IsChecked="{Binding IsLooping}" MinWidth="64" Padding="14,8"
-                            ToolTip.Tip="When on, the current track restarts after it ends instead of advancing the playlist." />
-              <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
-                <Button Content="Play" Classes="transport primary"
-                        Command="{Binding PlayCommand}"
-                        ToolTip.Tip="Start (or auto-load + start) the selected playlist item." />
-                <Button Content="Pause" Classes="transport"
-                        Command="{Binding PauseCommand}" />
-                <Button Content="Stop" Classes="transport"
+            <!-- Transport row: prev / play-pause / next / stop + loop + display-mode -->
+            <Grid ColumnDefinitions="*,Auto,*">
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                          HorizontalAlignment="Center">
+                <Button Classes="transport" Content="⏮"
+                        Command="{Binding PreviousTrackCommand}"
+                        ToolTip.Tip="Previous track" />
+                <Button Classes="play-pause"
+                        Content="{Binding PlayPauseLabel}"
+                        Command="{Binding TogglePlayPauseCommand}"
+                        ToolTip.Tip="Play or pause the current track." />
+                <Button Classes="transport" Content="⏭"
+                        Command="{Binding NextTrackCommand}"
+                        ToolTip.Tip="Next track" />
+                <Button Classes="transport" Content="⏹"
                         Command="{Binding StopCommand}"
-                        ToolTip.Tip="Stop playback and rewind to 00:00." />
-                <Button Content="Seek" Classes="transport"
-                        Command="{Binding SeekToSliderCommand}"
-                        ToolTip.Tip="Jump to the position selected on the slider above." />
+                        ToolTip.Tip="Stop and rewind to 00:00." />
               </StackPanel>
-            </DockPanel>
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                          HorizontalAlignment="Right">
+                <ToggleButton Content="🔁 Loop" IsChecked="{Binding IsLooping}" Padding="10,6"
+                              ToolTip.Tip="Restart the current track when it ends." />
+                <ToggleButton Content="⏭ Auto-advance"
+                              IsChecked="{Binding AutoAdvancePlaylist}" Padding="10,6"
+                              ToolTip.Tip="When on, the next playlist entry loads and plays automatically when the current track ends." />
+              </StackPanel>
+            </Grid>
           </StackPanel>
         </Border>
 
-        <!-- Routing + fallback below the transport card -->
-        <ScrollViewer HorizontalScrollBarVisibility="Disabled">
-          <StackPanel Spacing="10">
+        <!-- Playlist card -->
+        <Border Classes="card"
+                ToolTip.Tip="Double-click a row to load + play. Single-click selects so Play loads that file.">
+          <DockPanel LastChildFill="True">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,0,0,8" ColumnSpacing="4">
+              <TextBlock Grid.Column="0" Text="Playlist" Classes="section-title" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Content="↑" Command="{Binding MovePlaylistItemUpCommand}"
+                      MinWidth="34" ToolTip.Tip="Move the selected entry up." />
+              <Button Grid.Column="2" Content="↓" Command="{Binding MovePlaylistItemDownCommand}"
+                      MinWidth="34" ToolTip.Tip="Move the selected entry down." />
+              <Button Grid.Column="3" Content="Remove" Command="{Binding RemoveFromPlaylistCommand}"
+                      ToolTip.Tip="Remove the selected entry." />
+              <Button Grid.Column="4" Content="+ Add files…"
+                      Command="{Binding AddFilesToPlaylistCommand}" />
+            </Grid>
 
-            <Expander IsExpanded="True"
-                      ToolTip.Tip="Tick the outputs this player should drive. Two players can independently route to different outputs (e.g. main → NDI, secondary → local SDL).">
-              <Expander.Header>
-                <TextBlock Text="Routing — outputs used by this player" />
-              </Expander.Header>
-              <Border Classes="card" Padding="6">
-                <ItemsControl ItemsSource="{Binding Outputs}">
-                  <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:PlayerOutputBinding">
-                      <Grid ColumnDefinitions="Auto,*" Margin="0,2">
-                        <CheckBox Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0"
-                                  IsChecked="{Binding IsSelected}"
-                                  IsEnabled="{Binding Line.SupportsMediaPlayerRouting}" />
-                        <StackPanel Grid.Column="1" Spacing="1"
-                                    ToolTip.Tip="{Binding Line.Summary}">
-                          <StackPanel Orientation="Horizontal" Spacing="6">
-                            <TextBlock FontWeight="SemiBold" Text="{Binding Line.KindLabel}" />
-                            <TextBlock Text="—" Opacity="0.5" />
-                            <TextBlock Text="{Binding Line.Definition.DisplayName}" />
-                          </StackPanel>
+            <ListBox Name="PlaylistListBox" MinHeight="220" MaxHeight="380"
+                     ItemsSource="{Binding PlaylistPaths}"
+                     SelectedItem="{Binding SelectedPlaylistPath, Mode=TwoWay}"
+                     DoubleTapped="OnPlaylistItemDoubleTapped">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding Converter={StaticResource FilenameConverter}}"
+                             ToolTip.Tip="{Binding}"
+                             TextTrimming="CharacterEllipsis" />
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <!-- Routing expander (collapsed once configured; shows count when collapsed) -->
+        <Expander IsExpanded="{Binding IsRoutingExpanded, Mode=TwoWay}">
+          <Expander.Header>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="Routing" FontWeight="SemiBold" />
+              <TextBlock Opacity="0.7" Text="{Binding RoutingSummary}" />
+            </StackPanel>
+          </Expander.Header>
+          <Border Classes="card" Padding="10">
+            <StackPanel Spacing="6">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Grid.Column="0" Opacity="0.7" FontSize="12"
+                           Text="Tick the outputs this player should drive." />
+                <Button Grid.Column="1" Content="+ Add output…" Padding="10,4">
+                  <Button.Flyout>
+                    <MenuFlyout>
+                      <MenuItem Header="PortAudio output…"
+                                Command="{Binding AddPortAudioOutputCommand}" />
+                      <MenuItem Header="Local video output…"
+                                Command="{Binding AddLocalVideoOutputCommand}" />
+                      <MenuItem Header="NDI output…"
+                                Command="{Binding AddNDIOutputCommand}" />
+                    </MenuFlyout>
+                  </Button.Flyout>
+                </Button>
+              </Grid>
+              <ItemsControl ItemsSource="{Binding Outputs}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PlayerOutputBinding">
+                    <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+                      <CheckBox Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0"
+                                IsChecked="{Binding IsSelected}"
+                                IsEnabled="{Binding Line.SupportsMediaPlayerRouting}" />
+                      <StackPanel Grid.Column="1" Spacing="1"
+                                  ToolTip.Tip="{Binding Line.Summary}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <TextBlock FontWeight="SemiBold" Text="{Binding Line.KindLabel}" />
+                          <TextBlock Text="—" Opacity="0.5" />
+                          <TextBlock Text="{Binding Line.Definition.DisplayName}" />
                         </StackPanel>
-                      </Grid>
-                    </DataTemplate>
-                  </ItemsControl.ItemTemplate>
-                </ItemsControl>
-              </Border>
-            </Expander>
+                      </StackPanel>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+              <TextBlock Opacity="0.55" FontSize="11"
+                         IsVisible="{Binding HasNoOutputs}"
+                         Text="No outputs configured yet — add one above. Click Play with nothing selected to auto-route." />
+            </StackPanel>
+          </Border>
+        </Expander>
 
-            <Expander IsExpanded="False"
-                      ToolTip.Tip="When enabled, every video output displays this image instead of decoded pixels — useful for audio-only files, idle slates, or branding overlays.">
-              <Expander.Header>
-                <TextBlock Text="Video fallback (logo)" />
-              </Expander.Header>
-              <StackPanel Spacing="8">
-                <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
-                  <TextBox PlaceholderText="PNG / JPEG path…" Text="{Binding FallbackImagePath}" />
-                  <Button Grid.Column="1" Content="Browse…" Command="{Binding BrowseFallbackCommand}" />
-                  <Button Grid.Column="2" Content="Unload session" Command="{Binding CloseSessionCommand}"
-                          ToolTip.Tip="Close the current playback session without removing the player." />
-                </Grid>
-                <ToggleButton Content="Hold fallback on video outputs"
-                              IsChecked="{Binding HoldFallbackVideo}"
-                              HorizontalAlignment="Left"
-                              ToolTip.Tip="Keep displaying the fallback image even while playing — useful for audio-only files." />
-              </StackPanel>
-            </Expander>
+        <!-- Hold-image / display-mode expander -->
+        <Expander
+                  ToolTip.Tip="Show a still image on every video output instead of decoded pixels — outputs are resized to the image's native dimensions when set.">
+          <Expander.Header>
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="Hold image" FontWeight="SemiBold" />
+              <TextBlock Opacity="0.7" Text="{Binding HoldImageSummary}" />
+            </StackPanel>
+          </Expander.Header>
+          <Border Classes="card" Padding="10">
+            <StackPanel Spacing="8">
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBox Grid.Column="0" PlaceholderText="PNG / JPEG path…"
+                         Text="{Binding FallbackImagePath}" />
+                <Button Grid.Column="1" Content="Browse…"
+                        Command="{Binding BrowseFallbackCommand}" />
+              </Grid>
+              <ToggleButton Content="Show hold image on video outputs"
+                            IsChecked="{Binding HoldFallbackVideo}"
+                            HorizontalAlignment="Left"
+                            ToolTip.Tip="When on, video outputs resize to the image and display it instead of decoded frames." />
+            </StackPanel>
+          </Border>
+        </Expander>
 
-          </StackPanel>
-        </ScrollViewer>
-      </DockPanel>
-
-      <!-- Right column: playlist -->
-      <Border Grid.Column="2" Classes="card" Padding="10"
-              ToolTip.Tip="Double-click an entry to load + play it. Otherwise click Play with a row selected to auto-load.">
-        <DockPanel>
-          <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
-            <TextBlock Grid.Column="0" Text="Playlist" Classes="section-title" VerticalAlignment="Center" />
-            <Button Grid.Column="1" Content="Add files…"
-                    Command="{Binding AddFilesToPlaylistCommand}"
-                    Padding="10,2" />
-          </Grid>
-
-          <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,*,*" ColumnSpacing="4" Margin="0,8,0,0">
-            <Button Grid.Column="0" Content="↑" Command="{Binding MovePlaylistItemUpCommand}"
-                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                    ToolTip.Tip="Move the selected entry up." />
-            <Button Grid.Column="1" Content="↓" Command="{Binding MovePlaylistItemDownCommand}"
-                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                    ToolTip.Tip="Move the selected entry down." />
-            <Button Grid.Column="2" Content="Remove" Command="{Binding RemoveFromPlaylistCommand}"
-                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" />
-          </Grid>
-
-          <ListBox Name="PlaylistListBox"
-                   ItemsSource="{Binding PlaylistPaths}"
-                   SelectedItem="{Binding SelectedPlaylistPath, Mode=TwoWay}"
-                   DoubleTapped="OnPlaylistItemDoubleTapped">
-            <ListBox.ItemTemplate>
-              <DataTemplate>
-                <TextBlock Text="{Binding Converter={StaticResource FilenameConverter}}"
-                           ToolTip.Tip="{Binding}"
-                           TextTrimming="CharacterEllipsis" />
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </DockPanel>
-      </Border>
-
-    </Grid>
-  </DockPanel>
+      </StackPanel>
+    </DockPanel>
+  </ScrollViewer>
 </UserControl>

@@ -12,7 +12,6 @@ public sealed class VideoDmabufNv12Backing : IDisposable
 {
     private int _yFd;
     private int _uvFd;
-    private int _closed;
     private int _refCount = 1;
 
     public VideoDmabufNv12Backing(
@@ -66,25 +65,39 @@ public sealed class VideoDmabufNv12Backing : IDisposable
     /// Increment the shared ownership count (one per <see cref="VideoFrame"/> that wraps this backing).
     /// Call before handing the same backing to another consumer that will invoke <see cref="Dispose"/> independently.
     /// </summary>
+    /// <remarks>
+    /// Atomic against a concurrent <see cref="Dispose"/> that would otherwise close the fds between a
+    /// disposed-check and the increment (TOCTOU).
+    /// </remarks>
     /// <exception cref="ObjectDisposedException">Backing file descriptors are already closed.</exception>
     public void AddReference()
     {
-        if (Volatile.Read(ref _closed) != 0)
-            throw new ObjectDisposedException(nameof(VideoDmabufNv12Backing));
-        Interlocked.Increment(ref _refCount);
+        while (true)
+        {
+            var n = Volatile.Read(ref _refCount);
+            if (n <= 0)
+                throw new ObjectDisposedException(nameof(VideoDmabufNv12Backing));
+            if (Interlocked.CompareExchange(ref _refCount, n + 1, n) == n)
+                return;
+        }
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
-        var remaining = Interlocked.Decrement(ref _refCount);
-        if (remaining > 0)
-            return;
-        if (remaining < 0)
-            return;
-
-        if (Interlocked.Exchange(ref _closed, 1) != 0)
-            return;
+        // Drop one reference; only the thread that drives the count to zero closes the fds.
+        // CAS loop pairs with AddReference's loop so a racing AddReference cannot increment
+        // through zero.
+        while (true)
+        {
+            var n = Volatile.Read(ref _refCount);
+            if (n <= 0) return;
+            if (Interlocked.CompareExchange(ref _refCount, n - 1, n) == n)
+            {
+                if (n - 1 > 0) return;
+                break;
+            }
+        }
 
         if (_yFd >= 0)
         {

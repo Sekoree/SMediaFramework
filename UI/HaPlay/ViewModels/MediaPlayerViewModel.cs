@@ -25,7 +25,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private IdleLogoSlateSession? _idleSlate;
     private string? _idleSlateSig;
     private readonly DispatcherTimer _idleSlateSyncTimer;
-    private DispatcherTimer? _holdPumpTimer;
+    /// <summary>Phase 2B — runs on a threadpool tick instead of the UI dispatcher so transport gate
+    /// holds don't stall the hold-image pump (NDI receivers would briefly freeze on every Pause/Play).</summary>
+    private Timer? _holdPumpTimer;
+    private int _holdPumpReentry;
 
     /// <summary>Serializes load/unload/stop/pause/play/seek and loop-timer Router use so Dispose cannot overlap transport.</summary>
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
@@ -81,6 +84,52 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// to overlapping subsets of outputs (e.g. main → NDI, preview → local SDL).</summary>
     public ObservableCollection<PlayerOutputBinding> Outputs { get; } = new();
 
+    /// <summary>True when no outputs are registered yet — view shows the "click Play to auto-route" hint.</summary>
+    public bool HasNoOutputs => Outputs.Count == 0;
+
+    /// <summary>Short header summary so the routing expander reads e.g. "2 selected of 3" when collapsed.</summary>
+    public string RoutingSummary
+    {
+        get
+        {
+            var total = Outputs.Count;
+            var sel = Outputs.Count(b => b.IsSelected);
+            return total == 0 ? "(no outputs)" : $"{sel} selected of {total}";
+        }
+    }
+
+    /// <summary>Short header text for the hold-image expander.</summary>
+    public string HoldImageSummary
+    {
+        get
+        {
+            if (!HoldFallbackVideo)
+                return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(off)" : "(off — image set)";
+            return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(on — no image)" : "(on)";
+        }
+    }
+
+    /// <summary>Visual label for the Play/Pause toggle.</summary>
+    public string PlayPauseLabel => IsPlaying ? "⏸ Pause" : "▶ Play";
+
+    /// <summary>One-word kind label for the source-state chip ("Video", "Audio", "Idle").</summary>
+    public string SourceKindLabel
+    {
+        get
+        {
+            if (!IsMediaLoaded || _session is null) return "Idle";
+            var hasVid = _session.Player.Decoder.HasVideo;
+            var hasAud = _session.Player.Decoder.HasAudio;
+            if (hasVid && hasAud) return "Video + audio";
+            if (hasVid) return "Video";
+            if (hasAud) return "Audio";
+            return "Empty";
+        }
+    }
+
+    [ObservableProperty]
+    private bool _isRoutingExpanded = true;
+
     /// <summary>Paths queued for sequential playback after the current file ends.</summary>
     public ObservableCollection<string> PlaylistPaths { get; } = new();
 
@@ -98,6 +147,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _isLooping;
+
+    /// <summary>When true, the loop timer auto-loads the next playlist entry on natural end of file.
+    /// Defaults to false — auto-advance is rarely wanted in performance contexts where each track is cued.</summary>
+    [ObservableProperty]
+    private bool _autoAdvancePlaylist;
 
     [ObservableProperty]
     private bool _holdFallbackVideo;
@@ -136,12 +190,34 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     partial void OnIsMediaLoadedChanged(bool value)
     {
+        NotifyTransportCanExecuteChanged();
+        OnPropertyChanged(nameof(SourceKindLabel));
+        if (value)
+            StopIdleSlate();
+    }
+
+    partial void OnIsPlayingChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(PlayPauseLabel));
+        TogglePlayPauseCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnHoldFallbackVideoChanging(bool value) => _ = value;
+
+    partial void OnFallbackImagePathChanging(string? value) => _ = value;
+
+    /// <summary>Coalesce the four transport CanExecute invalidations behind a single helper so the
+    /// position-changed handler doesn't fire four binding updates per tick.</summary>
+    private void NotifyTransportCanExecuteChanged()
+    {
         PlayCommand.NotifyCanExecuteChanged();
         PauseCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
         SeekToSliderCommand.NotifyCanExecuteChanged();
-        if (value)
-            StopIdleSlate();
+        TogglePlayPauseCommand.NotifyCanExecuteChanged();
+        NextTrackCommand.NotifyCanExecuteChanged();
+        PreviousTrackCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnDurationChanged(TimeSpan value)
@@ -174,13 +250,24 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void SyncOutputsCollection()
     {
         var keep = Outputs.ToDictionary(b => b.Line);
+        foreach (var b in Outputs)
+            b.PropertyChanged -= OnOutputBindingPropertyChanged;
         Outputs.Clear();
         foreach (var line in _outputs.Outputs)
         {
             if (!keep.TryGetValue(line, out var binding))
                 binding = new PlayerOutputBinding(line);
+            binding.PropertyChanged += OnOutputBindingPropertyChanged;
             Outputs.Add(binding);
         }
+        OnPropertyChanged(nameof(HasNoOutputs));
+        OnPropertyChanged(nameof(RoutingSummary));
+    }
+
+    private void OnOutputBindingPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(PlayerOutputBinding.IsSelected))
+            OnPropertyChanged(nameof(RoutingSummary));
     }
 
     private IReadOnlyList<OutputLineViewModel> SelectedOutputLines() =>
@@ -198,6 +285,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     partial void OnHoldFallbackVideoChanged(bool value)
     {
+        OnPropertyChanged(nameof(HoldImageSummary));
+        if (value && _session is not null && IsMediaLoaded && !string.IsNullOrWhiteSpace(FallbackImagePath))
+        {
+            // Phase 3 — toggling hold on (with an image path already set) must re-apply the image so
+            // outputs reconfigure to the image's native size.
+            try { _session.ApplyFallbackImage(FallbackImagePath); }
+            catch { /* best effort */ }
+        }
+
         _session?.SetHoldFallback(value);
         if (_session is not null && IsMediaLoaded)
         {
@@ -228,6 +324,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     partial void OnFallbackImagePathChanged(string? value)
     {
+        OnPropertyChanged(nameof(HoldImageSummary));
         if (_session is not null && !string.IsNullOrWhiteSpace(value))
             _session.ApplyFallbackImage(value);
         if (_session is not null && IsMediaLoaded && HoldFallbackVideo && !string.IsNullOrWhiteSpace(value))
@@ -477,6 +574,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         SelectedPlaylistPath = SelectedPlaylistPath,
         FallbackImagePath = FallbackImagePath,
         IsLooping = IsLooping,
+        AutoAdvancePlaylist = AutoAdvancePlaylist,
         HoldFallbackVideo = HoldFallbackVideo,
         SelectedOutputDisplayNames = Outputs
             .Where(b => b.IsSelected)
@@ -498,6 +596,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             : PlaylistPaths.Count > 0 ? PlaylistPaths[0] : null;
         FallbackImagePath = config.FallbackImagePath;
         IsLooping = config.IsLooping;
+        AutoAdvancePlaylist = config.AutoAdvancePlaylist;
         HoldFallbackVideo = config.HoldFallbackVideo;
 
         var wanted = new HashSet<string>(config.SelectedOutputDisplayNames, StringComparer.OrdinalIgnoreCase);
@@ -675,59 +774,34 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         if (_holdPumpTimer is not null)
             return;
-        _holdPumpTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.0 / 30.0) };
-        _holdPumpTimer.Tick += OnHoldPumpTick;
-        _holdPumpTimer.Start();
+        var period = TimeSpan.FromSeconds(1.0 / 30.0);
+        _holdPumpTimer = new Timer(OnHoldPumpTick, null, period, period);
     }
 
     private void StopHoldPumpTimer()
     {
-        if (_holdPumpTimer is null)
-            return;
-        _holdPumpTimer.Tick -= OnHoldPumpTick;
-        _holdPumpTimer.Stop();
-        _holdPumpTimer = null;
+        var t = Interlocked.Exchange(ref _holdPumpTimer, null);
+        t?.Dispose();
     }
 
-    private void OnHoldPumpTick(object? sender, EventArgs e)
+    private void OnHoldPumpTick(object? state)
     {
-        if (_session is null || !IsMediaLoaded || !HoldFallbackVideo)
-            return;
-        var session = _session;
-        var t = session.Player.PlayClock.CurrentPosition;
-        _ = PumpHoldFramesOnPoolAsync(session, t);
-    }
-
-    private async Task PumpHoldFramesOnPoolAsync(HaPlayPlaybackSession session, TimeSpan presentationTime)
-    {
-        if (!await _playbackArc.WaitAsync(0).ConfigureAwait(false))
+        // Drop-not-queue if a previous tick is still in flight (sink Submit can briefly block on NDI
+        // SDK lock). Better to skip a frame than to stack tick handlers.
+        if (Interlocked.CompareExchange(ref _holdPumpReentry, 1, 0) != 0)
             return;
         try
         {
-            try
-            {
-                // Never hold _playbackArc across unbounded native work — load/stop/seek wait on this gate and the
-                // Load command stays disabled until OpenOrReloadAsync's WithPlaybackArcAsync completes.
-                await Task.Run(() => session.PumpHoldFrames(presentationTime))
-                    .WaitAsync(TimeSpan.FromMilliseconds(1200))
-                    .ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                /* avoid wedging transport behind a stuck hold pump */
-            }
-            catch (ObjectDisposedException)
-            {
-                /* session replaced */
-            }
-            catch
-            {
-                /* best effort */
-            }
+            var session = _session;
+            if (session is null || !IsMediaLoaded || !HoldFallbackVideo)
+                return;
+            var pt = session.Player.PlayClock.CurrentPosition;
+            try { session.PumpHoldFrames(pt); }
+            catch { /* best effort — sink torn down mid-tick */ }
         }
         finally
         {
-            _playbackArc.Release();
+            Interlocked.Exchange(ref _holdPumpReentry, 0);
         }
     }
 
@@ -789,7 +863,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (!fileEnded) return;
 
             resumePlayForPlaylist = IsPlaying;
-            advancePlaylist = true;
+            advancePlaylist = AutoAdvancePlaylist;
             await RunBoundedCancelableAsync(session.Router.PauseSkippingSharedMuxFlush,
                 innerTimeout: TimeSpan.FromSeconds(1.5),
                 outerTimeout: TimeSpan.FromSeconds(2.5));
@@ -799,7 +873,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             _playbackArc.Release();
         }
 
-        if (!advancePlaylist) return;
+        if (!advancePlaylist)
+        {
+            // Router is paused but UI's IsPlaying still says "playing" — sync so the toggle reflects state.
+            await Dispatcher.UIThread.InvokeAsync(() => IsPlaying = false);
+            return;
+        }
 
         var shouldLoadNext = await Dispatcher.UIThread.InvokeAsync(() =>
         {
@@ -841,6 +920,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanPlay))]
     private async Task PlayAsync()
     {
+        // Phase 1C — auto-route: if the user clicks Play with no outputs selected, pick a sensible
+        // default (first compatible output) so playback isn't silent on first run.
+        await TryAutoRouteAsync().ConfigureAwait(false);
+
         // Auto-load: if nothing's loaded yet but the user has selected a playlist row, load + play in one click.
         if (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath) && File.Exists(SelectedPlaylistPath))
         {
@@ -851,6 +934,115 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
 
         await StartPlaybackAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>One-button transport: pause if playing, play otherwise.</summary>
+    [RelayCommand(CanExecute = nameof(CanTogglePlayPause))]
+    private Task TogglePlayPauseAsync() =>
+        IsPlaying && _session is not null ? PauseAsync() : PlayAsync();
+
+    private bool CanTogglePlayPause() =>
+        (_session is not null && IsMediaLoaded) ||
+        (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath));
+
+    [RelayCommand(CanExecute = nameof(CanGoNext))]
+    private async Task NextTrackAsync()
+    {
+        if (!TryGetNextPlaylistPath(out var next)) return;
+        await PlayPlaylistItemAsync(next).ConfigureAwait(false);
+    }
+
+    private bool CanGoNext() => TryGetNextPlaylistPath(out _);
+
+    [RelayCommand(CanExecute = nameof(CanGoPrevious))]
+    private async Task PreviousTrackAsync()
+    {
+        if (!TryGetPreviousPlaylistPath(out var prev)) return;
+        await PlayPlaylistItemAsync(prev).ConfigureAwait(false);
+    }
+
+    private bool CanGoPrevious() => TryGetPreviousPlaylistPath(out _);
+
+    private bool TryGetPreviousPlaylistPath([NotNullWhen(true)] out string? prevPath)
+    {
+        prevPath = null;
+        if (PlaylistPaths.Count == 0 || string.IsNullOrEmpty(MediaFilePath))
+            return false;
+        var idx = PlaylistPaths.IndexOf(MediaFilePath);
+        if (idx <= 0) return false;
+        prevPath = PlaylistPaths[idx - 1];
+        return true;
+    }
+
+    [RelayCommand]
+    private Task AddPortAudioOutputAsync() => _outputs.AddPortAudioCommand.ExecuteAsync(null);
+
+    [RelayCommand]
+    private Task AddLocalVideoOutputAsync() => _outputs.AddLocalVideoCommand.ExecuteAsync(null);
+
+    [RelayCommand]
+    private Task AddNDIOutputAsync() => _outputs.AddNDICommand.ExecuteAsync(null);
+
+    /// <summary>
+    /// First-Play helper: if the user hasn't ticked any outputs yet, pick the first compatible one and
+    /// surface a one-line banner so they know what we chose.
+    /// </summary>
+    private async Task TryAutoRouteAsync()
+    {
+        var anySelected = await Dispatcher.UIThread.InvokeAsync(() => Outputs.Any(b => b.IsSelected));
+        if (anySelected || Outputs.Count == 0)
+            return;
+
+        // Probe the source so we know whether to prefer a video or audio output. When nothing is loaded
+        // yet (Play with a playlist row), assume audio+video so we'll happily route to either.
+        var preferVideo = true;
+        var preferAudio = true;
+        var path = SelectedPlaylistPath ?? MediaFilePath;
+        if (!string.IsNullOrEmpty(path) && File.Exists(path))
+        {
+            // Best-effort probe — failures fall back to "pick anything compatible".
+            try
+            {
+                var dec = await Task.Run(() => S.Media.FFmpeg.MediaContainerDecoder.Open(path))
+                    .ConfigureAwait(false);
+                try
+                {
+                    preferVideo = dec.HasVideo;
+                    preferAudio = dec.HasAudio;
+                }
+                finally { dec.Dispose(); }
+            }
+            catch { /* unreadable file — caller will surface the open error */ }
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            var picked = PickAutoRoute(preferVideo, preferAudio);
+            if (picked is null) return;
+            picked.IsSelected = true;
+            StatusMessage = $"Auto-routed to {picked.Line.KindLabel} — {picked.Line.Definition.DisplayName}. " +
+                            "Change in Routing below.";
+        });
+    }
+
+    private PlayerOutputBinding? PickAutoRoute(bool preferVideo, bool preferAudio)
+    {
+        // First compatible match wins. Video outputs cover video; PortAudio covers audio; NDI covers both.
+        foreach (var b in Outputs)
+        {
+            if (b.Line.Definition is Models.NDIOutputDefinition) return b;
+        }
+        if (preferVideo)
+        {
+            foreach (var b in Outputs)
+                if (b.Line.Definition is Models.LocalVideoOutputDefinition) return b;
+        }
+        if (preferAudio)
+        {
+            foreach (var b in Outputs)
+                if (b.Line.Definition is Models.PortAudioOutputDefinition) return b;
+        }
+        return Outputs.FirstOrDefault();
     }
 
     private async Task StartPlaybackAsync()

@@ -109,6 +109,11 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
     /// <summary>True when this sink was created with <see cref="CreateTextureMirror"/> (frames go to the anchor only).</summary>
     public bool IsTextureMirror => _textureMirrorAnchor is not null;
 
+    /// <summary>How the frame is mapped into the window's viewport. Default <see cref="VideoViewportFit.Stretch"/>
+    /// preserves the original behaviour; set to <see cref="VideoViewportFit.Contain"/> to letterbox the frame so
+    /// its aspect ratio is preserved (the letterbox bars are painted black before each render).</summary>
+    public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Stretch;
+
     public event EventHandler? CloseRequested;
     public event EventHandler<(int Width, int Height)>? Resized;
 
@@ -244,13 +249,61 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
     public void Configure(VideoFormat format)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_configured)
-            throw new InvalidOperationException("SDL3GLVideoSink already configured; create a new sink to switch format");
         if (Array.IndexOf(AcceptedFormats, format.PixelFormat) < 0)
             throw new NotSupportedException(
                 $"SDL3GLVideoSink does not accept pixel format {format.PixelFormat}; supported: {string.Join(", ", AcceptedFormats)}");
         if (format.Width <= 0 || format.Height <= 0)
             throw new ArgumentException("video format must have positive dimensions", nameof(format));
+
+        if (_configured)
+        {
+            // Idempotent for the same format.
+            if (_format == format)
+                return;
+
+            // Mirrors share GL textures with the anchor's renderer — reconfiguring the anchor would
+            // invalidate them. Disallow reconfigure while any mirror is registered.
+            lock (_textureMirrorLock)
+            {
+                if (_registeredTextureMirrors.Count > 0)
+                    throw new InvalidOperationException(
+                        "Cannot reconfigure an SDL3GLVideoSink that has registered texture mirrors — dispose mirrors first.");
+            }
+
+            // Drop frames queued for the old format so Submit's format guard doesn't reject them after switch.
+            var stale = Interlocked.Exchange(ref _pendingFrame, null);
+            stale?.Dispose();
+
+            _format = format;
+            _canIdleRepaint = false;
+
+            // Rebuild the renderer on the render thread so GL teardown happens with the right context current.
+            Exception? rebuildError = null;
+            using var done = new ManualResetEventSlim(false);
+            InvokeOnRenderThread(() =>
+            {
+                try
+                {
+                    try { _renderer?.Dispose(); }
+                    catch { /* best effort */ }
+                    _renderer = null;
+                    _renderer = BuildRendererForCurrentFormat();
+                }
+                catch (Exception ex)
+                {
+                    rebuildError = ex;
+                }
+                finally
+                {
+                    done.Set();
+                }
+            });
+            done.Wait(TimeSpan.FromSeconds(4));
+            if (rebuildError is not null)
+                throw new InvalidOperationException("SDL3GLVideoSink reconfigure failed", rebuildError);
+
+            return;
+        }
 
         _format = format;
 
@@ -557,6 +610,15 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
 
         _gl = SilkGL.GetApi(name => SDL.GLGetProcAddress(name));
 
+        _renderer = BuildRendererForCurrentFormat();
+
+        _graphicsInitialized = true;
+    }
+
+    /// <summary>Constructs a <see cref="YuvVideoRenderer"/> for <see cref="_format"/>. Caller must hold the GL
+    /// context current and have <see cref="_gl"/> initialized. Used by initial setup and by reconfigure.</summary>
+    private YuvVideoRenderer BuildRendererForCurrentFormat()
+    {
         nint win32D3d11DevicePtr = 0;
         if (OperatingSystem.IsWindows() && _format.PixelFormat == PixelFormat.Nv12)
             win32D3d11DevicePtr = _win32Nv12Device.ResolveDevicePointerForNv12RendererConstruction();
@@ -566,13 +628,11 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
             && win32D3d11DevicePtr == 0
             && !_win32Nv12Device.CreatesFallbackOwnedInteropDevice;
 
-        _renderer = new YuvVideoRenderer(_gl, _format, eglDmabufInterop: OperatingSystem.IsLinux()
+        return new YuvVideoRenderer(_gl!, _format, eglDmabufInterop: OperatingSystem.IsLinux()
                 ? new YuvDmabufEglInterop(SDL.EGLGetCurrentDisplay(), name => SDL.EGLGetProcAddress(name))
                 : null,
             win32D3D11DeviceComPtrForNv12: win32D3d11DevicePtr,
             allowLazyWin32Nv12UploaderFromDecodedFrame: allowLazyNv12);
-
-        _graphicsInitialized = true;
     }
 
     private static void ApplyStandardGlContextAttributes()
@@ -667,13 +727,24 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
             return;
         }
 
-        _renderer.Render(_viewportWidth, _viewportHeight);
+        ClearForLetterboxIfNeeded();
+        _renderer.Render(_viewportWidth, _viewportHeight, ViewportFit);
         if (_disposed)
             SDL.GLSetSwapInterval(0);
 
         SDL.GLSwapWindow(_window);
         Interlocked.Increment(ref _displayed);
         _canIdleRepaint = true;
+    }
+
+    private void ClearForLetterboxIfNeeded()
+    {
+        // Stretch already covers every pixel — skip the clear to avoid an unnecessary state change.
+        if (ViewportFit == VideoViewportFit.Stretch || _gl is null)
+            return;
+        _gl.Viewport(0, 0, (uint)_viewportWidth, (uint)_viewportHeight);
+        _gl.ClearColor(0f, 0f, 0f, 1f);
+        _gl.Clear(Silk.NET.OpenGL.ClearBufferMask.ColorBufferBit);
     }
 
     private void PresentWithoutNewUpload()
@@ -690,7 +761,8 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
             return;
         }
 
-        _renderer.Render(_viewportWidth, _viewportHeight);
+        ClearForLetterboxIfNeeded();
+        _renderer.Render(_viewportWidth, _viewportHeight, ViewportFit);
         if (_disposed)
             SDL.GLSetSwapInterval(0);
 
@@ -735,7 +807,8 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
 
         try
         {
-            _renderer.Render(_viewportWidth, _viewportHeight);
+            ClearForLetterboxIfNeeded();
+            _renderer.Render(_viewportWidth, _viewportHeight, ViewportFit);
             if (_disposed || anchor._disposed)
                 SDL.GLSetSwapInterval(0);
 

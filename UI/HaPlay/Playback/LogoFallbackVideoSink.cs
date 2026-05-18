@@ -20,8 +20,11 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     private readonly object _logoGate = new();
     private VideoFormat _format;
     private bool _configured;
+    private VideoFormat? _decoderFormat;
+    private volatile bool _imageOverrideActive;
     private volatile bool _holdFallback;
     private volatile bool _holdEverEngaged;
+    private volatile bool _singleFrameSourceMode;
     private VideoFrame? _holdTemplate;
     private VideoFrame? _lastRealFrameCache;
     private bool _disposed;
@@ -39,10 +42,49 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     public void Configure(VideoFormat format)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // When an image override is in effect, the inner sink stays at the image's format and we just
+        // remember the decoder's negotiated format so we can revert when the override clears. Decoded
+        // frames are still dropped by Submit while hold is on.
+        _decoderFormat = format;
+        if (_imageOverrideActive)
+        {
+            _configured = true;
+            return;
+        }
         _inner.Configure(format);
         _format = format;
         _configured = true;
     }
+
+    /// <summary>
+    /// Phase 3 — switches the wrapped sink to an image-native format (e.g. the dimensions of the
+    /// user-supplied hold image). Subsequent template pushes use the image format; decoded frames are
+    /// already dropped while hold is on. Pass <c>null</c> to revert to the decoder's format.
+    /// </summary>
+    public void ApplyImageOverrideFormat(VideoFormat? imageFormat)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (imageFormat is null)
+        {
+            if (!_imageOverrideActive)
+                return;
+            _imageOverrideActive = false;
+            if (_decoderFormat is { } df)
+            {
+                _inner.Configure(df);
+                _format = df;
+            }
+            return;
+        }
+
+        _imageOverrideActive = true;
+        _inner.Configure(imageFormat.Value);
+        _format = imageFormat.Value;
+        _configured = true;
+    }
+
+    /// <summary>True while the wrapped sink is presenting at the image-override format.</summary>
+    public bool IsImageOverrideActive => _imageOverrideActive;
 
     public void SetHoldFallback(bool hold)
     {
@@ -50,6 +92,14 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             _holdEverEngaged = true;
         _holdFallback = hold;
     }
+
+    /// <summary>
+    /// Tells <see cref="Submit"/> to keep the cached "last real frame" refreshed so a later hold-toggle-off
+    /// can re-show the source. Enable only for single-frame sources (attached_pic cover art, still images) —
+    /// the cache is a per-frame ~8 MB deep-copy at 1080p BGRA and would cost ~500 MB/s for regular video.
+    /// </summary>
+    public void SetSingleFrameSourceMode(bool isSingleFrameSource) =>
+        _singleFrameSourceMode = isSingleFrameSource;
 
     /// <summary>
     /// Pushes the configured template at <paramref name="presentationTime"/> (idle slate / no mux decode).
@@ -112,11 +162,12 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             }
         }
 
-        // Lazy cache strategy: always snapshot the FIRST pass-through frame so single-frame sources
-        // (audio + cover art) survive a future hold toggle. Once SetHoldFallback(true) has fired this
-        // session, refresh the cache on every submit so a subsequent toggle has a current frame.
-        // Sessions that never engage hold pay one deep-copy per session — not 8 MB × frame-rate forever.
-        var shouldCache = _holdEverEngaged;
+        // Cache strategy: snapshot the FIRST pass-through frame so single-frame sources (cover art,
+        // still images) survive a future hold toggle. For sources that opt into single-frame mode,
+        // also refresh the cache on every submit after hold has engaged once. For regular video,
+        // skip the per-frame deep-copy entirely — the live decode loop will produce a current frame
+        // on the next tick anyway, and 8 MB × frame-rate is too expensive (~500 MB/s at 1080p60).
+        var shouldCache = _holdEverEngaged && _singleFrameSourceMode;
         if (!shouldCache)
         {
             lock (_logoGate)

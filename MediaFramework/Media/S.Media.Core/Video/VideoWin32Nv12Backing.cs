@@ -22,7 +22,6 @@ public sealed class VideoWin32Nv12Backing : IDisposable
 {
     private nint _lumaNtHandle;
     private nint _chromaNtHandle;
-    private int _closed;
     private int _refCount = 1;
 
     /// <param name="d3d11TextureArraySliceIndex">Array slice for D3D11VA pool textures; 0 for non-array.</param>
@@ -77,23 +76,32 @@ public sealed class VideoWin32Nv12Backing : IDisposable
 
     public bool UsesDistinctSharedObjects => _lumaNtHandle != _chromaNtHandle;
 
+    /// <summary>Atomic against a racing <see cref="Dispose"/> that would otherwise close the handles between a disposed-check and the increment.</summary>
+    /// <exception cref="ObjectDisposedException">Backing handles are already closed.</exception>
     public void AddReference()
     {
-        if (Volatile.Read(ref _closed) != 0)
-            throw new ObjectDisposedException(nameof(VideoWin32Nv12Backing));
-        Interlocked.Increment(ref _refCount);
+        while (true)
+        {
+            var n = Volatile.Read(ref _refCount);
+            if (n <= 0)
+                throw new ObjectDisposedException(nameof(VideoWin32Nv12Backing));
+            if (Interlocked.CompareExchange(ref _refCount, n + 1, n) == n)
+                return;
+        }
     }
 
     public void Dispose()
     {
-        var remaining = Interlocked.Decrement(ref _refCount);
-        if (remaining > 0)
-            return;
-        if (remaining < 0)
-            return;
-
-        if (Interlocked.Exchange(ref _closed, 1) != 0)
-            return;
+        while (true)
+        {
+            var n = Volatile.Read(ref _refCount);
+            if (n <= 0) return;
+            if (Interlocked.CompareExchange(ref _refCount, n - 1, n) == n)
+            {
+                if (n - 1 > 0) return;
+                break;
+            }
+        }
 
         var l = _lumaNtHandle;
         var c = _chromaNtHandle;

@@ -43,6 +43,10 @@ public sealed class MediaContainerDecoder : IDisposable
     /// <c>IsExhausted = true</c> immediately, so the negotiated video pipeline runs but never produces frames.</summary>
     public bool HasVideo => _shared.HasVideo;
 
+    /// <summary>True when the chosen video stream is <c>AV_DISPOSITION_ATTACHED_PIC</c> (album cover art).
+    /// Always false when <see cref="HasVideo"/> is false. Single-frame for the entire file.</summary>
+    public bool VideoIsAttachedPicture => _shared.VideoIsAttachedPicture;
+
     /// <summary>Always true for this implementation.</summary>
     public bool UsesSharedDemux => true;
 

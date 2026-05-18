@@ -130,10 +130,15 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
         // _playedSamples is preserved (lifetime stat / monotonic clock).
         Volatile.Write(ref _writeIndex, 0);
         Volatile.Write(ref _readIndex, 0);
+        // Reset BEFORE Pa_StartStream so the first new-segment callback re-anchors
+        // _segmentStreamT0 / _segmentPlayed0Samples to this segment. Writing after
+        // StartStream races the callback and leaves ElapsedSinceStart anchored to
+        // the previous segment until the next stray callback happens to re-trip
+        // calibration.
+        Volatile.Write(ref _streamSmoothCalibrated, 0);
         var err = Native.Pa_StartStream(_stream);
         if (err != PaError.paNoError)
             PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
-        Volatile.Write(ref _streamSmoothCalibrated, 0);
     }
 
     /// <summary>
