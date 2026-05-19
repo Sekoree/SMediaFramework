@@ -172,9 +172,9 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             if (ret == 0)
             {
                 var workFrame = ResolveWorkFrame();
-                var trc = _frame->color_trc;
+                var meta = ExtractMetadata(_frame);
                 SyncCodecPixelFormatIfNeeded(workFrame);
-                frame = BuildFrame(workFrame, trc);
+                frame = BuildFrame(workFrame, meta);
                 av_frame_unref(_frame);
                 return true;
             }
@@ -553,30 +553,40 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         return _frame;
     }
 
-    private VideoFrame BuildFrame(AVFrame* work, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildFrame(AVFrame* work, VideoFrameMetadata meta)
     {
         var pts = ResolvePts(work);
         Position = pts;
         _framesEmitted++;
 
         if (_drmGpuNv12Path)
-            return BuildNv12DrmDmabufGpuFrame(work, pts, trc);
+            return BuildNv12DrmDmabufGpuFrame(work, pts, meta);
 
         if (_d3d11GpuNv12Path)
-            return BuildNv12D3D11SharedGpuFrame(work, pts, trc);
+            return BuildNv12D3D11SharedGpuFrame(work, pts, meta);
 
         return _passThrough
-            ? BuildPassThroughFrame(work, pts, trc)
-            : BuildConvertedFrame(work, pts, trc);
+            ? BuildPassThroughFrame(work, pts, meta)
+            : BuildConvertedFrame(work, pts, meta);
     }
 
-    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, AVColorTransferCharacteristic trc) =>
-        CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Format, trc);
+    /// <summary>
+    /// Reads color-space / color-range / field-order / S12M-timecode plus the existing transfer
+    /// hint off <paramref name="source"/>. Called once per decoded frame at the top of the read loop.
+    /// </summary>
+    internal VideoFrameMetadata ExtractMetadata(AVFrame* source) => new(
+        MapTransferHint(source->color_trc),
+        MapColorSpace(source->colorspace),
+        MapColorRange(source->color_range),
+        MapFieldOrder(source),
+        ReadS12mTimecode(source, Format.FrameRate));
+
+    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, VideoFrameMetadata meta) =>
+        CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Format, meta);
 
     internal static unsafe VideoFrame CreateVideoFrameFromLinuxDrmPrimeFrame(
-        AVFrame* drmFrame, TimeSpan pts, VideoFormat format, AVColorTransferCharacteristic trc)
+        AVFrame* drmFrame, TimeSpan pts, VideoFormat format, VideoFrameMetadata meta)
     {
-        var hint = MapTransferHint(trc);
         var nv12 = DrmPrimeNv12BackingFactory.TryCreateBacking(drmFrame);
         var p010 = DrmPrimeP010BackingFactory.TryCreateBacking(drmFrame);
         var p016 = DrmPrimeP016BackingFactory.TryCreateBacking(drmFrame);
@@ -584,7 +594,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (format.PixelFormat == PixelFormat.P016)
         {
             if (p016 != null)
-                return VideoFrame.CreateP016Dmabuf(pts, format, p016, hint);
+                return VideoFrame.CreateP016Dmabuf(pts, format, p016, meta);
             if (p010 != null)
                 throw new InvalidOperationException(
                     "DRM PRIME frame is P010 (DRM_FORMAT_P010) but the decoder negotiated P016 output. Re-open with a 12-bit profile or CPU decode.");
@@ -598,7 +608,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (format.PixelFormat == PixelFormat.P010)
         {
             if (p010 != null)
-                return VideoFrame.CreateP010Dmabuf(pts, format, p010, hint);
+                return VideoFrame.CreateP010Dmabuf(pts, format, p010, meta);
             if (p016 != null)
                 throw new InvalidOperationException(
                     "DRM PRIME frame is P016 (DRM_FORMAT_P016) but the decoder negotiated P010 output. Re-open with a 10-bit profile or CPU decode.");
@@ -612,7 +622,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (format.PixelFormat == PixelFormat.Nv12)
         {
             if (nv12 != null)
-                return VideoFrame.CreateNv12Dmabuf(pts, format, nv12, hint);
+                return VideoFrame.CreateNv12Dmabuf(pts, format, nv12, meta);
             if (p016 != null)
                 throw new InvalidOperationException(
                     "DRM PRIME frame is P016 (DRM_FORMAT_P016) but the decoder negotiated NV12 output. Re-open the source as 12-bit or select P016 for sinks.");
@@ -651,17 +661,17 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         return PixelFormat.Nv12;
     }
 
-    private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, VideoFrameMetadata meta)
     {
         var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame, _win32Nv12SharedHandleOnly);
         if (backing == null)
             throw new InvalidOperationException(
                 "D3D11 frame could not be exported to NT shared handles. Disable decoder option RetainD3D11SharedHandleForGl or try a CPU upload path.");
 
-        return VideoFrame.CreateNv12Win32Shared(pts, Format, backing, MapTransferHint(trc));
+        return VideoFrame.CreateNv12Win32Shared(pts, Format, backing, meta);
     }
 
-    private VideoFrame BuildPassThroughFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildPassThroughFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)
     {
         // Clone the ref so the underlying buffer survives the next decode call.
         var clone = av_frame_alloc();
@@ -686,7 +696,6 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         var passHandle = _passThroughArena.Rent(planeCount);
         var planes = passHandle.Planes;
         var strides = passHandle.Strides;
-        var hint = MapTransferHint(trc);
         for (var i = 0; i < planeCount; i++)
         {
             var rawStride = clone->linesize[(uint)i];
@@ -700,14 +709,16 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         }
 
         var clonePtr = (nint)clone;
-        return new VideoFrame(pts, Format, planes, strides, hint, release: () =>
-        {
-            FreeAVFrame(clonePtr);
-            _passThroughArena.Return(in passHandle);
-        });
+        return new VideoFrame(pts, Format, planes, strides,
+            release: () =>
+            {
+                FreeAVFrame(clonePtr);
+                _passThroughArena.Return(in passHandle);
+            },
+            metadata: meta);
     }
 
-    private VideoFrame BuildConvertedFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildConvertedFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)
     {
         if (_swsCtx == null)
             throw new InvalidOperationException("swscale is not configured — SelectOutputFormat must run before decoding.");
@@ -718,7 +729,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (bytesPerPixel == 0)
         {
             if (_outPixelFormat is PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.I420)
-                return BuildConvertedPlanarFrame(work, pts, trc);
+                return BuildConvertedPlanarFrame(work, pts, meta);
             throw new NotSupportedException(
                 $"sws conversion to {_outPixelFormat} is not implemented — use BGRA32, NV12, I420, or a packed RGB layout.");
         }
@@ -764,13 +775,13 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             if (ret < 0) FFmpegException.ThrowIfError(ret, nameof(sws_scale));
         }
 
-        var hint = MapTransferHint(trc);
         byte[] pooled = rented;
-        return new VideoFrame(pts, Format, dstMem, stride, hint,
-            release: () => ArrayPool<byte>.Shared.Return(pooled));
+        return new VideoFrame(pts, Format, dstMem, stride,
+            release: () => ArrayPool<byte>.Shared.Return(pooled),
+            metadata: meta);
     }
 
-    private VideoFrame BuildConvertedPlanarFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildConvertedPlanarFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)
     {
         var width = Format.Width;
         var height = Format.Height;
@@ -846,13 +857,14 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             memories[i] = buffers[i].AsMemory(0, len);
         }
 
-        var hint = MapTransferHint(trc);
         var captured = buffers;
-        return new VideoFrame(pts, Format, memories, strides, hint, release: () =>
-        {
-            foreach (var b in captured)
-                ArrayPool<byte>.Shared.Return(b);
-        });
+        return new VideoFrame(pts, Format, memories, strides,
+            release: () =>
+            {
+                foreach (var b in captured)
+                    ArrayPool<byte>.Shared.Return(b);
+            },
+            metadata: meta);
     }
 
     private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)
@@ -873,13 +885,13 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
 
             var workFrame = ResolveWorkFrame();
-            var trc = _frame->color_trc;
+            var meta = ExtractMetadata(_frame);
             SyncCodecPixelFormatIfNeeded(workFrame);
 
             var pts = ResolvePts(workFrame);
             if (pts >= targetPresentationTime)
             {
-                _primedAfterSeek = BuildFrame(workFrame, trc);
+                _primedAfterSeek = BuildFrame(workFrame, meta);
                 av_frame_unref(_frame);
                 return;
             }
@@ -1024,4 +1036,94 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         AVColorTransferCharacteristic.AVCOL_TRC_UNSPECIFIED => VideoTransferHint.Unspecified,
         _ => VideoTransferHint.Unspecified,
     };
+
+    /// <summary>Maps libav <see cref="AVColorSpace"/> to a Core <see cref="VideoColorSpace"/> hint.</summary>
+    internal static VideoColorSpace MapColorSpace(AVColorSpace cs) => cs switch
+    {
+        AVColorSpace.AVCOL_SPC_BT709 => VideoColorSpace.Bt709,
+        AVColorSpace.AVCOL_SPC_SMPTE170M => VideoColorSpace.Bt601,
+        AVColorSpace.AVCOL_SPC_BT470BG => VideoColorSpace.Bt601,
+        AVColorSpace.AVCOL_SPC_BT2020_NCL => VideoColorSpace.Bt2020,
+        AVColorSpace.AVCOL_SPC_BT2020_CL => VideoColorSpace.Bt2020Cl,
+        _ => VideoColorSpace.Unspecified,
+    };
+
+    /// <summary>Maps libav <see cref="AVColorRange"/> to a Core <see cref="VideoColorRange"/> hint.</summary>
+    internal static VideoColorRange MapColorRange(AVColorRange range) => range switch
+    {
+        AVColorRange.AVCOL_RANGE_MPEG => VideoColorRange.Limited,
+        AVColorRange.AVCOL_RANGE_JPEG => VideoColorRange.Full,
+        _ => VideoColorRange.Unspecified,
+    };
+
+    /// <summary>
+    /// Maps libav frame interlace flags into a Core <see cref="VideoFieldOrder"/> hint. On
+    /// FFmpeg ≥ 7 the legacy <c>interlaced_frame</c>/<c>top_field_first</c> bits live on
+    /// <see cref="AVFrame.flags"/>; we read the spelled-out names from FFmpeg.AutoGen.
+    /// </summary>
+    internal static unsafe VideoFieldOrder MapFieldOrder(AVFrame* frame)
+    {
+        // FFmpeg.AutoGen exposes AV_FRAME_FLAG_INTERLACED + AV_FRAME_FLAG_TOP_FIELD_FIRST as int constants
+        // on the ffmpeg static class. Fall back to legacy interlaced_frame/top_field_first when those
+        // members aren't available (older FFmpeg.AutoGen surfaces).
+        const int AV_FRAME_FLAG_INTERLACED = 1 << 3;
+        const int AV_FRAME_FLAG_TOP_FIELD_FIRST = 1 << 4;
+        var flags = frame->flags;
+        var interlaced = (flags & AV_FRAME_FLAG_INTERLACED) != 0;
+        if (!interlaced) return VideoFieldOrder.Progressive;
+        var tff = (flags & AV_FRAME_FLAG_TOP_FIELD_FIRST) != 0;
+        return tff ? VideoFieldOrder.TopFieldFirst : VideoFieldOrder.BottomFieldFirst;
+    }
+
+    /// <summary>
+    /// Reads the first SMPTE 12M timecode side-data on <paramref name="frame"/>, when present. Returns
+    /// <see langword="null"/> when the source carries no S12M side data.
+    /// </summary>
+    internal static unsafe VideoTimecode? ReadS12mTimecode(AVFrame* frame, Rational frameRate)
+    {
+        var sd = av_frame_get_side_data(frame, AVFrameSideDataType.AV_FRAME_DATA_S12M_TIMECODE);
+        if (sd is null || sd->size < sizeof(uint) * 2) return null;
+        var words = (uint*)sd->data;
+        var count = words[0];
+        if (count == 0) return null;
+        var tc = words[1];
+
+        // SMPTE 12M packed bits (per libavutil/timecode.h):
+        //   bits 0-3  : frames units
+        //   bits 4-7  : frames tens
+        //   bits 8    : drop frame
+        //   bits 9    : color frame
+        //   bits 10-13: seconds units
+        //   bits 14-16: seconds tens
+        //   bit  17   : flags
+        //   bits 18-21: minutes units
+        //   bits 22-24: minutes tens
+        //   bit  25-27: flags
+        //   bits 28-31: hours units / tens
+        var ff = (int)(tc & 0x0F);
+        var fT = (int)((tc >> 4) & 0x03);
+        var dropFrame = ((tc >> 6) & 0x01) != 0;
+        var ss = (int)((tc >> 8) & 0x0F);
+        var sT = (int)((tc >> 12) & 0x07);
+        var mm = (int)((tc >> 16) & 0x0F);
+        var mT = (int)((tc >> 20) & 0x07);
+        var hh = (int)((tc >> 24) & 0x0F);
+        var hT = (int)((tc >> 28) & 0x03);
+
+        var hours = hT * 10 + hh;
+        var mins = mT * 10 + mm;
+        var secs = sT * 10 + ss;
+        var frames = fT * 10 + ff;
+
+        try
+        {
+            return new VideoTimecode(hours, mins, secs, frames, dropFrame, frameRate);
+        }
+        catch (ArgumentException)
+        {
+            // Malformed timecode (out-of-range fields, drop-frame at a non-drop-rate). Drop it
+            // rather than crashing the decode loop — the absence is signalling enough.
+            return null;
+        }
+    }
 }

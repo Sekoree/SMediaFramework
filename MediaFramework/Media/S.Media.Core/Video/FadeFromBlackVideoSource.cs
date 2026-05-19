@@ -182,8 +182,8 @@ public sealed class FadeFromBlackVideoSource : IVideoSource, IDisposable
             src.Format,
             new ReadOnlyMemory<byte>(buffer, 0, byteCount),
             stride,
-            src.ColorTransferHint,
-            release: () => ArrayPool<byte>.Shared.Return(owned, clearArray: false));
+            release: () => ArrayPool<byte>.Shared.Return(owned, clearArray: false),
+            metadata: src.Metadata);
     }
 
     private static bool IsSupportedFormat(PixelFormat pf) => pf is

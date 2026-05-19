@@ -455,8 +455,8 @@ public sealed class VideoPlayer : IDisposable
                 _heldFormat,
                 _heldPlanes,
                 _heldStrides,
-                _heldTransferHint,
-                release: null);
+                release: null,
+                metadata: new VideoFrameMetadata(ColorTransferHint: _heldTransferHint));
         }
         catch (Exception ex)
         {

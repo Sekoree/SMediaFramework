@@ -60,7 +60,6 @@ public class VideoCpuFrameConverterTests
         using var src = new VideoFrame(TimeSpan.Zero, fmt,
             [mmY.Memory, mmU.Memory, mmV.Memory],
             [yStride, uvStride, uvStride],
-            default,
             release: () => NativeMemory.AlignedFree(pool));
 
         using var conv = new VideoCpuFrameConverter();

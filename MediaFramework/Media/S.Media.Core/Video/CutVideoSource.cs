@@ -125,9 +125,9 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
                 dup.Format,
                 dup.Planes,
                 dup.Strides,
-                dup.ColorTransferHint,
                 release: dup.Dispose,
-                dmaBufNv12: dup.DmabufNv12);
+                dmaBufNv12: dup.DmabufNv12,
+                metadata: dup.Metadata);
         }
         if (original.DmabufP010 is not null)
         {
@@ -138,9 +138,9 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
                 dup.Format,
                 dup.Planes,
                 dup.Strides,
-                dup.ColorTransferHint,
                 release: dup.Dispose,
-                dmaBufP010: dup.DmabufP010);
+                dmaBufP010: dup.DmabufP010,
+                metadata: dup.Metadata);
         }
         if (original.DmabufP016 is not null)
         {
@@ -151,9 +151,9 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
                 dup.Format,
                 dup.Planes,
                 dup.Strides,
-                dup.ColorTransferHint,
                 release: dup.Dispose,
-                dmaBufP016: dup.DmabufP016);
+                dmaBufP016: dup.DmabufP016,
+                metadata: dup.Metadata);
         }
         if (original.Win32Nv12 is not null && OperatingSystem.IsWindows())
         {
@@ -164,9 +164,9 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
                 dup.Format,
                 dup.Planes,
                 dup.Strides,
-                dup.ColorTransferHint,
                 release: dup.Dispose,
-                win32Nv12: dup.Win32Nv12);
+                win32Nv12: dup.Win32Nv12,
+                metadata: dup.Metadata);
         }
 
         // CPU path — share the planes and forward dispose to the original.
@@ -176,8 +176,8 @@ public sealed class CutVideoSource : IVideoSource, IDisposable
             original.Format,
             original.Planes,
             original.Strides,
-            original.ColorTransferHint,
-            release: capturedOriginal.Dispose);
+            release: capturedOriginal.Dispose,
+            metadata: original.Metadata);
     }
 
     public void Dispose()

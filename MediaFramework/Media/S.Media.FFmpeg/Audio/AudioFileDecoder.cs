@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using S.Media.Core.Audio;
 
@@ -359,9 +360,9 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
     }
 
     /// <summary>
-    /// Allocates a fresh array and converts <see cref="_frame"/> into it. Used
-    /// by the (kept) <see cref="TryReadNextFrame"/> path so each returned
-    /// <see cref="AudioFrame"/> owns its buffer.
+    /// Rents an array from <see cref="ArrayPool{T}.Shared"/> and converts <see cref="_frame"/> into it.
+    /// The returned <see cref="AudioFrame"/> carries a <see cref="AudioFrame.Release"/> callback that
+    /// returns the buffer on <see cref="AudioFrame.Dispose"/>.
     /// </summary>
     private AudioFrame ConvertFrame()
     {
@@ -370,20 +371,31 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
             swr_get_delay(_swrCtx, Format.SampleRate) + srcSamples,
             Format.SampleRate, Format.SampleRate, AVRounding.AV_ROUND_UP);
 
-        var samples = new float[outCapacity * Format.Channels];
+        var totalFloats = outCapacity * Format.Channels;
+        var samples = ArrayPool<float>.Shared.Rent(totalFloats);
         int converted;
         fixed (float* outPtr = samples)
         {
             var outBuf = (byte*)outPtr;
             converted = swr_convert(_swrCtx, &outBuf, outCapacity, _frame->extended_data, srcSamples);
         }
-        if (converted < 0) FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+        if (converted < 0)
+        {
+            ArrayPool<float>.Shared.Return(samples);
+            FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+        }
 
         var pts = ResolvePts();
         Position = pts + TimeSpan.FromSeconds((double)converted / Format.SampleRate);
         _samplesEmitted += converted;
 
-        return new AudioFrame(pts, Format, converted, samples.AsMemory(0, converted * Format.Channels));
+        var owned = samples;
+        return new AudioFrame(
+            pts,
+            Format,
+            converted,
+            samples.AsMemory(0, converted * Format.Channels),
+            Release: () => ArrayPool<float>.Shared.Return(owned, clearArray: false));
     }
 
     private TimeSpan ResolvePts()

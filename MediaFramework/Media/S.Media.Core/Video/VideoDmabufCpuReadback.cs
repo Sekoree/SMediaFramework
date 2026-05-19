@@ -52,7 +52,7 @@ public static unsafe class VideoDmabufCpuReadback
             source.Format,
             [yBuf, uvBuf],
             [yPitch, uvPitch],
-            source.ColorTransferHint);
+            metadata: source.Metadata);
         return true;
     }
 
@@ -83,7 +83,7 @@ public static unsafe class VideoDmabufCpuReadback
             source.Format,
             [yBuf, uvBuf],
             [yPitch, uvPitch],
-            source.ColorTransferHint);
+            metadata: source.Metadata);
         return true;
     }
 
@@ -114,7 +114,7 @@ public static unsafe class VideoDmabufCpuReadback
             source.Format,
             [yBuf, uvBuf],
             [yPitch, uvPitch],
-            source.ColorTransferHint);
+            metadata: source.Metadata);
         return true;
     }
 

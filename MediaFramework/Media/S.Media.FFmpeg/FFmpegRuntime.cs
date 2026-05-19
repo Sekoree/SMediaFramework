@@ -4,6 +4,7 @@ using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Audio;
 using S.Media.FFmpeg.Video;
+using CorePixelFormat = S.Media.Core.Video.PixelFormat;
 
 namespace S.Media.FFmpeg;
 
@@ -73,6 +74,17 @@ public static class FFmpegRuntime
             // other packages can replace these after FFmpegRuntime.EnsureInitialized() returns.
             VideoCpuFrameConverterRegistry.Factory ??= () => new VideoCpuFrameConverter();
             VideoCpuFrameConverterRegistry.CanConvertProbe ??= VideoCpuFrameConverter.CanConvert;
+
+            // Install yadif-based deinterlacer so Core consumers get it via
+            // VideoDeinterlacerRegistry.Create(input) when they reference S.Media.FFmpeg. The
+            // factory throws on unsupported formats (anything other than I420 / NV12) so callers
+            // that need broader format coverage fall through to BobDeinterlacer.
+            VideoDeinterlacerRegistry.Factory ??= input =>
+            {
+                if (input.PixelFormat is CorePixelFormat.I420 or CorePixelFormat.Nv12)
+                    return new YadifDeinterlacer(input);
+                return new BobDeinterlacer(input);
+            };
 
             _initialized = true;
         }

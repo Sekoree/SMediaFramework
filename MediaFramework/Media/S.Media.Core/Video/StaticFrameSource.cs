@@ -87,7 +87,9 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
             return false;
         }
 
-        frame = new VideoFrame(_nextPts, _format, _planes, _strides, _transferHint, release: null);
+        frame = new VideoFrame(_nextPts, _format, _planes, _strides,
+            release: null,
+            metadata: new VideoFrameMetadata(ColorTransferHint: _transferHint));
         _nextPts += _ptsStep;
         return true;
     }

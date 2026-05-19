@@ -120,8 +120,8 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             tpl.Format,
             tpl.Planes,
             tpl.Strides,
-            tpl.ColorTransferHint,
-            release: null);
+            release: null,
+            metadata: tpl.Metadata);
         _inner.Submit(logoFrame);
     }
 
@@ -219,8 +219,8 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             cache.Format,
             cache.Planes,
             cache.Strides,
-            cache.ColorTransferHint,
-            release: null);
+            release: null,
+            metadata: cache.Metadata);
 
         try
         {

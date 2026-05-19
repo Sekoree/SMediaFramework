@@ -869,20 +869,31 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             swr_get_delay(_swr, Audio.Format.SampleRate) + srcSamples,
             Audio.Format.SampleRate, Audio.Format.SampleRate, AVRounding.AV_ROUND_UP);
 
-        var samples = new float[outCapacity * Audio.Format.Channels];
+        var totalFloats = outCapacity * Audio.Format.Channels;
+        var samples = ArrayPool<float>.Shared.Rent(totalFloats);
         int converted;
         fixed (float* outPtr = samples)
         {
             var outBuf = (byte*)outPtr;
             converted = swr_convert(_swr, &outBuf, outCapacity, _aFrame->extended_data, srcSamples);
         }
-        if (converted < 0) FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+        if (converted < 0)
+        {
+            ArrayPool<float>.Shared.Return(samples);
+            FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+        }
 
         var pts = ResolveAudioPts();
         Audio.Position = pts + TimeSpan.FromSeconds((double)converted / Audio.Format.SampleRate);
         _aSamplesEmitted += converted;
 
-        return new AudioFrame(pts, Audio.Format, converted, samples.AsMemory(0, converted * Audio.Format.Channels));
+        var owned = samples;
+        return new AudioFrame(
+            pts,
+            Audio.Format,
+            converted,
+            samples.AsMemory(0, converted * Audio.Format.Channels),
+            Release: () => ArrayPool<float>.Shared.Return(owned, clearArray: false));
     }
 
     internal void RequestVideoDecodeYield()
@@ -1082,37 +1093,45 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         return PtsToTimeSpanVideo(pts);
     }
 
-    private VideoFrame BuildVideoFrame(AVFrame* work, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildVideoFrame(AVFrame* work, VideoFrameMetadata meta)
     {
         var pts = ResolveVideoPts(work);
         Video.Position = pts;
         _vFramesEmitted++;
 
         if (_drmGpuNv12Path)
-            return BuildNv12DrmDmabufGpuFrame(work, pts, trc);
+            return BuildNv12DrmDmabufGpuFrame(work, pts, meta);
 
         if (_d3d11GpuNv12Path)
-            return BuildNv12D3D11SharedGpuFrame(work, pts, trc);
+            return BuildNv12D3D11SharedGpuFrame(work, pts, meta);
 
         return _vPassThrough
-            ? BuildPassThroughVideoFrame(work, pts, trc)
-            : BuildConvertedVideoFrame(work, pts, trc);
+            ? BuildPassThroughVideoFrame(work, pts, meta)
+            : BuildConvertedVideoFrame(work, pts, meta);
     }
 
-    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, AVColorTransferCharacteristic trc) =>
-        VideoFileDecoder.CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Video.Format, trc);
+    /// <summary>Reads transfer / color-space / range / field-order / S12M-timecode off <paramref name="source"/>.</summary>
+    private VideoFrameMetadata ExtractVideoMetadata(AVFrame* source) => new(
+        VideoFileDecoder.MapTransferHint(source->color_trc),
+        VideoFileDecoder.MapColorSpace(source->colorspace),
+        VideoFileDecoder.MapColorRange(source->color_range),
+        VideoFileDecoder.MapFieldOrder(source),
+        VideoFileDecoder.ReadS12mTimecode(source, Video.Format.FrameRate));
 
-    private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, VideoFrameMetadata meta) =>
+        VideoFileDecoder.CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Video.Format, meta);
+
+    private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, VideoFrameMetadata meta)
     {
         var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame, _win32Nv12SharedHandleOnly);
         if (backing == null)
             throw new InvalidOperationException(
                 "D3D11 frame could not be exported to NT shared handles. Disable decoder option RetainD3D11SharedHandleForGl or try a CPU upload path.");
 
-        return VideoFrame.CreateNv12Win32Shared(pts, Video.Format, backing, VideoFileDecoder.MapTransferHint(trc));
+        return VideoFrame.CreateNv12Win32Shared(pts, Video.Format, backing, meta);
     }
 
-    private VideoFrame BuildPassThroughVideoFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildPassThroughVideoFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)
     {
         var clone = av_frame_alloc();
         if (clone == null) throw new OutOfMemoryException("av_frame_alloc (clone) returned NULL");
@@ -1136,7 +1155,6 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         var passHandle = _passThroughArena.Rent(planeCount);
         var planes = passHandle.Planes;
         var strides = passHandle.Strides;
-        var hint = VideoFileDecoder.MapTransferHint(trc);
         for (var i = 0; i < planeCount; i++)
         {
             var rawStride = clone->linesize[(uint)i];
@@ -1150,15 +1168,17 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
 
         var clonePtr = (nint)clone;
-        return new VideoFrame(pts, Video.Format, planes, strides, hint, release: () =>
-        {
-            var f = (AVFrame*)clonePtr;
-            av_frame_free(&f);
-            _passThroughArena.Return(in passHandle);
-        });
+        return new VideoFrame(pts, Video.Format, planes, strides,
+            release: () =>
+            {
+                var f = (AVFrame*)clonePtr;
+                av_frame_free(&f);
+                _passThroughArena.Return(in passHandle);
+            },
+            metadata: meta);
     }
 
-    private VideoFrame BuildConvertedVideoFrame(AVFrame* work, TimeSpan pts, AVColorTransferCharacteristic trc)
+    private VideoFrame BuildConvertedVideoFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)
     {
         var width = Video.Format.Width;
         var height = Video.Format.Height;
@@ -1203,10 +1223,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (sret < 0) FFmpegException.ThrowIfError(sret, nameof(sws_scale));
         }
 
-        var hint = VideoFileDecoder.MapTransferHint(trc);
         byte[] pooled = rented;
-        return new VideoFrame(pts, Video.Format, dstMem, stride, hint,
-            release: () => ArrayPool<byte>.Shared.Return(pooled));
+        return new VideoFrame(pts, Video.Format, dstMem, stride,
+            release: () => ArrayPool<byte>.Shared.Return(pooled),
+            metadata: meta);
     }
 
     private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)
@@ -1238,11 +1258,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
             var workFrame = ResolveWorkVideoFrame();
             SyncVideoPixelFormatIfNeeded(workFrame);
-            var trc = _vFrame->color_trc;
+            var meta = ExtractVideoMetadata(_vFrame);
             var pts = ResolveVideoPts(workFrame);
             if (pts >= targetPresentationTime)
             {
-                _vPrimedAfterSeek = BuildVideoFrame(workFrame, trc);
+                _vPrimedAfterSeek = BuildVideoFrame(workFrame, meta);
                 av_frame_unref(_vFrame);
                 return;
             }
@@ -1425,8 +1445,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                     {
                         var workFrame = _o.ResolveWorkVideoFrame();
                         _o.SyncVideoPixelFormatIfNeeded(workFrame);
-                        var trc = _o._vFrame->color_trc;
-                        frame = _o.BuildVideoFrame(workFrame, trc);
+                        var meta = _o.ExtractVideoMetadata(_o._vFrame);
+                        frame = _o.BuildVideoFrame(workFrame, meta);
                         av_frame_unref(_o._vFrame);
                         return true;
                     }

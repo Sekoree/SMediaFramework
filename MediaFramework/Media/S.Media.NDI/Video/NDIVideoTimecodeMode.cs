@@ -33,4 +33,12 @@ public enum NDIVideoTimecodeMode
     /// <see cref="S.Media.NDI.Audio.NDIAudioSink"/> stamps from <see cref="S.Media.Core.Audio.AudioFrame.PresentationTime"/>.
     /// </summary>
     MuxerPresentationTicks,
+
+    /// <summary>
+    /// Read SMPTE 12M timecode from <see cref="S.Media.Core.Video.VideoFrame.Timecode"/> and encode it as
+    /// 100-ns ticks (matching NDI's timecode slot semantics) — so e.g. <c>01:23:45:00</c> at 30 fps lands
+    /// as <c>(1·3600 + 23·60 + 45)·10⁷</c> ticks. Frames without a timecode fall back to the same logic
+    /// as <see cref="PresentationRelativeTicks"/>.
+    /// </summary>
+    SmpteFromFrame,
 }

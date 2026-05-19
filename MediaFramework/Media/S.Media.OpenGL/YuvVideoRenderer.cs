@@ -328,6 +328,16 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             || frame.Format.Height != _format.Height)
             throw new ArgumentException($"frame format {frame.Format} does not match renderer format {_format}", nameof(frame));
 
+        // Pick the right YCbCr matrix from the frame's metadata hint when surfaced (BT.709 vs BT.601
+        // vs BT.2020, limited vs full). Unspecified falls back to the height-derived default. No-op
+        // when the resolved matrix equals the current one.
+        if (frame.ColorSpace != VideoColorSpace.Unspecified || frame.ColorRange != VideoColorRange.Unspecified)
+        {
+            var resolved = YuvColorSpace.FromHint(frame.ColorSpace, frame.ColorRange, _format.Height);
+            if (!resolved.Equals(_colorSpace))
+                ColorSpace = resolved;
+        }
+
         _suppressYPlaneMipForLastGlDmabufUpload = false;
         if (frame.Win32Nv12 is not null)
         {

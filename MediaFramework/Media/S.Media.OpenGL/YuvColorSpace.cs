@@ -1,3 +1,5 @@
+using S.Media.Core.Video;
+
 namespace S.Media.OpenGL;
 
 /// <summary>
@@ -49,11 +51,51 @@ public readonly record struct YuvColorSpace(float[] Matrix, float[] Offset)
         },
         Offset: new[] { 16f / 255f, 128f / 255f, 128f / 255f });
 
+    /// <summary>
+    /// ITU-R BT.2020 / Rec.2020 (UHD HDR) limited-range matrix. Coefficients <c>Kr=0.2627</c>,
+    /// <c>Kb=0.0593</c>; same offset shape as BT.709 limited.
+    /// </summary>
+    public static readonly YuvColorSpace Bt2020Limited = new(
+        Matrix: new float[]
+        {
+            1.16438356f,  0.00000000f,  1.67867410f,
+            1.16438356f, -0.18732610f, -0.65042418f,
+            1.16438356f,  2.14177232f,  0.00000000f,
+        },
+        Offset: new[] { 16f / 255f, 128f / 255f, 128f / 255f });
+
+    /// <summary>BT.2020 full-range YCbCr → RGB matrix (no Y scaling, chroma centered at 0.5).</summary>
+    public static readonly YuvColorSpace Bt2020Full = new(
+        Matrix: new float[]
+        {
+            1.0f,  0.00000000f,  1.47460000f,
+            1.0f, -0.16455313f, -0.57135313f,
+            1.0f,  1.88140000f,  0.00000000f,
+        },
+        Offset: new[] { 0f, 128f / 255f, 128f / 255f });
+
     /// <summary>Pick a default by frame height — BT.709 for HD+ content, BT.601 for SD.</summary>
     public static YuvColorSpace DefaultForHeight(int height, bool fullRange = false)
     {
         if (height >= 720)
             return fullRange ? Bt709Full : Bt709Limited;
         return Bt601Limited;
+    }
+
+    /// <summary>
+    /// Pick the right matrix from a per-frame <see cref="VideoColorSpace"/> +
+    /// <see cref="VideoColorRange"/> hint. Falls back to <see cref="DefaultForHeight"/> when
+    /// <paramref name="cs"/> is <see cref="VideoColorSpace.Unspecified"/>.
+    /// </summary>
+    public static YuvColorSpace FromHint(VideoColorSpace cs, VideoColorRange range, int height)
+    {
+        var full = range == VideoColorRange.Full;
+        return cs switch
+        {
+            VideoColorSpace.Bt709 => full ? Bt709Full : Bt709Limited,
+            VideoColorSpace.Bt601 => Bt601Limited, // SD path — full-range 601 is rare; map to limited.
+            VideoColorSpace.Bt2020 or VideoColorSpace.Bt2020Cl => full ? Bt2020Full : Bt2020Limited,
+            _ => DefaultForHeight(height, full),
+        };
     }
 }

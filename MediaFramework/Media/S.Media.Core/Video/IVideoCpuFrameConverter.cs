@@ -90,11 +90,13 @@ public static class VideoFrameCpuClone
                 planes[i] = buf.AsMemory(0, totalBytes);
             }
 
-            return new VideoFrame(source.PresentationTime, source.Format, planes, stridesOut, hint, release: () =>
-            {
-                foreach (var b in rentedBuffers)
-                    ArrayPool<byte>.Shared.Return(b);
-            });
+            return new VideoFrame(source.PresentationTime, source.Format, planes, stridesOut,
+                release: () =>
+                {
+                    foreach (var b in rentedBuffers)
+                        ArrayPool<byte>.Shared.Return(b);
+                },
+                metadata: source.Metadata with { ColorTransferHint = hint });
         }
         catch
         {

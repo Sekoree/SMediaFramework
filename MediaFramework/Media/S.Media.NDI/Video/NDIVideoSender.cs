@@ -223,7 +223,7 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
                 FrameRateN = _format.FrameRate.Numerator,
                 FrameRateD = _format.FrameRate.Denominator <= 0 ? 1 : _format.FrameRate.Denominator,
                 PictureAspectRatio = 0f, // 0 = derive from Xres/Yres (square pixels)
-                FrameFormatType = NDIFrameFormatType.Progressive,
+                FrameFormatType = MapFieldOrder(frame.FieldOrder),
                 Timecode = timecode,
                 PData = (nint)dstBase,
                 LineStrideInBytes = LineStrideForFormat(_format),
@@ -247,36 +247,55 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
             case NDIVideoTimecodeMode.Synthesize:
                 return (NDIConstants.TimecodeSynthesize, 0);
             case NDIVideoTimecodeMode.PresentationRelativeTicks:
-            {
-                if (_sharedPresentationTimeline is not null)
-                {
-                    var tc = _sharedPresentationTimeline.TimecodeFromPresentationTime(frame.PresentationTime);
-                    return (tc, NDIConstants.TimestampUndefined);
-                }
-
-                if (_presentationAnchor is null)
-                    _presentationAnchor = frame.PresentationTime;
-
-                var anchor = _presentationAnchor.Value;
-                var delta = frame.PresentationTime - anchor;
-                if (delta < TimeSpan.FromSeconds(-1))
-                {
-                    _presentationAnchor = frame.PresentationTime;
-                    delta = TimeSpan.Zero;
-                }
-
-                var tcLocal = delta < TimeSpan.Zero ? 0L : delta.Ticks;
-                return (tcLocal, NDIConstants.TimestampUndefined);
-            }
+                return BuildPresentationRelativeTimecode(frame);
             case NDIVideoTimecodeMode.MuxerPresentationTicks:
             {
                 var t = frame.PresentationTime.Ticks;
                 return (t < 0 ? 0L : t, NDIConstants.TimestampUndefined);
             }
+            case NDIVideoTimecodeMode.SmpteFromFrame:
+                if (frame.Timecode is { } tc)
+                {
+                    var ticks = tc.ToTicksAtRate();
+                    return (ticks < 0 ? 0L : ticks, NDIConstants.TimestampUndefined);
+                }
+                // No SMPTE attached — fall back to presentation-relative ticks so downstream still has a sync source.
+                return BuildPresentationRelativeTimecode(frame);
             default:
                 throw new InvalidOperationException($"unknown {nameof(NDIVideoTimecodeMode)} {_timecodeMode}");
         }
     }
+
+    private (long timecode, long timestamp) BuildPresentationRelativeTimecode(VideoFrame frame)
+    {
+        if (_sharedPresentationTimeline is not null)
+        {
+            var tc = _sharedPresentationTimeline.TimecodeFromPresentationTime(frame.PresentationTime);
+            return (tc, NDIConstants.TimestampUndefined);
+        }
+
+        if (_presentationAnchor is null)
+            _presentationAnchor = frame.PresentationTime;
+
+        var anchor = _presentationAnchor.Value;
+        var delta = frame.PresentationTime - anchor;
+        if (delta < TimeSpan.FromSeconds(-1))
+        {
+            _presentationAnchor = frame.PresentationTime;
+            delta = TimeSpan.Zero;
+        }
+
+        var tcLocal = delta < TimeSpan.Zero ? 0L : delta.Ticks;
+        return (tcLocal, NDIConstants.TimestampUndefined);
+    }
+
+    private static NDIFrameFormatType MapFieldOrder(VideoFieldOrder order) => order switch
+    {
+        VideoFieldOrder.Progressive => NDIFrameFormatType.Progressive,
+        VideoFieldOrder.TopFieldFirst or VideoFieldOrder.BottomFieldFirst or VideoFieldOrder.Interlaced
+            => NDIFrameFormatType.Interleaved,
+        _ => NDIFrameFormatType.Progressive,
+    };
 
     private void PackInto(VideoFrame frame, byte* dst)
     {

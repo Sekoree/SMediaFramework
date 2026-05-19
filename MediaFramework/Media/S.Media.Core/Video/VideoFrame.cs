@@ -7,16 +7,26 @@ namespace S.Media.Core.Video;
 /// presentation time the producer attached to them.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Unlike <see cref="Audio.AudioFrame"/>, video frames are large enough that
 /// per-frame allocation isn't viable (1080p BGRA32 ≈ 8 MB). Producers pass an
-/// optional <c>release</c> callback to free the underlying buffer — refcount
+/// optional <c>release</c> callback (or an <see cref="IDisposable"/> via
+/// <c>disposableRelease</c>) to free the underlying buffer — refcount
 /// decrement (NDI), <c>av_frame_unref</c> (FFmpeg), <c>ArrayPool.Return</c>,
 /// etc. The frame is one-shot disposable; calling <see cref="Dispose"/> twice
 /// is safe and only the first call invokes the release.
+/// </para>
+/// <para>
+/// Optional metadata (transfer hint, color space / range, field order, SMPTE
+/// timecode) is bundled into <see cref="Metadata"/>; individual properties
+/// (<see cref="ColorTransferHint"/>, <see cref="ColorSpace"/>, etc.) forward
+/// to the bundle for convenient access.
+/// </para>
 /// </remarks>
 public sealed class VideoFrame : IDisposable
 {
     private Action? _release;
+    private IDisposable? _disposableRelease;
     private readonly ReadOnlyMemory<byte>[] _planes;
     private readonly int[] _strides;
     private readonly VideoDmabufNv12Backing? _dmabufNv12;
@@ -27,8 +37,23 @@ public sealed class VideoFrame : IDisposable
     public TimeSpan PresentationTime { get; }
     public VideoFormat Format { get; }
 
-    /// <summary>Optional colour transfer detected from metadata (codec / frame side data).</summary>
-    public VideoTransferHint ColorTransferHint { get; }
+    /// <summary>Per-frame metadata bundle — see <see cref="VideoFrameMetadata"/>.</summary>
+    public VideoFrameMetadata Metadata { get; }
+
+    /// <inheritdoc cref="VideoFrameMetadata.ColorTransferHint" />
+    public VideoTransferHint ColorTransferHint => Metadata.ColorTransferHint;
+
+    /// <inheritdoc cref="VideoFrameMetadata.ColorSpace" />
+    public VideoColorSpace ColorSpace => Metadata.ColorSpace;
+
+    /// <inheritdoc cref="VideoFrameMetadata.ColorRange" />
+    public VideoColorRange ColorRange => Metadata.ColorRange;
+
+    /// <inheritdoc cref="VideoFrameMetadata.FieldOrder" />
+    public VideoFieldOrder FieldOrder => Metadata.FieldOrder;
+
+    /// <inheritdoc cref="VideoFrameMetadata.Timecode" />
+    public VideoTimecode? Timecode => Metadata.Timecode;
 
     /// <summary>
     /// When set, <see cref="Planes"/> are empty stubs; upload via DMA-BUF / EGL instead of CPU memory.
@@ -72,24 +97,34 @@ public sealed class VideoFrame : IDisposable
     /// <summary>Number of byte planes. Same as <c>Planes.Length</c>.</summary>
     public int PlaneCount => _planes.Length;
 
+    /// <param name="release">Optional <see cref="Action"/> invoked on <see cref="Dispose"/>. Suitable for closures that need to capture local state (e.g. pooled buffers).</param>
+    /// <param name="disposableRelease">
+    /// Optional <see cref="IDisposable"/> invoked on <see cref="Dispose"/>. Prefer this over <paramref name="release"/>
+    /// when the cleanup target is already an <see cref="IDisposable"/> (e.g. a refcounted hardware backing) — avoids
+    /// the per-frame method-group → delegate allocation that <paramref name="release"/> incurs. Both may be set; both
+    /// fire on dispose.
+    /// </param>
+    /// <param name="metadata">Optional per-frame metadata (transfer hint / color space / range / field order / SMPTE timecode).</param>
     public VideoFrame(
         TimeSpan presentationTime,
         VideoFormat format,
         ReadOnlyMemory<byte>[] planes,
         int[] strides,
-        VideoTransferHint colorTransferHint = default,
         Action? release = null,
         VideoDmabufNv12Backing? dmaBufNv12 = null,
         VideoDmabufP010Backing? dmaBufP010 = null,
         VideoDmabufP016Backing? dmaBufP016 = null,
-        VideoWin32Nv12Backing? win32Nv12 = null)
+        VideoWin32Nv12Backing? win32Nv12 = null,
+        VideoFrameMetadata metadata = default,
+        IDisposable? disposableRelease = null)
     {
         ArgumentNullException.ThrowIfNull(planes);
         ArgumentNullException.ThrowIfNull(strides);
         PresentationTime = presentationTime;
         Format = format;
-        ColorTransferHint = colorTransferHint;
+        Metadata = metadata;
         _release = release;
+        _disposableRelease = disposableRelease;
         _dmabufNv12 = dmaBufNv12;
         _dmabufP010 = dmaBufP010;
         _dmabufP016 = dmaBufP016;
@@ -210,27 +245,41 @@ public sealed class VideoFrame : IDisposable
     }
 
     /// <summary>Builds an NV12 <see cref="VideoFrame"/> wrapping Linux DRM PRIME dma-bufs (zero-copy).</summary>
+    /// <remarks>
+    /// When <paramref name="additionalRelease"/> is null, the dma-buf backing is wired as
+    /// <c>disposableRelease</c> directly — saves one method-group delegate allocation per frame on the
+    /// fan-out hot path.
+    /// </remarks>
     public static VideoFrame CreateNv12Dmabuf(
         TimeSpan presentationTime,
         VideoFormat format,
         VideoDmabufNv12Backing dmaBufNv12Backing,
-        VideoTransferHint colorTransferHint = default,
+        VideoFrameMetadata metadata = default,
         Action? additionalRelease = null)
     {
         ArgumentNullException.ThrowIfNull(dmaBufNv12Backing);
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException(CreateNv12DmabufOnlyLinux);
-        Action? release = additionalRelease == null
-            ? dmaBufNv12Backing.Dispose
-            : () =>
-            {
-                dmaBufNv12Backing.Dispose();
-                additionalRelease();
-            };
 
         ReadOnlyMemory<byte>[] planes = [default, default];
         var strides = new[] { dmaBufNv12Backing.YPlanePitchBytes, dmaBufNv12Backing.UvPlanePitchBytes };
-        return new VideoFrame(presentationTime, format, planes, strides, colorTransferHint, release, dmaBufNv12Backing);
+
+        if (additionalRelease is null)
+        {
+            return new VideoFrame(presentationTime, format, planes, strides,
+                release: null, dmaBufNv12: dmaBufNv12Backing,
+                metadata: metadata,
+                disposableRelease: dmaBufNv12Backing);
+        }
+
+        Action release = () =>
+        {
+            dmaBufNv12Backing.Dispose();
+            additionalRelease();
+        };
+        return new VideoFrame(presentationTime, format, planes, strides,
+            release: release, dmaBufNv12: dmaBufNv12Backing,
+            metadata: metadata);
     }
 
     /// <summary>
@@ -247,12 +296,10 @@ public sealed class VideoFrame : IDisposable
             throw new PlatformNotSupportedException(CreateNv12DmabufOnlyLinux);
 
         source.DmabufNv12.AddReference();
-        return CreateNv12Dmabuf(
-            source.PresentationTime,
-            source.Format,
-            source.DmabufNv12,
-            colorTransferHint ?? source.ColorTransferHint,
-            additionalRelease: null);
+        var meta = colorTransferHint is { } hint
+            ? source.Metadata with { ColorTransferHint = hint }
+            : source.Metadata;
+        return CreateNv12Dmabuf(source.PresentationTime, source.Format, source.DmabufNv12, meta);
     }
 
     /// <summary>Builds a P010 <see cref="VideoFrame"/> wrapping Linux DRM PRIME dma-bufs (zero-copy).</summary>
@@ -260,24 +307,34 @@ public sealed class VideoFrame : IDisposable
         TimeSpan presentationTime,
         VideoFormat format,
         VideoDmabufP010Backing dmaBufP010Backing,
-        VideoTransferHint colorTransferHint = default,
+        VideoFrameMetadata metadata = default,
         Action? additionalRelease = null)
     {
         ArgumentNullException.ThrowIfNull(dmaBufP010Backing);
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException(CreateP010DmabufOnlyLinux);
-        Action? release = additionalRelease == null
-            ? dmaBufP010Backing.Dispose
-            : () =>
-            {
-                dmaBufP010Backing.Dispose();
-                additionalRelease();
-            };
 
         ReadOnlyMemory<byte>[] planes = [default, default];
         var strides = new[] { dmaBufP010Backing.YPlanePitchBytes, dmaBufP010Backing.UvPlanePitchBytes };
-        return new VideoFrame(presentationTime, format, planes, strides, colorTransferHint, release,
-            dmaBufNv12: null, dmaBufP010: dmaBufP010Backing, dmaBufP016: null);
+
+        if (additionalRelease is null)
+        {
+            return new VideoFrame(presentationTime, format, planes, strides,
+                release: null,
+                dmaBufNv12: null, dmaBufP010: dmaBufP010Backing, dmaBufP016: null,
+                metadata: metadata,
+                disposableRelease: dmaBufP010Backing);
+        }
+
+        Action release = () =>
+        {
+            dmaBufP010Backing.Dispose();
+            additionalRelease();
+        };
+        return new VideoFrame(presentationTime, format, planes, strides,
+            release: release,
+            dmaBufNv12: null, dmaBufP010: dmaBufP010Backing, dmaBufP016: null,
+            metadata: metadata);
     }
 
     /// <summary>Builds a P016 <see cref="VideoFrame"/> wrapping Linux DRM PRIME dma-bufs (zero-copy).</summary>
@@ -285,24 +342,34 @@ public sealed class VideoFrame : IDisposable
         TimeSpan presentationTime,
         VideoFormat format,
         VideoDmabufP016Backing dmaBufP016Backing,
-        VideoTransferHint colorTransferHint = default,
+        VideoFrameMetadata metadata = default,
         Action? additionalRelease = null)
     {
         ArgumentNullException.ThrowIfNull(dmaBufP016Backing);
         if (!OperatingSystem.IsLinux())
             throw new PlatformNotSupportedException(CreateP016DmabufOnlyLinux);
-        Action? release = additionalRelease == null
-            ? dmaBufP016Backing.Dispose
-            : () =>
-            {
-                dmaBufP016Backing.Dispose();
-                additionalRelease();
-            };
 
         ReadOnlyMemory<byte>[] planes = [default, default];
         var strides = new[] { dmaBufP016Backing.YPlanePitchBytes, dmaBufP016Backing.UvPlanePitchBytes };
-        return new VideoFrame(presentationTime, format, planes, strides, colorTransferHint, release,
-            dmaBufNv12: null, dmaBufP010: null, dmaBufP016: dmaBufP016Backing);
+
+        if (additionalRelease is null)
+        {
+            return new VideoFrame(presentationTime, format, planes, strides,
+                release: null,
+                dmaBufNv12: null, dmaBufP010: null, dmaBufP016: dmaBufP016Backing,
+                metadata: metadata,
+                disposableRelease: dmaBufP016Backing);
+        }
+
+        Action release = () =>
+        {
+            dmaBufP016Backing.Dispose();
+            additionalRelease();
+        };
+        return new VideoFrame(presentationTime, format, planes, strides,
+            release: release,
+            dmaBufNv12: null, dmaBufP010: null, dmaBufP016: dmaBufP016Backing,
+            metadata: metadata);
     }
 
     /// <summary>
@@ -318,12 +385,10 @@ public sealed class VideoFrame : IDisposable
             throw new PlatformNotSupportedException(CreateP016DmabufOnlyLinux);
 
         source.DmabufP016.AddReference();
-        return CreateP016Dmabuf(
-            source.PresentationTime,
-            source.Format,
-            source.DmabufP016,
-            colorTransferHint ?? source.ColorTransferHint,
-            additionalRelease: null);
+        var meta = colorTransferHint is { } hint
+            ? source.Metadata with { ColorTransferHint = hint }
+            : source.Metadata;
+        return CreateP016Dmabuf(source.PresentationTime, source.Format, source.DmabufP016, meta);
     }
 
     /// <summary>
@@ -339,12 +404,10 @@ public sealed class VideoFrame : IDisposable
             throw new PlatformNotSupportedException(CreateP010DmabufOnlyLinux);
 
         source.DmabufP010.AddReference();
-        return CreateP010Dmabuf(
-            source.PresentationTime,
-            source.Format,
-            source.DmabufP010,
-            colorTransferHint ?? source.ColorTransferHint,
-            additionalRelease: null);
+        var meta = colorTransferHint is { } hint
+            ? source.Metadata with { ColorTransferHint = hint }
+            : source.Metadata;
+        return CreateP010Dmabuf(source.PresentationTime, source.Format, source.DmabufP010, meta);
     }
 
     internal const string CreateNv12DmabufOnlyLinux = "CreateNv12Dmabuf is supported on Linux only.";
@@ -356,24 +419,32 @@ public sealed class VideoFrame : IDisposable
         TimeSpan presentationTime,
         VideoFormat format,
         VideoWin32Nv12Backing win32Nv12Backing,
-        VideoTransferHint colorTransferHint = default,
+        VideoFrameMetadata metadata = default,
         Action? additionalRelease = null)
     {
         ArgumentNullException.ThrowIfNull(win32Nv12Backing);
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException(CreateNv12Win32SharedOnlyWindows);
 
-        Action? release = additionalRelease == null
-            ? win32Nv12Backing.Dispose
-            : () =>
-            {
-                win32Nv12Backing.Dispose();
-                additionalRelease();
-            };
-
         ReadOnlyMemory<byte>[] planes = [default, default];
         var strides = new[] { win32Nv12Backing.YPlanePitchBytes, win32Nv12Backing.UvPlanePitchBytes };
-        return new VideoFrame(presentationTime, format, planes, strides, colorTransferHint, release, win32Nv12: win32Nv12Backing);
+
+        if (additionalRelease is null)
+        {
+            return new VideoFrame(presentationTime, format, planes, strides,
+                release: null, win32Nv12: win32Nv12Backing,
+                metadata: metadata,
+                disposableRelease: win32Nv12Backing);
+        }
+
+        Action release = () =>
+        {
+            win32Nv12Backing.Dispose();
+            additionalRelease();
+        };
+        return new VideoFrame(presentationTime, format, planes, strides,
+            release: release, win32Nv12: win32Nv12Backing,
+            metadata: metadata);
     }
 
     /// <summary>
@@ -389,12 +460,10 @@ public sealed class VideoFrame : IDisposable
             throw new PlatformNotSupportedException(CreateNv12Win32SharedOnlyWindows);
 
         source.Win32Nv12.AddReference();
-        return CreateNv12Win32Shared(
-            source.PresentationTime,
-            source.Format,
-            source.Win32Nv12,
-            colorTransferHint ?? source.ColorTransferHint,
-            additionalRelease: null);
+        var meta = colorTransferHint is { } hint
+            ? source.Metadata with { ColorTransferHint = hint }
+            : source.Metadata;
+        return CreateNv12Win32Shared(source.PresentationTime, source.Format, source.Win32Nv12, meta);
     }
 
     internal const string CreateNv12Win32SharedOnlyWindows = "CreateNv12Win32Shared is supported on Windows only.";
@@ -430,6 +499,7 @@ public sealed class VideoFrame : IDisposable
                 inner();
         };
 
+        var viewMeta = source.Metadata with { ColorTransferHint = hint };
         var created = 0;
         try
         {
@@ -440,8 +510,8 @@ public sealed class VideoFrame : IDisposable
                     source.Format,
                     source._planes,
                     source._strides,
-                    hint,
-                    shared);
+                    release: shared,
+                    metadata: viewMeta);
             }
 
             views = viewsLocal;
@@ -489,12 +559,17 @@ public sealed class VideoFrame : IDisposable
         VideoFormat format,
         ReadOnlyMemory<byte> plane,
         int stride,
-        VideoTransferHint colorTransferHint = default,
-        Action? release = null)
-        : this(presentationTime, format, [plane], [stride], colorTransferHint, release) { }
+        Action? release = null,
+        VideoFrameMetadata metadata = default,
+        IDisposable? disposableRelease = null)
+        : this(presentationTime, format, [plane], [stride],
+            release: release, metadata: metadata, disposableRelease: disposableRelease) { }
+
     public void Dispose()
     {
-        var r = Interlocked.Exchange(ref _release, null);
-        r?.Invoke();
+        var a = Interlocked.Exchange(ref _release, null);
+        var d = Interlocked.Exchange(ref _disposableRelease, null);
+        a?.Invoke();
+        d?.Dispose();
     }
 }

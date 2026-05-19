@@ -271,7 +271,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
     private static VideoFrame CloneLogoFrame(VideoFrame template, TimeSpan presentationTime) =>
         new(presentationTime, template.Format, template.Planes, template.Strides,
-            template.ColorTransferHint, release: null);
+            release: null, metadata: template.Metadata);
 
     private void OnAudioTick(object? _)
     {

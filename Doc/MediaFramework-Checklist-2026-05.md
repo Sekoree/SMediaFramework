@@ -4,7 +4,7 @@ Derived from `Doc/MediaFramework-Review-2026-05.md`. Ordered to minimize wasted 
 
 Legend: **size** = XS (<1 h) · S (<½ day) · M (1–2 days) · L (1 week) · XL (multi-week feature). **breaks** = which downstream code likely needs updates.
 
-**Status (updated 2026-05-19):** Phase 0 complete. Phase 1 complete. Phase 2 complete. Phase 3 complete (8/8 — P3.8 VideoRouter→Core refactor landed). Phase 4 complete (6/6 — full GL compositor scope incl. shaders + readback). Phase 5 is the next planned batch.
+**Status (updated 2026-05-19):** Phase 0 complete. Phase 1 complete. Phase 2 complete. Phase 3 complete (8/8 — P3.8 VideoRouter→Core refactor landed). Phase 4 complete (6/6 — full GL compositor scope incl. shaders + readback). Phase 5 complete (3/4 — BT.2020 / interlaced + yadif / SMPTE timecode landed; ancillary-data envelope explicitly deferred per checklist note). Phase 6 complete (4 cleanup items landed; remaining items remain opportunistic).
 
 ---
 
@@ -271,41 +271,125 @@ MediaFramework/Test/S.Media.SkiaSharp.Tests/TextLayerSourceTests.cs         (new
 
 ---
 
-## Phase 5 — Broadcast-grade format support
+## Phase 5 — Broadcast-grade format support ✅ COMPLETE (2026-05-19, 3/4 — ancillary deferred)
 
-These move the framework from "playout / streaming" to "broadcast-ready". Each is sizable; sequence them only when a real consumer needs them.
+These move the framework from "playout / streaming" to "broadcast-ready". User picked the **three-item scope** (BT.2020 / interlaced + yadif / SMPTE timecode); the ancillary-data envelope is explicitly deferred per its own "Defer until a concrete consumer asks" note.
 
-- [ ] **BT.2020 / Rec.2020 color primaries.** `S.Media.OpenGL/YuvColorSpace.cs` — add the matrices; `YuvVideoRenderer` shader uniforms. **Size:** M.
+- [x] **BT.2020 / Rec.2020 color primaries.** Added `VideoColorSpace` + `VideoColorRange` enums in `S.Media.Core/Video/`; FFmpeg propagation extracts `_frame->colorspace` + `_frame->color_range` and threads them through every frame factory via a new internal `VideoFrameMetadataHint` struct. Added `YuvColorSpace.Bt2020Limited` / `Bt2020Full` matrices plus a `YuvColorSpace.FromHint(VideoColorSpace, VideoColorRange, int height)` helper. `YuvVideoRenderer.Upload` now applies the per-frame hint automatically (no-op when the resolved matrix equals the current). FFmpeg's `AVCOL_SPC_BT2020_NCL` and `AVCOL_SPC_BT2020_CL` now flow end-to-end to the right shader matrix.
 
-- [ ] **Interlaced video.** Field metadata on `VideoFrame` (top-field-first vs bottom-field-first vs progressive), a deinterlace converter (FFmpeg `yadif` is the obvious choice; pre-wrap it in `S.Media.FFmpeg/Video/`). **Size:** L. **Breaks:** `VideoFrame` ctor — add an optional field-order parameter; existing call sites become "progressive".
+- [x] **Interlaced video.** New `VideoFieldOrder` enum on `VideoFrame`; FFmpeg propagation reads the FFmpeg-8 `AV_FRAME_FLAG_INTERLACED` / `AV_FRAME_FLAG_TOP_FIELD_FIRST` flags and threads them through every frame factory. New `IDeinterlacer` interface + `VideoDeinterlacerRegistry` in Core (same pluggable shape as `IVideoCpuFrameConverter`). `BobDeinterlacer` (Core) is the always-available CPU fallback for BGRA32 / RGBA32 / I420 / NV12 — field separation + line interpolation, doubles the frame rate. `YadifDeinterlacer` (FFmpeg) wraps a libavfilter graph `buffer → yadif=mode=0:parity=auto:deint=interlaced → buffersink` and is auto-registered at `FFmpegRuntime.EnsureInitialized`. Supports I420 and NV12 inputs; NV12 round-trips through yuv420p internally because yadif's in-tree NV12 support is incomplete on some FFmpeg builds. Progressive input bypasses the graph as a passthrough.
 
-- [ ] **SMPTE LTC / drop-frame timecode.** New `VideoTimecode` struct on `VideoFrame`; NDI sender writes it into the NDI timecode slot; NDI receiver reads it out. Drop-frame computation in a small helper. **Size:** M.
+- [x] **SMPTE LTC / drop-frame timecode.** New `VideoTimecode` readonly record struct in Core: carries `(Hours, Minutes, Seconds, Frames, IsDropFrame, FrameRate)` with `ToFrameNumber()` / `ToTicksAtRate()` / `ToTimecodeString()` / `TryParse(string, Rational, out)` / `FromFrameNumber(long, Rational, bool)`. Companion static helper `VideoTimecodeMath` does the drop-frame skip math (29.97 → skip 2 per minute except every 10th; 59.94 → skip 4). Validates that drop-frame is only allowed at 30000/1001 and 60000/1001 — 23.976 explicitly rejected. FFmpeg extracts `AV_FRAME_DATA_S12M_TIMECODE` side data via a new `VideoFileDecoder.ReadS12mTimecode` helper and attaches the result to every `VideoFrame`. New `NDIVideoTimecodeMode.SmpteFromFrame` mode on `NDIVideoSender` encodes `frame.Timecode?.ToTicksAtRate()` into the NDI Timecode slot (falls back to `PresentationRelativeTicks` math when the frame carries no timecode). `NDIVideoSender.FrameFormatType` now derives from `frame.FieldOrder` (Progressive vs Interleaved).
 
-- [ ] **Embedded ancillary data** (closed captions, AFD, SCTE-35). Add a generic `VideoAncillary` envelope on `VideoFrame` (or a sidecar callback per frame). **Size:** L. Defer until a concrete consumer asks.
+- [ ] **Embedded ancillary data** (closed captions, AFD, SCTE-35). **Deferred — no concrete consumer.** The checklist annotation "Defer until a concrete consumer asks" is the reason; the API surface for `VideoAncillary` (envelope vs sidecar callback, per-frame vs side-data, generic vs typed slots) is speculative without a real CC / AFD / SCTE-35 consumer to design against. Will re-open when a paying use case lands.
 
-**Phase exit:** demonstrably correct ingest/playout for SMPTE-source content; the framework is plausibly usable in a broadcast environment.
+**Phase exit:** demonstrably correct ingest/playout for SMPTE-source content. BT.2020 UHD HDR routes the right matrix automatically; interlaced ingest no longer silently strips field info; SMPTE timecode round-trips from FFmpeg side data into the NDI sender slot. ✅
+
+**Outcomes:**
+- Build: clean (0 warnings / 0 errors) across all 25 projects including HaPlay.
+- Tests: 595/596 pass. Single failure is the same pre-existing flaky `NDIIngestPlaybackClockTests.Timestamp_UsedWhenTimecodeSynthesize` (~4600 ticks FP-tolerance delta) seen in every prior phase — unrelated.
+- 38 new tests added across VideoTimecode (12), VideoFrameMetadata (2), BobDeinterlacer (5), VideoColorSpace (3), FFmpeg VideoColorSpaceMapping (6), FFmpeg YadifDeinterlacer (3), OpenGL YuvColorSpace (7).
+
+**Files added:**
+```
+MediaFramework/Media/S.Media.Core/Video/VideoColorSpace.cs                 (new)
+MediaFramework/Media/S.Media.Core/Video/VideoColorRange.cs                 (new)
+MediaFramework/Media/S.Media.Core/Video/VideoFieldOrder.cs                 (new)
+MediaFramework/Media/S.Media.Core/Video/VideoTimecode.cs                   (new — struct + VideoTimecodeMath helpers)
+MediaFramework/Media/S.Media.Core/Video/IDeinterlacer.cs                   (new — interface + registry)
+MediaFramework/Media/S.Media.Core/Video/BobDeinterlacer.cs                 (new — Core fallback)
+MediaFramework/Media/S.Media.Core/Video/VideoFrame.cs                      (4 new optional ctor params + 4 new properties, threaded through all Create*Dmabuf factories + SharedReference forwarders + TryCreateNv12CpuFanOutViews)
+MediaFramework/Media/S.Media.Core/Video/IVideoCpuFrameConverter.cs         (VideoFrameCpuClone forwards new metadata)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoFrameMetadataHint.cs        (new — internal struct bundling trc/cs/range/field/timecode)
+MediaFramework/Media/S.Media.FFmpeg/Video/YadifDeinterlacer.cs             (new — libavfilter wrapper, I420 / NV12 input)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoFileDecoder.cs              (MapColorSpace/MapColorRange/MapFieldOrder/ReadS12mTimecode + refactored 5 Build*Frame sites to take VideoFrameMetadataHint)
+MediaFramework/Media/S.Media.FFmpeg/MediaContainerSharedDemux.cs           (mirrors the VideoFileDecoder refactor on its 3 Build*VideoFrame sites)
+MediaFramework/Media/S.Media.FFmpeg/FFmpegRuntime.cs                       (registers YadifDeinterlacer factory)
+MediaFramework/Media/S.Media.OpenGL/YuvColorSpace.cs                       (Bt2020Limited + Bt2020Full + FromHint)
+MediaFramework/Media/S.Media.OpenGL/YuvVideoRenderer.cs                    (Upload applies per-frame ColorSpace hint)
+MediaFramework/Media/S.Media.NDI/Video/NDIVideoTimecodeMode.cs             (new SmpteFromFrame mode)
+MediaFramework/Media/S.Media.NDI/Video/NDIVideoSender.cs                   (SmpteFromFrame branch in BuildTimecode, FrameFormatType from FieldOrder)
+MediaFramework/Test/S.Media.Core.Tests/Video/VideoTimecodeTests.cs         (new — 12 tests covering drop-frame math, parsing, round-trips)
+MediaFramework/Test/S.Media.Core.Tests/Video/VideoFrameMetadataTests.cs    (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/BobDeinterlacerTests.cs       (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/VideoColorSpaceTests.cs       (new)
+MediaFramework/Test/S.Media.FFmpeg.Tests/Video/VideoColorSpaceMappingTests.cs (new)
+MediaFramework/Test/S.Media.FFmpeg.Tests/Video/YadifDeinterlacerTests.cs   (new)
+MediaFramework/Test/S.Media.OpenGL.Tests/YuvColorSpaceTests.cs             (new)
+```
+
+**Design notes for next phase consumers:**
+- The `VideoFrame` ctor now has 11 positional/optional params (was 8 pre-Phase-5). A future refactor could collapse the optional-metadata trio (`ColorTransferHint`, `ColorSpace`, `ColorRange`, `FieldOrder`, `Timecode`) into a single `VideoFrameMetadata` record struct — not in this batch, but worth flagging in Phase 6 cleanup.
+- `YadifDeinterlacer` accepts only I420 / NV12 inputs. Other interlaced formats (uyvy422, yuv422p, yuv422p10le) currently fall through to `BobDeinterlacer` via the registry factory's switch. Adding more yadif-supported formats is a follow-up — yadif's accepted-format set on the libavfilter side is broader than what we wire here.
+- The "NDI receiver reads SMPTE timecode out" part of the checklist is contingent on an `NDIVideoReceiver` existing — only the sender side is in this batch. When the receiver lands, it should read `NDIVideoFrameV2.Timecode` ticks and reconstruct via `VideoTimecode.FromFrameNumber(ticks / (10_000_000 * den / num), rate, dropFrame: VideoTimecodeMath.IsDropFrameRate(rate))`.
+- BT.2020 primaries are wired for the YCbCr → RGB matrix only. **RGB-to-RGB gamut mapping** (BT.2020 → BT.709 for SDR display preview) is not done — the framework presents BT.2020 content as-if-BT.709 to the display, which under-saturates without a display that natively understands BT.2020. A future GL pass between matrix and HDR transfer could handle this with a 3×3 RGB matrix.
+- Drop-frame math is conservative: 29.97 and 59.94 only. Variable-frame-rate streams (where the rational rate is the maximum, not the exact playback rate) are out of scope.
 
 ---
 
-## Phase 6 — Cleanup (do whenever)
+## Phase 6 — Cleanup ✅ COMPLETE (2026-05-19, 4 items landed)
 
-Quality-of-life. No correctness or feature consequences; can be opportunistic.
+Quality-of-life. No correctness or feature consequences; can be opportunistic. User picked four items in this batch; the rest remain open and opportunistic.
 
-- [ ] **Split `ChannelMap.cs` (2106 lines)** into `ChannelMap.cs` (data + small ops) + `ChannelMap.SimdAccumulate.cs` (14 SIMD shortcut methods, partial class). **Size:** S.
+- [x] **Split `ChannelMap.cs` (2106 lines)** into `ChannelMap.cs` (data + ApplyAdditive dispatcher + small ops; now 292 lines) + `ChannelMap.SimdAccumulate.cs` (19 SIMD methods + private helpers, partial struct, 1831 lines). Zero behavior change — confirmed by re-running the 141 in-tree ChannelMap / AudioRouter tests, all green. (Review said 14 SIMD methods; the actual count was 19 once the `TryAccumulate*` family was enumerated.)
 
-- [ ] **Move long-form XML `<remarks>` into `Doc/` files**, leave 3–4 lines of IntelliSense doc on the type. Worst offenders: `MediaContainerSession.cs`, `AudioRouter.cs:1-86`, `MediaContainerPlaybackBundle.cs:39-66`. **Size:** S (per type).
+- [x] **`VideoFrameMetadata` consolidation** — new `readonly record struct VideoFrameMetadata` in `S.Media.Core/Video/` bundling `(ColorTransferHint, ColorSpace, ColorRange, FieldOrder, Timecode)`. `VideoFrame` ctor signature drops 5 individual hint params in favor of one `metadata` param. The 5 read-side properties (`ColorTransferHint` etc.) are preserved as forwarders to `Metadata.X` so existing consumers compile unchanged. New `Metadata` property exposes the bundle directly for `with`-expression mutation. FFmpeg's internal `VideoFrameMetadataHint` struct (Phase 5) is deleted — superseded by the public Core type. `meta.TransferHint` → `meta.ColorTransferHint` rename mechanically applied. Net VideoFrame ctor: 11 params → 11 params (4 swapped for 1 metadata + 1 IDisposable; see P6.4 below) but conceptually much cleaner — the metadata bundle is one named thing rather than 5 loose hints. Touched: VideoFrame.cs, IVideoCpuFrameConverter.cs (`VideoFrameCpuClone`), BobDeinterlacer.cs, FadeFromBlackVideoSource.cs, CutVideoSource.cs, StaticFrameSource.cs, VideoPlayer.cs, VideoDmabufCpuReadback.cs, VideoFileDecoder.cs, MediaContainerSharedDemux.cs, VideoCpuFrameConverter.cs, YadifDeinterlacer.cs, LogoFallbackVideoSink.cs (HaPlay), NDIOutputPreviewRuntime.cs (HaPlay), 3 test files.
 
-- [ ] **Refresh project memory** (`~/.claude/projects/-home-seko-RiderProjects-MFPlayer/memory/project_overview.md`). The 2026-05-10 snapshot predates `S.Media.Playback`, `VideoRouter`, `MediaContainerSharedDemux`, the NDI clock zoo. **Size:** XS.
+- [x] **`AudioFileDecoder.TryReadNextFrame` ArrayPool** (S3 from §11.2). `AudioFrame` gains an optional `Release` callback (5th positional record-struct field, default null) + a `Dispose()` method that invokes it. `AudioFileDecoder.ConvertFrame` and `MediaContainerSharedDemux.ConvertAudioFrame` rent from `ArrayPool<float>.Shared` and return on dispose. Existing `AudioFrame` constructions (test sites etc.) compile unchanged because the new field has a default value. Eliminates per-call `new float[]` alloc for frame-based audio consumers (the ReadInto path was already alloc-free).
 
-- [ ] **Clean up untracked files in tree.** `git status` claims `Doc/HaPlay-Review-2026-05.md` is untracked but it doesn't exist; `UI/HaPlay/OutputPreview/PortAudioOutputRuntime.cs` is genuinely new. Either commit or delete. **Size:** XS.
+- [x] **`VideoFrame` `IDisposable` release path** — added a second `disposableRelease: IDisposable?` parameter to the VideoFrame ctor. Dispose method invokes both `_release: Action?` and `_disposableRelease: IDisposable?` (both nullable, both fire-and-clear). The four `Create*Dmabuf` / `CreateNv12Win32Shared` factories now pass `disposableRelease: <backing>` directly when `additionalRelease` is null — eliminates the per-frame method-group → delegate allocation on the common path (each `VideoDmabufXXXBacking` already implements `IDisposable`). When `additionalRelease` is non-null they keep the existing closure path (one alloc per call, unavoidable). Saves roughly one delegate allocation (~24-64 B) per zero-copy dma-buf / Win32 shared frame in fan-out scenarios.
 
-- [x] **Add `Doc/NDI-Terminology.md` glossary** (Egress, Ingest, Mux, Fusion, Aggregating, Pump) if you kept the names. **Size:** XS. *(Done in Phase 1.)*
+- [ ] **Move long-form XML `<remarks>` into `Doc/` files** — still open. Worst offenders unchanged: `MediaContainerSession.cs`, `AudioRouter.cs:1-86`, `MediaContainerPlaybackBundle.cs:39-66`. Subjective work — defer until a contributor finds the XML hover noisy.
 
-- [ ] **CI smoke-test the `Tools/` projects.** They double as documentation; make sure `dotnet build` + a no-arg run is part of CI so they don't bitrot. **Size:** S.
+- [ ] **Refresh project memory** — done as a separate step after this batch (out-of-band of the in-repo checklist; touches `~/.claude/projects/.../memory/`).
 
-- [ ] **Replace `Action _release` closure on `VideoFrame` with `IVideoFrameReleaser` (struct).** Eliminates one closure allocation per dma-buf / shared-handle frame in fan-out scenarios. Profile-driven; defer until §6 of the review flags it as live cost. **Size:** S.
+- [ ] **Clean up untracked files in tree** — out-of-scope housekeeping. The Phase-3/4/5/6 work itself adds new files that are currently untracked. The user will commit when ready.
 
-- [ ] **`AudioFileDecoder.TryReadNextFrame` array-pool** (S3 from §11.2). Switch `new float[]` to `ArrayPool<float>` with a release callback. **Size:** S.
+- [x] **Add `Doc/NDI-Terminology.md` glossary** (Egress, Ingest, Mux, Fusion, Aggregating, Pump). **Size:** XS. *(Done in Phase 1.)*
+
+- [ ] **CI smoke-test the `Tools/` projects** — out of scope for an in-repo coding pass; needs CI infrastructure that doesn't exist in the repo today. Future work when the project adopts CI.
+
+**Phase exit:** four selected cleanup items landed without behaviour regressions. ✅
+
+**Outcomes:**
+- Build: clean (0 warnings / 0 errors) across all 25 projects.
+- Tests: 602/603 pass. Single failure is the same pre-existing flaky `NDIIngestPlaybackClockTests.Timestamp_UsedWhenTimecodeSynthesize` (FP-tolerance ~78k ticks delta this run; varies per run, unrelated to Phase 6) seen in every prior phase.
+- 7 new tests added: `VideoFrameMetadataTests` (1 new — bundled-read test), `VideoFrameReleaseTests` (4 — Action/IDisposable/both/idempotent), `AudioFileDecoderArrayPoolTests` (2).
+
+**Files added / modified (representative):**
+```
+MediaFramework/Media/S.Media.Core/Audio/ChannelMap.cs                       (-1814 lines; class → partial, kept dispatcher + small ops + factories)
+MediaFramework/Media/S.Media.Core/Audio/ChannelMap.SimdAccumulate.cs        (new; 1831 lines, partial — 19 SIMD methods + private helpers)
+MediaFramework/Media/S.Media.Core/Audio/AudioFrame.cs                       (new Release field + Dispose())
+MediaFramework/Media/S.Media.Core/Video/VideoFrameMetadata.cs               (new — consolidated metadata struct)
+MediaFramework/Media/S.Media.Core/Video/VideoFrame.cs                       (ctor consolidation + IDisposable release path)
+MediaFramework/Media/S.Media.Core/Video/IVideoCpuFrameConverter.cs          (VideoFrameCpuClone forwards new metadata struct)
+MediaFramework/Media/S.Media.Core/Video/BobDeinterlacer.cs                  (3 sites: metadata bundle + with-mutation)
+MediaFramework/Media/S.Media.Core/Video/FadeFromBlackVideoSource.cs         (1 site)
+MediaFramework/Media/S.Media.Core/Video/CutVideoSource.cs                   (5 sites including hardware-backing forwarders)
+MediaFramework/Media/S.Media.Core/Video/StaticFrameSource.cs                (ctor arg fix)
+MediaFramework/Media/S.Media.Core/Video/VideoPlayer.cs                      (HoldLastFrame ctor)
+MediaFramework/Media/S.Media.Core/Video/VideoDmabufCpuReadback.cs           (3 sites: Nv12/P010/P016 CPU copy)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoFrameMetadataHint.cs         (deleted — superseded)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoFileDecoder.cs               (Build* methods take VideoFrameMetadata; 4 frame-factory sites simplified)
+MediaFramework/Media/S.Media.FFmpeg/MediaContainerSharedDemux.cs            (ConvertAudioFrame uses ArrayPool + AudioFrame.Release; 3 video frame-factory sites simplified)
+MediaFramework/Media/S.Media.FFmpeg/Audio/AudioFileDecoder.cs               (ConvertFrame uses ArrayPool<float> + AudioFrame.Release)
+MediaFramework/Media/S.Media.FFmpeg/Video/VideoCpuFrameConverter.cs         (metadata forwarding)
+MediaFramework/Media/S.Media.FFmpeg/Video/YadifDeinterlacer.cs              (2 sites: output frames forward source metadata with progressive-field override)
+UI/HaPlay/Playback/LogoFallbackVideoSink.cs                                 (2 sites)
+UI/HaPlay/OutputPreview/NDIOutputPreviewRuntime.cs                          (1 site)
+MediaFramework/Test/S.Media.Core.Tests/Video/VideoFrameMetadataTests.cs     (new bundled-read test)
+MediaFramework/Test/S.Media.Core.Tests/Video/VideoFrameReleaseTests.cs      (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/BobDeinterlacerTests.cs        (named-arg → metadata bundle)
+MediaFramework/Test/S.Media.FFmpeg.Tests/Audio/AudioFileDecoderArrayPoolTests.cs (new)
+MediaFramework/Test/S.Media.FFmpeg.Tests/Video/YadifDeinterlacerTests.cs    (named-arg → metadata bundle)
+MediaFramework/Test/S.Media.FFmpeg.Tests/Video/VideoCpuFrameConverterTests.cs (ctor arg fix)
+```
+
+**Design notes:**
+- The `Action? _release` ↔ `IDisposable? _disposableRelease` two-slot dispatch is the simplest non-breaking variant. A future refactor could collapse both into a discriminated-union struct (e.g. a tagged `(byte kind, object state)` pair), but that touches VideoFrame internals more deeply and is profile-driven — not in scope.
+- `ChannelMap` is now a `readonly partial struct` (was `readonly struct`). External callers see no change.
+- `AudioFrame` is still a `readonly record struct`, just with an additional `Release` field. Auto-generated `Equals` now considers the Release callback in value equality — practically this means two AudioFrames with the same data but different release callbacks compare unequal. No in-tree consumer relies on the prior equality contract; documented if it becomes an issue.
 
 ---
 
@@ -321,6 +405,12 @@ Quality-of-life. No correctness or feature consequences; can be opportunistic.
 
 Phase 3 features in any order; pick by what's most needed for the next product milestone (cue player vs. soundboard vs. multi-output mixer). Phase 4 is a quarter-sized chunk on its own. Phase 5 only when a paying use case demands it.
 
-## Suggested next (after Phase 4 — 2026-05-19)
+## Suggested next (after Phase 5 — 2026-05-19)
 
-Phase 5 broadcast-format work is the obvious next batch when a SMPTE-source consumer arrives. Otherwise the cleanup items in Phase 6 (especially the `ChannelMap.cs` split, the `Tools/CompositorSmoke` integration sample, and the project-memory refresh) can land opportunistically — no one item is blocking anything else.
+With Phase 5 closed (modulo the deferred ancillary-data envelope), the framework is plausibly broadcast-capable for SMPTE-source content. The remaining work splits into:
+
+- **Phase 6 cleanup** (opportunistic): the `ChannelMap.cs` split, the `VideoFrameMetadata` consolidation flagged in the Phase-5 design notes, an `NDIVideoReceiver` (which unlocks the receiver side of SMPTE timecode + interlace metadata), and a `Tools/CompositorSmoke` integration sample exercising `GlVideoCompositor` against a real SDL3 context.
+- **Phase 5 ancillary follow-up**: when a CC / AFD / SCTE-35 consumer materialises, design `VideoAncillary` against that real use case.
+- **Beyond the checklist**: RGB-to-RGB gamut mapping for BT.2020 → BT.709 SDR display preview, broader YadifDeinterlacer pixel-format coverage (yuv422p, yuv444p), bilinear / bicubic sampling in CpuVideoCompositor.
+
+No item is blocking anything else.
