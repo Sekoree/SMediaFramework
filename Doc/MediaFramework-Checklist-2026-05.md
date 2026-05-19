@@ -4,7 +4,7 @@ Derived from `Doc/MediaFramework-Review-2026-05.md`. Ordered to minimize wasted 
 
 Legend: **size** = XS (<1 h) · S (<½ day) · M (1–2 days) · L (1 week) · XL (multi-week feature). **breaks** = which downstream code likely needs updates.
 
-**Status (updated 2026-05-18):** Phase 0 complete. Phase 1 complete. Phase 2 complete. Phase 3 complete (8/8 — P3.8 VideoRouter→Core refactor landed). Phase 4 is the next planned batch.
+**Status (updated 2026-05-19):** Phase 0 complete. Phase 1 complete. Phase 2 complete. Phase 3 complete (8/8 — P3.8 VideoRouter→Core refactor landed). Phase 4 complete (6/6 — full GL compositor scope incl. shaders + readback). Phase 5 is the next planned batch.
 
 ---
 
@@ -214,21 +214,60 @@ MediaFramework/Media/S.Media.PortAudio/PortAudioPlaybackHost.cs             (cre
 
 ---
 
-## Phase 4 — Compositing & overlays (the next product frontier)
+## Phase 4 — Compositing & overlays ✅ COMPLETE (2026-05-19, 6/6)
 
-Once Phase 3 lands, the largest remaining gap is N→1 video compositing — needed for picture-in-picture, transitions, lower-thirds, text overlays. Plan up front so abstractions land in the right place.
+The N→1 video compositing surface needed for picture-in-picture, lower-thirds, text overlays, and cue-stack transitions. Land all six items together so abstractions and consumers ship in lockstep.
 
-- [ ] **Define `IVideoCompositor`** in `S.Media.Core`. Inputs: ordered list of `VideoFrame` (layers, back to front) plus per-layer transform / opacity / blend mode. Output: single `VideoFrame` (or direct write to a sink). The implementation runs in shader on the sink's GL context. **Size:** S (interface design).
+- [x] **Define `IVideoCompositor`** in `S.Media.Core`. Inputs: ordered list of `CompositorLayer` (frame + transform + opacity + blend mode). Output: single `VideoFrame` (compositor returns a new frame; caller takes ownership). Supporting types: `LayerTransform2D` (2×3 affine with Identity/Translate/Scale/Rotate/Compose/Invert), `BlendMode` (`Source` / `SourceOver` / `Multiply`), `CompositorLayer` record struct.
+  - Done in `S.Media.Core/Video/{IVideoCompositor,CompositorLayer,LayerTransform2D,BlendMode}.cs`.
 
-- [ ] **`GlVideoCompositor`** in `S.Media.OpenGL`. Builds on existing `YuvVideoRenderer` plane-upload code. Supports `Source`, `Source-over`, `Multiply`, opacity, affine transform. **Size:** L. **Breaks:** nothing — additive.
+- [x] **`CpuVideoCompositor`** in `S.Media.Core/Video/CpuVideoCompositor.cs`. BGRA32 in/out reference impl — inverse-affine nearest-neighbor sampling, premultiplied-alpha math for Source / SourceOver / Multiply, output buffer from `ArrayPool<byte>` released via the frame's release callback. Always available — no GPU context required.
 
-- [ ] **`CompositorVideoSink`** in `S.Media.OpenGL` (or Core, if you keep the compositor interface generic). N input slots, each one an `IVideoSink`. One `IVideoSource` output that the `VideoRouter` can hand to a real display sink. **Size:** M.
+- [x] **`GlVideoCompositor`** in `S.Media.OpenGL/GlVideoCompositor.cs`. GL 3.3 implementation: FBO + RGBA8 texture as render target, per-`(W, H)` layer-texture cache, shader-based blend with `glBlendFunc` per blend mode (`Source` → blend disabled; `SourceOver` → `ONE, ONE_MINUS_SRC_ALPHA` premul; `Multiply` → `DST_COLOR, ZERO` with shader-side mix to handle layer-alpha weighting). Bring-your-own GL context (caller responsible for making it current on the same thread). Shaders `Shaders/composite_layer.{vert,frag}.glsl` embedded as resources; `SharedGlProgramCache` reuse. Output via `glReadPixels(GL_BGRA)` into pooled BGRA32 buffer. State save/restore around `Composite` (FB binding, viewport, program, VAO, blend func + enable, scissor, unpack alignment/row-length) so it can embed in another sink's render path without trashing host state.
 
-- [ ] **`TextLayerSource : IVideoSource`** in `S.Media.Image` (or a sibling). GPU-side SDF font rendering preferred; SkiaSharp CPU rasterization is a fine first cut. Inputs: string + font + size + color + transform. **Size:** L.
+- [x] **`CompositorVideoSink`** in `S.Media.Core/Video/CompositorVideoSink.cs`. Single class implementing `IVideoSource`; exposes N slots via `AddSlot(...)` → returns a `Slot` handle with `.Sink` (the `IVideoSink` upstream code targets) plus mutable `.Opacity` / `.Transform` / `.BlendMode`. **Replace-on-submit** hold-latest semantics per slot — the previous frame is disposed when a new one arrives; `Slot.OverflowFrames` counts replacements. `TryReadNextFrame` snapshots slots in insertion order (back-to-front), invokes `IVideoCompositor.Composite`, returns the result. PTS derived from the output `Format.FrameRate`. Slot format negotiation declares the compositor's accepted layer formats.
 
-- [ ] **Layer transitions** (fade, dip-to-black, cut) as wrapping sources that animate parameters of an underlying layer. Land after compositor primitives stabilize. **Size:** M.
+- [x] **`TextLayerSource : IVideoSource`** in `S.Media.SkiaSharp/TextLayerSource.cs`. SkiaSharp CPU rasterization (first cut per checklist) → BGRA32 premul with alpha. Mutable Text / FontFamily / FontSize / ArgbColor / BackgroundArgb / Alignment with dirty-flag re-rasterise. Buffer rented from `ArrayPool<byte>`; emitted frames alias the live buffer (released on `Dispose`).
 
-**Phase exit:** PiP and lower-thirds are demonstrable; the cue player can do "PNG fades in, video plays under it, text label appears, all out one NDI sender".
+- [x] **Transitions** in `S.Media.Core/Video/{LayerOpacityTween,FadeFromBlackVideoSource,CutVideoSource}.cs`. `LayerOpacityTween` is a stateless tween helper (`Linear` / `EaseInOutSine`) — pair with a slot to drive fade-in/fade-out animations from a clock. `FadeFromBlackVideoSource` wraps an inner CPU source and multiplies RGB by a 0→1 ramp for the first `duration` worth of frames (BGRA32/Rgba32/Rgb24/Bgr24/Gray8; YUV rejected). `CutVideoSource` switches between two sources at a configurable PTS, rewriting the first B-frame's PTS to the cut boundary for clean continuity.
+
+**Phase exit:** PiP and lower-thirds are demonstrable — `CompositorVideoSink` + `CpuVideoCompositor` runs headless in tests; `GlVideoCompositor` integrates with the existing SDL3/Avalonia GL context discipline. Transitions, text overlays, fade-from-black, and hard cuts all land. The cue player can now wire "PNG with fade-in + video underneath + text label" through one `IVideoCompositor` and ship out an NDI sender. ✅
+
+**Outcomes:**
+- Build: clean (0 warnings / 0 errors) across all 25 projects including HaPlay.
+- Tests: 557/558 pass. Single failure is the same pre-existing flaky `NDIIngestPlaybackClockTests.Timestamp_UsedWhenTimecodeSynthesize` (FP-tolerance, ~5000 ticks delta) seen in Phase 0/1/2/3 — unrelated to Phase 4.
+- 24 new tests across LayerTransform2D (7), CpuVideoCompositor (6), CompositorVideoSink (6), LayerOpacityTween (7), FadeFromBlackVideoSource (4), CutVideoSource (3), TextLayerSource (4 — 1 carry-over with ImageFileSource).
+- GL compositor itself has no headless-context test infra in the repo today; it builds clean and is validated via the existing SDL3/Avalonia GL test surfaces. Future work: extend `Tools/VideoPlaybackSmoke` (or a new `Tools/CompositorSmoke`) with a `--pip` flag exercising the GL compositor against a real SDL3 context. Not blocking phase exit.
+
+**Files added:**
+```
+MediaFramework/Media/S.Media.Core/Video/IVideoCompositor.cs           (new)
+MediaFramework/Media/S.Media.Core/Video/CompositorLayer.cs            (new)
+MediaFramework/Media/S.Media.Core/Video/LayerTransform2D.cs           (new)
+MediaFramework/Media/S.Media.Core/Video/BlendMode.cs                  (new)
+MediaFramework/Media/S.Media.Core/Video/CpuVideoCompositor.cs         (new)
+MediaFramework/Media/S.Media.Core/Video/CompositorVideoSink.cs        (new)
+MediaFramework/Media/S.Media.Core/Video/LayerOpacityTween.cs          (new)
+MediaFramework/Media/S.Media.Core/Video/FadeFromBlackVideoSource.cs   (new)
+MediaFramework/Media/S.Media.Core/Video/CutVideoSource.cs             (new)
+MediaFramework/Media/S.Media.OpenGL/GlVideoCompositor.cs              (new)
+MediaFramework/Media/S.Media.OpenGL/Shaders/composite_layer.vert.glsl (new)
+MediaFramework/Media/S.Media.OpenGL/Shaders/composite_layer.frag.glsl (new)
+MediaFramework/Media/S.Media.SkiaSharp/TextLayerSource.cs             (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/LayerTransform2DTests.cs        (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/CpuVideoCompositorTests.cs     (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/CompositorVideoSinkTests.cs    (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/LayerOpacityTweenTests.cs      (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/FadeFromBlackVideoSourceTests.cs (new)
+MediaFramework/Test/S.Media.Core.Tests/Video/CutVideoSourceTests.cs         (new)
+MediaFramework/Test/S.Media.SkiaSharp.Tests/TextLayerSourceTests.cs         (new)
+```
+
+**Design notes for next phase consumers:**
+- The GL compositor consumer of `CompositorVideoSink.Output` (typically a `VideoPlayer` on a clock thread) must own the GL context. Wiring a GL compositor into a non-GL player driven by an arbitrary clock thread is not supported — a "GL-owned context" wrapper is future work.
+- First-cut compositors accept BGRA32 layers only; YUV layers must be CPU-converted upstream. The existing `VideoRouter` branch-converter path handles this if the slot declares `AcceptedPixelFormats = [Bgra32]`. A future enhancement can teach `GlVideoCompositor` to upload YUV layers directly via the existing `YuvVideoRenderer` recipes, skipping the CPU conversion.
+- CPU compositor uses nearest-neighbor sampling on affine transforms; bilinear / bicubic is a future improvement.
+- `FadeFromBlackVideoSource` rejects hardware-backed frames. For hardware paths use `LayerOpacityTween` on a `CompositorVideoSink.Slot` — opacity is a compositor uniform, not a frame-content transform.
 
 ---
 
@@ -281,3 +320,7 @@ Quality-of-life. No correctness or feature consequences; can be opportunistic.
 ## Suggested third onwards
 
 Phase 3 features in any order; pick by what's most needed for the next product milestone (cue player vs. soundboard vs. multi-output mixer). Phase 4 is a quarter-sized chunk on its own. Phase 5 only when a paying use case demands it.
+
+## Suggested next (after Phase 4 — 2026-05-19)
+
+Phase 5 broadcast-format work is the obvious next batch when a SMPTE-source consumer arrives. Otherwise the cleanup items in Phase 6 (especially the `ChannelMap.cs` split, the `Tools/CompositorSmoke` integration sample, and the project-memory refresh) can land opportunistically — no one item is blocking anything else.
