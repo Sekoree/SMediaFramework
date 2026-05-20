@@ -64,6 +64,8 @@ public sealed class MediaClock : IMediaClock, IDisposable
     private Thread? _driverThread;
     private CancellationTokenSource? _driverCts;
 
+    private static readonly ILogger TraceLog = MediaDiagnostics.CreateLogger("S.Media.Core.Clock.MediaClock");
+
     public MediaClock() : this(DefaultAudioTickInterval, DefaultVideoTickInterval, logger: null) { }
 
     public MediaClock(ILogger? logger)
@@ -108,7 +110,13 @@ public sealed class MediaClock : IMediaClock, IDisposable
         lock (_gate)
         {
             ThrowIfDisposed();
-            if (_isRunning) return;
+            if (_isRunning)
+            {
+                TraceLog.LogTrace("Start: already running (position={Position})", ComputePositionUnlocked());
+                return;
+            }
+            TraceLog.LogDebug("Start: master={Master} position={Position}",
+                _master?.GetType().Name ?? "(stopwatch)", _basePosition);
             _isRunning = true;
             if (_master is not null)
             {
@@ -139,6 +147,8 @@ public sealed class MediaClock : IMediaClock, IDisposable
             ThrowIfDisposed();
             if (!_isRunning) return;
             _basePosition = ComputePositionUnlocked();
+            TraceLog.LogDebug("Pause: position={Position} master={Master}",
+                _basePosition, _master?.GetType().Name ?? "(stopwatch)");
             if (_master is not null)
                 _masterElapsedWhenPaused = _master.ElapsedSinceStart;
             else
@@ -173,6 +183,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
         lock (_gate)
         {
             ThrowIfDisposed();
+            TraceLog.LogDebug("Seek: from={From} to={To}", _basePosition, position);
             _basePosition = position;
             _masterElapsedWhenPaused = null;
             if (_master is not null) _masterAnchor = _master.ElapsedSinceStart;
@@ -188,6 +199,8 @@ public sealed class MediaClock : IMediaClock, IDisposable
         {
             ThrowIfDisposed();
             var current = ComputePositionUnlocked();
+            TraceLog.LogDebug("SetMaster: prev={Prev} next={Next} positionAtSwap={Position}",
+                _master?.GetType().Name ?? "(stopwatch)", master?.GetType().Name ?? "(stopwatch)", current);
             _master = master;
             _basePosition = current;
             _masterElapsedWhenPaused = null;

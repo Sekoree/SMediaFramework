@@ -2,8 +2,10 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
 using HaPlay.Models;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
 using S.Media.NDI.Audio;
@@ -42,6 +44,8 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     private bool _audioAcquired;
     private bool _disposeOnRelease;
     private VideoFrame? _logoTemplate;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.OutputPreview.NDIOutputPreviewRuntime");
 
     public NDIOutputPreviewRuntime(NDIOutputDefinition definition) =>
         _definition = definition;
@@ -86,6 +90,8 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 StartAudioTimerLocked();
             }
         }
+        Trace.LogInformation("Start: '{Name}' mode={Mode} clockVideo={CV} clockAudio={CA} videoTcMode={VTC}",
+            _definition.SourceName, mode, clockVideo, clockAudio, videoTc);
     }
 
     /// <summary>
@@ -115,12 +121,29 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         if (!needsVideo && !needsAudio)
             return null;
 
+        var waitStart = Environment.TickCount64;
         lock (_gate)
         {
+            var waitMs = Environment.TickCount64 - waitStart;
+            if (waitMs > 50)
+                Trace.LogWarning("AcquireForPlayback: '{Name}' gate wait={WaitMs}ms (carrier video/audio tick may be slow inside lock)",
+                    _definition.SourceName, waitMs);
             if (_disposed || _output is null)
+            {
+                Trace.LogTrace("AcquireForPlayback: '{Name}' returning null (disposed={Disposed} output={HasOutput})",
+                    _definition.SourceName, _disposed, _output is not null);
                 return null;
-            if (needsVideo && _videoAcquired) return null;
-            if (needsAudio && _audioAcquired) return null;
+            }
+            if (needsVideo && _videoAcquired)
+            {
+                Trace.LogTrace("AcquireForPlayback: '{Name}' video already acquired", _definition.SourceName);
+                return null;
+            }
+            if (needsAudio && _audioAcquired)
+            {
+                Trace.LogTrace("AcquireForPlayback: '{Name}' audio already acquired", _definition.SourceName);
+                return null;
+            }
 
             var mode = _definition.StreamMode;
             if (needsVideo && HasVideoStream(mode))
@@ -139,6 +162,8 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 _audioTimer = null;
             }
 
+            Trace.LogDebug("AcquireForPlayback: '{Name}' acquired video={V} audio={A}",
+                _definition.SourceName, needsVideo && HasVideoStream(mode), needsAudio && HasAudioStream(mode));
             return _output;
         }
     }
@@ -156,6 +181,8 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
             var wasAudio = _audioAcquired;
             if (!wasVideo && !wasAudio)
                 return;
+            Trace.LogDebug("ReleaseFromPlayback: '{Name}' wasVideo={V} wasAudio={A}",
+                _definition.SourceName, wasVideo, wasAudio);
 
             _videoAcquired = false;
             _audioAcquired = false;
@@ -247,6 +274,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
     private void OnVideoTick(object? _)
     {
+        var tickStart = Environment.TickCount64;
         lock (_gate)
         {
             if (_disposed || _videoAcquired || _output is null)
@@ -261,9 +289,16 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                     ? CloneLogoFrame(tpl, pt)
                     : PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat, pt);
                 _output.VideoSink.Submit(frame);
+                var dur = Environment.TickCount64 - tickStart;
+                // ~33ms is one frame period. NDI SDK's clockVideo:true can pace the send internally,
+                // so a slow tick here just means the SDK was throttling — only worth reading at Trace.
+                if (dur > 100 && Trace.IsEnabled(LogLevel.Trace))
+                    Trace.LogTrace("OnVideoTick: '{Name}' ran for {Ms}ms while holding gate",
+                        _definition.SourceName, dur);
             }
             catch (Exception ex)
             {
+                Trace.LogError(ex, $"NDIOutputPreviewRuntime '{_definition.SourceName}' video tick");
                 Debug.WriteLine($"NDIOutputPreviewRuntime video tick: {ex}");
             }
         }

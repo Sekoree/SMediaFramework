@@ -66,6 +66,8 @@ public sealed class VideoRouter : IDisposable
     private bool _disposed;
     private EventHandler<VideoRouterPumpPressureEventArgs>? _pumpPressure;
 
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoRouter");
+
     public VideoRouter(ILogger? logger = null) => _log = logger;
 
     /// <summary>Optional: raised when an async <see cref="VideoSinkPump"/> on an output drops an oldest frame; arguments include <see cref="VideoRouterPumpPressureEventArgs.OutputId"/> and cumulative drops. Handler runs on the pump's <see cref="IVideoSink.Submit"/> caller thread (typically the router input path).</summary>
@@ -134,6 +136,8 @@ public sealed class VideoRouter : IDisposable
             }
 
             _outputs.Add(id, new OutputRegistration(id, sink, disposeSinkOnRouterDispose));
+            Trace.LogDebug("AddOutput: id={OutputId} type={SinkType} async={IsAsync} disposeOnRouterDispose={Dispose}",
+                id, sink.GetType().Name, sink is VideoSinkPump, disposeSinkOnRouterDispose);
             return id;
         }
     }
@@ -195,6 +199,8 @@ public sealed class VideoRouter : IDisposable
             _outputOwner[primaryOutputId] = inputId;
             reg.RoutedOutputIds.Add(primaryOutputId);
             reg.RoutedSet.Add(primaryOutputId);
+            Trace.LogDebug("AddInput: id={InputId} primaryOut={Primary} acceptedFormats=[{Accepted}]",
+                inputId, primaryOutputId, string.Join(",", accepted));
             return new VideoRouterInputRegistration(inputId, reg.Sink);
         }
     }
@@ -241,6 +247,8 @@ public sealed class VideoRouter : IDisposable
             _outputOwner[outputId] = inputId;
             reg.RoutedOutputIds.Add(outputId);
             reg.RoutedSet.Add(outputId);
+            Trace.LogDebug("TryAddRoute: input={InputId} -> output={OutputId} (totalRoutes={Total})",
+                inputId, outputId, reg.RoutedOutputIds.Count);
             ReconfigureInputIfNeededLocked(reg);
             return true;
         }
@@ -492,6 +500,8 @@ public sealed class VideoRouter : IDisposable
             if (RoutedOutputIds.Count == 0)
                 throw new InvalidOperationException($"VideoRouter input '{Id}' has no routed outputs.");
 
+            VideoRouter.Trace.LogDebug("ApplyConfigure: input={InputId} negotiated={Format} routedOutputs=[{Outputs}]",
+                Id, negotiated, string.Join(",", RoutedOutputIds));
             NegotiatedFormat = negotiated;
             var primarySink = _owner._outputs[PrimaryOutputId].Sink;
             VideoRouter.ApplyD3D11GlBorrowVideoSourceToSink(primarySink, _borrowVideoSourceForWin32Nv12Gl);

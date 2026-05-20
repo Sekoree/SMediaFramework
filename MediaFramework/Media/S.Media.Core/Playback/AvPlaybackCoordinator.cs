@@ -1,5 +1,7 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 
 namespace S.Media.Core.Playback;
@@ -30,6 +32,9 @@ namespace S.Media.Core.Playback;
 /// </remarks>
 public static class AvPlaybackCoordinator
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Playback.AvPlaybackCoordinator");
+
+
     /// <summary>
     /// Typical play order: optional decoder prefill → optional
     /// <paramref name="verifyPrebufferAfterPrefill"/> → optional hardware
@@ -54,25 +59,48 @@ public static class AvPlaybackCoordinator
         Func<bool>? verifyPrebufferAfterPrefill = null)
     {
         ArgumentNullException.ThrowIfNull(video);
-        prefillBeforeHardware?.Invoke();
+        Trace.LogDebug("Play: hasAudio={HasAudio} hasPrefill={HasPrefill} hasStartHw={HasStartHw} hasVoMaster={HasVoMaster}",
+            audio is not null, prefillBeforeHardware is not null, startHardware is not null, videoOnlyMaster is not null);
+
+        if (prefillBeforeHardware is not null)
+        {
+            Trace.LogTrace("Play: invoking prefill");
+            prefillBeforeHardware.Invoke();
+        }
+
         if (verifyPrebufferAfterPrefill is not null && !verifyPrebufferAfterPrefill())
         {
+            Trace.LogWarning("Play: verifyPrebufferAfterPrefill returned false — aborting");
             throw new InvalidOperationException(
                 "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false.");
         }
 
-        startHardware?.Invoke();
+        if (startHardware is not null)
+        {
+            Trace.LogTrace("Play: invoking startHardware");
+            startHardware.Invoke();
+        }
+
         if (audio is not null)
+        {
+            Trace.LogTrace("Play: starting audio player");
             audio.Play();
+        }
         else
         {
             if (videoOnlyMaster is not null)
                 video.Clock.SetMaster(videoOnlyMaster);
             if (!video.Clock.IsRunning)
+            {
+                Trace.LogTrace("Play: starting video-only clock");
                 video.Clock.Start();
+            }
         }
 
+        Trace.LogTrace("Play: starting video player");
         video.Play();
+        Trace.LogDebug("Play: complete (audioRunning={AudioRunning} videoRunning={VideoRunning} clockRunning={ClockRunning})",
+            audio?.IsPlaying ?? false, video.IsRunning, video.Clock.IsRunning);
     }
 
     /// <summary>
@@ -95,6 +123,8 @@ public static class AvPlaybackCoordinator
         Action? flushSharedMuxAfterPause = null)
     {
         ArgumentNullException.ThrowIfNull(video);
+        Trace.LogDebug("Pause: hasAudio={HasAudio} hasFlush={HasFlush}",
+            audio is not null, flushSharedMuxAfterPause is not null);
         try
         {
             video.Pause(cancellationToken);
@@ -106,7 +136,12 @@ public static class AvPlaybackCoordinator
             else
                 video.Clock.Pause(cancellationToken);
 
-            flushSharedMuxAfterPause?.Invoke();
+            if (flushSharedMuxAfterPause is not null)
+            {
+                Trace.LogTrace("Pause: invoking shared-mux flush");
+                flushSharedMuxAfterPause.Invoke();
+            }
+            Trace.LogDebug("Pause: complete");
         }
     }
 

@@ -1,6 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Playback;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
@@ -29,18 +31,23 @@ public sealed class MediaPlayer : IDisposable
 {
     private readonly MediaContainerPlaybackBundle _bundle;
     private readonly string _videoRouterInputId;
+    private readonly IVideoSink _videoInputSink;
     private readonly string? _audioSourceId;
     private readonly MediaClock? _freerun;
     private bool _disposed;
 
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Playback.MediaPlayer");
+
     private MediaPlayer(
         MediaContainerPlaybackBundle bundle,
         string videoRouterInputId,
+        IVideoSink videoInputSink,
         string? audioSourceId,
         MediaClock? freerun)
     {
         _bundle = bundle;
         _videoRouterInputId = videoRouterInputId;
+        _videoInputSink = videoInputSink;
         _audioSourceId = audioSourceId;
         _freerun = freerun;
     }
@@ -51,6 +58,13 @@ public sealed class MediaPlayer : IDisposable
 
     /// <summary>Input id returned by <see cref="VideoRouter.AddInput"/> — use with <see cref="VideoRouter.TryAddRoute"/>.</summary>
     public string VideoRouterInputId => _videoRouterInputId;
+
+    /// <summary>
+    /// The router input sink the decoder feeds into. Submit pre-Play priming or warmup frames here
+    /// rather than directly to per-branch leaf sinks so the router's pixel-format converters run for
+    /// every branch (Avalonia keeps the source format, NDI gets the post-conversion format, etc.).
+    /// </summary>
+    public IVideoSink VideoInputSink => _videoInputSink;
 
     public VideoPlayer Video => _bundle.Video;
 
@@ -286,12 +300,19 @@ public sealed class MediaPlayer : IDisposable
                 freerun,
                 bundleOwned);
 
-            player = new MediaPlayer(bundle, vin.Id, audioSourceId, audioPlayer is null ? freerun : null);
+            player = new MediaPlayer(bundle, vin.Id, vin.Sink, audioSourceId, audioPlayer is null ? freerun : null);
+            Trace.LogInformation("TryOpenCore: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
+                media.HasAudio, media.HasVideo,
+                media.HasAudio ? media.Audio.Format.SampleRate : 0,
+                media.HasVideo ? videoPlayer.Format.ToString() : "(none)",
+                playClock.GetType().Name,
+                videoNegotiationLead?.GetType().Name ?? "(discard)");
             return true;
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
+            Trace.LogError(ex, "TryOpenCore failed");
             FailDispose();
             return false;
         }

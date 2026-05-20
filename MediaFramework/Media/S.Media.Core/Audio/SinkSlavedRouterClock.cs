@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using S.Media.Core.Diagnostics;
+
 namespace S.Media.Core.Audio;
 
 /// <summary>
@@ -31,6 +34,9 @@ public sealed class SinkSlavedRouterClock : IRouterClock
     private readonly int _sampleRate;
     private readonly int _chunkSamples;
     private WallClockRouterClock? _lazyFallback;
+    private int _consecutiveFallbacks;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Audio.SinkSlavedRouterClock");
 
     /// <remarks>
     /// <strong>Invariant — ctor must not invoke any <see cref="AudioRouter"/> API.</strong>
@@ -64,7 +70,16 @@ public sealed class SinkSlavedRouterClock : IRouterClock
     {
         var sink = _resolveSink();
         if (sink is not null)
+        {
+            if (Interlocked.Exchange(ref _consecutiveFallbacks, 0) > 0)
+                Trace.LogDebug("WaitForNextChunk: slaved sink resolved again (recovered from wall-clock fallback)");
             return sink.WaitForCapacity(_chunkSamples, token);
+        }
+
+        var fallbacks = Interlocked.Increment(ref _consecutiveFallbacks);
+        // Log on first fallback and every ~5 seconds afterwards (~500 chunks at 480/48k).
+        if (fallbacks == 1 || fallbacks % 500 == 0)
+            Trace.LogWarning("WaitForNextChunk: slaved sink unresolvable — falling back to wall clock (consecutiveFallbacks={Count})", fallbacks);
 
         WallClockRouterClock fb;
         lock (_fallbackGate)

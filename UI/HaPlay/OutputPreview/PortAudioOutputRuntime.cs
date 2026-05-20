@@ -1,6 +1,8 @@
 using System.Threading;
 using HaPlay.Models;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.PortAudio;
 
 namespace HaPlay.OutputPreview;
@@ -20,6 +22,8 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     private PortAudioOutput? _output;
     private int _holders;
     private bool _disposed;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.OutputPreview.PortAudioOutputRuntime");
 
     public PortAudioOutputRuntime(PortAudioOutputDefinition definition) =>
         _definition = definition;
@@ -55,6 +59,8 @@ internal sealed class PortAudioOutputRuntime : IDisposable
 
             _output = output;
         }
+        Trace.LogInformation("Start: '{Name}' device={Device} rate={Rate}Hz channels={Ch}",
+            _definition.DisplayName, _definition.GlobalDeviceIndex, _definition.SampleRate, _definition.ChannelCount);
     }
 
     /// <summary>
@@ -67,13 +73,21 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         lock (_gate)
         {
             if (_disposed || _output is null)
+            {
+                Trace.LogTrace("AcquireForPlayback: '{Name}' returning null (disposed={D} hasOutput={H})",
+                    _definition.DisplayName, _disposed, _output is not null);
                 return null;
+            }
             if (Interlocked.CompareExchange(ref _holders, 1, 0) != 0)
+            {
+                Trace.LogWarning("AcquireForPlayback: '{Name}' already held", _definition.DisplayName);
                 return null;
+            }
 
             try { _output.Flush(); }
-            catch { /* best effort — Flush is idempotent on a fresh stream */ }
+            catch (Exception ex) { Trace.LogError(ex, $"PortAudioOutputRuntime '{_definition.DisplayName}' Acquire.Flush"); }
 
+            Trace.LogDebug("AcquireForPlayback: '{Name}' acquired", _definition.DisplayName);
             return _output;
         }
     }

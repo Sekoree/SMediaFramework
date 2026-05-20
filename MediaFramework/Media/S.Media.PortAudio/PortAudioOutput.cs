@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
@@ -45,6 +46,9 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     private GCHandle _selfHandle;
     private bool _isRunning;
     private bool _disposed;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.PortAudio.PortAudioOutput");
+    private long _waitForCapacityWarnTicks;
 
     /// <summary>Pa_GetStreamTime at <see cref="_segmentPlayed0Samples"/> — set on first callback after Start/Flush.</summary>
     private double _segmentStreamT0;
@@ -125,6 +129,8 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     public void Flush()
     {
         if (_disposed || !Volatile.Read(ref _isRunning) || _stream == nint.Zero) return;
+        Trace.LogDebug("Flush: aborting + restarting stream (queued={Queued}f played={Played}f)",
+            QueuedSamples, Volatile.Read(ref _playedSamples));
         Native.Pa_AbortStream(_stream);
         // Reset ring positions so the queue starts empty post-restart;
         // _playedSamples is preserved (lifetime stat / monotonic clock).
@@ -244,11 +250,17 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
 
         Volatile.Write(ref _streamSmoothCalibrated, 0);
         Volatile.Write(ref _isRunning, true);
+        Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f targetQueue={TargetFrames}f",
+            _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
+            _ringBuffer.Length / _format.Channels, TargetQueueSamples);
     }
 
     public void Stop()
     {
         if (!Volatile.Read(ref _isRunning)) return;
+        Trace.LogDebug("Stop: device={Device} played={Played}f underrun={Underrun}f dropped={Dropped}f callbacks={Callbacks}",
+            _deviceIndex, Volatile.Read(ref _playedSamples), Volatile.Read(ref _underrunSamples),
+            Volatile.Read(ref _droppedSamples), Volatile.Read(ref _callbackCount));
         try
         {
             if (_stream != nint.Zero)
@@ -377,14 +389,31 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
 
         // Before the stream is started PA isn't draining yet — pretend ready,
         // so prebuffering can fill the ring up to the target before Start().
-        if (!Volatile.Read(ref _isRunning)) return !token.IsCancellationRequested;
+        if (!Volatile.Read(ref _isRunning))
+        {
+            if (Trace.IsEnabled(LogLevel.Trace))
+                Trace.LogTrace("WaitForCapacity: stream not running yet — returning ready (chunk={Chunk})", chunkSamples);
+            return !token.IsCancellationRequested;
+        }
 
         var target = TargetQueueSamples;
-        var deadlineTicks = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
+        var startTicks = Environment.TickCount64;
+        var deadlineTicks = startTicks + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
         while (!token.IsCancellationRequested)
         {
             if (Environment.TickCount64 >= deadlineTicks)
+            {
+                var now = Environment.TickCount64;
+                var prev = Volatile.Read(ref _waitForCapacityWarnTicks);
+                if (now - prev >= 2000 || prev == 0)
+                {
+                    if (Interlocked.CompareExchange(ref _waitForCapacityWarnTicks, now, prev) == prev)
+                        Trace.LogWarning("WaitForCapacity: timed out after 5s (queued={Queued}f target={Target}f played={Played}f underrun={Underrun}f cbCount={CB} streamActive={Active}) — router pacing will stall",
+                            QueuedSamples, target, Volatile.Read(ref _playedSamples), Volatile.Read(ref _underrunSamples),
+                            Volatile.Read(ref _callbackCount), StreamActive);
+                }
                 return false;
+            }
 
             var queued = QueuedSamples;
             if (queued + chunkSamples <= target) return true;

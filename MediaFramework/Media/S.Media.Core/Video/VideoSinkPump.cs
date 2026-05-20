@@ -59,7 +59,10 @@ public sealed class VideoSinkPump : IVideoSink, IVideoSinkD3D11GlBorrowSetup, ID
     private long _dropped;
     private long _submitted;
     private long _lastDropLogTicks;
+    private int _firstSubmitLogged;
     private EventHandler<VideoSinkPumpPressureEventArgs>? _pumpPressure;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoSinkPump");
 
     public VideoSinkPump(IVideoSink inner, int maxQueuedFrames = 3, string name = "VideoSinkPump", ILogger? log = null,
         bool disposeInnerOnDispose = false)
@@ -104,8 +107,19 @@ public sealed class VideoSinkPump : IVideoSink, IVideoSinkD3D11GlBorrowSetup, ID
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
-            if (_thread is not null)
-                throw new InvalidOperationException("VideoSinkPump.Configure may only be called once.");
+            if (_configured)
+            {
+                // VideoRouter.ApplyConfigureLocked re-Configures the primary every time a branch route
+                // is added (even though the negotiated format hasn't changed). Forward to the inner sink
+                // without restarting the drainer thread — same semantics other IVideoSinks already have.
+                // Frames already queued at the prior format would race a true format change, so callers
+                // doing an actual resize/pixel-format swap should pause + drain first.
+                Trace.LogTrace("Configure: name={Name} re-configure (already running) format={Format}", _name, format);
+                _inner.Configure(format);
+                return;
+            }
+            Trace.LogDebug("Configure: name={Name} format={Format} maxQueued={MaxQueued} innerType={InnerType}",
+                _name, format, _maxQueued, _inner.GetType().Name);
             _inner.Configure(format);
             _configured = true;
         }
@@ -212,11 +226,17 @@ public sealed class VideoSinkPump : IVideoSink, IVideoSinkD3D11GlBorrowSetup, ID
                 try
                 {
                     _inner.Submit(next);
-                    Interlocked.Increment(ref _submitted);
+                    var n = Interlocked.Increment(ref _submitted);
+                    if (n == 1)
+                    {
+                        Interlocked.Exchange(ref _firstSubmitLogged, 1);
+                        Trace.LogDebug("{Name}: first frame submitted to inner sink", _name);
+                    }
                 }
                 catch (Exception ex)
                 {
                     _log?.LogError(ex, "VideoSinkPump {Name}: inner Submit failed", _name);
+                    Trace.LogError(ex, $"{_name}: inner Submit failed");
                     next.Dispose();
                 }
             }

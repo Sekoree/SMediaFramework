@@ -92,6 +92,8 @@ public sealed class AudioRouter : IDisposable
     private long _chunksProduced;
     private int _idCounter;
 
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Audio.AudioRouter");
+
     /// <summary>
     /// Nominal mix sample rate in Hz.
     /// </summary>
@@ -185,6 +187,8 @@ public sealed class AudioRouter : IDisposable
 
             var entry = new SourceEntry(id, source, new float[_chunkSamples * source.Format.Channels], ownedWrapper);
             Volatile.Write(ref _state, _state with { Sources = _state.Sources.Add(id, entry) });
+            Trace.LogDebug("AddSource: id={SourceId} type={SourceType} format={Format} wrapped={Wrapped}",
+                id, source.GetType().Name, source.Format, ownedWrapper is not null);
             return id;
         }
     }
@@ -282,6 +286,8 @@ public sealed class AudioRouter : IDisposable
             var pump = new SinkPump(this, sink, capacity, floatsPerChunk, id);
             var entry = new SinkEntry(id, sink, pump);
             Volatile.Write(ref _state, _state with { Sinks = _state.Sinks.Add(id, entry) });
+            Trace.LogDebug("AddSink: id={SinkId} type={SinkType} format={Format} clocked={Clocked} flushable={Flushable} pumpCap={PumpCapacity}",
+                id, sink.GetType().Name, sink.Format, sink is IClockedSink, sink is IFlushableSink, capacity);
             return id;
         }
     }
@@ -639,6 +645,7 @@ public sealed class AudioRouter : IDisposable
 
             _slaveClockSinkId = sinkId;
             _clock = new SinkSlavedRouterClock(_sampleRate, _chunkSamples, () => ResolveClockedSink(sinkId));
+            Trace.LogDebug("SlaveTo: pacing router from sink {SinkId} ({SinkType})", sinkId, entry.Sink.GetType().Name);
         }
     }
 
@@ -655,7 +662,12 @@ public sealed class AudioRouter : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_isRunning) return;
+            if (_isRunning)
+            {
+                Trace.LogTrace("Start: already running (sinkCount={SinkCount} sourceCount={SourceCount})",
+                    _state.Sinks.Count, _state.Sources.Count);
+                return;
+            }
 
             CompletedNaturally = false;
             _cts = new CancellationTokenSource();
@@ -669,6 +681,8 @@ public sealed class AudioRouter : IDisposable
             };
             _isRunning = true;
             _thread.Start();
+            Trace.LogDebug("Start: rate={SampleRate}Hz chunk={Chunk} clock={ClockType} sinks={SinkCount} sources={SourceCount} routes={RouteCount}",
+                _sampleRate, _chunkSamples, _clock.GetType().Name, _state.Sinks.Count, _state.Sources.Count, _state.Routes.Length);
         }
     }
 
@@ -677,8 +691,11 @@ public sealed class AudioRouter : IDisposable
     /// <see cref="Stop"/> reaches its sink. Use <see cref="Pause"/> instead for
     /// "stop now and go silent immediately."
     /// </summary>
-    public void Stop(CancellationToken cancellationToken = default) =>
+    public void Stop(CancellationToken cancellationToken = default)
+    {
+        Trace.LogDebug("Stop: draining run loop (chunksProduced={Chunks})", Volatile.Read(ref _chunksProduced));
         StopInternal(drain: true, flushAfterAbandon: false, cancellationToken);
+    }
 
     /// <summary>
     /// Immediate-silence stop: tears the run loop down, abandons any audio
@@ -698,6 +715,7 @@ public sealed class AudioRouter : IDisposable
     public void Pause()
     {
         if (!IsRunning) return;
+        Trace.LogDebug("Pause: stopping run loop (chunksProduced={Chunks})", Volatile.Read(ref _chunksProduced));
         StopInternal(drain: false, flushAfterAbandon: true, CancellationToken.None);
     }
 
@@ -869,6 +887,8 @@ public sealed class AudioRouter : IDisposable
 
     private void RunLoop(CancellationToken token)
     {
+        Trace.LogDebug("RunLoop: entered (rate={SampleRate} chunk={Chunk})", _sampleRate, _chunkSamples);
+        var loggedFirstChunk = false;
         try
         {
             while (!token.IsCancellationRequested)
@@ -878,7 +898,11 @@ public sealed class AudioRouter : IDisposable
                 // of a new iteration), so the pump is safe to dispose.
                 while (_pumpsAwaitingDispose.TryDequeue(out var p)) p.Dispose();
 
-                if (!_clock.WaitForNextChunk(token)) break;
+                if (!_clock.WaitForNextChunk(token))
+                {
+                    Trace.LogTrace("RunLoop: WaitForNextChunk returned false (cancelled={Cancelled})", token.IsCancellationRequested);
+                    break;
+                }
 
                 // Snapshot the immutable state at chunk start. Concurrent mutations
                 // replace the whole RouterState atomically; this loop sees a
@@ -924,14 +948,34 @@ public sealed class AudioRouter : IDisposable
                     sink.Pump.Commit();
 
                 Interlocked.Increment(ref _chunksProduced);
+                if (!loggedFirstChunk)
+                {
+                    Trace.LogDebug("RunLoop: first chunk committed (sinks={SinkCount} routes={RouteCount})",
+                        snapshot.Sinks.Count, snapshot.Routes.Length);
+                    loggedFirstChunk = true;
+                }
+                else if (Trace.IsEnabled(LogLevel.Trace))
+                {
+                    var produced = Volatile.Read(ref _chunksProduced);
+                    // Trace level: every 200 chunks (~2s @ 480/48k). Spammy but bounded.
+                    if (produced % 200 == 0)
+                        Trace.LogTrace("RunLoop: chunk #{Produced} (sinks={SinkCount})", produced, snapshot.Sinks.Count);
+                }
 
                 if (!keepRunning)
                 {
                     CompletedNaturally = true;
                     lock (_gate) _isRunning = false;
+                    Trace.LogDebug("RunLoop: all sources exhausted, completed naturally (chunks={Chunks})",
+                        Volatile.Read(ref _chunksProduced));
                     break;
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "RunLoop: unhandled exception, exiting");
+            throw;
         }
         finally
         {

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
@@ -45,8 +46,11 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
     private byte* _packedBuffer;
     private int _packedCapacityBytes;
     private bool _disposed;
+    private int _firstSubmitLogged;
 
     private long _samplesSentPerChannel;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Audio.NDIAudioSink");
 
     public AudioFormat Format => _format;
 
@@ -97,6 +101,10 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
         var channels = _format.Channels;
         var samplesPerChannel = packedSamples.Length / channels;
         if (samplesPerChannel == 0) return;
+
+        if (Interlocked.Exchange(ref _firstSubmitLogged, 1) == 0)
+            Trace.LogDebug("First Submit: format={Format} samples={Samples} tc100ns={TC}",
+                _format, samplesPerChannel, timecode100Ns);
 
         var packedBytes = packedSamples.Length * sizeof(float);
         EnsurePackedCapacity(packedBytes);

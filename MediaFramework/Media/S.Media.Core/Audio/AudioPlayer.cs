@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
 
@@ -49,6 +50,8 @@ public sealed class AudioPlayer : IDisposable
 
     private string? _primarySinkId;
     private bool _disposed;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Audio.AudioPlayer");
 
     public AudioRouter Router => _router;
     public MediaClock Clock => _clock;
@@ -111,8 +114,22 @@ public sealed class AudioPlayer : IDisposable
             {
                 _router.SlaveTo(sinkId);
                 if (sink is IPlaybackClock pc)
+                {
                     _clock.SetMaster(pc);
+                    Trace.LogDebug("AddOutput: promoted sink {SinkId} to primary, master clock set ({ClockType})",
+                        sinkId, pc.GetType().Name);
+                }
+                else
+                {
+                    Trace.LogDebug("AddOutput: sink {SinkId} promoted to primary (IClockedSink, but no IPlaybackClock — media clock stays in stopwatch mode)",
+                        sinkId);
+                }
                 _primarySinkId = sinkId;
+            }
+            else if (AutoWirePrimary && _primarySinkId is null)
+            {
+                Trace.LogTrace("AddOutput: sink {SinkId} ({SinkType}) does not implement IClockedSink — not eligible as router master",
+                    sinkId, sink.GetType().Name);
             }
         }
         return sinkId;
@@ -229,6 +246,8 @@ public sealed class AudioPlayer : IDisposable
     public void Play()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        Trace.LogDebug("Play: primary={Primary} sinks={SinkCount} sources={SourceCount}",
+            _primarySinkId ?? "(none)", _router.SinkIds.Count, _router.SourceIds.Count);
         _router.Start();
         _clock.Start();
     }
@@ -241,6 +260,7 @@ public sealed class AudioPlayer : IDisposable
     public void Pause()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        Trace.LogDebug("Pause: position={Position}", _clock.CurrentPosition);
         _router.Pause();
         _clock.Pause();
     }

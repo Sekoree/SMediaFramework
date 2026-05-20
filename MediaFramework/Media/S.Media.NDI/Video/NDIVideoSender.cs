@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
@@ -83,6 +84,10 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
     private readonly NDIEgressPresentationTimeline? _sharedPresentationTimeline;
     private long _lastSubmitTimestamp;
     private TimeSpan? _presentationAnchor;
+    private int _firstSubmitLogged;
+    private long _submittedCount;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Video.NDIVideoSender");
 
     public VideoFormat Format
     {
@@ -180,6 +185,9 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         _sharedPresentationTimeline?.Reset();
         _presentationAnchor = null;
         _configured = true;
+        Interlocked.Exchange(ref _firstSubmitLogged, 0);
+        Trace.LogDebug("Configure: {Format} timecodeMode={Mode} spacing={Spacing}ms",
+            format, _timecodeMode, _minimumSubmitSpacing.TotalMilliseconds);
     }
 
     public void Submit(VideoFrame frame)
@@ -233,6 +241,12 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
             _sender.SendVideoAsync(native);
             _hasInFlight = true;
             _stagingIdx ^= 1;
+            var n = Interlocked.Increment(ref _submittedCount);
+            if (Interlocked.Exchange(ref _firstSubmitLogged, 1) == 0)
+                Trace.LogDebug("First Submit: format={Format} pts={Pts} tc={TC}",
+                    _format, frame.PresentationTime, timecode);
+            else if (Trace.IsEnabled(LogLevel.Trace) && n % 300 == 0)
+                Trace.LogTrace("Submit: #{N} pts={Pts}", n, frame.PresentationTime);
         }
         finally
         {

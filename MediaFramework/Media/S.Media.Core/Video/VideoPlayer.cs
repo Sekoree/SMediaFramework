@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
@@ -63,6 +64,11 @@ public sealed class VideoPlayer : IDisposable
     private long _displayed;
     private long _droppedLate;
     private long _droppedQueueDrain;
+    private int _firstTickLogged;
+    private int _firstSubmittedLogged;
+    private int _firstDecodedLogged;
+
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoPlayer");
 
     /// <summary>
     /// Frozen plane data captured from the final submitted frame when <see cref="HoldLastFrameAtEnd"/> is on.
@@ -169,9 +175,16 @@ public sealed class VideoPlayer : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
-            if (_isRunning) return;
+            if (_isRunning)
+            {
+                Trace.LogTrace("Play: already running");
+                return;
+            }
             CompletedNaturally = false;
             ReleaseHeldFrame();
+            Interlocked.Exchange(ref _firstTickLogged, 0);
+            Interlocked.Exchange(ref _firstSubmittedLogged, 0);
+            Interlocked.Exchange(ref _firstDecodedLogged, 0);
             if (_source is ICooperativeVideoReadInterrupt iv)
                 iv.ClearYieldRequest();
             _cts = new CancellationTokenSource();
@@ -186,6 +199,8 @@ public sealed class VideoPlayer : IDisposable
             };
             _isRunning = true;
             _decodeThread.Start();
+            Trace.LogDebug("Play: format={Format} queueCap={Cap} clockRunning={ClockRunning} clockType={ClockType}",
+                _sink.Format, _queueCapacity, _clock.IsRunning, _clock.GetType().Name);
         }
     }
 
@@ -301,11 +316,16 @@ public sealed class VideoPlayer : IDisposable
 
     private void DecodeLoop(CancellationToken token)
     {
+        Trace.LogDebug("DecodeLoop: entered");
         try
         {
             while (!token.IsCancellationRequested)
             {
-                if (_source.IsExhausted) return;
+                if (_source.IsExhausted)
+                {
+                    Trace.LogDebug("DecodeLoop: source exhausted (decoded={Decoded})", Volatile.Read(ref _decoded));
+                    return;
+                }
 
                 if (!_source.TryReadNextFrame(out var frame))
                 {
@@ -316,6 +336,8 @@ public sealed class VideoPlayer : IDisposable
                 }
 
                 Interlocked.Increment(ref _decoded);
+                if (Interlocked.Exchange(ref _firstDecodedLogged, 1) == 0)
+                    Trace.LogDebug("DecodeLoop: first frame decoded (pts={Pts})", frame.PresentationTime);
 
                 try
                 {
@@ -330,11 +352,26 @@ public sealed class VideoPlayer : IDisposable
             }
         }
         catch (ObjectDisposedException) { /* StopInternal disposed semaphore mid-wait */ }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "VideoPlayer.DecodeLoop: unhandled exception");
+            throw;
+        }
+        finally
+        {
+            Trace.LogDebug("DecodeLoop: exiting (decoded={Decoded} displayed={Displayed} droppedLate={DropLate} droppedDrain={DropDrain})",
+                Volatile.Read(ref _decoded), Volatile.Read(ref _displayed),
+                Volatile.Read(ref _droppedLate), Volatile.Read(ref _droppedQueueDrain));
+        }
     }
 
     private void OnVideoTick()
     {
         if (!IsRunning) return;
+
+        if (Interlocked.Exchange(ref _firstTickLogged, 1) == 0)
+            Trace.LogDebug("OnVideoTick: first tick (playhead={Playhead} queued={Queued})",
+                _clock.CurrentPosition, _queue.Count);
 
         var playhead = _clock.CurrentPosition;
         var early = playhead + EarlyTolerance;
@@ -389,6 +426,8 @@ public sealed class VideoPlayer : IDisposable
             {
                 _sink.Submit(toShow);
                 Interlocked.Increment(ref _displayed);
+                if (Interlocked.Exchange(ref _firstSubmittedLogged, 1) == 0)
+                    Trace.LogDebug("OnVideoTick: first frame submitted (pts={Pts})", toShow.PresentationTime);
                 FramePresentationTimePresented?.Invoke(toShow.PresentationTime);
             }
             catch (Exception ex)
