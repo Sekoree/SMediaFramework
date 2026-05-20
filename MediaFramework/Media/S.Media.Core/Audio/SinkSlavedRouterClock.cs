@@ -32,6 +32,15 @@ public sealed class SinkSlavedRouterClock : IRouterClock
     private readonly int _chunkSamples;
     private WallClockRouterClock? _lazyFallback;
 
+    /// <remarks>
+    /// <strong>Invariant — ctor must not invoke any <see cref="AudioRouter"/> API.</strong>
+    /// <see cref="AudioRouter.SlaveTo"/>, <see cref="AudioRouter.RetargetSlaveClock"/>, and
+    /// <see cref="AudioRouter.ReconfigureSampleRateWhileRunning"/> construct the clock while
+    /// holding the router's internal <c>_gate</c> lock; calling back into the router from
+    /// here would deadlock the run loop. Keep this ctor field-store-only — defer all router
+    /// interaction to <paramref name="resolveSink"/>, which runs lock-free on the producer
+    /// thread.
+    /// </remarks>
     public SinkSlavedRouterClock(int sampleRate, int chunkSamples, Func<IClockedSink?> resolveSink)
     {
         if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate));

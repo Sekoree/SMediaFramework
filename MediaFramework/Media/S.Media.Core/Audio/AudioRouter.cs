@@ -47,11 +47,6 @@ namespace S.Media.Core.Audio;
 /// <see cref="AddSink(IAudioSink, string?, int?)"/> can override depth per sink.
 /// </para>
 /// <para>
-/// Optional route-mix profiling: set <c>MF_MEDIA_PROFILE_CHANNEL_MAP=1</c> (global recording in apps), or use
-/// <see cref="ChannelRouteMixProfiling.SetTestOverride"/> with <see cref="ChannelRouteMixProfiling.EnterTestRecordingScope"/> in tests so parallel workers do not share counters.
-/// Read <see cref="ChannelRouteMixProfiling"/> to measure scalar versus SIMD fast-path channel mixing in the run loop.
-/// </para>
-/// <para>
 /// <strong>Pacing</strong>: the router is paced by an <see cref="IRouterClock"/>.
 /// Default is <see cref="WallClockRouterClock"/>; call <see cref="SlaveTo"/>
 /// to bind production to a specific <see cref="IClockedSink"/> (typically a
@@ -65,22 +60,12 @@ namespace S.Media.Core.Audio;
 /// hard 1.0 → 0.0 transition produces a smooth fade rather than a discontinuity.
 /// </para>
 /// <para>
-/// <strong>Multi-output drift</strong>: when multiple outputs are attached,
-/// only one slaved sink's <see cref="IClockedSink"/> paces the router via <see cref="SlaveTo"/>.
-/// Other sinks' physical clocks
-/// (PortAudio's hardware crystal, NDI sender's internal pace) drift relative
-/// to the master at typical ±50 ppm hardware tolerance — over hours, the
-/// non-slaved sink's pump accumulates fill or empty pressure and eventually
-/// drops oldest chunks. Subscribe to <see cref="PumpPressure"/> when
-/// <c>Dropped</c> increments so a host can react. For automatic easing on one
-/// slow sink without retuning the master clock, wrap that sink with the FFmpeg
-/// <c>AdaptiveRateAudioSink</c> (per-sink <c>swresample</c> driven by
-/// <see cref="PumpPressurePlaybackHintMonitor"/> filtered to that sink id).
-/// <see cref="GetAggregatePumpStats"/> sums per-sink <see cref="SinkPumpStats"/> for HUD/logging only — it does not synthesize a global master clock or coordinated drop policy.
-/// </para>
-/// <para>
-/// A single coordinated <strong>master</strong> clock ppm policy plus synchronized <strong>drop/repeat</strong> across every sink is not implemented in this type —
-/// hosts combine <see cref="PumpPressure"/> telemetry, <see cref="PumpPressurePlaybackHintMonitor"/>, and per-sink FFmpeg <c>AdaptiveRateAudioSink</c> as needed.
+/// <strong>Multi-output drift</strong>: only the sink wired via <see cref="SlaveTo"/> paces the router; every
+/// other sink runs off its own physical clock and drifts at typical ±50 ppm. Subscribe to <see cref="PumpPressure"/>
+/// to react when a non-slaved sink starts dropping; wrap it in the FFmpeg <c>AdaptiveRateAudioSink</c> for automatic
+/// per-sink resample-driven easing. A single coordinated master-ppm policy and synchronized cross-sink drop/repeat
+/// are <strong>not</strong> implemented here. See <c>Doc/MediaFramework-Architecture.md</c> for the in-depth
+/// discussion plus the optional <c>MF_MEDIA_PROFILE_CHANNEL_MAP</c> profiling switch.
 /// </para>
 /// </remarks>
 public sealed class AudioRouter : IDisposable
@@ -240,9 +225,38 @@ public sealed class AudioRouter : IDisposable
 
     /// <param name="pumpCapacityChunks">
     /// Bounded depth of this sink's background chunk queue (see remarks on
-    /// <see cref="AudioRouter"/>). <c>null</c> uses the router constructor default.
-    /// When set, must be at least 2.
+    /// <see cref="AudioRouter"/>). <c>null</c> uses the router constructor default
+    /// (currently <c>8</c>). When set, must be at least 2.
     /// </param>
+    /// <remarks>
+    /// <para>
+    /// <strong>Latency budget</strong>. The pump queue is a worst-case staging buffer
+    /// in front of the sink. End-to-end producer-to-sink latency in the steady state
+    /// is roughly <c>pumpCapacityChunks × chunkSamples / sampleRate</c>: at the framework
+    /// defaults (8 chunks × 480 samples @ 48&#160;kHz) that's about <strong>80&#160;ms</strong>,
+    /// which is the slack a slow sink can absorb before the router starts dropping
+    /// oldest chunks. Multiply by your own <c>chunkSamples</c> / sample rate to recompute.
+    /// </para>
+    /// <para>
+    /// <strong>Hardware sinks</strong> (anything implementing <see cref="IClockedSink"/>,
+    /// e.g. a PortAudio output) already maintain their own ring with its own dedicated
+    /// latency knobs; the pump in front of them only needs to absorb router-to-sink
+    /// scheduling jitter. A depth of <c>2</c>–<c>4</c> (≈ 20–40&#160;ms at defaults) is
+    /// typically plenty and keeps overall latency low.
+    /// </para>
+    /// <para>
+    /// <strong>Network / non-clocked sinks</strong> (e.g. an NDI sender) want a deeper
+    /// queue so a transient send stall doesn't immediately translate into a dropped chunk
+    /// on the producer side. The default <c>8</c> is sized for that case; increase further
+    /// if the sender is known to stall longer than 80&#160;ms.
+    /// </para>
+    /// <para>
+    /// Auto-tuning of the default for <see cref="IClockedSink"/> at <c>AddSink</c> time is
+    /// not implemented — callers pass <paramref name="pumpCapacityChunks"/> explicitly when
+    /// they want non-default behaviour. <see cref="AudioPlayer.AddOutput"/> exposes the same
+    /// knob via its <c>sinkPumpCapacityChunks</c> parameter.
+    /// </para>
+    /// </remarks>
     public string AddSink(IAudioSink sink, string? id = null, int? pumpCapacityChunks = null)
     {
         ArgumentNullException.ThrowIfNull(sink);

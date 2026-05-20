@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Reflection;
 using S.Media.Core.Video;
 using GlPixelFormat = Silk.NET.OpenGL.PixelFormat;
@@ -21,15 +22,27 @@ namespace S.Media.OpenGL;
 /// the downstream consumer of the sink's output must run on the GL thread.
 /// </para>
 /// <para>
-/// <strong>First-cut limitations:</strong>
+/// <strong>Layer pixel-format support:</strong> accepts every format <see cref="YuvVideoRenderer"/> accepts
+/// (BGRA32 / RGBA32 / RGB24 / BGR24 / I420 / Yv12 / NV12 / NV21 / Yuv422P / Yuv422P10Le / Yuv422P12Le /
+/// Yuv444P / Yuv444P10Le / Yuv444P12Le / Yuv420P10Le / Yuv420P12Le / P010 / P016 / Uyvy / Yuyv / Argb32 /
+/// Abgr32 / Gray8 / Gray16, plus the full YUVA family at 8 / 10 / 12 / 16 bit). BGRA32 layers run a direct
+/// upload to an RGBA8 texture; every other format runs a per-layer YUV → RGB pre-pass into a cached RGBA16F
+/// intermediate texture so 10 / 12 / 16-bit precision survives through blending. The composite shader samples
+/// the intermediate identically to a BGRA32 layer — transform, opacity, and blend mode are unchanged.
+/// </para>
+/// <para>
+/// <strong>Output:</strong> BGRA32 via <c>glReadPixels</c>. A single 8-bit truncation lands at the very end —
+/// the intermediate working space stays 16-bit per channel until the final readback. GPU-resident output is
+/// not in this batch.
+/// </para>
+/// <para>
+/// <strong>Per-layer caches:</strong>
 /// <list type="bullet">
-/// <item>BGRA32 layers only (matches <c>CpuVideoCompositor</c>). YUV layers must be converted upstream
-/// — the existing <c>VideoRouter</c> branch-converter path handles this transparently.</item>
-/// <item>Output is BGRA32 via <c>glReadPixels</c>. GPU-resident output (e.g. a frame backed by a GL
-/// texture handle) would let downstream GL sinks skip the readback; not in this batch.</item>
-/// <item>Per-layer texture cache is keyed on <c>(Width, Height)</c>. Layers that vary in size every
-/// frame will thrash; for steady-state UI this is fine.</item>
+/// <item>BGRA32 textures keyed on <c>(Width, Height)</c>.</item>
+/// <item>YUV intermediate textures + FBOs keyed on <c>(Width, Height)</c> (any YUV format at the same size shares one).</item>
+/// <item>YUV renderers keyed on <c>(PixelFormat, Width, Height)</c>.</item>
 /// </list>
+/// Layers that vary in size every frame will thrash; steady-state UI is fine.
 /// </para>
 /// <para>
 /// <strong>State hygiene:</strong> <see cref="Composite"/> saves and restores the current framebuffer
@@ -39,7 +52,6 @@ namespace S.Media.OpenGL;
 /// </remarks>
 public sealed class GlVideoCompositor : IVideoCompositor
 {
-    private static readonly CorePixelFormat[] AcceptedFormatsArr = [CorePixelFormat.Bgra32];
     private static readonly ConcurrentDictionary<string, string> ShaderSourceCache = new(StringComparer.Ordinal);
     private const string ProgramCacheKey = "GlVideoCompositor:composite_layer";
 
@@ -56,7 +68,14 @@ public sealed class GlVideoCompositor : IVideoCompositor
     private uint _vbo;
     private uint _fbo;
     private uint _fboTexture;
+    /// <summary>Per-(W, H) RGBA8 textures for BGRA32 layers.</summary>
     private readonly Dictionary<(int W, int H), uint> _layerTextures = new();
+    /// <summary>Per-(PixelFormat, W, H) YUV → RGB pre-pass renderers for non-BGRA32 layers.</summary>
+    private readonly Dictionary<(CorePixelFormat Fmt, int W, int H), YuvVideoRenderer> _yuvRenderers = new();
+    /// <summary>Per-(W, H) RGBA16F intermediate texture + FBO that holds the YUV-converted layer.</summary>
+    private readonly Dictionary<(int W, int H), (uint Tex, uint Fbo)> _yuvIntermediates = new();
+    /// <summary>Cached accepted-formats array — mirrors <see cref="YuvVideoRenderer.SupportedPixelFormats"/>.</summary>
+    private static readonly CorePixelFormat[] AcceptedFormatsArr = YuvVideoRenderer.SupportedPixelFormats.ToArray();
     private bool _configured;
     private bool _disposed;
 
@@ -137,9 +156,10 @@ public sealed class GlVideoCompositor : IVideoCompositor
             for (var i = 0; i < layersBackToFront.Count; i++)
             {
                 var layer = layersBackToFront[i];
-                if (layer.Frame.Format.PixelFormat != CorePixelFormat.Bgra32)
+                var fmt = layer.Frame.Format.PixelFormat;
+                if (!GlVideoFormatSupport.TryGetRecipe(fmt, out _))
                     throw new InvalidOperationException(
-                        $"GlVideoCompositor layer {i}: only BGRA32 accepted, got {layer.Frame.Format.PixelFormat}.");
+                        $"GlVideoCompositor layer {i}: pixel format {fmt} has no GL recipe — accepted set is YuvVideoRenderer.SupportedPixelFormats.");
                 var opacity = Math.Clamp(layer.Opacity, 0f, 1f);
                 if (opacity <= 0f) continue;
                 DrawLayer(layer, opacity);
@@ -183,34 +203,17 @@ public sealed class GlVideoCompositor : IVideoCompositor
         var src = layer.Frame;
         var srcW = src.Format.Width;
         var srcH = src.Format.Height;
-        var srcStride = src.Strides[0];
 
-        // Acquire / refresh the per-layer texture.
-        if (!_layerTextures.TryGetValue((srcW, srcH), out var tex))
+        // Pick the per-layer source texture: BGRA32 uploads direct to RGBA8; everything else runs the YUV
+        // pre-pass into a cached RGBA16F intermediate so high-bit precision survives into the composite.
+        if (src.Format.PixelFormat == CorePixelFormat.Bgra32)
         {
-            tex = _gl.GenTexture();
-            _gl.BindTexture(TextureTarget.Texture2D, tex);
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, GlInternalFormat.Rgba8, (uint)srcW, (uint)srcH, 0,
-                GlPixelFormat.Bgra, GlPixelType.UnsignedByte, null);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-            _layerTextures[(srcW, srcH)] = tex;
+            PrepareBgra32LayerTexture(src, srcW, srcH);
         }
         else
         {
-            _gl.BindTexture(TextureTarget.Texture2D, tex);
+            PrepareYuvLayerIntermediate(src, srcW, srcH);
         }
-
-        // Upload BGRA32 plane. Match alignment and row length to the source's stride.
-        var rowLenPixels = srcStride / 4;
-        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
-        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, rowLenPixels);
-        var span = src.Planes[0].Span;
-        fixed (byte* p = span)
-            _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)srcW, (uint)srcH,
-                GlPixelFormat.Bgra, GlPixelType.UnsignedByte, p);
 
         // Bake the per-layer 3x3 transform: uv ∈ [0,1] → ndc ∈ [-1,1] with Y flipped so glReadPixels
         // produces a top-down output buffer.
@@ -257,6 +260,113 @@ public sealed class GlVideoCompositor : IVideoCompositor
         }
 
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
+    }
+
+    /// <summary>
+    /// Direct BGRA32 upload into a cached RGBA8 texture, then bind it to texture unit 0 so the
+    /// composite shader samples it as the layer source.
+    /// </summary>
+    private unsafe void PrepareBgra32LayerTexture(VideoFrame src, int srcW, int srcH)
+    {
+        var srcStride = src.Strides[0];
+        if (!_layerTextures.TryGetValue((srcW, srcH), out var tex))
+        {
+            tex = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, tex);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, GlInternalFormat.Rgba8, (uint)srcW, (uint)srcH, 0,
+                GlPixelFormat.Bgra, GlPixelType.UnsignedByte, null);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            _layerTextures[(srcW, srcH)] = tex;
+        }
+        else
+        {
+            _gl.BindTexture(TextureTarget.Texture2D, tex);
+        }
+
+        var rowLenPixels = srcStride / 4;
+        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, rowLenPixels);
+        var span = src.Planes[0].Span;
+        fixed (byte* p = span)
+            _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)srcW, (uint)srcH,
+                GlPixelFormat.Bgra, GlPixelType.UnsignedByte, p);
+    }
+
+    /// <summary>
+    /// Run a per-layer <see cref="YuvVideoRenderer"/> pre-pass into a cached RGBA16F intermediate so the
+    /// composite stage works in float precision regardless of the source's bit depth. Rebinds the compositor's
+    /// FBO + viewport + program + VAO + texture-unit-0 to the intermediate so the caller can continue with the
+    /// transform / opacity / blend setup as if this were a BGRA32 layer.
+    /// </summary>
+    private unsafe void PrepareYuvLayerIntermediate(VideoFrame src, int srcW, int srcH)
+    {
+        var fmt = src.Format.PixelFormat;
+        var key = (fmt, srcW, srcH);
+        if (!_yuvRenderers.TryGetValue(key, out var renderer))
+        {
+            renderer = new YuvVideoRenderer(_gl, src.Format);
+            _yuvRenderers[key] = renderer;
+        }
+
+        // Pick the YUV → RGB matrix from the per-frame hint (Phase 5 metadata).
+        renderer.ColorSpace = YuvColorSpace.FromHint(
+            src.Metadata.ColorSpace,
+            src.Metadata.ColorRange,
+            srcH);
+
+        if (!_yuvIntermediates.TryGetValue((srcW, srcH), out var intermediate))
+        {
+            intermediate = CreateRgba16fIntermediate(srcW, srcH);
+            _yuvIntermediates[(srcW, srcH)] = intermediate;
+        }
+
+        // Pre-pass: bind the intermediate FBO, set viewport to source size, clear, upload + render YUV → RGB.
+        // YuvVideoRenderer's Render() changes program / VAO / viewport — we restore them below.
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, intermediate.Fbo);
+        _gl.Viewport(0, 0, (uint)srcW, (uint)srcH);
+        _gl.Disable(EnableCap.Blend);
+        _gl.ClearColor(0f, 0f, 0f, 0f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
+        renderer.Upload(src);
+        renderer.Render(srcW, srcH);
+
+        // Rebind compositor state. Blend / scissor / pixel-store stay as the outer Composite set them; we just
+        // restore framebuffer, viewport, program, VAO, and the layer texture binding.
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+        _gl.UseProgram(_program);
+        _gl.BindVertexArray(_vao);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, intermediate.Tex);
+    }
+
+    private unsafe (uint Tex, uint Fbo) CreateRgba16fIntermediate(int width, int height)
+    {
+        var tex = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, tex);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, GlInternalFormat.Rgba16f, (uint)width, (uint)height, 0,
+            GlPixelFormat.Rgba, GlPixelType.HalfFloat, null);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+
+        var fbo = _gl.GenFramebuffer();
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, tex, 0);
+        var status = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != GLEnum.FramebufferComplete)
+        {
+            _gl.DeleteFramebuffer(fbo);
+            _gl.DeleteTexture(tex);
+            throw new InvalidOperationException(
+                $"GlVideoCompositor RGBA16F intermediate FBO incomplete: {status}");
+        }
+        return (tex, fbo);
     }
 
     private void BuildPipeline()
@@ -383,6 +493,15 @@ public sealed class GlVideoCompositor : IVideoCompositor
         foreach (var (_, tex) in _layerTextures)
             _gl.DeleteTexture(tex);
         _layerTextures.Clear();
+        foreach (var (_, renderer) in _yuvRenderers)
+            renderer.Dispose();
+        _yuvRenderers.Clear();
+        foreach (var (_, inter) in _yuvIntermediates)
+        {
+            _gl.DeleteFramebuffer(inter.Fbo);
+            _gl.DeleteTexture(inter.Tex);
+        }
+        _yuvIntermediates.Clear();
         if (_fboTexture != 0) { _gl.DeleteTexture(_fboTexture); _fboTexture = 0; }
         if (_fbo != 0) { _gl.DeleteFramebuffer(_fbo); _fbo = 0; }
         if (_vbo != 0) { _gl.DeleteBuffer(_vbo); _vbo = 0; }

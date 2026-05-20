@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
+using System.Threading;
 using S.Media.Core.Audio;
 
 namespace S.Media.FFmpeg.Audio;
@@ -390,12 +391,19 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         _samplesEmitted += converted;
 
         var owned = samples;
+        // Idempotent single-shot Release: Interlocked guards double-Dispose from returning
+        // the same buffer twice (AudioFrame's XML doc promises multi-call safety).
+        var released = 0;
         return new AudioFrame(
             pts,
             Format,
             converted,
             samples.AsMemory(0, converted * Format.Channels),
-            Release: () => ArrayPool<float>.Shared.Return(owned, clearArray: false));
+            Release: () =>
+            {
+                if (Interlocked.Exchange(ref released, 1) == 0)
+                    ArrayPool<float>.Shared.Return(owned, clearArray: false);
+            });
     }
 
     private TimeSpan ResolvePts()

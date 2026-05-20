@@ -76,12 +76,15 @@ public static class FFmpegRuntime
             VideoCpuFrameConverterRegistry.CanConvertProbe ??= VideoCpuFrameConverter.CanConvert;
 
             // Install yadif-based deinterlacer so Core consumers get it via
-            // VideoDeinterlacerRegistry.Create(input) when they reference S.Media.FFmpeg. The
-            // factory throws on unsupported formats (anything other than I420 / NV12) so callers
-            // that need broader format coverage fall through to BobDeinterlacer.
+            // VideoDeinterlacerRegistry.Create(input) when they reference S.Media.FFmpeg. Any
+            // YadifDeinterlacer-supported planar layout (I420 / NV12 / Yuv422P / Yuv444P) routes
+            // through libavfilter; anything else falls back to BobDeinterlacer.
             VideoDeinterlacerRegistry.Factory ??= input =>
             {
-                if (input.PixelFormat is CorePixelFormat.I420 or CorePixelFormat.Nv12)
+                if (input.PixelFormat is CorePixelFormat.I420
+                    or CorePixelFormat.Nv12
+                    or CorePixelFormat.Yuv422P
+                    or CorePixelFormat.Yuv444P)
                     return new YadifDeinterlacer(input);
                 return new BobDeinterlacer(input);
             };

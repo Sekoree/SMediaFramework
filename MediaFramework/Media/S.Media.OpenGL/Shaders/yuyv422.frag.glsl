@@ -10,6 +10,7 @@ uniform float frameWidth;
 uniform float halfTexWidth;
 uniform vec3 yuvOffset;
 uniform mat3 yuvMatrix;
+uniform mat3 gamutMatrix; // identity by default; Bt2020->Bt709 for SDR preview of UHD HDR.
 uniform int uHdrTransfer;
 uniform float uHdrExposure;
 
@@ -81,5 +82,7 @@ void main()
     float V = yuyv.a;
     vec3 yuv = vec3(Y, U, V) - yuvOffset;
     vec3 rgb = yuvMatrix * yuv;
-    fragColor = vec4(hdrPreviewAfterMatrix(rgb), 1.0);
+    rgb = hdrPreviewAfterMatrix(rgb);
+    rgb = gamutMatrix * rgb;
+    fragColor = vec4(rgb, 1.0);
 }

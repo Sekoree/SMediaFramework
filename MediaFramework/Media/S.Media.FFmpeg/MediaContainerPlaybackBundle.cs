@@ -49,15 +49,12 @@ public enum MediaContainerPlaybackBundleOwnedParts
 /// <c>S.Media.PortAudio.PortAudioPlaybackHost.TryCreatePortAudioMain</c>.
 /// </para>
 /// <para>
-/// <strong>Example:</strong> <c>Tools/VideoPlaybackSmoke</c> wires GL / NDI / PortAudio sinks, then wraps decoder +
-/// <see cref="VideoPlayer"/> + optional <see cref="VideoRouter"/> + freerun <see cref="MediaClock"/> in this bundle so
-/// <c>finally</c> can dispose the bundle (mux + optional <see cref="AudioPlayer"/>) before
-/// <c>S.Media.PortAudio.PortAudioPlaybackHost</c> closes the PortAudio device when using
-/// <c>PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer</c>. Use <see cref="SmokeToolDefaultOwnership"/>
-/// or <see cref="DefaultBundledHostOwnership"/> for the ownership flags that match <c>VideoPlaybackSmoke</c> /
-/// <see cref="S.Media.Playback.MediaPlayer"/> wiring. For a single media path with router + optional sinks only,
-/// <see cref="S.Media.Playback.MediaPlayer.TryOpen(string,S.Media.Playback.MediaPlayerOpenOptions,S.Media.Core.Video.IVideoSink?,bool,out S.Media.Playback.MediaPlayer?,out string?)"/>
-/// is the library entry (no SDL / NDI / PortAudio on the playback assembly itself).
+/// Pre-baked ownership profiles: <see cref="SmokeToolDefaultOwnership"/> matches the <c>Tools/VideoPlaybackSmoke</c>
+/// wiring; <see cref="DefaultBundledHostOwnership"/> matches <see cref="S.Media.Playback.MediaPlayer"/>. For a
+/// host-platform-free single-file playback path use
+/// <see cref="S.Media.Playback.MediaPlayer.TryOpen(string,S.Media.Playback.MediaPlayerOpenOptions,S.Media.Core.Video.IVideoSink?,bool,out S.Media.Playback.MediaPlayer?,out string?)"/>.
+/// Worked example (GL + NDI + PortAudio fan-out, ownership flags, `finally`-order) in
+/// <c>Doc/MediaFramework-Architecture.md</c>.
 /// </para>
 /// <para>
 /// Default teardown order: <see cref="VideoPlayer"/> → optional <see cref="AudioPlayer"/> → optional

@@ -26,6 +26,9 @@ uniform sampler2D vPlane;
 uniform float bitScale;
 uniform vec3 yuvOffset;
 uniform mat3 yuvMatrix;
+// 3x3 RGB -> RGB remap applied after HDR preview / tonemap. Default mat3(1.0) is identity;
+// set to RgbGamutMatrix.Bt2020ToBt709 when previewing BT.2020 content on a BT.709 display.
+uniform mat3 gamutMatrix;
 uniform int uHdrTransfer;
 uniform float uHdrExposure;
 
@@ -92,5 +95,7 @@ void main()
     float v = textureBicubicR(vPlane, v_uv, uTexBicubicDim2) * bitScale;
     vec3 yuv = vec3(y, u, v) - yuvOffset;
     vec3 rgb = yuvMatrix * yuv;
-    fragColor = vec4(hdrPreviewAfterMatrix(rgb), 1.0);
+    rgb = hdrPreviewAfterMatrix(rgb);
+    rgb = gamutMatrix * rgb;
+    fragColor = vec4(rgb, 1.0);
 }

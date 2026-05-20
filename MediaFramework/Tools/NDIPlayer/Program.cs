@@ -318,9 +318,16 @@ static void PumpMuxOrdered(
             if (pendingA is { } aFrame)
             {
                 pendingA = null;
-                dbg?.OnAudioFrame(in aFrame);
-                PaceToPresentationTime(aFrame.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
-                audioSink.Submit(in aFrame);
+                try
+                {
+                    dbg?.OnAudioFrame(in aFrame);
+                    PaceToPresentationTime(aFrame.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
+                    audioSink.Submit(in aFrame);
+                }
+                finally
+                {
+                    aFrame.Dispose();
+                }
             }
         }
     }
@@ -328,6 +335,8 @@ static void PumpMuxOrdered(
     {
         if (pendingV is { } pv)
             pv.Dispose();
+        if (pendingA is { } pa)
+            pa.Dispose();
         pumpsFinished?.Signal();
     }
 }
@@ -370,9 +379,16 @@ static void PumpAudio(IAudioSource src, NDIAudioSink sink, NDIDebugState? dbg, C
             if (!src.TryReadNextFrame(out var frame))
                 break;
 
-            dbg?.OnAudioFrame(in frame);
-            PaceToPresentationTime(frame.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
-            sink.Submit(in frame);
+            try
+            {
+                dbg?.OnAudioFrame(in frame);
+                PaceToPresentationTime(frame.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
+                sink.Submit(in frame);
+            }
+            finally
+            {
+                frame.Dispose();
+            }
         }
     }
     finally

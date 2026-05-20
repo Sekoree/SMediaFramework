@@ -21,12 +21,11 @@ namespace S.Media.FFmpeg;
 /// see <see cref="MediaContainerPlaybackBundle"/>.
 /// </para>
 /// <para>
-/// For <see cref="Pause(CancellationToken, Action?)"/> and <see cref="SeekCoordinated(TimeSpan, CancellationToken, Action?)"/>,
-/// the optional <c>flushSharedMuxAfterPause</c> argument defaults to <see cref="MediaContainerDecoder.FlushCodecPipelines"/>
-/// when omitted (and <c>null</c> is coalesced via <c>??</c>) — use <see cref="PauseSkippingSharedMuxFlush"/> /
-/// <see cref="SeekCoordinatedSkippingSharedMuxFlush"/> when that flush can deadlock (decode thread still inside libav
-/// while the flush tries to take the same demux locks). Pass an empty <c>static () => { }</c> delegate to
-/// <see cref="Pause(CancellationToken, Action?)"/> if you need a custom no-op without adding these helpers.
+/// <see cref="Pause(CancellationToken, Action?)"/> and <see cref="SeekCoordinated(TimeSpan, CancellationToken, Action?)"/>
+/// default to running <see cref="MediaContainerDecoder.FlushCodecPipelines"/> after A/V quiesces; that default can
+/// deadlock if the decode thread is still inside libav. Use <see cref="PauseSkippingSharedMuxFlush"/> /
+/// <see cref="SeekCoordinatedSkippingSharedMuxFlush"/> in that case. Full discussion in
+/// <c>Doc/MediaFramework-Architecture.md</c>.
 /// </para>
 /// <para>
 /// Graph-wide master-clock PPM correction and synchronized multi-sink drop/repeat are <strong>not</strong> implemented

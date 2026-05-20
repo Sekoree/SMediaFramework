@@ -393,6 +393,22 @@ Add to the §9 ranked list:
 
 Three Explore subagents read the highest-risk files. They returned ~14 candidate findings. I personally re-read the cited lines for each and accepted 4 confirmed defects + 2 lower-priority issues, kept 6 as "suspect — worth verifying", and rejected 5 outright. The keep-rate is consistent with my prior experience: skeptical agent audits surface roughly 50 % real signal, the rest being doc-comment misreads or transcription errors. **For the suspects in §11.2 I have written down enough context that a follow-up pass can confirm or reject each in under 15 minutes per item.**
 
+### 11.6 Follow-up addendum — 2026-05-19
+
+Post-checklist re-audit found four additional items worth tracking explicitly:
+
+- **F1 — `AudioFrame.Dispose()` idempotency contract is currently false.**  
+  `S.Media.Core/Audio/AudioFrame.cs:20-32` says dispose is safe and release runs once, but implementation is `Release?.Invoke()` with no one-shot guard. With pooled frames returned by `S.Media.FFmpeg/Audio/AudioFileDecoder.cs:393-399` and `S.Media.FFmpeg/MediaContainerSharedDemux.cs:891-897`, double-dispose can double-return the same `ArrayPool<float>` buffer.
+
+- **F2 — C1 still open on Win32 backing.**  
+  `S.Media.Core/Video/VideoWin32Nv12Backing.cs:80-96` still uses the original `_closed` + `_refCount` split-state pattern (`Volatile.Read` + `Interlocked.Increment`) and retains the TOCTOU window already fixed on the three Linux dma-buf backings.
+
+- **F3 — pooled-frame ownership contract is not surfaced on `IAudioSource.TryReadNextFrame` and is missed by tooling.**  
+  `S.Media.Core/Audio/IAudioSource.cs:21-25` does not mention disposal requirements for leased frame buffers. `Tools/NDIPlayer/Program.cs:370-376` reads frame-based audio and submits it without a corresponding `Dispose()`.
+
+- **F4 — sentinel documentation drift.**  
+  `S.Media.Core/Audio/AudioFormat.cs:16-21` now documents `AudioFormat(0, 0)` as the no-audio sentinel, while `S.Media.FFmpeg/MediaContainerSharedDemux.cs:213-218` still emits `AudioFormat(48000, 0)` for video-only containers.
+
 ---
 
 ## 10. One-paragraph summary

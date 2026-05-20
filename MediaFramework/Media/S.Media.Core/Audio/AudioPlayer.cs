@@ -91,7 +91,11 @@ public sealed class AudioPlayer : IDisposable
     /// for clock/pacing wiring.
     /// </summary>
     /// <param name="sinkPumpCapacityChunks">
-    /// Optional per-sink pump queue depth (mixed chunks); see <see cref="AudioRouter.AddSink"/>.
+    /// Optional per-sink pump queue depth (mixed chunks). <c>null</c> inherits the router
+    /// default (currently 8 → ≈ 80&#160;ms at chunkSamples=480 / 48&#160;kHz). For hardware sinks
+    /// implementing <see cref="IClockedSink"/> a smaller value (2–4) keeps end-to-end latency
+    /// down — they have their own ring. See <see cref="AudioRouter.AddSink"/> for the full
+    /// latency-budget discussion.
     /// </param>
     public string AddOutput(IAudioSink sink, string? id = null, int? sinkPumpCapacityChunks = null)
     {

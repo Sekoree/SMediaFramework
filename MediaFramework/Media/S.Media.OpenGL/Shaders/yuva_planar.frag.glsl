@@ -12,6 +12,7 @@ uniform sampler2D aPlane;
 uniform float bitScale;
 uniform vec3 yuvOffset;
 uniform mat3 yuvMatrix;
+uniform mat3 gamutMatrix; // identity by default; Bt2020->Bt709 for SDR preview of UHD HDR.
 uniform int uHdrTransfer;
 uniform float uHdrExposure;
 
@@ -79,6 +80,9 @@ void main()
     vec3 yuv = vec3(y, u, v) - yuvOffset;
     vec3 rgbLin = yuvMatrix * yuv;
     vec3 rgb = hdrPreviewAfterMatrix(rgbLin);
-    float a = textureBicubicR(aPlane, v_uv, uTexBicubicDim3);
+    rgb = gamutMatrix * rgb;
+    // Alpha shares the chroma's bit depth: R16 storage with valid bits in the low 10/12 needs the same
+    // bitScale as Y/U/V to land in [0, 1]. For 8-bit yuva420p the bitScale is 1.0, so this is a no-op there.
+    float a = clamp(textureBicubicR(aPlane, v_uv, uTexBicubicDim3) * bitScale, 0.0, 1.0);
     fragColor = vec4(rgb, a);
 }

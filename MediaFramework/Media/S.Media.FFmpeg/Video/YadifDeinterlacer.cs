@@ -18,10 +18,11 @@ namespace S.Media.FFmpeg.Video;
 /// <c>S.Media.FFmpeg</c>; consumers that don't fall back to <see cref="BobDeinterlacer"/>.
 /// </para>
 /// <para>
-/// Supported input pixel formats: I420 (yuv420p) — covers DV, MPEG-2, broadcast HD interlaced
-/// content. NV12 is converted to I420 internally on input and back to NV12 on output (yadif's
-/// in-tree NV12 support is incomplete on some FFmpeg builds; the round-trip is robust). Other
-/// formats throw at <see cref="Configure"/>.
+/// Supported input pixel formats: I420 (yuv420p) — DV, MPEG-2, broadcast HD interlaced;
+/// Yuv422P — 4:2:2 broadcast / ProRes-style content; Yuv444P — 4:4:4 broadcast; NV12 is
+/// converted to I420 internally on input and back to NV12 on output (yadif's in-tree NV12
+/// support is incomplete on some FFmpeg builds; the round-trip is robust). All other formats
+/// throw at <see cref="Configure"/> — callers fall through to <see cref="BobDeinterlacer"/>.
 /// </para>
 /// <para>
 /// Progressive input bypasses the filter graph — <see cref="Process"/> returns the original frame
@@ -32,6 +33,9 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
 {
     private VideoFormat _input;
     private VideoFormat _output;
+    private AVPixelFormat _internalAvPixFmt;
+    private int _chromaWidthDiv;
+    private int _chromaHeightDiv;
     private AVFilterGraph* _graph;
     private AVFilterContext* _src;
     private AVFilterContext* _sink;
@@ -54,17 +58,45 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
     public void Configure(VideoFormat input)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (input.PixelFormat is not (CorePixelFormat.I420 or CorePixelFormat.Nv12))
-            throw new ArgumentException(
-                $"YadifDeinterlacer only supports I420 / Nv12 input; got {input.PixelFormat}. " +
-                "Use BobDeinterlacer for other formats or pre-convert via the existing CPU converter.",
-                nameof(input));
+        switch (input.PixelFormat)
+        {
+            case CorePixelFormat.I420:
+            case CorePixelFormat.Nv12:
+                _internalAvPixFmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
+                _chromaWidthDiv = 2;
+                _chromaHeightDiv = 2;
+                break;
+            case CorePixelFormat.Yuv422P:
+                _internalAvPixFmt = AVPixelFormat.AV_PIX_FMT_YUV422P;
+                _chromaWidthDiv = 2;
+                _chromaHeightDiv = 1;
+                break;
+            case CorePixelFormat.Yuv444P:
+                _internalAvPixFmt = AVPixelFormat.AV_PIX_FMT_YUV444P;
+                _chromaWidthDiv = 1;
+                _chromaHeightDiv = 1;
+                break;
+            default:
+                throw new ArgumentException(
+                    $"YadifDeinterlacer only supports I420 / Nv12 / Yuv422P / Yuv444P input; got {input.PixelFormat}. " +
+                    "Use BobDeinterlacer for other formats or pre-convert via the existing CPU converter.",
+                    nameof(input));
+        }
         if (input.Width <= 0 || input.Height <= 0)
             throw new ArgumentException($"invalid dimensions {input.Width}x{input.Height}", nameof(input));
+        // 4:2:2 / 4:2:0 require even width; 4:2:0 also needs even height. Reject sub-sampling that would round to zero.
+        if (_chromaWidthDiv == 2 && (input.Width & 1) != 0)
+            throw new ArgumentException(
+                $"YadifDeinterlacer with {input.PixelFormat} needs an even width (got {input.Width}).",
+                nameof(input));
+        if (_chromaHeightDiv == 2 && (input.Height & 1) != 0)
+            throw new ArgumentException(
+                $"YadifDeinterlacer with {input.PixelFormat} needs an even height (got {input.Height}).",
+                nameof(input));
 
         TearDownGraph();
         _input = input;
-        _output = input; // yadif mode 0 preserves frame rate and format (we convert NV12↔I420 internally).
+        _output = input; // yadif mode 0 preserves frame rate and format (NV12 round-trips through yuv420p internally).
 
         BuildGraph();
         _configured = true;
@@ -94,9 +126,10 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
                 throw new InvalidOperationException(
                     "libavfilter 'yadif' filter unavailable — FFmpeg build is missing --enable-filter=yadif.");
 
-            // Internal format always yuv420p — minimal surprise for yadif and matches I420 byte layout
-            // bit-for-bit. NV12 inputs round-trip through I420 (Configure throws on other formats).
-            var pixFmt = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
+            // Internal format mirrors input subsampling (per Configure): yuv420p for I420 / NV12, yuv422p for
+            // Yuv422P, yuv444p for Yuv444P. NV12 inputs round-trip through yuv420p because yadif's in-tree
+            // NV12 support is incomplete on some FFmpeg builds.
+            var pixFmt = (int)_internalAvPixFmt;
             var srcArgs = $"video_size={width}x{height}:pix_fmt={pixFmt}:time_base={den}/{num}:pixel_aspect=1/1";
 
             AVFilterContext* srcCtx = null;
@@ -178,7 +211,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
         av_frame_unref(_scratchIn);
         _scratchIn->width = _input.Width;
         _scratchIn->height = _input.Height;
-        _scratchIn->format = (int)AVPixelFormat.AV_PIX_FMT_YUV420P;
+        _scratchIn->format = (int)_internalAvPixFmt;
         _scratchIn->pts = ++_pushCounter;
         _scratchIn->flags |= AV_FRAME_FLAG_INTERLACED;
         if (frame.FieldOrder == VideoFieldOrder.TopFieldFirst)
@@ -193,28 +226,29 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
             return false;
         }
 
-        // Copy plane data into the allocated AVFrame. Input is either I420 (3 planes) or NV12 (2);
-        // for NV12 we interleave UV → split into U + V to match yuv420p.
+        // Copy plane data into the allocated AVFrame. Chroma dimensions follow the input format's
+        // subsampling (set by Configure): 4:2:0 has half-W half-H chroma, 4:2:2 has half-W full-H,
+        // 4:4:4 is the same size as Y. NV12 (interleaved UV) splits into separate U/V to match yuv420p.
         var w = _input.Width;
         var h = _input.Height;
-        var halfW = w / 2;
-        var halfH = h / 2;
+        var cW = w / _chromaWidthDiv;
+        var cH = h / _chromaHeightDiv;
 
-        if (frame.Format.PixelFormat == CorePixelFormat.I420)
+        if (frame.Format.PixelFormat == CorePixelFormat.Nv12)
         {
-            CopyPlane(frame.Planes[0].Span, frame.Strides[0], _scratchIn->data[0], _scratchIn->linesize[0], w, h);
-            CopyPlane(frame.Planes[1].Span, frame.Strides[1], _scratchIn->data[1], _scratchIn->linesize[1], halfW, halfH);
-            CopyPlane(frame.Planes[2].Span, frame.Strides[2], _scratchIn->data[2], _scratchIn->linesize[2], halfW, halfH);
-        }
-        else
-        {
-            // NV12 → yuv420p: split UV plane into U + V.
             CopyPlane(frame.Planes[0].Span, frame.Strides[0], _scratchIn->data[0], _scratchIn->linesize[0], w, h);
             SplitNv12UvToI420(
                 frame.Planes[1].Span, frame.Strides[1],
                 _scratchIn->data[1], _scratchIn->linesize[1],
                 _scratchIn->data[2], _scratchIn->linesize[2],
-                halfW, halfH);
+                cW, cH);
+        }
+        else
+        {
+            // I420 / Yuv422P / Yuv444P — three-plane planar layout; copy each plane straight through.
+            CopyPlane(frame.Planes[0].Span, frame.Strides[0], _scratchIn->data[0], _scratchIn->linesize[0], w, h);
+            CopyPlane(frame.Planes[1].Span, frame.Strides[1], _scratchIn->data[1], _scratchIn->linesize[1], cW, cH);
+            CopyPlane(frame.Planes[2].Span, frame.Strides[2], _scratchIn->data[2], _scratchIn->linesize[2], cW, cH);
         }
 
         ret = av_buffersrc_add_frame_flags(_src, _scratchIn, (int)AV_BUFFERSRC_FLAG_PUSH);
@@ -233,17 +267,17 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
     {
         var w = _input.Width;
         var h = _input.Height;
-        var halfW = w / 2;
-        var halfH = h / 2;
+        var cW = w / _chromaWidthDiv;
+        var cH = h / _chromaHeightDiv;
 
-        // Output is yuv420p; if input was NV12, we re-interleave U+V → UV.
+        // Output mirrors input: NV12 re-interleaves U+V → UV; everything else stays in its 3-plane planar form.
         var inputIsNv12 = original.Format.PixelFormat == CorePixelFormat.Nv12;
         if (inputIsNv12)
         {
             var yStride = w;
             var uvStride = w; // NV12 UV is 2 bytes per chroma sample, full width.
             var yBytes = yStride * h;
-            var uvBytes = uvStride * halfH;
+            var uvBytes = uvStride * cH;
             var totalBytes = yBytes + uvBytes;
             var buffer = ArrayPool<byte>.Shared.Rent(totalBytes);
             var span = buffer.AsSpan(0, totalBytes);
@@ -251,7 +285,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
             InterleaveI420UvToNv12(
                 deinterlaced->data[1], deinterlaced->linesize[1],
                 deinterlaced->data[2], deinterlaced->linesize[2],
-                span.Slice(yBytes, uvBytes), uvStride, halfW, halfH);
+                span.Slice(yBytes, uvBytes), uvStride, cW, cH);
 
             var planes = new ReadOnlyMemory<byte>[]
             {
@@ -267,17 +301,17 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
         }
         else
         {
-            // I420 round-trip.
+            // I420 / Yuv422P / Yuv444P — three planes back out at the input's chroma layout.
             var yStride = w;
-            var cStride = halfW;
+            var cStride = cW;
             var yBytes = yStride * h;
-            var cBytes = cStride * halfH;
+            var cBytes = cStride * cH;
             var totalBytes = yBytes + 2 * cBytes;
             var buffer = ArrayPool<byte>.Shared.Rent(totalBytes);
             var span = buffer.AsSpan(0, totalBytes);
             CopyPlaneOut(deinterlaced->data[0], deinterlaced->linesize[0], span.Slice(0, yBytes), yStride, w, h);
-            CopyPlaneOut(deinterlaced->data[1], deinterlaced->linesize[1], span.Slice(yBytes, cBytes), cStride, halfW, halfH);
-            CopyPlaneOut(deinterlaced->data[2], deinterlaced->linesize[2], span.Slice(yBytes + cBytes, cBytes), cStride, halfW, halfH);
+            CopyPlaneOut(deinterlaced->data[1], deinterlaced->linesize[1], span.Slice(yBytes, cBytes), cStride, cW, cH);
+            CopyPlaneOut(deinterlaced->data[2], deinterlaced->linesize[2], span.Slice(yBytes + cBytes, cBytes), cStride, cW, cH);
 
             var planes = new ReadOnlyMemory<byte>[]
             {

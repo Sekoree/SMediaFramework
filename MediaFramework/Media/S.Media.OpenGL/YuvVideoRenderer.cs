@@ -32,6 +32,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     private int _uBitScale = -1;
     private int _uYuvOffset = -1;
     private int _uYuvMatrix = -1;
+    private int _uGamutMatrix = -1;
     private int _uYuvFlip = -1;
     private int _uFrameWidth = -1;
     private int _uHalfTexWidth = -1;
@@ -39,6 +40,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     private int _uHdrExposure = -1;
 
     private YuvColorSpace _colorSpace;
+    private RgbGamutMatrix _gamutMatrix = RgbGamutMatrix.Identity;
     private float _yUvFlip = 1f;
     private VideoHdrTransfer _hdrTransfer = VideoHdrTransfer.None;
     private float _hdrPreviewExposure = 400f;
@@ -84,6 +86,23 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             _colorSpace = value;
             ApplyYuvColorUniforms();
+        }
+    }
+
+    /// <summary>
+    /// 3×3 RGB → RGB matrix applied after YUV → RGB conversion and the HDR preview pass. Defaults
+    /// to <see cref="RgbGamutMatrix.Identity"/>; set to <see cref="RgbGamutMatrix.Bt2020ToBt709"/>
+    /// when previewing BT.2020 content on a BT.709 display. Has no effect on RGB pixel formats
+    /// (those shaders never sample <c>gamutMatrix</c>).
+    /// </summary>
+    public RgbGamutMatrix GamutMatrix
+    {
+        get => _gamutMatrix;
+        set
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _gamutMatrix = value;
+            ApplyGamutMatrixUniform();
         }
     }
 
@@ -502,7 +521,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             CorePixelFormat.Yv12 => UploadYv12FromFrame,
             CorePixelFormat.Yuv422P => UploadYuv422PFromFrame,
             CorePixelFormat.Yuv444P => UploadYuv444PFromFrame,
-            CorePixelFormat.Yuv422P10Le => UploadYuv422P10LeFromFrame,
+            CorePixelFormat.Yuv422P10Le or CorePixelFormat.Yuv422P12Le => UploadYuv422P10LeFromFrame,
             CorePixelFormat.Nv12 => UploadNv12Adaptive,
             CorePixelFormat.Nv21 => UploadNv21FromFrame,
             CorePixelFormat.P010 or CorePixelFormat.P016 => UploadSemiPlanar16FromFrame,
@@ -511,8 +530,13 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             CorePixelFormat.Gray8 => UploadGray8FromFrame,
             CorePixelFormat.Gray16 => UploadGray16FromFrame,
             CorePixelFormat.Yuv420P10Le or CorePixelFormat.Yuv420P12Le => UploadPlanar420P16FromFrame,
-            CorePixelFormat.Yuv444P10Le => UploadYuv444P10LeFromFrame,
+            CorePixelFormat.Yuv444P10Le or CorePixelFormat.Yuv444P12Le => UploadYuv444P10LeFromFrame,
             CorePixelFormat.Yuva420p => UploadYuva420FromFrame,
+            CorePixelFormat.Yuva422P => UploadYuva422FromFrame,
+            CorePixelFormat.Yuva444P => UploadYuva444FromFrame,
+            CorePixelFormat.Yuva420P10Le or CorePixelFormat.Yuva420P16Le => UploadYuva420P16FromFrame,
+            CorePixelFormat.Yuva422P10Le or CorePixelFormat.Yuva422P12Le or CorePixelFormat.Yuva422P16Le => UploadYuva422P16FromFrame,
+            CorePixelFormat.Yuva444P10Le or CorePixelFormat.Yuva444P12Le or CorePixelFormat.Yuva444P16Le => UploadYuva444P16FromFrame,
             _ => throw new NotSupportedException($"Upload: {pixelFormat}"),
         };
 
@@ -547,6 +571,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
                 UploadYuv444PPtr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1], (byte*)planes[2], strides[2]);
                 break;
             case CorePixelFormat.Yuv422P10Le:
+            case CorePixelFormat.Yuv422P12Le:
                 UploadYuv422P10LePtr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1], (byte*)planes[2], strides[2]);
                 break;
             case CorePixelFormat.Nv12:
@@ -577,11 +602,37 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
                     (byte*)planes[2], strides[2]);
                 break;
             case CorePixelFormat.Yuv444P10Le:
+            case CorePixelFormat.Yuv444P12Le:
                 UploadYuv444P10LePtr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
                     (byte*)planes[2], strides[2]);
                 break;
             case CorePixelFormat.Yuva420p:
                 UploadYuva420Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2], (byte*)planes[3], strides[3]);
+                break;
+            case CorePixelFormat.Yuva422P:
+                UploadYuva422Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2], (byte*)planes[3], strides[3]);
+                break;
+            case CorePixelFormat.Yuva444P:
+                UploadYuva444Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2], (byte*)planes[3], strides[3]);
+                break;
+            case CorePixelFormat.Yuva420P10Le:
+            case CorePixelFormat.Yuva420P16Le:
+                UploadYuva420P16Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2], (byte*)planes[3], strides[3]);
+                break;
+            case CorePixelFormat.Yuva422P10Le:
+            case CorePixelFormat.Yuva422P12Le:
+            case CorePixelFormat.Yuva422P16Le:
+                UploadYuva422P16Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2], (byte*)planes[3], strides[3]);
+                break;
+            case CorePixelFormat.Yuva444P10Le:
+            case CorePixelFormat.Yuva444P12Le:
+            case CorePixelFormat.Yuva444P16Le:
+                UploadYuva444P16Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
                     (byte*)planes[2], strides[2], (byte*)planes[3], strides[3]);
                 break;
             default:
@@ -706,7 +757,9 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         {
             _uYuvOffset = _gl.GetUniformLocation(_program, "yuvOffset");
             _uYuvMatrix = _gl.GetUniformLocation(_program, "yuvMatrix");
+            _uGamutMatrix = _gl.GetUniformLocation(_program, "gamutMatrix");
             ApplyYuvColorUniforms();
+            ApplyGamutMatrixUniform();
         }
 
         _uFrameWidth = _gl.GetUniformLocation(_program, "frameWidth");
@@ -838,6 +891,14 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         }
     }
 
+    private void ApplyGamutMatrixUniform()
+    {
+        if (_uGamutMatrix < 0 || _program == 0) return;
+        _gl.UseProgram(_program);
+        fixed (float* p = _gamutMatrix.Matrix)
+            _gl.UniformMatrix3(_uGamutMatrix, 1, transpose: true, p);
+    }
+
     private uint LinkProgram(string vertSrc, string fragSrc)
     {
         var vs = CompileShader(ShaderType.VertexShader, vertSrc);
@@ -876,7 +937,12 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         {
             var log = _gl.GetShaderInfoLog(s);
             _gl.DeleteShader(s);
-            throw new InvalidOperationException($"{type} compile failed: {log}");
+            // Mesa "unexpected end of file" errors on shader source can mean a non-ASCII byte
+            // somewhere in the embedded resource (see feedback_gl_shader_ascii memory entry).
+            // Dump the exact source the driver saw so `glslangValidator` can give a second opinion.
+            var dumpPath = $"/tmp/mfplayer-failed-{type}.glsl";
+            try { System.IO.File.WriteAllText(dumpPath, source); } catch { /* best effort */ }
+            throw new InvalidOperationException($"{type} compile failed: {log}\n(source dumped to {dumpPath})");
         }
         return s;
     }
@@ -1043,6 +1109,56 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             (byte*)p2.Pointer, f.Strides[2], (byte*)p3.Pointer, f.Strides[3]);
     }
 
+    private void UploadYuva422FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        using var p3 = f.Planes[3].Pin();
+        UploadYuva422Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2], (byte*)p3.Pointer, f.Strides[3]);
+    }
+
+    private void UploadYuva444FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        using var p3 = f.Planes[3].Pin();
+        UploadYuva444Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2], (byte*)p3.Pointer, f.Strides[3]);
+    }
+
+    private void UploadYuva420P16FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        using var p3 = f.Planes[3].Pin();
+        UploadYuva420P16Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2], (byte*)p3.Pointer, f.Strides[3]);
+    }
+
+    private void UploadYuva422P16FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        using var p3 = f.Planes[3].Pin();
+        UploadYuva422P16Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2], (byte*)p3.Pointer, f.Strides[3]);
+    }
+
+    private void UploadYuva444P16FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        using var p3 = f.Planes[3].Pin();
+        UploadYuva444P16Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2], (byte*)p3.Pointer, f.Strides[3]);
+    }
+
     // --- Native pointer uploads (shared paths) ---
     // Bgra: assumes little-endian 8-bit packing (memory order matches GL Bgra + UnsignedByte; big-endian hosts are rare/non-target).
     private void UploadBgraPtr(byte* basePtr, int stride)
@@ -1153,6 +1269,61 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         UploadPlanarR8Ptr(1, uPtr, us, cw, ch);
         UploadPlanarR8Ptr(2, vPtr, vs, cw, ch);
         UploadPlanarR8Ptr(3, aPtr, astride, _format.Width, _format.Height);
+    }
+
+    private void UploadYuva422Ptr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs,
+        byte* aPtr, int astride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth422(_format.Width);
+        var h = _format.Height;
+        UploadPlanarR8Ptr(0, yPtr, ys, _format.Width, h);
+        UploadPlanarR8Ptr(1, uPtr, us, cw, h);
+        UploadPlanarR8Ptr(2, vPtr, vs, cw, h);
+        UploadPlanarR8Ptr(3, aPtr, astride, _format.Width, h);
+    }
+
+    private void UploadYuva444Ptr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs,
+        byte* aPtr, int astride)
+    {
+        var w = _format.Width;
+        var h = _format.Height;
+        UploadPlanarR8Ptr(0, yPtr, ys, w, h);
+        UploadPlanarR8Ptr(1, uPtr, us, w, h);
+        UploadPlanarR8Ptr(2, vPtr, vs, w, h);
+        UploadPlanarR8Ptr(3, aPtr, astride, w, h);
+    }
+
+    private void UploadYuva420P16Ptr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs,
+        byte* aPtr, int astride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth420(_format.Width);
+        var ch = PixelFormatInfo.ChromaHeight420(_format.Height);
+        UploadPlanarR16Ptr(0, yPtr, ys, _format.Width, _format.Height);
+        UploadPlanarR16Ptr(1, uPtr, us, cw, ch);
+        UploadPlanarR16Ptr(2, vPtr, vs, cw, ch);
+        UploadPlanarR16Ptr(3, aPtr, astride, _format.Width, _format.Height);
+    }
+
+    private void UploadYuva422P16Ptr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs,
+        byte* aPtr, int astride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth422(_format.Width);
+        var h = _format.Height;
+        UploadPlanarR16Ptr(0, yPtr, ys, _format.Width, h);
+        UploadPlanarR16Ptr(1, uPtr, us, cw, h);
+        UploadPlanarR16Ptr(2, vPtr, vs, cw, h);
+        UploadPlanarR16Ptr(3, aPtr, astride, _format.Width, h);
+    }
+
+    private void UploadYuva444P16Ptr(byte* yPtr, int ys, byte* uPtr, int us, byte* vPtr, int vs,
+        byte* aPtr, int astride)
+    {
+        var w = _format.Width;
+        var h = _format.Height;
+        UploadPlanarR16Ptr(0, yPtr, ys, w, h);
+        UploadPlanarR16Ptr(1, uPtr, us, w, h);
+        UploadPlanarR16Ptr(2, vPtr, vs, w, h);
+        UploadPlanarR16Ptr(3, aPtr, astride, w, h);
     }
 
     private void UploadNv12Ptr(byte* yPtr, int yStride, byte* uvPtr, int uvStride)

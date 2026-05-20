@@ -210,11 +210,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
         else
         {
-            // Sentinel format for video-only files: 0 channels signals "no audio" to consumers.
-            // The 48000 Hz rate is a placeholder for clock-math fallback paths that never run when
-            // MediaContainerDecoder.HasAudio is false (MediaPlayer skips AudioPlayer creation).
+            // Sentinel format for video-only files: AudioFormat(0, 0) — both fields zero so any
+            // consumer that forgets to guard with HasAudio fails fast at AudioFormat.Validate
+            // rather than silently latching onto a bogus 48000 Hz rate.
             AudioCodecName = "";
-            Audio.Format = new AudioFormat(48000, 0);
+            Audio.Format = new AudioFormat(0, 0);
         }
 
         AVStream* vSt = null;
@@ -888,12 +888,19 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         _aSamplesEmitted += converted;
 
         var owned = samples;
+        // Idempotent single-shot Release: Interlocked guards double-Dispose from returning
+        // the same buffer twice (AudioFrame's XML doc promises multi-call safety).
+        var released = 0;
         return new AudioFrame(
             pts,
             Audio.Format,
             converted,
             samples.AsMemory(0, converted * Audio.Format.Channels),
-            Release: () => ArrayPool<float>.Shared.Return(owned, clearArray: false));
+            Release: () =>
+            {
+                if (Interlocked.Exchange(ref released, 1) == 0)
+                    ArrayPool<float>.Shared.Return(owned, clearArray: false);
+            });
     }
 
     internal void RequestVideoDecodeYield()

@@ -179,6 +179,90 @@ internal static class GlVideoFormatSupport
                 static _ => (GlInternalFormat.R8, GlPixelFormat.Red, GlPixelType.UnsignedByte),
                 1f, true, false),
 
+            [CorePixelFormat.Yuva422P] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar422YuvaSize,
+                static _ => (GlInternalFormat.R8, GlPixelFormat.Red, GlPixelType.UnsignedByte),
+                1f, true, false),
+
+            [CorePixelFormat.Yuva444P] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar444YuvaSize,
+                static _ => (GlInternalFormat.R8, GlPixelFormat.Red, GlPixelType.UnsignedByte),
+                1f, true, false),
+
+            [CorePixelFormat.Yuva420P10Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar420YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                65535f / 1023f, true, false),
+
+            [CorePixelFormat.Yuva422P10Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar422YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                65535f / 1023f, true, false),
+
+            [CorePixelFormat.Yuva444P10Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar444YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                65535f / 1023f, true, false),
+
+            [CorePixelFormat.Yuva422P12Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar422YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                65535f / 4095f, true, false),
+
+            [CorePixelFormat.Yuva444P12Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar444YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                65535f / 4095f, true, false),
+
+            [CorePixelFormat.Yuva420P16Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar420YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                1f, true, false),
+
+            [CorePixelFormat.Yuva422P16Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar422YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                1f, true, false),
+
+            [CorePixelFormat.Yuva444P16Le] = new(
+                "fullscreen.vert.glsl", "yuva_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane", "aPlane"], 4,
+                Planar444YuvaSize,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                1f, true, false),
+
+            [CorePixelFormat.Yuv422P12Le] = new(
+                "fullscreen.vert.glsl", "yuv_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane"], 3,
+                Planar422Size,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                65535f / 4095f, true, false),
+
+            [CorePixelFormat.Yuv444P12Le] = new(
+                "fullscreen.vert.glsl", "yuv_planar.frag.glsl",
+                ["yPlane", "uPlane", "vPlane"], 3,
+                Planar444Size,
+                static _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
+                65535f / 4095f, true, false),
+
             [CorePixelFormat.Uyvy] = new(
                 "fullscreen.vert.glsl", "uyvy422.frag.glsl",
                 ["packed"], 1,
@@ -204,21 +288,38 @@ internal static class GlVideoFormatSupport
     /// </summary>
     private static readonly CorePixelFormat[] SupportedPixelFormatsOrder =
     [
+        // Highest-fidelity YUVA (alpha-bearing) first so a hardware decode path that exposes both
+        // alpha and non-alpha natives prefers the alpha-preserving format. 16-bit > 12-bit > 10-bit > 8-bit.
+        CorePixelFormat.Yuva444P16Le,
+        CorePixelFormat.Yuva422P16Le,
+        CorePixelFormat.Yuva420P16Le,
+        CorePixelFormat.Yuva444P12Le,
+        CorePixelFormat.Yuva422P12Le,
+        CorePixelFormat.Yuva444P10Le,
+        CorePixelFormat.Yuva422P10Le,
+        CorePixelFormat.Yuva420P10Le,
+        CorePixelFormat.Yuva444P,
+        CorePixelFormat.Yuva422P,
+        CorePixelFormat.Yuva420p,
+        // High bit-depth non-alpha YUV.
+        CorePixelFormat.Yuv444P12Le,
+        CorePixelFormat.Yuv422P12Le,
         CorePixelFormat.Yuv422P10Le,
         CorePixelFormat.Yuv444P10Le,
         CorePixelFormat.Yuv420P10Le,
         CorePixelFormat.Yuv420P12Le,
         CorePixelFormat.P010,
         CorePixelFormat.P016,
+        // 8-bit non-alpha YUV.
         CorePixelFormat.Yuv444P,
         CorePixelFormat.Yuv422P,
-        CorePixelFormat.Yuva420p,
         CorePixelFormat.I420,
         CorePixelFormat.Yv12,
         CorePixelFormat.Nv12,
         CorePixelFormat.Nv21,
         CorePixelFormat.Uyvy,
         CorePixelFormat.Yuyv,
+        // RGB(A) / luminance fall-backs.
         CorePixelFormat.Bgra32,
         CorePixelFormat.Rgba32,
         CorePixelFormat.Bgr24,
@@ -272,6 +373,17 @@ internal static class GlVideoFormatSupport
         3 => (vf.Width, vf.Height),
         _ => (0, 0),
     };
+
+    private static (int w, int h) Planar422YuvaSize(VideoFormat vf, int p) => p switch
+    {
+        0 => (vf.Width, vf.Height),
+        1 or 2 => (PixelFormatInfo.ChromaWidth422(vf.Width), vf.Height),
+        3 => (vf.Width, vf.Height),
+        _ => (0, 0),
+    };
+
+    private static (int w, int h) Planar444YuvaSize(VideoFormat vf, int p) =>
+        p is >= 0 and <= 3 ? (vf.Width, vf.Height) : (0, 0);
 
     private static (int w, int h) SemiPlanar420Size(VideoFormat vf, int p) => p switch
     {

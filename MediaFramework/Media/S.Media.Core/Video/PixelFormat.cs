@@ -76,4 +76,43 @@ public enum PixelFormat
 
     /// <summary>Planar YUV 4:2:0 with full-resolution 8‑bit alpha plane (Y, U, V, A) — FFmpeg <c>YUVA420P</c>.</summary>
     Yuva420p,
+
+    /// <summary>Planar YUV 4:2:2 + full-resolution 8-bit alpha plane (Y, U, V, A) — FFmpeg <c>YUVA422P</c>.</summary>
+    Yuva422P,
+
+    /// <summary>Planar YUV 4:4:4 + full-resolution 8-bit alpha plane (Y, U, V, A) — FFmpeg <c>YUVA444P</c>.</summary>
+    Yuva444P,
+
+    /// <summary>Planar YUV 4:2:0 + alpha — 10-bit LE samples in 16-bit words (4 planes) — FFmpeg <c>YUVA420P10LE</c>.</summary>
+    Yuva420P10Le,
+
+    /// <summary>Planar YUV 4:2:2 + alpha — 10-bit LE samples in 16-bit words (4 planes) — FFmpeg <c>YUVA422P10LE</c>.</summary>
+    Yuva422P10Le,
+
+    /// <summary>Planar YUV 4:4:4 + alpha — 10-bit LE samples in 16-bit words (4 planes) — FFmpeg <c>YUVA444P10LE</c>.</summary>
+    Yuva444P10Le,
+
+    /// <summary>Planar YUV 4:2:2 + alpha — 12-bit LE samples in 16-bit words (4 planes) — FFmpeg <c>YUVA422P12LE</c>.</summary>
+    Yuva422P12Le,
+
+    /// <summary>
+    /// Planar YUV 4:4:4 + alpha — 12-bit LE samples in 16-bit words (4 planes) — FFmpeg <c>YUVA444P12LE</c>.
+    /// Common in professional capture and HEVC 4:4:4 12-bit pipelines (e.g. <c>yuva444p12le(tv, bt709, progressive)</c>).
+    /// </summary>
+    Yuva444P12Le,
+
+    /// <summary>Planar YUV 4:2:0 + alpha — 16-bit LE samples (4 planes) — FFmpeg <c>YUVA420P16LE</c>.</summary>
+    Yuva420P16Le,
+
+    /// <summary>Planar YUV 4:2:2 + alpha — 16-bit LE samples (4 planes) — FFmpeg <c>YUVA422P16LE</c>.</summary>
+    Yuva422P16Le,
+
+    /// <summary>Planar YUV 4:4:4 + alpha — 16-bit LE samples (4 planes) — FFmpeg <c>YUVA444P16LE</c>.</summary>
+    Yuva444P16Le,
+
+    /// <summary>Planar YUV 4:2:2 — 12-bit LE samples in 16-bit words (3 planes) — FFmpeg <c>YUV422P12LE</c>.</summary>
+    Yuv422P12Le,
+
+    /// <summary>Planar YUV 4:4:4 — 12-bit LE samples in 16-bit words (3 planes) — FFmpeg <c>YUV444P12LE</c>.</summary>
+    Yuv444P12Le,
 }

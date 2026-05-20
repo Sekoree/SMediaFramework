@@ -16,15 +16,15 @@ void main()
     vec4 src = texture(uLayer, vUV);
     if (uBlendKind == 1)
     {
-        // Multiply: emit a multiplier color. Layer alpha × opacity acts as the blend weight —
-        // weight = 0 → multiplier is white (no effect); weight = 1 → multiplier is src.rgb.
+        // Multiply: emit a multiplier color. Layer alpha * opacity acts as the blend weight --
+        // weight = 0 -> multiplier is white (no effect); weight = 1 -> multiplier is src.rgb.
         float w = src.a * uOpacity;
         vec3 c = mix(vec3(1.0), src.rgb, w);
         fragColor = vec4(c, 1.0);
     }
     else
     {
-        // Source / SourceOver: pass through (premul) × opacity. glBlendFunc handles the dst combine.
+        // Source / SourceOver: pass through (premul) * opacity. glBlendFunc handles the dst combine.
         fragColor = src * uOpacity;
     }
 }

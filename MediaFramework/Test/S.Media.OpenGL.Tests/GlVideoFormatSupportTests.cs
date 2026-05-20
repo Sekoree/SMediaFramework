@@ -53,4 +53,52 @@ public sealed class GlVideoFormatSupportTests
         float b = a * 1f;
         Assert.True(MathF.Abs(a - b) < 1e-6f);
     }
+
+    [Theory]
+    [InlineData(PixelFormat.Yuva420p)]
+    [InlineData(PixelFormat.Yuva422P)]
+    [InlineData(PixelFormat.Yuva444P)]
+    [InlineData(PixelFormat.Yuva420P10Le)]
+    [InlineData(PixelFormat.Yuva422P10Le)]
+    [InlineData(PixelFormat.Yuva444P10Le)]
+    [InlineData(PixelFormat.Yuva422P12Le)]
+    [InlineData(PixelFormat.Yuva444P12Le)]
+    [InlineData(PixelFormat.Yuva420P16Le)]
+    [InlineData(PixelFormat.Yuva422P16Le)]
+    [InlineData(PixelFormat.Yuva444P16Le)]
+    [InlineData(PixelFormat.Yuv422P12Le)]
+    [InlineData(PixelFormat.Yuv444P12Le)]
+    public void NewFormats_HaveGlRecipe_AndAppearInSupportedList(PixelFormat fmt)
+    {
+        Assert.True(GlVideoFormatSupport.TryGetRecipe(fmt, out var recipe),
+            $"missing GL recipe for {fmt}");
+        Assert.NotNull(recipe.Samplers);
+
+        var list = YuvVideoRenderer.SupportedPixelFormats;
+        Assert.True(IndexOf(list, fmt) >= 0, $"{fmt} is not listed in YuvVideoRenderer.SupportedPixelFormats");
+    }
+
+    /// <summary>
+    /// 10-bit / 12-bit / 16-bit storage uses R16 with the matching bitScale so the shader sees [0, 1].
+    /// 8-bit formats keep bitScale = 1.0.
+    /// </summary>
+    [Theory]
+    [InlineData(PixelFormat.Yuva420p, 1f)]
+    [InlineData(PixelFormat.Yuva422P, 1f)]
+    [InlineData(PixelFormat.Yuva444P, 1f)]
+    [InlineData(PixelFormat.Yuva420P10Le, 65535f / 1023f)]
+    [InlineData(PixelFormat.Yuva422P10Le, 65535f / 1023f)]
+    [InlineData(PixelFormat.Yuva444P10Le, 65535f / 1023f)]
+    [InlineData(PixelFormat.Yuva422P12Le, 65535f / 4095f)]
+    [InlineData(PixelFormat.Yuva444P12Le, 65535f / 4095f)]
+    [InlineData(PixelFormat.Yuva420P16Le, 1f)]
+    [InlineData(PixelFormat.Yuva422P16Le, 1f)]
+    [InlineData(PixelFormat.Yuva444P16Le, 1f)]
+    [InlineData(PixelFormat.Yuv422P12Le, 65535f / 4095f)]
+    [InlineData(PixelFormat.Yuv444P12Le, 65535f / 4095f)]
+    public void NewFormats_BitScale_MatchesStorage(PixelFormat fmt, float expected)
+    {
+        Assert.True(GlVideoFormatSupport.TryGetRecipe(fmt, out var recipe));
+        Assert.Equal(expected, recipe.DefaultBitScale, precision: 3);
+    }
 }

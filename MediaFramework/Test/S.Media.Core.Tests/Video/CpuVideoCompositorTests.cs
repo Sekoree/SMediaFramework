@@ -155,6 +155,131 @@ public sealed class CpuVideoCompositorTests
         Assert.Throws<InvalidOperationException>(() => c.Composite([layer], TimeSpan.Zero));
     }
 
+    [Fact]
+    public void Bilinear_OnEdge_BlendsBetweenNeighbors()
+    {
+        // 2×1 source: pixel 0 = black (0,0,0,255), pixel 1 = white (255,255,255,255).
+        // Scale 2× into 4×1 output using bilinear; nearest would give two solid blocks (BBWW),
+        // bilinear samples should produce a gradient across the seam.
+        var srcW = 2;
+        var srcH = 1;
+        var srcStride = srcW * 4;
+        var srcBuf = new byte[srcStride * srcH];
+        WritePixel(srcBuf, 0, 0, 0, 0, 255);          // black
+        WritePixel(srcBuf, 1, 255, 255, 255, 255);    // white
+        var srcFormat = new VideoFormat(srcW, srcH, PixelFormat.Bgra32, new Rational(30, 1));
+        using var srcFrame = new VideoFrame(TimeSpan.Zero, srcFormat, srcBuf, srcStride, release: null);
+
+        var dstFormat = new VideoFormat(4, 1, PixelFormat.Bgra32, new Rational(30, 1));
+        var transform = LayerTransform2D.Scale(2f, 1f); // 2× horizontal scale, 1× vertical
+        var layer = new CompositorLayer(srcFrame, transform, 1f, BlendMode.Source);
+
+        using var nearest = new CpuVideoCompositor(dstFormat, CompositorSamplingMode.Nearest);
+        using var bilinear = new CpuVideoCompositor(dstFormat, CompositorSamplingMode.Bilinear);
+        var nearestFrame = nearest.Composite([layer], TimeSpan.Zero);
+        var bilinearFrame = bilinear.Composite([layer], TimeSpan.Zero);
+        try
+        {
+            // Nearest: hard step. Sample at dst centers 0.5,1.5,2.5,3.5 → src centers 0.25,0.75,1.25,1.75.
+            // Floor gives 0,0,1,1 → BBWW.
+            var n = nearestFrame.Planes[0].Span;
+            Assert.Equal(0, n[0 * 4 + 0]);
+            Assert.Equal(0, n[1 * 4 + 0]);
+            Assert.Equal(255, n[2 * 4 + 0]);
+            Assert.Equal(255, n[3 * 4 + 0]);
+
+            // Bilinear: dst 1 and dst 2 land on the seam between the two source pixels, so they
+            // should be intermediate (neither fully black nor fully white). End pixels keep their
+            // colors due to edge clamping.
+            var bl = bilinearFrame.Planes[0].Span;
+            Assert.Equal(0, bl[0 * 4 + 0]);          // clamped to black on the left
+            Assert.InRange(bl[1 * 4 + 0], 1, 254);   // blended
+            Assert.InRange(bl[2 * 4 + 0], 1, 254);   // blended
+            Assert.Equal(255, bl[3 * 4 + 0]);        // clamped to white on the right
+
+            // Symmetric: the two intermediates should bracket 127±some-margin (the seam midpoint).
+            Assert.True(bl[1 * 4 + 0] < bl[2 * 4 + 0],
+                $"bilinear should produce a monotonically increasing gradient; got {bl[1 * 4 + 0]} → {bl[2 * 4 + 0]}");
+        }
+        finally
+        {
+            nearestFrame.Dispose();
+            bilinearFrame.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Bilinear_DefaultRemainsNearest()
+    {
+        // Ctor without explicit samplingMode picks Nearest — protects byte-exact output for callers
+        // upgraded after Phase 7 lands.
+        using var c = new CpuVideoCompositor(Bgra32_4x4);
+        Assert.Equal(CompositorSamplingMode.Nearest, c.SamplingMode);
+    }
+
+    [Fact]
+    public void Bicubic_OnEdge_PreservesEndsAndInterpolatesMiddle()
+    {
+        // Same 2×1 → 4×1 scale setup as the bilinear test. Bicubic (Catmull-Rom) is interpolating —
+        // it passes through every source sample, so the clamped end pixels stay black/white, and the
+        // two middle samples should still form a monotone increasing gradient.
+        var srcW = 2;
+        var srcH = 1;
+        var srcStride = srcW * 4;
+        var srcBuf = new byte[srcStride * srcH];
+        WritePixel(srcBuf, 0, 0, 0, 0, 255);
+        WritePixel(srcBuf, 1, 255, 255, 255, 255);
+        var srcFormat = new VideoFormat(srcW, srcH, PixelFormat.Bgra32, new Rational(30, 1));
+        using var srcFrame = new VideoFrame(TimeSpan.Zero, srcFormat, srcBuf, srcStride, release: null);
+
+        var dstFormat = new VideoFormat(4, 1, PixelFormat.Bgra32, new Rational(30, 1));
+        var transform = LayerTransform2D.Scale(2f, 1f);
+        var layer = new CompositorLayer(srcFrame, transform, 1f, BlendMode.Source);
+
+        using var c = new CpuVideoCompositor(dstFormat, CompositorSamplingMode.Bicubic);
+        var frame = c.Composite([layer], TimeSpan.Zero);
+        try
+        {
+            var bl = frame.Planes[0].Span;
+            // End pixels: edge-clamped Catmull-Rom on a 2-sample row hits the endpoint when the
+            // continuous source coord is far enough beyond the edge.
+            Assert.Equal(0, bl[0 * 4 + 0]);
+            Assert.Equal(255, bl[3 * 4 + 0]);
+
+            // Interior must remain monotone-increasing and bracket the seam midpoint.
+            Assert.True(bl[1 * 4 + 0] < bl[2 * 4 + 0],
+                $"bicubic should produce a monotone gradient across the seam; got {bl[1 * 4 + 0]} → {bl[2 * 4 + 0]}");
+            Assert.InRange(bl[1 * 4 + 0], 1, 254);
+            Assert.InRange(bl[2 * 4 + 0], 1, 254);
+        }
+        finally { frame.Dispose(); }
+    }
+
+    [Fact]
+    public void Bicubic_IdentityTransform_PreservesSourceExactly()
+    {
+        // 1:1 mapping with Catmull-Rom: at integer sample positions the kernel's middle weight is 1
+        // and the others are 0, so output should match input bit-for-bit. Sanity check that the
+        // bicubic path doesn't introduce drift on the identity case.
+        var srcPlane = MakeSolid(4, 4, 10, 80, 220, 255);
+        using var srcFrame = new VideoFrame(TimeSpan.Zero, Bgra32_4x4, srcPlane, 16, release: null);
+        using var c = new CpuVideoCompositor(Bgra32_4x4, CompositorSamplingMode.Bicubic);
+        var layer = new CompositorLayer(srcFrame, LayerTransform2D.Identity, 1f, BlendMode.Source);
+        var frame = c.Composite([layer], TimeSpan.Zero);
+        try
+        {
+            var span = frame.Planes[0].Span;
+            for (var p = 0; p < 4 * 4; p++)
+            {
+                Assert.Equal(10, span[p * 4 + 0]);
+                Assert.Equal(80, span[p * 4 + 1]);
+                Assert.Equal(220, span[p * 4 + 2]);
+                Assert.Equal(255, span[p * 4 + 3]);
+            }
+        }
+        finally { frame.Dispose(); }
+    }
+
     private static byte[] MakeSolid(int w, int h, byte b, byte g, byte r, byte a)
     {
         var buf = new byte[w * h * 4];

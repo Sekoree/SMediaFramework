@@ -11,6 +11,7 @@ uniform sampler2D uvPlane;
 uniform float bitScale;
 uniform vec3 yuvOffset;
 uniform mat3 yuvMatrix;
+uniform mat3 gamutMatrix; // identity by default; Bt2020->Bt709 for SDR preview of UHD HDR.
 uniform int uHdrTransfer;
 uniform float uHdrExposure;
 
@@ -76,5 +77,7 @@ void main()
     vec2  uv = textureBicubicVec4(uvPlane, v_uv, uTexBicubicDim1).rg * bitScale;
     vec3 yuv = vec3(y, uv.r, uv.g) - yuvOffset;
     vec3 rgb = yuvMatrix * yuv;
-    fragColor = vec4(hdrPreviewAfterMatrix(rgb), 1.0);
+    rgb = hdrPreviewAfterMatrix(rgb);
+    rgb = gamutMatrix * rgb;
+    fragColor = vec4(rgb, 1.0);
 }
