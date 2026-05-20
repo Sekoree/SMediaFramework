@@ -3,14 +3,15 @@
         xmlns:vm="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.AddNDIOutputDialog"
         x:DataType="vm:AddNDIOutputDialogViewModel"
-        Title="Add NDI output"
+        Title="{Binding DialogTitle}"
         Width="520" Height="560"
         WindowStartupLocation="CenterOwner"
-        CanResize="False">
+        CanResize="True"
+        MinWidth="420" MinHeight="480">
   <DockPanel Margin="16">
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
       <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
-      <Button Content="OK" Click="OkClick" IsDefault="True" />
+      <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
     </StackPanel>
 
     <ScrollViewer>

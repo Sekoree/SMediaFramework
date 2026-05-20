@@ -6,8 +6,9 @@
         xmlns:views="using:HaPlay.Views"
         mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="640"
         x:Class="HaPlay.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
         Width="960" Height="640" MinWidth="720" MinHeight="480"
         Icon="/Assets/avalonia-logo.ico"
-        Title="HaPlay">
+        Title="{Binding ProjectTitle, FallbackValue=HaPlay}">
   <views:MainView />
 </Window>

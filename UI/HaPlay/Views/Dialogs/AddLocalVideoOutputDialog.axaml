@@ -3,14 +3,15 @@
         xmlns:vm="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.AddLocalVideoOutputDialog"
         x:DataType="vm:AddLocalVideoOutputDialogViewModel"
-        Title="Add local video output"
+        Title="{Binding DialogTitle}"
         Width="520" Height="520"
         WindowStartupLocation="CenterOwner"
-        CanResize="False">
+        CanResize="True"
+        MinWidth="420" MinHeight="460">
   <DockPanel Margin="16">
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
       <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
-      <Button Content="OK" Click="OkClick" IsDefault="True" />
+      <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
     </StackPanel>
 
     <ScrollViewer>
@@ -20,8 +21,22 @@
         <TextBlock Text="Display name" FontWeight="SemiBold" />
         <TextBox Text="{Binding DisplayName}" />
 
-        <TextBlock Text="Engine" FontWeight="SemiBold" />
-        <ComboBox ItemsSource="{Binding Engines}" SelectedItem="{Binding Engine}" />
+        <TextBlock Text="Output type" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Engines}"
+                  SelectedItem="{Binding SelectedEngine}"
+                  IsEnabled="{Binding !EngineLockedByEdit}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:VideoEngineChoice">
+              <StackPanel>
+                <TextBlock Text="{Binding Label}" />
+                <TextBlock Text="{Binding Subtitle}" Opacity="0.55" FontSize="11" />
+              </StackPanel>
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+        <TextBlock Text="(Output type cannot change on an existing output — remove and re-add.)"
+                   Foreground="#888"
+                   IsVisible="{Binding EngineLockedByEdit}" />
 
         <TextBlock Text="Presentation" FontWeight="SemiBold" />
         <ComboBox ItemsSource="{Binding SurfaceModes}" SelectedItem="{Binding SurfaceMode}" />
@@ -40,6 +55,19 @@
           <NumericUpDown Grid.Column="0" Minimum="320" Maximum="7680" Value="{Binding WindowWidth}" />
           <NumericUpDown Grid.Column="2" Minimum="240" Maximum="4320" Value="{Binding WindowHeight}" />
         </Grid>
+
+        <TextBlock Text="Clone of (optional)" FontWeight="SemiBold" Margin="0,8,0,0" />
+        <TextBlock Classes="hint"
+                   Text="When set, this output mirrors the parent's video stream. Routing follows the parent automatically."
+                   Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+        <ComboBox ItemsSource="{Binding CloneParentChoices}"
+                  SelectedItem="{Binding SelectedCloneParent}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:CloneParentChoice">
+              <TextBlock Text="{Binding Label}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

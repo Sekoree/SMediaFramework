@@ -18,6 +18,7 @@
         <PackageReference Include="Avalonia.Fonts.Inter"/>
         <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == ''" />
         <PackageReference Include="CommunityToolkit.Mvvm"/>
+        <PackageReference Include="TreeDataGrid.Avalonia" />
     </ItemGroup>
 
     <ItemGroup>

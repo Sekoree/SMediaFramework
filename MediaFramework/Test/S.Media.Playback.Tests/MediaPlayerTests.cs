@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Playback;
 using Xunit;
 
@@ -5,6 +6,21 @@ namespace S.Media.Playback.Tests;
 
 public sealed class MediaPlayerTests
 {
+    [Fact]
+    public void MediaPlayerOpenOptions_Default_uses_constructor_defaults()
+    {
+        var options = MediaPlayerOpenOptions.Default;
+
+        Assert.True(options.TryHardwareAcceleration);
+        Assert.True(options.IncludeAudioRouter);
+        Assert.Equal(480, options.AudioChunkSamples);
+        Assert.Equal(0, options.AudioPacketQueueDepth);
+        Assert.Equal(0, options.VideoPacketQueueDepth);
+
+        var parameterless = new MediaPlayerOpenOptions();
+        Assert.Equal(options, parameterless);
+    }
+
     [Fact]
     public void TryOpen_missing_file_returns_false()
     {
@@ -50,6 +66,95 @@ public sealed class MediaPlayerTests
         using var player = p;
         Assert.NotNull(player);
         Assert.True(player.Decoder.HasAudio);
+    }
+
+    [Fact]
+    public void TryOpenLive_audio_only_returns_live_player()
+    {
+        using var audio = new SilenceSource(new AudioFormat(48_000, 2));
+
+        Assert.True(
+            MediaPlayer.TryOpenLive(
+                audio,
+                videoSource: null,
+                MediaPlayerOpenOptions.Default,
+                videoNegotiationLead: null,
+                disposeNegotiationLead: false,
+                disposeSourcesOnDispose: false,
+                out var p,
+                out var err),
+            err);
+
+        using var player = p;
+        Assert.NotNull(player);
+        Assert.True(player.IsLive);
+        Assert.False(player.HasContainerDecoder);
+        Assert.NotNull(player.Audio);
+        Assert.NotNull(player.AudioSourceId);
+        Assert.NotNull(player.PlaybackSession);
+        Assert.Throws<InvalidOperationException>(() => { _ = player.Decoder; });
+        Assert.Throws<InvalidOperationException>(() => { _ = player.Bundle; });
+        Assert.Throws<InvalidOperationException>(() => { _ = player.Session; });
+        Assert.False(audio.Disposed);
+    }
+
+    [Fact]
+    public void TryOpenLive_owned_audio_source_disposes_with_player()
+    {
+        var audio = new SilenceSource(new AudioFormat(48_000, 2));
+
+        Assert.True(
+            MediaPlayer.TryOpenLive(
+                audio,
+                videoSource: null,
+                MediaPlayerOpenOptions.Default,
+                videoNegotiationLead: null,
+                disposeNegotiationLead: false,
+                disposeSourcesOnDispose: true,
+                out var p,
+                out var err),
+            err);
+
+        p!.Dispose();
+        Assert.True(audio.Disposed);
+    }
+
+    [Fact]
+    public void TryOpenLive_without_sources_returns_false()
+    {
+        Assert.False(
+            MediaPlayer.TryOpenLive(
+                audioSource: null,
+                videoSource: null,
+                MediaPlayerOpenOptions.Default,
+                videoNegotiationLead: null,
+                disposeNegotiationLead: false,
+                out var p,
+                out var err));
+
+        Assert.Null(p);
+        Assert.False(string.IsNullOrWhiteSpace(err));
+    }
+
+    [Fact]
+    public void TryOpenLive_audio_only_without_audio_router_returns_false()
+    {
+        using var audio = new SilenceSource(new AudioFormat(48_000, 2));
+        var options = new MediaPlayerOpenOptions(IncludeAudioRouter: false);
+
+        Assert.False(
+            MediaPlayer.TryOpenLive(
+                audio,
+                videoSource: null,
+                options,
+                videoNegotiationLead: null,
+                disposeNegotiationLead: false,
+                out var p,
+                out var err));
+
+        Assert.Null(p);
+        Assert.False(string.IsNullOrWhiteSpace(err));
+        Assert.False(audio.Disposed);
     }
 
     [Fact]
@@ -131,5 +236,21 @@ public sealed class MediaPlayerTests
     {
         try { File.Delete(path); }
         catch { /* ignored */ }
+    }
+
+    private sealed class SilenceSource(AudioFormat format) : IAudioSource, IDisposable
+    {
+        public AudioFormat Format { get; } = format;
+        public bool IsExhausted => false;
+        public bool Disposed { get; private set; }
+
+        public int ReadInto(Span<float> destination)
+        {
+            ObjectDisposedException.ThrowIf(Disposed, this);
+            destination.Clear();
+            return destination.Length;
+        }
+
+        public void Dispose() => Disposed = true;
     }
 }

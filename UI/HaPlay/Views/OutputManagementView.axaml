@@ -40,7 +40,7 @@
       <ListBox ItemsSource="{Binding Outputs}" Background="Transparent">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:OutputLineViewModel">
-            <Grid ColumnDefinitions="*,Auto" Margin="0,4">
+            <Grid ColumnDefinitions="*,Auto" Margin="{Binding IndentMargin}">
               <Grid.ContextFlyout>
                 <MenuFlyout>
                   <MenuItem Header="No preview actions for this output type."
@@ -62,13 +62,21 @@
               </Grid.ContextFlyout>
               <StackPanel Grid.Column="0" Spacing="4">
                 <StackPanel Orientation="Horizontal" Spacing="6">
-                  <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold" />
+                  <TextBlock Text="↳" Opacity="0.6" IsVisible="{Binding IsClone}" />
+                  <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold"
+                             ToolTip.Tip="{Binding KindTechnicalLabel}" />
                   <TextBlock Text="—" Opacity="0.5" />
                   <TextBlock Text="{Binding Definition.DisplayName}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding CloneParentLabel}"
+                             Opacity="0.55" FontSize="12" VerticalAlignment="Center"
+                             IsVisible="{Binding IsClone}" />
                 </StackPanel>
                 <TextBlock Classes="hint" Text="{Binding Summary}" />
               </StackPanel>
-              <Button Grid.Column="1" VerticalAlignment="Top" Content="Remove" Command="{Binding RemoveCommand}" />
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top">
+                <Button Content="Edit…" Command="{Binding EditCommand}" />
+                <Button Content="Remove" Command="{Binding RemoveCommand}" />
+              </StackPanel>
             </Grid>
           </DataTemplate>
         </ListBox.ItemTemplate>

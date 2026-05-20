@@ -207,9 +207,8 @@ public sealed class AudioRouter : IDisposable
             foreach (var r in _state.Routes)
                 if (r.SourceId == id)
                 {
-                    var rk = RouteGainDictionaryKey(r.SourceId, r.SinkId);
-                    _currentGains.TryRemove(rk, out _);
-                    _routeTargetGains.TryRemove(rk, out _);
+                    _currentGains.TryRemove(r.RouteId, out _);
+                    _routeTargetGains.TryRemove(r.RouteId, out _);
                 }
             Volatile.Write(ref _state, _state with
             {
@@ -317,9 +316,8 @@ public sealed class AudioRouter : IDisposable
             foreach (var route in _state.Routes)
                 if (route.SinkId == id)
                 {
-                    var rk = RouteGainDictionaryKey(route.SourceId, route.SinkId);
-                    _currentGains.TryRemove(rk, out _);
-                    _routeTargetGains.TryRemove(rk, out _);
+                    _currentGains.TryRemove(route.RouteId, out _);
+                    _routeTargetGains.TryRemove(route.RouteId, out _);
                 }
             Volatile.Write(ref _state, _state with
             {
@@ -350,10 +348,26 @@ public sealed class AudioRouter : IDisposable
     /// count. <paramref name="gain"/> scales the contribution before summation.
     /// Re-adding for an existing pair replaces it.
     /// </summary>
-    public void AddRoute(string sourceId, string sinkId, ChannelMap map, float gain = 1.0f)
+    public string AddRoute(string sourceId, string sinkId, ChannelMap map, float gain = 1.0f)
+    {
+        var routeId = LegacyRouteId(sourceId, sinkId);
+        AddRoute(sourceId, sinkId, routeId, map, gain);
+        return routeId;
+    }
+
+    /// <summary>
+    /// Phase C (§4.3.4) — add (or replace) a route under an explicit <paramref name="routeId"/>. Multiple
+    /// routes may target the same <c>(source, sink)</c> pair when they carry distinct ids; their
+    /// per-cell contributions sum additively into the sink (the run loop already iterates and
+    /// accumulates every route per chunk). Re-adding the same <paramref name="routeId"/>
+    /// replaces the previous route in-place (channel map + gain hard-reset, no fade — same semantics as
+    /// re-registering via the legacy overload).
+    /// </summary>
+    public void AddRoute(string sourceId, string sinkId, string routeId, ChannelMap map, float gain = 1.0f)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
         ArgumentException.ThrowIfNullOrEmpty(sinkId);
+        ArgumentException.ThrowIfNullOrEmpty(routeId);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         lock (_gate)
@@ -370,34 +384,71 @@ public sealed class AudioRouter : IDisposable
                 throw new InvalidOperationException(
                     $"map requires {map.RequiredInputChannels} input channels but source '{sourceId}' has {src.Source.Format.Channels}");
 
-            var route = new Route(sourceId, sinkId, map, gain);
-            var existing = FindRouteIndex(_state.Routes, sourceId, sinkId);
+            var existing = FindRouteIndexById(_state.Routes, routeId);
+            if (existing >= 0)
+            {
+                var prior = _state.Routes[existing];
+                if (prior.SourceId != sourceId || prior.SinkId != sinkId)
+                    throw new ArgumentException(
+                        $"route id '{routeId}' is already registered for ('{prior.SourceId}' -> '{prior.SinkId}'); cannot reuse for ('{sourceId}' -> '{sinkId}')",
+                        nameof(routeId));
+            }
+
+            var route = new Route(sourceId, sinkId, routeId, map, gain);
             var newRoutes = existing >= 0
                 ? _state.Routes.SetItem(existing, route)
                 : _state.Routes.Add(route);
             Volatile.Write(ref _state, _state with { Routes = newRoutes });
-            var rk = RouteGainDictionaryKey(sourceId, sinkId);
-            _routeTargetGains[rk] = gain;
+            _routeTargetGains[routeId] = gain;
             // Brand-new route starts at its target gain (no ramp on first chunk).
             // Re-adding an existing route is treated as a fresh registration —
             // user explicitly replaced the route, no fade.
-            _currentGains[rk] = gain;
+            _currentGains[routeId] = gain;
         }
     }
 
-    /// <summary>Removes the route between <paramref name="sourceId"/> and <paramref name="sinkId"/>. Returns false if no such route existed.</summary>
+    /// <summary>
+    /// Removes the route(s) between <paramref name="sourceId"/> and <paramref name="sinkId"/>.
+    /// Returns false if no such route existed.
+    /// </summary>
+    /// <remarks>
+    /// Legacy single-route-per-pair API. If multiple routes share the pair (post Phase C per-cell matrix),
+    /// removes <em>all</em> of them. Prefer <see cref="RemoveRouteById"/> when you registered the route
+    /// under an explicit id.
+    /// </remarks>
     public bool RemoveRoute(string sourceId, string sinkId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
         ArgumentException.ThrowIfNullOrEmpty(sinkId);
         lock (_gate)
         {
-            var idx = FindRouteIndex(_state.Routes, sourceId, sinkId);
+            var any = false;
+            for (var i = _state.Routes.Length - 1; i >= 0; i--)
+            {
+                if (_state.Routes[i].SourceId == sourceId && _state.Routes[i].SinkId == sinkId)
+                {
+                    var rid = _state.Routes[i].RouteId;
+                    _currentGains.TryRemove(rid, out _);
+                    _routeTargetGains.TryRemove(rid, out _);
+                    Volatile.Write(ref _state, _state with { Routes = _state.Routes.RemoveAt(i) });
+                    any = true;
+                }
+            }
+            return any;
+        }
+    }
+
+    /// <summary>Phase C (§4.3.4) — remove a single route by its registration id. Returns false when no such id.</summary>
+    public bool RemoveRouteById(string routeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(routeId);
+        lock (_gate)
+        {
+            var idx = FindRouteIndexById(_state.Routes, routeId);
             if (idx < 0) return false;
             Volatile.Write(ref _state, _state with { Routes = _state.Routes.RemoveAt(idx) });
-            var rk = RouteGainDictionaryKey(sourceId, sinkId);
-            _currentGains.TryRemove(rk, out _);
-            _routeTargetGains.TryRemove(rk, out _);
+            _currentGains.TryRemove(routeId, out _);
+            _routeTargetGains.TryRemove(routeId, out _);
             return true;
         }
     }
@@ -408,26 +459,52 @@ public sealed class AudioRouter : IDisposable
     /// across its samples (sample-accurate, click-free fade). Subsequent
     /// chunks then run at the new gain. Throws if the route doesn't exist.
     /// </summary>
+    /// <remarks>
+    /// Legacy single-route-per-pair API. If multiple routes share the pair, applies the change to all
+    /// of them. Prefer <see cref="SetRouteGainById"/> when targeting a specific matrix cell.
+    /// </remarks>
     public void SetRouteGain(string sourceId, string sinkId, float gain)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
         ArgumentException.ThrowIfNullOrEmpty(sinkId);
         lock (_gate)
         {
-            var idx = FindRouteIndex(_state.Routes, sourceId, sinkId);
-            if (idx < 0)
+            var any = false;
+            foreach (var route in _state.Routes)
+            {
+                if (route.SourceId == sourceId && route.SinkId == sinkId)
+                {
+                    _routeTargetGains[route.RouteId] = gain;
+                    any = true;
+                }
+            }
+            if (!any)
                 throw new InvalidOperationException($"no route exists from '{sourceId}' to '{sinkId}'");
-            _routeTargetGains[RouteGainDictionaryKey(sourceId, sinkId)] = gain;
         }
     }
 
-    private static string RouteGainDictionaryKey(string sourceId, string sinkId) =>
+    /// <summary>Phase C (§4.3.4) — update gain on a specific route by its id. Click-free fade as in <see cref="SetRouteGain"/>.</summary>
+    public void SetRouteGainById(string routeId, float gain)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(routeId);
+        lock (_gate)
+        {
+            if (FindRouteIndexById(_state.Routes, routeId) < 0)
+                throw new InvalidOperationException($"no route registered under id '{routeId}'");
+            _routeTargetGains[routeId] = gain;
+        }
+    }
+
+    /// <summary>Synthesized routeId for the legacy single-route-per-pair API. Keeps the
+    /// pre-Phase-C key shape (US-separator-delimited) so existing dictionary entries stay
+    /// interpretable and dumps still read as before.</summary>
+    private static string LegacyRouteId(string sourceId, string sinkId) =>
         string.Concat(sourceId, '\u001f', sinkId);
 
-    private static int FindRouteIndex(ImmutableArray<Route> routes, string sourceId, string sinkId)
+    private static int FindRouteIndexById(ImmutableArray<Route> routes, string routeId)
     {
         for (var i = 0; i < routes.Length; i++)
-            if (routes[i].SourceId == sourceId && routes[i].SinkId == sinkId)
+            if (routes[i].RouteId == routeId)
                 return i;
         return -1;
     }
@@ -934,13 +1011,12 @@ public sealed class AudioRouter : IDisposable
                     if (!snapshot.Sources.TryGetValue(route.SourceId, out var src)) continue;
                     if (!snapshot.Sinks.TryGetValue(route.SinkId, out var sink)) continue;
 
-                    var rk = RouteGainDictionaryKey(route.SourceId, route.SinkId);
-                    var fromGain = _currentGains.GetValueOrDefault(rk, route.Gain);
-                    var toGain = _routeTargetGains.TryGetValue(rk, out var tg) ? tg : route.Gain;
+                    var fromGain = _currentGains.GetValueOrDefault(route.RouteId, route.Gain);
+                    var toGain = _routeTargetGains.TryGetValue(route.RouteId, out var tg) ? tg : route.Gain;
                     ApplyRoute(src.Scratch, src.Source.Format.Channels,
                                sink.Pump.WorkingBuffer, sink.Sink.Format.Channels,
                                route.Map, fromGain, toGain, _chunkSamples);
-                    if (fromGain != toGain) _currentGains[rk] = toGain;
+                    if (fromGain != toGain) _currentGains[route.RouteId] = toGain;
                 }
 
                 // Publish each sink's mixed buffer to its pump (zero-copy hand-off);
@@ -1166,8 +1242,15 @@ public sealed class AudioRouter : IDisposable
             ChannelRouteMixProfiling.RecordScalarRamp(Stopwatch.GetTimestamp() - tRamp);
     }
 
-    /// <summary>One side of a routing connection.</summary>
-    public sealed record Route(string SourceId, string SinkId, ChannelMap Map, float Gain);
+    /// <summary>
+    /// One side of a routing connection. <see cref="RouteId"/> uniquely identifies the route within
+    /// the router; the legacy <see cref="AddRoute(string, string, ChannelMap, float)"/> overload
+    /// synthesizes it from <c>(SourceId, SinkId)</c> for back-compat replace-by-pair semantics.
+    /// Explicit routeIds (via <see cref="AddRoute(string, string, string, ChannelMap, float)"/>) let
+    /// callers register multiple routes per <c>(source, sink)</c> pair — used by HaPlay's per-cell
+    /// audio matrix to install one route per non-zero matrix cell.
+    /// </summary>
+    public sealed record Route(string SourceId, string SinkId, string RouteId, ChannelMap Map, float Gain);
 
     /// <summary>Snapshot of pump throughput stats.</summary>
     public readonly record struct SinkPumpStats(long Enqueued, long Processed, long Dropped, int PumpCapacityChunks);

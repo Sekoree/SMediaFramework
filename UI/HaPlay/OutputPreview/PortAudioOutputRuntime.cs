@@ -17,7 +17,7 @@ namespace HaPlay.OutputPreview;
 /// </summary>
 internal sealed class PortAudioOutputRuntime : IDisposable
 {
-    private readonly PortAudioOutputDefinition _definition;
+    private PortAudioOutputDefinition _definition;
     private readonly object _gate = new();
     private PortAudioOutput? _output;
     private int _holders;
@@ -28,8 +28,22 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     public PortAudioOutputRuntime(PortAudioOutputDefinition definition) =>
         _definition = definition;
 
+    /// <summary>Current definition for this runtime. May be swapped by <see cref="ReconfigureAsync"/>.</summary>
+    public PortAudioOutputDefinition Definition
+    {
+        get { lock (_gate) return _definition; }
+    }
+
     /// <summary>Format the persistent stream is opened at — sessions resample upstream when their source differs.</summary>
-    public AudioFormat Format => new(_definition.SampleRate, _definition.ChannelCount);
+    public AudioFormat Format => new(Definition.SampleRate, Definition.ChannelCount);
+
+    /// <summary>
+    /// Raised after <see cref="ReconfigureAsync"/> swaps the underlying <see cref="PortAudioOutput"/>.
+    /// Any prior reference handed out by <see cref="AcquireForPlayback"/> is now stale; subscribers
+    /// (i.e. an in-flight <c>HaPlayPlaybackSession</c>) should release + re-acquire to pick up the new
+    /// stream. Phase A wires the event but does not orchestrate the re-acquire — that's Phase B's job.
+    /// </summary>
+    public event EventHandler? Reconfigured;
 
     /// <summary>Opens and starts the underlying <see cref="PortAudioOutput"/>. Call once per runtime.</summary>
     public void Start()
@@ -106,6 +120,89 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             try { _output.Flush(); }
             catch { /* best effort */ }
         }
+    }
+
+    /// <summary>
+    /// Phase A foundations (§9.6) — swaps the underlying <see cref="PortAudioOutput"/> for one opened at
+    /// <paramref name="newDefinition"/>'s sample rate / channel count / device. Hot semantics per §3.6:
+    /// no policy enforcement here, callers see a brief silence/glitch window and react to <see cref="Reconfigured"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>The Id field MUST match the existing definition — re-binding to a different line is the wrong
+    /// operation (use a fresh runtime). Other fields are free to change.</para>
+    /// <para>Existing <see cref="AcquireForPlayback"/> holders see their <see cref="PortAudioOutput"/>
+    /// reference go stale; once they release, the next acquire returns the new output.</para>
+    /// </remarks>
+    public async Task ReconfigureAsync(PortAudioOutputDefinition newDefinition, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (newDefinition.Id != _definition.Id)
+            throw new ArgumentException(
+                $"ReconfigureAsync requires the same line Id ({_definition.Id}); got {newDefinition.Id}.",
+                nameof(newDefinition));
+
+        await Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            PortAudioOutput? toDispose;
+            PortAudioOutput? newOutput = null;
+            lock (_gate)
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(PortAudioOutputRuntime));
+                toDispose = _output;
+                _definition = newDefinition;
+                // Build the new output before dropping the old reference so any failure leaves the line
+                // in the "no current output" state rather than half-reconfigured. Hot semantics still hold
+                // — acquirers will see null until the new stream comes up.
+                _output = null;
+            }
+
+            try
+            {
+                toDispose?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "ReconfigureAsync: '{Name}' old output Dispose threw", newDefinition.DisplayName);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            try
+            {
+                newOutput = new PortAudioOutput(
+                    new AudioFormat(newDefinition.SampleRate, newDefinition.ChannelCount),
+                    newDefinition.GlobalDeviceIndex,
+                    suggestedLatency: null,
+                    framesPerBuffer: 480,
+                    ringCapacityFrames: newDefinition.SampleRate);
+                newOutput.Start();
+            }
+            catch
+            {
+                newOutput?.Dispose();
+                throw;
+            }
+
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    // Concurrent Dispose during reconfigure — drop the just-built output rather than leaking.
+                    try { newOutput.Dispose(); }
+                    catch { /* best effort */ }
+                    throw new ObjectDisposedException(nameof(PortAudioOutputRuntime));
+                }
+
+                _output = newOutput;
+            }
+
+            Trace.LogInformation("ReconfigureAsync: '{Name}' device={Device} rate={Rate}Hz channels={Ch}",
+                newDefinition.DisplayName, newDefinition.GlobalDeviceIndex, newDefinition.SampleRate, newDefinition.ChannelCount);
+        }, cancellationToken).ConfigureAwait(false);
+
+        Reconfigured?.Invoke(this, EventArgs.Empty);
     }
 
     public void Dispose()

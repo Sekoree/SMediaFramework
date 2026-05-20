@@ -18,6 +18,20 @@ public readonly record struct MediaPlayerOpenOptions(
     /// <summary>Max demuxed video packets buffered ahead of the video decoder. <c>0</c> = use the demuxer default (384). Raise for HEVC 4K B-frame reorder.</summary>
     int VideoPacketQueueDepth = 0)
 {
+    public MediaPlayerOpenOptions()
+        : this(
+            TryHardwareAcceleration: true,
+            RetainDmabufForGl: false,
+            RetainD3D11SharedHandleForGl: false,
+            Win32Nv12SharedHandleOnlyExport: false,
+            WindowsD3d11ZeroHostGl: false,
+            AudioChunkSamples: 480,
+            IncludeAudioRouter: true,
+            AudioPacketQueueDepth: 0,
+            VideoPacketQueueDepth: 0)
+    {
+    }
+
     /// <summary>Baseline: hardware decode on, GL decode flags off, standard audio chunking.</summary>
     public static MediaPlayerOpenOptions Default => new();
 

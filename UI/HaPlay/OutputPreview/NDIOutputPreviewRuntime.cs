@@ -29,7 +29,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     private const int CarrierAudioChannels = 2;
     private const int CarrierAudioChunkHz = 50;
 
-    private readonly NDIOutputDefinition _definition;
+    private NDIOutputDefinition _definition;
     private readonly object _gate = new();
     private NDIOutput? _output;
     private NDIAudioSink? _audio;
@@ -49,6 +49,19 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
     public NDIOutputPreviewRuntime(NDIOutputDefinition definition) =>
         _definition = definition;
+
+    /// <summary>Current definition. May be swapped by <see cref="ReconfigureAsync"/>.</summary>
+    public NDIOutputDefinition Definition
+    {
+        get { lock (_gate) return _definition; }
+    }
+
+    /// <summary>
+    /// Raised after <see cref="ReconfigureAsync"/> rebuilds the underlying <see cref="NDIOutput"/>. Active
+    /// playback sessions should release + re-acquire to pick up the new sender. Phase A wires the event
+    /// but does not orchestrate the re-acquire (§3.6 hot semantics — Phase B handles UX policy).
+    /// </summary>
+    public event EventHandler? Reconfigured;
 
     public void Start()
     {
@@ -357,6 +370,96 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         new Rational(CarrierVideoFpsNumerator, CarrierVideoFpsDenominator));
 
     private AudioFormat CarrierAudioFormat => new(_definition.AudioSampleRate, CarrierAudioChannels);
+
+    /// <summary>
+    /// Phase A (§9.6) — swaps the underlying carrier for one started from <paramref name="newDefinition"/>.
+    /// Implements the "always restart" form: source-name, groups, stream-mode, and audio-format changes
+    /// all share one code path. Phase B can optimize specific in-place transitions (e.g. audio sample-rate)
+    /// once a clear UX cost is established.
+    /// </summary>
+    /// <remarks>
+    /// <para>Id must match — callers can't rebind a runtime to a different line. Other fields are free.</para>
+    /// <para>If playback currently holds a side of the carrier, the runtime waits for release before tearing
+    /// down the old sender (mirroring the existing Dispose semantics — the carrier defers teardown so the
+    /// player isn't yanked mid-stream). The wait is unbounded; callers wanting a hard upper bound pass a
+    /// cancellation token.</para>
+    /// </remarks>
+    public async Task ReconfigureAsync(NDIOutputDefinition newDefinition, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (newDefinition.Id != _definition.Id)
+            throw new ArgumentException(
+                $"ReconfigureAsync requires the same line Id ({_definition.Id}); got {newDefinition.Id}.",
+                nameof(newDefinition));
+
+        await Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Wait for any playback acquire to release; the existing Dispose path uses _disposeOnRelease,
+            // but for reconfigure we want the swap to land synchronously. Poll cheaply — reconfigure is
+            // a user-initiated operation, not a hot loop.
+            while (true)
+            {
+                lock (_gate)
+                {
+                    if (_disposed)
+                        throw new ObjectDisposedException(nameof(NDIOutputPreviewRuntime));
+                    if (!_videoAcquired && !_audioAcquired)
+                        break;
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                Thread.Sleep(10);
+            }
+
+            VideoFrame? logoToCarryOver;
+            lock (_gate)
+            {
+                // Tear down the old carrier (timers + NDIOutput + audio sink) while the gate is held so
+                // no tick fires against the dying sender. Preserve any logo template so the new carrier
+                // resumes the same idle slate after restart.
+                _videoTimer?.Dispose();
+                _videoTimer = null;
+                _audioTimer?.Dispose();
+                _audioTimer = null;
+                logoToCarryOver = _logoTemplate;
+                _logoTemplate = null;
+
+                try { _output?.Dispose(); }
+                catch (Exception ex)
+                {
+                    Trace.LogWarning(ex, "ReconfigureAsync: '{Name}' old NDIOutput Dispose threw", _definition.SourceName);
+                }
+
+                _output = null;
+                _audio = null;
+
+                if (_connectionMetadataUtf8 != nint.Zero)
+                {
+                    Marshal.FreeCoTaskMem(_connectionMetadataUtf8);
+                    _connectionMetadataUtf8 = nint.Zero;
+                }
+
+                _definition = newDefinition;
+
+                // Reset stream ordinals so the new carrier's timestamps start at zero — receivers see a
+                // single clean reconnect instead of a confused jump in timecodes.
+                _videoOrdinal = 0;
+                _audioSamplePosition = 0;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Start a fresh carrier with the new definition. Reuse Start() so the wiring path stays single-source.
+            Start();
+
+            if (logoToCarryOver is not null)
+                SetLogoTemplate(logoToCarryOver);
+        }, cancellationToken).ConfigureAwait(false);
+
+        Reconfigured?.Invoke(this, EventArgs.Empty);
+    }
 
     public void Dispose()
     {

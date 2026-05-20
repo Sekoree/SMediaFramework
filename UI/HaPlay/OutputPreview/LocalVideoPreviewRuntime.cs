@@ -12,6 +12,16 @@ namespace HaPlay.OutputPreview;
 
 internal interface ILocalVideoPreviewRuntime : IDisposable
 {
+    /// <summary>Current definition. May be swapped by <see cref="ReconfigureAsync"/>.</summary>
+    LocalVideoOutputDefinition Definition { get; }
+
+    /// <summary>
+    /// Raised after <see cref="ReconfigureAsync"/> applies new placement / sizing to the window. Active
+    /// playback sessions don't need to re-acquire (the underlying sink reference stays valid — only its
+    /// window framing changes), but Phase B may use this hook to refresh UI bindings.
+    /// </summary>
+    event EventHandler? Reconfigured;
+
     Task StartAsync(CancellationToken cancellationToken = default);
 
     void SetFullscreen(bool fullscreen);
@@ -36,6 +46,13 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
     /// previously chosen size.
     /// </summary>
     void ApplyHoldImageWindowSize(int? width, int? height);
+
+    /// <summary>
+    /// Phase A (§9.6) — applies a new <see cref="LocalVideoOutputDefinition"/> in place. Window size,
+    /// screen index, and surface mode are honoured live. <see cref="LocalVideoOutputDefinition.Engine"/>
+    /// must not change (engine switches go through Remove + Add at the management layer).
+    /// </summary>
+    Task ReconfigureAsync(LocalVideoOutputDefinition newDefinition, CancellationToken cancellationToken = default);
 }
 
 internal static class PreviewVideoFrames
@@ -101,7 +118,7 @@ internal static class LocalVideoWindowPlacement
 
 internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 {
-    private readonly LocalVideoOutputDefinition _definition;
+    private LocalVideoOutputDefinition _definition;
     private readonly OutputLineViewModel _line;
     private readonly OutputManagementViewModel _owner;
     private SDL3GLVideoSink? _sink;
@@ -117,6 +134,10 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         _line = line;
         _owner = owner;
     }
+
+    public LocalVideoOutputDefinition Definition => _definition;
+
+    public event EventHandler? Reconfigured;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -166,6 +187,36 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
     public void Dispose()
     {
         Interlocked.Exchange(ref _sink, null)?.Dispose();
+    }
+
+    public Task ReconfigureAsync(LocalVideoOutputDefinition newDefinition, CancellationToken cancellationToken = default)
+    {
+        if (newDefinition.Id != _definition.Id)
+            throw new ArgumentException(
+                $"ReconfigureAsync requires the same line Id ({_definition.Id}); got {newDefinition.Id}.",
+                nameof(newDefinition));
+        if (newDefinition.Engine != _definition.Engine)
+            throw new ArgumentException(
+                "Cannot switch VideoOutputEngine in-place — remove and re-add the output.",
+                nameof(newDefinition));
+
+        _definition = newDefinition;
+
+        // Window placement runs on whichever thread SDL prefers — Task.Run avoids blocking the caller
+        // (typically the UI thread invoking Apply Edit from a dialog).
+        return Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var sink = _sink;
+            if (sink is null)
+                return;
+            sink.ApplyWindowPlacement(
+                newDefinition.ScreenIndex,
+                newDefinition.SurfaceMode == VideoSurfaceMode.FullScreen,
+                newDefinition.WindowWidth,
+                newDefinition.WindowHeight);
+            Reconfigured?.Invoke(this, EventArgs.Empty);
+        }, cancellationToken);
     }
 
     public IVideoSink? AcquireForPlayback()
@@ -223,7 +274,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
 internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 {
-    private readonly LocalVideoOutputDefinition _definition;
+    private LocalVideoOutputDefinition _definition;
     private readonly OutputLineViewModel _line;
     private readonly OutputManagementViewModel _owner;
     private readonly Window? _screenReference;
@@ -242,6 +293,10 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
         _owner = owner;
         _screenReference = screenReference;
     }
+
+    public LocalVideoOutputDefinition Definition => _definition;
+
+    public event EventHandler? Reconfigured;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
@@ -291,6 +346,30 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
         {
             _window?.Close();
         }, DispatcherPriority.Normal);
+    }
+
+    public async Task ReconfigureAsync(LocalVideoOutputDefinition newDefinition, CancellationToken cancellationToken = default)
+    {
+        if (newDefinition.Id != _definition.Id)
+            throw new ArgumentException(
+                $"ReconfigureAsync requires the same line Id ({_definition.Id}); got {newDefinition.Id}.",
+                nameof(newDefinition));
+        if (newDefinition.Engine != _definition.Engine)
+            throw new ArgumentException(
+                "Cannot switch VideoOutputEngine in-place — remove and re-add the output.",
+                nameof(newDefinition));
+
+        _definition = newDefinition;
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_window is null)
+                return;
+            LocalVideoWindowPlacement.Apply(_window, newDefinition, _screenReference, null);
+        }, DispatcherPriority.Normal);
+
+        Reconfigured?.Invoke(this, EventArgs.Empty);
     }
 
     public IVideoSink? AcquireForPlayback()

@@ -3,17 +3,124 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:models="using:HaPlay.Models"
              xmlns:views="using:HaPlay.Views"
              mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
              x:Class="HaPlay.Views.MainView"
              x:DataType="vm:MainViewModel">
 
-  <TabControl Margin="0">
+  <UserControl.Styles>
+    <Style Selector="Button.sidebar">
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+      <Setter Property="Padding" Value="10,8" />
+      <Setter Property="Margin" Value="4,2" />
+      <Setter Property="Background" Value="Transparent" />
+    </Style>
+    <Style Selector="Button.sidebar.selected">
+      <Setter Property="Background" Value="#22808080" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.sidebar-glyph">
+      <Setter Property="FontSize" Value="18" />
+      <Setter Property="Width" Value="24" />
+      <Setter Property="TextAlignment" Value="Center" />
+    </Style>
+  </UserControl.Styles>
 
-    <TabItem Header="Players">
-      <DockPanel Margin="8">
+  <UserControl.KeyBindings>
+    <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleSidebarCommand}" />
+    <KeyBinding Gesture="Ctrl+N" Command="{Binding NewProjectCommand}" />
+    <KeyBinding Gesture="Ctrl+O" Command="{Binding OpenProjectCommand}" />
+    <KeyBinding Gesture="Ctrl+S" Command="{Binding SaveProjectCommand}" />
+    <KeyBinding Gesture="Ctrl+Shift+S" Command="{Binding SaveProjectAsCommand}" />
+    <KeyBinding Gesture="Ctrl+1" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.Players}" />
+    <KeyBinding Gesture="Ctrl+2" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.Cues}" />
+    <KeyBinding Gesture="Ctrl+3" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.Outputs}" />
+    <KeyBinding Gesture="Ctrl+4" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.Project}" />
+  </UserControl.KeyBindings>
 
-        <!-- Player switcher strip + Add button -->
+  <DockPanel>
+    <!-- File / Project menu (kept above the sidebar so keyboard shortcuts still surface). -->
+    <Menu DockPanel.Dock="Top">
+      <MenuItem Header="_File">
+        <MenuItem Header="_New Project" Command="{Binding NewProjectCommand}" InputGesture="Ctrl+N" />
+        <MenuItem Header="_Open Project…" Command="{Binding OpenProjectCommand}" InputGesture="Ctrl+O" />
+        <Separator />
+        <MenuItem Header="_Save Project" Command="{Binding SaveProjectCommand}" InputGesture="Ctrl+S" />
+        <MenuItem Header="Save Project _As…" Command="{Binding SaveProjectAsCommand}" InputGesture="Ctrl+Shift+S" />
+        <Separator />
+        <MenuItem Header="_Recent Projects" ItemsSource="{Binding RecentProjects}">
+          <MenuItem.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding}" />
+            </DataTemplate>
+          </MenuItem.ItemTemplate>
+          <MenuItem.Styles>
+            <Style Selector="MenuItem">
+              <Setter Property="Command" Value="{Binding $parent[Menu].((vm:MainViewModel)DataContext).OpenRecentCommand}" />
+              <Setter Property="CommandParameter" Value="{Binding}" />
+            </Style>
+          </MenuItem.Styles>
+        </MenuItem>
+      </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="_Toggle Sidebar" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
+      </MenuItem>
+    </Menu>
+
+    <!-- Status banner under menu — surfaces save / load / missing-route messages. -->
+    <Border DockPanel.Dock="Top"
+            Background="#222"
+            Padding="8,4"
+            IsVisible="{Binding ProjectStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+      <TextBlock Text="{Binding ProjectStatus}" Foreground="#DDD" />
+    </Border>
+
+    <!-- Sidebar -->
+    <Border DockPanel.Dock="Left"
+            BorderBrush="#22808080" BorderThickness="0,0,1,0"
+            Width="{Binding SidebarWidth}">
+      <DockPanel>
+        <!-- Hamburger toggle -->
+        <Button DockPanel.Dock="Top"
+                Classes="sidebar"
+                Command="{Binding ToggleSidebarCommand}"
+                ToolTip.Tip="Toggle sidebar (Ctrl+B)">
+          <TextBlock Text="☰" Classes="sidebar-glyph" />
+        </Button>
+
+        <!-- Workspace entries -->
+        <ItemsControl ItemsSource="{Binding Workspaces}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="models:WorkspaceItem">
+              <Button Classes.sidebar="True"
+                      Classes.selected="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectedWorkspace,
+                                         Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
+                      Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).SelectWorkspaceCommand}"
+                      CommandParameter="{Binding}"
+                      ToolTip.Tip="{Binding Label}">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <TextBlock Text="{Binding Glyph}" Classes="sidebar-glyph" />
+                  <TextBlock Text="{Binding Label}"
+                             VerticalAlignment="Center"
+                             IsVisible="{Binding !$parent[ItemsControl].((vm:MainViewModel)DataContext).SidebarCollapsed}" />
+                </StackPanel>
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </DockPanel>
+    </Border>
+
+    <!-- Workspace content area -->
+    <Grid>
+      <!-- Players -->
+      <DockPanel Margin="8" IsVisible="{Binding IsPlayersWorkspaceSelected}">
         <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
           <TabStrip Grid.Column="0"
                     ItemsSource="{Binding Players}"
@@ -28,14 +135,56 @@
                   Command="{Binding AddPlayerCommand}"
                   VerticalAlignment="Center" Margin="6,0,0,0" />
         </Grid>
-
-        <!-- Selected player content (rendered via DataTemplate in App.axaml) -->
         <ContentControl Content="{Binding SelectedPlayer}" />
       </DockPanel>
-    </TabItem>
 
-    <TabItem Header="Outputs">
-      <views:OutputManagementView DataContext="{Binding OutputManagement}" />
-    </TabItem>
-  </TabControl>
+      <!-- Outputs -->
+      <views:OutputManagementView DataContext="{Binding OutputManagement}"
+                                  IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsOutputsWorkspaceSelected}" />
+
+      <DockPanel Margin="16" IsVisible="{Binding IsCuesWorkspaceSelected}">
+        <StackPanel DockPanel.Dock="Top" Spacing="8">
+          <TextBlock Text="Cues" FontSize="22" FontWeight="SemiBold" />
+          <TextBlock Text="No cue list loaded." Opacity="0.65" />
+        </StackPanel>
+      </DockPanel>
+
+      <!-- Project workspace — Phase B.2 surface. Sidebar wraps it for now; richer project metadata
+           lives in Phase C-D. -->
+      <DockPanel Margin="16" IsVisible="{Binding IsProjectWorkspaceSelected}">
+        <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
+          <TextBlock Text="Project" FontSize="22" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding ProjectTitle}" Opacity="0.85" />
+          <TextBlock Text="{Binding CurrentProjectPath, FallbackValue='(Unsaved — choose Save Project As… to write to disk)'}"
+                     Opacity="0.65" FontSize="12" TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
+          <Button Content="New" Command="{Binding NewProjectCommand}" />
+          <Button Content="Open…" Command="{Binding OpenProjectCommand}" />
+          <Button Content="Save" Command="{Binding SaveProjectCommand}" />
+          <Button Content="Save As…" Command="{Binding SaveProjectAsCommand}" />
+        </StackPanel>
+        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="Recent projects" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock DockPanel.Dock="Top"
+                       Text="(None yet — recent projects appear after the first Save or Open.)"
+                       Opacity="0.55" FontSize="12"
+                       IsVisible="{Binding RecentProjects.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+            <ItemsControl ItemsSource="{Binding RecentProjects}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Button Classes="sidebar"
+                          Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).OpenRecentCommand}"
+                          CommandParameter="{Binding}">
+                    <TextBlock Text="{Binding}" />
+                  </Button>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </DockPanel>
+        </Border>
+      </DockPanel>
+    </Grid>
+  </DockPanel>
 </UserControl>

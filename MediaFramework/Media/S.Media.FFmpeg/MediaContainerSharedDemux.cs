@@ -363,7 +363,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             _vNativePixFmt = PixelFormat.Bgra32;
             _vPassThrough = false;
             _vOutPixFmt = PixelFormat.Bgra32;
-            _vNativePixFormats = [];
+            // Bgra32 is what we actually emit after the forced sws conversion. Reporting it as native lets
+            // VideoFormatNegotiator find common ground when the sink declares no accepted formats (e.g.
+            // DiscardingVideoSink in HaPlay's audio-only routing path for FLAC + attached_pic cover art).
+            // Without this, an attached_pic source with odd dimensions and a permissive sink would crash
+            // with "neither source nor sink declared any pixel formats".
+            _vNativePixFormats = [PixelFormat.Bgra32];
         }
 
         Video.Format = new VideoFormat(outWidth, outHeight, _vOutPixFmt, frameRate);
@@ -1194,8 +1199,16 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         var srcHeight = _vCtx->height;
         var bytesPerPixel = VideoFileDecoder.BytesPerPackedPixel(_vOutPixFmt);
         if (bytesPerPixel == 0)
+        {
+            // Multi-plane targets (Nv12 / Nv21 / I420). Mirror VideoFileDecoder.BuildConvertedPlanarFrame —
+            // attached-picture cover-art branches need this path because their CPU-side conversion was
+            // previously routed at the GPU layer; when the routing graph picks Nv12 (e.g. NDI branch with
+            // pixel-format lock) and no GPU acceleration is in use, we must pack here too.
+            if (_vOutPixFmt is PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.I420)
+                return BuildConvertedPlanarVideoFrame(work, pts, meta, srcHeight);
             throw new NotSupportedException(
-                $"sws conversion to {_vOutPixFmt} (multi-plane / non-packed) is not implemented");
+                $"sws conversion to {_vOutPixFmt} is not implemented — use BGRA32, NV12, I420, or a packed RGB layout.");
+        }
 
         var stride = width * bytesPerPixel;
         var contiguous = stride * height;
@@ -1233,6 +1246,98 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         byte[] pooled = rented;
         return new VideoFrame(pts, Video.Format, dstMem, stride,
             release: () => ArrayPool<byte>.Shared.Return(pooled),
+            metadata: meta);
+    }
+
+    /// <summary>
+    /// Planar-target sws path (Nv12 / Nv21 / I420). Allocates one rented buffer per plane (sized via
+    /// <see cref="PixelFormatInfo.PlanePitchBufferLength"/>), pins for the duration of sws_scale, then
+    /// returns a <see cref="VideoFrame"/> whose release callback returns every plane to the pool.
+    /// Mirrors <c>VideoFileDecoder.BuildConvertedPlanarFrame</c> — same allocation discipline so the
+    /// attached-pic path doesn't diverge from the regular video file path.
+    /// </summary>
+    private VideoFrame BuildConvertedPlanarVideoFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta, int srcHeight)
+    {
+        var width = Video.Format.Width;
+        var height = Video.Format.Height;
+        var n = PixelFormatInfo.PlaneCount(_vOutPixFmt);
+
+        _swSrcLines[0] = work->data[0];
+        _swSrcLines[1] = work->data[1];
+        _swSrcLines[2] = work->data[2];
+        _swSrcLines[3] = work->data[3];
+        _swSrcLines[4] = work->data[4];
+        _swSrcLines[5] = work->data[5];
+        _swSrcLines[6] = work->data[6];
+        _swSrcLines[7] = work->data[7];
+        _swSrcStride[0] = work->linesize[0];
+        _swSrcStride[1] = work->linesize[1];
+        _swSrcStride[2] = work->linesize[2];
+        _swSrcStride[3] = work->linesize[3];
+        _swSrcStride[4] = work->linesize[4];
+        _swSrcStride[5] = work->linesize[5];
+        _swSrcStride[6] = work->linesize[6];
+        _swSrcStride[7] = work->linesize[7];
+
+        var strides = new int[n];
+        for (var i = 0; i < n; i++)
+            strides[i] = PixelFormatInfo.PlaneByteWidth(_vOutPixFmt, width, i);
+
+        var buffers = new byte[n][];
+        var handles = new List<GCHandle>(n);
+        try
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var len = PixelFormatInfo.PlanePitchBufferLength(_vOutPixFmt, width, height, i, strides[i]);
+                buffers[i] = ArrayPool<byte>.Shared.Rent(len);
+                handles.Add(GCHandle.Alloc(buffers[i], GCHandleType.Pinned));
+            }
+
+            for (var i = 0; i < n; i++)
+                _swDstLines[i] = (byte*)handles[i].AddrOfPinnedObject();
+            for (var i = n; i < 8; i++)
+                _swDstLines[i] = null;
+
+            Array.Clear(_swDstStride);
+            for (var i = 0; i < n; i++)
+                _swDstStride[i] = strides[i];
+
+            var sret = sws_scale(_swsCtx, _swSrcLines, _swSrcStride, 0, srcHeight, _swDstLines, _swDstStride);
+            if (sret < 0) FFmpegException.ThrowIfError(sret, nameof(sws_scale));
+        }
+        catch
+        {
+            foreach (var h in handles)
+            {
+                if (h.IsAllocated)
+                    h.Free();
+            }
+            foreach (var b in buffers)
+            {
+                if (b is not null)
+                    ArrayPool<byte>.Shared.Return(b);
+            }
+            throw;
+        }
+
+        foreach (var h in handles)
+            h.Free();
+
+        var memories = new ReadOnlyMemory<byte>[n];
+        for (var i = 0; i < n; i++)
+        {
+            var len = PixelFormatInfo.PlanePitchBufferLength(_vOutPixFmt, width, height, i, strides[i]);
+            memories[i] = buffers[i].AsMemory(0, len);
+        }
+
+        var captured = buffers;
+        return new VideoFrame(pts, Video.Format, memories, strides,
+            release: () =>
+            {
+                foreach (var b in captured)
+                    ArrayPool<byte>.Shared.Return(b);
+            },
             metadata: meta);
     }
 

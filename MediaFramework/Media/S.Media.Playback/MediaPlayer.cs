@@ -29,7 +29,14 @@ namespace S.Media.Playback;
 /// </remarks>
 public sealed class MediaPlayer : IDisposable
 {
-    private readonly MediaContainerPlaybackBundle _bundle;
+    private readonly MediaContainerPlaybackBundle? _bundle;
+    private readonly MediaPlaybackSession? _liveSession;
+    private readonly VideoRouter? _liveVideoRouter;
+    private readonly VideoPlayer? _liveVideo;
+    private readonly AudioPlayer? _liveAudio;
+    private readonly IMediaClock? _liveClock;
+    private readonly MediaClock? _liveFreerun;
+    private readonly List<IDisposable> _ownedLiveDisposables = [];
     private readonly string _videoRouterInputId;
     private readonly IVideoSink _videoInputSink;
     private readonly string? _audioSourceId;
@@ -52,12 +59,42 @@ public sealed class MediaPlayer : IDisposable
         _freerun = freerun;
     }
 
-    public MediaContainerDecoder Decoder => _bundle.Decoder;
+    private MediaPlayer(
+        VideoRouter videoRouter,
+        VideoPlayer video,
+        IMediaClock clock,
+        AudioPlayer? audio,
+        MediaClock? freerun,
+        string videoRouterInputId,
+        IVideoSink videoInputSink,
+        string? audioSourceId,
+        IEnumerable<IDisposable>? ownedLiveDisposables)
+    {
+        _liveVideoRouter = videoRouter;
+        _liveVideo = video;
+        _liveClock = clock;
+        _liveAudio = audio;
+        _liveFreerun = freerun;
+        _liveSession = new MediaPlaybackSession(video, clock, audio);
+        _videoRouterInputId = videoRouterInputId;
+        _videoInputSink = videoInputSink;
+        _audioSourceId = audioSourceId;
+        if (ownedLiveDisposables is not null)
+            _ownedLiveDisposables.AddRange(ownedLiveDisposables);
+    }
+
+    public bool IsLive => _bundle is null;
+
+    public bool HasContainerDecoder => _bundle is not null;
+
+    public MediaContainerDecoder Decoder =>
+        _bundle?.Decoder
+        ?? throw new InvalidOperationException("This MediaPlayer was opened from live sources and has no container decoder.");
 
     /// <inheritdoc cref="MediaContainerDecoder.Duration" />
-    public TimeSpan Duration => Decoder.Duration;
+    public TimeSpan Duration => _bundle?.Decoder.Duration ?? TimeSpan.Zero;
 
-    public VideoRouter VideoRouter => _bundle.VideoRouter!;
+    public VideoRouter VideoRouter => _bundle?.VideoRouter ?? _liveVideoRouter!;
 
     /// <summary>Input id returned by <see cref="VideoRouter.AddInput"/> — use with <see cref="VideoRouter.TryAddRoute"/>.</summary>
     public string VideoRouterInputId => _videoRouterInputId;
@@ -69,28 +106,65 @@ public sealed class MediaPlayer : IDisposable
     /// </summary>
     public IVideoSink VideoInputSink => _videoInputSink;
 
-    public VideoPlayer Video => _bundle.Video;
+    public VideoPlayer Video => _bundle?.Video ?? _liveVideo!;
 
     /// <summary>Present when <see cref="MediaPlayerOpenOptions.IncludeAudioRouter"/> was true at open time.</summary>
-    public AudioPlayer? Audio => _bundle.Audio;
+    public AudioPlayer? Audio => _bundle?.Audio ?? _liveAudio;
 
     /// <summary>Router source id for <see cref="MediaContainerDecoder.Audio"/> when <see cref="Audio"/> is non-null.</summary>
     public string? AudioSourceId => _audioSourceId;
 
-    public IMediaClock PlayClock => _bundle.Clock;
+    public IMediaClock PlayClock => _bundle?.Clock ?? _liveClock!;
 
     /// <summary>Non-null only when there was no <see cref="AudioPlayer"/> (video clocked from a freerun <see cref="MediaClock"/>).</summary>
-    public MediaClock? FreerunClock => _freerun;
+    public MediaClock? FreerunClock => _freerun ?? _liveFreerun;
 
-    public MediaContainerPlaybackBundle Bundle => _bundle;
+    public MediaContainerPlaybackBundle Bundle =>
+        _bundle ?? throw new InvalidOperationException("This MediaPlayer was opened from live sources and has no MediaContainerPlaybackBundle.");
 
-    public MediaContainerSession Session => _bundle.Session;
+    public MediaContainerSession Session =>
+        _bundle?.Session
+        ?? throw new InvalidOperationException("This MediaPlayer was opened from live sources; use PlaybackSession.");
+
+    public IAvPlaybackSession PlaybackSession => _bundle?.Session.Session ?? _liveSession!;
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        _bundle.Dispose();
+        if (_bundle is not null)
+        {
+            _bundle.Dispose();
+            return;
+        }
+
+        TryDispose(() => _liveVideo?.Dispose(), "MediaPlayer.Dispose: live VideoPlayer");
+        TryDispose(() => _liveAudio?.Dispose(), "MediaPlayer.Dispose: live AudioPlayer");
+        TryDispose(() => _liveVideoRouter?.Dispose(), "MediaPlayer.Dispose: live VideoRouter");
+        TryDispose(() => _liveFreerun?.Dispose(), "MediaPlayer.Dispose: live MediaClock");
+        foreach (var d in _ownedLiveDisposables)
+            TryDispose(d.Dispose, "MediaPlayer.Dispose: live source");
+    }
+
+    private static void TryDispose(Action? dispose, string debugLabel)
+    {
+        if (dispose is null)
+            return;
+        try
+        {
+            dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogError(ex, debugLabel);
+        }
+#else
+        catch
+        {
+            // best effort — continue teardown
+        }
+#endif
     }
 
     /// <summary>Registers <see cref="Console.CancelKeyPress"/> to cancel <paramref name="cts"/> while swallowing process exit.</summary>
@@ -252,6 +326,148 @@ public sealed class MediaPlayer : IDisposable
             disposeNegotiationLead,
             out player,
             out errorMessage);
+
+    /// <summary>
+    /// Opens a player graph from already-decoded live sources, bypassing
+    /// <see cref="MediaContainerDecoder"/>. Use for capture devices, NDI
+    /// receivers, and other inputs that already expose <see cref="IAudioSource"/>
+    /// / <see cref="IVideoSource"/>.
+    /// </summary>
+    public static bool TryOpenLive(
+        IAudioSource? audioSource,
+        IVideoSource? videoSource,
+        in MediaPlayerOpenOptions options,
+        IVideoSink? videoNegotiationLead,
+        bool disposeNegotiationLead,
+        [NotNullWhen(true)] out MediaPlayer? player,
+        out string? errorMessage) =>
+        TryOpenLive(
+            audioSource,
+            videoSource,
+            options,
+            videoNegotiationLead,
+            disposeNegotiationLead,
+            disposeSourcesOnDispose: true,
+            out player,
+            out errorMessage);
+
+    /// <summary>
+    /// Opens a player graph from live sources. When
+    /// <paramref name="disposeSourcesOnDispose"/> is true, the live video source
+    /// is disposed with the player; the live audio source is owned by
+    /// <see cref="AudioPlayer"/> when it is wired.
+    /// </summary>
+    public static bool TryOpenLive(
+        IAudioSource? audioSource,
+        IVideoSource? videoSource,
+        in MediaPlayerOpenOptions options,
+        IVideoSink? videoNegotiationLead,
+        bool disposeNegotiationLead,
+        bool disposeSourcesOnDispose,
+        [NotNullWhen(true)] out MediaPlayer? player,
+        out string? errorMessage)
+    {
+        player = null;
+        errorMessage = null;
+
+        if (!options.ValidateWin32Nv12Flags(out errorMessage))
+            return false;
+
+        if (audioSource is null && videoSource is null)
+        {
+            errorMessage = "at least one live audio or video source is required.";
+            return false;
+        }
+
+        if (audioSource is not null && videoSource is null && !options.IncludeAudioRouter)
+        {
+            errorMessage = "audio-only live sources require IncludeAudioRouter.";
+            return false;
+        }
+
+        AudioPlayer? audioPlayer = null;
+        string? audioSourceId = null;
+        MediaClock? freerun = null;
+        IMediaClock playClock;
+        VideoRouter? router = null;
+        VideoPlayer? videoPlayer = null;
+        var ownedDisposables = new List<IDisposable>();
+        var effectiveVideoSource = videoSource ?? new EmptyLiveVideoSource();
+
+        try
+        {
+            if (options.IncludeAudioRouter && audioSource is not null)
+            {
+                audioPlayer = new AudioPlayer(audioSource.Format.SampleRate, options.AudioChunkSamples);
+                audioSourceId = disposeSourcesOnDispose
+                    ? audioPlayer.AddOwnedSource(audioSource)
+                    : audioPlayer.Router.AddSource(audioSource);
+                playClock = audioPlayer.Clock;
+            }
+            else
+            {
+                freerun = new MediaClock();
+                playClock = freerun;
+                if (disposeSourcesOnDispose && audioSource is IDisposable audioDisposable)
+                    ownedDisposables.Add(audioDisposable);
+            }
+
+            if (disposeSourcesOnDispose && videoSource is IDisposable videoDisposable)
+                ownedDisposables.Add(videoDisposable);
+
+            router = new VideoRouter(null);
+            string primaryOutputId;
+            if (videoNegotiationLead is null)
+            {
+                var discard = new DiscardingVideoSink();
+                primaryOutputId = router.AddOutput(discard, "_discard",
+                    disposeSinkOnRouterDispose: true, synchronous: true);
+            }
+            else
+            {
+                primaryOutputId = router.AddOutput(
+                    videoNegotiationLead,
+                    "_primary",
+                    disposeSinkOnRouterDispose: disposeNegotiationLead);
+            }
+
+            var vin = router.AddInput(primaryOutputId);
+            videoPlayer = new VideoPlayer(effectiveVideoSource, vin.Sink, playClock);
+
+            player = new MediaPlayer(
+                router,
+                videoPlayer,
+                playClock,
+                audioPlayer,
+                audioPlayer is null ? freerun : null,
+                vin.Id,
+                vin.Sink,
+                audioSourceId,
+                ownedDisposables);
+
+            Trace.LogInformation("TryOpenLive: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
+                audioSource is not null,
+                videoSource is not null,
+                audioSource?.Format.SampleRate ?? 0,
+                videoPlayer.Format,
+                playClock.GetType().Name,
+                videoNegotiationLead?.GetType().Name ?? "(discard)");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            Trace.LogError(ex, "TryOpenLive failed");
+            TryDispose(() => videoPlayer?.Dispose(), "MediaPlayer.TryOpenLive: VideoPlayer");
+            TryDispose(() => audioPlayer?.Dispose(), "MediaPlayer.TryOpenLive: AudioPlayer");
+            TryDispose(() => router?.Dispose(), "MediaPlayer.TryOpenLive: VideoRouter");
+            TryDispose(() => freerun?.Dispose(), "MediaPlayer.TryOpenLive: MediaClock");
+            foreach (var d in ownedDisposables)
+                TryDispose(d.Dispose, "MediaPlayer.TryOpenLive: live source");
+            player = null;
+            return false;
+        }
+    }
 
     /// <summary>Uses an already-opened decoder (caller keeps ownership unless <paramref name="decoderOwnership"/> requests otherwise).</summary>
     public static bool TryOpen(
@@ -451,5 +667,24 @@ public sealed class MediaPlayer : IDisposable
         if (hasAudio)
             o |= MediaContainerPlaybackBundleOwnedParts.AudioPlayer;
         return o;
+    }
+
+    private sealed class EmptyLiveVideoSource : IVideoSource
+    {
+        private VideoFormat _format = new(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+
+        public VideoFormat Format => _format;
+
+        public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [PixelFormat.Bgra32];
+
+        public bool IsExhausted => true;
+
+        public void SelectOutputFormat(PixelFormat format) => _format = _format with { PixelFormat = format };
+
+        public bool TryReadNextFrame(out VideoFrame frame)
+        {
+            frame = null!;
+            return false;
+        }
     }
 }

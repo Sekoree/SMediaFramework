@@ -31,6 +31,9 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     private long _readIndex;
     private long _samplesEmitted;
     private long _overflowSamples;
+    private int _callbackFaulted;
+    private Exception? _callbackFaultException;
+    private int _streamInactiveDetected;
 
     private nint _stream;
     private GCHandle _selfHandle;
@@ -38,7 +41,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     private bool _disposed;
 
     public AudioFormat Format => _format;
-    public bool IsRunning => _isRunning;
+    public bool IsRunning => Volatile.Read(ref _isRunning);
     public int DeviceIndex => _deviceIndex;
 
     /// <summary>Live source — only "exhausted" if disposed; otherwise more samples may yet arrive.</summary>
@@ -73,7 +76,53 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     /// <summary>Samples dropped by the callback because the ring buffer was full.</summary>
     public long OverflowSamples => Volatile.Read(ref _overflowSamples);
 
+    /// <summary>Non-zero if the native stream callback caught an exception.</summary>
+    public bool CallbackFaulted => Volatile.Read(ref _callbackFaulted) != 0;
+
+    /// <summary>
+    /// First exception caught in the PortAudio stream callback, if <see cref="CallbackFaulted"/> is true.
+    /// Cleared when <see cref="Start"/> begins a new stream session.
+    /// </summary>
+    public Exception? CallbackFaultException => Volatile.Read(ref _callbackFaultException);
+
+    /// <summary>1 = PA reports stream active, 0 = inactive, negative = error/closed.</summary>
+    public int StreamActive => _stream != nint.Zero ? (int)Native.Pa_IsStreamActive(_stream) : -1;
+
+    /// <summary>True when the input stream is open and PortAudio reports it active.</summary>
+    public bool IsAdvancing => _stream != nint.Zero && (int)Native.Pa_IsStreamActive(_stream) == 1;
+
+    /// <summary>Latched once <see cref="CheckStreamActive"/> observes a running stream that is no longer active.</summary>
+    public bool StreamInactiveDetected => Volatile.Read(ref _streamInactiveDetected) != 0;
+
+    /// <summary>True when capture has faulted, or a running stream is no longer reported active.</summary>
+    public bool HasInputFault
+    {
+        get
+        {
+            if (CallbackFaulted || StreamInactiveDetected)
+                return true;
+            return IsRunning && StreamActive != 1;
+        }
+    }
+
     public double StreamTime => _stream != nint.Zero ? Native.Pa_GetStreamTime(_stream) : 0.0;
+
+    /// <summary>
+    /// Polls PortAudio's active flag and latches <see cref="StreamInactiveDetected"/>
+    /// when a stream that should be running has stopped or reports an error.
+    /// </summary>
+    public bool CheckStreamActive()
+    {
+        if (!IsRunning || _stream == nint.Zero)
+            return false;
+
+        var active = (int)Native.Pa_IsStreamActive(_stream);
+        if (active == 1)
+            return true;
+
+        Volatile.Write(ref _streamInactiveDetected, 1);
+        return false;
+    }
 
     public PortAudioInput(
         AudioFormat format,
@@ -121,7 +170,11 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_isRunning) return;
+        if (Volatile.Read(ref _isRunning)) return;
+
+        Interlocked.Exchange(ref _callbackFaultException, null);
+        Volatile.Write(ref _callbackFaulted, 0);
+        Volatile.Write(ref _streamInactiveDetected, 0);
 
         _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
 
@@ -159,20 +212,26 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
             PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
         }
 
-        _isRunning = true;
+        Volatile.Write(ref _isRunning, true);
     }
 
     public void Stop()
     {
-        if (!_isRunning) return;
-        if (_stream != nint.Zero)
+        if (!Volatile.Read(ref _isRunning)) return;
+        try
         {
-            Native.Pa_StopStream(_stream);
-            Native.Pa_CloseStream(_stream);
-            _stream = nint.Zero;
+            if (_stream != nint.Zero)
+            {
+                Native.Pa_StopStream(_stream);
+                Native.Pa_CloseStream(_stream);
+                _stream = nint.Zero;
+            }
         }
-        if (_selfHandle.IsAllocated) _selfHandle.Free();
-        _isRunning = false;
+        finally
+        {
+            if (_selfHandle.IsAllocated) _selfHandle.Free();
+            Volatile.Write(ref _isRunning, false);
+        }
     }
 
     /// <summary>
@@ -239,11 +298,23 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
         nint inputBuffer, nint outputBuffer, nuint frames,
         nint timeInfo, PaStreamCallbackFlags flags, nint userData)
     {
+        PortAudioInput? self = null;
         try
         {
             var handle = GCHandle.FromIntPtr(userData);
-            if (handle.Target is not PortAudioInput self)
+            if (handle.Target is not PortAudioInput s)
                 return (int)PaStreamCallbackResult.paAbort;
+            self = s;
+
+            if (inputBuffer == nint.Zero)
+            {
+                Interlocked.CompareExchange(
+                    ref self._callbackFaultException,
+                    new InvalidOperationException("PortAudio input callback received a null input buffer."),
+                    null);
+                Volatile.Write(ref self._callbackFaulted, 1);
+                return (int)PaStreamCallbackResult.paAbort;
+            }
 
             var totalFloats = (int)frames * self._format.Channels;
             var input = new ReadOnlySpan<float>((float*)inputBuffer, totalFloats);
@@ -268,8 +339,14 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
 
             return (int)PaStreamCallbackResult.paContinue;
         }
-        catch
+        catch (Exception ex)
         {
+            if (self is not null)
+            {
+                Interlocked.CompareExchange(ref self._callbackFaultException, ex, null);
+                Volatile.Write(ref self._callbackFaulted, 1);
+            }
+
             return (int)PaStreamCallbackResult.paAbort;
         }
     }

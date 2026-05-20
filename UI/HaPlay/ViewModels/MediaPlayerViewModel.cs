@@ -29,6 +29,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// holds don't stall the hold-image pump (NDI receivers would briefly freeze on every Pause/Play).</summary>
     private Timer? _holdPumpTimer;
     private int _holdPumpReentry;
+    private PlaylistTabViewModel? _activePlaybackTab;
+    private bool _syncingPlaylistTabState;
+    private readonly ObservableCollection<string> _emptyPlaylistPaths = new();
 
     /// <summary>Serializes load/unload/stop/pause/play/seek and loop-timer Router use so Dispose cannot overlap transport.</summary>
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
@@ -54,10 +57,21 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Name = name;
         SyncOutputsCollection();
         _outputs.Outputs.CollectionChanged += OnSharedOutputsCollectionChanged;
+        // Phase B (§3.4) — also resync on definition changes (Edit) so clone-of transitions update
+        // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
+        _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
+        // Phase B follow-up — unwire from the active session BEFORE the runtime is disposed (§4.3.3).
+        // Without this the AudioRouter pump keeps Submit'ing to a disposed PortAudioOutput and spams
+        // ObjectDisposedException until the session is torn down.
+        _outputs.OutputLineRemoving += OnOutputLineRemoving;
+        _outputs.OutputLineReconfiguringAsync += OnOutputLineReconfiguringAsync;
+        _outputs.OutputLineReconfiguredAsync += OnOutputLineReconfiguredAsync;
         _idleSlateSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _idleSlateSyncTimer.Tick += (_, _) => SyncIdleSlate();
         _idleSlateSyncTimer.Start();
-        PlaylistPaths.CollectionChanged += (_, _) => OnPlaylistPathsChanged();
+        var initialTab = new PlaylistTabViewModel("Set A");
+        PlaylistTabs.Add(initialTab);
+        SelectedPlaylistTab = initialTab;
         Dispatcher.UIThread.Post(() => SyncIdleSlate(), DispatcherPriority.Loaded);
     }
 
@@ -67,9 +81,21 @@ public partial class MediaPlayerViewModel : ViewModelBase
         MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
         MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
         PlayCommand.NotifyCanExecuteChanged();
+        TogglePlayPauseCommand.NotifyCanExecuteChanged();
+        NextTrackCommand.NotifyCanExecuteChanged();
+        PreviousTrackCommand.NotifyCanExecuteChanged();
     }
 
     private void OnSharedOutputsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            SyncOutputsCollection();
+            SyncIdleSlate();
+        });
+    }
+
+    private void OnRoutingTopologyChanged(object? sender, EventArgs e)
     {
         Dispatcher.UIThread.Post(() =>
         {
@@ -130,8 +156,39 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isRoutingExpanded = true;
 
-    /// <summary>Paths queued for sequential playback after the current file ends.</summary>
-    public ObservableCollection<string> PlaylistPaths { get; } = new();
+    public ObservableCollection<PlaylistTabViewModel> PlaylistTabs { get; } = new();
+
+    [ObservableProperty]
+    private PlaylistTabViewModel? _selectedPlaylistTab;
+
+    /// <summary>Paths queued for sequential playback on the visible playlist tab.</summary>
+    public ObservableCollection<string> PlaylistPaths => SelectedPlaylistTab?.Paths ?? _emptyPlaylistPaths;
+
+    public IReadOnlyList<PlayerOutputPreset> OutputPresets { get; } = Enum.GetValues<PlayerOutputPreset>();
+
+    public IReadOnlyList<PlayerTransitionMode> TransitionModes { get; } = Enum.GetValues<PlayerTransitionMode>();
+
+    /// <summary>Phase C (§4.3.4) — combobox choices for the per-output channel-mix mode.</summary>
+    public IReadOnlyList<AudioRouteMixMode> MixModes { get; } = Enum.GetValues<AudioRouteMixMode>();
+
+    /// <summary>Phase C (§4.3.4) — TreeDataGrid rows. One row per (selected device × output channel),
+    /// rebuilt whenever the selection set or the sized input channel count changes. Bound by the view's
+    /// code-behind, which also installs dynamic input-channel columns.</summary>
+    public ObservableCollection<AudioMatrixRow> AudioMatrixRows { get; } = new();
+
+    /// <summary>Phase C (§4.3.4) — current source channel count for the TreeDataGrid's input columns.
+    /// 0 until a session opens. Watched by the view's code-behind to rebuild input columns.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasAudioMatrix))]
+    private int _audioMatrixInputChannelCount;
+
+    /// <summary>True once the matrix has been sized and at least one routed output exists — gates the
+    /// TreeDataGrid's visibility and the empty-state hint.</summary>
+    public bool HasAudioMatrix => AudioMatrixInputChannelCount > 0 && AudioMatrixRows.Count > 0;
+
+    /// <summary>Phase C (§4.3.4) — change-stamp the view can hook to rebuild columns/rows after the matrix
+    /// rows or channel counts change. Fires once per coalesced rebuild.</summary>
+    public event EventHandler? AudioMatrixLayoutChanged;
 
     [ObservableProperty]
     private string _name = "Player";
@@ -155,6 +212,21 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _holdFallbackVideo;
+
+    [ObservableProperty]
+    private double _masterVolumeDb;
+
+    [ObservableProperty]
+    private bool _masterMuted;
+
+    [ObservableProperty]
+    private PlayerOutputPreset _outputPreset = PlayerOutputPreset.AsSource;
+
+    [ObservableProperty]
+    private PlayerTransitionMode _transitionMode = PlayerTransitionMode.Cut;
+
+    [ObservableProperty]
+    private int _transitionDurationMs = 500;
 
     [ObservableProperty]
     private bool _isMediaLoaded;
@@ -239,39 +311,467 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     partial void OnSelectedPlaylistPathChanged(string? value)
     {
-        _ = value;
+        if (!_syncingPlaylistTabState && SelectedPlaylistTab is not null)
+            SelectedPlaylistTab.SelectedPath = value;
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
         MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
         MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
         PlayCommand.NotifyCanExecuteChanged();
     }
 
-    /// <summary>Mirror the shared outputs list into per-player bindings, preserving selection on the survivors.</summary>
+    partial void OnSelectedPlaylistTabChanged(PlaylistTabViewModel? oldValue, PlaylistTabViewModel? newValue)
+    {
+        if (oldValue is not null)
+            oldValue.Paths.CollectionChanged -= OnSelectedTabPathsCollectionChanged;
+        if (newValue is not null)
+            newValue.Paths.CollectionChanged += OnSelectedTabPathsCollectionChanged;
+
+        _syncingPlaylistTabState = true;
+        try
+        {
+            SelectedPlaylistPath = newValue?.SelectedPath is { } sp && newValue.Paths.Contains(sp, StringComparer.Ordinal)
+                ? sp
+                : newValue?.Paths.FirstOrDefault();
+            IsLooping = newValue?.IsLooping ?? false;
+            AutoAdvancePlaylist = newValue?.AutoAdvance ?? false;
+        }
+        finally
+        {
+            _syncingPlaylistTabState = false;
+        }
+
+        OnPropertyChanged(nameof(PlaylistPaths));
+        OnPlaylistPathsChanged();
+    }
+
+    private void OnSelectedTabPathsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        OnPlaylistPathsChanged();
+
+    partial void OnIsLoopingChanged(bool value)
+    {
+        if (!_syncingPlaylistTabState && SelectedPlaylistTab is not null)
+            SelectedPlaylistTab.IsLooping = value;
+    }
+
+    partial void OnAutoAdvancePlaylistChanged(bool value)
+    {
+        if (!_syncingPlaylistTabState && SelectedPlaylistTab is not null)
+            SelectedPlaylistTab.AutoAdvance = value;
+    }
+
+    partial void OnMasterVolumeDbChanged(double value)
+    {
+        _ = value;
+        ApplyAllOutputGainsToSession();
+    }
+
+    partial void OnMasterMutedChanged(bool value)
+    {
+        _ = value;
+        ApplyAllOutputGainsToSession();
+    }
+
+    /// <summary>Mirror the shared outputs list into per-player bindings, preserving selection on the survivors.
+    /// Clones (§3.4) are deliberately excluded — their routing is mirrored from the parent's checkbox by
+    /// <see cref="SelectedOutputLines"/>, so showing them as separate checkboxes would be misleading.</summary>
     private void SyncOutputsCollection()
     {
         var keep = Outputs.ToDictionary(b => b.Line);
         foreach (var b in Outputs)
+        {
             b.PropertyChanged -= OnOutputBindingPropertyChanged;
+            UnwatchMatrixCells(b);
+        }
         Outputs.Clear();
         foreach (var line in _outputs.Outputs)
         {
+            if (!line.SupportsMediaPlayerRouting)
+                continue; // skip clones — handled via the parent's binding
             if (!keep.TryGetValue(line, out var binding))
                 binding = new PlayerOutputBinding(line);
             binding.PropertyChanged += OnOutputBindingPropertyChanged;
+            WatchMatrixCells(binding);
             Outputs.Add(binding);
         }
         OnPropertyChanged(nameof(HasNoOutputs));
         OnPropertyChanged(nameof(RoutingSummary));
     }
 
-    private void OnOutputBindingPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    /// <summary>Phase C (§4.3.4) — subscribe to per-cell PropertyChanged so any matrix edit pushes the new
+    /// route layout into the session. New cells added by <see cref="AudioMatrixViewModel.Resize"/> get
+    /// re-subscribed via the CollectionChanged hook.</summary>
+    private void WatchMatrixCells(PlayerOutputBinding binding)
     {
-        if (e.PropertyName == nameof(PlayerOutputBinding.IsSelected))
-            OnPropertyChanged(nameof(RoutingSummary));
+        binding.Matrix.Cells.CollectionChanged += OnBindingMatrixCellsCollectionChanged;
+        foreach (var c in binding.Matrix.Cells)
+            c.PropertyChanged += OnBindingMatrixCellChanged;
     }
 
-    private IReadOnlyList<OutputLineViewModel> SelectedOutputLines() =>
-        Outputs.Where(b => b.IsSelected).Select(b => b.Line).ToList();
+    private void UnwatchMatrixCells(PlayerOutputBinding binding)
+    {
+        binding.Matrix.Cells.CollectionChanged -= OnBindingMatrixCellsCollectionChanged;
+        foreach (var c in binding.Matrix.Cells)
+            c.PropertyChanged -= OnBindingMatrixCellChanged;
+    }
+
+    private void OnBindingMatrixCellsCollectionChanged(object? sender,
+        System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+            foreach (AudioMatrixCellViewModel c in e.OldItems)
+                c.PropertyChanged -= OnBindingMatrixCellChanged;
+        if (e.NewItems is not null)
+            foreach (AudioMatrixCellViewModel c in e.NewItems)
+                c.PropertyChanged += OnBindingMatrixCellChanged;
+    }
+
+    private void OnBindingMatrixCellChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(AudioMatrixCellViewModel.GainDb) or nameof(AudioMatrixCellViewModel.Muted)))
+            return;
+        if (sender is not AudioMatrixCellViewModel cell)
+            return;
+        var binding = Outputs.FirstOrDefault(b => b.Matrix.Cells.Contains(cell));
+        if (binding is null) return;
+        ApplyOutputMatrixToSession(binding);
+    }
+
+    private void OnOutputBindingPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (sender is not PlayerOutputBinding binding)
+            return;
+
+        if (e.PropertyName == nameof(PlayerOutputBinding.IsSelected))
+        {
+            OnPropertyChanged(nameof(RoutingSummary));
+            RebuildAudioMatrixRows();
+            // Hot toggle: if a session is running, mirror the checkbox change into the playback graph so
+            // routing takes effect without reload. Without this, ticking a new output mid-play did nothing
+            // until next Open / Play, and unticking left the route alive until the session was torn down.
+            if (_session is not null)
+                _ = HotApplyRoutingToggleAsync(binding);
+            SyncIdleSlate();
+            return;
+        }
+
+        if (e.PropertyName is nameof(PlayerOutputBinding.GainDb) or nameof(PlayerOutputBinding.IsMuted))
+        {
+            ApplyOutputCompoundGainToSession(binding.Line);
+            return;
+        }
+
+        if (e.PropertyName == nameof(PlayerOutputBinding.MixMode))
+        {
+            ApplyOutputMixModeToSession(binding);
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Phase C (§4.3.4) — apply the mix-mode preset by rebuilding the matrix cells; the per-cell push
+    /// then re-installs router routes via <see cref="ApplyOutputMatrixToSession"/>. Falls back to the
+    /// single-route <c>ChannelMap</c> path on lines whose matrix hasn't been sized yet (no session open).
+    /// </summary>
+    private void ApplyOutputMixModeToSession(PlayerOutputBinding binding)
+    {
+        var session = _session;
+        if (binding.Matrix.OutputChannelCount > 0 && binding.Matrix.InputChannelCount > 0)
+        {
+            binding.Matrix.ApplyPreset(binding.MixMode);
+            ApplyOutputMatrixToSession(binding);
+            return;
+        }
+        if (session is null) return;
+        var gain = EffectiveGain(binding);
+        if (!session.TrySetOutputChannelMap(binding.Line, binding.MixMode, gain, out var err) && !string.IsNullOrWhiteSpace(err))
+            StatusMessage = err;
+    }
+
+    /// <summary>
+    /// Phase C (§4.3.4) — push the binding's matrix cells down into the playback session, installing
+    /// one router route per audible cell. Re-applies after any cell edit; click-free gain rides for
+    /// master/per-output changes go through <see cref="ApplyOutputCompoundGainToSession"/> instead.
+    /// </summary>
+    private void ApplyOutputMatrixToSession(PlayerOutputBinding binding)
+    {
+        var session = _session;
+        if (session is null) return;
+        var compound = CompoundEnvelope(binding);
+        if (!session.TrySetOutputMatrix(binding.Line, binding.Matrix.ToRouteCells(), compound, out var err) &&
+            !string.IsNullOrWhiteSpace(err))
+            StatusMessage = err;
+    }
+
+    /// <summary>Linear master × per-output gain (envelope) applied on top of every cell's own gain.</summary>
+    private float CompoundEnvelope(PlayerOutputBinding binding)
+    {
+        if (MasterMuted || binding.IsMuted) return 0f;
+        var db = Math.Clamp(MasterVolumeDb + binding.GainDb, -80.0, 24.0);
+        return (float)Math.Pow(10.0, db / 20.0);
+    }
+
+    /// <summary>
+    /// Phase C (§4.3.4) — click-free gain ride across the line's cell routes. Falls back to the legacy
+    /// single-route gain path when the line has no cell routes installed.
+    /// </summary>
+    private void ApplyOutputCompoundGainToSession(OutputLineViewModel line)
+    {
+        var session = _session;
+        if (session is null) return;
+        var binding = Outputs.FirstOrDefault(b => b.Line == line);
+        if (binding is null) return;
+
+        var compound = CompoundEnvelope(binding);
+        // Matrix path: ride per-cell. Returns false when no cells installed → fall through to legacy path.
+        if (session.TrySetOutputMatrixCompoundGain(line, compound, out var err))
+            return;
+        if (!string.IsNullOrWhiteSpace(err))
+            StatusMessage = err;
+        ApplyOutputGainToSession(line);
+    }
+
+    private void ApplyAllOutputGainsToSession()
+    {
+        foreach (var binding in Outputs)
+            ApplyOutputCompoundGainToSession(binding.Line);
+    }
+
+    /// <summary>
+    /// Phase C (§4.3.4) — re-stamp every wired route's <c>ChannelMap</c> from the binding's mix mode.
+    /// Used at session-open (after WireAudio's default identity map is in place) so a player whose
+    /// outputs were saved with non-default mix modes comes back identically on next open.
+    /// </summary>
+    private void ApplyAllOutputMixModesToSession()
+    {
+        var session = _session;
+        if (session is null) return;
+        foreach (var binding in Outputs)
+        {
+            if (!binding.IsSelected) continue;
+            var gain = EffectiveGain(binding);
+            if (!session.TrySetOutputChannelMap(binding.Line, binding.MixMode, gain, out var err) &&
+                !string.IsNullOrWhiteSpace(err))
+                StatusMessage = err;
+        }
+    }
+
+    /// <summary>
+    /// Phase C (§4.3.4) — push the full per-cell matrix into the session for every selected output.
+    /// Replaces the legacy <see cref="ApplyAllOutputMixModesToSession"/> path at the per-cell layer.
+    /// </summary>
+    private void ApplyAllOutputMatricesToSession()
+    {
+        var session = _session;
+        if (session is null) return;
+        foreach (var binding in Outputs)
+        {
+            if (!binding.IsSelected) continue;
+            if (binding.Matrix.InputChannelCount == 0) continue; // matrix not yet sized
+            ApplyOutputMatrixToSession(binding);
+        }
+    }
+
+    /// <summary>
+    /// Phase C (§4.3.4) — rebuild <see cref="AudioMatrixRows"/> from the currently-selected bindings.
+    /// Each ticked output contributes one row per output channel. The view's code-behind watches this list
+    /// + <see cref="AudioMatrixInputChannelCount"/> to add / remove dynamic input-channel columns.
+    /// </summary>
+    private void RebuildAudioMatrixRows()
+    {
+        AudioMatrixRows.Clear();
+        var inputChannels = 0;
+        foreach (var binding in Outputs)
+        {
+            if (!binding.IsSelected) continue;
+            if (binding.Matrix.InputChannelCount == 0) continue;
+            inputChannels = Math.Max(inputChannels, binding.Matrix.InputChannelCount);
+            for (var oc = 0; oc < binding.Matrix.OutputChannelCount; oc++)
+            {
+                var label = binding.Matrix.OutputChannelCount == 2
+                    ? $"{binding.Line.Definition.DisplayName} · Out {(oc == 0 ? "L" : "R")}"
+                    : $"{binding.Line.Definition.DisplayName} · Out {oc + 1}";
+                AudioMatrixRows.Add(new AudioMatrixRow(binding, oc, label));
+            }
+        }
+
+        AudioMatrixInputChannelCount = inputChannels;
+        OnPropertyChanged(nameof(HasAudioMatrix));
+        AudioMatrixLayoutChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ApplyOutputGainToSession(OutputLineViewModel line)
+    {
+        var session = _session;
+        if (session is null)
+            return;
+
+        var binding = Outputs.FirstOrDefault(b => b.Line == line);
+        if (binding is null)
+            return;
+
+        var gain = EffectiveGain(binding);
+        if (!session.TrySetOutputGain(line, gain, out var err) && !string.IsNullOrWhiteSpace(err))
+            StatusMessage = err;
+    }
+
+    private float EffectiveGain(PlayerOutputBinding binding)
+    {
+        if (MasterMuted || binding.IsMuted)
+            return 0.0f;
+        var db = Math.Clamp(MasterVolumeDb + binding.GainDb, -80.0, 24.0);
+        return (float)Math.Pow(10.0, db / 20.0);
+    }
+
+    private bool ShouldRouteLine(OutputLineViewModel line)
+    {
+        if (line.SupportsMediaPlayerRouting)
+            return Outputs.FirstOrDefault(b => b.Line == line)?.IsSelected == true;
+
+        if (line.Definition is LocalVideoOutputDefinition { CloneOfId: { } parentId })
+            return Outputs.FirstOrDefault(b => b.Line.Definition.Id == parentId)?.IsSelected == true;
+
+        return false;
+    }
+
+    private async Task OnOutputLineReconfiguringAsync(OutputLineViewModel line)
+    {
+        await WithPlaybackArcAsync(() =>
+        {
+            _session?.TryRemoveOutput(line, out _);
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    private async Task OnOutputLineReconfiguredAsync(OutputLineViewModel line)
+    {
+        await WithPlaybackArcAsync(() =>
+        {
+            if (_session is not null && ShouldRouteLine(line))
+            {
+                if (_session.TryAddOutput(line, out var err))
+                {
+                    // Re-stamp the matrix on the freshly-wired route; falls back to the legacy single-route
+                    // ChannelMap when the matrix hasn't been sized yet (first hot-add before session play).
+                    var binding = Outputs.FirstOrDefault(b => b.Line == line);
+                    if (binding is not null)
+                    {
+                        var srcCh = _session.Player.Decoder.Audio?.Format.Channels ?? 2;
+                        binding.Matrix.Resize(srcCh, 2);
+                        ApplyOutputMatrixToSession(binding);
+                    }
+                    ApplyOutputCompoundGainToSession(line);
+                }
+                else if (!string.IsNullOrWhiteSpace(err))
+                    Dispatcher.UIThread.Post(() => StatusMessage = err);
+            }
+
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    private void ApplyBindingGainFromConfig(IReadOnlyDictionary<string, OutputGainConfig> gains)
+    {
+        foreach (var binding in Outputs)
+        {
+            if (!gains.TryGetValue(binding.Line.Definition.DisplayName, out var gain))
+                continue;
+            binding.GainDb = gain.GainDb;
+            binding.IsMuted = gain.Muted;
+            binding.MixMode = gain.MixMode;
+            // Persisted cells apply once the matrix has been sized (which happens on session open / hot-add).
+            // Until then, MixMode acts as the placeholder preset — when the matrix Resize runs it picks the
+            // identity layout, and a subsequent ApplyConfig overlays the saved cells.
+            if (gain.MatrixCells.Count > 0 && binding.Matrix.InputChannelCount > 0)
+                binding.Matrix.ApplyConfig(gain.MatrixCells);
+        }
+    }
+
+    /// <summary>
+    /// Phase B follow-up (§4.3.3) — call the session's hot route APIs from a checkbox toggle.
+    /// Includes the line's clones (PlayerRoutingMirror) so a parent tick wires every child as well.
+    /// Routes through the playback arc semaphore so a toggle can't race with Stop / Seek / Dispose.
+    /// </summary>
+    private async Task HotApplyRoutingToggleAsync(PlayerOutputBinding binding)
+    {
+        var line = binding.Line;
+        var add = binding.IsSelected;
+
+        // Mirror the parent's tick onto clones (§3.4) so the playback graph stays consistent with the
+        // logical "route to parent" intent. Clones don't have their own checkbox.
+        var targets = new List<OutputLineViewModel> { line };
+        targets.AddRange(_outputs.GetClonesOf(line.Definition.Id));
+
+        await WithPlaybackArcAsync(() =>
+        {
+            var session = _session;
+            if (session is null)
+                return Task.CompletedTask;
+
+            foreach (var target in targets)
+            {
+                if (add)
+                {
+                    if (!session.TryAddOutput(target, out var err))
+                    {
+                        // Common error: line not yet acquirable (preview not running, NDI carrier missing).
+                        // Surface as a banner so the user knows the route didn't take.
+                        if (!string.IsNullOrEmpty(err))
+                            Dispatcher.UIThread.Post(() => StatusMessage = err);
+                    }
+                    else
+                    {
+                        // Size + push the matrix so cell routes install before the first chunk; fall back to
+                        // legacy compound-gain path when the matrix hasn't been sized yet.
+                        var b = Outputs.FirstOrDefault(o => o.Line == target);
+                        if (b is not null)
+                        {
+                            var srcCh = session.Player.Decoder.Audio?.Format.Channels ?? 2;
+                            b.Matrix.Resize(srcCh, 2);
+                            ApplyOutputMatrixToSession(b);
+                        }
+                        ApplyOutputCompoundGainToSession(target);
+                    }
+                }
+                else
+                {
+                    session.TryRemoveOutput(target, out _);
+                }
+            }
+
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+    }
+
+    private void OnOutputLineRemoving(object? sender, OutputLineViewModel line)
+    {
+        // Synchronous: the management VM is about to dispose the runtime. Drop our route now so the
+        // router doesn't keep submitting to a sink that's seconds away from disposal.
+        var session = _session;
+        if (session is null) return;
+        try { session.TryRemoveOutput(line, out _); }
+        catch { /* best effort — removal must not block teardown */ }
+
+        // Clones tied to this parent are removed alongside (Outputs.Remove fires separate events for
+        // each clone, so they'll route through this handler in turn).
+    }
+
+    /// <summary>
+    /// Returns the lines the user has ticked, PLUS every clone of each ticked parent (§3.4
+    /// PlayerRoutingMirror). Clones don't appear as separate checkboxes (see <see cref="SyncOutputsCollection"/>);
+    /// their selection state is derived from their parent's tick. Order: parent immediately followed by
+    /// its clones so the playback wiring path picks the parent as the negotiation lead.
+    /// </summary>
+    private IReadOnlyList<OutputLineViewModel> SelectedOutputLines()
+    {
+        var result = new List<OutputLineViewModel>();
+        foreach (var binding in Outputs.Where(b => b.IsSelected))
+        {
+            result.Add(binding.Line);
+            foreach (var clone in _outputs.GetClonesOf(binding.Line.Definition.Id))
+                result.Add(clone);
+        }
+        return result;
+    }
 
     [RelayCommand(CanExecute = nameof(CanRemovePlayer))]
     private void RemovePlayer()
@@ -342,6 +842,107 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
 
         SyncIdleSlate();
+    }
+
+    [RelayCommand]
+    private void AddPlaylistTab()
+    {
+        var tab = new PlaylistTabViewModel($"Set {PlaylistTabs.Count + 1}");
+        PlaylistTabs.Add(tab);
+        SelectedPlaylistTab = tab;
+        RemovePlaylistTabCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemovePlaylistTab))]
+    private void RemovePlaylistTab()
+    {
+        if (SelectedPlaylistTab is null || PlaylistTabs.Count <= 1)
+            return;
+        var idx = PlaylistTabs.IndexOf(SelectedPlaylistTab);
+        if (idx < 0)
+            return;
+        PlaylistTabs.RemoveAt(idx);
+        SelectedPlaylistTab = PlaylistTabs[Math.Clamp(idx, 0, PlaylistTabs.Count - 1)];
+        RemovePlaylistTabCommand.NotifyCanExecuteChanged();
+    }
+
+    private bool CanRemovePlaylistTab() => PlaylistTabs.Count > 1;
+
+    [RelayCommand]
+    private async Task SavePlaylistTabAsync()
+    {
+        var top = TryGetMainWindow();
+        var tab = SelectedPlaylistTab;
+        if (top is null || tab is null)
+            return;
+
+        var opts = new FilePickerSaveOptions
+        {
+            Title = "Save playlist tab",
+            DefaultExtension = PlaylistIO.FileExtension,
+            SuggestedFileName = SanitizeFileName(tab.Name, PlaylistIO.FileExtension),
+            FileTypeChoices =
+            [
+                new FilePickerFileType("HaPlay playlist") { Patterns = ["*." + PlaylistIO.FileExtension] },
+            ],
+        };
+        var file = await top.StorageProvider.SaveFilePickerAsync(opts);
+        var path = file?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        try
+        {
+            await PlaylistIO.SaveAsync(tab.ToConfig(), path).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = null);
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = $"Save playlist failed: {ex.Message}");
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadPlaylistTabAsync()
+    {
+        var top = TryGetMainWindow();
+        if (top is null)
+            return;
+
+        var opts = new FilePickerOpenOptions
+        {
+            Title = "Load playlist tab",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("HaPlay playlist") { Patterns = ["*." + PlaylistIO.FileExtension, "*.json"] },
+                new FilePickerFileType("M3U playlist") { Patterns = ["*.m3u", "*.m3u8"] },
+                new FilePickerFileType("All files") { Patterns = ["*"] },
+            ],
+        };
+        var files = await top.StorageProvider.OpenFilePickerAsync(opts);
+        var path = files.FirstOrDefault()?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            return;
+
+        try
+        {
+            var config = await PlaylistIO.LoadAsync(path).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                var tab = PlaylistTabViewModel.FromConfig(config);
+                if (string.IsNullOrWhiteSpace(tab.Name))
+                    tab.Name = Path.GetFileNameWithoutExtension(path);
+                PlaylistTabs.Add(tab);
+                SelectedPlaylistTab = tab;
+                RemovePlaylistTabCommand.NotifyCanExecuteChanged();
+                StatusMessage = null;
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = $"Load playlist failed: {ex.Message}");
+        }
     }
 
     [RelayCommand]
@@ -461,6 +1062,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public async Task PlayPlaylistItemAsync(string path)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+        _activePlaybackTab = SelectedPlaylistTab;
         SelectedPlaylistPath = path;
         MediaFilePath = path;
         await OpenOrReloadAsync().ConfigureAwait(false);
@@ -566,9 +1168,24 @@ public partial class MediaPlayerViewModel : ViewModelBase
         await Dispatcher.UIThread.InvokeAsync(() => ApplyPlayerConfig(config));
     }
 
+    /// <summary>Phase B (§3.6) — true when this player has the line wired into its session AND the
+    /// session is currently in <see cref="IsPlaying"/> state. Used by the Edit confirm prompt.</summary>
+    public bool IsActivelyPlayingThroughLine(OutputLineViewModel line) =>
+        IsPlaying && _session?.HasWiredLine(line) == true;
+
+    /// <summary>Phase A — public snapshot for project save (§7). Internally still calls the same builder
+    /// used by the per-player Save Player command, so the JSON shape stays identical.</summary>
+    public MediaPlayerConfig BuildPlayerConfigSnapshot() => BuildPlayerConfig();
+
+    /// <summary>Phase A — public companion to <see cref="BuildPlayerConfigSnapshot"/>; applies a player
+    /// config in-place. Same semantics as the per-player Load Player command.</summary>
+    public void ApplyPlayerConfigSnapshot(MediaPlayerConfig config) => ApplyPlayerConfig(config);
+
     private MediaPlayerConfig BuildPlayerConfig() => new()
     {
         Name = Name,
+        PlaylistTabs = PlaylistTabs.Select(t => t.ToConfig()).ToList(),
+        SelectedPlaylistTabIndex = SelectedPlaylistTab is null ? 0 : Math.Max(0, PlaylistTabs.IndexOf(SelectedPlaylistTab)),
         PlaylistPaths = PlaylistPaths.ToList(),
         MediaFilePath = MediaFilePath,
         SelectedPlaylistPath = SelectedPlaylistPath,
@@ -576,28 +1193,83 @@ public partial class MediaPlayerViewModel : ViewModelBase
         IsLooping = IsLooping,
         AutoAdvancePlaylist = AutoAdvancePlaylist,
         HoldFallbackVideo = HoldFallbackVideo,
+        MasterVolumeDb = MasterVolumeDb,
+        MasterMuted = MasterMuted,
+        OutputPreset = OutputPreset,
+        TransitionMode = TransitionMode,
+        TransitionDurationMs = TransitionDurationMs,
         SelectedOutputDisplayNames = Outputs
             .Where(b => b.IsSelected)
             .Select(b => b.Line.Definition.DisplayName)
             .ToList(),
+        OutputGains = Outputs
+            .Where(b => Math.Abs(b.GainDb) > 0.0001 || b.IsMuted || b.MixMode != AudioRouteMixMode.Stereo
+                        || HasNonDefaultMatrix(b))
+            .Select(b => new OutputGainConfig
+            {
+                OutputDisplayName = b.Line.Definition.DisplayName,
+                GainDb = b.GainDb,
+                Muted = b.IsMuted,
+                MixMode = b.MixMode,
+                MatrixCells = HasNonDefaultMatrix(b) ? b.Matrix.ToPersistableCells().ToList() : new(),
+            })
+            .ToList(),
     };
+
+    /// <summary>Phase C — a matrix is non-default when any cell deviates from the identity layout
+    /// produced by <see cref="AudioMatrixViewModel.Resize"/> (audible diagonal cells at 0 dB; everything
+    /// else muted). We persist only non-default matrices to keep saved configs compact.</summary>
+    private static bool HasNonDefaultMatrix(PlayerOutputBinding b)
+    {
+        if (b.Matrix.Cells.Count == 0) return false;
+        foreach (var c in b.Matrix.Cells)
+        {
+            var isDiagonal = b.Matrix.InputChannelCount >= 2
+                ? c.InputChannel == c.OutputChannel
+                : c.InputChannel == 0;
+            var expectedMuted = !isDiagonal;
+            var expectedGain = isDiagonal ? AudioMatrixDefaults.IdentityGainDb : AudioMatrixDefaults.MutedFloorDb;
+            if (c.Muted != expectedMuted) return true;
+            if (Math.Abs(c.GainDb - expectedGain) > 0.001) return true;
+        }
+        return false;
+    }
 
     private void ApplyPlayerConfig(MediaPlayerConfig config)
     {
         Name = string.IsNullOrWhiteSpace(config.Name) ? Name : config.Name;
 
-        PlaylistPaths.Clear();
-        foreach (var p in config.PlaylistPaths)
-            PlaylistPaths.Add(p);
+        PlaylistTabs.Clear();
+        var tabs = config.PlaylistTabs.Count > 0
+            ? config.PlaylistTabs
+            : new List<PlaylistConfig>
+            {
+                new()
+                {
+                    Name = "Set A",
+                    Paths = config.PlaylistPaths,
+                    SelectedPath = config.SelectedPlaylistPath,
+                    IsLooping = config.IsLooping,
+                    AutoAdvance = config.AutoAdvancePlaylist,
+                },
+            };
+
+        foreach (var tabConfig in tabs)
+            PlaylistTabs.Add(PlaylistTabViewModel.FromConfig(tabConfig));
+        if (PlaylistTabs.Count == 0)
+            PlaylistTabs.Add(new PlaylistTabViewModel("Set A"));
 
         MediaFilePath = config.MediaFilePath;
-        SelectedPlaylistPath = config.SelectedPlaylistPath is { } sp && PlaylistPaths.Contains(sp, StringComparer.Ordinal)
-            ? sp
-            : PlaylistPaths.Count > 0 ? PlaylistPaths[0] : null;
+        var selectedIndex = Math.Clamp(config.SelectedPlaylistTabIndex, 0, PlaylistTabs.Count - 1);
+        SelectedPlaylistTab = PlaylistTabs[selectedIndex];
+        RemovePlaylistTabCommand.NotifyCanExecuteChanged();
         FallbackImagePath = config.FallbackImagePath;
-        IsLooping = config.IsLooping;
-        AutoAdvancePlaylist = config.AutoAdvancePlaylist;
         HoldFallbackVideo = config.HoldFallbackVideo;
+        MasterVolumeDb = config.MasterVolumeDb;
+        MasterMuted = config.MasterMuted;
+        OutputPreset = config.OutputPreset;
+        TransitionMode = config.TransitionMode;
+        TransitionDurationMs = config.TransitionDurationMs <= 0 ? 500 : config.TransitionDurationMs;
 
         var wanted = new HashSet<string>(config.SelectedOutputDisplayNames, StringComparer.OrdinalIgnoreCase);
         var missing = new HashSet<string>(wanted, StringComparer.OrdinalIgnoreCase);
@@ -608,19 +1280,23 @@ public partial class MediaPlayerViewModel : ViewModelBase
             binding.IsSelected = selected;
             if (selected) missing.Remove(name);
         }
+        ApplyBindingGainFromConfig(config.OutputGains
+            .Where(g => !string.IsNullOrWhiteSpace(g.OutputDisplayName))
+            .GroupBy(g => g.OutputDisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase));
 
         StatusMessage = missing.Count > 0
             ? $"Loaded. Missing outputs: {string.Join(", ", missing)}."
             : null;
     }
 
-    private static string SanitizeFileName(string name)
+    private static string SanitizeFileName(string name, string extension = "haplay.json")
     {
         if (string.IsNullOrWhiteSpace(name))
-            return "player.haplay.json";
+            return "player." + extension;
         var invalid = Path.GetInvalidFileNameChars();
         var clean = new string(name.Select(c => Array.IndexOf(invalid, c) >= 0 ? '_' : c).ToArray());
-        return clean + ".haplay.json";
+        return clean + "." + extension.TrimStart('.');
     }
 
     private async Task CloseSessionCoreInnerAsync(bool deferIdleSync, bool resetPlayingUi = true)
@@ -725,6 +1401,19 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 if (!string.IsNullOrWhiteSpace(FallbackImagePath))
                     created.ApplyFallbackImage(FallbackImagePath);
                 created.SetHoldFallback(HoldFallbackVideo);
+                // Size every binding's matrix to the source channel count (sink is currently always 2; see
+                // HaPlayPlaybackSession WireAudio downmix), then push matrices into the session so cell
+                // routes are installed before the first chunk runs.
+                var srcCh = created.Player.Decoder.Audio?.Format.Channels ?? 2;
+                foreach (var binding in Outputs)
+                {
+                    binding.Matrix.Resize(srcCh, 2);
+                    // First open after a config-load installs the saved mix mode preset; on a freshly-created
+                    // binding the matrix already sits at the identity defaults from Resize.
+                }
+                RebuildAudioMatrixRows();
+                ApplyAllOutputMatricesToSession();
+                ApplyAllOutputGainsToSession();
 
                 if (HoldFallbackVideo)
                 {
@@ -833,7 +1522,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             var session = _session;
             if (session is null) return;
 
-            if (IsLooping)
+            if ((_activePlaybackTab?.IsLooping ?? IsLooping))
             {
                 // Use audio's natural completion when an audio router is present (covers both audio-only
                 // and audio+video sources). Falls back to video for video-only files where audio is null.
@@ -863,7 +1552,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (!fileEnded) return;
 
             resumePlayForPlaylist = IsPlaying;
-            advancePlaylist = AutoAdvancePlaylist;
+            advancePlaylist = _activePlaybackTab?.AutoAdvance ?? AutoAdvancePlaylist;
             await RunBoundedCancelableAsync(session.Router.PauseSkippingSharedMuxFlush,
                 innerTimeout: TimeSpan.FromSeconds(1.5),
                 outerTimeout: TimeSpan.FromSeconds(2.5));
@@ -886,7 +1575,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
             IsPlaying = false;
             if (!TryGetNextPlaylistPath(out var nextPath)) return false;
             MediaFilePath = nextPath;
-            SelectedPlaylistPath = nextPath;
+            if (_activePlaybackTab is not null)
+                _activePlaybackTab.SelectedPath = nextPath;
+            if (ReferenceEquals(_activePlaybackTab, SelectedPlaylistTab))
+                SelectedPlaylistPath = nextPath;
             return true;
         });
         if (!shouldLoadNext) return;
@@ -927,6 +1619,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // Auto-load: if nothing's loaded yet but the user has selected a playlist row, load + play in one click.
         if (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath) && File.Exists(SelectedPlaylistPath))
         {
+            _activePlaybackTab = SelectedPlaylistTab;
             MediaFilePath = SelectedPlaylistPath;
             IsPlaying = true; // signals OpenOrReloadAsync to resume after open
             await OpenOrReloadAsync().ConfigureAwait(false);
@@ -966,22 +1659,39 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private bool TryGetPreviousPlaylistPath([NotNullWhen(true)] out string? prevPath)
     {
         prevPath = null;
-        if (PlaylistPaths.Count == 0 || string.IsNullOrEmpty(MediaFilePath))
+        var paths = ActivePlaybackPaths();
+        if (paths.Count == 0 || string.IsNullOrEmpty(MediaFilePath))
             return false;
-        var idx = PlaylistPaths.IndexOf(MediaFilePath);
+        var idx = IndexOfPath(paths, MediaFilePath);
         if (idx <= 0) return false;
-        prevPath = PlaylistPaths[idx - 1];
+        prevPath = paths[idx - 1];
         return true;
     }
 
     [RelayCommand]
-    private Task AddPortAudioOutputAsync() => _outputs.AddPortAudioCommand.ExecuteAsync(null);
+    private Task AddPortAudioOutputAsync() => AddOutputAndSelectAsync(() => _outputs.AddPortAudioCommand.ExecuteAsync(null));
 
     [RelayCommand]
-    private Task AddLocalVideoOutputAsync() => _outputs.AddLocalVideoCommand.ExecuteAsync(null);
+    private Task AddLocalVideoOutputAsync() => AddOutputAndSelectAsync(() => _outputs.AddLocalVideoCommand.ExecuteAsync(null));
 
     [RelayCommand]
-    private Task AddNDIOutputAsync() => _outputs.AddNDICommand.ExecuteAsync(null);
+    private Task AddNDIOutputAsync() => AddOutputAndSelectAsync(() => _outputs.AddNDICommand.ExecuteAsync(null));
+
+    private async Task AddOutputAndSelectAsync(Func<Task> addOutputAsync)
+    {
+        var before = _outputs.Outputs.Select(o => o.Definition.Id).ToHashSet();
+        await addOutputAsync().ConfigureAwait(false);
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            SyncOutputsCollection();
+            foreach (var binding in Outputs)
+            {
+                if (!before.Contains(binding.Line.Definition.Id))
+                    binding.IsSelected = true;
+            }
+        });
+    }
 
     /// <summary>
     /// First-Play helper: if the user hasn't ticked any outputs yet, pick the first compatible one and
@@ -1212,22 +1922,55 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private bool CanSeek() => _session is not null && IsMediaLoaded && Duration > TimeSpan.Zero;
 
+    /// <summary>Phase C — Keyboard `,` jog backward 5 s. Routes through <see cref="SeekToSliderAsync"/>
+    /// so the bounded-CT teardown timing matches a normal drag-end commit.</summary>
+    [RelayCommand(CanExecute = nameof(CanSeek))]
+    private Task JogBackAsync() => JogByAsync(TimeSpan.FromSeconds(-5));
+
+    /// <summary>Phase C — Keyboard `.` jog forward 5 s.</summary>
+    [RelayCommand(CanExecute = nameof(CanSeek))]
+    private Task JogForwardAsync() => JogByAsync(TimeSpan.FromSeconds(5));
+
+    private Task JogByAsync(TimeSpan delta)
+    {
+        if (Duration <= TimeSpan.Zero) return Task.CompletedTask;
+        var target = CurrentPosition + delta;
+        if (target < TimeSpan.Zero) target = TimeSpan.Zero;
+        if (target > Duration) target = Duration;
+        SeekSliderValue = target.Ticks * 1000.0 / Duration.Ticks;
+        return SeekToSliderCommand.CanExecute(null)
+            ? SeekToSliderCommand.ExecuteAsync(null)
+            : Task.CompletedTask;
+    }
+
     [RelayCommand]
     private Task CloseSessionAsync() => WithPlaybackArcAsync(() => CloseSessionCoreInnerAsync(false));
 
     private bool TryGetNextPlaylistPath([NotNullWhen(true)] out string? nextPath)
     {
         nextPath = null;
-        if (PlaylistPaths.Count == 0 || string.IsNullOrEmpty(MediaFilePath))
+        var paths = ActivePlaybackPaths();
+        if (paths.Count == 0 || string.IsNullOrEmpty(MediaFilePath))
             return false;
-        var idx = PlaylistPaths.IndexOf(MediaFilePath);
+        var idx = IndexOfPath(paths, MediaFilePath);
         if (idx < 0)
             return false;
         var n = idx + 1;
-        if (n >= PlaylistPaths.Count)
+        if (n >= paths.Count)
             return false;
-        nextPath = PlaylistPaths[n];
+        nextPath = paths[n];
         return true;
+    }
+
+    private IReadOnlyList<string> ActivePlaybackPaths() =>
+        _activePlaybackTab?.Paths ?? PlaylistPaths;
+
+    private static int IndexOfPath(IReadOnlyList<string> paths, string path)
+    {
+        for (var i = 0; i < paths.Count; i++)
+            if (string.Equals(paths[i], path, StringComparison.Ordinal))
+                return i;
+        return -1;
     }
 
     private static Window? TryGetMainWindow()
