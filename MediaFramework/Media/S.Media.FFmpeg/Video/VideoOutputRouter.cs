@@ -4,6 +4,8 @@ using S.Media.Core.Video;
 namespace S.Media.FFmpeg.Video;
 
 /// <summary>
+/// Legacy FFmpeg-specific two-sink fan-out helper. Prefer
+/// <see cref="S.Media.Core.Video.VideoRouter"/> for new code.
 /// Routes one decoded video stream to a <strong>primary</strong> sink (full
 /// <see cref="IVideoSink.AcceptedPixelFormats"/> for negotiation) plus a
 /// <strong>branch</strong> sink. When the branch cannot accept the negotiated
@@ -38,6 +40,7 @@ namespace S.Media.FFmpeg.Video;
 /// then the primary sink. In <c>DEBUG</c> builds, failures are logged via <see cref="MediaDiagnostics"/> and teardown continues; <c>Release</c> remains best-effort silent.
 /// </para>
 /// </remarks>
+[Obsolete("Use S.Media.Core.Video.VideoRouter for new video fan-out. VideoOutputRouter remains only as a legacy compatibility path and will be removed after migration.")]
 public sealed class VideoOutputRouter : IVideoSink, IDisposable
 {
     private readonly IVideoSink _primary;

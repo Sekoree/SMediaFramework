@@ -36,7 +36,7 @@ namespace S.Media.NDI.Video;
 /// source strides use bulk copies when they match the packed staging layout (NV12 and I420).
 /// </para>
 /// <para>
-/// <strong>Fan-out cost (SDL + NDI):</strong> when <c>VideoRouter</c> / <c>VideoOutputRouter</c> fan out negotiated CPU
+/// <strong>Fan-out cost (SDL + NDI):</strong> when <c>VideoRouter</c> fans out negotiated CPU
 /// <see cref="PixelFormat.Nv12"/> without a per-branch <c>VideoCpuFrameConverter</c>, branches share one backing via
 /// <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> — the NDI path still packs into ping-pong staging here (one
 /// memcpy from that shared view plus SDK upload), but the router no longer deep-copies NV12 for each branch.

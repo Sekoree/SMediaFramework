@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
@@ -28,6 +29,7 @@ public class MediaContainerDecoderTests
             Assert.True(c.UsesSharedDemux);
             Assert.Null(c.LegacyAudio);
             Assert.Null(c.LegacyVideo);
+            Assert.InRange(c.Duration.TotalSeconds, 0.8, 1.2);
 
             var scratch = new float[c.Audio.Format.Channels * 512];
             var n = c.Audio.ReadInto(scratch);
@@ -136,6 +138,33 @@ public class MediaContainerDecoderTests
         }
     }
 
+    [Fact]
+    public void Open_VideoOnly_Duration_UsesVideoOrContainerDuration()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mc_video_only_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateVideoOnly(path)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+
+            Assert.False(c.HasAudio);
+            Assert.True(c.HasVideo);
+            Assert.InRange(c.Duration.TotalSeconds, 0.8, 1.2);
+
+            var seekableVideo = Assert.IsAssignableFrom<ISeekableSource>(c.Video);
+            Assert.Equal(c.Duration, seekableVideo.Duration);
+        }
+        finally
+        {
+            try { File.Delete(path); }
+#if DEBUG
+            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp video-only delete"); }
+#else
+            catch { /* ignored */ }
+#endif
+        }
+    }
+
     private static bool TryGenerateAudioVideo(string path)
     {
         try
@@ -153,6 +182,38 @@ public class MediaContainerDecoderTests
                     "-g", "1",
                     "-keyint_min", "1",
                     "-pix_fmt", "yuv420p",
+                    "-loglevel", "error",
+                    path,
+                },
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+            };
+            using var p = Process.Start(psi);
+            if (p is null) return false;
+            p.WaitForExit(20000);
+            return p.ExitCode == 0 && File.Exists(path) && new FileInfo(path).Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGenerateVideoOnly(string path)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("ffmpeg")
+            {
+                ArgumentList =
+                {
+                    "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=320x240:rate=10:duration=1",
+                    "-c:v", "libx264",
+                    "-g", "1",
+                    "-keyint_min", "1",
+                    "-pix_fmt", "yuv420p",
+                    "-an",
                     "-loglevel", "error",
                     path,
                 },

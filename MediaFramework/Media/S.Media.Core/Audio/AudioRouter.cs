@@ -148,10 +148,12 @@ public sealed class AudioRouter : IDisposable
     /// <param name="autoResample">
     /// When <c>true</c> and <paramref name="source"/>'s rate doesn't match the router's nominal rate,
     /// the source is transparently wrapped via <see cref="AudioRouterAutoResample.SourceWrapper"/>
-    /// (installed by <c>S.Media.FFmpeg</c>'s <c>FFmpegRuntime.EnsureInitialized</c>). The wrapper takes
-    /// ownership of the original source, so callers using <see cref="AudioPlayer.AddOwnedSource"/> get a
-    /// clean dispose chain. Throws <see cref="InvalidOperationException"/> when a rate mismatch is
-    /// observed but no resampler factory is registered.
+    /// (installed by <c>S.Media.FFmpeg</c>'s <c>FFmpegRuntime.EnsureInitialized</c>). The router owns
+    /// and disposes that wrapper, but it does not assume ownership of the caller's original source;
+    /// wrapper factories must make their own inner-source ownership policy explicit. The default
+    /// FFmpeg wrapper deliberately leaves the original source caller-owned. Throws
+    /// <see cref="InvalidOperationException"/> when a rate mismatch is observed but no resampler
+    /// factory is registered.
     /// </param>
     public string AddSource(IAudioSource source, string? id = null, bool autoResample = false)
     {

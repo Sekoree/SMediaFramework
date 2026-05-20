@@ -54,6 +54,9 @@ public sealed class MediaPlayer : IDisposable
 
     public MediaContainerDecoder Decoder => _bundle.Decoder;
 
+    /// <inheritdoc cref="MediaContainerDecoder.Duration" />
+    public TimeSpan Duration => Decoder.Duration;
+
     public VideoRouter VideoRouter => _bundle.VideoRouter!;
 
     /// <summary>Input id returned by <see cref="VideoRouter.AddInput"/> — use with <see cref="VideoRouter.TryAddRoute"/>.</summary>
@@ -101,7 +104,7 @@ public sealed class MediaPlayer : IDisposable
         };
     }
 
-    /// <summary>Opens from a media file (decoder owned by the bundle).</summary>
+    /// <summary>Opens from a media file path (decoder owned by the bundle).</summary>
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -118,7 +121,20 @@ public sealed class MediaPlayer : IDisposable
             out player,
             out errorMessage);
 
-    /// <summary>Opens from a media file with explicit decoder ownership.</summary>
+    /// <summary>
+    /// Opens from a local media file path (decoder owned by the bundle). Prefer this explicit helper
+    /// when user input is known to be a file path; use <see cref="TryOpenUri"/> for network/protocol URLs.
+    /// </summary>
+    public static bool TryOpenFile(
+        string mediaPath,
+        in MediaPlayerOpenOptions options,
+        IVideoSink? videoNegotiationLead,
+        bool disposeNegotiationLead,
+        [NotNullWhen(true)] out MediaPlayer? player,
+        out string? errorMessage) =>
+        TryOpen(mediaPath, options, videoNegotiationLead, disposeNegotiationLead, out player, out errorMessage);
+
+    /// <summary>Opens from a media file path with explicit decoder ownership.</summary>
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -171,6 +187,72 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
+    /// <summary>
+    /// Opens from a media URI. <c>file:</c> URIs are validated as local files; non-file absolute URIs
+    /// are passed through to FFmpeg protocol I/O (for example <c>http:</c>, <c>https:</c>, or <c>rtsp:</c>).
+    /// </summary>
+    public static bool TryOpenUri(
+        Uri mediaUri,
+        in MediaPlayerOpenOptions options,
+        IVideoSink? videoNegotiationLead,
+        bool disposeNegotiationLead,
+        [NotNullWhen(true)] out MediaPlayer? player,
+        out string? errorMessage)
+    {
+        var openOptions = options;
+        return TryOpenFromDecoderFactory(
+            () => MediaContainerDecoder.OpenUri(mediaUri, openOptions.ToVideoDecoderOpenOptions()),
+            openOptions,
+            videoNegotiationLead,
+            disposeNegotiationLead,
+            MediaPlayerDecoderOwnership.BundleDisposesDecoder,
+            out player,
+            out errorMessage);
+    }
+
+    /// <summary>
+    /// Opens from a finite readable media stream by spooling it to a temporary file owned by the decoder.
+    /// For live/network streams, prefer <see cref="TryOpenUri"/> so FFmpeg can use protocol-native I/O.
+    /// </summary>
+    public static bool TryOpenStream(
+        Stream mediaStream,
+        string? inputName,
+        in MediaPlayerOpenOptions options,
+        IVideoSink? videoNegotiationLead,
+        bool disposeNegotiationLead,
+        [NotNullWhen(true)] out MediaPlayer? player,
+        out string? errorMessage)
+    {
+        var openOptions = options;
+        return TryOpenFromDecoderFactory(
+            () => MediaContainerDecoder.OpenStream(mediaStream, inputName, openOptions.ToVideoDecoderOpenOptions()),
+            openOptions,
+            videoNegotiationLead,
+            disposeNegotiationLead,
+            MediaPlayerDecoderOwnership.BundleDisposesDecoder,
+            out player,
+            out errorMessage);
+    }
+
+    /// <summary>
+    /// Opens from a finite readable media stream by spooling it to a temporary file owned by the decoder.
+    /// </summary>
+    public static bool TryOpenStream(
+        Stream mediaStream,
+        in MediaPlayerOpenOptions options,
+        IVideoSink? videoNegotiationLead,
+        bool disposeNegotiationLead,
+        [NotNullWhen(true)] out MediaPlayer? player,
+        out string? errorMessage) =>
+        TryOpenStream(
+            mediaStream,
+            null,
+            options,
+            videoNegotiationLead,
+            disposeNegotiationLead,
+            out player,
+            out errorMessage);
+
     /// <summary>Uses an already-opened decoder (caller keeps ownership unless <paramref name="decoderOwnership"/> requests otherwise).</summary>
     public static bool TryOpen(
         MediaContainerDecoder decoder,
@@ -201,6 +283,47 @@ public sealed class MediaPlayer : IDisposable
         catch (Exception ex)
         {
             errorMessage = ex.Message;
+            player = null;
+            return false;
+        }
+    }
+
+    private static bool TryOpenFromDecoderFactory(
+        Func<MediaContainerDecoder> decoderFactory,
+        in MediaPlayerOpenOptions options,
+        IVideoSink? videoNegotiationLead,
+        bool disposeNegotiationLead,
+        MediaPlayerDecoderOwnership decoderOwnership,
+        [NotNullWhen(true)] out MediaPlayer? player,
+        out string? errorMessage)
+    {
+        ArgumentNullException.ThrowIfNull(decoderFactory);
+        player = null;
+        errorMessage = null;
+
+        if (!options.ValidateWin32Nv12Flags(out errorMessage))
+            return false;
+
+        FFmpegRuntime.EnsureInitialized();
+
+        MediaContainerDecoder? media = null;
+        try
+        {
+            media = decoderFactory();
+            media.SeekPresentation(TimeSpan.Zero);
+            return TryOpenCore(
+                media,
+                options,
+                videoNegotiationLead,
+                disposeNegotiationLead,
+                decoderOwnership,
+                out player,
+                out errorMessage);
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            media?.Dispose();
             player = null;
             return false;
         }

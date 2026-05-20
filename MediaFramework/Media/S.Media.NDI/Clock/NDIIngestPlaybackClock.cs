@@ -27,6 +27,7 @@ namespace S.Media.NDI.Clock;
 public sealed class NDIIngestPlaybackClock : IPlaybackClock
 {
     private readonly Lock _gate = new();
+    private readonly Func<long> _getTimestamp;
 
     private long _sessionOriginTicks;
     private long _lastStreamEndTicks;
@@ -36,6 +37,16 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     private bool _paused;
     private bool _captureStopped;
     private TimeSpan _frozenElapsed;
+
+    public NDIIngestPlaybackClock()
+        : this(Stopwatch.GetTimestamp)
+    {
+    }
+
+    internal NDIIngestPlaybackClock(Func<long> getTimestamp)
+    {
+        _getTimestamp = getTimestamp ?? throw new ArgumentNullException(nameof(getTimestamp));
+    }
 
     /// <inheritdoc />
     public bool IsAdvancing
@@ -100,7 +111,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
             if (_paused && _sessionStarted)
                 return;
 
-            var wallNow = Stopwatch.GetTimestamp();
+            var wallNow = _getTimestamp();
             long startTicks;
             if (TryGetFrameStartTicks(timecode100Ns, timestamp100Ns, out var absoluteStart))
                 startTicks = absoluteStart;
@@ -168,7 +179,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
                 return;
             if (!_paused)
                 return;
-            _lastWallTicks = Stopwatch.GetTimestamp();
+            _lastWallTicks = _getTimestamp();
             _advancing = true;
             _paused = false;
         }
@@ -198,7 +209,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
 
     private TimeSpan ComputeElapsedUnlocked()
     {
-        var wallNow = Stopwatch.GetTimestamp();
+        var wallNow = _getTimestamp();
         var media = TimeSpan.FromTicks(_lastStreamEndTicks - _sessionOriginTicks);
         var wallExtras = Stopwatch.GetElapsedTime(_lastWallTicks, wallNow);
         var total = media + wallExtras;

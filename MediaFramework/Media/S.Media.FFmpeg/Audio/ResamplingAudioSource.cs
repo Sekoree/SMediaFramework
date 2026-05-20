@@ -11,9 +11,11 @@ namespace S.Media.FFmpeg.Audio;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Owns its inner — disposing the wrapper disposes <c>inner</c>. The router doesn't track inner
-/// sources, so making the wrapper the single owner means <see cref="AudioPlayer.AddOwnedSource"/>
-/// only has to add one disposable for both pieces of the chain.
+/// Direct instances own their inner by default — disposing the wrapper disposes <c>inner</c>.
+/// Hosts can pass <paramref name="disposeInnerWhenDisposed"/> as <see langword="false"/> when the
+/// original source remains caller-owned. The default FFmpeg auto-resample factory installed for
+/// <see cref="AudioRouter.AddSource(IAudioSource, string?, bool)"/> uses that caller-owned mode so
+/// router disposal only disposes the wrapper it created.
 /// </para>
 /// <para>
 /// libswresample buffers a small amount internally to honour the requested rate exactly; on the

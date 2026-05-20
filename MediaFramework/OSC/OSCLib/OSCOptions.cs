@@ -88,17 +88,15 @@ public sealed class OSCServerOptions
     public bool EnableTraceHexDump { get; init; }
 
     /// <summary>
-    /// <b>Currently not consumed.</b> All bundles are dispatched immediately regardless of this flag.
+    /// Controls whether OSC bundle timetags delay server-side dispatch.
     /// <para>
-    /// This property is reserved for a future server-side timetag scheduler. When implemented,
-    /// setting this to <see langword="true"/> (the default) will dispatch bundles immediately
-    /// regardless of their timetag — the OSC 1.0 "deliver now if in the past" interpretation
-    /// adopted by most real-world implementations (Max/MSP, TouchOSC, etc.).
-    /// Setting it to <see langword="false"/> will enable deferred delivery for future-dated bundles.
+    /// Setting this to <see langword="true"/> (the default) dispatches bundles immediately regardless
+    /// of their timetag. Setting it to <see langword="false"/> delays future-dated bundles until their
+    /// OSC/NTP timetag; immediate and past timetags dispatch without delay.
     /// </para>
     /// <para>
     /// The <see cref="OSCMessageContext.BundleTimeTag"/> property is always populated and
-    /// available for application-level scheduling inside message handlers.
+    /// available to handlers.
     /// </para>
     /// </summary>
     public bool IgnoreTimeTagScheduling { get; init; } = true;

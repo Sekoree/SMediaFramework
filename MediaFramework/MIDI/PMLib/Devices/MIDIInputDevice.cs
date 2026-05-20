@@ -15,8 +15,7 @@ public class MIDIInputDevice : MIDIDevice
     private volatile bool _polling;
     private readonly ManualResetEventSlim _pollWakeSignal = new(false);
 
-    // Partial SysEx accumulator
-    private List<byte>? _sysExBuffer;
+    private readonly MIDISysExAccumulator _sysExAccumulator = new();
 
     // ── Configuration ─────────────────────────────────────────────────────────
 
@@ -113,7 +112,7 @@ public class MIDIInputDevice : MIDIDevice
         }
 
         _pollThread = null;
-        _sysExBuffer = null;
+        _sysExAccumulator.Reset();
         return base.Close();
     }
 
@@ -167,11 +166,11 @@ public class MIDIInputDevice : MIDIDevice
     }
 
     /// <summary>
-    /// Routes a single PortMidi event through a two-state machine:
+    /// Routes a single PortMidi event through the shared MIDI decoder and SysEx accumulator:
     /// <list type="bullet">
-    ///   <item><b>Normal mode</b> (<c>_sysExBuffer == null</c>): decodes the event and
+    ///   <item><b>Normal mode</b>: decodes the event and
     ///     fires <see cref="MessageReceived"/>, or transitions to SysEx mode on 0xF0.</item>
-    ///   <item><b>SysEx accumulation mode</b> (<c>_sysExBuffer != null</c>): appends bytes
+    ///   <item><b>SysEx accumulation mode</b>: appends bytes
     ///     to the accumulator until EOX (0xF7) is found, then fires
     ///     <see cref="SysExReceived"/> and returns to normal mode.  Real-time messages
     ///     (0xF8–0xFF) embedded inside SysEx are dispatched immediately without
@@ -181,60 +180,17 @@ public class MIDIInputDevice : MIDIDevice
     /// </summary>
     private void ProcessEvent(PmEvent ev)
     {
-        byte status = PmEvent.GetStatus(ev.Message);
-
-        if (_sysExBuffer != null)
+        var msg = _sysExAccumulator.Process(ev, out var sysEx);
+        if (msg is not null)
         {
-            // Real-time messages can be embedded inside SysEx — fire them independently.
-            if (MIDIMessageParser.IsRealTime(status))
-            {
-                var rt = MIDIMessageParser.Decode(ev);
-                if (rt != null) try { MessageReceived?.Invoke(this, rt); }
-                    catch (Exception ex) { Logger.LogWarning(ex, "MessageReceived handler threw (deviceId={DeviceId})", DeviceId); }
-                return;
-            }
-            AccumulateSysEx(ev.Message, startByte: 0);
+            try { MessageReceived?.Invoke(this, msg); }
+            catch (Exception ex) { Logger.LogWarning(ex, "MessageReceived handler threw (deviceId={DeviceId})", DeviceId); }
         }
-        else if (status == 0xF0)
+
+        if (sysEx is not null)
         {
-            _sysExBuffer = new List<byte>();
-            AccumulateSysEx(ev.Message, startByte: 0);
-        }
-        else
-        {
-            var msg = MIDIMessageParser.Decode(ev);
-            if (msg != null) try { MessageReceived?.Invoke(this, msg); }
-                catch (Exception ex) { Logger.LogWarning(ex, "MessageReceived handler threw (deviceId={DeviceId})", DeviceId); }
-        }
-    }
-
-    /// <summary>
-    /// Appends bytes from a raw PmEvent message word into the SysEx accumulator.
-    /// Fires <see cref="SysExReceived"/> when EOX (0xF7) is found.
-    /// </summary>
-    private void AccumulateSysEx(uint message, int startByte)
-    {
-        for (int b = startByte; b < 4; b++)
-        {
-            byte by = (byte)((message >> (b * 8)) & 0xFF);
-
-            if (by == 0xF7)
-            {
-                _sysExBuffer!.Add(0xF7);
-                try { SysExReceived?.Invoke(this, new SysEx([.. _sysExBuffer])); }
-                catch (Exception ex) { Logger.LogWarning(ex, "SysExReceived handler threw (deviceId={DeviceId})", DeviceId); }
-                _sysExBuffer = null;
-                return;
-            }
-
-            // A non-real-time status byte inside SysEx means truncated/corrupt message.
-            if (b > 0 && (by & 0x80) != 0)
-            {
-                _sysExBuffer = null;
-                return;
-            }
-
-            _sysExBuffer!.Add(by);
+            try { SysExReceived?.Invoke(this, sysEx.Value); }
+            catch (Exception ex) { Logger.LogWarning(ex, "SysExReceived handler threw (deviceId={DeviceId})", DeviceId); }
         }
     }
 }

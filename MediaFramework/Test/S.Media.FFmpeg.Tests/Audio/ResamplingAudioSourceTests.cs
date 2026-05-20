@@ -55,6 +55,18 @@ public sealed class ResamplingAudioSourceTests
     }
 
     [Fact]
+    public void Router_Dispose_AutoResample_DisposesWrapperButNotOriginalSource()
+    {
+        var router = new AudioRouter(sampleRate: 48000);
+        var src = new ConstantToneSource(sampleRate: 44100, channels: 2, totalFrames: 1024);
+
+        router.AddSource(src, "tone44k", autoResample: true);
+        router.Dispose();
+
+        Assert.False(src.Disposed, "router must not dispose the caller's original source on Dispose");
+    }
+
+    [Fact]
     public void Router_AddSource_AutoResample_False_ThrowsOnMismatchedRate()
     {
         using var router = new AudioRouter(sampleRate: 48000);

@@ -24,8 +24,13 @@ namespace S.Media.FFmpeg;
 public sealed class MediaContainerDecoder : IDisposable
 {
     private readonly MediaContainerSharedDemux _shared;
+    private readonly string? _ownedTempPath;
 
-    private MediaContainerDecoder(MediaContainerSharedDemux shared) => _shared = shared;
+    private MediaContainerDecoder(MediaContainerSharedDemux shared, string? ownedTempPath = null)
+    {
+        _shared = shared;
+        _ownedTempPath = ownedTempPath;
+    }
 
     /// <summary>Audio side — <see cref="ISeekableSource"/> for coordinated seeks. For video-only
     /// files <see cref="HasAudio"/> is <c>false</c> and this source reports <c>IsExhausted = true</c>
@@ -47,6 +52,13 @@ public sealed class MediaContainerDecoder : IDisposable
     /// Always false when <see cref="HasVideo"/> is false. Single-frame for the entire file.</summary>
     public bool VideoIsAttachedPicture => _shared.VideoIsAttachedPicture;
 
+    /// <summary>
+    /// Best available container duration. Uses stream duration when available
+    /// and falls back to container duration; returns <see cref="TimeSpan.Zero"/>
+    /// for live or unknown-duration media.
+    /// </summary>
+    public TimeSpan Duration => _shared.Duration;
+
     /// <summary>Always true for this implementation.</summary>
     public bool UsesSharedDemux => true;
 
@@ -63,15 +75,76 @@ public sealed class MediaContainerDecoder : IDisposable
     /// <summary>Reserved for API stability; always <c>null</c>.</summary>
     public VideoFileDecoder? LegacyVideo => null;
 
-    public static MediaContainerDecoder Open(string path, VideoDecoderOpenOptions? videoOptions = null)
+    public static MediaContainerDecoder Open(string path, VideoDecoderOpenOptions? videoOptions = null) =>
+        OpenInput(path, videoOptions, validateLocalFile: true, ownedTempPath: null);
+
+    /// <summary>
+    /// Opens a local media file. Prefer this explicit helper when accepting file paths from end users;
+    /// use <see cref="OpenUri"/> for network/protocol URLs.
+    /// </summary>
+    public static MediaContainerDecoder OpenFile(string path, VideoDecoderOpenOptions? videoOptions = null) =>
+        Open(path, videoOptions);
+
+    /// <summary>
+    /// Opens a media URI. <c>file:</c> URIs are validated as local files; other absolute URI schemes
+    /// are passed to FFmpeg as protocol inputs (for example <c>http:</c>, <c>https:</c>, or <c>rtsp:</c>).
+    /// </summary>
+    public static MediaContainerDecoder OpenUri(Uri uri, VideoDecoderOpenOptions? videoOptions = null)
     {
-        ArgumentException.ThrowIfNullOrEmpty(path);
-        if (!File.Exists(path)) throw new FileNotFoundException("media file not found", path);
+        ArgumentNullException.ThrowIfNull(uri);
+        if (!uri.IsAbsoluteUri)
+            throw new ArgumentException("media URI must be absolute.", nameof(uri));
+
+        return uri.IsFile
+            ? OpenInput(uri.LocalPath, videoOptions, validateLocalFile: true, ownedTempPath: null)
+            : OpenInput(uri.AbsoluteUri, videoOptions, validateLocalFile: false, ownedTempPath: null);
+    }
+
+    /// <summary>
+    /// Opens a finite media stream by spooling it to a temporary file owned by the decoder.
+    /// For live/network streams, prefer <see cref="OpenUri"/> so FFmpeg can use protocol-native I/O.
+    /// </summary>
+    public static MediaContainerDecoder OpenStream(
+        Stream stream,
+        string? inputName = null,
+        VideoDecoderOpenOptions? videoOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanRead)
+            throw new ArgumentException("media stream must be readable.", nameof(stream));
+
+        FFmpegRuntime.EnsureInitialized();
+
+        var tempPath = BuildTempInputPath(inputName);
+        try
+        {
+            using (var file = File.Create(tempPath))
+                stream.CopyTo(file);
+
+            return OpenInput(tempPath, videoOptions, validateLocalFile: true, ownedTempPath: tempPath);
+        }
+        catch
+        {
+            TryDeleteTempFile(tempPath);
+            throw;
+        }
+    }
+
+    private static MediaContainerDecoder OpenInput(
+        string input,
+        VideoDecoderOpenOptions? videoOptions,
+        bool validateLocalFile,
+        string? ownedTempPath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(input);
+        if (validateLocalFile && !File.Exists(input))
+            throw new FileNotFoundException("media file not found", input);
+
         FFmpegRuntime.EnsureInitialized();
 
         var opt = videoOptions ?? new VideoDecoderOpenOptions();
-        var shared = MediaContainerSharedDemux.Open(path, opt);
-        return new MediaContainerDecoder(shared);
+        var shared = MediaContainerSharedDemux.Open(input, opt);
+        return new MediaContainerDecoder(shared, ownedTempPath);
     }
 
     /// <summary>Seeks both streams to the same presentation timestamp.</summary>
@@ -104,5 +177,33 @@ public sealed class MediaContainerDecoder : IDisposable
     public bool TryGetHardwareD3D11AdapterLuid(out long adapterLuidPacked) =>
         _shared.TryGetHardwareD3D11AdapterLuid(out adapterLuidPacked);
 
-    public void Dispose() => _shared.Dispose();
+    public void Dispose()
+    {
+        _shared.Dispose();
+        if (_ownedTempPath is not null)
+            TryDeleteTempFile(_ownedTempPath);
+    }
+
+    private static string BuildTempInputPath(string? inputName)
+    {
+        var ext = string.IsNullOrWhiteSpace(inputName) ? ".media" : Path.GetExtension(inputName);
+        if (string.IsNullOrWhiteSpace(ext) || ext.Length > 16 || ext.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            ext = ".media";
+
+        return Path.Combine(Path.GetTempPath(), $"mf_stream_{Guid.NewGuid():N}{ext}");
+    }
+
+    private static void TryDeleteTempFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+#if DEBUG
+        catch (Exception ex) { S.Media.Core.Diagnostics.MediaDiagnostics.LogError(ex, "MediaContainerDecoder: temp stream delete"); }
+#else
+        catch { /* ignored */ }
+#endif
+    }
 }

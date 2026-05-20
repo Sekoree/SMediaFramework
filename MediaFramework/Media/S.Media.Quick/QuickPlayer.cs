@@ -160,7 +160,7 @@ public sealed class QuickPlayback : IDisposable
     private readonly VideoPlayer? _imageVideoPlayer;
     private readonly MediaClock? _imageClock;
     private readonly IDisposable? _ownedDisposable;
-    private bool _audioHardwareStarted;
+    private readonly QuickAudioStartup? _audioStartup;
     private bool _disposed;
 
     internal QuickPlayback(QuickPlaybackKind kind, MediaPlayer? mediaPlayer,
@@ -174,6 +174,11 @@ public sealed class QuickPlayback : IDisposable
         _imageVideoPlayer = video;
         _imageClock = clock;
         _ownedDisposable = ownedDisposable;
+        _audioStartup = audioHost is null
+            ? null
+            : new QuickAudioStartup(
+                () => audioHost.PrefillMainOutputDirectFromDecoder(AudioPrefillTimeout),
+                audioHost.StartHardwareOutput);
     }
 
     public QuickPlaybackKind Kind { get; }
@@ -189,16 +194,7 @@ public sealed class QuickPlayback : IDisposable
         {
             Action? prefill = null;
             Action? startHardware = null;
-            if (_audioHost is not null && !_audioHardwareStarted)
-            {
-                prefill = () => _audioHost.PrefillMainOutputDirectFromDecoder(AudioPrefillTimeout);
-                startHardware = () =>
-                {
-                    _audioHost.StartHardwareOutput();
-                    _audioHardwareStarted = true;
-                };
-            }
-
+            _audioStartup?.GetCallbacks(out prefill, out startHardware);
             _mediaPlayer.Session.Play(prefill, startHardware);
         }
         if (_imageClock is not null)
@@ -234,5 +230,35 @@ public sealed class QuickPlayback : IDisposable
         try { _imageClock?.Dispose(); } catch { /* best effort */ }
         try { _sink.Dispose(); } catch { /* best effort */ }
         try { _ownedDisposable?.Dispose(); } catch { /* best effort */ }
+    }
+}
+
+internal sealed class QuickAudioStartup
+{
+    private readonly Action _prefill;
+    private readonly Action _startHardware;
+    private bool _started;
+
+    public QuickAudioStartup(Action prefill, Action startHardware)
+    {
+        _prefill = prefill ?? throw new ArgumentNullException(nameof(prefill));
+        _startHardware = startHardware ?? throw new ArgumentNullException(nameof(startHardware));
+    }
+
+    public void GetCallbacks(out Action? prefill, out Action? startHardware)
+    {
+        if (_started)
+        {
+            prefill = null;
+            startHardware = null;
+            return;
+        }
+
+        prefill = _prefill;
+        startHardware = () =>
+        {
+            _startHardware();
+            _started = true;
+        };
     }
 }

@@ -6,6 +6,8 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests.Video;
 
+#pragma warning disable CS0618 // Tests intentionally pin the legacy compatibility surface until removal.
+
 public sealed class VideoOutputRouterTests
 {
     public VideoOutputRouterTests() => FFmpegRuntime.EnsureInitialized();

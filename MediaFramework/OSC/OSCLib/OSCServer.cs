@@ -167,6 +167,10 @@ public sealed class OSCServer : IOSCServer
         }
 
         var bundle = packet.Bundle!;
+        if (!Options.IgnoreTimeTagScheduling)
+            await OSCBundleScheduler.DelayUntilDueAsync(bundle.TimeTag, DateTimeOffset.UtcNow, cancellationToken)
+                .ConfigureAwait(false);
+
         foreach (var child in bundle.Elements)
             await DispatchPacketAsync(child, remote, bundle.TimeTag, receivedAt, cancellationToken, depth + 1).ConfigureAwait(false);
     }

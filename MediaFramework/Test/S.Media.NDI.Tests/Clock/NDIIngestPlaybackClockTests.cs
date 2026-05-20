@@ -12,7 +12,8 @@ public class NDIIngestPlaybackClockTests
     [Fact]
     public void Timecode_ChainsFrames_ElapsedMatchesSampleDuration()
     {
-        var c = new NDIIngestPlaybackClock();
+        var wall = new ManualStopwatch();
+        var c = new NDIIngestPlaybackClock(wall.GetTimestamp);
         c.AttachReceiver();
         const int rate = 48_000;
         const int samples = 480;
@@ -29,7 +30,8 @@ public class NDIIngestPlaybackClockTests
     [Fact]
     public void Timestamp_UsedWhenTimecodeSynthesize()
     {
-        var c = new NDIIngestPlaybackClock();
+        var wall = new ManualStopwatch();
+        var c = new NDIIngestPlaybackClock(wall.GetTimestamp);
         c.AttachReceiver();
         const int rate = 48_000;
         const int samples = 480;
@@ -89,5 +91,15 @@ public class NDIIngestPlaybackClockTests
         var d = Math.Abs((actual - expected).Ticks);
         // Frame duration uses double rounding; ingest clock may accumulate small FP drift across chained frames.
         Assert.True(d <= 512, $"expected ~{expected}, got {actual} (delta {d} ticks)");
+    }
+
+    private sealed class ManualStopwatch
+    {
+        private long _timestamp;
+
+        public long GetTimestamp() => _timestamp;
+
+        public void Advance(TimeSpan elapsed) =>
+            _timestamp += (long)Math.Round(elapsed.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
     }
 }

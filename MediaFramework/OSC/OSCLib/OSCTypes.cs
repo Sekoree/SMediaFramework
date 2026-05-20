@@ -47,6 +47,8 @@ public enum OSCOversizePolicy
 /// </summary>
 public readonly record struct OSCTimeTag(ulong Value)
 {
+    private static readonly DateTimeOffset NtpEpochUtc = new(1900, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     /// <summary>
     /// Timetag constant that denotes immediate execution.
     /// </summary>
@@ -56,6 +58,38 @@ public readonly record struct OSCTimeTag(ulong Value)
     /// Indicates whether the timetag is the OSC special immediate value.
     /// </summary>
     public bool IsImmediately => Value == 1UL;
+
+    /// <summary>
+    /// Converts a UTC timestamp to an OSC/NTP timetag. Use <see cref="Immediately"/> for immediate dispatch.
+    /// </summary>
+    public static OSCTimeTag FromDateTimeOffset(DateTimeOffset timestamp)
+    {
+        var utc = timestamp.ToUniversalTime();
+        if (utc < NtpEpochUtc)
+            throw new ArgumentOutOfRangeException(nameof(timestamp), timestamp, "OSC timetag cannot precede the NTP epoch.");
+
+        var delta = utc - NtpEpochUtc;
+        var seconds = (ulong)delta.Ticks / (ulong)TimeSpan.TicksPerSecond;
+        var remainderTicks = (ulong)delta.Ticks % (ulong)TimeSpan.TicksPerSecond;
+        var fraction = (remainderTicks << 32) / (ulong)TimeSpan.TicksPerSecond;
+        return new OSCTimeTag((seconds << 32) | fraction);
+    }
+
+    /// <summary>
+    /// Converts this OSC/NTP timetag to a UTC timestamp. The special <see cref="Immediately"/>
+    /// value cannot be represented as an absolute timestamp.
+    /// </summary>
+    public DateTimeOffset ToDateTimeOffset()
+    {
+        if (IsImmediately)
+            throw new InvalidOperationException("OSC immediate timetag does not represent an absolute timestamp.");
+
+        var seconds = Value >> 32;
+        var fraction = Value & 0xFFFFFFFFUL;
+        var ticks = checked((long)seconds * TimeSpan.TicksPerSecond)
+            + (long)((fraction * (ulong)TimeSpan.TicksPerSecond) >> 32);
+        return NtpEpochUtc.AddTicks(ticks);
+    }
 }
 
 /// <summary>
