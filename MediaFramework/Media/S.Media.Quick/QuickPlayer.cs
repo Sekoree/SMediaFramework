@@ -152,12 +152,15 @@ public enum QuickPlaybackKind
 /// </summary>
 public sealed class QuickPlayback : IDisposable
 {
+    private static readonly TimeSpan AudioPrefillTimeout = TimeSpan.FromSeconds(3);
+
     private readonly MediaPlayer? _mediaPlayer;
     private readonly PortAudioPlaybackHost? _audioHost;
     private readonly SDL3GLVideoSink _sink;
     private readonly VideoPlayer? _imageVideoPlayer;
     private readonly MediaClock? _imageClock;
     private readonly IDisposable? _ownedDisposable;
+    private bool _audioHardwareStarted;
     private bool _disposed;
 
     internal QuickPlayback(QuickPlaybackKind kind, MediaPlayer? mediaPlayer,
@@ -184,8 +187,19 @@ public sealed class QuickPlayback : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_mediaPlayer is not null)
         {
-            _mediaPlayer.Audio?.Play();
-            _mediaPlayer.Video.Play();
+            Action? prefill = null;
+            Action? startHardware = null;
+            if (_audioHost is not null && !_audioHardwareStarted)
+            {
+                prefill = () => _audioHost.PrefillMainOutputDirectFromDecoder(AudioPrefillTimeout);
+                startHardware = () =>
+                {
+                    _audioHost.StartHardwareOutput();
+                    _audioHardwareStarted = true;
+                };
+            }
+
+            _mediaPlayer.Session.Play(prefill, startHardware);
         }
         if (_imageClock is not null)
             _imageClock.Start();

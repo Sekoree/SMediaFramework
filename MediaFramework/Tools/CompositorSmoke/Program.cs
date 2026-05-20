@@ -91,7 +91,7 @@ if (!SDL.GLMakeCurrent(window, glContext))
 
 try
 {
-    var gl = SilkGL.GetApi(name => SDL.GLGetProcAddress(name));
+    var gl = SilkGL.GetApi(SDL.GLGetProcAddress);
 
     // 3. Composite: foreground (SourceOver) over background (Source). Both layers use the full canvas.
     var output = new VideoFormat(w, h, PixelFormat.Bgra32, bgFrame.Format.FrameRate);
