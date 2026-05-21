@@ -7,7 +7,11 @@ namespace HaPlay.Views.Dialogs;
 
 public partial class ActionCueBuilderDialog : Window
 {
-    public ActionCueBuilderDialog() => InitializeComponent();
+    public ActionCueBuilderDialog()
+    {
+        InitializeComponent();
+        DialogStatePersister.Attach(this, nameof(ActionCueBuilderDialog), MinWidth, MinHeight);
+    }
 
     private void CancelClick(object? sender, RoutedEventArgs e)
     {

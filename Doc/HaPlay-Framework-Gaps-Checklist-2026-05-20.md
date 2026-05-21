@@ -26,17 +26,48 @@ Status legend:
   the same `AudioPlayer` / `VideoRouter` / `VideoPlayer` surface.
 - [x] **`PortAudioInput` disconnect detection** — expose stream active/error
   state and callback-fault diagnostics so UI can enter "waiting for source".
-- [ ] **NDI input video receiver** — implement `NDIVideoReceiver` to pair with
-  the existing `NDIAudioReceiver`; until then NDI input items remain audio-only.
+- [x] **NDI input video receiver** — landed 2026-05-21. `NDIVideoReceiver` +
+  `NDIVideoFrameUnpack` (`S.Media.NDI`); HaPlay opens video-only, audio-only, or
+  combined NDI input items via `TryCreateLive`.
+  - 2026-05-21 follow-up fix: live open now wires `HaPlayPlaybackSession` through
+    `MediaPlayer.PlaybackSession` (instead of container-only `Session`) so NDI/live
+    sessions no longer throw `InvalidOperationException` during post-open wiring.
+  - 2026-05-21 follow-up fix: live playback paths no longer read `MediaPlayer.Decoder`
+    during output priming / hot output wiring. Live sessions now use
+    `LiveHasVideo` / `SourceAudioFormat` guards, which prevents
+    `This MediaPlayer was opened from live sources and has no container decoder.`
+  - 2026-05-21 follow-up fix: live transport stop no longer routes through seek.
+    `Stop` now pauses live sessions and `PlaybackRouter` treats zero-seek on live
+    as pause, preventing non-seekable-source exceptions (`does not implement
+    ISeekableSource`).
+  - 2026-05-21 follow-up fix: packed-422 GL shaders renamed sampler uniform
+    `packed` → `packedTex` (`uyvy422` / `yuyv422`) to avoid GLSL reserved-token
+    compile failures on Mesa (`unexpected PACKED_TOK`).
+  - 2026-05-21 follow-up fix: `NDIVideoFrameUnpack` now unpacks
+    `NDIFourCCVideoType.Yv12` (Y + V + U native layout mapped to
+    `VideoFrame` planes Y/U/V). This closes the live NDI "audio present, black
+    video" path when senders negotiate YV12.
+  - 2026-05-21 follow-up fix: `NDIVideoReceiver` now requests
+    `NDIRecvColorFormat.UyvyBgra` (instead of `Fastest`) so receiver-side
+    conversion stays in known ingest formats; added unpack fallback mappings
+    for `Bgrx`/`Rgbx` and first-drop diagnostics when unpack fails.
 
 ## Phase C Polish / Follow-Ups
 
-- [ ] **NDI pixel-format / resolution lock** — propagate output-definition
-  locks through video routing/conversion so NDI senders present a predictable
-  receiver format. UI side already stores `PixelFormatLock` / `ResolutionLockWidth`
-  / `ResolutionLockHeight` on `NDIOutputDefinition` and round-trips through the
-  project file; the router-side branch-format pick still needs to honour them.
-- [ ] **Output preset compositor path** — wire `CompositorVideoSink` /
+- [x] **NDI pixel-format / resolution lock** — landed 2026-05-21.
+  `LockedFormatVideoSink` wraps each NDI output's `VideoSink` whenever the
+  definition has a `PixelFormatLock` / `ResolutionLockWidth` / `Height` set;
+  filters `AcceptedPixelFormats` so the router negotiator picks the locked
+  format, and letterboxes incoming frames into the locked raster via the
+  existing `CpuVideoCompositor` pipeline (same path `OutputPresetVideoSource`
+  uses for the file-open preset). Add/Edit NDI Output dialog now exposes
+  editable pixel-format and resolution combos backed by `NDIPixelFormatChoice`
+  / `NDIResolutionChoice`; "Auto" entries map to null locks so the negotiator
+  picks per-source.
+- [x] **Output preset compositor path** (HaPlay file open, 2026-05-21) —
+        `OutputPresetVideoSource` + `MediaPlayer.TryOpen(..., videoSourceOverride)`.
+        Idle-image-as-compositor-layer (§8.10) still open.
+- [ ] **Output preset compositor path (idle layer / PiP)** — wire `CompositorVideoSink` /
   `IVideoCompositor` as the fixed-format program output path for 1080p60,
   720p60, custom, and idle-image composition. Blocks: Output preset (§4.3.5
   preset combobox is UI-only today), fade transition, idle-image as
@@ -48,6 +79,12 @@ Status legend:
   consumes that before falling back to output-definition defaults. Remaining
   follow-up: promote this to an explicit framework-level capability contract for
   sinks that can renegotiate channels dynamically at runtime.
+  - 2026-05-21 follow-up: framework contract introduced as
+    `IAudioSinkChannelCapabilities` (`AudioSinkChannelCapabilities`), implemented
+    on `PortAudioOutput`, `NDIAudioSink`, and common wrappers (`ResamplingAudioSink`,
+    `AdaptiveRateAudioSink`, `NDIAudioAggregatingSink`, `BusSink`). HaPlay now
+    consults live sink capabilities via `AudioRouter.TryGetSink(...)` in
+    `TryGetEffectiveOutputChannelCount(...)` before using definition-time defaults.
 - [x] **Per-cell channel-mix matrix** — shipped 2026-05-20.
   `AudioRouter` now supports multiple routes per `(source, sink)` pair via
   `AddRoute(source, sink, routeId, map, gain)` + `RemoveRouteById` /
@@ -64,13 +101,13 @@ Status legend:
 
 ## Phase D Blockers
 
-- [ ] **Cue-player pre-roll hooks** — use the live/file player open paths above
+- [x] **Cue-player pre-roll hooks** (2026-05-21) — file cues via `CuePreRollCache`;
+        NDI audio pre-connect via `NdiInputPreConnectCache` (§6.11).
   to keep a bounded cache of ready-to-fire sessions.
 - [~] **Action-cue endpoint health** — first emitter path landed in HaPlay:
   action cues now execute OSC (`OSCLib`) and MIDI (`PMLib`) with project-level
   endpoint registry lookup (`HaPlayProject.ActionEndpoints`) and surfaced error
-  strings on trigger. OSC/MIDI sidebar workspaces (`OscConnectionsView`,
-  `MidiDevicesView`) now expose endpoint management + MIDI device catalog
-  refresh, but remaining framework-facing gap is still richer
-  endpoint-health telemetry/rebind states surfaced as explicit health signals
-  (not just error text).
+  strings on trigger. OSC/MIDI sidebar workspaces expose management + **Test
+  connection/device** probes (2026-05-21); broken cue endpoint refs flag
+  `IsEndpointBroken` after load. Persistent health LEDs + rebind-missing-endpoints
+  dialog for action targets landed 2026-05-21.

@@ -14,7 +14,7 @@
       <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
     </Border>
 
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,220,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,220,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
       <TextBlock Grid.Column="0" Text="Cue list" VerticalAlignment="Center" />
       <ComboBox Grid.Column="1"
                 ItemsSource="{Binding CueLists}"
@@ -31,6 +31,13 @@
       <Button Grid.Column="4" Content="Load…" Command="{Binding LoadCueListCommand}" />
       <Button Grid.Column="5" Content="Save" Command="{Binding SaveCueListCommand}" />
       <Button Grid.Column="6" Content="Save As…" Command="{Binding SaveCueListAsCommand}" />
+      <TextBlock Grid.Column="7" Text="Pre-roll N" VerticalAlignment="Center" ToolTip.Tip="File media cues to pre-open ahead of standby (§5.7)." />
+      <NumericUpDown Grid.Column="8"
+                       Minimum="0"
+                       Maximum="16"
+                       Width="72"
+                       IsEnabled="{Binding SelectedCueList, Converter={x:Static ObjectConverters.IsNotNull}}"
+                       Value="{Binding SelectedCueList.PreRollCount, Mode=TwoWay}" />
     </Grid>
 
     <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
@@ -56,8 +63,45 @@
     <Grid ColumnDefinitions="3*,2*" ColumnSpacing="8">
       <TreeDataGrid Name="CueTreeGrid" Grid.Column="0" MinHeight="360" />
 
-      <Grid Grid.Column="1" RowDefinitions="*,*" RowSpacing="8">
-        <DockPanel Grid.Row="0">
+      <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*,*" RowSpacing="8">
+        <Grid Grid.Row="0"
+              ColumnDefinitions="Auto,*,Auto,*"
+              ColumnSpacing="8"
+              Margin="0,0,0,4"
+              IsVisible="{Binding HasSelectedMediaCue}">
+          <TextBlock Grid.Column="0" Text="Fade in (ms)" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="1"
+                         Minimum="0"
+                         Maximum="120000"
+                         Width="100"
+                         Value="{Binding SelectedCueNode.FadeInMs, Mode=TwoWay}" />
+          <TextBlock Grid.Column="2" Text="Fade out (ms)" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="3"
+                         Minimum="0"
+                         Maximum="120000"
+                         Width="100"
+                         Value="{Binding SelectedCueNode.FadeOutMs, Mode=TwoWay}" />
+        </Grid>
+        <Grid Grid.Row="1"
+              ColumnDefinitions="Auto,*,Auto,Auto,*"
+              ColumnSpacing="8"
+              Margin="0,0,0,4"
+              IsVisible="{Binding HasSelectedMediaCue}">
+          <TextBlock Grid.Column="0" Text="Start (ms)" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="1"
+                         Minimum="0"
+                         Maximum="86400000"
+                         Width="100"
+                         Value="{Binding SelectedCueNode.StartOffsetMs, Mode=TwoWay}" />
+          <CheckBox Grid.Column="2" Content="Loop" VerticalAlignment="Center"
+                    IsChecked="{Binding SelectedCueNode.Loop, Mode=TwoWay}" />
+          <TextBlock Grid.Column="3" Text="End" VerticalAlignment="Center" />
+          <ComboBox Grid.Column="4"
+                    MinWidth="140"
+                    ItemsSource="{Binding CueEndBehaviors}"
+                    SelectedItem="{Binding SelectedCueNode.EndBehavior, Mode=TwoWay}" />
+        </Grid>
+        <DockPanel Grid.Row="2">
           <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,6">
             <TextBlock Grid.Column="0" Text="Virtual Outputs (VOut)" FontWeight="SemiBold" VerticalAlignment="Center" />
             <Button Grid.Column="1" Content="+ VOut" Command="{Binding AddVirtualOutputCommand}" />
@@ -66,7 +110,7 @@
           <TreeDataGrid Name="VirtualOutputsTreeGrid" MinHeight="140" />
         </DockPanel>
 
-        <DockPanel Grid.Row="1">
+        <DockPanel Grid.Row="3">
           <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,6">
             <TextBlock Grid.Column="0" Text="Cue Route Connections" FontWeight="SemiBold" VerticalAlignment="Center" />
             <Button Grid.Column="1" Content="+ Route" Command="{Binding AddRouteConnectionCommand}" />

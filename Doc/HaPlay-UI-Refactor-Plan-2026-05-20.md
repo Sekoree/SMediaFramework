@@ -1074,13 +1074,15 @@ one branch.
    multi-target endpoint registry (§12.6) and the Target
    Configuration dialog (§12.2). Endpoints referenced by GUID from
    cues; rebind-missing-endpoints flow parallels rebind-missing-
-   outputs. *(Partially landed 2026-05-21: OSC + MIDI first-send paths
-   wired via `OSCLib` / `PMLib`; project-level endpoint registry
-   persisted and referenced by cue `EndpointId`; OSC/MIDI sidebar workspaces
-   host endpoint management + MIDI catalog refresh; the Cue workspace uses
-   `ActionCueBuilderDialog` (**Edit action…**) instead of an inline builder
-   panel. Target-config/rebind UX depth and endpoint-health surface remain
-   open.)*
+   outputs. *(Landed 2026-05-21: OSC + MIDI first-send paths via
+   `OSCLib` / `PMLib`; project-level endpoint registry persisted and
+   referenced by cue `EndpointId`; OSC/MIDI sidebar workspaces host endpoint
+   management + MIDI catalog + per-endpoint test actions; unified
+   `TargetConfigurationDialog` (OSC/MIDI tabs) also available from View menu;
+   Cue workspace uses `ActionCueBuilderDialog` (**Edit action…**) instead of
+   an inline panel; cue route overrides/fades/pre-roll/auto-follow/auto-continue
+   landed, along with rebind dialogs and endpoint/output health LEDs. Remaining
+   open work is the framework-facing rich endpoint-health telemetry contract.)*
 
 ### Phase E — Polish & Follow-ups (§8)
 
@@ -1251,8 +1253,9 @@ before the implementation phase starts:
   Cue workspace stays focused on the cue tree, VOut registry, and per-cue route
   overrides; **Project** is file metadata + recent projects only. Keyboard
   shortcuts: `Ctrl+1` Players, `Ctrl+2` Cues, `Ctrl+3` Outputs, `Ctrl+4` OSC,
-  `Ctrl+5` MIDI, `Ctrl+6` Project. A unified "Target Configuration" dialog (§12.2)
-  remains optional; per-kind editing happens in the sidebar workspaces today.
+  `Ctrl+5` MIDI, `Ctrl+6` Project. Unified `TargetConfigurationDialog` (§12.2)
+  landed on 2026-05-21 (View menu) with OSC/MIDI tabs; per-kind sidebar
+  workspaces remain the primary editing flow.
 
 ### 12.6 Multi-Target OSC / MIDI Endpoint Registry
 

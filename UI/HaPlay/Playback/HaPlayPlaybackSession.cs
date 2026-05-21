@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Playback;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Audio;
@@ -25,6 +26,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     private readonly List<OutputLineViewModel> _acquiredLocalVideoLines = new();
     private readonly List<OutputLineViewModel> _acquiredPortAudioLines = new();
     private readonly OutputManagementViewModel _outputs;
+    private readonly List<IDisposable> _playbackOwnedDisposables = new();
     private readonly List<ResamplingAudioSink> _portAudioResamplers = new();
     private readonly List<ResamplingAudioSink> _ndiAudioResamplers = new();
     private readonly List<NDIAudioSink> _ndiAudioSinks = new();
@@ -37,7 +39,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.HaPlayPlaybackSession");
 
-    private HaPlayPlaybackSession(MediaPlayer player, MediaContainerSession router, OutputManagementViewModel outputs)
+    private HaPlayPlaybackSession(MediaPlayer player, PlaybackRouter router, OutputManagementViewModel outputs)
     {
         Player = player;
         Router = router;
@@ -45,7 +47,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     }
 
     public MediaPlayer Player { get; }
-    public MediaContainerSession Router { get; }
+    public PlaybackRouter Router { get; }
 
     /// <summary>Phase C.5 — true when this session was opened via <see cref="MediaPlayer.TryOpenLive"/>
     /// (PortAudio capture / NDI receiver) rather than a container decoder. Live sessions have no
@@ -58,7 +60,93 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     /// count (e.g. <see cref="AudioMatrixViewModel.Resize"/>) work for both kinds.</summary>
     public AudioFormat SourceAudioFormat { get; private init; }
 
+    /// <summary>True when this live session drives video outputs.</summary>
+    public bool LiveHasVideo { get; private init; }
+
+    /// <summary>True when this live session drives audio outputs.</summary>
+    public bool LiveHasAudio { get; private init; }
+
+    private IAudioSource? _liveAudioSource;
+    private IVideoSource? _liveVideoSource;
+    private PortAudioInput? _livePortAudioInput;
+
+    /// <summary>
+    /// True when the live capture/receiver should be treated as ended (PortAudio fault, disposed source).
+    /// Used for cue <see cref="CueTriggerMode.AutoFollow"/> on live media cues.
+    /// </summary>
+    public bool IsLiveSourceDisconnected
+    {
+        get
+        {
+            if (!IsLive)
+                return false;
+
+            _livePortAudioInput?.CheckStreamActive();
+            if (_livePortAudioInput is { HasInputFault: true })
+                return true;
+            if (_liveAudioSource is { IsExhausted: true })
+                return true;
+            if (_liveVideoSource is { IsExhausted: true })
+                return true;
+            return false;
+        }
+    }
+
     public IReadOnlyList<LogoFallbackVideoSink> LogoSinks => _logoSinks;
+
+    internal sealed class PlaybackRouter
+    {
+        private readonly IAvPlaybackSession _session;
+        private readonly MediaContainerSession? _container;
+
+        private PlaybackRouter(MediaContainerSession container)
+        {
+            _container = container ?? throw new ArgumentNullException(nameof(container));
+            _session = container.Session;
+        }
+
+        private PlaybackRouter(IAvPlaybackSession session)
+        {
+            _session = session ?? throw new ArgumentNullException(nameof(session));
+        }
+
+        public static PlaybackRouter ForContainer(MediaContainerSession container) => new(container);
+
+        public static PlaybackRouter ForLive(IAvPlaybackSession session) => new(session);
+
+        public void Play(Action? prefillBeforeHardware = null, Action? startHardware = null) =>
+            _session.Play(prefillBeforeHardware, startHardware);
+
+        public void PauseSkippingSharedMuxFlush(CancellationToken cancellationToken = default)
+        {
+            if (_container is not null)
+            {
+                _container.PauseSkippingSharedMuxFlush(cancellationToken);
+                return;
+            }
+
+            _session.Pause(cancellationToken, flushSharedMuxAfterPause: null);
+        }
+
+        public void SeekCoordinatedSkippingSharedMuxFlush(TimeSpan position, CancellationToken cancellationToken = default)
+        {
+            if (_container is not null)
+            {
+                _container.SeekCoordinatedSkippingSharedMuxFlush(position, cancellationToken);
+                return;
+            }
+
+            // Live sessions are fed by non-seekable sources (PortAudio/NDI receivers). For transport
+            // flows that conceptually "seek to zero" (Stop), degrade to pause instead of throwing.
+            if (position == TimeSpan.Zero)
+            {
+                _session.Pause(cancellationToken, flushSharedMuxAfterPause: null);
+                return;
+            }
+
+            _session.SeekCoordinated(position, cancellationToken, flushSharedMuxAfterPause: null);
+        }
+    }
 
     /// <summary>
     /// Phase B (§3.6) — true when this session has acquired any side of <paramref name="line"/>'s
@@ -76,17 +164,82 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     /// Returns the runtime-confirmed width when the line is currently wired; otherwise falls back to
     /// the output definition's declared audio width.
     /// </summary>
+    internal bool TryGetVideoOutputId(OutputLineViewModel line, out string outputId)
+    {
+        outputId = string.Empty;
+        if (_lineWiring.TryGetValue(line, out var wiring) && !string.IsNullOrEmpty(wiring.VideoOutputId))
+        {
+            outputId = wiring.VideoOutputId;
+            return true;
+        }
+
+        return false;
+    }
+
+    internal bool TryGetAudioSinkId(OutputLineViewModel line, out string sinkId)
+    {
+        sinkId = string.Empty;
+        if (_lineWiring.TryGetValue(line, out var wiring) && !string.IsNullOrEmpty(wiring.AudioSinkId))
+        {
+            sinkId = wiring.AudioSinkId;
+            return true;
+        }
+
+        return false;
+    }
+
     public bool TryGetEffectiveOutputChannelCount(OutputLineViewModel line, out int channels)
     {
         channels = 0;
-        if (_lineWiring.TryGetValue(line, out var wiring) && wiring.SinkChannelCount > 0)
+        if (_lineWiring.TryGetValue(line, out var wiring))
         {
-            channels = wiring.SinkChannelCount;
-            return true;
+            if (wiring.AudioSinkId is { Length: > 0 } sinkId
+                && Player.Audio?.Router is { } ar
+                && ar.TryGetSink(sinkId, out var sink)
+                && sink is IAudioSinkChannelCapabilities caps
+                && caps.ChannelCapabilities.CurrentChannels > 0)
+            {
+                channels = caps.ChannelCapabilities.CurrentChannels;
+                wiring.SinkChannelCount = channels;
+                return true;
+            }
+
+            if (wiring.SinkChannelCount > 0)
+            {
+                channels = wiring.SinkChannelCount;
+                return true;
+            }
         }
 
         channels = GetSinkChannelCount(line.Definition);
         return channels > 0;
+    }
+
+    private int SourceChannelCountOrFallback(int fallback = 2)
+    {
+        if (SourceAudioFormat.Channels > 0)
+            return SourceAudioFormat.Channels;
+        if (Player.HasContainerDecoder)
+            return Player.Decoder.Audio?.Format.Channels ?? fallback;
+        return fallback;
+    }
+
+    private bool TryGetSourceAudioFormat(out AudioFormat format)
+    {
+        if (SourceAudioFormat.IsValid)
+        {
+            format = SourceAudioFormat;
+            return true;
+        }
+
+        if (Player.HasContainerDecoder && Player.Decoder.Audio is { } a && a.Format.IsValid)
+        {
+            format = a.Format;
+            return true;
+        }
+
+        format = default;
+        return false;
     }
 
     /// <summary>Phase C.5 dispatcher — opens a playback session from a discriminated playlist item.
@@ -97,18 +250,19 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
         OutputManagementViewModel outputs,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
-        out string? errorMessage)
+        out string? errorMessage,
+        HaPlayFilePlaybackOptions? filePlayback = null)
     {
         session = null;
         errorMessage = null;
         switch (item)
         {
             case FilePlaylistItem f:
-                return TryCreate(f.Path, selectedOutputs, outputs, out session, out errorMessage);
+                return TryCreate(f.Path, selectedOutputs, outputs, out session, out errorMessage, filePlayback);
             case PortAudioInputPlaylistItem pa:
-                return TryCreateLive(pa, selectedOutputs, outputs, out session, out errorMessage);
+                return TryCreateLive(pa, selectedOutputs, outputs, preconnectedInput: null, out session, out errorMessage);
             case NDIInputPlaylistItem nd:
-                return TryCreateLive(nd, selectedOutputs, outputs, out session, out errorMessage);
+                return TryCreateLive(nd, selectedOutputs, outputs, preconnectedAudio: null, out session, out errorMessage);
             default:
                 errorMessage = $"Unsupported playlist item kind: {item?.GetType().Name ?? "(null)"}";
                 return false;
@@ -120,7 +274,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
         OutputManagementViewModel outputs,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
-        out string? errorMessage)
+        out string? errorMessage,
+        HaPlayFilePlaybackOptions? filePlayback = null)
     {
         session = null;
         errorMessage = null;
@@ -221,8 +376,12 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     {
                         if (!ndiByDefinitionId.TryGetValue(nd.Id, out var ndi))
                             continue;
-                        var pump = new VideoSinkPump(ndi.VideoSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}", log: null,
-                            disposeInnerOnDispose: false);
+                        // §4.3.5 follow-up — apply the NDI definition's pixel-format / resolution lock by
+                        // wrapping NDIVideoSender. Negotiation respects the locked pixel format; frames are
+                        // letterboxed into the locked dimensions before the pump fans them to the receiver.
+                        var lockedSink = WrapWithNDILockIfNeeded(ndi.VideoSink, nd, $"ndi-{nd.Id:N}");
+                        var pump = new VideoSinkPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}", log: null,
+                            disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.VideoSink));
                         var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
                         videoChains.Add((line, $"ndi_{nd.Id:N}", logo));
                         Trace.LogDebug("TryCreate: NDI video '{Name}' wired as videoChain[{Idx}] (pumpCap=8)",
@@ -235,11 +394,21 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         Trace.LogDebug("TryCreate: videoChains={Count} lead=(discard)", videoChains.Count);
 
+        var fileOpts = filePlayback ?? HaPlayFilePlaybackOptions.Default;
+        var pipelineOwned = new List<IDisposable>();
+        IVideoSource? videoOverride = null;
+        if (hasVideo)
+        {
+            videoOverride = PlaybackVideoPipeline.BuildFileVideoSource(decoder, fileOpts, pipelineOwned);
+        }
+
         if (!MediaPlayer.TryOpen(decoder, mpOpt, videoNegotiationLead: null, disposeNegotiationLead: true,
-                MediaPlayerDecoderOwnership.BundleDisposesDecoder, out var player, out errorMessage))
+                MediaPlayerDecoderOwnership.BundleDisposesDecoder, out var player, out errorMessage,
+                videoSourceOverride: videoOverride))
         {
             // BundleDisposesDecoder disposes the decoder for us on failure.
             Trace.LogWarning("TryCreate: MediaPlayer.TryOpen failed: {Error}", errorMessage ?? "(no message)");
+            DisposePipelineOwned(pipelineOwned);
             ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
             ReleaseAcquiredCarriers(outputs, acquired);
             return false;
@@ -250,11 +419,12 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         {
             var router = player.VideoRouter;
             var inputId = player.VideoRouterInputId;
-            pendingPlayback = new HaPlayPlaybackSession(player, player.Session, outputs)
+            pendingPlayback = new HaPlayPlaybackSession(player, PlaybackRouter.ForContainer(player.Session), outputs)
             {
                 IsLive = false,
                 SourceAudioFormat = decoder.HasAudio ? decoder.Audio.Format : default,
             };
+            pendingPlayback._playbackOwnedDisposables.AddRange(pipelineOwned);
 
             foreach (var (line, id, sink) in videoChains)
             {
@@ -290,6 +460,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         {
             Trace.LogError(ex, "TryCreate: post-open wiring failed, tearing down");
             errorMessage = ex.Message;
+            DisposePipelineOwned(pipelineOwned);
             pendingPlayback?.DisposePartialBeforePlayerDispose();
             player.Dispose();
             ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
@@ -298,167 +469,164 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
     }
 
+    private static void DisposePipelineOwned(List<IDisposable> owned)
+    {
+        foreach (var d in owned)
+        {
+            try { d.Dispose(); }
+            catch { /* best effort */ }
+        }
+        owned.Clear();
+    }
+
     /// <summary>Phase C.5 (§6.4) — wire a PortAudio capture device as the audio source. Audio-only (no
     /// video chains). Source is owned by the session (<see cref="MediaPlayer.TryOpenLive"/> with
     /// <c>disposeSourcesOnDispose=true</c>), so closing the session stops + closes the stream.</summary>
-    private static bool TryCreateLive(
+    /// <param name="preconnectedInput">When set (§6.11 pre-connect), session takes ownership of the running capture.</param>
+    public static bool TryCreateLive(
         PortAudioInputPlaylistItem item,
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
         OutputManagementViewModel outputs,
+        PortAudioInput? preconnectedInput,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
         out string? errorMessage)
     {
         session = null;
         errorMessage = null;
         var lines = selectedOutputs.ToList();
-        Trace.LogInformation("TryCreateLive(PortAudio): device='{Dev}' channels={Ch} rate={SR}",
-            item.DeviceName, item.Channels, item.SampleRate);
 
-        // Resolve device — name match first (§6.4 rule), then GlobalDeviceIndex fallback.
-        int? deviceIndex = null;
-        foreach (var d in PortAudioDeviceCatalog.EnumerateInputDevices())
-        {
-            if (string.Equals(d.Name, item.DeviceName, StringComparison.OrdinalIgnoreCase))
-            {
-                deviceIndex = d.GlobalDeviceIndex;
-                break;
-            }
-        }
-        if (deviceIndex is null && item.GlobalDeviceIndex is { } gi)
-            deviceIndex = gi;
-
-        if (deviceIndex is null)
-        {
-            errorMessage = $"PortAudio input '{item.DeviceName}' not found.";
-            return false;
-        }
-
-        PortAudioInput? input = null;
+        PortAudioInput? input = preconnectedInput;
         try
         {
-            var format = new AudioFormat(item.SampleRate, item.Channels);
-            input = new PortAudioInput(format, deviceIndex, item.SuggestedLatency);
-            input.Start();
+            if (input is null)
+            {
+                Trace.LogInformation("TryCreateLive(PortAudio): device='{Dev}' channels={Ch} rate={SR}",
+                    item.DeviceName, item.Channels, item.SampleRate);
+                if (!PortAudioInputConnector.TryOpen(item, out input, out var fmt, out errorMessage))
+                    return false;
+
+                return TryCreateLiveCore(
+                    new LiveOpenSources(input, fmt, null, DisposeSourcesOnDispose: true),
+                    lines,
+                    outputs,
+                    out session,
+                    out errorMessage);
+            }
+
+            Trace.LogInformation("TryCreateLive(PortAudio): using pre-connected capture for '{Dev}'", item.DeviceName);
+            if (!input.IsRunning)
+            {
+                errorMessage = $"PortAudio input '{item.DeviceName}' pre-connect is no longer running.";
+                return false;
+            }
 
             return TryCreateLiveCore(
-                audioSource: input,
-                sourceFormat: format,
-                takesOwnershipOfAudio: true,
-                lines, outputs, out session, out errorMessage);
+                new LiveOpenSources(input, input.Format, null, DisposeSourcesOnDispose: true),
+                lines,
+                outputs,
+                out session,
+                out errorMessage);
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "TryCreateLive(PortAudio) failed");
             errorMessage = ex.Message;
-            try { input?.Dispose(); } catch { /* best effort */ }
+            if (preconnectedInput is null)
+            {
+                try { input?.Dispose(); } catch { /* best effort */ }
+            }
             return false;
         }
     }
 
-    /// <summary>Phase C.5 (§6.3, §6.5) — wire an NDI receiver as the audio source. Currently
-    /// audio-only — video-side wiring lands once <c>NDIVideoReceiver</c> is in the framework
-    /// (§9.6 framework gap). The source is resolved via <see cref="NDIFinder"/> against
-    /// <see cref="NDIInputPlaylistItem.SourceName"/>; offline sources return an error so the caller
-    /// (task #5) can enter the waiting-for-source state.</summary>
-    private static bool TryCreateLive(
+    /// <summary>Sets output opacity on all logo-wrapped video branches (per-cue video fade).</summary>
+    public void SetLogoOutputOpacity(float opacity)
+    {
+        var o = Math.Clamp(opacity, 0f, 1f);
+        foreach (var logo in _logoSinks)
+            logo.SetOutputOpacity(o);
+    }
+
+    /// <summary>Phase C.5 (§6.3, §6.5) — wire NDI audio and/or video receivers as live sources.</summary>
+    /// <param name="preconnectedAudio">When set (§6.11 pre-connect), session takes ownership of audio capture.</param>
+    public static bool TryCreateLive(
         NDIInputPlaylistItem item,
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
         OutputManagementViewModel outputs,
+        NDIAudioReceiver? preconnectedAudio,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
         out string? errorMessage)
     {
         session = null;
         errorMessage = null;
-        if (string.IsNullOrWhiteSpace(item.SourceName))
-        {
-            errorMessage = "NDI input has no source name.";
-            return false;
-        }
+        var lines = selectedOutputs.ToList();
+        var wantAudio = !item.VideoOnly;
+        var wantVideo = !item.AudioOnly;
 
-        if (item.VideoOnly)
-        {
-            errorMessage = "NDI input is set to video-only, but NDIVideoReceiver is not yet shipped.";
-            return false;
-        }
-
-        Trace.LogInformation("TryCreateLive(NDI): source='{Src}' lowBw={Low}", item.SourceName, item.LowBandwidth);
-
-        NDIFinder? finder = null;
-        NDIAudioReceiver? receiver = null;
+        NDIAudioReceiver? audioReceiver = preconnectedAudio;
+        NDIVideoReceiver? videoReceiver = null;
         try
         {
-            var rc = NDIFinder.Create(out finder, new NDILib.NDIFinderSettings { ShowLocalSources = true });
-            if (rc != 0 || finder is null)
+            if (wantAudio && audioReceiver is null)
             {
-                errorMessage = $"NDI finder unavailable (rc={rc}).";
+                Trace.LogInformation("TryCreateLive(NDI): audio source='{Src}'", item.SourceName);
+                if (!NdiInputConnector.TryConnectAudio(item, out audioReceiver, out var audioFmt, out errorMessage))
+                    return false;
+            }
+            else if (wantAudio && audioReceiver is not null && !audioReceiver.IsConnected)
+            {
+                errorMessage = $"NDI source '{item.SourceName}' pre-connect audio is no longer connected.";
                 return false;
             }
 
-            // Short waits: NDIlib publishes sources within ~250 ms of finder creation when they're present.
-            // Loop a few times so a transient packet loss doesn't pretend the source is offline.
-            NDILib.NDIDiscoveredSource? match = null;
-            for (var attempt = 0; attempt < 4; attempt++)
+            if (wantVideo)
             {
-                finder.WaitForSources(250);
-                foreach (var src in finder.GetCurrentSources())
+                Trace.LogInformation("TryCreateLive(NDI): video source='{Src}'", item.SourceName);
+                if (!NdiInputConnector.TryConnectVideo(item, out videoReceiver, out errorMessage))
                 {
-                    if (string.Equals(src.Name, item.SourceName, StringComparison.Ordinal))
-                    {
-                        match = src;
-                        break;
-                    }
+                    if (preconnectedAudio is null)
+                        try { audioReceiver?.Dispose(); } catch { /* best effort */ }
+                    return false;
                 }
-                if (match is not null) break;
             }
 
-            if (match is null)
+            if (!wantAudio && !wantVideo)
             {
-                errorMessage = $"NDI source '{item.SourceName}' not currently visible on the network.";
+                errorMessage = "NDI input has neither audio nor video enabled.";
                 return false;
             }
 
-            // The audio receiver pumps as soon as it's created; format is unknown until the first frame
-            // arrives. Wait briefly so AudioPlayer ctor below sees a valid sample rate.
-            receiver = new NDIAudioReceiver(match.Value);
-            var connectionDeadline = DateTime.UtcNow.AddSeconds(2);
-            while (!receiver.IsConnected && DateTime.UtcNow < connectionDeadline)
-                Thread.Sleep(50);
+            var audioFmtLive = wantAudio && audioReceiver is not null ? audioReceiver.Format : default;
+            IAudioSource? audioSource = wantAudio ? audioReceiver : null;
+            IVideoSource? videoSource = wantVideo ? videoReceiver : null;
 
-            if (!receiver.IsConnected)
-            {
-                errorMessage = $"NDI source '{item.SourceName}' resolved but delivered no audio in 2 s.";
-                return false;
-            }
-
-            var sourceFormat = receiver.Format;
-            var lines = selectedOutputs.ToList();
             return TryCreateLiveCore(
-                audioSource: receiver,
-                sourceFormat: sourceFormat,
-                takesOwnershipOfAudio: true,
-                lines, outputs, out session, out errorMessage);
+                new LiveOpenSources(audioSource, audioFmtLive, videoSource, DisposeSourcesOnDispose: true),
+                lines,
+                outputs,
+                out session,
+                out errorMessage);
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "TryCreateLive(NDI) failed");
             errorMessage = ex.Message;
-            try { receiver?.Dispose(); } catch { /* best effort */ }
+            if (preconnectedAudio is null)
+                try { audioReceiver?.Dispose(); } catch { /* best effort */ }
+            try { videoReceiver?.Dispose(); } catch { /* best effort */ }
             return false;
-        }
-        finally
-        {
-            try { finder?.Dispose(); } catch { /* best effort */ }
         }
     }
 
-    /// <summary>Phase C.5 — shared wire-up for live audio sources. Acquires PortAudio output / NDI
-    /// carrier outputs same as the file path (audio side only — live items don't drive video chains
-    /// until <c>NDIVideoReceiver</c> ships), then calls <see cref="MediaPlayer.TryOpenLive"/> and the
-    /// live-format-aware <see cref="WireAudio"/> overload.</summary>
+    private readonly record struct LiveOpenSources(
+        IAudioSource? Audio,
+        AudioFormat AudioFormat,
+        IVideoSource? Video,
+        bool DisposeSourcesOnDispose);
+
+    /// <summary>Shared wire-up for live PortAudio / NDI sources (audio, video, or both).</summary>
     private static bool TryCreateLiveCore(
-        IAudioSource audioSource,
-        AudioFormat sourceFormat,
-        bool takesOwnershipOfAudio,
+        LiveOpenSources sources,
         List<OutputLineViewModel> lines,
         OutputManagementViewModel outputs,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
@@ -467,62 +635,131 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         session = null;
         errorMessage = null;
 
-        // Live items: audio-only for now. Acquire NDI carriers in audio-only mode (no video side wiring)
-        // and skip local video / NDI video chains entirely. PortAudio outputs go through the usual path.
-        var ndiByDefinitionId = new Dictionary<Guid, NDIOutput>();
-        var acquired = new List<OutputLineViewModel>();
-        foreach (var line in lines)
+        var hasAudio = sources.Audio is not null;
+        var hasVideo = sources.Video is not null;
+        if (!hasAudio && !hasVideo)
         {
-            if (line.Definition is not NDIOutputDefinition nd) continue;
-            if (ndiByDefinitionId.ContainsKey(nd.Id)) continue;
-            if (nd.StreamMode == NDIOutputStreamMode.VideoOnly)
-            {
-                Trace.LogTrace("TryCreateLiveCore: NDI '{Name}' is video-only — skipping (live audio source has no video to drive)",
-                    nd.DisplayName);
-                continue;
-            }
-
-            var ndi = outputs.TryAcquireNDICarrierForPlayback(line, needsVideo: false, needsAudio: true);
-            if (ndi is null)
-            {
-                Trace.LogWarning("TryCreateLiveCore: NDI carrier '{Name}' unavailable", nd.DisplayName);
-                ReleaseAcquiredCarriers(outputs, acquired);
-                errorMessage = $"NDI output '{nd.DisplayName}' has no live carrier.";
-                return false;
-            }
-            ndiByDefinitionId[nd.Id] = ndi;
-            acquired.Add(line);
+            errorMessage = "Live open requires at least one of audio or video.";
+            return false;
         }
 
-        var mpOpt = new MediaPlayerOpenOptions(IncludeAudioRouter: true);
-        if (!MediaPlayer.TryOpenLive(audioSource, videoSource: null, mpOpt,
-                videoNegotiationLead: null, disposeNegotiationLead: true,
-                disposeSourcesOnDispose: takesOwnershipOfAudio,
-                out var player, out errorMessage))
+        var ndiByDefinitionId = new Dictionary<Guid, NDIOutput>();
+        var acquiredCarriers = new List<OutputLineViewModel>();
+        var acquiredLocalLines = new List<OutputLineViewModel>();
+        var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoSink Sink)>();
+
+        foreach (var line in lines)
         {
-            Trace.LogWarning("TryCreateLiveCore: MediaPlayer.TryOpenLive failed: {Error}", errorMessage ?? "(no message)");
-            ReleaseAcquiredCarriers(outputs, acquired);
-            if (takesOwnershipOfAudio && audioSource is IDisposable d)
-                try { d.Dispose(); } catch { /* best effort */ }
+            switch (line.Definition)
+            {
+                case NDIOutputDefinition nd when !ndiByDefinitionId.ContainsKey(nd.Id):
+                {
+                    var needsVideo = hasVideo && nd.StreamMode != NDIOutputStreamMode.AudioOnly;
+                    var needsAudio = hasAudio && nd.StreamMode != NDIOutputStreamMode.VideoOnly;
+                    if (!needsVideo && !needsAudio)
+                        continue;
+
+                    var ndi = outputs.TryAcquireNDICarrierForPlayback(line, needsVideo, needsAudio);
+                    if (ndi is null)
+                    {
+                        ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
+                        errorMessage = $"NDI output '{nd.DisplayName}' has no live carrier.";
+                        return false;
+                    }
+
+                    ndiByDefinitionId[nd.Id] = ndi;
+                    acquiredCarriers.Add(line);
+                    if (needsVideo)
+                    {
+                        var lockedSink = WrapWithNDILockIfNeeded(ndi.VideoSink, nd, $"ndi-{nd.Id:N}-live");
+                        var pump = new VideoSinkPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-live",
+                            disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.VideoSink));
+                        var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
+                        videoChains.Add((line, $"ndi_{nd.Id:N}_live", logo));
+                    }
+
+                    break;
+                }
+                case LocalVideoOutputDefinition lv when hasVideo:
+                {
+                    var sink = outputs.TryAcquireLocalVideoSinkForPlayback(line);
+                    if (sink is null)
+                    {
+                        ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
+                        errorMessage = $"Local video '{lv.DisplayName}' is unavailable.";
+                        return false;
+                    }
+
+                    acquiredLocalLines.Add(line);
+                    var prefix = lv.Engine == VideoOutputEngine.SdlOpenGl ? "sdl" : "ava";
+                    var logo = new LogoFallbackVideoSink(sink, disposeInnerOnDispose: false);
+                    videoChains.Add((line, $"{prefix}_{lv.Id:N}_live", logo));
+                    break;
+                }
+            }
+        }
+
+        IVideoSink? negotiationLead = null;
+        var disposeNegotiationLead = false;
+        if (hasVideo && videoChains.Count > 0)
+        {
+            negotiationLead = videoChains[0].Sink;
+            disposeNegotiationLead = true;
+        }
+
+        var mpOpt = new MediaPlayerOpenOptions(IncludeAudioRouter: hasAudio);
+        if (!MediaPlayer.TryOpenLive(
+                sources.Audio,
+                sources.Video,
+                mpOpt,
+                negotiationLead,
+                disposeNegotiationLead,
+                disposeSourcesOnDispose: sources.DisposeSourcesOnDispose,
+                out var player,
+                out errorMessage))
+        {
+            ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
             return false;
         }
 
         HaPlayPlaybackSession? pendingPlayback = null;
         try
         {
-            pendingPlayback = new HaPlayPlaybackSession(player, player.Session, outputs)
+            var router = player.VideoRouter;
+            var inputId = player.VideoRouterInputId;
+            pendingPlayback = new HaPlayPlaybackSession(player, PlaybackRouter.ForLive(player.PlaybackSession), outputs)
             {
                 IsLive = true,
-                SourceAudioFormat = sourceFormat,
+                LiveHasAudio = hasAudio,
+                LiveHasVideo = hasVideo,
+                SourceAudioFormat = hasAudio ? sources.AudioFormat : default,
             };
-            pendingPlayback._acquiredCarriers.AddRange(acquired);
-            // No video chains — live items are audio-only until NDIVideoReceiver lands. The router's
-            // primary output is the internal DiscardingVideoSink created by TryOpenLive when
-            // videoNegotiationLead is null.
+            pendingPlayback._liveAudioSource = sources.Audio;
+            pendingPlayback._liveVideoSource = sources.Video;
+            pendingPlayback._livePortAudioInput = sources.Audio as PortAudioInput;
+            pendingPlayback._acquiredCarriers.AddRange(acquiredCarriers);
+            pendingPlayback._acquiredLocalVideoLines.AddRange(acquiredLocalLines);
 
-            WireAudio(lines, ndiByDefinitionId, player, pendingPlayback, outputs, sourceFormat);
-            Trace.LogInformation("TryCreateLiveCore: success — portAudio={Pa} ndiAudio={Na} src={Fmt}",
-                pendingPlayback._acquiredPortAudioLines.Count, pendingPlayback._ndiAudioSinks.Count, sourceFormat);
+            foreach (var (line, id, sink) in videoChains)
+            {
+                var outId = router.AddOutput(sink, id, disposeSinkOnRouterDispose: true);
+                if (!router.TryAddRoute(inputId, outId, out var routeErr))
+                    throw new InvalidOperationException(routeErr ?? "TryAddRoute failed");
+
+                var wiring = pendingPlayback.GetOrCreateLineWiring(line);
+                wiring.VideoOutputId = outId;
+                wiring.LogoSink = sink;
+                wiring.AcquiredKind = line.Definition is NDIOutputDefinition ? AcquireKind.NDI : AcquireKind.LocalVideo;
+                pendingPlayback._logoSinks.Add(sink);
+            }
+
+            if (hasAudio)
+                WireAudio(lines, ndiByDefinitionId, player, pendingPlayback, outputs, sources.AudioFormat);
+
+            Trace.LogInformation(
+                "TryCreateLiveCore: success — video={V} audio={A} videoChains={Vc} portAudio={Pa} ndiAudio={Na}",
+                hasVideo, hasAudio, videoChains.Count,
+                pendingPlayback._acquiredPortAudioLines.Count, pendingPlayback._ndiAudioSinks.Count);
             session = pendingPlayback;
             pendingPlayback = null;
             return true;
@@ -532,10 +769,40 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             Trace.LogError(ex, "TryCreateLiveCore: post-open wiring failed");
             errorMessage = ex.Message;
             pendingPlayback?.DisposePartialBeforePlayerDispose();
-            player.Dispose(); // disposes the live audio source via the takesOwnershipOfAudio path
-            ReleaseAcquiredCarriers(outputs, acquired);
+            player.Dispose();
+            ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
             return false;
         }
+    }
+
+    private static void ReleaseLiveAcquires(
+        OutputManagementViewModel outputs,
+        List<OutputLineViewModel> acquiredCarriers,
+        List<OutputLineViewModel> acquiredLocalLines,
+        List<(OutputLineViewModel Line, string Id, LogoFallbackVideoSink Sink)> videoChains)
+    {
+        ReleaseAcquiredCarriers(outputs, acquiredCarriers);
+        ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
+        foreach (var (_, _, sink) in videoChains)
+        {
+            try { sink.Dispose(); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>§4.3.5 follow-up — wrap an NDI sender in <see cref="LockedFormatVideoSink"/> when the
+    /// <see cref="NDIOutputDefinition"/> carries a pixel-format or resolution lock. Returns the inner
+    /// sink unchanged when no lock is set so the existing pump → sender hot path isn't perturbed.</summary>
+    private static IVideoSink WrapWithNDILockIfNeeded(IVideoSink ndiSender, NDIOutputDefinition nd, string name)
+    {
+        if (nd.PixelFormatLock is null && nd.ResolutionLockWidth is null && nd.ResolutionLockHeight is null)
+            return ndiSender;
+        return new LockedFormatVideoSink(
+            ndiSender,
+            nd.PixelFormatLock,
+            nd.ResolutionLockWidth,
+            nd.ResolutionLockHeight,
+            name,
+            disposeInnerOnDispose: false);
     }
 
     private static void ReleaseAcquiredCarriers(OutputManagementViewModel outputs, List<OutputLineViewModel> acquired)
@@ -779,9 +1046,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         try
         {
-            var srcChannels = SourceAudioFormat.Channels > 0
-                ? SourceAudioFormat.Channels
-                : Player.Decoder.Audio?.Format.Channels ?? 2;
+            var srcChannels = SourceChannelCountOrFallback(2);
             var sinkChannels = wiring.SinkChannelCount > 0 ? wiring.SinkChannelCount : GetSinkChannelCount(line.Definition);
             var map = MixModeToChannelMap(mode, srcChannels, sinkChannels);
             Player.Audio.Connect(Player.AudioSourceId!, wiring.AudioSinkId, map, gain);
@@ -836,9 +1101,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             wiring.CellRouteIds.Clear();
             wiring.Cells.Clear();
 
-            var srcChannels = SourceAudioFormat.Channels > 0
-                ? SourceAudioFormat.Channels
-                : Player.Decoder.Audio?.Format.Channels ?? 0;
+            var srcChannels = SourceChannelCountOrFallback(0);
             wiring.SinkChannelCount = wiring.SinkChannelCount > 0
                 ? wiring.SinkChannelCount
                 : GetSinkChannelCount(line.Definition);
@@ -932,8 +1195,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             return;
         }
 
-        // Phase 3 — load the image at its native dimensions and use it both as the output format
-        // and the template. The output is resized to the image (not the image scaled into the output).
+        // Phase 3 — load the image at its native dimensions and use it as the template/format override
+        // on fallback sinks. Local window sizes remain stable; only rendered content changes.
         var fr = Player.Video.Format.FrameRate;
         var proto = FallbackImageLoader.TryBuildHoldFrameAtImageSize(path, fr);
         if (proto is null)
@@ -988,7 +1251,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         // Audio-only sources (no real video stream) negotiate to a stub format the sink doesn't care
         // about — priming black frames at the stub resolution would just glitch NDI receivers between
         // the carrier's real size and the stub size. Skip when there's no decodable video.
-        if (!Player.Decoder.HasVideo)
+        var hasVideo = IsLive ? LiveHasVideo : Player.Decoder.HasVideo;
+        if (!hasVideo)
             return;
         var fmt = Player.Video.Format;
         var input = Player.VideoInputSink;
@@ -1117,8 +1381,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             return false;
         }
 
-        var hasVideo = Player.Decoder.HasVideo;
-        var hasAudio = Player.Decoder.HasAudio;
+        var hasVideo = IsLive ? LiveHasVideo : Player.Decoder.HasVideo;
+        var hasAudio = IsLive ? LiveHasAudio : Player.Decoder.HasAudio;
         var wiring = new LineWiring();
 
         try
@@ -1193,7 +1457,11 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         _acquiredPortAudioLines.Add(line);
         wiring.AcquiredKind = AcquireKind.PortAudio;
 
-        var dec = Player.Decoder.Audio.Format;
+        if (!TryGetSourceAudioFormat(out var dec))
+        {
+            errorMessage = "Source audio format is unavailable.";
+            return false;
+        }
         var sinkChannels = GetSinkChannelCount(pa);
         var targetFmt = new AudioFormat(dec.SampleRate, sinkChannels);
         var map = DefaultChannelMap(dec.Channels, sinkChannels);
@@ -1273,7 +1541,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         _logoSinks.Add(logo);
         // Keep single-frame source mode in sync with the existing branches so attached-pic sources don't
         // show garbage on the newly added branch.
-        logo.SetSingleFrameSourceMode(Player.Decoder.HasVideo && Player.Decoder.VideoIsAttachedPicture);
+        logo.SetSingleFrameSourceMode(!IsLive && Player.Decoder.HasVideo && Player.Decoder.VideoIsAttachedPicture);
         return true;
     }
 
@@ -1301,8 +1569,9 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         if (needsVideo)
         {
-            var pump = new VideoSinkPump(ndi.VideoSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-hot", log: null,
-                disposeInnerOnDispose: false);
+            var lockedSink = WrapWithNDILockIfNeeded(ndi.VideoSink, nd, $"ndi-{nd.Id:N}-hot");
+            var pump = new VideoSinkPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-hot", log: null,
+                disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.VideoSink));
             var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
             var outputId = Player.VideoRouter.AddOutput(logo, $"ndi_{nd.Id:N}_hot", disposeSinkOnRouterDispose: true);
             if (!Player.VideoRouter.TryAddRoute(Player.VideoRouterInputId, outputId, out var routeErr))
@@ -1318,12 +1587,16 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             wiring.VideoOutputId = outputId;
             wiring.LogoSink = logo;
             _logoSinks.Add(logo);
-            logo.SetSingleFrameSourceMode(Player.Decoder.HasVideo && Player.Decoder.VideoIsAttachedPicture);
+            logo.SetSingleFrameSourceMode(!IsLive && Player.Decoder.HasVideo && Player.Decoder.VideoIsAttachedPicture);
         }
 
         if (needsAudio && Player.Audio is not null && !string.IsNullOrEmpty(Player.AudioSourceId))
         {
-            var dec = Player.Decoder.Audio.Format;
+            if (!TryGetSourceAudioFormat(out var dec))
+            {
+                errorMessage = "Source audio format is unavailable.";
+                return false;
+            }
             var sinkChannels = GetSinkChannelCount(nd);
             var ndiAudioFmt = new AudioFormat(nd.AudioSampleRate, sinkChannels);
             var targetFmt = new AudioFormat(dec.SampleRate, sinkChannels);
@@ -1504,6 +1777,12 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        foreach (var d in _playbackOwnedDisposables)
+        {
+            try { d.Dispose(); }
+            catch { /* best effort */ }
+        }
+        _playbackOwnedDisposables.Clear();
         try
         {
             // Player.Dispose tears down VideoRouter (and its outputs / pumps) and AudioRouter (and SinkPumps).

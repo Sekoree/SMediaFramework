@@ -249,6 +249,7 @@ public sealed class MediaPlayer : IDisposable
                 videoNegotiationLead,
                 disposeNegotiationLead,
                 decoderOwnership,
+                videoSourceOverride: null,
                 out player,
                 out errorMessage);
         }
@@ -470,6 +471,10 @@ public sealed class MediaPlayer : IDisposable
     }
 
     /// <summary>Uses an already-opened decoder (caller keeps ownership unless <paramref name="decoderOwnership"/> requests otherwise).</summary>
+    /// <param name="videoSourceOverride">
+    /// When non-null, drives <see cref="VideoPlayer"/> instead of <see cref="MediaContainerDecoder.Video"/>
+    /// (preset scaling, fade wrappers, etc.). The decoder is still used for audio and container metadata.
+    /// </param>
     public static bool TryOpen(
         MediaContainerDecoder decoder,
         in MediaPlayerOpenOptions options,
@@ -477,7 +482,8 @@ public sealed class MediaPlayer : IDisposable
         bool disposeNegotiationLead,
         MediaPlayerDecoderOwnership decoderOwnership,
         [NotNullWhen(true)] out MediaPlayer? player,
-        out string? errorMessage)
+        out string? errorMessage,
+        IVideoSource? videoSourceOverride = null)
     {
         ArgumentNullException.ThrowIfNull(decoder);
         player = null;
@@ -493,6 +499,7 @@ public sealed class MediaPlayer : IDisposable
                 videoNegotiationLead,
                 disposeNegotiationLead,
                 decoderOwnership,
+                videoSourceOverride,
                 out player,
                 out errorMessage);
         }
@@ -533,6 +540,7 @@ public sealed class MediaPlayer : IDisposable
                 videoNegotiationLead,
                 disposeNegotiationLead,
                 decoderOwnership,
+                videoSourceOverride: null,
                 out player,
                 out errorMessage);
         }
@@ -551,6 +559,7 @@ public sealed class MediaPlayer : IDisposable
         IVideoSink? videoNegotiationLead,
         bool disposeNegotiationLead,
         MediaPlayerDecoderOwnership decoderOwnership,
+        IVideoSource? videoSourceOverride,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage)
     {
@@ -625,10 +634,15 @@ public sealed class MediaPlayer : IDisposable
             }
 
             var vin = router.AddInput(primaryOutputId);
-            videoPlayer = new VideoPlayer(media.Video, vin.Sink, playClock);
+            var videoForPlayer = videoSourceOverride ?? media.Video;
+            videoPlayer = new VideoPlayer(videoForPlayer, vin.Sink, playClock);
 
             var ownDecoder = decoderOwnership == MediaPlayerDecoderOwnership.BundleDisposesDecoder;
-            var bundleOwned = ComputeOwnedParts(ownDecoder: ownDecoder, hasFreerun: freerun is not null, hasAudio: audioPlayer is not null);
+            var bundleOwned = ComputeOwnedParts(
+                ownDecoder: ownDecoder,
+                hasFreerun: freerun is not null,
+                hasAudio: audioPlayer is not null,
+                hasVideo: true);
 
             bundle = new MediaContainerPlaybackBundle(
                 media,
@@ -643,7 +657,7 @@ public sealed class MediaPlayer : IDisposable
             Trace.LogInformation("TryOpenCore: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
                 media.HasAudio, media.HasVideo,
                 media.HasAudio ? media.Audio.Format.SampleRate : 0,
-                media.HasVideo ? videoPlayer.Format.ToString() : "(none)",
+                videoPlayer is not null ? videoPlayer.Format.ToString() : "(none)",
                 playClock.GetType().Name,
                 videoNegotiationLead?.GetType().Name ?? "(discard)");
             return true;
@@ -657,9 +671,12 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
-    private static MediaContainerPlaybackBundleOwnedParts ComputeOwnedParts(bool ownDecoder, bool hasFreerun, bool hasAudio)
+    private static MediaContainerPlaybackBundleOwnedParts ComputeOwnedParts(
+        bool ownDecoder, bool hasFreerun, bool hasAudio, bool hasVideo)
     {
-        var o = MediaContainerPlaybackBundleOwnedParts.VideoPlayer | MediaContainerPlaybackBundleOwnedParts.VideoRouter;
+        var o = MediaContainerPlaybackBundleOwnedParts.VideoRouter;
+        if (hasVideo)
+            o |= MediaContainerPlaybackBundleOwnedParts.VideoPlayer;
         if (ownDecoder)
             o |= MediaContainerPlaybackBundleOwnedParts.Decoder;
         if (hasFreerun)

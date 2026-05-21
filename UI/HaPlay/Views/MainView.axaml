@@ -73,6 +73,7 @@
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Toggle Sidebar" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
+        <MenuItem Header="_Target Configuration…" Command="{Binding OpenTargetConfigurationCommand}" />
       </MenuItem>
     </Menu>
 
@@ -118,21 +119,75 @@
 
     <Grid>
       <DockPanel Margin="8" IsVisible="{Binding IsPlayersWorkspaceSelected}">
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,6">
+          <!-- §8.3 — TabStrip is only used in Tabs layout. In Stacked/Split modes players render
+               directly, so hide the strip to save vertical space. -->
           <TabStrip Grid.Column="0"
                     ItemsSource="{Binding Players}"
-                    SelectedItem="{Binding SelectedPlayer}">
+                    SelectedItem="{Binding SelectedPlayer}"
+                    IsVisible="{Binding IsPlayersTabsLayout}">
             <TabStrip.ItemTemplate>
               <DataTemplate DataType="vm:MediaPlayerViewModel">
                 <TextBlock Text="{Binding Name}" VerticalAlignment="Center" Padding="2,0" />
               </DataTemplate>
             </TabStrip.ItemTemplate>
           </TabStrip>
-          <Button Grid.Column="1" Content="+ Add player"
+          <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                     IsVisible="{Binding !IsPlayersTabsLayout}"
+                     Opacity="0.75"
+                     Text="All players visible — use the layout combo to switch back to tabs." />
+          <ComboBox Grid.Column="1" Margin="6,0,0,0" Width="120"
+                    ItemsSource="{Binding PlayersLayoutChoices}"
+                    SelectedItem="{Binding PlayersLayout}"
+                    ToolTip.Tip="Tabs: one player at a time. Stacked: scroll through all players vertically. Split: tile players side-by-side." />
+          <Button Grid.Column="2" Content="+ Add player"
                   Command="{Binding AddPlayerCommand}"
                   VerticalAlignment="Center" Margin="6,0,0,0" />
         </Grid>
-        <ContentControl Content="{Binding SelectedPlayer}" />
+
+        <!-- Tabs layout — original single-player view. Content is null when not in Tabs mode (the VM
+             projects SelectedPlayer through TabsLayoutContent) so the hidden branch doesn't
+             materialize a second MediaPlayerView for the selected player. -->
+        <Border x:Name="PlayersQuickPlayHost"
+                IsVisible="{Binding IsPlayersTabsLayout}"
+                ToolTip.Tip="Drop media files here to play immediately (quick-play)">
+          <ContentControl Content="{Binding TabsLayoutContent}" />
+        </Border>
+
+        <!-- Stacked layout — vertical list of every player, scrollable. ItemsSource is null in other
+             layouts so the ItemsControl doesn't materialize player views off-screen. -->
+        <ScrollViewer IsVisible="{Binding IsPlayersStackedLayout}"
+                      HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollBarVisibility="Auto">
+          <ItemsControl ItemsSource="{Binding StackedLayoutContent}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate DataType="vm:MediaPlayerViewModel">
+                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6"
+                        Margin="0,0,0,8" Padding="4">
+                  <ContentControl Content="{Binding}" />
+                </Border>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Split layout — UniformGrid (1 row × N columns) of every player. -->
+        <ItemsControl IsVisible="{Binding IsPlayersSplitLayout}"
+                      ItemsSource="{Binding SplitLayoutContent}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <UniformGrid Rows="1" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate DataType="vm:MediaPlayerViewModel">
+              <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6"
+                      Margin="4" Padding="4">
+                <ContentControl Content="{Binding}" />
+              </Border>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
       </DockPanel>
 
       <views:OutputManagementView DataContext="{Binding OutputManagement}"
@@ -161,7 +216,7 @@
           <Button Content="Save" Command="{Binding SaveProjectCommand}" />
           <Button Content="Save As…" Command="{Binding SaveProjectAsCommand}" />
         </StackPanel>
-        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,12">
           <DockPanel>
             <TextBlock DockPanel.Dock="Top" Text="Recent projects" FontWeight="SemiBold" Margin="0,0,0,6" />
             <TextBlock DockPanel.Dock="Top"
@@ -180,6 +235,27 @@
               </ItemsControl.ItemTemplate>
             </ItemsControl>
           </DockPanel>
+        </Border>
+
+        <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
+        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+          <StackPanel Spacing="6">
+            <TextBlock Text="Display" FontWeight="SemiBold" />
+            <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
+                       Text="Theme and density apply to this machine and persist in app-settings.json — they are not saved in the project." />
+            <Grid ColumnDefinitions="120,*,16,120,*" RowDefinitions="Auto" Margin="0,4,0,0">
+              <TextBlock Grid.Column="0" Text="Theme" VerticalAlignment="Center" />
+              <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding ThemeChoices}"
+                        SelectedItem="{Binding Theme}"
+                        HorizontalAlignment="Stretch" />
+              <TextBlock Grid.Column="3" Text="Density" VerticalAlignment="Center" />
+              <ComboBox Grid.Column="4"
+                        ItemsSource="{Binding DensityChoices}"
+                        SelectedItem="{Binding Density}"
+                        HorizontalAlignment="Stretch" />
+            </Grid>
+          </StackPanel>
         </Border>
       </DockPanel>
     </Grid>

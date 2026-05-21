@@ -41,9 +41,8 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
     void ReleaseFromPlayback();
 
     /// <summary>
-    /// Phase 3 — resize the preview window to the supplied pixel dimensions while a hold image is
-    /// engaged so the output matches the image's native size. <c>null</c> reverts to the user's
-    /// previously chosen size.
+    /// Optional preview-window size override while a hold image is engaged.
+    /// Current policy keeps windowed preview dimensions stable, so runtimes may ignore this call.
     /// </summary>
     void ApplyHoldImageWindowSize(int? width, int? height);
 
@@ -175,13 +174,9 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
     public void ApplyHoldImageWindowSize(int? width, int? height)
     {
-        var sink = _sink;
-        if (sink is null) return;
-        if (_definition.SurfaceMode == VideoSurfaceMode.FullScreen)
-            return; // honour fullscreen — image is letterboxed via ViewportFit
-        var w = width ?? _definition.WindowWidth ?? 1280;
-        var h = height ?? _definition.WindowHeight ?? 720;
-        sink.ApplyWindowPlacement(_definition.ScreenIndex, false, w, h);
+        // Keep windowed local outputs stable while source/hold image sizes change.
+        _ = width;
+        _ = height;
     }
 
     public void Dispose()
@@ -331,13 +326,9 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
     public void ApplyHoldImageWindowSize(int? width, int? height) =>
         Dispatcher.UIThread.Post(() =>
         {
-            if (_window is null) return;
-            if (_definition.SurfaceMode == VideoSurfaceMode.FullScreen)
-                return;
-            var w = width ?? _definition.WindowWidth ?? 1280;
-            var h = height ?? _definition.WindowHeight ?? 720;
-            _window.Width = w;
-            _window.Height = h;
+            // Keep windowed local outputs stable while source/hold image sizes change.
+            _ = width;
+            _ = height;
         }, DispatcherPriority.Normal);
 
     public void Dispose()

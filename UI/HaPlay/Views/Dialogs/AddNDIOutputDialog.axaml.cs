@@ -10,6 +10,7 @@ public partial class AddNDIOutputDialog : Window
     public AddNDIOutputDialog()
     {
         InitializeComponent();
+        DialogStatePersister.Attach(this, nameof(AddNDIOutputDialog), MinWidth, MinHeight);
     }
 
     private void OkClick(object? sender, RoutedEventArgs e)

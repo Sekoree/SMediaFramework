@@ -1,5 +1,7 @@
 using System.ComponentModel;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
@@ -19,6 +21,35 @@ public partial class CuePlayerView : UserControl
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        DragDrop.SetAllowDrop(CueTreeGrid, true);
+        CueTreeGrid.AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Bubble);
+        CueTreeGrid.AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Bubble);
+    }
+
+    private void OnCueTreeDragOver(object? sender, DragEventArgs e)
+    {
+        _ = sender;
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+    }
+
+    private void OnCueTreeDrop(object? sender, DragEventArgs e)
+    {
+        _ = sender;
+        if (DataContext is not CuePlayerViewModel vm)
+            return;
+
+        var files = e.DataTransfer.TryGetFiles();
+        if (files is null || !files.Any())
+            return;
+
+        var paths = files
+            .Select(f => f.Path.LocalPath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+        if (paths.Count > 0)
+            vm.AddMediaFilesFromDrop(paths);
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)
@@ -153,7 +184,7 @@ public partial class CuePlayerView : UserControl
             width: new GridLength(76)));
         _routeSource.Columns.Add(new TemplateColumn<CueRouteConnectionViewModel>(
             "VOut",
-            new FuncDataTemplate<CueRouteConnectionViewModel>((row, _) => BuildRouteChannelEditor(row, nameof(CueRouteConnectionViewModel.VirtualOutputChannel), 1, 64), supportsRecycling: true),
+            new FuncDataTemplate<CueRouteConnectionViewModel>((row, _) => BuildRouteVirtualOutputEditor(vm, row), supportsRecycling: true),
             width: new GridLength(92)));
         _routeSource.Columns.Add(new TemplateColumn<CueRouteConnectionViewModel>(
             "Gain dB",
@@ -357,5 +388,28 @@ public partial class CuePlayerView : UserControl
             Mode = BindingMode.TwoWay,
         });
         return check;
+    }
+
+    private static Control BuildRouteVirtualOutputEditor(CuePlayerViewModel vm, CueRouteConnectionViewModel row)
+    {
+        var channels = vm.VisibleVirtualOutputs
+            .Select(v => v.Channel)
+            .Distinct()
+            .OrderBy(v => v)
+            .ToList();
+        if (channels.Count == 0)
+            return BuildRouteChannelEditor(row, nameof(CueRouteConnectionViewModel.VirtualOutputChannel), 1, 64);
+
+        var combo = new ComboBox
+        {
+            DataContext = row,
+            ItemsSource = channels,
+            MinWidth = 80,
+        };
+        combo.Bind(ComboBox.SelectedItemProperty, new Binding(nameof(CueRouteConnectionViewModel.VirtualOutputChannel))
+        {
+            Mode = BindingMode.TwoWay,
+        });
+        return combo;
     }
 }

@@ -27,7 +27,16 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     private volatile bool _singleFrameSourceMode;
     private VideoFrame? _holdTemplate;
     private VideoFrame? _lastRealFrameCache;
+    private volatile float _outputOpacity = 1f;
+    private VideoCpuFrameConverter? _opacityToBgra;
+    private VideoCpuFrameConverter? _opacityFromBgra;
+    private PixelFormat _opacityCachedFormat;
+    private int _opacityCachedWidth;
+    private int _opacityCachedHeight;
     private bool _disposed;
+
+    /// <summary>Linear opacity applied to decoded CPU frames (fade toward black / neutral chroma). 1 = pass-through.</summary>
+    public void SetOutputOpacity(float opacity) => _outputOpacity = Math.Clamp(opacity, 0f, 1f);
 
     public LogoFallbackVideoSink(IVideoSink inner, bool disposeInnerOnDispose = true)
     {
@@ -192,7 +201,78 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             }
         }
 
-        _inner.Submit(frame);
+        SubmitToInner(frame);
+    }
+
+    private void SubmitToInner(VideoFrame frame)
+    {
+        var opacity = _outputOpacity;
+        if (opacity >= 0.999f || VideoCpuOpacity.IsHardwareBacked(frame))
+        {
+            _inner.Submit(frame);
+            return;
+        }
+
+        try
+        {
+            var faded = ApplyOutputOpacity(frame, opacity);
+            _inner.Submit(faded);
+            frame.Dispose();
+        }
+        catch
+        {
+            _inner.Submit(frame);
+        }
+    }
+
+    private VideoFrame ApplyOutputOpacity(VideoFrame frame, float opacity)
+    {
+        var pf = frame.Format.PixelFormat;
+        var w = frame.Format.Width;
+        var h = frame.Format.Height;
+        var hint = frame.ColorTransferHint;
+        var range = frame.ColorRange;
+
+        if (VideoCpuOpacity.SupportsInPlace(pf))
+        {
+            var dup = VideoCpuFrameConverter.DuplicateCpuBacking(frame, hint);
+            VideoCpuOpacity.ApplyInPlace(dup, opacity, range);
+            return dup;
+        }
+
+        if (!VideoCpuFrameConverter.CanConvert(pf, PixelFormat.Bgra32, w, h)
+            || !VideoCpuFrameConverter.CanConvert(PixelFormat.Bgra32, pf, w, h))
+            throw new NotSupportedException($"Cannot fade {pf} via CPU opacity or BGRA conversion.");
+
+        EnsureOpacityConverters(pf, w, h);
+        var dupSrc = VideoCpuFrameConverter.DuplicateCpuBacking(frame, hint);
+        VideoFrame? bgra = null;
+        try
+        {
+            bgra = _opacityToBgra!.Convert(dupSrc, hint);
+            dupSrc.Dispose();
+            VideoCpuOpacity.ApplyInPlace(bgra, opacity, range);
+            return _opacityFromBgra!.Convert(bgra, hint);
+        }
+        finally
+        {
+            bgra?.Dispose();
+        }
+    }
+
+    private void EnsureOpacityConverters(PixelFormat src, int width, int height)
+    {
+        if (_opacityToBgra is not null && _opacityCachedFormat == src
+                                      && _opacityCachedWidth == width && _opacityCachedHeight == height)
+            return;
+
+        _opacityToBgra ??= new VideoCpuFrameConverter();
+        _opacityFromBgra ??= new VideoCpuFrameConverter();
+        _opacityToBgra.Configure(src, PixelFormat.Bgra32, width, height);
+        _opacityFromBgra.Configure(PixelFormat.Bgra32, src, width, height);
+        _opacityCachedFormat = src;
+        _opacityCachedWidth = width;
+        _opacityCachedHeight = height;
     }
 
     /// <summary>
@@ -247,5 +327,10 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
 
         if (_disposeInner && _inner is IDisposable d)
             d.Dispose();
+
+        _opacityToBgra?.Dispose();
+        _opacityFromBgra?.Dispose();
+        _opacityToBgra = null;
+        _opacityFromBgra = null;
     }
 }

@@ -27,7 +27,7 @@ namespace S.Media.Core.Audio;
 /// upstream sources exhaust).
 /// </para>
 /// </remarks>
-public sealed class BusSink : IAudioSink, IAudioSource
+public sealed class BusSink : IAudioSink, IAudioSinkChannelCapabilities, IAudioSource
 {
     private readonly AudioFormat _format;
     private readonly int _channels;
@@ -60,6 +60,7 @@ public sealed class BusSink : IAudioSink, IAudioSource
     }
 
     public AudioFormat Format => _format;
+    public AudioSinkChannelCapabilities ChannelCapabilities => AudioSinkChannelCapabilities.Fixed(_channels);
     public bool IsExhausted => false;
 
     /// <summary>Total floats dropped by Submit because the ring was full (router buffer too small or downstream stuck).</summary>

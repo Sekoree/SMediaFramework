@@ -12,6 +12,9 @@ public sealed record CueList
 
     public string Name { get; init; } = "Cue List";
 
+    /// <summary>How many upcoming file media cues to pre-open (§5.7). Default 4.</summary>
+    public int PreRollCount { get; init; } = 4;
+
     /// <summary>List-level virtual output registry (VOut 1..N) for deterministic cue routing.</summary>
     public List<CueVirtualOutputChannel> VirtualOutputs { get; init; } = new();
 

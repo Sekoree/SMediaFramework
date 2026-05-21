@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
+using HaPlay.Playback;
 using OSCLib;
 using PMLib;
 using PMLib.Devices;
@@ -25,6 +26,7 @@ public partial class MainViewModel : ViewModelBase
     private int _nextPlayerNumber = 1;
     private readonly object _midiInitSync = new();
     private bool _midiInitialized;
+    private CancellationTokenSource? _endpointHealthCts;
 
     public MainViewModel()
     {
@@ -36,22 +38,34 @@ public partial class MainViewModel : ViewModelBase
         SelectedPlayer = Players[0];
         CuePlayer.MediaCueExecutor = ExecuteCueMediaAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
+        CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
+        foreach (var player in Players)
+            player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         SeedDefaultActionEndpointsIfEmpty();
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         RefreshMidiDeviceCatalog();
+        _ = RefreshAllEndpointHealthAsync();
 
         // Phase B (§3.6) — give the Edit dialog a way to ask "is any player playing through this line?".
         // Iterating the Players collection on each probe is fine: outputs are edited rarely, never
         // during a hot loop, and this is the single source of truth that doesn't require a new event.
         OutputManagement.PlaybackUsageProbe =
             line => Players.Any(p => p.IsActivelyPlayingThroughLine(line));
+        OutputManagement.ActivePlayersProbe = () => Players;
 
         LoadRecentProjects();
         _appSettings = AppSettings.Load();
         _sidebarCollapsed = _appSettings.SidebarCollapsed;
+        // Theme/density (§8.6) — load saved values and apply them immediately. The OnXChanged hooks
+        // would re-save on first set; seed via backing fields so we don't fire that pointlessly.
+        _theme = _appSettings.Theme;
+        _density = _appSettings.Density;
+        _playersLayout = _appSettings.PlayersLayout;
+        AppearanceController.ApplyTheme(_theme);
+        AppearanceController.ApplyDensity(_density);
         SelectedWorkspace = Workspaces.FirstOrDefault(w => w.Id == _appSettings.LastSelectedWorkspace)
                             ?? WorkspaceItem.Players;
     }
@@ -106,11 +120,37 @@ public partial class MainViewModel : ViewModelBase
         _appSettings.Save();
     }
 
+    // ----- Phase E (§8.7): Main window state persistence -----------------------------------------
+
+    /// <summary>Phase E (§8.7) — last saved main-window placement, or <see langword="null"/> on first
+    /// launch. The window code-behind calls this on Opened to restore size/position; values are
+    /// validated against the current screen layout before being applied.</summary>
+    public WindowStateSnapshot? GetSavedWindowState() => _appSettings.MainWindow;
+
+    /// <summary>Phase E (§8.7) — persist the current main-window placement. Called from the window
+    /// code-behind on Closing (or on debounced size/move/state changes). Writes through to
+    /// <c>app-settings.json</c> immediately so a hard kill still preserves the last-known good state.</summary>
+    public void SaveWindowState(WindowStateSnapshot snapshot)
+    {
+        _appSettings.MainWindow = snapshot;
+        _appSettings.Save();
+    }
+
     [RelayCommand]
     private void ToggleSidebar() => SidebarCollapsed = !SidebarCollapsed;
 
     [RelayCommand]
     private void SelectWorkspace(WorkspaceItem workspace) => SelectedWorkspace = workspace;
+
+    [RelayCommand]
+    private async Task OpenTargetConfigurationAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+        var dialog = new Views.Dialogs.TargetConfigurationDialog { DataContext = this };
+        await dialog.ShowDialog(owner);
+    }
 
     /// <summary>Ctrl+1..N keyboard handler. Index is 1-based to match the modifier key. (§12.5)</summary>
     public void SelectWorkspaceByIndex(int oneBasedIndex)
@@ -125,11 +165,94 @@ public partial class MainViewModel : ViewModelBase
     public ObservableCollection<MediaPlayerViewModel> Players { get; }
     public ObservableCollection<ActionEndpoint> ActionEndpoints { get; } = new();
 
-    /// <summary>OSC-only slice of <see cref="ActionEndpoints"/> for the OSC sidebar workspace.</summary>
-    public ObservableCollection<OscActionEndpoint> OscEndpoints { get; } = new();
+    // ----- Phase E (§8.6): Theme & Density -------------------------------------------------------
 
-    /// <summary>MIDI-only slice of <see cref="ActionEndpoints"/> for the MIDI sidebar workspace.</summary>
-    public ObservableCollection<MidiActionEndpoint> MidiEndpoints { get; } = new();
+    public IReadOnlyList<AppThemeMode> ThemeChoices { get; } = Enum.GetValues<AppThemeMode>();
+    public IReadOnlyList<AppDensityMode> DensityChoices { get; } = Enum.GetValues<AppDensityMode>();
+    public IReadOnlyList<PlayersLayoutMode> PlayersLayoutChoices { get; } = Enum.GetValues<PlayersLayoutMode>();
+
+    /// <summary>Phase E (§8.6) — chrome theme. Setting this both persists the choice and applies it
+    /// live to <see cref="Application.RequestedThemeVariant"/> so the UI repaints without restart.</summary>
+    [ObservableProperty]
+    private AppThemeMode _theme;
+
+    /// <summary>Phase E (§8.6) — Fluent density. Setting this both persists and applies the change to
+    /// the live <see cref="Avalonia.Themes.Fluent.FluentTheme.DensityStyle"/>.</summary>
+    [ObservableProperty]
+    private AppDensityMode _density;
+
+    partial void OnThemeChanged(AppThemeMode value)
+    {
+        _appSettings.Theme = value;
+        _appSettings.Save();
+        AppearanceController.ApplyTheme(value);
+    }
+
+    partial void OnDensityChanged(AppDensityMode value)
+    {
+        _appSettings.Density = value;
+        _appSettings.Save();
+        AppearanceController.ApplyDensity(value);
+    }
+
+    /// <summary>Phase E (§8.3) — Players-workspace layout mode (Tabs / Stacked / Split). Setting this
+    /// flips which visual tree renders inside the Players DockPanel via the boolean derived properties
+    /// below, and persists to app-settings.json.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPlayersTabsLayout))]
+    [NotifyPropertyChangedFor(nameof(IsPlayersStackedLayout))]
+    [NotifyPropertyChangedFor(nameof(IsPlayersSplitLayout))]
+    private PlayersLayoutMode _playersLayout;
+
+    public bool IsPlayersTabsLayout => PlayersLayout == PlayersLayoutMode.Tabs;
+    public bool IsPlayersStackedLayout => PlayersLayout == PlayersLayoutMode.Stacked;
+    public bool IsPlayersSplitLayout => PlayersLayout == PlayersLayoutMode.Split;
+
+    /// <summary>Phase E (§8.3) — bound by the Tabs-layout ContentControl. Returns the selected player
+    /// only when Tabs mode is active so the hidden Tabs branch can't materialize a duplicate
+    /// <c>MediaPlayerView</c> for the same VM that the Stacked/Split ItemsControl is already showing.
+    /// (<see cref="Avalonia.Controls.Control.IsVisible"/>=false hides rendering but keeps the visual
+    /// tree materialized, so without this null-when-not-tabs gate every selected player would have
+    /// two attached views in Stacked/Split mode.)</summary>
+    public MediaPlayerViewModel? TabsLayoutContent =>
+        IsPlayersTabsLayout ? SelectedPlayer : null;
+
+    /// <summary>Same idea for Stacked layout — returns the players collection only when Stacked is active.</summary>
+    public ObservableCollection<MediaPlayerViewModel>? StackedLayoutContent =>
+        IsPlayersStackedLayout ? Players : null;
+
+    /// <summary>Same idea for Split layout.</summary>
+    public ObservableCollection<MediaPlayerViewModel>? SplitLayoutContent =>
+        IsPlayersSplitLayout ? Players : null;
+
+    partial void OnPlayersLayoutChanged(PlayersLayoutMode value)
+    {
+        _appSettings.PlayersLayout = value;
+        _appSettings.Save();
+        OnPropertyChanged(nameof(TabsLayoutContent));
+        OnPropertyChanged(nameof(StackedLayoutContent));
+        OnPropertyChanged(nameof(SplitLayoutContent));
+    }
+
+    partial void OnSelectedPlayerChanged(MediaPlayerViewModel? value)
+    {
+        _ = value;
+        // Tabs layout pulls from the live SelectedPlayer, so a tab switch must rebroadcast.
+        if (IsPlayersTabsLayout)
+            OnPropertyChanged(nameof(TabsLayoutContent));
+    }
+
+    /// <summary>OSC endpoints with persistent health LEDs for the OSC sidebar workspace.</summary>
+    public ObservableCollection<ActionEndpointRowViewModel> OscEndpointRows { get; } = new();
+
+    /// <summary>MIDI endpoints with persistent health LEDs for the MIDI sidebar workspace.</summary>
+    public ObservableCollection<ActionEndpointRowViewModel> MidiEndpointRows { get; } = new();
+
+    [ObservableProperty]
+    private ActionEndpointRowViewModel? _selectedOscEndpointRow;
+
+    [ObservableProperty]
+    private ActionEndpointRowViewModel? _selectedMidiEndpointRow;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasSelectedActionEndpoint))]
@@ -168,6 +291,9 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     private MidiOutputOption? _selectedMidiOutputOption;
 
+    [ObservableProperty]
+    private string? _endpointTestStatus;
+
     partial void OnSelectedActionEndpointChanged(ActionEndpoint? value)
     {
         if (value is null)
@@ -199,6 +325,33 @@ public partial class MainViewModel : ViewModelBase
         RemoveActionEndpointCommand.NotifyCanExecuteChanged();
         SaveActionEndpointEditsCommand.NotifyCanExecuteChanged();
         RefreshMidiOutputsCommand.NotifyCanExecuteChanged();
+        TestSelectedOscEndpointCommand.NotifyCanExecuteChanged();
+        TestSelectedMidiEndpointCommand.NotifyCanExecuteChanged();
+        EndpointTestStatus = null;
+        SyncEndpointRowSelectionFromEndpoint();
+    }
+
+    partial void OnSelectedOscEndpointRowChanged(ActionEndpointRowViewModel? value)
+    {
+        if (value is not null && !ReferenceEquals(SelectedActionEndpoint, value.Endpoint))
+            SelectedActionEndpoint = value.Endpoint;
+    }
+
+    partial void OnSelectedMidiEndpointRowChanged(ActionEndpointRowViewModel? value)
+    {
+        if (value is not null && !ReferenceEquals(SelectedActionEndpoint, value.Endpoint))
+            SelectedActionEndpoint = value.Endpoint;
+    }
+
+    private void SyncEndpointRowSelectionFromEndpoint()
+    {
+        var id = SelectedActionEndpoint?.Id;
+        SelectedOscEndpointRow = id is null
+            ? null
+            : OscEndpointRows.FirstOrDefault(r => r.Endpoint.Id == id);
+        SelectedMidiEndpointRow = id is null
+            ? null
+            : MidiEndpointRows.FirstOrDefault(r => r.Endpoint.Id == id);
     }
 
     private void OnActionEndpointsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -208,17 +361,84 @@ public partial class MainViewModel : ViewModelBase
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         RemoveActionEndpointCommand.NotifyCanExecuteChanged();
+        _ = RefreshAllEndpointHealthAsync();
     }
 
     private void RebuildEndpointWorkspaceLists()
     {
-        OscEndpoints.Clear();
+        var oscHealth = OscEndpointRows.ToDictionary(r => r.Endpoint.Id, r => (r.Health, r.HealthDetail));
+        OscEndpointRows.Clear();
         foreach (var endpoint in ActionEndpoints.OfType<OscActionEndpoint>())
-            OscEndpoints.Add(endpoint);
+        {
+            var row = new ActionEndpointRowViewModel(endpoint);
+            if (oscHealth.TryGetValue(endpoint.Id, out var h))
+            {
+                row.Health = h.Health;
+                row.HealthDetail = h.HealthDetail;
+            }
 
-        MidiEndpoints.Clear();
+            OscEndpointRows.Add(row);
+        }
+
+        var midiHealth = MidiEndpointRows.ToDictionary(r => r.Endpoint.Id, r => (r.Health, r.HealthDetail));
+        MidiEndpointRows.Clear();
         foreach (var endpoint in ActionEndpoints.OfType<MidiActionEndpoint>())
-            MidiEndpoints.Add(endpoint);
+        {
+            var row = new ActionEndpointRowViewModel(endpoint);
+            if (midiHealth.TryGetValue(endpoint.Id, out var h))
+            {
+                row.Health = h.Health;
+                row.HealthDetail = h.HealthDetail;
+            }
+
+            MidiEndpointRows.Add(row);
+        }
+
+        SyncEndpointRowSelectionFromEndpoint();
+    }
+
+    private ActionEndpointRowViewModel? FindEndpointRow(Guid endpointId) =>
+        OscEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId)
+        ?? MidiEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId);
+
+    public async Task RefreshAllEndpointHealthAsync()
+    {
+        _endpointHealthCts?.Cancel();
+        _endpointHealthCts?.Dispose();
+        _endpointHealthCts = new CancellationTokenSource();
+        var ct = _endpointHealthCts.Token;
+
+        foreach (var row in OscEndpointRows.Concat(MidiEndpointRows))
+        {
+            if (ct.IsCancellationRequested)
+                return;
+            await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
+        }
+    }
+
+    private async Task ProbeEndpointRowAsync(ActionEndpointRowViewModel row, CancellationToken ct)
+    {
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            row.Health = ActionEndpointHealthState.Checking;
+            row.HealthDetail = null;
+        });
+
+        var (ok, detail) = row.Endpoint switch
+        {
+            OscActionEndpoint osc => await ActionEndpointProbe.TryProbeOscAsync(osc, ct).ConfigureAwait(false),
+            MidiActionEndpoint midi => ActionEndpointProbe.TryProbeMidi(midi, EnsureMidiInitialized),
+            _ => (false, "Unknown endpoint kind"),
+        };
+
+        if (ct.IsCancellationRequested)
+            return;
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            row.Health = ok ? ActionEndpointHealthState.Ok : ActionEndpointHealthState.Failed;
+            row.HealthDetail = detail;
+        });
     }
 
     [RelayCommand]
@@ -292,6 +512,10 @@ public partial class MainViewModel : ViewModelBase
 
         ActionEndpoints[index] = replacement;
         SelectedActionEndpoint = replacement;
+        FindEndpointRow(replacement.Id)?.ReplaceEndpoint(replacement);
+        var row = FindEndpointRow(replacement.Id);
+        if (row is not null)
+            _ = ProbeEndpointRowAsync(row, CancellationToken.None);
     }
 
     private bool CanSaveActionEndpointEdits() => SelectedActionEndpoint is not null;
@@ -352,7 +576,23 @@ public partial class MainViewModel : ViewModelBase
     private MediaPlayerViewModel CreatePlayer(bool removable)
     {
         var name = $"Player {_nextPlayerNumber++}";
-        return new MediaPlayerViewModel(OutputManagement, name, removable ? RemovePlayer : null);
+        var player = new MediaPlayerViewModel(OutputManagement, name, removable ? RemovePlayer : null);
+        player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
+        return player;
+    }
+
+    private async void OnPlayerNaturalPlaybackEnded(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        try
+        {
+            await CuePlayer.OnMediaCueNaturallyEndedAsync();
+        }
+        catch (Exception ex)
+        {
+            CuePlayer.StatusMessage = $"Auto-follow failed: {ex.Message}";
+        }
     }
 
     private void RemovePlayer(MediaPlayerViewModel player)
@@ -378,15 +618,42 @@ public partial class MainViewModel : ViewModelBase
 
     private async Task<string?> ExecuteCueMediaAsync(MediaCueNode cue, CancellationToken ct)
     {
-        _ = ct;
         var player = SelectedPlayer;
         if (player is null)
             return "no selected player";
         if (cue.Source is null)
             return "no media source";
 
-        await player.PlayPlaylistItemAsync(cue.Source);
-        return cue.Source.DisplayName;
+        player.ConfigureCueTransport(cue);
+        player.ApplyCueRouteOverrides(cue);
+        var preRolled = await player.TryPlayCueMediaAsync(cue, ct).ConfigureAwait(false);
+        _ = RefreshCuePreRollAsync();
+        return preRolled
+            ? $"{cue.Source.DisplayName} (pre-roll)"
+            : cue.Source.DisplayName;
+    }
+
+    private async Task RefreshCuePreRollAsync()
+    {
+        var player = SelectedPlayer;
+        var list = CuePlayer.SelectedCueList;
+        if (player is null || list is null)
+            return;
+
+        var n = list.PreRollCount;
+        var fileTargets = CuePlayer.GetPreRollTargets(n);
+        var ndiTargets = CuePlayer.GetNdiPreConnectTargets(n);
+        var paTargets = CuePlayer.GetPortAudioPreConnectTargets(n);
+        try
+        {
+            await player.RefreshCuePreRollAsync(fileTargets).ConfigureAwait(false);
+            await player.RefreshNdiPreConnectAsync(ndiTargets).ConfigureAwait(false);
+            await player.RefreshPortAudioPreConnectAsync(paTargets).ConfigureAwait(false);
+        }
+        catch
+        {
+            /* best effort — pre-roll must not break transport */
+        }
     }
 
     private async Task<string?> ExecuteCueActionAsync(ActionCueNode cue, CancellationToken ct)
@@ -648,6 +915,8 @@ public partial class MainViewModel : ViewModelBase
 
         for (var i = 0; i < project.Players.Count && i < Players.Count; i++)
             Players[i].ApplyPlayerConfigSnapshot(project.Players[i]);
+
+        _ = RefreshCuePreRollAsync();
     }
 
     // ----- Phase B (§7): Project save / load command plumbing --------------------------------
@@ -750,13 +1019,29 @@ public partial class MainViewModel : ViewModelBase
         var missing = requestedRoutes.Where(r => !availableNames.Contains(r)).ToList();
 
         ApplyProjectSnapshot(project);
+        _ = RefreshCuePreRollAsync();
         var outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync();
         CurrentProjectPath = path;
         PushRecentProject(path);
 
+        if (missing.Count > 0)
+        {
+            var replacementMap = await PromptRebindMissingOutputsAsync(missing);
+            if (replacementMap.Count > 0)
+            {
+                foreach (var player in Players)
+                    player.RemapSelectedOutputs(replacementMap);
+                missing = missing.Where(m => !replacementMap.ContainsKey(m)).ToList();
+            }
+        }
+
+        CuePlayer.RefreshBrokenEndpointFlags();
+        await PromptRebindMissingActionEndpointsAsync();
+        _ = RefreshAllEndpointHealthAsync();
+
         var statusParts = new List<string> { $"Loaded '{Path.GetFileName(path)}'." };
         if (missing.Count > 0)
-            statusParts.Add($"{missing.Count} player route(s) reference missing outputs: {string.Join(", ", missing)}.");
+            statusParts.Add($"{missing.Count} player route(s) still reference missing outputs: {string.Join(", ", missing)}.");
         if (outputStartErrors.Count > 0)
             statusParts.Add($"{outputStartErrors.Count} output runtime(s) could not start: {string.Join("; ", outputStartErrors)}.");
         ProjectStatus = string.Join(" ", statusParts);
@@ -823,6 +1108,88 @@ public partial class MainViewModel : ViewModelBase
             return null;
         }
     }
+
+    private async Task PromptRebindMissingActionEndpointsAsync()
+    {
+        var groups = CuePlayer.GetBrokenEndpointGroups();
+        if (groups.Count == 0)
+            return;
+
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+
+        var vm = new Dialogs.RebindMissingActionEndpointsDialogViewModel(groups, ActionEndpoints.ToList());
+        if (vm.Rows.Count == 0)
+            return;
+
+        var dialog = new Views.Dialogs.RebindMissingActionEndpointsDialog { DataContext = vm };
+        var result = await dialog.ShowDialog<IReadOnlyDictionary<Guid, Guid>?>(owner);
+        if (result is { Count: > 0 })
+            CuePlayer.RemapActionEndpoints(result);
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>> PromptRebindMissingOutputsAsync(
+        IReadOnlyList<string> missingDisplayNames)
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null || missingDisplayNames.Count == 0)
+            return new Dictionary<string, string>();
+
+        var available = OutputManagement.Outputs
+            .Select(o => o.Definition.DisplayName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (available.Count == 0)
+            return new Dictionary<string, string>();
+
+        var vm = new Dialogs.RebindMissingOutputsDialogViewModel(missingDisplayNames, available);
+        var dialog = new Views.Dialogs.RebindMissingOutputsDialog { DataContext = vm };
+        var result = await dialog.ShowDialog<IReadOnlyDictionary<string, string>?>(owner);
+        return result ?? new Dictionary<string, string>();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanTestSelectedOscEndpoint))]
+    private async Task TestSelectedOscEndpointAsync()
+    {
+        if (SelectedActionEndpoint is not OscActionEndpoint)
+            return;
+        var row = SelectedOscEndpointRow ?? FindEndpointRow(SelectedActionEndpoint.Id);
+        if (row is null)
+            return;
+
+        EndpointTestStatus = "Testing OSC…";
+        await ProbeEndpointRowAsync(row, CancellationToken.None);
+        EndpointTestStatus = row.Health switch
+        {
+            ActionEndpointHealthState.Ok => $"OSC {row.HealthDetail}",
+            ActionEndpointHealthState.Failed => $"OSC failed: {row.HealthDetail}",
+            _ => "OSC test finished.",
+        };
+    }
+
+    private bool CanTestSelectedOscEndpoint() => SelectedActionEndpoint is OscActionEndpoint;
+
+    [RelayCommand(CanExecute = nameof(CanTestSelectedMidiEndpoint))]
+    private async Task TestSelectedMidiEndpointAsync()
+    {
+        if (SelectedActionEndpoint is not MidiActionEndpoint)
+            return;
+        var row = SelectedMidiEndpointRow ?? FindEndpointRow(SelectedActionEndpoint.Id);
+        if (row is null)
+            return;
+
+        EndpointTestStatus = "Testing MIDI…";
+        await ProbeEndpointRowAsync(row, CancellationToken.None);
+        EndpointTestStatus = row.Health switch
+        {
+            ActionEndpointHealthState.Ok => $"MIDI {row.HealthDetail}",
+            ActionEndpointHealthState.Failed => $"MIDI failed: {row.HealthDetail}",
+            _ => "MIDI test finished.",
+        };
+    }
+
+    private bool CanTestSelectedMidiEndpoint() => SelectedActionEndpoint is MidiActionEndpoint;
 
     private static Window? TryGetOwnerWindow()
     {

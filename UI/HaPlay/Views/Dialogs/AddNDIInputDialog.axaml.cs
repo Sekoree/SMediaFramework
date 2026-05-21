@@ -9,6 +9,7 @@ public partial class AddNDIInputDialog : Window
     public AddNDIInputDialog()
     {
         InitializeComponent();
+        DialogStatePersister.Attach(this, nameof(AddNDIInputDialog), MinWidth, MinHeight);
     }
 
     private void OkClick(object? sender, RoutedEventArgs e)

@@ -40,7 +40,7 @@
 
         <StackPanel Spacing="6" IsVisible="{Binding !UseDiscovery}">
           <TextBlock Text="Manual source name (e.g. MACHINE (Instance))" FontWeight="SemiBold" />
-          <TextBox Text="{Binding SourceName}" Watermark="MACHINE (Camera 1)" />
+          <TextBox Text="{Binding SourceName}" PlaceholderText="MACHINE (Camera 1)" />
           <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
                      Text="Manual entries load even if the source is offline today — the playlist enters 'waiting for source' on Play until the sender appears." />
         </StackPanel>
@@ -61,7 +61,7 @@
         </Border>
 
         <TextBlock TextWrapping="Wrap" Opacity="0.7" FontSize="11" Margin="0,4,0,0"
-                   Text="Note: NDI video reception is gated on framework backfill (NDIVideoReceiver). Audio-only items work today; saving a video-capable item now means it'll start sending video once backfill ships." />
+                   Text="Video-only items drive NDI video without audio. Audio+video items use separate receivers on the same source name." />
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

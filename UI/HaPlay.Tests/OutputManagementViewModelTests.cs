@@ -6,6 +6,51 @@ namespace HaPlay.Tests;
 
 public sealed class OutputManagementViewModelTests
 {
+    /// <summary>Phase E (§8.1) — the sparkline ring on <see cref="OutputLineViewModel"/> stores
+    /// per-tick deltas. Three ticks of growing cumulative counters must produce three positive
+    /// samples whose peak matches the largest delta.</summary>
+    [Fact]
+    public void OutputLineViewModel_RecordSparklineSample_StoresPerTickDeltas()
+    {
+        var line = new OutputLineViewModel(
+            new PortAudioOutputDefinition(Guid.NewGuid(), "Spark", 0, "Alsa", 1, "d", 2, 48000),
+            _ => { });
+
+        line.RecordSparklineSample(videoSubmittedTotal: 60, audioEnqueuedTotal: 100);
+        line.RecordSparklineSample(videoSubmittedTotal: 120, audioEnqueuedTotal: 200);
+        line.RecordSparklineSample(videoSubmittedTotal: 240, audioEnqueuedTotal: 350);
+
+        var samples = line.SparklineSamples;
+        Assert.Equal(3, samples.Count);
+        Assert.Equal(60 + 100, samples[0]); // first tick: 60 frames + 100 chunks
+        Assert.Equal(60 + 100, samples[1]); // second tick: same delta (60+100)
+        Assert.Equal(120 + 150, samples[2]); // third tick: 120 frames + 150 chunks
+        Assert.Equal(270, line.SparklinePeakSample);
+        Assert.Equal(270, line.SparklineLastSample);
+    }
+
+    /// <summary>Sparkline reset clears the ring + last-counters so a re-Play after Stop starts fresh
+    /// rather than emitting a giant first-tick spike from the cumulative drift.</summary>
+    [Fact]
+    public void OutputLineViewModel_ResetSparkline_ClearsRingAndLastCounters()
+    {
+        var line = new OutputLineViewModel(
+            new PortAudioOutputDefinition(Guid.NewGuid(), "Spark", 0, "Alsa", 1, "d", 2, 48000),
+            _ => { });
+        line.RecordSparklineSample(60, 100);
+        line.RecordSparklineSample(120, 200);
+        Assert.Equal(2, line.SparklineSamples.Count);
+
+        line.ResetSparkline();
+        Assert.Empty(line.SparklineSamples);
+        Assert.Equal(0, line.SparklinePeakSample);
+
+        // First post-reset sample uses the FULL counter values, not deltas relative to the pre-reset state.
+        line.RecordSparklineSample(50, 70);
+        Assert.Single(line.SparklineSamples);
+        Assert.Equal(120, line.SparklineSamples[0]);
+    }
+
     [Fact]
     public void ReplaceDefinitionsForLoad_EmptyToPopulated_PopulatesOutputs()
     {
@@ -170,5 +215,30 @@ public sealed class OutputManagementViewModelTests
         Assert.Equal(6, vm.VirtualAudioChannelAssignments[^1].VirtualOutputChannel);
         Assert.Equal(4, vm.GetAssignedVirtualAudioChannel(paId, 3));
         Assert.Equal(6, vm.GetAssignedVirtualAudioChannel(ndiId, 1));
+    }
+
+    [Fact]
+    public void NdiRecordingToggle_AppliesOnlyToNdiLines()
+    {
+        var vm = new OutputManagementViewModel();
+        vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+        {
+            new NDIOutputDefinition(Guid.NewGuid(), "NDI 1", "src", null, NDIOutputStreamMode.VideoAndAudio, 2, 48000),
+            new PortAudioOutputDefinition(Guid.NewGuid(), "PA", 0, "Alsa", 1, "dev", 2, 48000),
+        });
+
+        var ndiLine = vm.Outputs[0];
+        var paLine = vm.Outputs[1];
+
+        Assert.True(ndiLine.ToggleNdiRecordingCommand.CanExecute(null));
+        Assert.False(paLine.ToggleNdiRecordingCommand.CanExecute(null));
+
+        Assert.False(ndiLine.IsNdiRecording);
+        ndiLine.ToggleNdiRecordingCommand.Execute(null);
+        Assert.True(ndiLine.IsNdiRecording);
+        Assert.Equal("Stop Rec", ndiLine.NdiRecordingButtonText);
+        ndiLine.ToggleNdiRecordingCommand.Execute(null);
+        Assert.False(ndiLine.IsNdiRecording);
+        Assert.Equal("Record", ndiLine.NdiRecordingButtonText);
     }
 }

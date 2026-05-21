@@ -23,10 +23,11 @@ namespace S.Media.PortAudio;
 /// <see cref="Dispose"/> calls <see cref="Stop"/> then <see cref="PortAudioRuntime.Release"/>; each step is wrapped so <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
 /// </para>
 /// </remarks>
-public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushableSink, IPlaybackClock, IDisposable
+public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabilities, IClockedSink, IFlushableSink, IPlaybackClock, IDisposable
 {
     private readonly AudioFormat _format;
     private readonly int _deviceIndex;
+    private readonly int _maxOutputChannels;
     private readonly double _suggestedLatency;
     private readonly nuint _framesPerBuffer;
     private readonly float[] _ringBuffer;
@@ -58,6 +59,9 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
     private int _streamSmoothCalibrated;
 
     public AudioFormat Format => _format;
+    public AudioSinkChannelCapabilities ChannelCapabilities =>
+        new(CurrentChannels: _format.Channels, MinChannels: 1, MaxChannels: _maxOutputChannels,
+            SupportsRuntimeChannelReconfigure: false);
     public bool IsRunning => Volatile.Read(ref _isRunning);
     public int DeviceIndex => _deviceIndex;
 
@@ -186,6 +190,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IClockedSink, IFlushabl
 
             var devInfo = Native.Pa_GetDeviceInfo(_deviceIndex)
                 ?? throw new InvalidOperationException($"invalid PortAudio device index {_deviceIndex}");
+            _maxOutputChannels = Math.Max(1, devInfo.maxOutputChannels);
             if (devInfo.maxOutputChannels < format.Channels)
                 throw new InvalidOperationException(
                     $"device '{devInfo.Name}' supports {devInfo.maxOutputChannels} output channels, requested {format.Channels}");

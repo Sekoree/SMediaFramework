@@ -5,7 +5,7 @@
 in vec2 v_uv;
 out vec4 fragColor;
 
-uniform sampler2D packed;
+uniform sampler2D packedTex;
 uniform float frameWidth;
 uniform float halfTexWidth;
 uniform vec3 yuvOffset;
@@ -76,7 +76,7 @@ void main()
     float hx = floor(x);
     float pairIdx = floor(hx * 0.5);
     float s = (pairIdx + 0.5) / halfTexWidth;
-    vec4 yuyv = texture(packed, vec2(s, v_uv.y));
+    vec4 yuyv = texture(packedTex, vec2(s, v_uv.y));
     float Y = mod(hx, 2.0) < 0.5 ? yuyv.r : yuyv.b;
     float U = yuyv.g;
     float V = yuyv.a;

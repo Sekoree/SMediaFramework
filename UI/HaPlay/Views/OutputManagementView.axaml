@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:ctrls="using:HaPlay.Views.Controls"
              mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="640"
              x:Class="HaPlay.Views.OutputManagementView"
              x:DataType="vm:OutputManagementViewModel">
@@ -23,13 +24,20 @@
   </UserControl.Styles>
 
   <DockPanel Margin="16">
-    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,12">
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,12">
       <StackPanel Grid.Column="0" Spacing="2">
         <TextBlock Text="Outputs" FontSize="22" FontWeight="SemiBold" />
         <TextBlock Classes="hint"
                    Text="Configured audio / video destinations. Right-click a local-video row for preview controls." />
       </StackPanel>
-      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+      <!-- §8.1 aggregate health chip — recolors when any line is warn/error. -->
+      <Border Grid.Column="1" Margin="0,0,8,0" Padding="10,4" CornerRadius="12"
+              VerticalAlignment="Center"
+              Background="{Binding HasAggregateIssues, Converter={x:Static vm:AggregateBrushConverter.Instance}}">
+        <TextBlock Text="{Binding AggregateSummary}" FontSize="12" FontWeight="SemiBold"
+                   Foreground="#FFE6E6" />
+      </Border>
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
         <Button Content="Add PortAudio…" Command="{Binding AddPortAudioCommand}" />
         <Button Content="Add local video…" Command="{Binding AddLocalVideoCommand}" />
         <Button Content="Add NDI…" Command="{Binding AddNDICommand}" />
@@ -62,6 +70,18 @@
               </Grid.ContextFlyout>
               <StackPanel Grid.Column="0" Spacing="4">
                 <StackPanel Orientation="Horizontal" Spacing="6">
+                  <Ellipse Width="10" Height="10"
+                           VerticalAlignment="Center"
+                           Fill="{Binding HealthColor}"
+                           ToolTip.Tip="{Binding HealthToolTip}" />
+                  <Border IsVisible="{Binding IsNdiRecording}"
+                          Background="#CCB00020"
+                          BorderBrush="#FFDF4A4A"
+                          BorderThickness="1"
+                          CornerRadius="3"
+                          Padding="4,1">
+                    <TextBlock Text="REC" FontSize="10" FontWeight="SemiBold" Foreground="#FFF5D4D4" />
+                  </Border>
                   <TextBlock Text="↳" Opacity="0.6" IsVisible="{Binding IsClone}" />
                   <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold"
                              ToolTip.Tip="{Binding KindTechnicalLabel}" />
@@ -73,7 +93,18 @@
                 </StackPanel>
                 <TextBlock Classes="hint" Text="{Binding Summary}" />
               </StackPanel>
-              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top">
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <!-- §8.1 inline sparkline — frames+chunks per second over last 60 s. -->
+                <ctrls:SparklineControl Width="120" Height="22"
+                                        Samples="{Binding SparklineSamples}"
+                                        PeakSample="{Binding SparklinePeakSample}"
+                                        Revision="{Binding SparklineRevision}"
+                                        Stroke="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.Instance}}"
+                                        AreaFill="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.AreaInstance}}"
+                                        ToolTip.Tip="Throughput over the last minute (frames + audio chunks per second)." />
+                <Button Content="{Binding NdiRecordingButtonText}"
+                        Command="{Binding ToggleNdiRecordingCommand}"
+                        IsVisible="{Binding IsNdi}" />
                 <Button Content="Edit…" Command="{Binding EditCommand}" />
                 <Button Content="Remove" Command="{Binding RemoveCommand}" />
               </StackPanel>

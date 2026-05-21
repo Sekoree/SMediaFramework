@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        xmlns:dlg="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.AddNDIOutputDialog"
         x:DataType="vm:AddNDIOutputDialogViewModel"
         Title="{Binding DialogTitle}"
@@ -37,6 +38,34 @@
           <TextBlock Text="NDI audio sample rate (Hz)" FontWeight="SemiBold" />
           <NumericUpDown Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding AudioSampleRate}" />
         </StackPanel>
+
+        <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Margin="0,8,0,0" Padding="0,8,0,0">
+          <StackPanel Spacing="8">
+            <TextBlock Text="Video format lock (optional)" FontWeight="SemiBold" />
+            <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                       Text="When set, receivers see a fixed pixel format and/or resolution regardless of the source. Leave on 'Auto' for receivers to pick the cheapest negotiation." />
+
+            <TextBlock Text="Pixel format" />
+            <ComboBox ItemsSource="{Binding PixelFormatChoices}"
+                      SelectedItem="{Binding SelectedPixelFormat}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="dlg:NDIPixelFormatChoice">
+                  <TextBlock Text="{Binding Label}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <TextBlock Text="Resolution" />
+            <ComboBox ItemsSource="{Binding ResolutionChoices}"
+                      SelectedItem="{Binding SelectedResolution}">
+              <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="dlg:NDIResolutionChoice">
+                  <TextBlock Text="{Binding Label}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+        </Border>
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

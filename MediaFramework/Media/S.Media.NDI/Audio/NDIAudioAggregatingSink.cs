@@ -14,7 +14,7 @@ namespace S.Media.NDI.Audio;
 /// <see cref="IAudioSink.Submit"/> via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues.
 /// </para>
 /// </remarks>
-public sealed class NDIAudioAggregatingSink : IAudioSink, IDisposable
+public sealed class NDIAudioAggregatingSink : IAudioSink, IAudioSinkChannelCapabilities, IDisposable
 {
     private readonly IAudioSink _inner;
     private readonly int _targetSamplesPerChannel;
@@ -32,6 +32,10 @@ public sealed class NDIAudioAggregatingSink : IAudioSink, IDisposable
     }
 
     public AudioFormat Format => _inner.Format;
+    public AudioSinkChannelCapabilities ChannelCapabilities =>
+        _inner is IAudioSinkChannelCapabilities c
+            ? c.ChannelCapabilities with { CurrentChannels = Format.Channels }
+            : AudioSinkChannelCapabilities.Fixed(Format.Channels);
 
     public void Submit(in AudioFrame frame)
     {

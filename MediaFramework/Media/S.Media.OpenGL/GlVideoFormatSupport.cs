@@ -265,14 +265,14 @@ internal static class GlVideoFormatSupport
 
             [CorePixelFormat.Uyvy] = new(
                 "fullscreen.vert.glsl", "uyvy422.frag.glsl",
-                ["packed"], 1,
+                ["packedTex"], 1,
                 Packed422RgbaHalfWidth,
                 static _ => (GlInternalFormat.Rgba8, GlPixelFormat.Rgba, GlPixelType.UnsignedByte),
                 1f, true, true),
 
             [CorePixelFormat.Yuyv] = new(
                 "fullscreen.vert.glsl", "yuyv422.frag.glsl",
-                ["packed"], 1,
+                ["packedTex"], 1,
                 Packed422RgbaHalfWidth,
                 static _ => (GlInternalFormat.Rgba8, GlPixelFormat.Rgba, GlPixelType.UnsignedByte),
                 1f, true, true),

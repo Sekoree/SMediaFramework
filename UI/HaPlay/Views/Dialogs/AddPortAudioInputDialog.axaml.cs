@@ -9,6 +9,7 @@ public partial class AddPortAudioInputDialog : Window
     public AddPortAudioInputDialog()
     {
         InitializeComponent();
+        DialogStatePersister.Attach(this, nameof(AddPortAudioInputDialog), MinWidth, MinHeight);
     }
 
     private void OkClick(object? sender, RoutedEventArgs e)

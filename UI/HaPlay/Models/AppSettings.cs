@@ -15,6 +15,30 @@ public sealed class AppSettings
     /// <summary>Workspace selected on last shutdown — restored on next launch.</summary>
     public string? LastSelectedWorkspace { get; set; }
 
+    /// <summary>Phase E (§8.7) — last-known main window placement. Restored on next launch; ignored
+    /// when the saved position would land off all visible screens (multi-monitor change between
+    /// sessions). <see langword="null"/> means "use the window's design-time defaults".</summary>
+    public WindowStateSnapshot? MainWindow { get; set; }
+
+    /// <summary>Phase B (§12.2) — per-dialog-type size memory. Key is the dialog's
+    /// <see cref="DialogStatePersister"/> id (e.g. <c>"AddNDIOutputDialog"</c>); value is the
+    /// last-known size. Position is not persisted — dialogs always centre on their owner.</summary>
+    public Dictionary<string, DialogSizeSnapshot> DialogSizes { get; set; } = new();
+
+    /// <summary>Phase E (§8.6) — chrome theme. <see cref="AppThemeMode.System"/> defers to the OS
+    /// setting; <see cref="AppThemeMode.Light"/> / <see cref="AppThemeMode.Dark"/> force the variant.
+    /// Saved as a string ("system"/"light"/"dark") via the source-gen contract.</summary>
+    public AppThemeMode Theme { get; set; } = AppThemeMode.System;
+
+    /// <summary>Phase E (§8.6) — Fluent density. <see cref="AppDensityMode.Compact"/> keeps the
+    /// tight pre-§8.6 spacing (the default), <see cref="AppDensityMode.Normal"/> opens it up.</summary>
+    public AppDensityMode Density { get; set; } = AppDensityMode.Compact;
+
+    /// <summary>Phase E (§8.3) — how the Players workspace lays out its players. <see cref="PlayersLayoutMode.Tabs"/>
+    /// is the pre-§8.3 single-player-visible default; <see cref="PlayersLayoutMode.Stacked"/> shows every
+    /// player vertically (scrollable); <see cref="PlayersLayoutMode.Split"/> tiles them in a UniformGrid.</summary>
+    public PlayersLayoutMode PlayersLayout { get; set; } = PlayersLayoutMode.Tabs;
+
     private static string FilePath
     {
         get
@@ -58,6 +82,63 @@ public sealed class AppSettings
     }
 }
 
+/// <summary>Phase E (§8.7) — persisted window placement. Coordinates are in Avalonia pixel space and
+/// must be re-validated against the current <see cref="Avalonia.Controls.Screens"/> collection before
+/// being applied (multi-monitor unplug between sessions can leave the saved point off-screen).</summary>
+public sealed class WindowStateSnapshot
+{
+    public double Width { get; set; }
+    public double Height { get; set; }
+    public int X { get; set; }
+    public int Y { get; set; }
+
+    /// <summary>True when the window was maximized at save time. Restore re-applies size + position from
+    /// the snapshot first (so the un-maximize size is remembered) and then sets
+    /// <see cref="Avalonia.Controls.Window.WindowState"/> to <see cref="Avalonia.Controls.WindowState.Maximized"/>.</summary>
+    public bool IsMaximized { get; set; }
+}
+
+/// <summary>Phase B (§12.2) — persisted size of a resizable dialog. Position is intentionally not
+/// captured: dialogs centre on their owner so a saved point would land on the wrong monitor when the
+/// main window moves between sessions.</summary>
+public sealed class DialogSizeSnapshot
+{
+    public double Width { get; set; }
+    public double Height { get; set; }
+}
+
+/// <summary>Phase E (§8.6) — chrome theme variant. <see cref="System"/> follows the OS preference.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<AppThemeMode>))]
+public enum AppThemeMode
+{
+    System,
+    Light,
+    Dark,
+}
+
+/// <summary>Phase E (§8.6) — Fluent theme density. <see cref="Compact"/> matches the pre-§8.6 default
+/// (tight padding), <see cref="Normal"/> opens spacing up for touch / accessibility.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<AppDensityMode>))]
+public enum AppDensityMode
+{
+    Compact,
+    Normal,
+}
+
+/// <summary>Phase E (§8.3) — how the Players workspace lays out its players.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<PlayersLayoutMode>))]
+public enum PlayersLayoutMode
+{
+    /// <summary>One player visible at a time, picked via a TabStrip. Pre-§8.3 default.</summary>
+    Tabs,
+    /// <summary>Every player visible vertically; the workspace gets a scroll viewer.</summary>
+    Stacked,
+    /// <summary>Every player tiled in a UniformGrid (side-by-side for two, grid for more).</summary>
+    Split,
+}
+
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(AppSettings))]
+[JsonSerializable(typeof(WindowStateSnapshot))]
+[JsonSerializable(typeof(DialogSizeSnapshot))]
 internal partial class AppSettingsJsonContext : JsonSerializerContext;

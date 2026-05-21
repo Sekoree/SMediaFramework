@@ -38,7 +38,7 @@ namespace S.Media.NDI.Audio;
 /// <see cref="Dispose"/> frees the native packed buffer; <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/>.
 /// </para>
 /// </remarks>
-public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
+public sealed unsafe class NDIAudioSink : IAudioSink, IAudioSinkChannelCapabilities, IDisposable
 {
     private readonly NDISender _sender;
     private readonly AudioFormat _format;
@@ -53,6 +53,7 @@ public sealed unsafe class NDIAudioSink : IAudioSink, IDisposable
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Audio.NDIAudioSink");
 
     public AudioFormat Format => _format;
+    public AudioSinkChannelCapabilities ChannelCapabilities => AudioSinkChannelCapabilities.Fixed(_format.Channels);
 
     internal NDIAudioSink(NDISender sender, AudioFormat format, NDIEgressPresentationTimeline? presentationTimeline = null)
     {

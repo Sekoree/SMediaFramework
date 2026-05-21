@@ -10,6 +10,7 @@ public partial class AddLocalVideoOutputDialog : Window
     public AddLocalVideoOutputDialog()
     {
         InitializeComponent();
+        DialogStatePersister.Attach(this, nameof(AddLocalVideoOutputDialog), MinWidth, MinHeight);
     }
 
     private void OkClick(object? sender, RoutedEventArgs e)

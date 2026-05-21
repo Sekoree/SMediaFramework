@@ -1,0 +1,86 @@
+using HaPlay.ViewModels;
+using S.Media.Core.Video;
+using S.Media.Playback;
+
+namespace HaPlay.Playback;
+
+/// <summary>Derives per-output health from router pump metrics during active playback.</summary>
+internal static class OutputLineHealthEvaluator
+{
+    /// <summary>Phase E (§8.1) — one snapshot of a line's pump counters. The session-aware
+    /// <see cref="EvaluateWithMetrics"/> overload returns this so the caller can push throughput
+    /// + drops into a per-line ring buffer for sparklines without re-querying the metrics.</summary>
+    public readonly record struct LineHealthMetrics(
+        OutputLineHealthState State,
+        long VideoSubmitted,
+        long VideoDropped,
+        int VideoQueueDepth,
+        int VideoQueueCap,
+        long AudioEnqueued,
+        long AudioDropped);
+
+    public static OutputLineHealthState Evaluate(
+        HaPlayPlaybackSession session,
+        OutputLineViewModel line) =>
+        EvaluateWithMetrics(session, line).State;
+
+    /// <summary>Same scoring as <see cref="Evaluate"/> but also exposes the underlying counters so the
+    /// caller can push them into a sparkline history (§8.1).</summary>
+    public static LineHealthMetrics EvaluateWithMetrics(
+        HaPlayPlaybackSession session,
+        OutputLineViewModel line)
+    {
+        if (!session.HasWiredLine(line))
+            return new LineHealthMetrics(OutputLineHealthState.Unknown, 0, 0, 0, 0, 0, 0);
+
+        var player = session.Player;
+        long videoDropped = 0;
+        long videoSubmitted = 0;
+        int videoQueueDepth = 0;
+        int videoQueueCap = 0;
+        long audioDropped = 0;
+        long audioEnqueued = 0;
+
+        if (session.TryGetVideoOutputId(line, out var videoOutputId)
+            && player.VideoRouter.TryGetVideoSinkPumpMetrics(videoOutputId, out VideoSinkPumpMetrics vm))
+        {
+            videoDropped = vm.DroppedFrames;
+            videoSubmitted = vm.SubmittedFrames;
+            videoQueueDepth = vm.CurrentQueuedDepth;
+            videoQueueCap = vm.MaxQueueDepth;
+        }
+
+        if (session.TryGetAudioSinkId(line, out var audioSinkId) && player.Audio is not null)
+        {
+            var st = player.Audio.Router.GetPumpStats(audioSinkId);
+            audioDropped = st.Dropped;
+            audioEnqueued = st.Enqueued;
+        }
+
+        OutputLineHealthState state;
+        if (videoDropped == 0 && audioDropped == 0 && videoSubmitted + audioEnqueued > 0)
+        {
+            if (videoQueueCap > 0 && videoQueueDepth >= Math.Max(1, videoQueueCap * 3 / 4))
+                state = OutputLineHealthState.Warning;
+            else
+                state = OutputLineHealthState.Healthy;
+        }
+        else
+        {
+            var totalSubmitted = Math.Max(1, videoSubmitted + audioEnqueued);
+            var totalDropped = videoDropped + audioDropped;
+            var dropRatio = (double)totalDropped / totalSubmitted;
+
+            if (totalDropped > 120 || dropRatio > 0.05)
+                state = OutputLineHealthState.Error;
+            else if (totalDropped > 0 || (videoQueueCap > 0 && videoQueueDepth >= Math.Max(1, videoQueueCap / 2)))
+                state = OutputLineHealthState.Warning;
+            else
+                state = totalSubmitted > 0 ? OutputLineHealthState.Healthy : OutputLineHealthState.Unknown;
+        }
+
+        return new LineHealthMetrics(state,
+            videoSubmitted, videoDropped, videoQueueDepth, videoQueueCap,
+            audioEnqueued, audioDropped);
+    }
+}

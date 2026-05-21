@@ -17,7 +17,7 @@ namespace S.Media.FFmpeg.Audio;
 /// resampler state instead of bleeding across discontinuities.
 /// </para>
 /// </remarks>
-public sealed class ResamplingAudioSink : IAudioSink, IFlushableSink, IDisposable
+public sealed class ResamplingAudioSink : IAudioSink, IAudioSinkChannelCapabilities, IFlushableSink, IDisposable
 {
     private readonly IAudioSink _inner;
     private readonly AudioFormat _routerFormat;
@@ -44,6 +44,10 @@ public sealed class ResamplingAudioSink : IAudioSink, IFlushableSink, IDisposabl
     /// <inheritdoc />
     /// <summary>Router-side format (input to <see cref="Submit"/>).</summary>
     public AudioFormat Format => _routerFormat;
+    public AudioSinkChannelCapabilities ChannelCapabilities =>
+        _inner is IAudioSinkChannelCapabilities c
+            ? c.ChannelCapabilities with { CurrentChannels = _routerFormat.Channels }
+            : AudioSinkChannelCapabilities.Fixed(_routerFormat.Channels);
 
     public void Submit(ReadOnlySpan<float> packedSamples)
     {

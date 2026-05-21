@@ -13,6 +13,8 @@ using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Playback;
 using S.Media.Core.Audio;
+using S.Media.NDI.Audio;
+using S.Media.PortAudio;
 
 namespace HaPlay.ViewModels;
 
@@ -21,6 +23,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private readonly OutputManagementViewModel _outputs;
     private readonly Action<MediaPlayerViewModel>? _requestRemove;
     private HaPlayPlaybackSession? _session;
+
+    /// <summary>Active playback session when media is loaded (for output health probes).</summary>
+    internal HaPlayPlaybackSession? PlaybackSession => _session;
     private DispatcherTimer? _loopTimer;
     private IdleLogoSlateSession? _idleSlate;
     private string? _idleSlateSig;
@@ -30,6 +35,477 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private Timer? _holdPumpTimer;
     private int _holdPumpReentry;
     private PlaylistTabViewModel? _activePlaybackTab;
+
+    /// <summary>When true, natural file-end raises <see cref="NaturalPlaybackEnded"/> instead of playlist auto-advance.</summary>
+    private bool _cuePlaybackActive;
+
+    /// <summary>Raised when a file-backed session reaches natural end (not live, not looping).</summary>
+    public event EventHandler? NaturalPlaybackEnded;
+
+    public void SetCuePlaybackActive(bool active)
+    {
+        _cuePlaybackActive = active;
+        if (!active)
+        {
+            _activeCueEndBehavior = CueEndBehavior.Stop;
+            CancelCueEnvelope();
+        }
+    }
+
+    /// <summary>Apply loop/end-behavior flags before opening a cue (§5.2).</summary>
+    public void ConfigureCueTransport(MediaCueNode cue)
+    {
+        _cuePlaybackActive = true;
+        _activeCueEndBehavior = cue.EndBehavior;
+        IsLooping = cue.Loop || cue.EndBehavior == CueEndBehavior.Loop;
+    }
+
+    private CueEndBehavior _activeCueEndBehavior = CueEndBehavior.Stop;
+
+    public void InvalidateCuePreRoll()
+    {
+        _cuePreRoll.InvalidateAll();
+        _ndiPreConnect.InvalidateAll();
+        _paPreConnect.InvalidateAll();
+    }
+
+    public HaPlayFilePlaybackOptions CurrentFilePlaybackOptions() =>
+        new(OutputPreset, TransitionMode, TransitionDurationMs);
+
+    public HaPlayFilePlaybackOptions FilePlaybackOptionsForCue(MediaCueNode cue) =>
+        new(OutputPreset, TransitionMode, TransitionDurationMs,
+            Math.Max(0, cue.FadeInMs), Math.Max(0, cue.FadeOutMs));
+
+    public void CancelCueEnvelope()
+    {
+        try { _cueEnvelopeCts?.Cancel(); } catch { /* best effort */ }
+        try { _cueEnvelopeCts?.Dispose(); } catch { /* best effort */ }
+        _cueEnvelopeCts = null;
+        _cueEnvelope = 1f;
+        _cueVideoOpacity = 1f;
+        _session?.SetLogoOutputOpacity(1f);
+    }
+
+    /// <summary>Ramps master×output compound gain for per-cue <see cref="MediaCueNode.FadeInMs"/> /
+    /// <see cref="MediaCueNode.FadeOutMs"/> (audio + video via logo opacity when video is routed).</summary>
+    public void BeginCueFades(MediaCueNode cue)
+    {
+        CancelCueEnvelope();
+        if (cue.FadeInMs <= 0 && cue.FadeOutMs <= 0)
+            return;
+        _cueEnvelopeCts = new CancellationTokenSource();
+        _ = RunCueEnvelopeAsync(cue, _cueEnvelopeCts.Token);
+    }
+
+    private async Task RunCueEnvelopeAsync(MediaCueNode cue, CancellationToken ct)
+    {
+        try
+        {
+            if (cue.FadeInMs > 0)
+            {
+                _cueEnvelope = 0f;
+                _cueVideoOpacity = 0f;
+                await ApplyCueEnvelopeToSessionAsync();
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < cue.FadeInMs)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var t = (float)Math.Min(1.0, sw.ElapsedMilliseconds / (double)cue.FadeInMs);
+                    _cueEnvelope = t;
+                    _cueVideoOpacity = t;
+                    await ApplyCueEnvelopeToSessionAsync();
+                    await Task.Delay(20, ct).ConfigureAwait(false);
+                }
+                _cueEnvelope = 1f;
+                _cueVideoOpacity = 1f;
+                await ApplyCueEnvelopeToSessionAsync();
+            }
+
+            if (cue.FadeOutMs > 0)
+            {
+                var duration = await Dispatcher.UIThread.InvokeAsync(() => Duration);
+                if (duration <= TimeSpan.Zero)
+                    return;
+
+                var fadeOutStart = duration - TimeSpan.FromMilliseconds(cue.FadeOutMs);
+                while (!ct.IsCancellationRequested)
+                {
+                    var pos = await Dispatcher.UIThread.InvokeAsync(() => CurrentPosition);
+                    if (!IsPlaying || pos >= fadeOutStart)
+                        break;
+                    await Task.Delay(50, ct).ConfigureAwait(false);
+                }
+
+                var swOut = System.Diagnostics.Stopwatch.StartNew();
+                while (swOut.ElapsedMilliseconds < cue.FadeOutMs && !ct.IsCancellationRequested)
+                {
+                    var stillPlaying = await Dispatcher.UIThread.InvokeAsync(() => IsPlaying);
+                    if (!stillPlaying)
+                        break;
+                    var t = 1f - (float)Math.Min(1.0, swOut.ElapsedMilliseconds / (double)cue.FadeOutMs);
+                    _cueEnvelope = t;
+                    _cueVideoOpacity = t;
+                    await ApplyCueEnvelopeToSessionAsync();
+                    await Task.Delay(20, ct).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            /* stop/panic/next cue */
+        }
+        finally
+        {
+            _cueEnvelope = 1f;
+            _cueVideoOpacity = 1f;
+            await ApplyCueEnvelopeToSessionAsync();
+        }
+    }
+
+    private float _cueVideoOpacity = 1f;
+
+    private async Task ApplyCueEnvelopeToSessionAsync()
+    {
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            ApplyAllOutputGainsToSession();
+            _session?.SetLogoOutputOpacity(_cueVideoOpacity);
+        });
+    }
+
+    /// <summary>GO path — adopt pre-opened file/NDI when cache matches; otherwise open normally.</summary>
+    public async Task<bool> TryPlayCueMediaAsync(MediaCueNode cue, CancellationToken ct = default)
+    {
+        if (cue.Source is null)
+            return false;
+
+        var adopted = cue.Source switch
+        {
+            NDIInputPlaylistItem ndi => await TryPlayNdiCueAsync(cue, ndi, ct).ConfigureAwait(false),
+            PortAudioInputPlaylistItem pa => await TryPlayPortAudioCueAsync(cue, pa, ct).ConfigureAwait(false),
+            _ => await TryPlayFileCueAsync(cue, ct).ConfigureAwait(false),
+        };
+
+        await ApplyCueTransportAsync(cue, ct).ConfigureAwait(false);
+        return adopted;
+    }
+
+    private async Task<bool> TryPlayFileCueAsync(MediaCueNode cue, CancellationToken ct)
+    {
+        var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
+        var fileOpts = FilePlaybackOptionsForCue(cue);
+        var cacheKey = CuePreRollCache.BuildCacheKey(cue.Source!, lines, fileOpts);
+        if (_cuePreRoll.TryTake(cue.Id, cacheKey, out var session, out var item) && session is not null && item is not null)
+        {
+            _activePlaybackTab = SelectedPlaylistTab;
+            SelectedPlaylistItem = item;
+            await AdoptPreRolledSessionAsync(session, item, cue, ct).ConfigureAwait(false);
+            if (!IsPlaying)
+                await StartPlaybackAsync().ConfigureAwait(false);
+            return true;
+        }
+
+        _pendingCueFilePlayback = fileOpts;
+        try
+        {
+            await PlayPlaylistItemAsync(cue.Source!).ConfigureAwait(false);
+        }
+        finally
+        {
+            _pendingCueFilePlayback = null;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> TryPlayNdiCueAsync(MediaCueNode cue, NDIInputPlaylistItem ndi, CancellationToken ct)
+    {
+        var cacheKey = NdiInputPreConnectCache.BuildCacheKey(ndi);
+        if (_ndiPreConnect.TryTake(cue.Id, cacheKey, out var receiver, out _))
+        {
+            await OpenPreconnectedNdiAsync(ndi, receiver!, cue, ct).ConfigureAwait(false);
+            if (!IsPlaying)
+                await StartPlaybackAsync().ConfigureAwait(false);
+            return true;
+        }
+
+        await PlayPlaylistItemAsync(ndi).ConfigureAwait(false);
+        return false;
+    }
+
+    private async Task OpenPreconnectedNdiAsync(
+        NDIInputPlaylistItem item,
+        NDIAudioReceiver receiver,
+        MediaCueNode cueRoutes,
+        CancellationToken ct)
+    {
+        _ = ct;
+        await WithPlaybackArcAsync(async () =>
+        {
+            await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
+
+            var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
+            HaPlayPlaybackSession? created = null;
+            string? createErr = null;
+            await Task.Run(() =>
+            {
+                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, receiver, out created, out createErr))
+                    created = null;
+            }).ConfigureAwait(false);
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (created is null)
+                {
+                    StatusMessage = createErr ?? "Failed to open pre-connected NDI.";
+                    try { receiver.Dispose(); } catch { /* best effort */ }
+                    return;
+                }
+
+                StopIdleSlate();
+                _outputs.StopPreviewsForPlayback(lines);
+                _currentPlaylistItem = item;
+                MediaFilePath = null;
+                OnPropertyChanged(nameof(CurrentMediaDisplay));
+                _session = created;
+                IsMediaLoaded = true;
+                Duration = TimeSpan.Zero;
+                StatusMessage = null;
+                created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
+                ApplyCueRouteOverrides(cueRoutes);
+                var srcCh = SourceChannelCountOrFallback(created);
+                foreach (var binding in Outputs)
+                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                RebuildAudioMatrixRows();
+                ApplyAllOutputMatricesToSession();
+                ApplyAllOutputGainsToSession();
+                EnsureLoopTimerStarted();
+            });
+        }).ConfigureAwait(false);
+    }
+
+    private async Task ApplyCueTransportAsync(MediaCueNode cue, CancellationToken ct)
+    {
+        if (cue.StartOffsetMs > 0 && _session?.IsLive != true)
+            await SeekToTimeAsync(TimeSpan.FromMilliseconds(cue.StartOffsetMs), ct).ConfigureAwait(false);
+
+        BeginCueFades(cue);
+    }
+
+    public async Task SeekToTimeAsync(TimeSpan position, CancellationToken ct = default)
+    {
+        if (_session is null || _session.IsLive || Duration <= TimeSpan.Zero)
+            return;
+
+        var t = position;
+        if (t < TimeSpan.Zero)
+            t = TimeSpan.Zero;
+        if (t > Duration)
+            t = Duration;
+
+        await WithPlaybackArcAsync(async () =>
+        {
+            ct.ThrowIfCancellationRequested();
+            var (session, playing, holdFb) = await Dispatcher.UIThread.InvokeAsync(() =>
+                (_session, IsPlaying, HoldFallbackVideo));
+            if (session is null)
+                return;
+
+            await RunBoundedCancelableAsync(innerCt =>
+                {
+                    session.Router.SeekCoordinatedSkippingSharedMuxFlush(t, innerCt);
+                    if (playing)
+                    {
+                        session.PrepareOutputsBeforePlay(holdFb);
+                        session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
+                    }
+                },
+                innerTimeout: TimeSpan.FromSeconds(3),
+                outerTimeout: TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+
+            if (!playing)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    CurrentPosition = t;
+                    if (Duration > TimeSpan.Zero)
+                        SeekSliderValue = t.Ticks * 1000.0 / Duration.Ticks;
+                });
+                return;
+            }
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (HoldFallbackVideo)
+                    StartHoldPumpTimer();
+                EnsureLoopTimerStarted();
+            });
+        }).ConfigureAwait(false);
+    }
+
+    private async Task<bool> TryPlayPortAudioCueAsync(MediaCueNode cue, PortAudioInputPlaylistItem pa, CancellationToken ct)
+    {
+        var cacheKey = PortAudioInputPreConnectCache.BuildCacheKey(pa);
+        if (_paPreConnect.TryTake(cue.Id, cacheKey, out var input, out _))
+        {
+            await OpenPreconnectedPortAudioAsync(pa, input!, cue, ct).ConfigureAwait(false);
+            if (!IsPlaying)
+                await StartPlaybackAsync().ConfigureAwait(false);
+            return true;
+        }
+
+        await PlayPlaylistItemAsync(pa).ConfigureAwait(false);
+        return false;
+    }
+
+    private async Task OpenPreconnectedPortAudioAsync(
+        PortAudioInputPlaylistItem item,
+        PortAudioInput input,
+        MediaCueNode cueRoutes,
+        CancellationToken ct)
+    {
+        _ = ct;
+        await WithPlaybackArcAsync(async () =>
+        {
+            await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
+
+            var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
+            HaPlayPlaybackSession? created = null;
+            string? createErr = null;
+            await Task.Run(() =>
+            {
+                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, input, out created, out createErr))
+                    created = null;
+            }).ConfigureAwait(false);
+
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (created is null)
+                {
+                    StatusMessage = createErr ?? "Failed to open pre-connected PortAudio.";
+                    try { input.Dispose(); } catch { /* best effort */ }
+                    return;
+                }
+
+                StopIdleSlate();
+                _outputs.StopPreviewsForPlayback(lines);
+                _currentPlaylistItem = item;
+                MediaFilePath = null;
+                OnPropertyChanged(nameof(CurrentMediaDisplay));
+                _session = created;
+                IsMediaLoaded = true;
+                Duration = TimeSpan.Zero;
+                StatusMessage = null;
+                created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
+                ApplyCueRouteOverrides(cueRoutes);
+                var srcCh = SourceChannelCountOrFallback(created);
+                foreach (var binding in Outputs)
+                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                RebuildAudioMatrixRows();
+                ApplyAllOutputMatricesToSession();
+                ApplyAllOutputGainsToSession();
+                EnsureLoopTimerStarted();
+            });
+        }).ConfigureAwait(false);
+    }
+
+    public async Task RefreshPortAudioPreConnectAsync(
+        IReadOnlyList<(Guid CueId, PortAudioInputPlaylistItem Item)> targets,
+        CancellationToken ct = default)
+    {
+        if (targets.Count == 0 || IsPlaying)
+            return;
+
+        var keepIds = targets.Select(t => t.CueId).ToHashSet();
+        foreach (var (cueId, item) in targets)
+        {
+            ct.ThrowIfCancellationRequested();
+            var cacheKey = PortAudioInputPreConnectCache.BuildCacheKey(item);
+            if (_paPreConnect.HasMatchingEntry(cueId, cacheKey))
+                continue;
+
+            PortAudioInput? input = null;
+            AudioFormat format = default;
+            string? err = null;
+            await Task.Run(() =>
+            {
+                if (!PortAudioInputConnector.TryOpen(item, out input, out format, out err))
+                    input = null;
+            }, ct).ConfigureAwait(false);
+
+            if (input is not null)
+                _paPreConnect.Store(cueId, cacheKey, input, format);
+        }
+
+        _paPreConnect.EvictExcept(keepIds, Math.Max(1, targets.Count));
+    }
+
+    public async Task RefreshNdiPreConnectAsync(
+        IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> targets,
+        CancellationToken ct = default)
+    {
+        if (targets.Count == 0 || IsPlaying)
+            return;
+
+        var keepIds = targets.Select(t => t.CueId).ToHashSet();
+        foreach (var (cueId, item) in targets)
+        {
+            ct.ThrowIfCancellationRequested();
+            var cacheKey = NdiInputPreConnectCache.BuildCacheKey(item);
+            if (_ndiPreConnect.HasMatchingEntry(cueId, cacheKey))
+                continue;
+
+            NDIAudioReceiver? receiver = null;
+            AudioFormat format = default;
+            string? err = null;
+            await Task.Run(() =>
+            {
+                if (!NdiInputConnector.TryConnectAudio(item, out receiver, out format, out err))
+                    receiver = null;
+            }, ct).ConfigureAwait(false);
+
+            if (receiver is not null)
+                _ndiPreConnect.Store(cueId, cacheKey, receiver, format);
+        }
+
+        _ndiPreConnect.EvictExcept(keepIds, Math.Max(1, targets.Count));
+    }
+
+    private HaPlayFilePlaybackOptions? _pendingCueFilePlayback;
+
+    public async Task RefreshCuePreRollAsync(
+        IReadOnlyList<(Guid CueId, PlaylistItem Item, int FadeInMs, int FadeOutMs)> targets,
+        CancellationToken ct = default)
+    {
+        if (targets.Count == 0 || IsPlaying)
+            return;
+
+        var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
+        var keepIds = targets.Select(t => t.CueId).ToHashSet();
+
+        foreach (var (cueId, item, fadeIn, fadeOut) in targets)
+        {
+            ct.ThrowIfCancellationRequested();
+            var fileOpts = new HaPlayFilePlaybackOptions(
+                OutputPreset, TransitionMode, TransitionDurationMs, fadeIn, fadeOut);
+            var cacheKey = CuePreRollCache.BuildCacheKey(item, lines, fileOpts);
+            if (_cuePreRoll.HasMatchingEntry(cueId, cacheKey))
+                continue;
+
+            HaPlayPlaybackSession? created = null;
+            string? err = null;
+            await Task.Run(() =>
+            {
+                if (!HaPlayPlaybackSession.TryCreate(item, lines, _outputs, out created, out err, fileOpts))
+                    created = null;
+            }, ct).ConfigureAwait(false);
+
+            if (created is not null)
+                _cuePreRoll.Store(cueId, cacheKey, created, item);
+        }
+
+        _cuePreRoll.EvictExcept(keepIds, Math.Max(1, targets.Count));
+    }
     private bool _syncingPlaylistTabState;
     private readonly ObservableCollection<PlaylistItem> _emptyPlaylistItems = new();
 
@@ -45,6 +521,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     /// <summary>Serializes load/unload/stop/pause/play/seek and loop-timer Router use so Dispose cannot overlap transport.</summary>
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
+    private readonly CuePreRollCache _cuePreRoll = new();
+    private readonly NdiInputPreConnectCache _ndiPreConnect = new();
+    private readonly PortAudioInputPreConnectCache _paPreConnect = new();
+    private float _cueEnvelope = 1f;
+    private CancellationTokenSource? _cueEnvelopeCts;
 
     /// <summary>Phase C.5 (§6.9) — switch into the "waiting for source" state. Surfaces a status banner,
     /// stamps the next retry deadline, and ensures the loop timer is running so the deadline ticks.
@@ -262,10 +743,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
         get
         {
             if (!IsMediaLoaded || _session is null) return "Idle";
-            // Live items don't carry a container decoder — Player.Decoder would throw. Use the
-            // negotiated source format (audio only until NDIVideoReceiver lands).
+            // Live items don't carry a container decoder; use negotiated live capabilities.
             if (_session.IsLive)
-                return _session.SourceAudioFormat.Channels > 0 ? "Live audio" : "Live";
+            {
+                if (_session.LiveHasVideo && _session.LiveHasAudio) return "Live video + audio";
+                if (_session.LiveHasVideo) return "Live video";
+                if (_session.LiveHasAudio) return "Live audio";
+                return "Live";
+            }
             var hasVid = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasVideo;
             var hasAud = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasAudio;
             if (hasVid && hasAud) return "Video + audio";
@@ -376,6 +861,24 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private PlayerOutputPreset _outputPreset = PlayerOutputPreset.AsSource;
+
+    partial void OnOutputPresetChanged(PlayerOutputPreset value)
+    {
+        _ = value;
+        InvalidateCuePreRoll();
+    }
+
+    partial void OnTransitionModeChanged(PlayerTransitionMode value)
+    {
+        _ = value;
+        InvalidateCuePreRoll();
+    }
+
+    partial void OnTransitionDurationMsChanged(int value)
+    {
+        _ = value;
+        InvalidateCuePreRoll();
+    }
 
     [ObservableProperty]
     private PlayerTransitionMode _transitionMode = PlayerTransitionMode.Cut;
@@ -741,7 +1244,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         if (MasterMuted || binding.IsMuted) return 0f;
         var db = Math.Clamp(MasterVolumeDb + binding.GainDb, -80.0, 24.0);
-        return (float)Math.Pow(10.0, db / 20.0);
+        return (float)Math.Pow(10.0, db / 20.0) * _cueEnvelope;
     }
 
     /// <summary>
@@ -1311,6 +1814,36 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>§8.5 quick-play — load and play the first dropped file without mutating the playlist.</summary>
+    public async Task QuickPlayDroppedFilesAsync(IEnumerable<string> paths)
+    {
+        var path = paths.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p) && File.Exists(p));
+        if (path is null)
+            return;
+        await PlayPlaylistItemAsync(new FilePlaylistItem(path)).ConfigureAwait(false);
+    }
+
+    [RelayCommand]
+    public void AddDroppedFilesToPlaylist(IEnumerable<string> paths)
+    {
+        var added = 0;
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                continue;
+            if (PlaylistItems.OfType<FilePlaylistItem>().Any(f =>
+                    string.Equals(f.Path, path, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            PlaylistItems.Add(new FilePlaylistItem(path));
+            added++;
+        }
+
+        if (added > 0 && SelectedPlaylistItem is null)
+            SelectedPlaylistItem = PlaylistItems[0];
+        if (added > 0)
+            StatusMessage = $"Added {added} file(s) to playlist.";
+    }
+
     [RelayCommand]
     private async Task AddFilesToPlaylistAsync()
     {
@@ -1429,6 +1962,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public async Task PlayPlaylistItemAsync(PlaylistItem item)
     {
         if (item is null) return;
+        if (_pendingCueFilePlayback is null)
+            CancelCueEnvelope();
         _activePlaybackTab = SelectedPlaylistTab;
         SelectedPlaylistItem = item;
         await PrepareCurrentItemAsync(item).ConfigureAwait(false);
@@ -1555,6 +2090,25 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// Apply cue-level audio routing overrides onto this player's matrix model.
     /// Uses cue virtual output channel numbers (VOut 1..N) mapped in current selected-output order.
     /// </summary>
+    /// <summary>Maps saved output display names that are missing on this machine to replacements.</summary>
+    public void RemapSelectedOutputs(IReadOnlyDictionary<string, string> missingToReplacement)
+    {
+        if (missingToReplacement.Count == 0)
+            return;
+
+        foreach (var (_, replacement) in missingToReplacement)
+        {
+            var binding = Outputs.FirstOrDefault(b =>
+                string.Equals(b.Line.Definition.DisplayName, replacement, StringComparison.OrdinalIgnoreCase));
+            if (binding is not null)
+                binding.IsSelected = true;
+        }
+
+        RebuildAudioMatrixRows();
+        ApplyAllOutputMatricesToSession();
+        ApplyAllOutputGainsToSession();
+    }
+
     public void ApplyCueRouteOverrides(MediaCueNode cue)
     {
         if (cue.RouteConnections.Count == 0 && cue.VirtualOutputChannels.Count == 0)
@@ -1763,6 +2317,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         var snapshot = await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            CancelCueEnvelope();
             StopHoldPumpTimer();
             _loopTimer?.Stop();
             _loopTimer = null;
@@ -1825,6 +2380,61 @@ public partial class MediaPlayerViewModel : ViewModelBase
                && File.Exists(MediaFilePath!);
     }
 
+    private async Task AdoptPreRolledSessionAsync(
+        HaPlayPlaybackSession session,
+        PlaylistItem item,
+        MediaCueNode cueRoutes,
+        CancellationToken ct)
+    {
+        _ = ct;
+        await WithPlaybackArcAsync(async () =>
+        {
+            await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
+
+            var holdFb = await Dispatcher.UIThread.InvokeAsync<bool>(() =>
+            {
+                StopIdleSlate();
+                _outputs.StopPreviewsForPlayback(SelectedOutputLines());
+                _currentPlaylistItem = item;
+                MediaFilePath = item is FilePlaylistItem f ? f.Path : null;
+                OnPropertyChanged(nameof(CurrentMediaDisplay));
+
+                _session = session;
+                IsMediaLoaded = true;
+                StatusMessage = null;
+                Duration = session.Player.HasContainerDecoder
+                           && session.Player.Decoder.Audio is ISeekableSource a
+                    ? a.Duration
+                    : TimeSpan.Zero;
+
+                session.Player.PlayClock.PositionChanged += OnClockPositionChanged;
+                if (!string.IsNullOrWhiteSpace(FallbackImagePath))
+                    session.ApplyFallbackImage(FallbackImagePath);
+                session.SetHoldFallback(HoldFallbackVideo);
+
+                ApplyCueRouteOverrides(cueRoutes);
+                var srcCh = SourceChannelCountOrFallback(session);
+                foreach (var binding in Outputs)
+                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                RebuildAudioMatrixRows();
+                ApplyAllOutputMatricesToSession();
+                ApplyAllOutputGainsToSession();
+
+                if (HoldFallbackVideo)
+                {
+                    try { session.PumpHoldFrames(session.Player.PlayClock.CurrentPosition); }
+                    catch { /* best effort */ }
+                }
+
+                EnsureLoopTimerStarted();
+                return HoldFallbackVideo;
+            });
+
+            if (holdFb)
+                await Dispatcher.UIThread.InvokeAsync(StartHoldPumpTimer);
+        });
+    }
+
     private async Task OpenOrReloadAsync()
     {
         if (!CanLoadMedia())
@@ -1853,9 +2463,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
             HaPlayPlaybackSession? created = null;
             string? createErr = null;
+            var fileOpts = _pendingCueFilePlayback ?? CurrentFilePlaybackOptions();
+            _cuePreRoll.InvalidateAll();
             await Task.Run(() =>
             {
-                if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr))
+                if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr, fileOpts))
                     created = null;
             }).ConfigureAwait(false);
 
@@ -2023,10 +2635,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (_session is null || !IsMediaLoaded || !IsPlaying)
             return;
 
-        // Phase C.5 — live sessions never auto-advance and never loop (§6.5). Skip the rest of the
-        // file-end logic so a transient router stall doesn't get mistaken for "track ended".
+        // Phase C.5 — live sessions never playlist-auto-advance (§6.5). Cue AutoFollow still fires when
+        // the operator stops transport or the capture/receiver disconnects.
         if (_session.IsLive)
+        {
+            if (IsPlaying && _cuePlaybackActive && _session.IsLiveSourceDisconnected)
+                await NotifyCuePlaybackNaturallyEndedAsync().ConfigureAwait(false);
             return;
+        }
 
         var holdFb = HoldFallbackVideo;
 
@@ -2068,6 +2684,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 ? !ar.IsRunning && ar.CompletedNaturally
                 : session.Player.Video.CompletedNaturally;
             if (!fileEnded) return;
+
+            var (cuePlaybackActive, endBehavior) = await Dispatcher.UIThread.InvokeAsync(() =>
+                (_cuePlaybackActive, _activeCueEndBehavior));
+            if (cuePlaybackActive)
+            {
+                await NotifyCuePlaybackNaturallyEndedAsync(endBehavior, session).ConfigureAwait(false);
+                return;
+            }
 
             resumePlayForPlaylist = IsPlaying;
             advancePlaylist = _activePlaybackTab?.AutoAdvance ?? AutoAdvancePlaylist;
@@ -2356,7 +2980,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
             // Task.Run/.WaitAsync blocks (the previous shape) could stack to ~11s on slow codecs.
             await RunBoundedCancelableAsync(ct =>
                 {
-                    snap.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, ct);
+                    if (snap.IsLive)
+                        snap.Router.PauseSkippingSharedMuxFlush(ct);
+                    else
+                        snap.Router.SeekCoordinatedSkippingSharedMuxFlush(TimeSpan.Zero, ct);
                     if (doPump)
                     {
                         try { snap.PumpHoldFrames(TimeSpan.Zero); }
@@ -2371,8 +2998,38 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 if (_session != snap) return;
                 CurrentPosition = TimeSpan.Zero;
                 SeekSliderValue = 0;
+                if (_cuePlaybackActive && snap.IsLive)
+                {
+                    _cuePlaybackActive = false;
+                    NaturalPlaybackEnded?.Invoke(this, EventArgs.Empty);
+                }
             });
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>Raises <see cref="NaturalPlaybackEnded"/> for cue AutoFollow (file natural end, live stop, or live disconnect).</summary>
+    private async Task NotifyCuePlaybackNaturallyEndedAsync(
+        CueEndBehavior? endBehavior = null,
+        HaPlayPlaybackSession? session = null)
+    {
+        var (cueActive, behavior, liveSession) = await Dispatcher.UIThread.InvokeAsync(() =>
+            (_cuePlaybackActive, endBehavior ?? _activeCueEndBehavior, session ?? _session));
+        if (!cueActive || liveSession is null)
+            return;
+
+        if (behavior == CueEndBehavior.FreezeLastFrame)
+        {
+            await RunBoundedCancelableAsync(liveSession.Router.PauseSkippingSharedMuxFlush,
+                innerTimeout: TimeSpan.FromSeconds(1.5),
+                outerTimeout: TimeSpan.FromSeconds(2.5));
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            _cuePlaybackActive = false;
+            IsPlaying = false;
+            NaturalPlaybackEnded?.Invoke(this, EventArgs.Empty);
+        });
     }
 
     /// <summary>

@@ -35,7 +35,7 @@ namespace S.Media.FFmpeg.Audio;
 /// <see cref="Dispose"/> tears down the optional <see cref="PumpPressurePlaybackHintMonitor"/> and the libav <see cref="AudioResampler"/> under the resample lock; each step logs in <strong>Debug</strong> via <see cref="MediaDiagnostics.LogError"/> on failure while <strong>Release</strong> continues.
 /// </para>
 /// </remarks>
-public sealed class AdaptiveRateAudioSink : IAudioSink, IClockedSink, IDisposable
+public sealed class AdaptiveRateAudioSink : IAudioSink, IAudioSinkChannelCapabilities, IClockedSink, IDisposable
 {
     private readonly IAudioSink _inner;
     private readonly AudioFormat _format;
@@ -94,6 +94,10 @@ public sealed class AdaptiveRateAudioSink : IAudioSink, IClockedSink, IDisposabl
     }
 
     public AudioFormat Format => _format;
+    public AudioSinkChannelCapabilities ChannelCapabilities =>
+        _inner is IAudioSinkChannelCapabilities c
+            ? c.ChannelCapabilities with { CurrentChannels = _format.Channels }
+            : AudioSinkChannelCapabilities.Fixed(_format.Channels);
 
     public void Submit(ReadOnlySpan<float> packedSamples)
     {

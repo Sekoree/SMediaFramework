@@ -33,10 +33,14 @@ public partial class OutputLineViewModel : ViewModelBase
         OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(IsLocalVideo));
         OnPropertyChanged(nameof(IsNotLocalVideo));
+        OnPropertyChanged(nameof(IsNdi));
+        OnPropertyChanged(nameof(IsNotNdi));
         OnPropertyChanged(nameof(IsClone));
         OnPropertyChanged(nameof(SupportsMediaPlayerRouting));
         OnPropertyChanged(nameof(IndentMargin));
         OnPropertyChanged(nameof(CloneParentLabel));
+        OnPropertyChanged(nameof(NdiRecordingButtonText));
+        ToggleNdiRecordingCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>True for top-level lines (non-clones). Per-player routing UI hides clones from the
@@ -46,6 +50,10 @@ public partial class OutputLineViewModel : ViewModelBase
     public bool IsLocalVideo => Definition is LocalVideoOutputDefinition;
 
     public bool IsNotLocalVideo => Definition is not LocalVideoOutputDefinition;
+
+    public bool IsNdi => Definition is NDIOutputDefinition;
+
+    public bool IsNotNdi => Definition is not NDIOutputDefinition;
 
     /// <summary>True when this line is a clone of another local-video line (§3.4).</summary>
     public bool IsClone =>
@@ -69,6 +77,128 @@ public partial class OutputLineViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _isPreviewRunning;
+
+    [ObservableProperty]
+    private bool _isNdiRecording;
+
+    [ObservableProperty]
+    private OutputLineHealthState _health = OutputLineHealthState.Unknown;
+
+    [ObservableProperty]
+    private string? _healthDetail;
+
+    /// <summary>Phase E (§8.1) — rolling ring of recent throughput samples (frames + audio chunks
+    /// per refresh tick). 60 entries × 1 s ticks = 1 minute window. The view binds to this list to
+    /// render an inline sparkline; <see cref="SparklinePeakSample"/> auto-scales the Y axis.</summary>
+    public const int SparklineCapacity = 60;
+
+    private readonly double[] _sparklineSamples = new double[SparklineCapacity];
+    private int _sparklineCount;
+    private int _sparklineHead;
+    private long _lastVideoSubmittedTotal;
+    private long _lastAudioEnqueuedTotal;
+
+    /// <summary>Current sparkline snapshot in oldest→newest order. Cheap to materialize — the buffer
+    /// is small and the view re-binds whenever <see cref="SparklineRevision"/> changes.</summary>
+    public IReadOnlyList<double> SparklineSamples
+    {
+        get
+        {
+            if (_sparklineCount == 0) return Array.Empty<double>();
+            var result = new double[_sparklineCount];
+            var start = (_sparklineHead - _sparklineCount + SparklineCapacity) % SparklineCapacity;
+            for (var i = 0; i < _sparklineCount; i++)
+                result[i] = _sparklineSamples[(start + i) % SparklineCapacity];
+            return result;
+        }
+    }
+
+    /// <summary>Peak observed sample within the current window — used as the Y-axis scale.</summary>
+    [ObservableProperty]
+    private double _sparklinePeakSample;
+
+    /// <summary>Increment that the view watches so the sparkline redraws on each new tick. Cheaper
+    /// than rebinding the list itself for a 60-entry buffer.</summary>
+    [ObservableProperty]
+    private int _sparklineRevision;
+
+    /// <summary>Throughput sample for the latest tick (frames + chunks per second).</summary>
+    [ObservableProperty]
+    private double _sparklineLastSample;
+
+    /// <summary>Phase E (§8.1) — push one tick's worth of pump deltas into the ring. Caller passes
+    /// the raw cumulative counters; the line VM subtracts the previous values so the ring stores
+    /// per-second deltas (with a refresh-tick wall of 1 s the value is samples-per-second too).</summary>
+    public void RecordSparklineSample(long videoSubmittedTotal, long audioEnqueuedTotal)
+    {
+        var videoDelta = Math.Max(0, videoSubmittedTotal - _lastVideoSubmittedTotal);
+        var audioDelta = Math.Max(0, audioEnqueuedTotal - _lastAudioEnqueuedTotal);
+        _lastVideoSubmittedTotal = videoSubmittedTotal;
+        _lastAudioEnqueuedTotal = audioEnqueuedTotal;
+
+        var sample = (double)(videoDelta + audioDelta);
+        _sparklineSamples[_sparklineHead] = sample;
+        _sparklineHead = (_sparklineHead + 1) % SparklineCapacity;
+        if (_sparklineCount < SparklineCapacity)
+            _sparklineCount++;
+
+        // Recompute peak from the live ring (O(n) but n=60).
+        var peak = 0.0;
+        for (var i = 0; i < _sparklineCount; i++)
+            if (_sparklineSamples[i] > peak)
+                peak = _sparklineSamples[i];
+
+        SparklineLastSample = sample;
+        SparklinePeakSample = peak;
+        SparklineRevision++;
+        OnPropertyChanged(nameof(SparklineSamples));
+    }
+
+    /// <summary>Clear the ring (called when a session closes so the next session starts fresh).</summary>
+    public void ResetSparkline()
+    {
+        Array.Clear(_sparklineSamples);
+        _sparklineCount = 0;
+        _sparklineHead = 0;
+        _lastVideoSubmittedTotal = 0;
+        _lastAudioEnqueuedTotal = 0;
+        SparklineLastSample = 0;
+        SparklinePeakSample = 0;
+        SparklineRevision++;
+        OnPropertyChanged(nameof(SparklineSamples));
+    }
+
+    public string HealthColor => Health switch
+    {
+        OutputLineHealthState.Healthy => "#4CAF50",
+        OutputLineHealthState.Warning => "#FFC107",
+        OutputLineHealthState.Error => "#E53935",
+        _ => "#666666",
+    };
+
+    public string HealthToolTip => Health switch
+    {
+        OutputLineHealthState.Healthy => HealthDetail ?? "Output healthy",
+        OutputLineHealthState.Warning => HealthDetail ?? "Elevated drops or queue pressure",
+        OutputLineHealthState.Error => HealthDetail ?? "Sustained frame/chunk drops",
+        _ => HealthDetail ?? "Idle — no active playback on this line",
+    };
+
+    partial void OnHealthChanged(OutputLineHealthState value)
+    {
+        OnPropertyChanged(nameof(HealthColor));
+        OnPropertyChanged(nameof(HealthToolTip));
+    }
+
+    partial void OnHealthDetailChanged(string? value) => OnPropertyChanged(nameof(HealthToolTip));
+
+    public string NdiRecordingButtonText => IsNdiRecording ? "Stop Rec" : "Record";
+
+    partial void OnIsNdiRecordingChanged(bool value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(NdiRecordingButtonText));
+    }
 
     partial void OnIsPreviewRunningChanged(bool value)
     {
@@ -141,6 +271,11 @@ public partial class OutputLineViewModel : ViewModelBase
     private void WindowedPreview() => _host?.SetLocalPreviewFullscreen(this, false);
 
     private bool CanWindowedPreview() => IsPreviewRunning && IsLocalVideo && _host is not null;
+
+    [RelayCommand(CanExecute = nameof(CanToggleNdiRecording))]
+    private void ToggleNdiRecording() => _host?.ToggleNdiRecording(this);
+
+    private bool CanToggleNdiRecording() => IsNdi;
 
     [RelayCommand]
     private void Remove() => _requestRemove(this);

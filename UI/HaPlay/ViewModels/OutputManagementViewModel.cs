@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.OutputPreview;
+using HaPlay.Playback;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
 using S.Media.Core.Video;
@@ -38,6 +39,11 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// with confirm only when the line is actively in use.
     /// </summary>
     public Func<OutputLineViewModel, bool>? PlaybackUsageProbe { get; set; }
+
+    /// <summary>Supplies players with active sessions for output-line health LEDs.</summary>
+    public Func<IReadOnlyList<MediaPlayerViewModel>>? ActivePlayersProbe { get; set; }
+
+    private DispatcherTimer? _healthTimer;
 
     /// <summary>
     /// Phase B (§3.4) — every local-video line whose <see cref="LocalVideoOutputDefinition.CloneOfId"/>
@@ -75,8 +81,56 @@ public partial class OutputManagementViewModel : ViewModelBase
     [ObservableProperty]
     private string? _virtualChannelCollisionMessage;
 
+    // ----- Phase E (§8.1): aggregate health summary -------------------------------------------------
+
+    /// <summary>Number of output lines currently driving at least one player session. 0 when the
+    /// app is idle.</summary>
+    [ObservableProperty]
+    private int _aggregateActiveCount;
+
+    /// <summary>Number of lines reporting <see cref="OutputLineHealthState.Warning"/> right now.</summary>
+    [ObservableProperty]
+    private int _aggregateWarningCount;
+
+    /// <summary>Number of lines reporting <see cref="OutputLineHealthState.Error"/> right now.</summary>
+    [ObservableProperty]
+    private int _aggregateErrorCount;
+
+    /// <summary>True when any line is below healthy — drives the colour of the summary chip.</summary>
+    public bool HasAggregateIssues => AggregateWarningCount + AggregateErrorCount > 0;
+
+    /// <summary>One-line summary: "5 active · 1 warning · 0 errors" — bound by the panel chip.</summary>
+    public string AggregateSummary => AggregateActiveCount == 0
+        ? "Idle — no active routes"
+        : $"{AggregateActiveCount} active · {AggregateWarningCount} warning · {AggregateErrorCount} error";
+
+    partial void OnAggregateActiveCountChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(AggregateSummary));
+        OnPropertyChanged(nameof(HasAggregateIssues));
+    }
+
+    partial void OnAggregateWarningCountChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(AggregateSummary));
+        OnPropertyChanged(nameof(HasAggregateIssues));
+    }
+
+    partial void OnAggregateErrorCountChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(AggregateSummary));
+        OnPropertyChanged(nameof(HasAggregateIssues));
+    }
+
     public OutputManagementViewModel()
     {
+        _healthTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => RefreshOutputHealth())
+        {
+            IsEnabled = true,
+        };
         Outputs.CollectionChanged += (_, _) => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         Outputs.CollectionChanged += (_, _) => RebuildVirtualAudioChannelAssignments();
         VirtualAudioChannelAssignments.CollectionChanged += OnVirtualAudioChannelAssignmentsChanged;
@@ -169,23 +223,26 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private void ValidateVirtualChannelAssignments()
     {
-        foreach (var row in VirtualAudioChannelAssignments)
+        var used = new HashSet<int>();
+        foreach (var row in VirtualAudioChannelAssignments
+                     .OrderBy(x => x.OutputDisplayName, StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(x => x.OutputChannel))
+        {
             row.IsDuplicate = false;
+            if (row.VirtualOutputChannel <= 0)
+                continue;
 
-        var collisions = VirtualAudioChannelAssignments
-            .GroupBy(x => x.VirtualOutputChannel)
-            .Where(g => g.Key > 0 && g.Count() > 1)
-            .OrderBy(g => g.Key)
-            .ToList();
+            if (used.Contains(row.VirtualOutputChannel))
+            {
+                var nextFree = Enumerable.Range(1, 256).First(n => !used.Contains(n));
+                row.VirtualOutputChannel = nextFree;
+            }
 
-        foreach (var group in collisions)
-            foreach (var row in group)
-                row.IsDuplicate = true;
+            used.Add(row.VirtualOutputChannel);
+        }
 
-        HasVirtualChannelCollisions = collisions.Count > 0;
-        VirtualChannelCollisionMessage = collisions.Count == 0
-            ? null
-            : $"Duplicate VOut assignments: {string.Join(", ", collisions.Select(g => $"VOut {g.Key}"))}.";
+        HasVirtualChannelCollisions = false;
+        VirtualChannelCollisionMessage = null;
     }
 
     /// <summary>
@@ -494,8 +551,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         rt.ReleaseFromPlayback();
     }
 
-    /// <summary>Phase 3 — resize the local video window to a hold-image's native dimensions
-    /// (or restore the user's chosen size when both args are null).</summary>
+    /// <summary>Forwards optional hold-image size overrides to local preview runtimes.
+    /// Current runtime policy keeps window dimensions stable, so this is presently a no-op.</summary>
     internal void ApplyHoldImageWindowSize(OutputLineViewModel line, int? width, int? height)
     {
         if (_localPreviews.TryGetValue(line, out var rt))
@@ -563,6 +620,17 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             /* best effort */
         }
+    }
+
+    /// <summary>
+    /// §8.8 UI-side recording control: toggles per-line record intent for NDI outputs.
+    /// Backend recording-sink wiring remains a separate framework follow-up.
+    /// </summary>
+    internal void ToggleNdiRecording(OutputLineViewModel line)
+    {
+        if (line.Definition is not NDIOutputDefinition)
+            return;
+        line.IsNdiRecording = !line.IsNdiRecording;
     }
 
     /// <summary>
@@ -839,6 +907,110 @@ public partial class OutputManagementViewModel : ViewModelBase
             await Dispatcher.UIThread.InvokeAsync(() => Outputs.Remove(line));
             Debug.WriteLine($"HaPlay: failed to start NDI output '{result.SourceName}': {ex}");
         }
+    }
+
+    private void RefreshOutputHealth()
+    {
+        var players = ActivePlayersProbe?.Invoke();
+        if (players is null || players.Count == 0)
+        {
+            foreach (var line in Outputs)
+            {
+                line.Health = OutputLineHealthState.Unknown;
+                line.HealthDetail = null;
+                line.ResetSparkline();
+            }
+
+            AggregateActiveCount = 0;
+            AggregateWarningCount = 0;
+            AggregateErrorCount = 0;
+            return;
+        }
+
+        foreach (var line in Outputs)
+        {
+            var worst = OutputLineHealthState.Unknown;
+            string? detail = null;
+            // §8.1 — sum throughput across all players driving this line. A line wired to two players
+            // would otherwise miss the second player's contribution.
+            long videoSubmittedTotal = 0;
+            long audioEnqueuedTotal = 0;
+            var anyWired = false;
+            foreach (var player in players)
+            {
+                var session = player.PlaybackSession;
+                if (session is null)
+                    continue;
+
+                var metrics = OutputLineHealthEvaluator.EvaluateWithMetrics(session, line);
+                if (metrics.State != OutputLineHealthState.Unknown)
+                {
+                    anyWired = true;
+                    videoSubmittedTotal += metrics.VideoSubmitted;
+                    audioEnqueuedTotal += metrics.AudioEnqueued;
+                }
+                if (metrics.State > worst)
+                {
+                    worst = metrics.State;
+                    detail = FormatHealthDetail(session, line, metrics.State);
+                }
+            }
+
+            line.Health = worst;
+            line.HealthDetail = detail;
+            if (anyWired)
+                line.RecordSparklineSample(videoSubmittedTotal, audioEnqueuedTotal);
+            else
+                line.ResetSparkline();
+        }
+
+        var active = 0;
+        var warn = 0;
+        var err = 0;
+        foreach (var line in Outputs)
+        {
+            switch (line.Health)
+            {
+                case OutputLineHealthState.Healthy: active++; break;
+                case OutputLineHealthState.Warning: active++; warn++; break;
+                case OutputLineHealthState.Error: active++; err++; break;
+            }
+        }
+        AggregateActiveCount = active;
+        AggregateWarningCount = warn;
+        AggregateErrorCount = err;
+    }
+
+    private static string? FormatHealthDetail(
+        HaPlayPlaybackSession session,
+        OutputLineViewModel line,
+        OutputLineHealthState state)
+    {
+        if (state == OutputLineHealthState.Unknown)
+            return null;
+
+        if (session.TryGetVideoOutputId(line, out var vid)
+            && session.Player.VideoRouter.TryGetVideoSinkPumpMetrics(vid, out var vm))
+        {
+            return state switch
+            {
+                OutputLineHealthState.Healthy =>
+                    $"Video pump OK ({vm.SubmittedFrames} submitted, queue {vm.CurrentQueuedDepth}/{vm.MaxQueueDepth})",
+                _ => $"Video drops {vm.DroppedFrames} / {vm.SubmittedFrames}, queue {vm.CurrentQueuedDepth}/{vm.MaxQueueDepth}",
+            };
+        }
+
+        if (session.TryGetAudioSinkId(line, out var sid) && session.Player.Audio is not null)
+        {
+            var st = session.Player.Audio.Router.GetPumpStats(sid);
+            return state switch
+            {
+                OutputLineHealthState.Healthy => $"Audio pump OK ({st.Processed} chunks)",
+                _ => $"Audio drops {st.Dropped} / {st.Enqueued}",
+            };
+        }
+
+        return state.ToString();
     }
 }
 

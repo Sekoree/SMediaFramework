@@ -113,6 +113,51 @@ public sealed class EditDialogViewModelTests
         Assert.Equal(720, committed.ResolutionLockHeight);
     }
 
+    /// <summary>Phase C polish (§4.3.5) — the dialog now exposes editable pixel-format and resolution
+    /// locks. Selecting an entry on a fresh "Add NDI" flow must round-trip onto the produced
+    /// <see cref="NDIOutputDefinition"/>, otherwise the runtime <see cref="LockedFormatVideoSink"/>
+    /// wrapper has nothing to act on.</summary>
+    [Fact]
+    public void NDI_TryCommit_PersistsSelectedPixelFormatAndResolutionLocks()
+    {
+        var vm = new AddNDIOutputDialogViewModel
+        {
+            DisplayName = "NDI Locked",
+            SourceName = "Studio (Cam1)",
+            SelectedPixelFormat = NDIPixelFormatChoice.FromPixelFormat(PixelFormat.Uyvy)!,
+            SelectedResolution = NDIResolutionChoice.All.First(r => r.Width == 1920 && r.Height == 1080),
+        };
+
+        var committed = vm.TryCommit();
+
+        Assert.NotNull(committed);
+        Assert.Equal(PixelFormat.Uyvy, committed!.PixelFormatLock);
+        Assert.Equal(1920, committed.ResolutionLockWidth);
+        Assert.Equal(1080, committed.ResolutionLockHeight);
+    }
+
+    /// <summary>"Auto" entries map back to nullable lock fields. Without this, every NDI output created
+    /// through the dialog would pin a lock even when the operator left both dropdowns on Auto.</summary>
+    [Fact]
+    public void NDI_TryCommit_AutoChoices_ProduceNullLocks()
+    {
+        var vm = new AddNDIOutputDialogViewModel
+        {
+            DisplayName = "NDI Auto",
+            SourceName = "Studio (Cam1)",
+            // Defaults are Auto, but spell it out so the test is self-documenting.
+            SelectedPixelFormat = NDIPixelFormatChoice.Auto,
+            SelectedResolution = NDIResolutionChoice.Auto,
+        };
+
+        var committed = vm.TryCommit();
+
+        Assert.NotNull(committed);
+        Assert.Null(committed!.PixelFormatLock);
+        Assert.Null(committed.ResolutionLockWidth);
+        Assert.Null(committed.ResolutionLockHeight);
+    }
+
     [Fact]
     public void PortAudio_LoadFromExisting_SwitchesToEditMode()
     {

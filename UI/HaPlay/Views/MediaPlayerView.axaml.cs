@@ -4,6 +4,7 @@ using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using Avalonia.Markup.Xaml.Templates;
 using HaPlay.ViewModels;
 
@@ -26,6 +27,35 @@ public partial class MediaPlayerView : UserControl
         // we still bail on text-editing sources so playlist-tab renames and NumericUpDowns stay typeable.
         AddHandler(KeyDownEvent, OnUserControlKeyDown, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
         DataContextChanged += OnDataContextChanged;
+        DragDrop.SetAllowDrop(PlaylistListBox, true);
+        PlaylistListBox.AddHandler(DragDrop.DragOverEvent, OnPlaylistDragOver, RoutingStrategies.Bubble);
+        PlaylistListBox.AddHandler(DragDrop.DropEvent, OnPlaylistDrop, RoutingStrategies.Bubble);
+    }
+
+    private void OnPlaylistDragOver(object? sender, DragEventArgs e)
+    {
+        _ = sender;
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+    }
+
+    private void OnPlaylistDrop(object? sender, DragEventArgs e)
+    {
+        _ = sender;
+        if (DataContext is not MediaPlayerViewModel vm)
+            return;
+
+        var files = e.DataTransfer.TryGetFiles();
+        if (files is null || !files.Any())
+            return;
+
+        var paths = files
+            .Select(f => f.Path.LocalPath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+        if (paths.Count > 0)
+            vm.AddDroppedFilesToPlaylist(paths);
     }
 
     private void OnDataContextChanged(object? sender, System.EventArgs e)

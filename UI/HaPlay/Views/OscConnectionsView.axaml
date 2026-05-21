@@ -21,15 +21,22 @@
           <Button Grid.Column="1" Content="+ OSC" Command="{Binding AddOscEndpointCommand}" />
           <Button Grid.Column="2" Content="Remove" Command="{Binding RemoveActionEndpointCommand}" />
         </Grid>
-        <ListBox ItemsSource="{Binding OscEndpoints}"
-                 SelectedItem="{Binding SelectedActionEndpoint, Mode=TwoWay}">
+        <ListBox ItemsSource="{Binding OscEndpointRows}"
+                 SelectedItem="{Binding SelectedOscEndpointRow, Mode=TwoWay}">
           <ListBox.ItemTemplate>
-            <DataTemplate DataType="models:OscActionEndpoint">
-              <StackPanel Spacing="2" Margin="0,2">
-                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                <TextBlock FontSize="12" Opacity="0.65" Text="{Binding Id}" />
-                <TextBlock FontSize="12" Opacity="0.75" Text="{Binding Summary}" />
-              </StackPanel>
+            <DataTemplate DataType="vm:ActionEndpointRowViewModel">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8" Margin="0,2">
+                <Ellipse Grid.Column="0"
+                         Width="10" Height="10"
+                         VerticalAlignment="Center"
+                         Fill="{Binding HealthColor}"
+                         ToolTip.Tip="{Binding HealthToolTip}" />
+                <StackPanel Grid.Column="1" Spacing="2">
+                  <TextBlock Text="{Binding Endpoint.Name}" FontWeight="SemiBold" />
+                  <TextBlock FontSize="12" Opacity="0.65" Text="{Binding Endpoint.Id}" />
+                  <TextBlock FontSize="12" Opacity="0.75" Text="{Binding Endpoint.Summary}" />
+                </StackPanel>
+              </Grid>
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
@@ -55,6 +62,9 @@
                              Maximum="65535"
                              Value="{Binding OscEditPort, Mode=TwoWay}" />
             </Grid>
+            <Button Content="Test connection"
+                    Command="{Binding TestSelectedOscEndpointCommand}" />
+            <TextBlock Text="{Binding EndpointTestStatus}" Opacity="0.75" FontSize="12" TextWrapping="Wrap" />
             <Button Content="Save Endpoint"
                     HorizontalAlignment="Right"
                     Command="{Binding SaveActionEndpointEditsCommand}" />

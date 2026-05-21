@@ -9,6 +9,7 @@ using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
+using HaPlay.Playback;
 
 namespace HaPlay.ViewModels;
 
@@ -106,6 +107,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     public CueNodeKind Kind { get; }
 
+    [ObservableProperty]
+    private Guid _id = Guid.NewGuid();
+
     public ObservableCollection<CueNodeViewModel> Children { get; } = new();
 
     [ObservableProperty]
@@ -129,8 +133,30 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private string _sourceOrAction = string.Empty;
 
+    /// <summary>Canonical media source for <see cref="CueNodeKind.Media"/> rows (files and live inputs).</summary>
+    [ObservableProperty]
+    private PlaylistItem? _mediaSourceItem;
+
+    [ObservableProperty]
+    private int _fadeInMs;
+
+    [ObservableProperty]
+    private int _fadeOutMs;
+
+    [ObservableProperty]
+    private int _startOffsetMs;
+
+    [ObservableProperty]
+    private bool _loop;
+
+    [ObservableProperty]
+    private CueEndBehavior _endBehavior = CueEndBehavior.Stop;
+
     [ObservableProperty]
     private string _endpointIdText = string.Empty;
+
+    [ObservableProperty]
+    private bool _isEndpointBroken;
 
     [ObservableProperty]
     private string _extra = string.Empty;
@@ -215,6 +241,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             {
                 var vm = new CueNodeViewModel(CueNodeKind.Group)
                 {
+                    Id = g.Id,
                     Number = g.Number,
                     Label = g.Label,
                     TriggerMode = g.TriggerMode,
@@ -230,12 +257,19 @@ public sealed partial class CueNodeViewModel : ObservableObject
             {
                 var vm = new CueNodeViewModel(CueNodeKind.Media)
                 {
+                    Id = m.Id,
                     Number = m.Number,
                     Label = m.Label,
                     TriggerMode = m.TriggerMode,
                     PreWaitMs = m.PreWaitMs,
                     Notes = m.Notes,
+                    MediaSourceItem = m.Source,
                     SourceOrAction = m.Source?.DisplayName ?? string.Empty,
+                    FadeInMs = m.FadeInMs,
+                    FadeOutMs = m.FadeOutMs,
+                    StartOffsetMs = m.StartOffsetMs,
+                    Loop = m.Loop,
+                    EndBehavior = m.EndBehavior,
                 };
                 foreach (var v in m.VirtualOutputChannels.Distinct().OrderBy(x => x))
                     vm.VirtualOutputChannels.Add(v);
@@ -247,6 +281,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             case ActionCueNode a:
                 return new CueNodeViewModel(CueNodeKind.Action)
                 {
+                    Id = a.Id,
                     Number = a.Number,
                     Label = a.Label,
                     TriggerMode = a.TriggerMode,
@@ -259,6 +294,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             case CommentCueNode c:
                 return new CueNodeViewModel(CueNodeKind.Comment)
                 {
+                    Id = c.Id,
                     Number = c.Number,
                     Label = c.Label,
                     TriggerMode = c.TriggerMode,
@@ -277,6 +313,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         {
             CueNodeKind.Group => new CueGroupNode
             {
+                Id = Id,
                 Number = Number,
                 Label = Label,
                 TriggerMode = TriggerMode,
@@ -287,17 +324,27 @@ public sealed partial class CueNodeViewModel : ObservableObject
             },
             CueNodeKind.Media => new MediaCueNode
             {
+                Id = Id,
                 Number = Number,
                 Label = Label,
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
                 Notes = Notes,
-                Source = string.IsNullOrWhiteSpace(SourceOrAction) ? null : new FilePlaylistItem(SourceOrAction),
+                Source = MediaSourceItem
+                           ?? (string.IsNullOrWhiteSpace(SourceOrAction)
+                               ? null
+                               : new FilePlaylistItem(SourceOrAction)),
+                FadeInMs = Math.Max(0, FadeInMs),
+                FadeOutMs = Math.Max(0, FadeOutMs),
+                StartOffsetMs = Math.Max(0, StartOffsetMs),
+                Loop = Loop,
+                EndBehavior = EndBehavior,
                 VirtualOutputChannels = VirtualOutputChannels.Distinct().OrderBy(x => x).ToList(),
                 RouteConnections = RouteConnections.Select(x => x.ToModel()).ToList(),
             },
             CueNodeKind.Action => new ActionCueNode
             {
+                Id = Id,
                 Number = Number,
                 Label = Label,
                 TriggerMode = TriggerMode,
@@ -309,6 +356,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
             },
             _ => new CommentCueNode
             {
+                Id = Id,
                 Number = Number,
                 Label = Label,
                 TriggerMode = TriggerMode,
@@ -340,13 +388,21 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     public CueList ToModel() => new()
     {
         Name = Name,
+        PreRollCount = PreRollCount,
         VirtualOutputs = VirtualOutputs.Select(v => v.ToModel()).ToList(),
         Nodes = Nodes.Select(n => n.ToModel()).ToList(),
     };
 
+    [ObservableProperty]
+    private int _preRollCount = 4;
+
     public static CueListEditorViewModel FromModel(CueList list, string? path = null)
     {
-        var vm = new CueListEditorViewModel(list.Name) { Path = path };
+        var vm = new CueListEditorViewModel(list.Name)
+        {
+            Path = path,
+            PreRollCount = list.PreRollCount > 0 ? list.PreRollCount : 4,
+        };
         if (list.VirtualOutputs.Count == 0)
         {
             vm.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = "Main L" });
@@ -389,6 +445,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     public ObservableCollection<CueListEditorViewModel> CueLists { get; } = new();
+
+    public IReadOnlyList<CueEndBehavior> CueEndBehaviors { get; } = Enum.GetValues<CueEndBehavior>();
 
     [ObservableProperty]
     private CueListEditorViewModel? _selectedCueList;
@@ -554,6 +612,76 @@ public partial class CuePlayerViewModel : ViewModelBase
         _ = value;
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
+        PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Host subscribes to warm the selected player's pre-roll cache (§5.7).</summary>
+    public event EventHandler? PreRollRefreshSuggested;
+
+    /// <summary>Next <paramref name="maxCount"/> file media cues from standby (or list start).</summary>
+    public IReadOnlyList<(Guid CueId, PlaylistItem Item, int FadeInMs, int FadeOutMs)> GetPreRollTargets(int maxCount)
+    {
+        if (maxCount <= 0 || SelectedCueList is null)
+            return [];
+
+        var ordered = EnumerateFireableCueOrder().ToList();
+        if (ordered.Count == 0)
+            return [];
+
+        var startIdx = 0;
+        if (StandbyCueNode is not null)
+        {
+            var resolved = ResolveFireableCue(StandbyCueNode) ?? StandbyCueNode;
+            var idx = ordered.FindIndex(c => ReferenceEquals(c, resolved));
+            if (idx >= 0)
+                startIdx = idx;
+        }
+
+        var targets = new List<(Guid, PlaylistItem, int, int)>();
+        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        {
+            var cue = ordered[i];
+            if (cue.Kind != CueNodeKind.Media
+                || cue.MediaSourceItem is not { } source
+                || !source.SupportsPreRoll())
+                continue;
+            targets.Add((cue.Id, source, Math.Max(0, cue.FadeInMs), Math.Max(0, cue.FadeOutMs)));
+        }
+
+        return targets;
+    }
+
+    /// <summary>NDI media cues in the pre-roll window (§6.11).</summary>
+    public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNdiPreConnectTargets(int maxCount)
+    {
+        if (maxCount <= 0 || SelectedCueList is null)
+            return [];
+
+        var ordered = EnumerateFireableCueOrder().ToList();
+        if (ordered.Count == 0)
+            return [];
+
+        var startIdx = 0;
+        if (StandbyCueNode is not null)
+        {
+            var resolved = ResolveFireableCue(StandbyCueNode) ?? StandbyCueNode;
+            var idx = ordered.FindIndex(c => ReferenceEquals(c, resolved));
+            if (idx >= 0)
+                startIdx = idx;
+        }
+
+        var targets = new List<(Guid, NDIInputPlaylistItem)>();
+        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        {
+            var cue = ordered[i];
+            if (cue.Kind != CueNodeKind.Media
+                || cue.MediaSourceItem is not NDIInputPlaylistItem ndi
+                || !ndi.SupportsPreRoll())
+                continue;
+            targets.Add((cue.Id, ndi));
+        }
+
+        return targets;
     }
 
     partial void OnCurrentCueNodeChanged(CueNodeViewModel? value)
@@ -698,7 +826,10 @@ public partial class CuePlayerViewModel : ViewModelBase
         SelectedCueNode = row;
         var picked = await PickMediaFilePathAsync();
         if (!string.IsNullOrWhiteSpace(picked))
+        {
+            row.MediaSourceItem = new FilePlaylistItem(picked);
             row.SourceOrAction = picked;
+        }
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
@@ -711,7 +842,10 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
         var path = await PickMediaFilePathAsync();
         if (!string.IsNullOrWhiteSpace(path))
+        {
+            mediaCue.MediaSourceItem = new FilePlaylistItem(path);
             mediaCue.SourceOrAction = path;
+        }
     }
 
     private bool CanBrowseMediaSource() => SelectedCueNode?.Kind == CueNodeKind.Media;
@@ -980,6 +1114,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         StandbyCueNode = NextCueAfter(ResolveFireableCue(fire) ?? fire, ordered);
         SelectedCueNode = plan[0].Cue;
         StatusMessage = $"GO {CueDisplay(fire)} ({plan.Count} trigger{(plan.Count == 1 ? "" : "s")})";
+        PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
 
         _transportRunCts = new CancellationTokenSource();
         try
@@ -1191,12 +1326,13 @@ public partial class CuePlayerViewModel : ViewModelBase
             ? mode
             : CueGroupFireMode.FirstCueOnly;
 
-    private static List<(CueNodeViewModel Cue, int DelayMs)> BuildTriggerPlan(CueNodeViewModel target)
+    private List<(CueNodeViewModel Cue, int DelayMs)> BuildTriggerPlan(CueNodeViewModel target)
     {
         var plan = new List<(CueNodeViewModel Cue, int DelayMs)>();
         if (target.Kind != CueNodeKind.Group)
         {
             plan.Add((target, Math.Max(0, target.PreWaitMs)));
+            AppendAutoContinueCues(plan, target);
             return plan;
         }
 
@@ -1216,8 +1352,188 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         var first = EnumerateFireableCueOrder(children).FirstOrDefault();
         if (first is not null)
+        {
             plan.Add((first, checked(groupPreWait + Math.Max(0, first.PreWaitMs))));
+            AppendAutoContinueCues(plan, first);
+        }
         return plan;
+    }
+
+    private void AppendAutoContinueCues(List<(CueNodeViewModel Cue, int DelayMs)> plan, CueNodeViewModel anchor)
+    {
+        var ordered = EnumerateFireableCueOrder().ToList();
+        var idx = ordered.FindIndex(c => ReferenceEquals(c, anchor));
+        if (idx < 0)
+            return;
+
+        for (var i = idx + 1; i < ordered.Count; i++)
+        {
+            var next = ordered[i];
+            if (next.TriggerMode != CueTriggerMode.AutoContinue)
+                break;
+            if (plan.Any(p => ReferenceEquals(p.Cue, next)))
+                continue;
+            plan.Add((next, Math.Max(0, next.PreWaitMs)));
+        }
+    }
+
+    /// <summary>Called when the active player finishes a file naturally during cue-driven playback.</summary>
+    public async Task OnMediaCueNaturallyEndedAsync()
+    {
+        if (CurrentCueNode is not { Kind: CueNodeKind.Media })
+            return;
+
+        var ordered = EnumerateFireableCueOrder().ToList();
+        var idx = ordered.FindIndex(c => ReferenceEquals(c, CurrentCueNode));
+        if (idx < 0 || idx + 1 >= ordered.Count)
+            return;
+
+        var next = ordered[idx + 1];
+        if (next.TriggerMode != CueTriggerMode.AutoFollow)
+            return;
+
+        StandbyCueNode = next;
+        SelectedCueNode = next;
+        StatusMessage = $"Auto-follow → {CueDisplay(next)}";
+        await Go();
+    }
+
+    public void RefreshBrokenEndpointFlags()
+    {
+        var ids = ActionEndpoints.Select(e => e.Id).ToHashSet();
+        var broken = 0;
+        foreach (var node in EnumerateAllCueNodes())
+        {
+            if (node.Kind != CueNodeKind.Action)
+            {
+                node.IsEndpointBroken = false;
+                continue;
+            }
+
+            node.IsEndpointBroken = Guid.TryParse(node.EndpointIdText, out var endpointId)
+                                    && !ids.Contains(endpointId);
+            if (node.IsEndpointBroken)
+                broken++;
+        }
+
+        if (broken > 0)
+            StatusMessage = $"{broken} action cue(s) reference missing endpoints.";
+    }
+
+    /// <summary>Distinct missing endpoint IDs referenced by action cues.</summary>
+    public IReadOnlyList<(Guid MissingId, int CueCount, CueActionKind Kind)> GetBrokenEndpointGroups()
+    {
+        var liveIds = ActionEndpoints.Select(e => e.Id).ToHashSet();
+        var groups = new Dictionary<Guid, (int Count, CueActionKind Kind)>();
+        foreach (var node in EnumerateAllCueNodes())
+        {
+            if (node.Kind != CueNodeKind.Action)
+                continue;
+            if (!Guid.TryParse(node.EndpointIdText, out var missingId) || liveIds.Contains(missingId))
+                continue;
+            var kind = Enum.TryParse<CueActionKind>(node.Extra, out var k) ? k : CueActionKind.OscOut;
+            if (groups.TryGetValue(missingId, out var g))
+                groups[missingId] = (g.Count + 1, g.Kind);
+            else
+                groups[missingId] = (1, kind);
+        }
+
+        return groups.Select(kv => (kv.Key, kv.Value.Count, kv.Value.Kind)).ToList();
+    }
+
+    public void RemapActionEndpoints(IReadOnlyDictionary<Guid, Guid> missingToReplacement)
+    {
+        if (missingToReplacement.Count == 0)
+            return;
+
+        foreach (var node in EnumerateAllCueNodes())
+        {
+            if (node.Kind != CueNodeKind.Action)
+                continue;
+            if (!Guid.TryParse(node.EndpointIdText, out var missingId))
+                continue;
+            if (!missingToReplacement.TryGetValue(missingId, out var replacement))
+                continue;
+            node.EndpointIdText = replacement.ToString();
+        }
+
+        RefreshBrokenEndpointFlags();
+    }
+
+    public IReadOnlyList<(Guid CueId, PortAudioInputPlaylistItem Item)> GetPortAudioPreConnectTargets(int maxCount)
+    {
+        if (maxCount <= 0 || SelectedCueList is null)
+            return [];
+
+        var ordered = EnumerateFireableCueOrder().ToList();
+        if (ordered.Count == 0)
+            return [];
+
+        var startIdx = 0;
+        if (StandbyCueNode is not null)
+        {
+            var resolved = ResolveFireableCue(StandbyCueNode) ?? StandbyCueNode;
+            var idx = ordered.FindIndex(c => ReferenceEquals(c, resolved));
+            if (idx >= 0)
+                startIdx = idx;
+        }
+
+        var targets = new List<(Guid, PortAudioInputPlaylistItem)>();
+        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        {
+            var cue = ordered[i];
+            if (cue.Kind != CueNodeKind.Media
+                || cue.MediaSourceItem is not PortAudioInputPlaylistItem pa
+                || !pa.SupportsPreRoll())
+                continue;
+            targets.Add((cue.Id, pa));
+        }
+
+        return targets;
+    }
+
+    public void AddMediaFilesFromDrop(IEnumerable<string> paths)
+    {
+        if (SelectedCueList is null)
+            return;
+
+        var parent = SelectedParentCollection() ?? SelectedCueList.Nodes;
+        var added = 0;
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                continue;
+            var row = new CueNodeViewModel(CueNodeKind.Media)
+            {
+                Number = NextNumber(parent),
+                Label = Path.GetFileName(path),
+                MediaSourceItem = new FilePlaylistItem(path),
+                SourceOrAction = path,
+            };
+            parent.Add(row);
+            added++;
+        }
+
+        if (added > 0)
+            StatusMessage = $"Added {added} media cue(s) from drop.";
+    }
+
+    private IEnumerable<CueNodeViewModel> EnumerateAllCueNodes()
+    {
+        if (SelectedCueList is null)
+            yield break;
+        foreach (var node in EnumerateAllCueNodes(SelectedCueList.Nodes))
+            yield return node;
+    }
+
+    private static IEnumerable<CueNodeViewModel> EnumerateAllCueNodes(IEnumerable<CueNodeViewModel> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in EnumerateAllCueNodes(node.Children))
+                yield return child;
+        }
     }
 
     private async Task RunTriggerPlanAsync(IReadOnlyList<(CueNodeViewModel Cue, int DelayMs)> plan, CancellationToken ct)
@@ -1310,6 +1626,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             ActionEndpoints.Add(endpoint);
         if (SelectedCueNode?.Kind == CueNodeKind.Action && Guid.TryParse(SelectedCueNode.EndpointIdText, out var endpointId))
             SelectedActionEndpoint = ActionEndpoints.FirstOrDefault(e => e.Id == endpointId);
+        RefreshBrokenEndpointFlags();
     }
 
     public List<CueList> BuildCueListsSnapshot() => CueLists.Select(c => c.ToModel()).ToList();
