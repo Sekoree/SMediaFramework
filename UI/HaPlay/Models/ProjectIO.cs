@@ -62,10 +62,11 @@ public static class PlaylistIO
         if (string.Equals(ext, ".m3u", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(ext, ".m3u8", StringComparison.OrdinalIgnoreCase))
         {
+            var paths = await ParseM3uAsync(path, cancellationToken).ConfigureAwait(false);
             return new PlaylistConfig
             {
                 Name = Path.GetFileNameWithoutExtension(path),
-                Paths = await ParseM3uAsync(path, cancellationToken).ConfigureAwait(false),
+                Items = paths.ConvertAll(p => (PlaylistItem)new FilePlaylistItem(p)),
             };
         }
 
@@ -98,6 +99,30 @@ public static class PlaylistIO
             result.Add(Path.IsPathRooted(line) ? line : Path.GetFullPath(Path.Combine(baseDir, line)));
         }
         return result;
+    }
+}
+
+public static class CueListIO
+{
+    public const string FileExtension = "haplaycues";
+
+    public static async Task<CueList> LoadAsync(string path, CancellationToken cancellationToken = default)
+    {
+        await using var stream = File.OpenRead(path);
+        var config = await JsonSerializer
+            .DeserializeAsync(stream, CueListJsonContext.Default.CueList, cancellationToken)
+            .ConfigureAwait(false);
+        if (config is null)
+            throw new InvalidDataException($"Cue list file '{path}' contains no JSON object.");
+        return config;
+    }
+
+    public static async Task SaveAsync(CueList config, string path, CancellationToken cancellationToken = default)
+    {
+        await using var stream = File.Create(path);
+        await JsonSerializer
+            .SerializeAsync(stream, config, CueListJsonContext.Default.CueList, cancellationToken)
+            .ConfigureAwait(false);
     }
 }
 

@@ -50,6 +50,35 @@ public sealed partial class AudioMatrixCellViewModel : ObservableObject
 }
 
 /// <summary>
+/// Per-input channel attenuation/mute row. Applied to every matrix cell that reads this input channel.
+/// </summary>
+public sealed partial class AudioMatrixInputTrimViewModel : ObservableObject
+{
+    public AudioMatrixInputTrimViewModel(int inputChannel, int inputChannelCount, double gainDb, bool muted)
+    {
+        InputChannel = inputChannel;
+        InputChannelCount = inputChannelCount;
+        _gainDb = gainDb;
+        _muted = muted;
+    }
+
+    public int InputChannel { get; }
+
+    public int InputChannelCount { get; }
+
+    public string Label =>
+        InputChannelCount == 2
+            ? $"In {(InputChannel == 0 ? "L" : "R")}"
+            : $"In {InputChannel + 1}";
+
+    [ObservableProperty]
+    private double _gainDb;
+
+    [ObservableProperty]
+    private bool _muted;
+}
+
+/// <summary>
 /// Phase C (§4.3.4) — one output device's view of the matrix: a list of (output-channel × input-channel)
 /// cells. Hosted by <see cref="PlayerOutputBinding"/>; mutated as a single ObservableCollection so the
 /// TreeDataGrid can render columns directly off <see cref="InputChannelCount"/> and the host VM can listen
@@ -126,11 +155,10 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
     }
 
     /// <summary>Phase C — overwrite the matrix from a preset mix mode. Useful before the user has touched any
-    /// cell individually. Assumes 2-channel sink (matches current <see cref="Playback.HaPlayPlaybackSession"/>
-    /// downmix behaviour).</summary>
+    /// cell individually.</summary>
     public void ApplyPreset(AudioRouteMixMode mode)
     {
-        if (OutputChannelCount < 2 || InputChannelCount < 1)
+        if (OutputChannelCount < 1 || InputChannelCount < 1)
             return;
 
         foreach (var c in Cells)
@@ -150,19 +178,44 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
         switch (mode)
         {
             case AudioRouteMixMode.Stereo:
-                Set(0, 0);
-                if (InputChannelCount >= 2) Set(1, 1); else Set(0, 1);
+                for (var oc = 0; oc < OutputChannelCount; oc++)
+                {
+                    var src = InputChannelCount == 1
+                        ? 0
+                        : (oc < InputChannelCount ? oc : -1);
+                    if (src >= 0)
+                        Set(src, oc);
+                }
                 break;
             case AudioRouteMixMode.Swap:
-                if (InputChannelCount >= 2) { Set(1, 0); Set(0, 1); }
-                else { Set(0, 0); Set(0, 1); }
+                if (InputChannelCount >= 2)
+                {
+                    if (OutputChannelCount > 0) Set(1, 0);
+                    if (OutputChannelCount > 1) Set(0, 1);
+                    for (var oc = 2; oc < OutputChannelCount; oc++)
+                        if (oc < InputChannelCount) Set(oc, oc);
+                }
+                else
+                {
+                    for (var oc = 0; oc < OutputChannelCount; oc++)
+                        Set(0, oc);
+                }
                 break;
             case AudioRouteMixMode.MonoLeft:
-                Set(0, 0); Set(0, 1);
+                for (var oc = 0; oc < OutputChannelCount; oc++)
+                    Set(0, oc);
                 break;
             case AudioRouteMixMode.MonoRight:
-                if (InputChannelCount >= 2) { Set(1, 0); Set(1, 1); }
-                else { Set(0, 0); Set(0, 1); }
+                if (InputChannelCount >= 2)
+                {
+                    for (var oc = 0; oc < OutputChannelCount; oc++)
+                        Set(1, oc);
+                }
+                else
+                {
+                    for (var oc = 0; oc < OutputChannelCount; oc++)
+                        Set(0, oc);
+                }
                 break;
             case AudioRouteMixMode.Silence:
                 /* every cell already muted */
@@ -189,16 +242,20 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
 /// </summary>
 public sealed class AudioMatrixRow
 {
-    public AudioMatrixRow(PlayerOutputBinding binding, int outputChannel, string label)
+    public AudioMatrixRow(PlayerOutputBinding binding, int outputChannel, int virtualOutputChannel, string label)
     {
         Binding = binding;
         OutputChannel = outputChannel;
+        VirtualOutputChannel = virtualOutputChannel;
         Label = label;
     }
 
     public PlayerOutputBinding Binding { get; }
 
     public int OutputChannel { get; }
+
+    /// <summary>1-based deterministic channel number across all selected outputs (VOut 1..N).</summary>
+    public int VirtualOutputChannel { get; }
 
     /// <summary>Display label, e.g. "Main Speakers · Out L".</summary>
     public string Label { get; }
@@ -208,3 +265,56 @@ public sealed class AudioMatrixRow
     public AudioMatrixCellViewModel? GetCell(int inputChannel) => Binding.Matrix.Cell(inputChannel, OutputChannel);
 }
 
+/// <summary>
+/// One active matrix connection (audible cell) shown in the route list TreeDataGrid.
+/// Uses the same <see cref="AudioMatrixCellViewModel"/> instance as the matrix grid so edits stay in sync.
+/// </summary>
+public sealed class AudioMatrixRouteRow
+{
+    public AudioMatrixRouteRow(
+        int virtualOutputChannel,
+        string outputLabel,
+        int inputChannel,
+        int inputChannelCount,
+        AudioMatrixCellViewModel cell,
+        string effectiveGainText)
+    {
+        VirtualOutputChannel = virtualOutputChannel;
+        OutputLabel = outputLabel;
+        InputChannel = inputChannel;
+        InputChannelCount = inputChannelCount;
+        Cell = cell;
+        EffectiveGainText = effectiveGainText;
+    }
+
+    public int VirtualOutputChannel { get; }
+
+    public string VirtualOutputLabel => $"VOut {VirtualOutputChannel}";
+
+    public string OutputLabel { get; }
+
+    public int InputChannel { get; }
+
+    public int InputChannelCount { get; }
+
+    public string InputLabel =>
+        InputChannelCount == 2
+            ? $"In {(InputChannel == 0 ? "L" : "R")}"
+            : $"In {InputChannel + 1}";
+
+    public AudioMatrixCellViewModel Cell { get; }
+
+    public double GainDb
+    {
+        get => Cell.GainDb;
+        set => Cell.GainDb = value;
+    }
+
+    public bool Muted
+    {
+        get => Cell.Muted;
+        set => Cell.Muted = value;
+    }
+
+    public string EffectiveGainText { get; }
+}

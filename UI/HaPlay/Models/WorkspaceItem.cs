@@ -9,5 +9,7 @@ public sealed record WorkspaceItem(string Id, string Label, string Glyph)
     public static readonly WorkspaceItem Players = new("players", "Players", "▶");
     public static readonly WorkspaceItem Cues = new("cues", "Cues", "●");
     public static readonly WorkspaceItem Outputs = new("outputs", "Outputs", "⎚");
+    public static readonly WorkspaceItem OscConnections = new("osc", "OSC", "〰");
+    public static readonly WorkspaceItem MidiDevices = new("midi", "MIDI", "♪");
     public static readonly WorkspaceItem Project = new("project", "Project", "🗂");
 }

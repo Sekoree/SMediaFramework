@@ -1,0 +1,68 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.AddNDIInputDialog"
+        x:DataType="vm:AddNDIInputDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="560" Height="620"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="460" MinHeight="520">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
+
+        <TextBlock Text="Display name" FontWeight="SemiBold" />
+        <TextBox Text="{Binding DisplayName}" />
+
+        <Grid ColumnDefinitions="*,Auto" Margin="0,8,0,0">
+          <ToggleButton Grid.Column="0" Content="Live-discovered sources"
+                        IsChecked="{Binding UseDiscovery}"
+                        HorizontalContentAlignment="Center"
+                        ToolTip.Tip="Pick from NDI sources currently visible on the network." />
+          <Button Grid.Column="1" Content="↻ Rescan" Margin="6,0,0,0"
+                  Command="{Binding RefreshCommand}"
+                  IsEnabled="{Binding UseDiscovery}" />
+        </Grid>
+
+        <StackPanel Spacing="6" IsVisible="{Binding UseDiscovery}">
+          <ComboBox ItemsSource="{Binding DiscoveredSources}"
+                    SelectedItem="{Binding SelectedDiscoveredSource}"
+                    HorizontalAlignment="Stretch" />
+          <TextBlock Opacity="0.7" FontSize="11" Text="{Binding DiscoveryStatus}" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <StackPanel Spacing="6" IsVisible="{Binding !UseDiscovery}">
+          <TextBlock Text="Manual source name (e.g. MACHINE (Instance))" FontWeight="SemiBold" />
+          <TextBox Text="{Binding SourceName}" Watermark="MACHINE (Camera 1)" />
+          <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
+                     Text="Manual entries load even if the source is offline today — the playlist enters 'waiting for source' on Play until the sender appears." />
+        </StackPanel>
+
+        <Border Background="#15808080" CornerRadius="4" Padding="10" Margin="0,8,0,0">
+          <StackPanel Spacing="6">
+            <TextBlock Text="Connection hints" FontWeight="SemiBold" />
+            <CheckBox Content="Low bandwidth (preview stream, NDI 5+)" IsChecked="{Binding LowBandwidth}" />
+            <CheckBox Content="Audio only (ignore sender's video)" IsChecked="{Binding AudioOnly}" />
+            <CheckBox Content="Video only (ignore sender's audio)" IsChecked="{Binding VideoOnly}" />
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock VerticalAlignment="Center" Text="Reconnect interval (s)" />
+              <NumericUpDown Minimum="0" Maximum="600" Increment="1" Value="{Binding RetrySeconds}" Width="100" />
+              <TextBlock VerticalAlignment="Center" Opacity="0.7" FontSize="11"
+                         Text="0 disables retries." />
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <TextBlock TextWrapping="Wrap" Opacity="0.7" FontSize="11" Margin="0,4,0,0"
+                   Text="Note: NDI video reception is gated on framework backfill (NDIVideoReceiver). Audio-only items work today; saving a video-capable item now means it'll start sending video once backfill ships." />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

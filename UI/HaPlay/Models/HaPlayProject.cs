@@ -4,8 +4,8 @@ namespace HaPlay.Models;
 
 /// <summary>
 /// Top-level project file (§7 of the UI refactor plan). Captures every persistable piece of a HaPlay
-/// session in one file so a show is one save/open away. Phase A persists outputs and players; cue lists
-/// (§5) will join under <see cref="CueLists"/> in Phase D. UI layout state intentionally lives in a
+/// session in one file so a show is one save/open away. Cue lists (§5) live under
+/// <see cref="CueLists"/>. UI layout state intentionally lives in a
 /// per-machine sidecar (not part of this record).
 /// </summary>
 public sealed record HaPlayProject
@@ -19,24 +19,17 @@ public sealed record HaPlayProject
     /// <summary>All output definitions in display order. Identity is <see cref="OutputDefinition.Id"/>.</summary>
     public List<OutputDefinition> Outputs { get; init; } = new();
 
+    public List<VirtualAudioChannelAssignment> VirtualAudioChannels { get; init; } = new();
+
     /// <summary>Per-player config (§4.5 will split this; Phase A keeps the existing <see cref="MediaPlayerConfig"/> shape).</summary>
     public List<MediaPlayerConfig> Players { get; init; } = new();
 
-    /// <summary>Reserved for Phase D — cue lists. Always empty in Phase A files.</summary>
-    public List<HaPlayCueListPlaceholder> CueLists { get; init; } = new();
+    public List<ActionEndpoint> ActionEndpoints { get; init; } = new();
+
+    public List<CueList> CueLists { get; init; } = new();
 
     /// <summary>Constant for callers that want to write SchemaVersion explicitly.</summary>
     public const int CurrentSchemaVersion = 1;
-}
-
-/// <summary>
-/// Placeholder for the Phase D cue list type. Defined now so the JSON shape doesn't change when cues
-/// land — adding fields to a sealed record is a non-breaking schema change; introducing a new top-level
-/// array would require a migration step.
-/// </summary>
-public sealed record HaPlayCueListPlaceholder
-{
-    public string Name { get; init; } = string.Empty;
 }
 
 [JsonSourceGenerationOptions(
@@ -48,7 +41,24 @@ public sealed record HaPlayCueListPlaceholder
 [JsonSerializable(typeof(PortAudioOutputDefinition))]
 [JsonSerializable(typeof(LocalVideoOutputDefinition))]
 [JsonSerializable(typeof(NDIOutputDefinition))]
+[JsonSerializable(typeof(VirtualAudioChannelAssignment))]
 [JsonSerializable(typeof(MediaPlayerConfig))]
 [JsonSerializable(typeof(PlaylistConfig))]
 [JsonSerializable(typeof(OutputGainConfig))]
+[JsonSerializable(typeof(InputChannelTrimConfig))]
+[JsonSerializable(typeof(ActionEndpoint))]
+[JsonSerializable(typeof(OscActionEndpoint))]
+[JsonSerializable(typeof(MidiActionEndpoint))]
+[JsonSerializable(typeof(CueList))]
+[JsonSerializable(typeof(CueNode))]
+[JsonSerializable(typeof(CueGroupNode))]
+[JsonSerializable(typeof(MediaCueNode))]
+[JsonSerializable(typeof(ActionCueNode))]
+[JsonSerializable(typeof(CommentCueNode))]
+[JsonSerializable(typeof(CueRouteConnectionOverride))]
+[JsonSerializable(typeof(CueVirtualOutputChannel))]
+[JsonSerializable(typeof(PlaylistItem))]
+[JsonSerializable(typeof(FilePlaylistItem))]
+[JsonSerializable(typeof(NDIInputPlaylistItem))]
+[JsonSerializable(typeof(PortAudioInputPlaylistItem))]
 internal partial class HaPlayProjectJsonContext : JsonSerializerContext;

@@ -41,6 +41,13 @@ Status legend:
   720p60, custom, and idle-image composition. Blocks: Output preset (§4.3.5
   preset combobox is UI-only today), fade transition, idle-image as
   compositor layer (§8.10).
+- [~] **Dynamic output-channel capability handshake** — partially landed
+  2026-05-21. `HaPlayPlaybackSession.TryGetEffectiveOutputChannelCount(...)`
+  now exposes runtime-confirmed sink widths from active line wiring
+  (`LineWiring.SinkChannelCount`), and `MediaPlayerViewModel` matrix sizing now
+  consumes that before falling back to output-definition defaults. Remaining
+  follow-up: promote this to an explicit framework-level capability contract for
+  sinks that can renegotiate channels dynamically at runtime.
 - [x] **Per-cell channel-mix matrix** — shipped 2026-05-20.
   `AudioRouter` now supports multiple routes per `(source, sink)` pair via
   `AddRoute(source, sink, routeId, map, gain)` + `RemoveRouteById` /
@@ -59,5 +66,11 @@ Status legend:
 
 - [ ] **Cue-player pre-roll hooks** — use the live/file player open paths above
   to keep a bounded cache of ready-to-fire sessions.
-- [ ] **Action-cue endpoint health** — OSC/MIDI emitters need open/error status
-  surfaced to the project endpoint registry.
+- [~] **Action-cue endpoint health** — first emitter path landed in HaPlay:
+  action cues now execute OSC (`OSCLib`) and MIDI (`PMLib`) with project-level
+  endpoint registry lookup (`HaPlayProject.ActionEndpoints`) and surfaced error
+  strings on trigger. OSC/MIDI sidebar workspaces (`OscConnectionsView`,
+  `MidiDevicesView`) now expose endpoint management + MIDI device catalog
+  refresh, but remaining framework-facing gap is still richer
+  endpoint-health telemetry/rebind states surfaced as explicit health signals
+  (not just error text).

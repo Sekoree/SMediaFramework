@@ -1,0 +1,66 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:models="using:HaPlay.Models"
+             mc:Ignorable="d" d:DesignWidth="720" d:DesignHeight="560"
+             x:Class="HaPlay.Views.OscConnectionsView"
+             x:DataType="vm:MainViewModel">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,12">
+      <TextBlock Text="OSC Connections" FontSize="22" FontWeight="SemiBold" />
+      <TextBlock Text="Named OSC targets for action cues. Cues store endpoint GUIDs, not host/port."
+                 Opacity="0.7" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+      <DockPanel>
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,6">
+          <TextBlock Grid.Column="0" Text="Endpoints" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="+ OSC" Command="{Binding AddOscEndpointCommand}" />
+          <Button Grid.Column="2" Content="Remove" Command="{Binding RemoveActionEndpointCommand}" />
+        </Grid>
+        <ListBox ItemsSource="{Binding OscEndpoints}"
+                 SelectedItem="{Binding SelectedActionEndpoint, Mode=TwoWay}">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="models:OscActionEndpoint">
+              <StackPanel Spacing="2" Margin="0,2">
+                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                <TextBlock FontSize="12" Opacity="0.65" Text="{Binding Id}" />
+                <TextBlock FontSize="12" Opacity="0.75" Text="{Binding Summary}" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <Border DockPanel.Dock="Bottom"
+                Margin="0,8,0,0"
+                Padding="8"
+                BorderBrush="#22808080"
+                BorderThickness="1"
+                CornerRadius="4"
+                IsVisible="{Binding IsSelectedOscEndpoint}">
+          <StackPanel Spacing="6">
+            <TextBlock Text="Endpoint Editor" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="90,*" ColumnSpacing="6">
+              <TextBlock Grid.Column="0" Text="Name" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding EndpointEditName, Mode=TwoWay}" />
+            </Grid>
+            <Grid ColumnDefinitions="90,*,70,100" ColumnSpacing="6">
+              <TextBlock Grid.Column="0" Text="Host" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding OscEditHost, Mode=TwoWay}" />
+              <TextBlock Grid.Column="2" Text="Port" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="3"
+                             Minimum="1"
+                             Maximum="65535"
+                             Value="{Binding OscEditPort, Mode=TwoWay}" />
+            </Grid>
+            <Button Content="Save Endpoint"
+                    HorizontalAlignment="Right"
+                    Command="{Binding SaveActionEndpointEditsCommand}" />
+          </StackPanel>
+        </Border>
+      </DockPanel>
+    </Border>
+  </DockPanel>
+</UserControl>

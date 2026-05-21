@@ -31,10 +31,116 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private int _holdPumpReentry;
     private PlaylistTabViewModel? _activePlaybackTab;
     private bool _syncingPlaylistTabState;
-    private readonly ObservableCollection<string> _emptyPlaylistPaths = new();
+    private readonly ObservableCollection<PlaylistItem> _emptyPlaylistItems = new();
+
+    /// <summary>Phase C.5 (§6.8) — the playlist entry currently loaded into the session. Tracks the
+    /// active item across <see cref="PlaylistItem"/> kinds so navigation (next/prev/end-of-track
+    /// auto-advance) works for both files and live inputs.</summary>
+    private PlaylistItem? _currentPlaylistItem;
+
+    /// <summary>
+    /// Trim settings loaded from config, keyed by input channel. Applied whenever the matrix is resized.
+    /// </summary>
+    private Dictionary<int, InputChannelTrimConfig> _pendingInputTrimConfigs = new();
 
     /// <summary>Serializes load/unload/stop/pause/play/seek and loop-timer Router use so Dispose cannot overlap transport.</summary>
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
+
+    /// <summary>Phase C.5 (§6.9) — switch into the "waiting for source" state. Surfaces a status banner,
+    /// stamps the next retry deadline, and ensures the loop timer is running so the deadline ticks.
+    /// Caller has already cleared the failed <see cref="_session"/>.</summary>
+    private void EnterWaitingForSource(PlaylistItem item, string reason)
+    {
+        _waitingItem = item;
+        IsWaitingForSource = true;
+        var retrySec = GetRetrySeconds(item);
+        if (retrySec > 0)
+        {
+            _nextRetryAt = DateTime.UtcNow.AddSeconds(retrySec);
+            WaitingForSourceMessage = $"WAITING: {item.DisplayName} — {reason} (retry in {retrySec}s).";
+            EnsureLoopTimerStarted();
+        }
+        else
+        {
+            WaitingForSourceMessage = $"WAITING: {item.DisplayName} — {reason}.";
+        }
+        StatusMessage = WaitingForSourceMessage;
+    }
+
+    private void ExitWaitingForSource()
+    {
+        if (!IsWaitingForSource && _waitingItem is null)
+            return;
+        _waitingItem = null;
+        IsWaitingForSource = false;
+        WaitingForSourceMessage = null;
+    }
+
+    /// <summary>Phase C.5 — per-kind retry interval. Files never retry (0). NDI inputs use their saved
+    /// <see cref="NDIInputPlaylistItem.RetrySeconds"/>. PortAudio inputs retry on a fixed 2 s cadence —
+    /// device disappearance is rare and PortAudio doesn't have a discovery handshake to wait on.</summary>
+    private static int GetRetrySeconds(PlaylistItem item) => item switch
+    {
+        NDIInputPlaylistItem ndi => ndi.RetrySeconds,
+        PortAudioInputPlaylistItem => 2,
+        _ => 0,
+    };
+
+    /// <summary>Phase C.5 — return the active source's channel count regardless of whether it was
+    /// opened via container decoder (files) or via <see cref="MediaPlayer.TryOpenLive"/> (live items).
+    /// Live sessions surface the negotiated format on <see cref="HaPlayPlaybackSession.SourceAudioFormat"/>;
+    /// file sessions still have a real <c>Decoder</c> and can read it from there. Falls back to 2 when
+    /// nothing is loaded so the audio matrix sizes sanely on early calls.</summary>
+    private static int SourceChannelCountOrFallback(HaPlayPlaybackSession? session)
+    {
+        if (session is null) return 2;
+        if (session.IsLive)
+            return session.SourceAudioFormat.Channels > 0 ? session.SourceAudioFormat.Channels : 2;
+        if (session.Player.HasContainerDecoder && session.Player.Decoder.Audio is { } a)
+            return a.Format.Channels;
+        return 2;
+    }
+
+    /// <summary>
+    /// Configured sink channel count for one output line. Audio-capable outputs return at least 1.
+    /// Video-only outputs return 0 so they drop out of matrix/route grids.
+    /// </summary>
+    private int OutputChannelCountOrZero(OutputLineViewModel line)
+    {
+        if (_session?.TryGetEffectiveOutputChannelCount(line, out var effective) == true)
+            return effective;
+
+        return line.Definition switch
+        {
+            PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
+            NDIOutputDefinition { StreamMode: NDIOutputStreamMode.VideoOnly } => 0,
+            NDIOutputDefinition nd => Math.Max(1, nd.AudioChannelCount),
+            _ => 0,
+        };
+    }
+
+    private static string OutputChannelSuffix(int outputChannels, int outputChannel) =>
+        outputChannels == 2
+            ? $"Out {(outputChannel == 0 ? "L" : "R")}"
+            : $"Out {outputChannel + 1}";
+
+    private AudioMatrixInputTrimViewModel? InputTrim(int inputChannel) =>
+        AudioMatrixInputTrims.FirstOrDefault(t => t.InputChannel == inputChannel);
+
+    private (double GainDb, bool Muted) InputTrimValues(int inputChannel)
+    {
+        var trim = InputTrim(inputChannel);
+        return trim is null ? (0.0, false) : (trim.GainDb, trim.Muted);
+    }
+
+    private string EffectiveCellGainText(PlayerOutputBinding binding, AudioMatrixCellViewModel cell)
+    {
+        var (inputTrimDb, inputTrimMuted) = InputTrimValues(cell.InputChannel);
+        if (MasterMuted || binding.IsMuted || cell.Muted || inputTrimMuted)
+            return "-inf dB";
+        var effective = MasterVolumeDb + binding.GainDb + inputTrimDb + cell.GainDb;
+        return $"{effective:0.#} dB";
+    }
 
     private async Task WithPlaybackArcAsync(Func<Task> action)
     {
@@ -60,6 +166,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // Phase B (§3.4) — also resync on definition changes (Edit) so clone-of transitions update
         // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
         _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
+        _outputs.VirtualAudioChannelMapChanged += OnVirtualAudioChannelMapChanged;
         // Phase B follow-up — unwire from the active session BEFORE the runtime is disposed (§4.3.3).
         // Without this the AudioRouter pump keeps Submit'ing to a disposed PortAudioOutput and spams
         // ObjectDisposedException until the session is torn down.
@@ -75,7 +182,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Dispatcher.UIThread.Post(() => SyncIdleSlate(), DispatcherPriority.Loaded);
     }
 
-    private void OnPlaylistPathsChanged()
+    private void OnPlaylistItemsChanged()
     {
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
         MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
@@ -101,6 +208,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             SyncOutputsCollection();
             SyncIdleSlate();
+        });
+    }
+
+    private void OnVirtualAudioChannelMapChanged(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        Dispatcher.UIThread.Post(() =>
+        {
+            RebuildAudioMatrixRows();
+            ApplyAllOutputMatricesToSession();
         });
     }
 
@@ -144,8 +262,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         get
         {
             if (!IsMediaLoaded || _session is null) return "Idle";
-            var hasVid = _session.Player.Decoder.HasVideo;
-            var hasAud = _session.Player.Decoder.HasAudio;
+            // Live items don't carry a container decoder — Player.Decoder would throw. Use the
+            // negotiated source format (audio only until NDIVideoReceiver lands).
+            if (_session.IsLive)
+                return _session.SourceAudioFormat.Channels > 0 ? "Live audio" : "Live";
+            var hasVid = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasVideo;
+            var hasAud = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasAudio;
             if (hasVid && hasAud) return "Video + audio";
             if (hasVid) return "Video";
             if (hasAud) return "Audio";
@@ -161,8 +283,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private PlaylistTabViewModel? _selectedPlaylistTab;
 
-    /// <summary>Paths queued for sequential playback on the visible playlist tab.</summary>
-    public ObservableCollection<string> PlaylistPaths => SelectedPlaylistTab?.Paths ?? _emptyPlaylistPaths;
+    /// <summary>Phase C.5 (§6.8) — discriminated entries (files + live inputs) queued for sequential
+    /// playback on the visible playlist tab.</summary>
+    public ObservableCollection<PlaylistItem> PlaylistItems => SelectedPlaylistTab?.Items ?? _emptyPlaylistItems;
 
     public IReadOnlyList<PlayerOutputPreset> OutputPresets { get; } = Enum.GetValues<PlayerOutputPreset>();
 
@@ -176,15 +299,33 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// code-behind, which also installs dynamic input-channel columns.</summary>
     public ObservableCollection<AudioMatrixRow> AudioMatrixRows { get; } = new();
 
+    /// <summary>
+    /// One row per active matrix connection (audible cell). Backing source for the route list TreeDataGrid.
+    /// Uses the same cell objects as <see cref="AudioMatrixRows"/>, so edits are fully synchronized.
+    /// </summary>
+    public ObservableCollection<AudioMatrixRouteRow> AudioMatrixRouteRows { get; } = new();
+
+    /// <summary>
+    /// Per-input-channel trims (column attenuation). Applied on top of every matrix cell from that input.
+    /// </summary>
+    public ObservableCollection<AudioMatrixInputTrimViewModel> AudioMatrixInputTrims { get; } = new();
+
     /// <summary>Phase C (§4.3.4) — current source channel count for the TreeDataGrid's input columns.
     /// 0 until a session opens. Watched by the view's code-behind to rebuild input columns.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasAudioMatrix))]
+    [NotifyPropertyChangedFor(nameof(HasAudioMatrixRoutes))]
+    [NotifyPropertyChangedFor(nameof(HasAudioMatrixInputTrims))]
     private int _audioMatrixInputChannelCount;
 
     /// <summary>True once the matrix has been sized and at least one routed output exists — gates the
     /// TreeDataGrid's visibility and the empty-state hint.</summary>
     public bool HasAudioMatrix => AudioMatrixInputChannelCount > 0 && AudioMatrixRows.Count > 0;
+
+    /// <summary>True once there is at least one active (audible) route cell.</summary>
+    public bool HasAudioMatrixRoutes => AudioMatrixRouteRows.Count > 0;
+
+    public bool HasAudioMatrixInputTrims => AudioMatrixInputTrims.Count > 0;
 
     /// <summary>Phase C (§4.3.4) — change-stamp the view can hook to rebuild columns/rows after the matrix
     /// rows or channel counts change. Fires once per coalesced rebuild.</summary>
@@ -199,8 +340,22 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _fallbackImagePath;
 
+    /// <summary>Phase C.5 — selected item in the visible playlist tab (file OR live input). Replaces
+    /// the v1-era string-path selection; the view binds <c>SelectedItem</c> of the playlist ListBox to
+    /// this property.</summary>
     [ObservableProperty]
-    private string? _selectedPlaylistPath;
+    private PlaylistItem? _selectedPlaylistItem;
+
+    /// <summary>Display label for the "current source" row above the seek bar. Shows the absolute file
+    /// path for file items (the v1 behavior) and the live-source name for live items. Falls back to
+    /// <see cref="MediaFilePath"/> when nothing is loaded yet.</summary>
+    public string? CurrentMediaDisplay =>
+        _currentPlaylistItem switch
+        {
+            FilePlaylistItem f => f.Path,
+            { } live => live.ToolTip,
+            null => MediaFilePath,
+        };
 
     [ObservableProperty]
     private bool _isLooping;
@@ -231,6 +386,25 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _isMediaLoaded;
 
+    /// <summary>Phase C.5 (§6.9) — true while a live item is offline / disconnected and the retry loop
+    /// is waiting for the source to come back. The transport bar shows the waiting banner via
+    /// <see cref="WaitingForSourceMessage"/> and the loop timer drives reconnect attempts on the item's
+    /// <see cref="NDIInputPlaylistItem.RetrySeconds"/> cadence.</summary>
+    [ObservableProperty]
+    private bool _isWaitingForSource;
+
+    [ObservableProperty]
+    private string? _waitingForSourceMessage;
+
+    /// <summary>Phase C.5 — wall-clock deadline for the next reconnect attempt. The loop timer reopens
+    /// the session via <see cref="OpenOrReloadAsync"/> as soon as <see cref="DateTime.UtcNow"/> reaches
+    /// this value. Cleared by <see cref="ExitWaitingForSource"/>.</summary>
+    private DateTime _nextRetryAt;
+
+    /// <summary>The item currently in waiting state. Held separately from <see cref="_currentPlaylistItem"/>
+    /// because the latter is set to <see langword="null"/> on close, but we still want to keep retrying.</summary>
+    private PlaylistItem? _waitingItem;
+
     [ObservableProperty]
     private bool _isPlaying;
 
@@ -249,6 +423,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public TimeSpan RemainingTime =>
         Duration > CurrentPosition ? Duration - CurrentPosition : TimeSpan.Zero;
 
+    /// <summary>Phase C.5 (§6.5) — true when the loaded source has a finite, seekable duration. Files
+    /// with non-zero duration are seekable; live items (PortAudio capture, NDI receiver) are not. The
+    /// view hides the seek slider + three-clock readout when this is false.</summary>
+    public bool IsTransportSeekable => Duration > TimeSpan.Zero && _session?.IsLive != true;
+
     /// <summary>Pre-formatted text bound by the view — Avalonia's <c>StringFormat=-{}{0:...}</c> with a leading minus
     /// is fragile (the binding silently fails). Formatting in the VM avoids the trap.</summary>
     public string CurrentPositionText => FormatClock(CurrentPosition);
@@ -264,6 +443,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         NotifyTransportCanExecuteChanged();
         OnPropertyChanged(nameof(SourceKindLabel));
+        OnPropertyChanged(nameof(IsTransportSeekable));
         if (value)
             StopIdleSlate();
     }
@@ -292,6 +472,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         PreviousTrackCommand.NotifyCanExecuteChanged();
     }
 
+    partial void OnIsWaitingForSourceChanged(bool value)
+    {
+        _ = value;
+        StopCommand.NotifyCanExecuteChanged();
+    }
+
     partial void OnDurationChanged(TimeSpan value)
     {
         _ = value;
@@ -299,7 +485,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(RemainingTime));
         OnPropertyChanged(nameof(RemainingTimeText));
         OnPropertyChanged(nameof(DurationText));
+        OnPropertyChanged(nameof(IsTransportSeekable));
     }
+
+    partial void OnIsMediaLoadedChanging(bool value) => _ = value;
 
     partial void OnCurrentPositionChanged(TimeSpan value)
     {
@@ -309,29 +498,30 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(CurrentPositionText));
     }
 
-    partial void OnSelectedPlaylistPathChanged(string? value)
+    partial void OnSelectedPlaylistItemChanged(PlaylistItem? value)
     {
         if (!_syncingPlaylistTabState && SelectedPlaylistTab is not null)
-            SelectedPlaylistTab.SelectedPath = value;
+            SelectedPlaylistTab.SelectedItem = value;
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
         MovePlaylistItemUpCommand.NotifyCanExecuteChanged();
         MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
         PlayCommand.NotifyCanExecuteChanged();
+        TogglePlayPauseCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedPlaylistTabChanged(PlaylistTabViewModel? oldValue, PlaylistTabViewModel? newValue)
     {
         if (oldValue is not null)
-            oldValue.Paths.CollectionChanged -= OnSelectedTabPathsCollectionChanged;
+            oldValue.Items.CollectionChanged -= OnSelectedTabItemsCollectionChanged;
         if (newValue is not null)
-            newValue.Paths.CollectionChanged += OnSelectedTabPathsCollectionChanged;
+            newValue.Items.CollectionChanged += OnSelectedTabItemsCollectionChanged;
 
         _syncingPlaylistTabState = true;
         try
         {
-            SelectedPlaylistPath = newValue?.SelectedPath is { } sp && newValue.Paths.Contains(sp, StringComparer.Ordinal)
-                ? sp
-                : newValue?.Paths.FirstOrDefault();
+            SelectedPlaylistItem = newValue?.SelectedItem is { } si && newValue.Items.Contains(si)
+                ? si
+                : newValue?.Items.FirstOrDefault();
             IsLooping = newValue?.IsLooping ?? false;
             AutoAdvancePlaylist = newValue?.AutoAdvance ?? false;
         }
@@ -340,12 +530,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             _syncingPlaylistTabState = false;
         }
 
-        OnPropertyChanged(nameof(PlaylistPaths));
-        OnPlaylistPathsChanged();
+        OnPropertyChanged(nameof(PlaylistItems));
+        OnPlaylistItemsChanged();
     }
 
-    private void OnSelectedTabPathsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
-        OnPlaylistPathsChanged();
+    private void OnSelectedTabItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
+        OnPlaylistItemsChanged();
 
     partial void OnIsLoopingChanged(bool value)
     {
@@ -363,12 +553,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         _ = value;
         ApplyAllOutputGainsToSession();
+        RebuildAudioMatrixRouteRows();
     }
 
     partial void OnMasterMutedChanged(bool value)
     {
         _ = value;
         ApplyAllOutputGainsToSession();
+        RebuildAudioMatrixRouteRows();
     }
 
     /// <summary>Mirror the shared outputs list into per-player bindings, preserving selection on the survivors.
@@ -434,6 +626,27 @@ public partial class MediaPlayerViewModel : ViewModelBase
         var binding = Outputs.FirstOrDefault(b => b.Matrix.Cells.Contains(cell));
         if (binding is null) return;
         ApplyOutputMatrixToSession(binding);
+        RebuildAudioMatrixRouteRows();
+    }
+
+    private void WatchInputTrimRows()
+    {
+        foreach (var trim in AudioMatrixInputTrims)
+            trim.PropertyChanged += OnInputTrimChanged;
+    }
+
+    private void UnwatchInputTrimRows()
+    {
+        foreach (var trim in AudioMatrixInputTrims)
+            trim.PropertyChanged -= OnInputTrimChanged;
+    }
+
+    private void OnInputTrimChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not (nameof(AudioMatrixInputTrimViewModel.GainDb) or nameof(AudioMatrixInputTrimViewModel.Muted)))
+            return;
+        ApplyAllOutputMatricesToSession();
+        RebuildAudioMatrixRouteRows();
     }
 
     private void OnOutputBindingPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -457,6 +670,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (e.PropertyName is nameof(PlayerOutputBinding.GainDb) or nameof(PlayerOutputBinding.IsMuted))
         {
             ApplyOutputCompoundGainToSession(binding.Line);
+            RebuildAudioMatrixRouteRows();
             return;
         }
 
@@ -497,9 +711,29 @@ public partial class MediaPlayerViewModel : ViewModelBase
         var session = _session;
         if (session is null) return;
         var compound = CompoundEnvelope(binding);
-        if (!session.TrySetOutputMatrix(binding.Line, binding.Matrix.ToRouteCells(), compound, out var err) &&
+        if (!session.TrySetOutputMatrix(binding.Line, BuildEffectiveRouteCells(binding), compound, out var err) &&
             !string.IsNullOrWhiteSpace(err))
             StatusMessage = err;
+    }
+
+    private IReadOnlyList<AudioMatrixCellConfig> BuildEffectiveRouteCells(PlayerOutputBinding binding)
+    {
+        var routed = new List<AudioMatrixCellConfig>();
+        foreach (var c in binding.Matrix.Cells)
+        {
+            var (trimDb, trimMuted) = InputTrimValues(c.InputChannel);
+            if (c.Muted || trimMuted)
+                continue;
+
+            routed.Add(new AudioMatrixCellConfig
+            {
+                InputChannel = c.InputChannel,
+                OutputChannel = c.OutputChannel,
+                GainDb = c.GainDb + trimDb,
+                Muted = false,
+            });
+        }
+        return routed;
     }
 
     /// <summary>Linear master × per-output gain (envelope) applied on top of every cell's own gain.</summary>
@@ -580,23 +814,108 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         AudioMatrixRows.Clear();
         var inputChannels = 0;
-        foreach (var binding in Outputs)
+        foreach (var slot in BuildVirtualOutputMap())
         {
-            if (!binding.IsSelected) continue;
-            if (binding.Matrix.InputChannelCount == 0) continue;
-            inputChannels = Math.Max(inputChannels, binding.Matrix.InputChannelCount);
-            for (var oc = 0; oc < binding.Matrix.OutputChannelCount; oc++)
-            {
-                var label = binding.Matrix.OutputChannelCount == 2
-                    ? $"{binding.Line.Definition.DisplayName} · Out {(oc == 0 ? "L" : "R")}"
-                    : $"{binding.Line.Definition.DisplayName} · Out {oc + 1}";
-                AudioMatrixRows.Add(new AudioMatrixRow(binding, oc, label));
-            }
+            inputChannels = Math.Max(inputChannels, slot.Binding.Matrix.InputChannelCount);
+            var label = $"VOut {slot.VirtualOutputChannel} · {slot.Binding.Line.Definition.DisplayName} · {OutputChannelSuffix(slot.Binding.Matrix.OutputChannelCount, slot.OutputChannel)}";
+            AudioMatrixRows.Add(new AudioMatrixRow(slot.Binding, slot.OutputChannel, slot.VirtualOutputChannel, label));
         }
 
         AudioMatrixInputChannelCount = inputChannels;
+        RebuildInputTrimRows(inputChannels);
+        RebuildAudioMatrixRouteRows();
         OnPropertyChanged(nameof(HasAudioMatrix));
         AudioMatrixLayoutChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private IEnumerable<VirtualOutputSlot> BuildVirtualOutputMap()
+    {
+        var rows = new List<VirtualOutputSlot>();
+        var fallback = 1;
+        var used = new HashSet<int>();
+        foreach (var binding in Outputs)
+        {
+            if (!binding.IsSelected) continue;
+            if (binding.Matrix.InputChannelCount == 0 || binding.Matrix.OutputChannelCount == 0) continue;
+            for (var oc = 0; oc < binding.Matrix.OutputChannelCount; oc++)
+            {
+                var assigned = _outputs.GetAssignedVirtualAudioChannel(binding.Line.Definition.Id, oc);
+                var vout = assigned is > 0 ? assigned.Value : 0;
+                if (vout <= 0)
+                {
+                    while (used.Contains(fallback))
+                        fallback++;
+                    vout = fallback++;
+                }
+                used.Add(vout);
+                rows.Add(new VirtualOutputSlot(vout, binding, oc));
+            }
+        }
+        return rows
+            .OrderBy(r => r.VirtualOutputChannel)
+            .ThenBy(r => r.Binding.Line.Definition.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.OutputChannel);
+    }
+
+    private readonly record struct VirtualOutputSlot(
+        int VirtualOutputChannel,
+        PlayerOutputBinding Binding,
+        int OutputChannel);
+
+    private void RebuildInputTrimRows(int inputChannels)
+    {
+        var preserved = AudioMatrixInputTrims.ToDictionary(
+            t => t.InputChannel,
+            t => new InputChannelTrimConfig { InputChannel = t.InputChannel, GainDb = t.GainDb, Muted = t.Muted });
+
+        UnwatchInputTrimRows();
+        AudioMatrixInputTrims.Clear();
+
+        for (var ic = 0; ic < inputChannels; ic++)
+        {
+            if (!preserved.TryGetValue(ic, out var cfg) && !_pendingInputTrimConfigs.TryGetValue(ic, out cfg))
+                cfg = new InputChannelTrimConfig { InputChannel = ic, GainDb = 0.0, Muted = false };
+            AudioMatrixInputTrims.Add(new AudioMatrixInputTrimViewModel(ic, inputChannels, cfg.GainDb, cfg.Muted));
+        }
+
+        WatchInputTrimRows();
+        OnPropertyChanged(nameof(HasAudioMatrixInputTrims));
+    }
+
+    /// <summary>
+    /// Rebuild the active-route list from audible matrix cells. Keeps deterministic VOut numbering aligned
+    /// with <see cref="RebuildAudioMatrixRows"/> ordering.
+    /// </summary>
+    private void RebuildAudioMatrixRouteRows()
+    {
+        AudioMatrixRouteRows.Clear();
+        var inputChannels = Math.Max(1, AudioMatrixInputChannelCount);
+        var vout = 0;
+        foreach (var binding in Outputs)
+        {
+            if (!binding.IsSelected) continue;
+            if (binding.Matrix.InputChannelCount == 0 || binding.Matrix.OutputChannelCount == 0) continue;
+
+            for (var oc = 0; oc < binding.Matrix.OutputChannelCount; oc++)
+            {
+                vout++;
+                var outLabel = $"{binding.Line.Definition.DisplayName} · {OutputChannelSuffix(binding.Matrix.OutputChannelCount, oc)}";
+                var active = binding.Matrix.Cells
+                    .Where(c => c.OutputChannel == oc && c.IsAudible)
+                    .OrderBy(c => c.InputChannel);
+                foreach (var cell in active)
+                {
+                    AudioMatrixRouteRows.Add(new AudioMatrixRouteRow(
+                        virtualOutputChannel: vout,
+                        outputLabel: outLabel,
+                        inputChannel: cell.InputChannel,
+                        inputChannelCount: inputChannels,
+                        cell: cell,
+                        effectiveGainText: EffectiveCellGainText(binding, cell)));
+                }
+            }
+        }
+        OnPropertyChanged(nameof(HasAudioMatrixRoutes));
     }
 
     private void ApplyOutputGainToSession(OutputLineViewModel line)
@@ -652,13 +971,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 {
                     // Re-stamp the matrix on the freshly-wired route; falls back to the legacy single-route
                     // ChannelMap when the matrix hasn't been sized yet (first hot-add before session play).
-                    var binding = Outputs.FirstOrDefault(b => b.Line == line);
-                    if (binding is not null)
-                    {
-                        var srcCh = _session.Player.Decoder.Audio?.Format.Channels ?? 2;
-                        binding.Matrix.Resize(srcCh, 2);
-                        ApplyOutputMatrixToSession(binding);
-                    }
+                        var binding = Outputs.FirstOrDefault(b => b.Line == line);
+                        if (binding is not null)
+                        {
+                            var srcCh = SourceChannelCountOrFallback(_session);
+                            binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                            ApplyOutputMatrixToSession(binding);
+                        }
                     ApplyOutputCompoundGainToSession(line);
                 }
                 else if (!string.IsNullOrWhiteSpace(err))
@@ -725,8 +1044,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
                         var b = Outputs.FirstOrDefault(o => o.Line == target);
                         if (b is not null)
                         {
-                            var srcCh = session.Player.Decoder.Audio?.Format.Channels ?? 2;
-                            b.Matrix.Resize(srcCh, 2);
+                            var srcCh = SourceChannelCountOrFallback(session);
+                            b.Matrix.Resize(srcCh, OutputChannelCountOrZero(b.Line));
                             ApplyOutputMatrixToSession(b);
                         }
                         ApplyOutputCompoundGainToSession(target);
@@ -945,6 +1264,53 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Phase C.5 (§6.4) — open the PortAudio-input dialog and, on commit, add the produced
+    /// <see cref="PortAudioInputPlaylistItem"/> to the active playlist tab. Live items sit alongside
+    /// file items in the same list and round-trip through the project file (§6.8).</summary>
+    [RelayCommand]
+    private async Task AddPortAudioInputAsync()
+    {
+        var top = TryGetMainWindow();
+        if (top is null) return;
+
+        var dialogVm = new Dialogs.AddPortAudioInputDialogViewModel();
+        dialogVm.ReloadHostApis();
+        var dialog = new Views.Dialogs.AddPortAudioInputDialog { DataContext = dialogVm };
+
+        var result = await dialog.ShowDialog<PortAudioInputPlaylistItem?>(top);
+        if (result is null) return;
+
+        PlaylistItems.Add(result);
+        SelectedPlaylistItem = result;
+    }
+
+    /// <summary>Phase C.5 (§6.3) — open the NDI-input dialog and add the produced
+    /// <see cref="NDIInputPlaylistItem"/>. The discovery list + manual-name path land alongside the
+    /// dialog VM in task #3; until then the menu entry surfaces a banner so users know the data
+    /// model is ready but the dialog isn't wired yet.</summary>
+    [RelayCommand]
+    private async Task AddNDIInputAsync()
+    {
+        var top = TryGetMainWindow();
+        if (top is null) return;
+
+        var dialogVm = new Dialogs.AddNDIInputDialogViewModel();
+        await dialogVm.StartDiscoveryAsync();
+        var dialog = new Views.Dialogs.AddNDIInputDialog { DataContext = dialogVm };
+
+        try
+        {
+            var result = await dialog.ShowDialog<NDIInputPlaylistItem?>(top);
+            if (result is null) return;
+            PlaylistItems.Add(result);
+            SelectedPlaylistItem = result;
+        }
+        finally
+        {
+            dialogVm.StopDiscovery();
+        }
+    }
+
     [RelayCommand]
     private async Task AddFilesToPlaylistAsync()
     {
@@ -976,23 +1342,22 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     skipped++;
                     continue;
                 }
-                if (!PlaylistPaths.Contains(path, StringComparer.Ordinal))
-                {
-                    PlaylistPaths.Add(path);
-                    added++;
-                }
-                else
+                // Dedup against existing file items (same-path live items don't make sense and don't exist here).
+                if (PlaylistItems.OfType<FilePlaylistItem>().Any(f => string.Equals(f.Path, path, StringComparison.Ordinal)))
                 {
                     skipped++;
+                    continue;
                 }
+                PlaylistItems.Add(new FilePlaylistItem(path));
+                added++;
             }
-            Log($"foreach done added={added} skipped={skipped} count={PlaylistPaths.Count}");
+            Log($"foreach done added={added} skipped={skipped} count={PlaylistItems.Count}");
 
-            if (SelectedPlaylistPath is null && PlaylistPaths.Count > 0)
+            if (SelectedPlaylistItem is null && PlaylistItems.Count > 0)
             {
-                Log("setting initial SelectedPlaylistPath");
-                SelectedPlaylistPath = PlaylistPaths[0];
-                Log("set initial SelectedPlaylistPath done");
+                Log("setting initial SelectedPlaylistItem");
+                SelectedPlaylistItem = PlaylistItems[0];
+                Log("set initial SelectedPlaylistItem done");
             }
         }
         catch (Exception ex)
@@ -1012,62 +1377,75 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanRemovePlaylistItem))]
     private void RemoveFromPlaylist()
     {
-        if (string.IsNullOrEmpty(SelectedPlaylistPath))
-            return;
-        var i = PlaylistPaths.IndexOf(SelectedPlaylistPath);
+        var item = SelectedPlaylistItem;
+        if (item is null) return;
+        var i = PlaylistItems.IndexOf(item);
         if (i < 0) return;
-        PlaylistPaths.RemoveAt(i);
-        SelectedPlaylistPath = PlaylistPaths.Count > 0
-            ? PlaylistPaths[Math.Min(i, PlaylistPaths.Count - 1)]
+        PlaylistItems.RemoveAt(i);
+        SelectedPlaylistItem = PlaylistItems.Count > 0
+            ? PlaylistItems[Math.Min(i, PlaylistItems.Count - 1)]
             : null;
         RemoveFromPlaylistCommand.NotifyCanExecuteChanged();
     }
 
     private bool CanRemovePlaylistItem() =>
-        !string.IsNullOrEmpty(SelectedPlaylistPath) && PlaylistPaths.Contains(SelectedPlaylistPath);
+        SelectedPlaylistItem is not null && PlaylistItems.Contains(SelectedPlaylistItem);
 
     [RelayCommand(CanExecute = nameof(CanMovePlaylistItemUp))]
     private void MovePlaylistItemUp()
     {
-        var path = SelectedPlaylistPath;
-        if (string.IsNullOrEmpty(path)) return;
-        var i = PlaylistPaths.IndexOf(path);
+        var item = SelectedPlaylistItem;
+        if (item is null) return;
+        var i = PlaylistItems.IndexOf(item);
         if (i <= 0) return;
-        (PlaylistPaths[i - 1], PlaylistPaths[i]) = (PlaylistPaths[i], PlaylistPaths[i - 1]);
-        SelectedPlaylistPath = path;
+        (PlaylistItems[i - 1], PlaylistItems[i]) = (PlaylistItems[i], PlaylistItems[i - 1]);
+        SelectedPlaylistItem = item;
     }
 
     private bool CanMovePlaylistItemUp() =>
-        !string.IsNullOrEmpty(SelectedPlaylistPath) && PlaylistPaths.IndexOf(SelectedPlaylistPath!) > 0;
+        SelectedPlaylistItem is not null && PlaylistItems.IndexOf(SelectedPlaylistItem) > 0;
 
     [RelayCommand(CanExecute = nameof(CanMovePlaylistItemDown))]
     private void MovePlaylistItemDown()
     {
-        var path = SelectedPlaylistPath;
-        if (string.IsNullOrEmpty(path)) return;
-        var i = PlaylistPaths.IndexOf(path);
-        if (i < 0 || i >= PlaylistPaths.Count - 1) return;
-        (PlaylistPaths[i + 1], PlaylistPaths[i]) = (PlaylistPaths[i], PlaylistPaths[i + 1]);
-        SelectedPlaylistPath = path;
+        var item = SelectedPlaylistItem;
+        if (item is null) return;
+        var i = PlaylistItems.IndexOf(item);
+        if (i < 0 || i >= PlaylistItems.Count - 1) return;
+        (PlaylistItems[i + 1], PlaylistItems[i]) = (PlaylistItems[i], PlaylistItems[i + 1]);
+        SelectedPlaylistItem = item;
     }
 
     private bool CanMovePlaylistItemDown()
     {
-        if (string.IsNullOrEmpty(SelectedPlaylistPath)) return false;
-        var idx = PlaylistPaths.IndexOf(SelectedPlaylistPath);
-        return idx >= 0 && idx < PlaylistPaths.Count - 1;
+        if (SelectedPlaylistItem is null) return false;
+        var idx = PlaylistItems.IndexOf(SelectedPlaylistItem);
+        return idx >= 0 && idx < PlaylistItems.Count - 1;
     }
 
-    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing.</summary>
-    public async Task PlayPlaylistItemAsync(string path)
+    /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing.
+    /// Routes both file items and live items through the open path; live playback wiring lands in Phase C.5
+    /// (currently surfaces "live items not yet supported" on play).</summary>
+    public async Task PlayPlaylistItemAsync(PlaylistItem item)
     {
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+        if (item is null) return;
         _activePlaybackTab = SelectedPlaylistTab;
-        SelectedPlaylistPath = path;
-        MediaFilePath = path;
+        SelectedPlaylistItem = item;
+        await PrepareCurrentItemAsync(item).ConfigureAwait(false);
         await OpenOrReloadAsync().ConfigureAwait(false);
         if (_session is not null && !IsPlaying)
             await StartPlaybackAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Phase C.5 — sets <see cref="_currentPlaylistItem"/> and the file-item path projection that
+    /// the existing file-based open path consumes. Live items leave <see cref="MediaFilePath"/> null and are
+    /// short-circuited by <see cref="OpenOrReloadAsync"/> until live wiring lands (task #4).</summary>
+    private Task PrepareCurrentItemAsync(PlaylistItem? item)
+    {
+        _currentPlaylistItem = item;
+        MediaFilePath = item is FilePlaylistItem f ? f.Path : null;
+        OnPropertyChanged(nameof(CurrentMediaDisplay));
+        return Task.CompletedTask;
     }
 
     [RelayCommand]
@@ -1173,6 +1551,65 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public bool IsActivelyPlayingThroughLine(OutputLineViewModel line) =>
         IsPlaying && _session?.HasWiredLine(line) == true;
 
+    /// <summary>
+    /// Apply cue-level audio routing overrides onto this player's matrix model.
+    /// Uses cue virtual output channel numbers (VOut 1..N) mapped in current selected-output order.
+    /// </summary>
+    public void ApplyCueRouteOverrides(MediaCueNode cue)
+    {
+        if (cue.RouteConnections.Count == 0 && cue.VirtualOutputChannels.Count == 0)
+            return;
+
+        var map = BuildVirtualOutputMap().ToList();
+        if (map.Count == 0)
+            return;
+
+        if (cue.VirtualOutputChannels.Count > 0)
+        {
+            var allowedVOuts = cue.VirtualOutputChannels.ToHashSet();
+            var wantedBindings = map
+                .Where(x => allowedVOuts.Contains(x.VirtualOutputChannel))
+                .Select(x => x.Binding)
+                .Distinct()
+                .ToHashSet();
+            foreach (var b in Outputs)
+                b.IsSelected = wantedBindings.Contains(b);
+            map = BuildVirtualOutputMap().ToList();
+            if (map.Count == 0)
+                return;
+        }
+
+        if (cue.RouteConnections.Count > 0)
+        {
+            var srcCh = Math.Max(AudioMatrixInputChannelCount, 1);
+            foreach (var binding in Outputs.Where(b => b.IsSelected))
+            {
+                var outCh = OutputChannelCountOrZero(binding.Line);
+                if (outCh <= 0) continue;
+                binding.Matrix.Resize(srcCh, outCh);
+                foreach (var cell in binding.Matrix.Cells)
+                {
+                    cell.GainDb = AudioMatrixDefaults.MutedFloorDb;
+                    cell.Muted = true;
+                }
+            }
+
+            foreach (var route in cue.RouteConnections)
+            {
+                var slot = map.FirstOrDefault(x => x.VirtualOutputChannel == route.VirtualOutputChannel);
+                if (slot.Binding is null) continue;
+                var cell = slot.Binding.Matrix.Cell(route.InputChannel, slot.OutputChannel);
+                if (cell is null) continue;
+                cell.GainDb = route.GainDb;
+                cell.Muted = route.Muted;
+            }
+        }
+
+        RebuildAudioMatrixRows();
+        ApplyAllOutputMatricesToSession();
+        ApplyAllOutputGainsToSession();
+    }
+
     /// <summary>Phase A — public snapshot for project save (§7). Internally still calls the same builder
     /// used by the per-player Save Player command, so the JSON shape stays identical.</summary>
     public MediaPlayerConfig BuildPlayerConfigSnapshot() => BuildPlayerConfig();
@@ -1186,9 +1623,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Name = Name,
         PlaylistTabs = PlaylistTabs.Select(t => t.ToConfig()).ToList(),
         SelectedPlaylistTabIndex = SelectedPlaylistTab is null ? 0 : Math.Max(0, PlaylistTabs.IndexOf(SelectedPlaylistTab)),
-        PlaylistPaths = PlaylistPaths.ToList(),
+        // Phase C.5 — the discriminated items live in PlaylistTabs[*].Items now. Keep the legacy flat
+        // file-path projection for v1 readers (HaPlay builds older than the Items field) so they don't
+        // silently lose the playlist on round-trip through an older build.
+        PlaylistPaths = PlaylistItems.OfType<FilePlaylistItem>().Select(f => f.Path).ToList(),
         MediaFilePath = MediaFilePath,
-        SelectedPlaylistPath = SelectedPlaylistPath,
+        SelectedPlaylistPath = _currentPlaylistItem is FilePlaylistItem cf ? cf.Path : null,
         FallbackImagePath = FallbackImagePath,
         IsLooping = IsLooping,
         AutoAdvancePlaylist = AutoAdvancePlaylist,
@@ -1212,6 +1652,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 Muted = b.IsMuted,
                 MixMode = b.MixMode,
                 MatrixCells = HasNonDefaultMatrix(b) ? b.Matrix.ToPersistableCells().ToList() : new(),
+            })
+            .ToList(),
+        InputTrims = AudioMatrixInputTrims
+            .Where(t => Math.Abs(t.GainDb) > 0.0001 || t.Muted)
+            .Select(t => new InputChannelTrimConfig
+            {
+                InputChannel = t.InputChannel,
+                GainDb = t.GainDb,
+                Muted = t.Muted,
             })
             .ToList(),
     };
@@ -1247,7 +1696,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 new()
                 {
                     Name = "Set A",
-                    Paths = config.PlaylistPaths,
+                    // v1 player-config fallback: project the top-level flat path list onto the
+                    // PlaylistConfig.Paths legacy field; PlaylistTabViewModel.FromConfig promotes those to
+                    // FilePlaylistItem entries (§6.8).
+                    Paths = config.PlaylistPaths.Count > 0 ? config.PlaylistPaths : null,
                     SelectedPath = config.SelectedPlaylistPath,
                     IsLooping = config.IsLooping,
                     AutoAdvance = config.AutoAdvancePlaylist,
@@ -1260,6 +1712,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
             PlaylistTabs.Add(new PlaylistTabViewModel("Set A"));
 
         MediaFilePath = config.MediaFilePath;
+        _currentPlaylistItem = null;
+        OnPropertyChanged(nameof(CurrentMediaDisplay));
         var selectedIndex = Math.Clamp(config.SelectedPlaylistTabIndex, 0, PlaylistTabs.Count - 1);
         SelectedPlaylistTab = PlaylistTabs[selectedIndex];
         RemovePlaylistTabCommand.NotifyCanExecuteChanged();
@@ -1284,6 +1738,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             .Where(g => !string.IsNullOrWhiteSpace(g.OutputDisplayName))
             .GroupBy(g => g.OutputDisplayName, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase));
+        _pendingInputTrimConfigs = config.InputTrims
+            .Where(t => t.InputChannel >= 0)
+            .GroupBy(t => t.InputChannel)
+            .ToDictionary(g => g.Key, g => g.Last());
+        RebuildInputTrimRows(AudioMatrixInputChannelCount);
+        RebuildAudioMatrixRouteRows();
 
         StatusMessage = missing.Count > 0
             ? $"Loaded. Missing outputs: {string.Join(", ", missing)}."
@@ -1351,8 +1811,19 @@ public partial class MediaPlayerViewModel : ViewModelBase
         });
     }
 
-    private bool CanLoadMedia() =>
-        !string.IsNullOrWhiteSpace(MediaFilePath) && File.Exists(MediaFilePath!);
+    private bool CanLoadMedia()
+    {
+        // Phase C.5 — live items go through TryCreate(PlaylistItem) which dispatches to TryCreateLive.
+        // File items need a readable path; live items are accepted unconditionally (the playback path
+        // will surface its own error if the device / source can't be resolved).
+        if (_currentPlaylistItem is { IsLive: true })
+            return true;
+        if (_currentPlaylistItem is FilePlaylistItem f && File.Exists(f.Path))
+            return true;
+        return _currentPlaylistItem is null
+               && !string.IsNullOrWhiteSpace(MediaFilePath)
+               && File.Exists(MediaFilePath!);
+    }
 
     private async Task OpenOrReloadAsync()
     {
@@ -1365,19 +1836,26 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: !resumeAfterOpen);
 
-            var (path, selected) = await Dispatcher.UIThread.InvokeAsync(() =>
+            var (item, selected) = await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
                 var lines = SelectedOutputLines();
                 _outputs.StopPreviewsForPlayback(lines);
-                return (MediaFilePath!, lines);
+                // Synthesize a FilePlaylistItem if MediaFilePath is set but _currentPlaylistItem isn't
+                // (legacy: ApplyPlayerConfig sets MediaFilePath alone).
+                PlaylistItem? effective = _currentPlaylistItem;
+                if (effective is null && !string.IsNullOrWhiteSpace(MediaFilePath))
+                    effective = new FilePlaylistItem(MediaFilePath!);
+                return (effective, lines);
             });
+
+            if (item is null) return;
 
             HaPlayPlaybackSession? created = null;
             string? createErr = null;
             await Task.Run(() =>
             {
-                if (!HaPlayPlaybackSession.TryCreate(path, selected, _outputs, out created, out createErr))
+                if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr))
                     created = null;
             }).ConfigureAwait(false);
 
@@ -1387,27 +1865,43 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 if (created is null)
                 {
-                    StatusMessage = createErr ?? "Failed to open media.";
+                    // Phase C.5 (§6.9) — for a live item with retries enabled, enter the waiting state so the
+                    // loop timer re-attempts to open. Manual-name NDI items and recently-unplugged USB capture
+                    // devices both end up here. Files / disabled-retry items just surface the error.
+                    if (item.IsLive && GetRetrySeconds(item) > 0)
+                        EnterWaitingForSource(item, createErr ?? "source unavailable");
+                    else
+                        StatusMessage = createErr ?? "Failed to open media.";
                     SyncIdleSlate();
                     return false;
                 }
 
+                ExitWaitingForSource();
+
                 _session = created;
                 IsMediaLoaded = true;
                 StatusMessage = null;
-                Duration = created.Player.Decoder.Audio is ISeekableSource a ? a.Duration : TimeSpan.Zero;
+                // Live items have no finite duration (§6.5) — the transport hides the seek bar via DurationText.
+                // File items pull Duration from the decoder's seekable audio (or video) source as before.
+                Duration = item.IsLive
+                    ? TimeSpan.Zero
+                    : (created.Player.HasContainerDecoder
+                        && created.Player.Decoder.Audio is ISeekableSource a
+                        ? a.Duration
+                        : TimeSpan.Zero);
 
                 created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
                 if (!string.IsNullOrWhiteSpace(FallbackImagePath))
                     created.ApplyFallbackImage(FallbackImagePath);
                 created.SetHoldFallback(HoldFallbackVideo);
-                // Size every binding's matrix to the source channel count (sink is currently always 2; see
-                // HaPlayPlaybackSession WireAudio downmix), then push matrices into the session so cell
-                // routes are installed before the first chunk runs.
-                var srcCh = created.Player.Decoder.Audio?.Format.Channels ?? 2;
+                // Size every binding's matrix to the source channel count and the configured sink-channel
+                // count of that output line, then push matrices into the session so cell
+                // routes are installed before the first chunk runs. Live items (§6.5) use the negotiated
+                // live-source channel count surfaced via SourceAudioFormat.
+                var srcCh = SourceChannelCountOrFallback(created);
                 foreach (var binding in Outputs)
                 {
-                    binding.Matrix.Resize(srcCh, 2);
+                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
                     // First open after a config-load installs the saved mix mode preset; on a freshly-created
                     // binding the matrix already sits at the identity defaults from Resize.
                 }
@@ -1507,7 +2001,31 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task ProcessLoopTimerTickAsync()
     {
+        // Phase C.5 (§6.9) — drive the reconnect retry loop. Has priority over the playback advance
+        // logic below since no _session exists while we're waiting. The retry tries to re-open the
+        // last-known live item; on success the normal play path continues.
+        if (IsWaitingForSource && _waitingItem is not null && DateTime.UtcNow >= _nextRetryAt)
+        {
+            var item = _waitingItem;
+            _currentPlaylistItem = item;
+            // Push the next deadline forward immediately so a slow open doesn't fire a retry storm
+            // when the dispatcher catches up.
+            var retrySec = GetRetrySeconds(item);
+            _nextRetryAt = DateTime.UtcNow.AddSeconds(Math.Max(retrySec, 1));
+            await OpenOrReloadAsync().ConfigureAwait(false);
+
+            // If the open succeeded, we exited waiting AND _session is set — start the source naturally.
+            if (_session is not null && !IsPlaying)
+                await StartPlaybackAsync().ConfigureAwait(false);
+            return;
+        }
+
         if (_session is null || !IsMediaLoaded || !IsPlaying)
+            return;
+
+        // Phase C.5 — live sessions never auto-advance and never loop (§6.5). Skip the rest of the
+        // file-end logic so a transient router stall doesn't get mistaken for "track ended".
+        if (_session.IsLive)
             return;
 
         var holdFb = HoldFallbackVideo;
@@ -1573,12 +2091,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             if (_session is null || !IsMediaLoaded) return false;
             IsPlaying = false;
-            if (!TryGetNextPlaylistPath(out var nextPath)) return false;
-            MediaFilePath = nextPath;
+            if (!TryGetNextPlaylistItem(out var nextItem)) return false;
+            _ = PrepareCurrentItemAsync(nextItem);
             if (_activePlaybackTab is not null)
-                _activePlaybackTab.SelectedPath = nextPath;
+                _activePlaybackTab.SelectedItem = nextItem;
             if (ReferenceEquals(_activePlaybackTab, SelectedPlaylistTab))
-                SelectedPlaylistPath = nextPath;
+                SelectedPlaylistItem = nextItem;
             return true;
         });
         if (!shouldLoadNext) return;
@@ -1617,10 +2135,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
         await TryAutoRouteAsync().ConfigureAwait(false);
 
         // Auto-load: if nothing's loaded yet but the user has selected a playlist row, load + play in one click.
-        if (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath) && File.Exists(SelectedPlaylistPath))
+        if (_session is null && SelectedPlaylistItem is { } selected)
         {
+            // File items must point at a readable path; live items short-circuit inside OpenOrReloadAsync
+            // until task #4 (live wiring) lands.
+            if (selected is FilePlaylistItem f && !File.Exists(f.Path))
+            {
+                StatusMessage = $"File missing: {f.Path}";
+                return;
+            }
             _activePlaybackTab = SelectedPlaylistTab;
-            MediaFilePath = SelectedPlaylistPath;
+            await PrepareCurrentItemAsync(selected).ConfigureAwait(false);
             IsPlaying = true; // signals OpenOrReloadAsync to resume after open
             await OpenOrReloadAsync().ConfigureAwait(false);
             return;
@@ -1636,35 +2161,35 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private bool CanTogglePlayPause() =>
         (_session is not null && IsMediaLoaded) ||
-        (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath));
+        (_session is null && SelectedPlaylistItem is not null);
 
     [RelayCommand(CanExecute = nameof(CanGoNext))]
     private async Task NextTrackAsync()
     {
-        if (!TryGetNextPlaylistPath(out var next)) return;
+        if (!TryGetNextPlaylistItem(out var next)) return;
         await PlayPlaylistItemAsync(next).ConfigureAwait(false);
     }
 
-    private bool CanGoNext() => TryGetNextPlaylistPath(out _);
+    private bool CanGoNext() => TryGetNextPlaylistItem(out _);
 
     [RelayCommand(CanExecute = nameof(CanGoPrevious))]
     private async Task PreviousTrackAsync()
     {
-        if (!TryGetPreviousPlaylistPath(out var prev)) return;
+        if (!TryGetPreviousPlaylistItem(out var prev)) return;
         await PlayPlaylistItemAsync(prev).ConfigureAwait(false);
     }
 
-    private bool CanGoPrevious() => TryGetPreviousPlaylistPath(out _);
+    private bool CanGoPrevious() => TryGetPreviousPlaylistItem(out _);
 
-    private bool TryGetPreviousPlaylistPath([NotNullWhen(true)] out string? prevPath)
+    private bool TryGetPreviousPlaylistItem([NotNullWhen(true)] out PlaylistItem? prevItem)
     {
-        prevPath = null;
-        var paths = ActivePlaybackPaths();
-        if (paths.Count == 0 || string.IsNullOrEmpty(MediaFilePath))
+        prevItem = null;
+        var items = ActivePlaybackItems();
+        if (items.Count == 0 || _currentPlaylistItem is null)
             return false;
-        var idx = IndexOfPath(paths, MediaFilePath);
+        var idx = items.IndexOf(_currentPlaylistItem);
         if (idx <= 0) return false;
-        prevPath = paths[idx - 1];
+        prevItem = items[idx - 1];
         return true;
     }
 
@@ -1707,7 +2232,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // yet (Play with a playlist row), assume audio+video so we'll happily route to either.
         var preferVideo = true;
         var preferAudio = true;
-        var path = SelectedPlaylistPath ?? MediaFilePath;
+        // File items probe via the decoder; live items don't have a file path — fall back to
+        // "prefer both" so we still pick a compatible output.
+        var path = (SelectedPlaylistItem as FilePlaylistItem)?.Path
+                   ?? (_currentPlaylistItem as FilePlaylistItem)?.Path
+                   ?? MediaFilePath;
         if (!string.IsNullOrEmpty(path) && File.Exists(path))
         {
             // Best-effort probe — failures fall back to "pick anything compatible".
@@ -1782,7 +2311,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private bool CanPlay() =>
         (_session is not null && IsMediaLoaded) ||
-        (_session is null && !string.IsNullOrEmpty(SelectedPlaylistPath));
+        (_session is null && SelectedPlaylistItem is not null);
 
     [RelayCommand(CanExecute = nameof(CanTransport))]
     private async Task PauseAsync()
@@ -1804,7 +2333,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }).ConfigureAwait(false);
     }
 
-    [RelayCommand(CanExecute = nameof(CanTransport))]
+    [RelayCommand(CanExecute = nameof(CanStop))]
     private async Task StopAsync()
     {
         await WithPlaybackArcAsync(async () =>
@@ -1815,6 +2344,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 _loopTimer?.Stop();
                 _loopTimer = null;
                 IsPlaying = false;
+                // Phase C.5 — Stop also cancels the retry loop. A waiting NDI input is "stopped" the
+                // moment the user clicks Stop; Play would re-arm both the load and the retry.
+                ExitWaitingForSource();
+                StatusMessage = null;
                 return (_session, HoldFallbackVideo);
             });
             if (snap is null) return;
@@ -1885,6 +2418,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private bool CanTransport() => _session is not null && IsMediaLoaded;
 
+    /// <summary>Phase C.5 — Stop is enabled while a session is loaded OR while a live item is in the
+    /// waiting-for-source state. Without the second clause, Stop can't cancel the retry loop on a
+    /// manual-name NDI item whose source never came online.</summary>
+    private bool CanStop() => (_session is not null && IsMediaLoaded) || IsWaitingForSource;
+
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private async Task SeekToSliderAsync()
     {
@@ -1946,32 +2484,24 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand]
     private Task CloseSessionAsync() => WithPlaybackArcAsync(() => CloseSessionCoreInnerAsync(false));
 
-    private bool TryGetNextPlaylistPath([NotNullWhen(true)] out string? nextPath)
+    private bool TryGetNextPlaylistItem([NotNullWhen(true)] out PlaylistItem? nextItem)
     {
-        nextPath = null;
-        var paths = ActivePlaybackPaths();
-        if (paths.Count == 0 || string.IsNullOrEmpty(MediaFilePath))
+        nextItem = null;
+        var items = ActivePlaybackItems();
+        if (items.Count == 0 || _currentPlaylistItem is null)
             return false;
-        var idx = IndexOfPath(paths, MediaFilePath);
+        var idx = items.IndexOf(_currentPlaylistItem);
         if (idx < 0)
             return false;
         var n = idx + 1;
-        if (n >= paths.Count)
+        if (n >= items.Count)
             return false;
-        nextPath = paths[n];
+        nextItem = items[n];
         return true;
     }
 
-    private IReadOnlyList<string> ActivePlaybackPaths() =>
-        _activePlaybackTab?.Paths ?? PlaylistPaths;
-
-    private static int IndexOfPath(IReadOnlyList<string> paths, string path)
-    {
-        for (var i = 0; i < paths.Count; i++)
-            if (string.Equals(paths[i], path, StringComparison.Ordinal))
-                return i;
-        return -1;
-    }
+    private IList<PlaylistItem> ActivePlaybackItems() =>
+        _activePlaybackTab?.Items ?? (IList<PlaylistItem>)PlaylistItems;
 
     private static Window? TryGetMainWindow()
     {

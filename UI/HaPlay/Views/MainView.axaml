@@ -41,11 +41,14 @@
     <KeyBinding Gesture="Ctrl+3" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Outputs}" />
     <KeyBinding Gesture="Ctrl+4" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.OscConnections}" />
+    <KeyBinding Gesture="Ctrl+5" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.MidiDevices}" />
+    <KeyBinding Gesture="Ctrl+6" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Project}" />
   </UserControl.KeyBindings>
 
   <DockPanel>
-    <!-- File / Project menu (kept above the sidebar so keyboard shortcuts still surface). -->
     <Menu DockPanel.Dock="Top">
       <MenuItem Header="_File">
         <MenuItem Header="_New Project" Command="{Binding NewProjectCommand}" InputGesture="Ctrl+N" />
@@ -73,7 +76,6 @@
       </MenuItem>
     </Menu>
 
-    <!-- Status banner under menu — surfaces save / load / missing-route messages. -->
     <Border DockPanel.Dock="Top"
             Background="#222"
             Padding="8,4"
@@ -81,12 +83,10 @@
       <TextBlock Text="{Binding ProjectStatus}" Foreground="#DDD" />
     </Border>
 
-    <!-- Sidebar -->
     <Border DockPanel.Dock="Left"
             BorderBrush="#22808080" BorderThickness="0,0,1,0"
             Width="{Binding SidebarWidth}">
       <DockPanel>
-        <!-- Hamburger toggle -->
         <Button DockPanel.Dock="Top"
                 Classes="sidebar"
                 Command="{Binding ToggleSidebarCommand}"
@@ -94,7 +94,6 @@
           <TextBlock Text="☰" Classes="sidebar-glyph" />
         </Button>
 
-        <!-- Workspace entries -->
         <ItemsControl ItemsSource="{Binding Workspaces}">
           <ItemsControl.ItemTemplate>
             <DataTemplate DataType="models:WorkspaceItem">
@@ -117,9 +116,7 @@
       </DockPanel>
     </Border>
 
-    <!-- Workspace content area -->
     <Grid>
-      <!-- Players -->
       <DockPanel Margin="8" IsVisible="{Binding IsPlayersWorkspaceSelected}">
         <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
           <TabStrip Grid.Column="0"
@@ -138,19 +135,19 @@
         <ContentControl Content="{Binding SelectedPlayer}" />
       </DockPanel>
 
-      <!-- Outputs -->
       <views:OutputManagementView DataContext="{Binding OutputManagement}"
                                   IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsOutputsWorkspaceSelected}" />
 
-      <DockPanel Margin="16" IsVisible="{Binding IsCuesWorkspaceSelected}">
-        <StackPanel DockPanel.Dock="Top" Spacing="8">
-          <TextBlock Text="Cues" FontSize="22" FontWeight="SemiBold" />
-          <TextBlock Text="No cue list loaded." Opacity="0.65" />
-        </StackPanel>
-      </DockPanel>
+      <views:CuePlayerView Margin="8"
+                         DataContext="{Binding CuePlayer}"
+                         IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsCuesWorkspaceSelected}" />
 
-      <!-- Project workspace — Phase B.2 surface. Sidebar wraps it for now; richer project metadata
-           lives in Phase C-D. -->
+      <views:OscConnectionsView
+          IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsOscConnectionsWorkspaceSelected}" />
+
+      <views:MidiDevicesView
+          IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsMidiDevicesWorkspaceSelected}" />
+
       <DockPanel Margin="16" IsVisible="{Binding IsProjectWorkspaceSelected}">
         <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
           <TextBlock Text="Project" FontSize="22" FontWeight="SemiBold" />

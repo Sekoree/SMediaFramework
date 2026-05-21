@@ -1,4 +1,7 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.Globalization;
+using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using Avalonia;
@@ -9,20 +12,36 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
+using OSCLib;
+using PMLib;
+using PMLib.Devices;
+using PMLib.MessageTypes;
+using PMLib.Types;
 
 namespace HaPlay.ViewModels;
 
 public partial class MainViewModel : ViewModelBase
 {
     private int _nextPlayerNumber = 1;
+    private readonly object _midiInitSync = new();
+    private bool _midiInitialized;
 
     public MainViewModel()
     {
         OutputManagement = new OutputManagementViewModel();
+        CuePlayer = new CuePlayerViewModel();
         Players = new ObservableCollection<MediaPlayerViewModel>();
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
+        CuePlayer.MediaCueExecutor = ExecuteCueMediaAsync;
+        CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
+        SeedDefaultActionEndpointsIfEmpty();
+        RebuildEndpointWorkspaceLists();
+        CuePlayer.SetActionEndpoints(ActionEndpoints);
+        ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
+        SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
+        RefreshMidiDeviceCatalog();
 
         // Phase B (§3.6) — give the Edit dialog a way to ask "is any player playing through this line?".
         // Iterating the Players collection on each probe is fine: outputs are edited rarely, never
@@ -42,7 +61,14 @@ public partial class MainViewModel : ViewModelBase
     private readonly AppSettings _appSettings;
 
     public IReadOnlyList<WorkspaceItem> Workspaces { get; } =
-        [WorkspaceItem.Players, WorkspaceItem.Cues, WorkspaceItem.Outputs, WorkspaceItem.Project];
+    [
+        WorkspaceItem.Players,
+        WorkspaceItem.Cues,
+        WorkspaceItem.Outputs,
+        WorkspaceItem.OscConnections,
+        WorkspaceItem.MidiDevices,
+        WorkspaceItem.Project,
+    ];
 
     /// <summary>True when the sidebar is in icon-only mode (~48 px). Toggled by the hamburger or Ctrl+B.</summary>
     [ObservableProperty]
@@ -56,12 +82,16 @@ public partial class MainViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(IsPlayersWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsCuesWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsOutputsWorkspaceSelected))]
+    [NotifyPropertyChangedFor(nameof(IsOscConnectionsWorkspaceSelected))]
+    [NotifyPropertyChangedFor(nameof(IsMidiDevicesWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsProjectWorkspaceSelected))]
     private WorkspaceItem _selectedWorkspace = WorkspaceItem.Players;
 
     public bool IsPlayersWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Players;
     public bool IsCuesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Cues;
     public bool IsOutputsWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Outputs;
+    public bool IsOscConnectionsWorkspaceSelected => SelectedWorkspace == WorkspaceItem.OscConnections;
+    public bool IsMidiDevicesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.MidiDevices;
     public bool IsProjectWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Project;
 
     partial void OnSidebarCollapsedChanged(bool value)
@@ -91,7 +121,222 @@ public partial class MainViewModel : ViewModelBase
     }
 
     public OutputManagementViewModel OutputManagement { get; }
+    public CuePlayerViewModel CuePlayer { get; }
     public ObservableCollection<MediaPlayerViewModel> Players { get; }
+    public ObservableCollection<ActionEndpoint> ActionEndpoints { get; } = new();
+
+    /// <summary>OSC-only slice of <see cref="ActionEndpoints"/> for the OSC sidebar workspace.</summary>
+    public ObservableCollection<OscActionEndpoint> OscEndpoints { get; } = new();
+
+    /// <summary>MIDI-only slice of <see cref="ActionEndpoints"/> for the MIDI sidebar workspace.</summary>
+    public ObservableCollection<MidiActionEndpoint> MidiEndpoints { get; } = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSelectedActionEndpoint))]
+    [NotifyPropertyChangedFor(nameof(IsSelectedOscEndpoint))]
+    [NotifyPropertyChangedFor(nameof(IsSelectedMidiEndpoint))]
+    private ActionEndpoint? _selectedActionEndpoint;
+
+    public bool HasSelectedActionEndpoint => SelectedActionEndpoint is not null;
+    public bool IsSelectedOscEndpoint => SelectedActionEndpoint is OscActionEndpoint;
+    public bool IsSelectedMidiEndpoint => SelectedActionEndpoint is MidiActionEndpoint;
+
+    [ObservableProperty]
+    private string _endpointEditName = string.Empty;
+
+    [ObservableProperty]
+    private string _oscEditHost = "127.0.0.1";
+
+    [ObservableProperty]
+    private int _oscEditPort = 9000;
+
+    [ObservableProperty]
+    private string _midiEditDeviceName = string.Empty;
+
+    [ObservableProperty]
+    private int? _midiEditDeviceId;
+
+    [ObservableProperty]
+    private int _midiEditChannel;
+
+    public ObservableCollection<MidiOutputOption> MidiOutputOptions { get; } = new();
+    public ObservableCollection<MidiInputOption> MidiInputOptions { get; } = new();
+
+    [ObservableProperty]
+    private string? _midiDeviceStatus;
+
+    [ObservableProperty]
+    private MidiOutputOption? _selectedMidiOutputOption;
+
+    partial void OnSelectedActionEndpointChanged(ActionEndpoint? value)
+    {
+        if (value is null)
+        {
+            EndpointEditName = string.Empty;
+            OscEditHost = "127.0.0.1";
+            OscEditPort = 9000;
+            MidiEditDeviceName = string.Empty;
+            MidiEditDeviceId = null;
+            MidiEditChannel = 0;
+        }
+        else
+        {
+            EndpointEditName = value.Name;
+            switch (value)
+            {
+                case OscActionEndpoint osc:
+                    OscEditHost = osc.Host;
+                    OscEditPort = osc.Port;
+                    break;
+                case MidiActionEndpoint midi:
+                    MidiEditDeviceName = midi.DeviceName ?? string.Empty;
+                    MidiEditDeviceId = midi.DeviceId;
+                    MidiEditChannel = midi.Channel;
+                    SelectedMidiOutputOption = MidiOutputOptions.FirstOrDefault(o => o.Id == midi.DeviceId);
+                    break;
+            }
+        }
+        RemoveActionEndpointCommand.NotifyCanExecuteChanged();
+        SaveActionEndpointEditsCommand.NotifyCanExecuteChanged();
+        RefreshMidiOutputsCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnActionEndpointsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        RebuildEndpointWorkspaceLists();
+        CuePlayer.SetActionEndpoints(ActionEndpoints);
+        RemoveActionEndpointCommand.NotifyCanExecuteChanged();
+    }
+
+    private void RebuildEndpointWorkspaceLists()
+    {
+        OscEndpoints.Clear();
+        foreach (var endpoint in ActionEndpoints.OfType<OscActionEndpoint>())
+            OscEndpoints.Add(endpoint);
+
+        MidiEndpoints.Clear();
+        foreach (var endpoint in ActionEndpoints.OfType<MidiActionEndpoint>())
+            MidiEndpoints.Add(endpoint);
+    }
+
+    [RelayCommand]
+    private void AddOscEndpoint()
+    {
+        var n = ActionEndpoints.OfType<OscActionEndpoint>().Count() + 1;
+        var endpoint = new OscActionEndpoint
+        {
+            Name = $"OSC {n}",
+            Host = "127.0.0.1",
+            Port = 9000,
+        };
+        ActionEndpoints.Add(endpoint);
+        SelectedActionEndpoint = endpoint;
+    }
+
+    [RelayCommand]
+    private void AddMidiEndpoint()
+    {
+        var n = ActionEndpoints.OfType<MidiActionEndpoint>().Count() + 1;
+        var endpoint = new MidiActionEndpoint
+        {
+            Name = $"MIDI {n}",
+            Channel = 0,
+        };
+        ActionEndpoints.Add(endpoint);
+        SelectedActionEndpoint = endpoint;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveActionEndpoint))]
+    private void RemoveActionEndpoint()
+    {
+        if (SelectedActionEndpoint is null)
+            return;
+        ActionEndpoints.Remove(SelectedActionEndpoint);
+        SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
+    }
+
+    private bool CanRemoveActionEndpoint() => SelectedActionEndpoint is not null;
+
+    [RelayCommand(CanExecute = nameof(CanSaveActionEndpointEdits))]
+    private void SaveActionEndpointEdits()
+    {
+        if (SelectedActionEndpoint is null)
+            return;
+        var index = ActionEndpoints.IndexOf(SelectedActionEndpoint);
+        if (index < 0)
+            return;
+
+        var name = string.IsNullOrWhiteSpace(EndpointEditName)
+            ? SelectedActionEndpoint.Name
+            : EndpointEditName.Trim();
+
+        var replacement = SelectedActionEndpoint switch
+        {
+            OscActionEndpoint osc => osc with
+            {
+                Name = name,
+                Host = string.IsNullOrWhiteSpace(OscEditHost) ? osc.Host : OscEditHost.Trim(),
+                Port = OscEditPort is >= IPEndPoint.MinPort and <= IPEndPoint.MaxPort ? OscEditPort : osc.Port,
+            },
+            MidiActionEndpoint midi => midi with
+            {
+                Name = name,
+                DeviceId = MidiEditDeviceId,
+                DeviceName = string.IsNullOrWhiteSpace(MidiEditDeviceName) ? null : MidiEditDeviceName.Trim(),
+                Channel = Math.Clamp(MidiEditChannel, 0, 15),
+            },
+            _ => SelectedActionEndpoint,
+        };
+
+        ActionEndpoints[index] = replacement;
+        SelectedActionEndpoint = replacement;
+    }
+
+    private bool CanSaveActionEndpointEdits() => SelectedActionEndpoint is not null;
+
+    [RelayCommand(CanExecute = nameof(CanRefreshMidiOutputs))]
+    private void RefreshMidiOutputs()
+    {
+        RefreshMidiDeviceCatalog();
+        if (SelectedActionEndpoint is MidiActionEndpoint midi)
+            SelectedMidiOutputOption = MidiOutputOptions.FirstOrDefault(o => o.Id == midi.DeviceId);
+    }
+
+    private bool CanRefreshMidiOutputs() => SelectedActionEndpoint is MidiActionEndpoint;
+
+    [RelayCommand]
+    private void RefreshMidiDeviceCatalog()
+    {
+        var initError = EnsureMidiInitialized();
+        if (initError is not null)
+        {
+            MidiDeviceStatus = initError;
+            return;
+        }
+
+        var inputs = PMUtil.GetInputDevices();
+        MidiInputOptions.Clear();
+        foreach (var dev in inputs)
+            MidiInputOptions.Add(new MidiInputOption(dev.Id, dev.Name ?? $"Device {dev.Id}"));
+
+        var outputs = PMUtil.GetOutputDevices();
+        MidiOutputOptions.Clear();
+        foreach (var dev in outputs)
+            MidiOutputOptions.Add(new MidiOutputOption(dev.Id, dev.Name ?? $"Device {dev.Id}"));
+
+        MidiDeviceStatus = $"MIDI devices: {inputs.Count} input, {outputs.Count} output.";
+    }
+
+    [RelayCommand]
+    private void UseSelectedMidiOutput()
+    {
+        if (SelectedMidiOutputOption is null)
+            return;
+        MidiEditDeviceId = SelectedMidiOutputOption.Id;
+        MidiEditDeviceName = SelectedMidiOutputOption.Name;
+    }
 
     [ObservableProperty]
     private MediaPlayerViewModel? _selectedPlayer;
@@ -119,6 +364,239 @@ public partial class MainViewModel : ViewModelBase
             SelectedPlayer = Players.Count > 0 ? Players[Math.Min(idx, Players.Count - 1)] : null;
     }
 
+    private void SeedDefaultActionEndpointsIfEmpty()
+    {
+        if (ActionEndpoints.Count > 0)
+            return;
+        ActionEndpoints.Add(new OscActionEndpoint
+        {
+            Name = "OSC Localhost",
+            Host = "127.0.0.1",
+            Port = 9000,
+        });
+    }
+
+    private async Task<string?> ExecuteCueMediaAsync(MediaCueNode cue, CancellationToken ct)
+    {
+        _ = ct;
+        var player = SelectedPlayer;
+        if (player is null)
+            return "no selected player";
+        if (cue.Source is null)
+            return "no media source";
+
+        await player.PlayPlaylistItemAsync(cue.Source);
+        return cue.Source.DisplayName;
+    }
+
+    private async Task<string?> ExecuteCueActionAsync(ActionCueNode cue, CancellationToken ct)
+    {
+        try
+        {
+            return cue.ActionKind switch
+            {
+                CueActionKind.OscOut => await ExecuteCueOscAsync(cue, ct),
+                CueActionKind.MidiOut => await Task.Run(() => ExecuteCueMidi(cue, ct), ct),
+                _ => $"action kind '{cue.ActionKind}' not wired",
+            };
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
+
+    private async Task<string?> ExecuteCueOscAsync(ActionCueNode cue, CancellationToken ct)
+    {
+        OscActionEndpoint? endpoint = null;
+        if (cue.EndpointId is { } endpointId)
+        {
+            endpoint = ActionEndpoints
+                .OfType<OscActionEndpoint>()
+                .FirstOrDefault(e => e.Id == endpointId);
+            if (endpoint is null)
+                return $"OSC endpoint missing: {endpointId}";
+        }
+
+        var spec = ParseOscSpec(cue.AddressOrMessage, endpoint);
+        using var client = await OSCClient.CreateAsync(spec.Host, spec.Port, cancellationToken: ct);
+        await client.SendMessageAsync(spec.Address, spec.Arguments, ct);
+        return $"OSC {spec.Host}:{spec.Port}{spec.Address}";
+    }
+
+    private string ExecuteCueMidi(ActionCueNode cue, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var endpoint = cue.EndpointId is { } endpointId
+            ? ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault(e => e.Id == endpointId)
+            : ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault();
+        if (cue.EndpointId is not null && endpoint is null)
+            return $"MIDI endpoint missing: {cue.EndpointId}";
+
+        var initErr = EnsureMidiInitialized();
+        if (initErr is not null)
+            return initErr;
+
+        var devices = PMUtil.GetOutputDevices();
+        if (devices.Count == 0)
+            return "no MIDI output devices";
+
+        var device = ResolveMidiDevice(endpoint, devices);
+        if (device is null)
+            return endpoint is null
+                ? "no suitable MIDI output device"
+                : $"MIDI endpoint device not found: {endpoint.DeviceName ?? endpoint.DeviceId?.ToString() ?? "(unset)"}";
+
+        var spec = ParseMidiSpec(cue.AddressOrMessage, endpoint, device.Value.Id);
+        using var outDevice = new MIDIOutputDevice(spec.DeviceId);
+        var openErr = outDevice.Open();
+        if (openErr != PmError.NoError)
+            return $"MIDI open failed: {PMUtil.GetErrorText(openErr) ?? openErr.ToString()}";
+        var writeErr = outDevice.Write(spec.Message);
+        if (writeErr != PmError.NoError)
+            return $"MIDI write failed: {PMUtil.GetErrorText(writeErr) ?? writeErr.ToString()}";
+        return $"MIDI {device.Value.Name ?? $"#{device.Value.Id}"} {spec.Description}";
+    }
+
+    private string? EnsureMidiInitialized()
+    {
+        lock (_midiInitSync)
+        {
+            if (_midiInitialized)
+                return null;
+            var err = PMUtil.Initialize();
+            if (err != PmError.NoError)
+                return $"MIDI init failed: {PMUtil.GetErrorText(err) ?? err.ToString()}";
+            _midiInitialized = true;
+            return null;
+        }
+    }
+
+    private static PmDeviceEntry? ResolveMidiDevice(MidiActionEndpoint? endpoint, IReadOnlyList<PmDeviceEntry> outputs)
+    {
+        if (endpoint is { DeviceId: { } id })
+        {
+            var byId = outputs.FirstOrDefault(d => d.Id == id);
+            if (byId.Id == id)
+                return byId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(endpoint?.DeviceName))
+        {
+            var byName = outputs.FirstOrDefault(d =>
+                string.Equals(d.Name, endpoint.DeviceName, StringComparison.OrdinalIgnoreCase));
+            if (!string.IsNullOrWhiteSpace(byName.Name))
+                return byName;
+        }
+
+        return outputs.FirstOrDefault();
+    }
+
+    private static OscSpec ParseOscSpec(string raw, OscActionEndpoint? endpoint)
+    {
+        var host = string.IsNullOrWhiteSpace(endpoint?.Host) ? "127.0.0.1" : endpoint.Host;
+        var port = endpoint is { Port: > 0 } ? endpoint.Port : 9000;
+        var tokens = raw
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (tokens.Count == 0)
+            return new OscSpec(host, port, "/cue/go", []);
+
+        string address;
+        var argsStart = 1;
+
+        if (tokens[0].StartsWith("osc://", StringComparison.OrdinalIgnoreCase)
+            && Uri.TryCreate(tokens[0], UriKind.Absolute, out var uri))
+        {
+            host = string.IsNullOrWhiteSpace(uri.Host) ? host : uri.Host;
+            port = uri.Port > 0 ? uri.Port : port;
+            address = string.IsNullOrWhiteSpace(uri.AbsolutePath) ? "/cue/go" : uri.AbsolutePath;
+        }
+        else if (tokens[0].Contains(':') && tokens.Count > 1 && tokens[1].StartsWith('/'))
+        {
+            var hp = tokens[0].Split(':', 2, StringSplitOptions.TrimEntries);
+            host = string.IsNullOrWhiteSpace(hp[0]) ? host : hp[0];
+            if (hp.Length > 1 && int.TryParse(hp[1], out var parsedPort) && parsedPort is >= IPEndPoint.MinPort and <= IPEndPoint.MaxPort)
+                port = parsedPort;
+            address = tokens[1];
+            argsStart = 2;
+        }
+        else
+        {
+            address = tokens[0].StartsWith('/') ? tokens[0] : "/" + tokens[0];
+        }
+
+        if (!OSCMessage.IsValidAddress(address))
+            address = "/cue/go";
+
+        var args = new List<OSCArgument>();
+        for (var i = argsStart; i < tokens.Count; i++)
+            args.Add(ParseOscArgumentToken(tokens[i]));
+
+        return new OscSpec(host, port, address, args);
+    }
+
+    private static MidiSpec ParseMidiSpec(string raw, MidiActionEndpoint? endpoint, int fallbackDeviceId)
+    {
+        var tokens = raw
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        if (tokens.Count == 0)
+            throw new InvalidOperationException("MIDI action requires a message (e.g. 'noteon 60 100').");
+
+        byte channel = (byte)Math.Clamp(endpoint?.Channel ?? 0, 0, 15);
+        var idx = 0;
+        if (tokens[0].StartsWith("ch", StringComparison.OrdinalIgnoreCase))
+        {
+            var rawCh = tokens[0].AsSpan(tokens[0].Contains('=') ? tokens[0].IndexOf('=') + 1 : 2);
+            if (int.TryParse(rawCh, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+                channel = (byte)Math.Clamp(parsed - 1, 0, 15);
+            idx++;
+        }
+
+        if (idx >= tokens.Count)
+            throw new InvalidOperationException("MIDI action command missing.");
+
+        var cmd = tokens[idx++].ToLowerInvariant();
+        IMIDIMessage msg = cmd switch
+        {
+            "noteon" => new NoteOn(channel, ParseByte(tokens, idx++, "note"), ParseByte(tokens, idx++, "velocity")),
+            "noteoff" => new NoteOff(channel, ParseByte(tokens, idx++, "note"),
+                idx < tokens.Count ? ParseByte(tokens, idx++, "velocity") : (byte)0),
+            "cc" => new ControlChange(channel, ParseByte(tokens, idx++, "controller"), ParseByte(tokens, idx++, "value")),
+            "pc" or "program" => new ProgramChange(channel, ParseByte(tokens, idx++, "program")),
+            _ => throw new InvalidOperationException($"Unsupported MIDI command '{cmd}'. Use noteon/noteoff/cc/pc."),
+        };
+
+        var deviceId = endpoint?.DeviceId ?? fallbackDeviceId;
+        return new MidiSpec(deviceId, msg, $"{cmd} ch{channel + 1}");
+    }
+
+    private static byte ParseByte(IReadOnlyList<string> tokens, int index, string name)
+    {
+        if (index < 0 || index >= tokens.Count)
+            throw new InvalidOperationException($"MIDI argument '{name}' is missing.");
+        if (!int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+            throw new InvalidOperationException($"MIDI argument '{name}' is invalid: '{tokens[index]}'.");
+        return (byte)Math.Clamp(value, 0, 127);
+    }
+
+    private static OSCArgument ParseOscArgumentToken(string token)
+    {
+        if (bool.TryParse(token, out var b))
+            return b ? OSCArgument.True() : OSCArgument.False();
+        if (int.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i32))
+            return OSCArgument.Int32(i32);
+        if (float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var f32))
+            return OSCArgument.Float32(f32);
+        return OSCArgument.String(token);
+    }
+
+    private sealed record OscSpec(string Host, int Port, string Address, IReadOnlyList<OSCArgument> Arguments);
+    private sealed record MidiSpec(int DeviceId, IMIDIMessage Message, string Description);
+    public sealed record MidiInputOption(int Id, string Name);
+    public sealed record MidiOutputOption(int Id, string Name);
+
     /// <summary>
     /// Phase A — build a <see cref="HaPlayProject"/> snapshot from the current VM state. Pure projection,
     /// no I/O. Phase B will wire this through a File → Save menu; for now tests and programmatic callers
@@ -131,7 +609,10 @@ public partial class MainViewModel : ViewModelBase
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
         Outputs = OutputManagement.Outputs.Select(o => o.Definition).ToList(),
+        VirtualAudioChannels = OutputManagement.BuildVirtualAudioChannelAssignmentsSnapshot().ToList(),
         Players = Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList(),
+        ActionEndpoints = ActionEndpoints.ToList(),
+        CueLists = CuePlayer.BuildCueListsSnapshot(),
     };
 
     /// <summary>
@@ -150,6 +631,14 @@ public partial class MainViewModel : ViewModelBase
         // Reconcile outputs: rebuild the list from the project definitions. Phase B will need a richer
         // "rebind missing devices" flow (§7.3, §7.4); for now we just project the definitions.
         OutputManagement.ReplaceDefinitionsForLoad(project.Outputs);
+        OutputManagement.ApplyVirtualAudioChannelAssignments(project.VirtualAudioChannels);
+        ActionEndpoints.Clear();
+        foreach (var endpoint in project.ActionEndpoints)
+            ActionEndpoints.Add(endpoint);
+        SeedDefaultActionEndpointsIfEmpty();
+        RebuildEndpointWorkspaceLists();
+        SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
+        CuePlayer.ApplyCueLists(project.CueLists);
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)

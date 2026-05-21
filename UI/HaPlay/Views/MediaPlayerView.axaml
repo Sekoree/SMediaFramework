@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:views="using:HaPlay.Views"
+             xmlns:models="using:HaPlay.Models"
              xmlns:tdg="using:Avalonia.Controls"
              mc:Ignorable="d" d:DesignWidth="780" d:DesignHeight="900"
              x:Class="HaPlay.Views.MediaPlayerView"
@@ -93,20 +94,30 @@
               </Border>
               <TextBlock Opacity="0.75" FontSize="12" TextTrimming="CharacterEllipsis"
                          VerticalAlignment="Center"
-                         Text="{Binding MediaFilePath, FallbackValue='No media loaded — pick a file from the playlist below.', TargetNullValue='No media loaded — pick a file from the playlist below.'}"
-                         ToolTip.Tip="{Binding MediaFilePath}" />
+                         Text="{Binding CurrentMediaDisplay, FallbackValue='No media loaded — pick an item from the playlist below.', TargetNullValue='No media loaded — pick an item from the playlist below.'}"
+                         ToolTip.Tip="{Binding CurrentMediaDisplay}" />
             </StackPanel>
 
+            <!-- Phase C.5 (§6.9) — "waiting for source" banner for live inputs that aren't currently
+                 resolvable. The transport bar stays interactive (Stop cancels retries). -->
+            <Border IsVisible="{Binding IsWaitingForSource}"
+                    Background="#332E7DAA" CornerRadius="3" Padding="8,4">
+              <TextBlock FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
+                         Text="{Binding WaitingForSourceMessage}" />
+            </Border>
+
             <!-- Scrubber: TwoWay binding for visual tracking; commit on PointerReleased (code-behind).
-                 Keyboard transport: Space play/pause, [ ] prev/next, , . jog -5/+5 s (handled in code-behind). -->
+                 Keyboard transport: Space play/pause, [ ] prev/next, , . jog -5/+5 s (handled in code-behind).
+                 Hidden for live items (§6.5) — no finite duration, no seek. -->
             <Slider Name="SeekSlider"
                     Minimum="0" Maximum="1000"
                     Value="{Binding SeekSliderValue, Mode=TwoWay}"
                     IsEnabled="{Binding IsMediaLoaded}"
+                    IsVisible="{Binding IsTransportSeekable}"
                     ToolTip.Tip="Drag to scrub. Keys: Space play/pause · [ ] prev/next · , . jog ±5 s." />
 
-            <!-- Three times: position / remaining / total -->
-            <Grid ColumnDefinitions="*,*,*">
+            <!-- Three times: position / remaining / total. Hidden for live items (§6.5). -->
+            <Grid ColumnDefinitions="*,*,*" IsVisible="{Binding IsTransportSeekable}">
               <StackPanel Grid.Column="0">
                 <TextBlock Classes="time" HorizontalAlignment="Center"
                            Text="{Binding CurrentPositionText}" />
@@ -190,7 +201,7 @@
               </StackPanel>
             </DockPanel>
 
-            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,8" ColumnSpacing="4">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,8" ColumnSpacing="4">
               <TextBlock Grid.Column="0" Text="Playlist" Classes="section-title" VerticalAlignment="Center" />
               <Button Grid.Column="1" Content="↑" Command="{Binding MovePlaylistItemUpCommand}"
                       MinWidth="34" ToolTip.Tip="Move the selected entry up." />
@@ -204,17 +215,31 @@
                       Command="{Binding LoadPlaylistTabCommand}" />
               <Button Grid.Column="6" Content="+ Add files…"
                       Command="{Binding AddFilesToPlaylistCommand}" />
+              <Button Grid.Column="7" Content="+ Live input…"
+                      ToolTip.Tip="Add a live source (PortAudio capture device or NDI receiver) to this playlist tab.">
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="PortAudio input…"
+                              Command="{Binding AddPortAudioInputCommand}" />
+                    <MenuItem Header="NDI input…"
+                              Command="{Binding AddNDIInputCommand}" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
             </Grid>
 
             <ListBox Name="PlaylistListBox" MinHeight="220" MaxHeight="380"
-                     ItemsSource="{Binding PlaylistPaths}"
-                     SelectedItem="{Binding SelectedPlaylistPath, Mode=TwoWay}"
+                     ItemsSource="{Binding PlaylistItems}"
+                     SelectedItem="{Binding SelectedPlaylistItem, Mode=TwoWay}"
                      DoubleTapped="OnPlaylistItemDoubleTapped">
               <ListBox.ItemTemplate>
-                <DataTemplate>
-                  <TextBlock Text="{Binding Converter={StaticResource FilenameConverter}}"
-                             ToolTip.Tip="{Binding}"
-                             TextTrimming="CharacterEllipsis" />
+                <DataTemplate x:DataType="models:PlaylistItem">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="{Binding KindGlyph}" Opacity="0.85" />
+                    <TextBlock Text="{Binding DisplayName}"
+                               ToolTip.Tip="{Binding ToolTip}"
+                               TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>
@@ -315,6 +340,29 @@
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
 
+              <Border BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0" Margin="0,2,0,0" Padding="0,8,0,0"
+                      IsVisible="{Binding HasAudioMatrixInputTrims}">
+                <StackPanel Spacing="4">
+                  <TextBlock Text="Input trims" FontWeight="SemiBold" />
+                  <ItemsControl ItemsSource="{Binding AudioMatrixInputTrims}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:AudioMatrixInputTrimViewModel">
+                        <Grid ColumnDefinitions="80,Auto,140,60" ColumnSpacing="8" Margin="0,1">
+                          <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                                     Text="{Binding Label}" />
+                          <CheckBox Grid.Column="1" Content="Mute"
+                                    IsChecked="{Binding Muted}" />
+                          <Slider Grid.Column="2" Minimum="-24" Maximum="24"
+                                  Value="{Binding GainDb, Mode=TwoWay}" />
+                          <TextBlock Grid.Column="3" Classes="time" VerticalAlignment="Center"
+                                     Text="{Binding GainDb, StringFormat={}{0:0.#} dB}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </Border>
+
               <!-- Per-cell matrix: rows = device channels, columns = input channels (built in code-behind
                    because the input-channel count comes from the loaded source — TreeDataGrid columns are
                    dynamic). The first column always shows the row label; following columns are gain
@@ -328,6 +376,21 @@
               <TextBlock Opacity="0.55" FontSize="11"
                          IsVisible="{Binding !HasAudioMatrix}"
                          Text="Tick an output above and load media — the per-cell matrix appears here, sized to the source's channel count." />
+
+              <Border BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0" Margin="0,4,0,0" Padding="0,8,0,0">
+                <StackPanel Spacing="6">
+                  <TextBlock Text="Active routes" FontWeight="SemiBold" />
+                  <TreeDataGrid Name="MatrixRoutesTreeGrid"
+                                MinHeight="96" MaxHeight="220"
+                                IsVisible="{Binding HasAudioMatrixRoutes}"
+                                CanUserResizeColumns="True"
+                                CanUserSortColumns="False"
+                                ShowColumnHeaders="True" />
+                  <TextBlock Opacity="0.55" FontSize="11"
+                             IsVisible="{Binding !HasAudioMatrixRoutes}"
+                             Text="No active routes — raise a matrix cell above -60 dB or unmute it." />
+                </StackPanel>
+              </Border>
             </StackPanel>
           </Border>
         </Expander>

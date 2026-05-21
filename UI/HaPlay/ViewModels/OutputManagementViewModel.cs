@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
@@ -19,6 +21,8 @@ namespace HaPlay.ViewModels;
 public partial class OutputManagementViewModel : ViewModelBase
 {
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
+    public ObservableCollection<OutputVirtualChannelAssignmentViewModel> VirtualAudioChannelAssignments { get; } = new();
+    private readonly Dictionary<(Guid OutputId, int OutputChannel), int> _virtualAudioChannelMap = new();
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
     private readonly Dictionary<OutputLineViewModel, NDIOutputPreviewRuntime> _ndiOutputs = new();
@@ -63,13 +67,126 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// list to drop the clone's checkbox.
     /// </summary>
     public event EventHandler? RoutingTopologyChanged;
+    public event EventHandler? VirtualAudioChannelMapChanged;
+
+    [ObservableProperty]
+    private bool _hasVirtualChannelCollisions;
+
+    [ObservableProperty]
+    private string? _virtualChannelCollisionMessage;
 
     public OutputManagementViewModel()
     {
         Outputs.CollectionChanged += (_, _) => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
+        Outputs.CollectionChanged += (_, _) => RebuildVirtualAudioChannelAssignments();
+        VirtualAudioChannelAssignments.CollectionChanged += OnVirtualAudioChannelAssignmentsChanged;
+        RebuildVirtualAudioChannelAssignments();
     }
 
     private void RaiseTopologyChanged() => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
+
+    private void OnVirtualAudioChannelAssignmentsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        _ = sender;
+        if (e.OldItems is not null)
+            foreach (var removed in e.OldItems.OfType<OutputVirtualChannelAssignmentViewModel>())
+                removed.PropertyChanged -= OnVirtualChannelAssignmentPropertyChanged;
+        if (e.NewItems is not null)
+            foreach (var added in e.NewItems.OfType<OutputVirtualChannelAssignmentViewModel>())
+                added.PropertyChanged += OnVirtualChannelAssignmentPropertyChanged;
+    }
+
+    private void OnVirtualChannelAssignmentPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (sender is OutputVirtualChannelAssignmentViewModel row)
+            _virtualAudioChannelMap[(row.OutputDefinitionId, row.OutputChannel)] = row.VirtualOutputChannel;
+        _ = e;
+        ValidateVirtualChannelAssignments();
+        VirtualAudioChannelMapChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public int? GetAssignedVirtualAudioChannel(Guid outputDefinitionId, int outputChannel)
+    {
+        var row = VirtualAudioChannelAssignments.FirstOrDefault(a =>
+            a.OutputDefinitionId == outputDefinitionId && a.OutputChannel == outputChannel);
+        return row?.VirtualOutputChannel;
+    }
+
+    public IReadOnlyList<VirtualAudioChannelAssignment> BuildVirtualAudioChannelAssignmentsSnapshot() =>
+        VirtualAudioChannelAssignments.Select(x => new VirtualAudioChannelAssignment
+        {
+            OutputDefinitionId = x.OutputDefinitionId,
+            OutputChannel = x.OutputChannel,
+            VirtualOutputChannel = x.VirtualOutputChannel,
+        }).ToList();
+
+    public void ApplyVirtualAudioChannelAssignments(IReadOnlyList<VirtualAudioChannelAssignment> assignments)
+    {
+        _virtualAudioChannelMap.Clear();
+        foreach (var a in assignments.Where(a => a.VirtualOutputChannel > 0 && a.OutputChannel >= 0))
+            _virtualAudioChannelMap[(a.OutputDefinitionId, a.OutputChannel)] = a.VirtualOutputChannel;
+        RebuildVirtualAudioChannelAssignments();
+    }
+
+    private void RebuildVirtualAudioChannelAssignments()
+    {
+        var preserved = VirtualAudioChannelAssignments.ToDictionary(
+            a => (a.OutputDefinitionId, a.OutputChannel),
+            a => a.VirtualOutputChannel);
+        var rows = new List<OutputVirtualChannelAssignmentViewModel>();
+        var vout = 1;
+        foreach (var line in Outputs)
+        {
+            var channels = line.Definition switch
+            {
+                PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
+                NDIOutputDefinition { StreamMode: NDIOutputStreamMode.VideoOnly } => 0,
+                NDIOutputDefinition nd => Math.Max(1, nd.AudioChannelCount),
+                _ => 0,
+            };
+            for (var oc = 0; oc < channels; oc++)
+            {
+                var key = (line.Definition.Id, oc);
+                var assigned = preserved.TryGetValue(key, out var existing)
+                    ? existing
+                    : _virtualAudioChannelMap.TryGetValue(key, out var saved) ? saved : vout;
+                rows.Add(new OutputVirtualChannelAssignmentViewModel(
+                    line.Definition.Id,
+                    line.Definition.DisplayName,
+                    oc,
+                    channels,
+                    assigned));
+                vout++;
+            }
+        }
+
+        VirtualAudioChannelAssignments.Clear();
+        foreach (var row in rows.OrderBy(r => r.VirtualOutputChannel).ThenBy(r => r.OutputDisplayName).ThenBy(r => r.OutputChannel))
+            VirtualAudioChannelAssignments.Add(row);
+        ValidateVirtualChannelAssignments();
+        VirtualAudioChannelMapChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void ValidateVirtualChannelAssignments()
+    {
+        foreach (var row in VirtualAudioChannelAssignments)
+            row.IsDuplicate = false;
+
+        var collisions = VirtualAudioChannelAssignments
+            .GroupBy(x => x.VirtualOutputChannel)
+            .Where(g => g.Key > 0 && g.Count() > 1)
+            .OrderBy(g => g.Key)
+            .ToList();
+
+        foreach (var group in collisions)
+            foreach (var row in group)
+                row.IsDuplicate = true;
+
+        HasVirtualChannelCollisions = collisions.Count > 0;
+        VirtualChannelCollisionMessage = collisions.Count == 0
+            ? null
+            : $"Duplicate VOut assignments: {string.Join(", ", collisions.Select(g => $"VOut {g.Key}"))}.";
+    }
 
     /// <summary>
     /// Phase B follow-up — raised *before* a line's runtime is torn down so any active
@@ -723,4 +840,37 @@ public partial class OutputManagementViewModel : ViewModelBase
             Debug.WriteLine($"HaPlay: failed to start NDI output '{result.SourceName}': {ex}");
         }
     }
+}
+
+public sealed partial class OutputVirtualChannelAssignmentViewModel : ObservableObject
+{
+    public OutputVirtualChannelAssignmentViewModel(
+        Guid outputDefinitionId,
+        string outputDisplayName,
+        int outputChannel,
+        int outputChannelCount,
+        int virtualOutputChannel)
+    {
+        OutputDefinitionId = outputDefinitionId;
+        OutputDisplayName = outputDisplayName;
+        OutputChannel = outputChannel;
+        OutputChannelCount = outputChannelCount;
+        _virtualOutputChannel = virtualOutputChannel;
+    }
+
+    public Guid OutputDefinitionId { get; }
+    public string OutputDisplayName { get; }
+    public int OutputChannel { get; }
+    public int OutputChannelCount { get; }
+
+    public string OutputChannelLabel =>
+        OutputChannelCount == 2
+            ? $"Out {(OutputChannel == 0 ? "L" : "R")}"
+            : $"Out {OutputChannel + 1}";
+
+    [ObservableProperty]
+    private int _virtualOutputChannel;
+
+    [ObservableProperty]
+    private bool _isDuplicate;
 }

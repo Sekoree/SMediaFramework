@@ -152,4 +152,23 @@ public sealed class OutputManagementViewModelTests
         Assert.Single(excluded);
         Assert.Equal(parentId, excluded[0].Id);
     }
+
+    [Fact]
+    public void VirtualAudioChannelAssignments_BuiltFromAudioOutputs()
+    {
+        var vm = new OutputManagementViewModel();
+        var paId = Guid.NewGuid();
+        var ndiId = Guid.NewGuid();
+        vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+        {
+            new PortAudioOutputDefinition(paId, "PA", 0, "Alsa", 1, "dev", 4, 48000),
+            new NDIOutputDefinition(ndiId, "NDI", "src", null, NDIOutputStreamMode.AudioOnly, 2, 48000),
+        });
+
+        Assert.Equal(6, vm.VirtualAudioChannelAssignments.Count);
+        Assert.Equal(1, vm.VirtualAudioChannelAssignments[0].VirtualOutputChannel);
+        Assert.Equal(6, vm.VirtualAudioChannelAssignments[^1].VirtualOutputChannel);
+        Assert.Equal(4, vm.GetAssignedVirtualAudioChannel(paId, 3));
+        Assert.Equal(6, vm.GetAssignedVirtualAudioChannel(ndiId, 1));
+    }
 }

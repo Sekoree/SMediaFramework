@@ -51,7 +51,8 @@ Each item links back to the plan section that motivates it.
 - [x] **App-shell sidebar** (§12.1)
   - [x] Collapsible (icon-only ~48 px vs labelled ~180 px)
   - [x] Hamburger toggle + Ctrl+B
-  - [x] Ctrl+1 / 2 / 3 jumps to Players / Outputs / Project
+  - [x] Ctrl+1 … Ctrl+6 jumps to Players / Cues / Outputs / OSC / MIDI / Project
+    (2026-05-21 — Cues was Ctrl+2 before OSC/MIDI split; shortcuts follow sidebar order)
   - [x] State persisted to `%LocalAppData%/HaPlay/app-settings.json`
 - [x] **Clone-of UX + PlayerRoutingMirror** (§3.4)
   - [x] Visual nesting (indent + "↳" caption "clone of …")
@@ -138,10 +139,28 @@ Each item links back to the plan section that motivates it.
     (`FlatTreeDataGridSource<AudioMatrixRow>`); columns built dynamically in
     code-behind from `AudioMatrixInputChannelCount` so the layout follows the
     loaded source's channel count.
-  - [ ] **Per-channel input column attenuation** (separate per-input trim row) —
-    deferred polish; per-cell gain already covers most use cases.
-  - [ ] **"Expand → full matrix" secondary dialog** (§4.3.4 last paragraph) —
-    deferred polish; the inline TreeDataGrid is full-featured already.
+  - [x] **Virtual output channel numbering (`VOut 1..N`)** — landed 2026-05-21.
+    Matrix rows now carry deterministic `VOut` labels in selected-output order
+    (`VOut {n} · {Device} · Out {ch}`), shared by the route list below.
+  - [~] **Output-management virtual-channel assignment** — landed and persisted
+    2026-05-21. New `Virtual Audio Channels` section in Outputs workspace lets
+    operators assign each real output channel to a `VOut` number; MediaPlayer's
+    matrix/route mapping consumes these assignments and project save/load now
+    round-trips them (`HaPlayProject.VirtualAudioChannels`). Remaining: stronger
+    collision guardrails beyond the current duplicate-warning UX.
+  - [x] **Per-connection route list (TreeDataGrid)** — landed 2026-05-21.
+    New `MatrixRoutesTreeGrid` shows one row per active route (`Input`, `VOut`,
+    `GainDb`, `Mute`, `Effective`) and edits reuse the same cell VM as the
+    matrix, so updates are bidirectionally synced.
+  - [x] **Per-channel input column attenuation** (separate per-input trim row) —
+    landed 2026-05-21. `AudioMatrixInputTrims` now exposes one gain/mute row per
+    input channel; trims are applied to every route cell using that input and are
+    persisted via `MediaPlayerConfig.InputTrims`.
+  - [x] **TreeDataGrid-only matrix surface** — accepted 2026-05-21: no
+    separate non-TreeDataGrid "full matrix" editor is planned.
+  - [x] **Matrix sink-channel sizing beyond stereo** — landed 2026-05-21.
+    Matrix sizing now uses per-line configured channel counts (`PortAudio.ChannelCount`,
+    `NDI.AudioChannelCount`, video-only lines = 0) instead of hardcoded stereo.
 - [~] **Output preset + transition** (§4.3.5)
   - [x] UI: preset combobox (`AsSource` / `1080p60` / `720p60` / `Custom`)
   - [x] UI: transition combobox + duration NumericUpDown
@@ -162,29 +181,112 @@ Each item links back to the plan section that motivates it.
 
 - [x] **`MediaPlayer.TryOpenLive(IAudioSource?, IVideoSource?, …)`** (§6.7, §9.6) — landed in framework
 - [x] **`PortAudioInput` disconnect detection** (§6.11, §9.6) — landed in framework
-- [ ] **PortAudio-input item: dialog, data model, playback** (§6.4)
-- [ ] **NDI-input item — discovery dialog** (§6.3)
-- [ ] **NDI-input item — manual-name path** (§6.3)
-- [ ] **NDI-input item — "waiting for source" UI** (§6.9)
-- [ ] **Playlist items as `FileItem | NDIInputItem | PortAudioInputItem` discriminated union** (§6.8)
-- [ ] **Live audio matrix auto-extension on NDI source negotiate** (§6.5)
-- [ ] **`NDIVideoReceiver` backfill** — gated by framework gap of same name (§8.9)
+- [x] **Playlist items as `FileItem | NDIInputItem | PortAudioInputItem` discriminated union** (§6.8) —
+  landed 2026-05-21. `PlaylistItem` polymorphic record (`kind: "file" | "ndi-input" | "pa-input"`) in
+  `Models/PlaylistItem.cs`; `PlaylistConfig.Schema` bumped to `HaPlayPlaylist/v2` with the canonical
+  `Items` list and a legacy `Paths` fallback so v1 playlist + player-config files still load via
+  `PlaylistTabViewModel.FromConfig`. `MediaPlayerViewModel.PlaylistItems` /
+  `SelectedPlaylistItem` / `CurrentMediaDisplay` replace the v1 string-path properties on the view
+  side; the playlist `ListBox` template now renders `KindGlyph + DisplayName` per row.
+- [x] **PortAudio-input item: dialog, data model, playback** (§6.4) — landed 2026-05-21.
+  `AddPortAudioInputDialog` mirrors the output dialog (host API → device list → channels → rate);
+  `PortAudioDeviceCatalog.EnumerateInputDevices` enumerates capture devices. Playback opens
+  via `HaPlayPlaybackSession.TryCreateLive(PortAudioInputPlaylistItem)` → starts
+  `PortAudioInput` → `MediaPlayer.TryOpenLive` with `disposeSourcesOnDispose=true`. Device matched
+  by name first, with `GlobalDeviceIndex` as fallback so a USB-port swap doesn't break the binding.
+- [x] **NDI-input item — discovery dialog** (§6.3) — landed 2026-05-21. `AddNDIInputDialogViewModel`
+  spins up `NDIFinder` and polls every 1 s; the dialog shows the discovered list, a Rescan button,
+  and a status line. Connection hints (low-bandwidth, audio/video-only, retry interval) round-trip on
+  `NDIInputPlaylistItem`.
+- [x] **NDI-input item — manual-name path** (§6.3) — landed 2026-05-21. The dialog's "Live-discovered"
+  toggle swaps to a free-text source-name TextBox so items can save with names that aren't on the
+  network at design time (camera that powers up at showtime, NDI bridge that connects on cue).
+- [x] **NDI-input item — "waiting for source" UI** (§6.9) — landed 2026-05-21. When
+  `TryCreateLive(NDIInputPlaylistItem)` can't find the source within ~1 s, the player VM enters the
+  waiting state: `IsWaitingForSource=true`, `WaitingForSourceMessage` shows the source name +
+  retry countdown, the existing loop timer drives reconnect attempts on the item's
+  `RetrySeconds` cadence. Stop cancels the retry loop. PortAudio inputs share the same plumbing
+  with a 2 s fixed retry (the device either exists or doesn't — no discovery handshake).
+- [x] **Live audio matrix auto-extension on NDI source negotiate** (§6.5) — landed 2026-05-21. The
+  session tracks `SourceAudioFormat` for both file (decoder format) and live (negotiated capture /
+  NDI format) sources. `SourceChannelCountOrFallback(session)` returns the live channel count so
+  matrix sizing tracks the negotiated source channels and the line's configured sink channels on session
+  open. Saved cells with
+  in-range `(input, output)` indices restore via `ApplyConfig`; out-of-range cells are silently
+  dropped (matching §6.5's "preserved-but-inactive" promise when reconnecting at the original
+  channel count).
+- [ ] **`NDIVideoReceiver` backfill** — gated by framework gap of same name (§8.9). Until it ships,
+  NDI input items are audio-only and items with `VideoOnly=true` are rejected at open time.
 
 ## Phase D — Cue Player
 
-- [ ] **Cue list data model** (§5.2) — `CueList`, `Group`, `MediaCue` / `ActionCue` / `CommentCue`
-- [ ] **`.haplaycues.json` serialization**
-- [ ] **TreeDataGrid view with row editing** (§5.4)
-- [ ] **Transport: GO / Standby / Pause / Stop / Panic / Back** (§5.3)
-- [ ] **Per-cue route + gain + fade + pre-wait** (§5.2)
+- [x] **Cue list data model** (§5.2) — landed 2026-05-21. Added polymorphic
+  `CueNode` tree with `CueGroupNode`, `MediaCueNode`, `ActionCueNode`, and
+  `CommentCueNode`, including route-connection overrides keyed by virtual output
+  channels (`VOut`).
+- [x] **`.haplaycues.json` serialization** — landed 2026-05-21. Added `CueListIO`
+  (`.haplaycues`) save/load plus project-file round-trip coverage.
+- [x] **TreeDataGrid cue list with row editing + grouping** (§5.4) — landed 2026-05-21.
+  New `CuePlayerView` replaces the Cues placeholder workspace with a hierarchical
+  `TreeDataGrid` (`HierarchicalTreeDataGridSource<CueNodeViewModel>`), inline
+  editable row fields (`No.`, `Label`, `Trigger`, `Pre(ms)`, `Source/Action`,
+  `Endpoint Id`, `Extra`, `Notes`), group nesting via expander rows, cue-list
+  add/remove and `.haplaycues` load/save actions, plus media-file browse action.
+  `+ Media` now immediately opens a file picker (cancel-safe) and writes the
+  selected path into the new media cue.
+  Project save/load now includes cue lists via
+  `MainViewModel.BuildProjectSnapshot()` / `ApplyProjectSnapshot()`.
+- [x] **Transport: GO / Standby / Pause / Stop / Panic / Back** (§5.3) — landed
+  2026-05-21 as CuePlayer transport state in `CuePlayerViewModel` with commands
+  + status line in `CuePlayerView` (`StandbySelected`, `Go`, `Back`, `Pause`,
+  `Stop`, `Panic`). This is the cue-stack transport layer; per-cue media/action
+  execution remains tracked by the items below.
+- [x] **CuePlayer virtual output channel registry (`VOut 1..N`)** (§5.2, §5.4) —
+  landed 2026-05-21. Added `CueList.VirtualOutputs` persisted in `.haplaycues`
+  and project snapshots, with editable `VOut` registry panel in Cue workspace.
+- [x] **Per-cue route-connection list (TreeDataGrid)** — landed 2026-05-21.
+  `CueRoutesTreeGrid` now edits per-route `Input`, `VOut`, `Gain dB`, `Mute`
+  rows on media cues, persisted via `MediaCueNode.RouteConnections`.
+  **+ Route** refresh fix 2026-05-21: grid rebuilds when `RouteConnections`
+  mutates (collection-change notifications); `+ Route` auto-seeds default
+  `VOut 1/2` when a cue list has no registry yet.
+- [~] **Typed cue-node editors by kind (optimization)** — `Extra` now uses
+  constrained combo editors for Group (`CueGroupFireMode`) and Action
+  (`CueActionKind`) rows in the cue `TreeDataGrid`, so invalid enum text
+  is no longer accepted for those node kinds. Remaining: route-map picker
+  and full kind-specific editor pass.
+- [~] **Per-cue route + gain + fade + pre-wait** (§5.2) — pre-wait delay
+  scheduling now applies in cue transport (`Go` executes a timed trigger plan;
+  groups in `FireAllSimultaneously` mode honor per-cue `PreWaitMs` offsets),
+  and per-cue route/gain rows are editable for media cues. Remaining: route
+  application into active playback sessions + fade envelopes.
 - [ ] **Pre-roll cache (next-N cues)** (§5.7)
 - [ ] **Auto-follow / auto-continue scheduling** (§5.2, §5.6)
 - [ ] **Group-level overrides + "fire all simultaneously" mode** (§5.2)
 - [ ] **Action-cue emitters** (§5.2, §5.6)
-  - [ ] OSC out via `OSCLib`
-  - [ ] MIDI out via `PMLib`
-  - [ ] Multi-target endpoint registry (§12.6) + rebind-missing-endpoints dialog
-  - [ ] Target Configuration dialog (§12.2, §12.6)
+  - [~] OSC out via `OSCLib` — landed first execution path 2026-05-21.
+    Cue transport now calls a host action executor; `MainViewModel` sends OSC
+    packets through `OSCLib.OSCClient` on cue fire. Current format is
+    inline-address syntax (`/addr ...args`, `host:port /addr ...args`, or
+    `osc://host:port/addr ...args`) with default endpoint `127.0.0.1:9000`, and
+    now also supports endpoint-registry lookup by `ActionCueNode.EndpointId`.
+  - [~] MIDI out via `PMLib` — landed first execution path 2026-05-21.
+    `MainViewModel` now opens a PortMidi output and sends `noteon/noteoff/cc/pc`
+    commands from action cues (channel override supported via `chN` / `ch=N`).
+    Endpoint-registry lookup by `ActionCueNode.EndpointId` is wired.
+  - [~] Multi-target endpoint registry (§12.6) + rebind-missing-endpoints dialog
+    — project persistence and runtime lookup are in place
+    (`HaPlayProject.ActionEndpoints`). Dedicated sidebar workspaces landed
+    2026-05-21: **OSC** (`OscConnectionsView`) for UDP targets, **MIDI**
+    (`MidiDevicesView`) for output endpoints + PortMidi catalog (removed from
+    the cluttered Cues split-pane and Project panel). Rebind/health UI is still
+    pending.
+  - [x] **Action-cue builder dialog** (§12.2, §5.2) — landed 2026-05-21.
+    `ActionCueBuilderDialog` replaces the inline Cue-workspace panel; Cues
+    workspace exposes **Edit action…** for the selected action row.
+  - [ ] Target Configuration unified dialog (§12.2) — per-kind OSC/MIDI
+    editors now live in sidebar workspaces; a single combined dialog remains
+    optional polish.
 
 ## Phase E — Polish & Follow-ups (§8)
 
@@ -216,8 +318,10 @@ Each item links back to the plan section that motivates it.
   bar item). New `JogBack` / `JogForward` jog commands route through the same arc.
 - [x] **§9.6 Framework gaps** — tracked in
   [`HaPlay-Framework-Gaps-Checklist-2026-05-20.md`](HaPlay-Framework-Gaps-Checklist-2026-05-20.md)
-- [~] **§9.7 Testing strategy** — `HaPlay.Tests` has IO + dialog VM coverage;
-  no Avalonia-headless ViewModel tests yet; no Cue Player timing tests yet (Phase D)
+- [~] **§9.7 Testing strategy** — `HaPlay.Tests` has IO + dialog VM coverage and
+  now includes Cue VM tests (cue tree shape, VOut/route edits, GO/standby step).
+  Still missing Avalonia-headless visual interaction tests and timing-heavy cue
+  execution tests.
 
 ## Cross-Cutting (§12 App Shell + Dialogs + Terminology)
 
@@ -226,7 +330,9 @@ Each item links back to the plan section that motivates it.
 - [x] §12.3 Terminology cleanup — done in B.5
 - [x] §12.4 Acceptance — sidebar collapse persists; no Avalonia/SDL strings leak by default
 - [x] §12.5 Open Questions (Resolved) — Ctrl+1..N implemented; English-only ship
-- [ ] §12.6 **Multi-target OSC/MIDI endpoint registry** — Phase D scope
+- [~] §12.6 **Multi-target OSC/MIDI endpoint registry** — project persistence +
+  cue endpoint-id binding landed; OSC/MIDI management moved to dedicated sidebar
+  entries (2026-05-21). Rebind/health UI still open.
 - [ ] §12.7 **String resource plumbing** — Phase E polish (`Strings.resx`)
 
 ---
@@ -237,8 +343,9 @@ Each item links back to the plan section that motivates it.
 |---|---|---|---|
 | Idle image via compositor (image-layer) | §8.10 / §4.3.5 | `[ ]` | Becomes natural once the compositor path lands for the Output preset. Until then, `LogoFallbackVideoSink` template frames are the mechanism. |
 | Output preset → CompositorVideoSink | §4.3.5, framework gap | `[ ]` | Same framework prerequisite as Idle image via compositor. |
-| Live inputs (NDI / PortAudio) as media items | §6, Phase C.5 | `[ ]` | Framework prerequisites already done; UI side is the next chunk. |
-| Cue Player view | §5, Phase D | `[ ]` | Whole new workspace. |
+| Live inputs (NDI / PortAudio) as media items | §6, Phase C.5 | `[x]` | Shipped in Phase C.5 (`PlaylistItem` DU + NDI/PortAudio dialogs + waiting/retry UX). |
+| Cue Player view | §5, Phase D | `[~]` | TreeDataGrid workspace + cue-list IO + cue transport + route-row editing landed; execution/prefetch/action emitters still open. |
+| Virtual output channel routing model (`VOut`) | §4.3.4, §5.2, §9.3 | `[~]` | MediaPlayer labels/route list + Output-management channel assignments + CuePlayer registry/overrides + project persistence landed; collision-prevention UX still open. |
 | Recording sink, drag-and-drop, theme, etc. | §8 | `[ ]` | Phase E polish. |
 | Per-dialog size persistence | §12.2 | `[ ]` | Small polish item; not load-bearing. |
 | `Strings.resx` plumbing | §12.7 | `[ ]` | Deferred to Phase E. |

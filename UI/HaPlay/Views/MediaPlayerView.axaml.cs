@@ -37,11 +37,16 @@ public partial class MediaPlayerView : UserControl
         {
             _matrixSubscribedVm.AudioMatrixLayoutChanged += OnAudioMatrixLayoutChanged;
             RebuildAudioMatrixSource();
+            RebuildAudioRouteSource();
         }
     }
 
     private void OnAudioMatrixLayoutChanged(object? sender, System.EventArgs e) =>
-        Avalonia.Threading.Dispatcher.UIThread.Post(RebuildAudioMatrixSource);
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            RebuildAudioMatrixSource();
+            RebuildAudioRouteSource();
+        });
 
     /// <summary>
     /// Phase C (§4.3.4) — build the TreeDataGrid source from <see cref="MediaPlayerViewModel.AudioMatrixRows"/>
@@ -76,6 +81,37 @@ public partial class MediaPlayerView : UserControl
         }
 
         MatrixTreeGrid.Source = source;
+    }
+
+    /// <summary>
+    /// Build the active-route TreeDataGrid source from <see cref="MediaPlayerViewModel.AudioMatrixRouteRows"/>.
+    /// This is a second view over the same matrix cells (one row per audible connection), so edits stay
+    /// in sync with the matrix grid automatically.
+    /// </summary>
+    private void RebuildAudioRouteSource()
+    {
+        if (DataContext is not MediaPlayerViewModel vm) return;
+        if (MatrixRoutesTreeGrid is null) return;
+        if (vm.AudioMatrixRouteRows.Count == 0)
+        {
+            MatrixRoutesTreeGrid.Source = null;
+            return;
+        }
+
+        var source = new Avalonia.Controls.FlatTreeDataGridSource<AudioMatrixRouteRow>(vm.AudioMatrixRouteRows);
+        source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("VOut", x => x.VirtualOutputLabel, width: new GridLength(92)));
+        source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("Output", x => x.OutputLabel, width: new GridLength(240)));
+        source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("Input", x => x.InputLabel, width: new GridLength(88)));
+        source.Columns.Add(new TemplateColumn<AudioMatrixRouteRow>(
+            "Gain dB",
+            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteGainEditor(row), supportsRecycling: true),
+            width: new GridLength(104)));
+        source.Columns.Add(new TemplateColumn<AudioMatrixRouteRow>(
+            "Mute",
+            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteMuteEditor(row), supportsRecycling: true),
+            width: new GridLength(72)));
+        source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("Effective", x => x.EffectiveGainText, width: new GridLength(96)));
+        MatrixRoutesTreeGrid.Source = source;
     }
 
     /// <summary>
@@ -130,12 +166,52 @@ public partial class MediaPlayerView : UserControl
         return panel;
     }
 
+    private static Control BuildRouteGainEditor(AudioMatrixRouteRow row)
+    {
+        var spinner = new NumericUpDown
+        {
+            Minimum = -60,
+            Maximum = 12,
+            Increment = 1.0M,
+            FormatString = "0.#",
+            ShowButtonSpinner = false,
+            ClipValueToMinMax = true,
+            Width = 82,
+            Padding = new Avalonia.Thickness(4, 2),
+            DataContext = row,
+        };
+        spinner.Bind(NumericUpDown.ValueProperty, new Binding(nameof(AudioMatrixRouteRow.GainDb))
+        {
+            Mode = BindingMode.TwoWay,
+        });
+        return spinner;
+    }
+
+    private static Control BuildRouteMuteEditor(AudioMatrixRouteRow row)
+    {
+        var mute = new CheckBox
+        {
+            Content = "M",
+            FontSize = 10,
+            Padding = new Avalonia.Thickness(2, 0),
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            DataContext = row,
+        };
+        ToolTip.SetTip(mute, "Mute this route connection.");
+        mute.Bind(CheckBox.IsCheckedProperty, new Binding(nameof(AudioMatrixRouteRow.Muted))
+        {
+            Mode = BindingMode.TwoWay,
+        });
+        return mute;
+    }
+
     private void OnPlaylistItemDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (DataContext is not MediaPlayerViewModel vm) return;
         if (sender is not ListBox lb) return;
-        if (lb.SelectedItem is not string path) return;
-        _ = vm.PlayPlaylistItemAsync(path);
+        if (lb.SelectedItem is not HaPlay.Models.PlaylistItem item) return;
+        _ = vm.PlayPlaylistItemAsync(item);
     }
 
     private void OnSeekSliderPointerReleased(object? sender, PointerReleasedEventArgs e)

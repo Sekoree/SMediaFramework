@@ -28,12 +28,14 @@ The five largest pieces:
 1. **Output configuration is editable in place** — sample rate, channel
    count, fullscreen target, NDI format lock, and clone/child views all
    become first-class properties on an existing output line.
-2. **MediaPlayer view is redesigned** around big transport buttons, an
-   audio matrix, per-channel and master gain, hot-swap output routing,
-   and multi-tab playlists per player.
-3. **New Cue Player view** built on `TreeDataGrid` with grouped cues,
-   per-cue routing/gain/fade overrides, GO/standby/panic transport, and
-   optional auto-follow chaining.
+2. **MediaPlayer view is redesigned** around big transport buttons and a
+   `TreeDataGrid`-first audio routing workspace: M input channels routed
+   into N virtual output channels with per-connection gain/mute, plus
+   master gain, hot-swap output routing, and multi-tab playlists per
+   player.
+3. **New Cue Player view** built on `TreeDataGrid` end-to-end: grouped
+   cues, virtual-output-channel route overrides with per-connection gain,
+   GO/standby/panic transport, and optional auto-follow chaining.
 4. **Live inputs as media items** — NDI sources and PortAudio inputs
    become first-class items in both Media Player playlists and Cue
    Player cue stacks, with auto-discovery + manual-name flows for
@@ -211,10 +213,10 @@ the Outputs panel. There is one playlist per player.
 │ └───────────────────────────────────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────┤
 │ Routing                       Audio Matrix                       │
-│  ☑ Main Speakers (PA)         L:  in1 → out1  -0 dB             │
-│  ☑ NDI Program                R:  in2 → out2  -0 dB             │
-│  ☐ Confidence Monitor         (matrix grows when expanded)      │
-│  [ + Add output… ]            [ Expand → full matrix view ]     │
+│  ☑ Main Speakers (PA)         TreeDataGrid: In1..M × VOut1..N   │
+│  ☑ NDI Program                TreeDataGrid: active routes list  │
+│  ☐ Confidence Monitor         (Input, VOut, Gain, Mute)         │
+│  [ + Add output… ]            [ Matrix expander open/close ]    │
 ├─────────────────────────────────────────────────────────────────┤
 │ Output preset:  ⟨ As source ⟩  ⟨ 1080p60 ⟩  ⟨ Custom… ⟩         │
 │ Transition:     ⟨ Cut ⟩  ⟨ Fade 500 ms ⟩  ⟨ Hold image ⟩       │
@@ -268,19 +270,26 @@ the Outputs panel. There is one playlist per player.
 
 #### 4.3.4 Audio matrix
 
-- Collapsible expander showing the full N×M routing grid.
-- N = decoder channels (1–8 typical), M = sum of all output channels
-  across selected sinks.
-- Each cell: gain dB (slider or numeric) + mute toggle (= -inf).
-  "Silence" is the same as mute.
-- Per-output channel labels along the top (e.g. "PA L", "PA R",
-  "NDI 1", "NDI 2"). Per-source-channel labels along the side ("In 1",
-  "In 2"…).
-- Underneath the matrix lives the existing per-output gain slider
-  (sum-of-cells convenience) and the per-channel input gain (column
-  attenuation).
-- Saves into the player config under a new `AudioMatrix` block; loads
-  back via `AudioRouter.AddRoute` with one route per non-zero cell.
+- A single `TreeDataGrid`-based routing workspace (no alternate matrix
+  control) inside a collapsible expander.
+- Decoder channels are the **input axis** (`In 1..M`).
+- Selected output lines expose a deterministic **virtual output channel**
+  axis (`VOut 1..N`), where each `VOut` maps to one concrete pair:
+  `(OutputLineId, OutputChannelIndex)`.
+- Each matrix cell is a candidate route from one input channel to one
+  virtual output channel; non-zero cells are active routes.
+- Under the matrix, a second `TreeDataGrid` shows one row per active
+  route connection with direct edit fields:
+  `Input`, `Virtual Output`, `Gain dB`, `Mute`, and computed
+  `Effective Gain` (master × output trim × connection gain).
+- Per-output gain stays as a convenience trim; precise balancing lives at
+  route-connection rows.
+- Saves into player config as:
+  1. virtual output channel mapping snapshot (`VOut` -> concrete output
+     channel), and
+  2. per-connection rows (`input`, `vout`, `gain`, `mute`).
+  Loads back via `AudioRouter.AddRoute` with one route per non-zero
+  connection row.
 
 This is the one piece that brushes against framework limits.
 `AudioRouter`'s `ChannelMap` today is "each output channel picks one
@@ -296,6 +305,10 @@ needs *per-cell* gain. Two ways forward:
 
 Recommend the multi-route approach for the first cut. Revisit if route
 count gets unwieldy (8 in × 8 out = 64 routes per player).
+
+UI simplification decision: keep one reusable routing editor component
+(`TreeDataGrid` matrix + `TreeDataGrid` connection list) shared by
+MediaPlayer and CuePlayer instead of separate editors.
 
 #### 4.3.5 Output preset + transition
 
@@ -331,6 +344,11 @@ first-class.
   player's routing list too.
 - Audio matrix edits take effect within one chunk (~10 ms at default
   config) — no Stop required.
+- Matrix and route-connection list stay in sync in both directions:
+  matrix cell edits add/remove/update connection rows; connection-row
+  edits update the matrix immediately.
+- Virtual output channel numbering is deterministic for a given selected
+  output set and survives save/load without route drift.
 - Saving a tab produces a self-contained playlist file; loading it
   into a player with different outputs ignores the missing routes
   with a banner ("3 routes skipped — outputs not present in this
@@ -419,9 +437,11 @@ Media-cue-only fields:
 - **Start offset** — jump to this position in the file at trigger.
 - **End behavior** — `Stop`, `FreezeLastFrame`, `Loop`, `FadeOutAndStop
   N ms`.
-- **Per-cue route override** — subset of the parent player's outputs
-  (defaults to all selected; can mute specific outputs for this cue).
-- **Per-cue audio gain** — overlaid on top of the player's matrix gain.
+- **Per-cue route override** — subset of virtual output channels
+  (`VOut` rows), with optional per-connection overrides. Default is
+  inherit parent routing profile.
+- **Per-cue audio gain** — overlaid on top of the inherited/overridden
+  route-connection gain values.
 - **Fade in / fade out** — durations applied on trigger / on end.
 - **Transition** — `Cut`, `CrossfadeWithPrevious`, `FadeFromBlack`.
 
@@ -491,6 +511,14 @@ Cue-Player transport is separate from a normal player's because the
 Right-pane (optional): selected-cue editor — file picker, route
 overrides, gain/fade fields, end-behavior dropdown, notes textarea.
 
+Below the cue list, Cue Player reuses the same routing-editor pattern as
+MediaPlayer:
+
+- `TreeDataGrid` matrix for M inputs -> N `VOut` channels.
+- `TreeDataGrid` route-connection list with gain/mute per active route.
+- Grouping in the connection list by `VOut` and by cue-override scope
+  (inherited vs overridden).
+
 ### 5.5 Framework Composition
 
 Each *active* cue gets its own `MediaContainerSession` (one decoder +
@@ -537,6 +565,8 @@ same configuration page.
   ±50 ms tolerance against a known clock).
 - Per-cue route overrides honored on trigger; cue's audio appears on
   exactly the selected outputs.
+- Per-cue route-connection overrides (input -> `VOut` gain/mute) are
+  honored without affecting other active cues.
 - Per-cue fade-in/out audible/visible at the right duration.
 
 ### 5.7 Open Questions (Resolved)
@@ -558,8 +588,10 @@ same configuration page.
   **Decided:** top-level workspace, surfaced through a **collapsible
   hamburger sidebar** on the left of the app shell. Sidebar shows
   icon-only when collapsed (so it doesn't eat horizontal space on
-  laptops) and labels when expanded. Same sidebar lists Players,
-  Cues, Outputs, Project. See §12 for the shell redesign.
+  laptops) and labels when expanded. Sidebar lists **Players**, **Cues**,
+  **Outputs**, **OSC**, **MIDI**, **Project** (2026-05-21 — OSC connections
+  and MIDI devices promoted from nested Cues/Project panels to reduce clutter).
+  See §12 for the shell redesign.
 - Pre-roll cost: do we pre-open every cue when the list loads, or
   only the next N? Recommend only the next N (configurable, default 4).
   **Decided:** only the next N, configurable. Same parameter
@@ -908,12 +940,16 @@ parent that follows the parent's check state.
 ### 9.3 Audio Matrix Bridge to Framework
 
 As noted in §4.3.4, the simplest implementation is "one route per
-non-zero cell." This may produce up to 64 routes per player at
-8 in × 8 out. `AudioRouter.AddRoute` is O(n) over the routes list
-internally (immutable rebuild). 64 routes is fine at session-load
-time; per-frame mix cost in `RunLoop` is also linear in route count.
-Worth measuring at 8×8 before assuming it scales further. Tracked as
-a follow-up.
+non-zero connection row (`input`, `vout`)". This may produce up to 64
+routes per player at 8 in × 8 out. `AudioRouter.AddRoute` is O(n) over
+the routes list internally (immutable rebuild). 64 routes is fine at
+session-load time; per-frame mix cost in `RunLoop` is also linear in
+route count. Worth measuring at 8×8 before assuming it scales further.
+Tracked as a follow-up.
+
+To avoid route drift and make save/load robust, route IDs should be
+derived deterministically from `(playerId, inputChannel, voutIndex)` for
+player routing and `(cueId, inputChannel, voutIndex)` for cue overrides.
 
 ### 9.4 Project File Migration
 
@@ -1004,7 +1040,7 @@ one branch.
 1. New transport bar + master volume.
 2. Playlist tab strip + per-tab save/load.
 3. Inline `+ Add output…`.
-4. Audio matrix (collapsed by default; opens to full view).
+4. TreeDataGrid-only routing editor (matrix + per-connection list).
 5. Output preset + transition picker (replaces hold-image expander).
 
 ### Phase C.5 — Live Inputs (shared by Players and Cue Player)
@@ -1021,9 +1057,14 @@ one branch.
 ### Phase D — Cue Player
 
 1. Cue list data model (media / action / comment kinds) + serialization.
-2. TreeDataGrid view with row editing.
-3. GO / Standby / Pause / Stop / Panic transport.
-4. Per-cue route + gain + fade + pre-wait.
+2. TreeDataGrid cue list with grouping + row editing. *(Landed 2026-05-21)*
+3. GO / Standby / Pause / Stop / Panic transport. *(Landed 2026-05-21 as
+   cue-stack transport state; media/action firing still pending in step 8.)*
+4. Per-cue virtual-output route overrides + per-connection gain/mute +
+   fade + pre-wait. *(Partially landed 2026-05-21: `VOut` registry +
+   route-connection row editing + pre-wait delay scheduling in cue transport +
+   media-cue route overrides pushed into MediaPlayer matrix on cue fire.
+   Fade path still open.)*
 5. Pre-roll cache.
 6. Auto-follow / auto-continue scheduling (offset for media, timer for
    live/action).
@@ -1033,7 +1074,13 @@ one branch.
    multi-target endpoint registry (§12.6) and the Target
    Configuration dialog (§12.2). Endpoints referenced by GUID from
    cues; rebind-missing-endpoints flow parallels rebind-missing-
-   outputs.
+   outputs. *(Partially landed 2026-05-21: OSC + MIDI first-send paths
+   wired via `OSCLib` / `PMLib`; project-level endpoint registry
+   persisted and referenced by cue `EndpointId`; OSC/MIDI sidebar workspaces
+   host endpoint management + MIDI catalog refresh; the Cue workspace uses
+   `ActionCueBuilderDialog` (**Edit action…**) instead of an inline builder
+   panel. Target-config/rebind UX depth and endpoint-health surface remain
+   open.)*
 
 ### Phase E — Polish & Follow-ups (§8)
 
@@ -1046,7 +1093,7 @@ Pick from §8 based on user feedback after D is in real use.
 Listed here so the planning phase resolves them rather than the
 implementation phase rediscovering them:
 
-1. **Clone-of pluming**: §3.4 Option A vs. B. Recommendation: A.
+1. **Clone-of plumbing**: §3.4 Option A vs. B. Recommendation: A.
 2. **Audio matrix backing**: multi-route vs. weighted ChannelMap.
    Recommendation: multi-route first, weighted matrix only if perf
    demands.
@@ -1064,6 +1111,10 @@ implementation phase rediscovering them:
    Recommendation: ship incremental. Audio-only NDI input is useful on
    its own (remote mic, IFB return) and an upgrade-in-place that adds
    video later is invisible to existing playlists.
+8. **Routing UI surface**: maintain two editors (matrix vs list) or one
+   unified TreeDataGrid-first editor shared by MediaPlayer and Cue
+   Player? Recommendation: one shared editor (matrix + connection list)
+   with virtual output channel numbering.
 
 ---
 
@@ -1078,8 +1129,8 @@ inconsistent UX.
 A persistent left sidebar replaces the current tab-based main shell:
 
 - Collapsed: icon-only column ~48 px wide. Icons for **Players**,
-  **Cues**, **Outputs**, **Project**. Tooltip on hover gives the
-  label.
+  **Cues**, **Outputs**, **OSC**, **MIDI**, **Project**. Tooltip on hover
+  gives the label.
 - Expanded: full label column ~180 px wide. Toggled by a hamburger
   button at the top of the sidebar (or by keyboard `Ctrl+B`).
 - Sidebar state (collapsed / expanded) is per-machine (in app
@@ -1194,8 +1245,14 @@ before the implementation phase starts:
 - Should the OSC/MIDI Target Configuration dialog live under
   Project, or as its own sidebar entry? Recommend nested under
   Project for now; promote if it grows.
-  **Decided:** nested under Project. The dialog manages **multiple
-  OSC servers and multiple MIDI devices** simultaneously — see §12.6.
+  **Decided (revised 2026-05-21):** promote to **two sidebar workspaces** —
+  **OSC** for the UDP endpoint registry (`OscConnectionsView`) and **MIDI** for
+  output endpoints plus the PortMidi device catalog (`MidiDevicesView`). The
+  Cue workspace stays focused on the cue tree, VOut registry, and per-cue route
+  overrides; **Project** is file metadata + recent projects only. Keyboard
+  shortcuts: `Ctrl+1` Players, `Ctrl+2` Cues, `Ctrl+3` Outputs, `Ctrl+4` OSC,
+  `Ctrl+5` MIDI, `Ctrl+6` Project. A unified "Target Configuration" dialog (§12.2)
+  remains optional; per-kind editing happens in the sidebar workspaces today.
 
 ### 12.6 Multi-Target OSC / MIDI Endpoint Registry
 
@@ -1210,11 +1267,12 @@ single one:
   `PMLib`). Many concurrent output ports; the same registry also
   holds *input* ports for the future remote-control work in §8.4 so
   OSC/MIDI in and out share one configuration surface.
-- **Action cue target reference** — the action-cue editor (§5.2)
-  shows a dropdown of endpoint *names* from the registry. The cue
-  stores the endpoint's GUID, not the inline IP/port. Renaming an
-  endpoint propagates to every cue automatically; moving an
-  endpoint to a new IP doesn't require touching cues at all.
+- **Action cue target reference** — the **Edit Action Cue** dialog
+  (`ActionCueBuilderDialog`, §5.2) shows a dropdown of endpoint *names* from
+  the registry and composes OSC/MIDI command text into the selected cue. The cue
+  stores the endpoint's GUID, not the inline IP/port. Renaming an endpoint
+  propagates to every cue automatically; moving an endpoint to a new IP doesn't
+  require touching cues at all.
 - **Broken-reference state** — deleting an endpoint marks every
   dependent action cue as "broken" with a banner offering to
   re-bind. Loading a project on a machine where a MIDI port name

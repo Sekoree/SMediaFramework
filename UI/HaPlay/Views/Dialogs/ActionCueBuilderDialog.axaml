@@ -1,0 +1,57 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.ActionCueBuilderDialog"
+        x:DataType="vm:ActionCueBuilderDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="520" Height="420"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="420" MinHeight="360">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="Apply" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <StackPanel Spacing="10">
+      <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
+
+      <Grid ColumnDefinitions="90,*" ColumnSpacing="6">
+        <TextBlock Grid.Column="0" Text="Kind" VerticalAlignment="Center" />
+        <ComboBox Grid.Column="1"
+                  ItemsSource="{Binding ActionKinds}"
+                  SelectedItem="{Binding ActionKind, Mode=TwoWay}" />
+      </Grid>
+
+      <Grid ColumnDefinitions="90,*,Auto" ColumnSpacing="6">
+        <TextBlock Grid.Column="0" Text="Endpoint" VerticalAlignment="Center" />
+        <ComboBox Grid.Column="1"
+                  ItemsSource="{Binding Endpoints}"
+                  SelectedItem="{Binding SelectedEndpoint, Mode=TwoWay}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding Name}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+      </Grid>
+
+      <Grid IsVisible="{Binding IsOscVisible}" ColumnDefinitions="90,*,*" ColumnSpacing="6">
+        <TextBlock Grid.Column="0" Text="OSC" VerticalAlignment="Center" />
+        <TextBox Grid.Column="1" Text="{Binding OscAddress, Mode=TwoWay}" PlaceholderText="/address" />
+        <TextBox Grid.Column="2" Text="{Binding OscArguments, Mode=TwoWay}" PlaceholderText="args" />
+      </Grid>
+
+      <Grid IsVisible="{Binding IsMidiVisible}" ColumnDefinitions="90,*,76,76,76" ColumnSpacing="6">
+        <TextBlock Grid.Column="0" Text="MIDI" VerticalAlignment="Center" />
+        <ComboBox Grid.Column="1"
+                  ItemsSource="{Binding MidiCommandTypes}"
+                  SelectedItem="{Binding MidiCommandType, Mode=TwoWay}" />
+        <NumericUpDown Grid.Column="2" Minimum="1" Maximum="16" Value="{Binding MidiChannel, Mode=TwoWay}" />
+        <NumericUpDown Grid.Column="3" Minimum="0" Maximum="127" Value="{Binding MidiData1, Mode=TwoWay}" />
+        <NumericUpDown Grid.Column="4" Minimum="0" Maximum="127" Value="{Binding MidiData2, Mode=TwoWay}" />
+      </Grid>
+    </StackPanel>
+  </DockPanel>
+</Window>

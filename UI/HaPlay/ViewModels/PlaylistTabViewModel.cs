@@ -14,10 +14,13 @@ public sealed partial class PlaylistTabViewModel : ObservableObject
     [ObservableProperty]
     private string _name;
 
-    public ObservableCollection<string> Paths { get; } = new();
+    /// <summary>Phase C.5 (§6.8) — discriminated items (files + live inputs). Replaces the v1 flat
+    /// <c>Paths</c> string list. The bound playlist ListBox renders items via
+    /// <see cref="PlaylistItem.DisplayName"/>; live items add <see cref="PlaylistItem.KindGlyph"/>.</summary>
+    public ObservableCollection<PlaylistItem> Items { get; } = new();
 
     [ObservableProperty]
-    private string? _selectedPath;
+    private PlaylistItem? _selectedItem;
 
     [ObservableProperty]
     private bool _isLooping;
@@ -27,9 +30,10 @@ public sealed partial class PlaylistTabViewModel : ObservableObject
 
     public PlaylistConfig ToConfig() => new()
     {
+        Schema = "HaPlayPlaylist/v2",
         Name = string.IsNullOrWhiteSpace(Name) ? "Set" : Name,
-        Paths = Paths.ToList(),
-        SelectedPath = SelectedPath,
+        Items = Items.ToList(),
+        SelectedItemId = SelectedItem?.Id,
         IsLooping = IsLooping,
         AutoAdvance = AutoAdvance,
     };
@@ -41,11 +45,29 @@ public sealed partial class PlaylistTabViewModel : ObservableObject
             IsLooping = config.IsLooping,
             AutoAdvance = config.AutoAdvance,
         };
-        foreach (var path in config.Paths)
-            tab.Paths.Add(path);
-        tab.SelectedPath = config.SelectedPath is { } sp && tab.Paths.Contains(sp, StringComparer.Ordinal)
-            ? sp
-            : tab.Paths.FirstOrDefault();
+
+        // v2 path: discriminated items are canonical.
+        if (config.Items.Count > 0)
+        {
+            foreach (var item in config.Items)
+                tab.Items.Add(item);
+        }
+        // v1 fallback: project legacy file-path list onto FilePlaylistItem.
+        else if (config.Paths is { Count: > 0 } legacy)
+        {
+            foreach (var p in legacy)
+                tab.Items.Add(new FilePlaylistItem(p));
+        }
+
+        // Resolve selection. v2 id first, v1 path as fallback, else first item.
+        PlaylistItem? selected = null;
+        if (config.SelectedItemId is { } sid)
+            selected = tab.Items.FirstOrDefault(i => i.Id == sid);
+        if (selected is null && !string.IsNullOrEmpty(config.SelectedPath))
+            selected = tab.Items.OfType<FilePlaylistItem>()
+                .FirstOrDefault(f => string.Equals(f.Path, config.SelectedPath, StringComparison.Ordinal));
+        tab.SelectedItem = selected ?? tab.Items.FirstOrDefault();
+
         return tab;
     }
 }

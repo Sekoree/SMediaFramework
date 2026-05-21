@@ -49,16 +49,36 @@ public sealed record MediaPlayerConfig
     public List<string> SelectedOutputDisplayNames { get; init; } = new();
 
     public List<OutputGainConfig> OutputGains { get; init; } = new();
+
+    /// <summary>
+    /// Per-input-channel attenuation/mute (column trims) for the audio matrix.
+    /// Applied on top of every cell that reads from the matching input channel.
+    /// </summary>
+    public List<InputChannelTrimConfig> InputTrims { get; init; } = new();
 }
 
 public sealed record PlaylistConfig
 {
-    public string Schema { get; init; } = "HaPlayPlaylist/v1";
+    /// <summary>v1 used a flat <c>Paths</c> string list; v2 (Phase C.5 §6.8) carries discriminated
+    /// <see cref="Items"/> so live inputs round-trip alongside files. Loaders fall back to <see cref="Paths"/>
+    /// when <see cref="Items"/> is empty so v1 playlist files keep working.</summary>
+    public string Schema { get; init; } = "HaPlayPlaylist/v2";
 
     public string Name { get; init; } = "Set A";
 
-    public List<string> Paths { get; init; } = new();
+    /// <summary>Phase C.5 (§6.8) — discriminated playlist entries. Canonical on write; on read, falls
+    /// back to <see cref="Paths"/> when this list is empty.</summary>
+    public List<PlaylistItem> Items { get; init; } = new();
 
+    /// <summary>Phase C.5 (§6.8) — selected playlist item by <see cref="PlaylistItem.Id"/>. <see langword="null"/>
+    /// means "use first item" or fall back to <see cref="SelectedPath"/> for v1 files.</summary>
+    public Guid? SelectedItemId { get; init; }
+
+    /// <summary>Legacy v1 file path list. Kept so v1 playlist files load via <see cref="FilePlaylistItem"/>
+    /// projection. Always written <see langword="null"/> by v2 so the field drops out of fresh saves.</summary>
+    public List<string>? Paths { get; init; }
+
+    /// <summary>Legacy v1 selected path. Resolved into <see cref="SelectedItemId"/> on load.</summary>
     public string? SelectedPath { get; init; }
 
     public bool IsLooping { get; init; }
@@ -81,6 +101,15 @@ public sealed record OutputGainConfig
 
     /// <summary>Phase C (§4.3.4) — full N×M matrix cells. Empty means "fall back to <see cref="MixMode"/>".</summary>
     public List<AudioMatrixCellConfig> MatrixCells { get; init; } = new();
+}
+
+public sealed record InputChannelTrimConfig
+{
+    public int InputChannel { get; init; }
+
+    public double GainDb { get; init; }
+
+    public bool Muted { get; init; }
 }
 
 /// <summary>
@@ -124,4 +153,9 @@ public enum PlayerTransitionMode
 [JsonSerializable(typeof(MediaPlayerConfig))]
 [JsonSerializable(typeof(PlaylistConfig))]
 [JsonSerializable(typeof(AudioMatrixCellConfig))]
+[JsonSerializable(typeof(InputChannelTrimConfig))]
+[JsonSerializable(typeof(PlaylistItem))]
+[JsonSerializable(typeof(FilePlaylistItem))]
+[JsonSerializable(typeof(NDIInputPlaylistItem))]
+[JsonSerializable(typeof(PortAudioInputPlaylistItem))]
 internal partial class MediaPlayerConfigJsonContext : JsonSerializerContext;

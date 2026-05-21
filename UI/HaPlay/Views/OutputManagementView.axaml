@@ -82,5 +82,41 @@
         </ListBox.ItemTemplate>
       </ListBox>
     </Border>
+
+    <Border Classes="card" Margin="0,10,0,0">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Top" Text="Virtual Audio Channels" FontWeight="SemiBold" Margin="0,0,0,6" />
+        <TextBlock DockPanel.Dock="Top" Classes="hint"
+                   Text="Assign each real output channel to a virtual channel number used by media/cue routing (VOut)." />
+        <Border DockPanel.Dock="Top"
+                IsVisible="{Binding HasVirtualChannelCollisions}"
+                Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
+                CornerRadius="4" Padding="8,4" Margin="0,6,0,0">
+          <TextBlock Text="{Binding VirtualChannelCollisionMessage}" Foreground="#FFE6E6" />
+        </Border>
+        <ListBox ItemsSource="{Binding VirtualAudioChannelAssignments}" Background="Transparent" Margin="0,6,0,0">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:OutputVirtualChannelAssignmentViewModel">
+              <Grid ColumnDefinitions="220,90,100,90,*" ColumnSpacing="8" Margin="0,2">
+                <TextBlock Grid.Column="0" Text="{Binding OutputDisplayName}" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding OutputChannelLabel}" VerticalAlignment="Center" />
+                <NumericUpDown Grid.Column="2"
+                               Minimum="1"
+                               Maximum="512"
+                               ShowButtonSpinner="False"
+                               Value="{Binding VirtualOutputChannel, Mode=TwoWay}" />
+                <TextBlock Grid.Column="3"
+                           IsVisible="{Binding IsDuplicate}"
+                           Text="Duplicate"
+                           Foreground="#FFCC6666"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="4" Text="{Binding VirtualOutputChannel, StringFormat='VOut {0}'}"
+                           VerticalAlignment="Center" Opacity="0.75" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
   </DockPanel>
 </UserControl>

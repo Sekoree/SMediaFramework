@@ -14,7 +14,47 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(HaPlayProject.CurrentSchemaVersion, roundTripped.SchemaVersion);
         Assert.Empty(roundTripped.Outputs);
         Assert.Empty(roundTripped.Players);
+        Assert.Empty(roundTripped.ActionEndpoints);
         Assert.Empty(roundTripped.CueLists);
+    }
+
+    [Fact]
+    public void RoundTrip_ActionEndpoints_PreservesKindsAndFields()
+    {
+        var oscId = Guid.NewGuid();
+        var midiId = Guid.NewGuid();
+        var project = new HaPlayProject
+        {
+            ActionEndpoints =
+            {
+                new OscActionEndpoint
+                {
+                    Id = oscId,
+                    Name = "FOH OSC",
+                    Host = "10.0.0.12",
+                    Port = 8000,
+                },
+                new MidiActionEndpoint
+                {
+                    Id = midiId,
+                    Name = "Lighting MIDI",
+                    DeviceId = 3,
+                    DeviceName = "USB MIDI",
+                    Channel = 1,
+                },
+            },
+        };
+
+        var loaded = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+        var osc = Assert.IsType<OscActionEndpoint>(loaded.ActionEndpoints[0]);
+        var midi = Assert.IsType<MidiActionEndpoint>(loaded.ActionEndpoints[1]);
+        Assert.Equal(oscId, osc.Id);
+        Assert.Equal("10.0.0.12", osc.Host);
+        Assert.Equal(8000, osc.Port);
+        Assert.Equal(midiId, midi.Id);
+        Assert.Equal(3, midi.DeviceId);
+        Assert.Equal("USB MIDI", midi.DeviceName);
+        Assert.Equal(1, midi.Channel);
     }
 
     [Fact]
@@ -117,6 +157,79 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public void RoundTrip_ProjectCueList_PreservesCueNodeTypes()
+    {
+        var cues = new CueList
+        {
+            Name = "Show A",
+            VirtualOutputs =
+            {
+                new CueVirtualOutputChannel { Channel = 1, Label = "Main L" },
+                new CueVirtualOutputChannel { Channel = 2, Label = "Main R" },
+            },
+            Nodes =
+            {
+                new CueGroupNode
+                {
+                    Number = "1",
+                    Label = "Pre-show",
+                    FireMode = CueGroupFireMode.FirstCueOnly,
+                    Children =
+                    {
+                        new MediaCueNode
+                        {
+                            Number = "1.1",
+                            Label = "Walk-in",
+                            Source = new FilePlaylistItem("/show/walkin.mp3"),
+                            VirtualOutputChannels = { 1, 2 },
+                            RouteConnections =
+                            {
+                                new CueRouteConnectionOverride
+                                {
+                                    InputChannel = 0,
+                                    VirtualOutputChannel = 1,
+                                    GainDb = -3,
+                                    Muted = false,
+                                },
+                            },
+                        },
+                        new CommentCueNode
+                        {
+                            Number = "1.2",
+                            Label = "Stage note",
+                            Text = "House lights at 50%.",
+                        },
+                    },
+                },
+                new ActionCueNode
+                {
+                    Number = "2",
+                    Label = "Lighting GO",
+                    ActionKind = CueActionKind.OscOut,
+                    AddressOrMessage = "/lighting/go",
+                    Arguments = { "12" },
+                },
+            },
+        };
+
+        var project = new HaPlayProject { CueLists = { cues } };
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+
+        var loadedCueList = Assert.Single(roundTripped.CueLists);
+        Assert.Equal("Show A", loadedCueList.Name);
+        Assert.Equal(2, loadedCueList.VirtualOutputs.Count);
+        Assert.Equal(1, loadedCueList.VirtualOutputs[0].Channel);
+        Assert.Equal("Main L", loadedCueList.VirtualOutputs[0].Label);
+        var group = Assert.IsType<CueGroupNode>(loadedCueList.Nodes[0]);
+        var media = Assert.IsType<MediaCueNode>(group.Children[0]);
+        Assert.IsType<FilePlaylistItem>(media.Source);
+        Assert.Equal(2, media.VirtualOutputChannels.Count);
+        Assert.Single(media.RouteConnections);
+        Assert.IsType<CommentCueNode>(group.Children[1]);
+        Assert.IsType<ActionCueNode>(loadedCueList.Nodes[1]);
+    }
+
+    [Fact]
     public void RoundTrip_PlayerConfig_PreservesPlaylistAndRouting()
     {
         var player = new MediaPlayerConfig
@@ -127,19 +240,22 @@ public sealed class HaPlayProjectIOTests
                 new PlaylistConfig
                 {
                     Name = "Set A",
-                    Paths = { "/show/opener.mp4", "/show/main.mkv" },
-                    SelectedPath = "/show/main.mkv",
+                    Items =
+                    {
+                        new FilePlaylistItem("/show/opener.mp4"),
+                        new FilePlaylistItem("/show/main.mkv"),
+                    },
                     AutoAdvance = true,
                 },
                 new PlaylistConfig
                 {
                     Name = "Encore",
-                    Paths = { "/show/stinger.mov" },
-                    SelectedPath = "/show/stinger.mov",
+                    Items = { new FilePlaylistItem("/show/stinger.mov") },
                     IsLooping = true,
                 },
             },
             SelectedPlaylistTabIndex = 1,
+            // Legacy v1 fields — round-trip the value as-is to preserve back-compat readers.
             PlaylistPaths = { "/show/opener.mp4", "/show/main.mkv" },
             SelectedPlaylistPath = "/show/main.mkv",
             MediaFilePath = "/show/main.mkv",
@@ -172,6 +288,9 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(2, loaded.PlaylistTabs.Count);
         Assert.Equal("Encore", loaded.PlaylistTabs[1].Name);
         Assert.Equal(1, loaded.SelectedPlaylistTabIndex);
+        // Set A: two FilePlaylistItem entries round-tripped through the discriminator.
+        Assert.Equal(2, loaded.PlaylistTabs[0].Items.Count);
+        Assert.IsType<FilePlaylistItem>(loaded.PlaylistTabs[0].Items[0]);
         Assert.Equal(2, loaded.PlaylistPaths.Count);
         Assert.Equal("/show/main.mkv", loaded.SelectedPlaylistPath);
         Assert.True(loaded.AutoAdvancePlaylist);
@@ -205,6 +324,11 @@ public sealed class HaPlayProjectIOTests
         {
             Name = "Matrix Player",
             SelectedOutputDisplayNames = { "Main Speakers" },
+            InputTrims =
+            {
+                new InputChannelTrimConfig { InputChannel = 0, GainDb = -3.0, Muted = false },
+                new InputChannelTrimConfig { InputChannel = 1, GainDb =  2.5, Muted = true },
+            },
             OutputGains =
             {
                 new OutputGainConfig
@@ -229,6 +353,8 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(-6.0, gain.MatrixCells[1].GainDb);
         Assert.Equal(-12.0, gain.MatrixCells[2].GainDb);
         Assert.Equal(1, gain.MatrixCells[2].OutputChannel);
+        Assert.Equal(2, loaded.Players[0].InputTrims.Count);
+        Assert.True(loaded.Players[0].InputTrims[1].Muted);
     }
 
     [Fact]
@@ -260,6 +386,32 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public void AudioMatrixViewModel_Resize_StereoSource_FourSink_DefaultsToFirstPair()
+    {
+        var m = new HaPlay.ViewModels.AudioMatrixViewModel();
+        m.Resize(2, 4);
+
+        Assert.False(m.Cell(0, 0)!.Muted);
+        Assert.False(m.Cell(1, 1)!.Muted);
+        Assert.True(m.Cell(0, 2)!.Muted);
+        Assert.True(m.Cell(1, 3)!.Muted);
+    }
+
+    [Fact]
+    public void AudioMatrixViewModel_ApplyPreset_MonoLeft_DrivesAllSinkChannels()
+    {
+        var m = new HaPlay.ViewModels.AudioMatrixViewModel();
+        m.Resize(2, 4);
+        m.ApplyPreset(AudioRouteMixMode.MonoLeft);
+
+        for (var oc = 0; oc < 4; oc++)
+        {
+            Assert.False(m.Cell(0, oc)!.Muted);
+            Assert.True(m.Cell(1, oc)!.Muted);
+        }
+    }
+
+    [Fact]
     public async Task SaveAsync_ThenLoadAsync_PreservesProject()
     {
         var project = new HaPlayProject
@@ -284,6 +436,40 @@ public sealed class HaPlayProjectIOTests
         finally
         {
             File.Delete(tmp);
+        }
+    }
+
+    [Fact]
+    public async Task CueListIO_SaveLoad_RoundTripsCueTree()
+    {
+        var cueList = new CueList
+        {
+            Name = "Cue Test",
+            Nodes =
+            {
+                new MediaCueNode
+                {
+                    Number = "1",
+                    Label = "Opener",
+                    Source = new FilePlaylistItem("/show/opener.mp4"),
+                    TriggerMode = CueTriggerMode.Manual,
+                },
+            },
+        };
+
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        try
+        {
+            await CueListIO.SaveAsync(cueList, tmp);
+            var loaded = await CueListIO.LoadAsync(tmp);
+            Assert.Equal("Cue Test", loaded.Name);
+            var media = Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes));
+            Assert.IsType<FilePlaylistItem>(media.Source);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
         }
     }
 

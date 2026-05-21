@@ -11,6 +11,15 @@ public readonly record struct PortAudioOutputDeviceEntry(
     int MaxOutputChannels,
     double DefaultSampleRate);
 
+/// <summary>One physical input (capture) device with a global PortAudio device index.</summary>
+public readonly record struct PortAudioInputDeviceEntry(
+    int GlobalDeviceIndex,
+    int HostApiIndex,
+    string Name,
+    int MaxInputChannels,
+    double DefaultSampleRate,
+    double DefaultLowInputLatency);
+
 /// <summary>
 /// Enumerates host APIs and output devices using the same <see cref="PortAudioRuntime"/> ref-count
 /// as <see cref="PortAudioOutput"/>.
@@ -76,6 +85,50 @@ public static class PortAudioDeviceCatalog
                     dev.Name ?? $"Device {i}",
                     dev.maxOutputChannels,
                     dev.defaultSampleRate));
+            }
+
+            return list;
+        }
+        finally
+        {
+            PortAudioRuntime.Release();
+        }
+    }
+
+    /// <summary>
+    /// Returns input-capable (capture) devices. When <paramref name="hostApiIndex"/> is set, only
+    /// devices belonging to that host API are returned. Mirrors <see cref="EnumerateOutputDevices"/>
+    /// but filters by <c>maxInputChannels &gt; 0</c> and carries <c>defaultLowInputLatency</c> for the
+    /// suggested-latency hint passed to <see cref="PortAudioInput"/>.
+    /// </summary>
+    public static IReadOnlyList<PortAudioInputDeviceEntry> EnumerateInputDevices(int? hostApiIndex = null)
+    {
+        PortAudioRuntime.Acquire();
+        try
+        {
+            var count = Native.Pa_GetDeviceCount();
+            if (count <= 0)
+                return [];
+
+            var list = new List<PortAudioInputDeviceEntry>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var maybe = Native.Pa_GetDeviceInfo(i);
+                if (!maybe.HasValue)
+                    continue;
+                var dev = maybe.Value;
+                if (dev.maxInputChannels <= 0)
+                    continue;
+                if (hostApiIndex is { } h && dev.hostApi != h)
+                    continue;
+
+                list.Add(new PortAudioInputDeviceEntry(
+                    i,
+                    dev.hostApi,
+                    dev.Name ?? $"Device {i}",
+                    dev.maxInputChannels,
+                    dev.defaultSampleRate,
+                    dev.defaultLowInputLatency));
             }
 
             return list;
