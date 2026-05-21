@@ -26,6 +26,11 @@ public sealed record HaPlayProject
 
     public List<ActionEndpoint> ActionEndpoints { get; init; } = new();
 
+    /// <summary>§8.2 — project-level shared headphones bus definitions. Players may reference one
+    /// of these by id via <see cref="MediaPlayerConfig.HeadphonesCueSharedBusId"/> to share a
+    /// monitor send across decks; otherwise they keep using a dedicated PortAudio line.</summary>
+    public List<SharedHeadphonesBus> SharedHeadphonesBuses { get; init; } = new();
+
     public List<CueList> CueLists { get; init; } = new();
 
     /// <summary>Constant for callers that want to write SchemaVersion explicitly.</summary>
@@ -49,6 +54,7 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(ActionEndpoint))]
 [JsonSerializable(typeof(OscActionEndpoint))]
 [JsonSerializable(typeof(MidiActionEndpoint))]
+[JsonSerializable(typeof(SharedHeadphonesBus))]
 [JsonSerializable(typeof(CueList))]
 [JsonSerializable(typeof(CueNode))]
 [JsonSerializable(typeof(CueGroupNode))]

@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
         xmlns:vm="using:HaPlay.ViewModels.Dialogs"
         xmlns:dlg="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.AddNDIOutputDialog"
@@ -11,7 +12,7 @@
         MinWidth="420" MinHeight="480">
   <DockPanel Margin="16">
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
-      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
       <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
     </StackPanel>
 
@@ -19,33 +20,33 @@
       <StackPanel Spacing="10">
         <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
 
-        <TextBlock Text="Display name" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
         <TextBox Text="{Binding DisplayName}" />
 
-        <TextBlock Text="NDI source name" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.NdiSourceNameLabel}" FontWeight="SemiBold" />
         <TextBox Text="{Binding SourceName}" />
 
-        <TextBlock Text="NDI groups (optional)" FontWeight="SemiBold" />
-        <TextBox Text="{Binding Groups}" PlaceholderText="e.g. HaPlay" />
+        <TextBlock Text="{x:Static res:Strings.NdiGroupsOptionalLabel}" FontWeight="SemiBold" />
+        <TextBox Text="{Binding Groups}" PlaceholderText="{x:Static res:Strings.NdiGroupsPlaceholder}" />
 
-        <TextBlock Text="Streams" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.StreamsLabel}" FontWeight="SemiBold" />
         <ComboBox ItemsSource="{Binding StreamModes}" SelectedItem="{Binding StreamMode}" />
 
         <StackPanel Spacing="8" IsVisible="{Binding ShowAudioSettings}">
-          <TextBlock Text="NDI audio channel count" FontWeight="SemiBold" />
+          <TextBlock Text="{x:Static res:Strings.NdiAudioChannelCountLabel}" FontWeight="SemiBold" />
           <NumericUpDown Minimum="1" Maximum="64" Value="{Binding AudioChannelCount}" />
 
-          <TextBlock Text="NDI audio sample rate (Hz)" FontWeight="SemiBold" />
+          <TextBlock Text="{x:Static res:Strings.NdiAudioSampleRateLabel}" FontWeight="SemiBold" />
           <NumericUpDown Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding AudioSampleRate}" />
         </StackPanel>
 
         <Border BorderBrush="#22808080" BorderThickness="0,1,0,0" Margin="0,8,0,0" Padding="0,8,0,0">
           <StackPanel Spacing="8">
-            <TextBlock Text="Video format lock (optional)" FontWeight="SemiBold" />
+            <TextBlock Text="{x:Static res:Strings.VideoFormatLockOptionalLabel}" FontWeight="SemiBold" />
             <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
-                       Text="When set, receivers see a fixed pixel format and/or resolution regardless of the source. Leave on 'Auto' for receivers to pick the cheapest negotiation." />
+                       Text="{x:Static res:Strings.VideoFormatLockHint}" />
 
-            <TextBlock Text="Pixel format" />
+            <TextBlock Text="{x:Static res:Strings.PixelFormatLabel}" />
             <ComboBox ItemsSource="{Binding PixelFormatChoices}"
                       SelectedItem="{Binding SelectedPixelFormat}">
               <ComboBox.ItemTemplate>
@@ -55,7 +56,7 @@
               </ComboBox.ItemTemplate>
             </ComboBox>
 
-            <TextBlock Text="Resolution" />
+            <TextBlock Text="{x:Static res:Strings.ResolutionLabel}" />
             <ComboBox ItemsSource="{Binding ResolutionChoices}"
                       SelectedItem="{Binding SelectedResolution}">
               <ComboBox.ItemTemplate>

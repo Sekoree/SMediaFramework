@@ -264,9 +264,15 @@ public sealed class HaPlayProjectIOTests
             AutoAdvancePlaylist = true,
             HoldFallbackVideo = true,
             MasterVolumeDb = -3,
-            OutputPreset = PlayerOutputPreset.Preset1080p60,
+            OutputPreset = PlayerOutputPreset.Custom,
+            CustomOutputWidth = 1366,
+            CustomOutputHeight = 768,
             TransitionMode = PlayerTransitionMode.Fade,
             TransitionDurationMs = 750,
+            HeadphonesCueEnabled = true,
+            HeadphonesCueOutputId = Guid.Parse("11111111-2222-3333-4444-555555555555"),
+            HeadphonesCueTapPoint = HeadphonesCueTapPoint.PostFader,
+            HeadphonesCueGainDb = -9.5,
             SelectedOutputDisplayNames = { "Main Speakers", "NDI Program" },
             OutputGains =
             {
@@ -296,9 +302,15 @@ public sealed class HaPlayProjectIOTests
         Assert.True(loaded.AutoAdvancePlaylist);
         Assert.True(loaded.HoldFallbackVideo);
         Assert.Equal(-3, loaded.MasterVolumeDb);
-        Assert.Equal(PlayerOutputPreset.Preset1080p60, loaded.OutputPreset);
+        Assert.Equal(PlayerOutputPreset.Custom, loaded.OutputPreset);
+        Assert.Equal(1366, loaded.CustomOutputWidth);
+        Assert.Equal(768, loaded.CustomOutputHeight);
         Assert.Equal(PlayerTransitionMode.Fade, loaded.TransitionMode);
         Assert.Equal(750, loaded.TransitionDurationMs);
+        Assert.True(loaded.HeadphonesCueEnabled);
+        Assert.Equal(Guid.Parse("11111111-2222-3333-4444-555555555555"), loaded.HeadphonesCueOutputId);
+        Assert.Equal(HeadphonesCueTapPoint.PostFader, loaded.HeadphonesCueTapPoint);
+        Assert.Equal(-9.5, loaded.HeadphonesCueGainDb);
         Assert.Equal(new[] { "Main Speakers", "NDI Program" }, loaded.SelectedOutputDisplayNames);
         var gain = Assert.Single(loaded.OutputGains);
         Assert.Equal(-6, gain.GainDb);
@@ -497,6 +509,59 @@ public sealed class HaPlayProjectIOTests
         {
             File.Delete(tmp);
         }
+    }
+
+    [Fact]
+    public void RoundTrip_SharedHeadphonesBuses_PreservesIdsAndTargets()
+    {
+        var busAId = Guid.NewGuid();
+        var busBId = Guid.NewGuid();
+        var paOutId = Guid.NewGuid();
+        var project = new HaPlayProject
+        {
+            SharedHeadphonesBuses =
+            {
+                new SharedHeadphonesBus
+                {
+                    Id = busAId,
+                    Label = "Booth A",
+                    PortAudioOutputId = paOutId,
+                },
+                new SharedHeadphonesBus
+                {
+                    Id = busBId,
+                    Label = "Booth B",
+                    PortAudioOutputId = null,
+                },
+            },
+            Players =
+            {
+                new MediaPlayerConfig
+                {
+                    Name = "Deck 1",
+                    HeadphonesCueEnabled = true,
+                    HeadphonesCueSharedBusId = busAId,
+                    HeadphonesCueOutputId = paOutId,
+                    HeadphonesCueTapPoint = HeadphonesCueTapPoint.PostFader,
+                    HeadphonesCueGainDb = -3.0,
+                },
+            },
+        };
+
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+
+        Assert.Equal(2, roundTripped.SharedHeadphonesBuses.Count);
+        Assert.Equal("Booth A", roundTripped.SharedHeadphonesBuses[0].Label);
+        Assert.Equal(paOutId, roundTripped.SharedHeadphonesBuses[0].PortAudioOutputId);
+        Assert.Equal(busBId, roundTripped.SharedHeadphonesBuses[1].Id);
+        Assert.Null(roundTripped.SharedHeadphonesBuses[1].PortAudioOutputId);
+
+        var loadedPlayer = Assert.Single(roundTripped.Players);
+        Assert.Equal(busAId, loadedPlayer.HeadphonesCueSharedBusId);
+        Assert.Equal(paOutId, loadedPlayer.HeadphonesCueOutputId);
+        Assert.True(loadedPlayer.HeadphonesCueEnabled);
+        Assert.Equal(HeadphonesCueTapPoint.PostFader, loadedPlayer.HeadphonesCueTapPoint);
+        Assert.Equal(-3.0, loadedPlayer.HeadphonesCueGainDb);
     }
 
     [Fact]

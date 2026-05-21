@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Collections.Specialized;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
@@ -6,6 +7,7 @@ using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using HaPlay.Models;
+using HaPlay.Resources;
 using HaPlay.ViewModels;
 
 namespace HaPlay.Views;
@@ -94,42 +96,42 @@ public partial class CuePlayerView : UserControl
         _source = new HierarchicalTreeDataGridSource<CueNodeViewModel>(vm.VisibleNodes);
         _source.Columns.Add(new HierarchicalExpanderColumn<CueNodeViewModel>(
             new TemplateColumn<CueNodeViewModel>(
-                "Cue",
+                Strings.CueTreeCueColumnHeader,
                 new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.Label)), supportsRecycling: true),
                 width: new GridLength(250)),
             x => x.Children,
             x => x.HasChildren,
             x => x.IsExpanded));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "No.",
+            Strings.CueTreeNumberColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.Number)), supportsRecycling: true),
             width: new GridLength(88)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "Kind",
+            Strings.CueTreeKindColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.KindLabel)), supportsRecycling: true),
             width: new GridLength(84)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "Trigger",
+            Strings.CueTreeTriggerColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTriggerEditor(row), supportsRecycling: true),
             width: new GridLength(130)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "Pre(ms)",
+            Strings.CueTreePreMsColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildPreWaitEditor(row), supportsRecycling: true),
             width: new GridLength(90)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "Source/Action",
-            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.SourceOrAction)), supportsRecycling: true),
+            Strings.CueTreeSourceActionColumnHeader,
+            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildSourceOrActionEditor(row), supportsRecycling: true),
             width: new GridLength(240)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "Endpoint Id",
-            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.EndpointIdText)), supportsRecycling: true),
+            Strings.CueTreeEndpointIdColumnHeader,
+            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildEndpointEditor(vm, row), supportsRecycling: true),
             width: new GridLength(220)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "Extra",
+            Strings.CueTreeExtraColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildExtraEditor(row), supportsRecycling: true),
             width: new GridLength(120)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            "Notes",
+            Strings.CueTreeNotesColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.Notes)), supportsRecycling: true),
             width: new GridLength(260)));
 
@@ -152,11 +154,11 @@ public partial class CuePlayerView : UserControl
 
         _virtualOutputSource = new FlatTreeDataGridSource<CueVirtualOutputChannelViewModel>(vm.VisibleVirtualOutputs);
         _virtualOutputSource.Columns.Add(new TemplateColumn<CueVirtualOutputChannelViewModel>(
-            "VOut",
+            Strings.CueVirtualOutputColumnHeader,
             new FuncDataTemplate<CueVirtualOutputChannelViewModel>((row, _) => BuildVirtualOutputChannelEditor(row), supportsRecycling: true),
             width: new GridLength(84)));
         _virtualOutputSource.Columns.Add(new TemplateColumn<CueVirtualOutputChannelViewModel>(
-            "Label",
+            Strings.CueLabelColumnHeader,
             new FuncDataTemplate<CueVirtualOutputChannelViewModel>((row, _) => BuildTextEditor(row, nameof(CueVirtualOutputChannelViewModel.Label)), supportsRecycling: true),
             width: new GridLength(210)));
 
@@ -179,19 +181,19 @@ public partial class CuePlayerView : UserControl
 
         _routeSource = new FlatTreeDataGridSource<CueRouteConnectionViewModel>(vm.VisibleRouteConnections);
         _routeSource.Columns.Add(new TemplateColumn<CueRouteConnectionViewModel>(
-            "In",
+            Strings.CueRouteInputColumnHeader,
             new FuncDataTemplate<CueRouteConnectionViewModel>((row, _) => BuildRouteChannelEditor(row, nameof(CueRouteConnectionViewModel.InputChannel), 0, 63), supportsRecycling: true),
             width: new GridLength(76)));
         _routeSource.Columns.Add(new TemplateColumn<CueRouteConnectionViewModel>(
-            "VOut",
+            Strings.CueRouteVoutColumnHeader,
             new FuncDataTemplate<CueRouteConnectionViewModel>((row, _) => BuildRouteVirtualOutputEditor(vm, row), supportsRecycling: true),
             width: new GridLength(92)));
         _routeSource.Columns.Add(new TemplateColumn<CueRouteConnectionViewModel>(
-            "Gain dB",
+            Strings.CueRouteGainDbColumnHeader,
             new FuncDataTemplate<CueRouteConnectionViewModel>((row, _) => BuildRouteGainEditor(row), supportsRecycling: true),
             width: new GridLength(104)));
         _routeSource.Columns.Add(new TemplateColumn<CueRouteConnectionViewModel>(
-            "Mute",
+            Strings.CueRouteMuteColumnHeader,
             new FuncDataTemplate<CueRouteConnectionViewModel>((row, _) => BuildRouteMuteEditor(row), supportsRecycling: true),
             width: new GridLength(76)));
 
@@ -218,6 +220,17 @@ public partial class CuePlayerView : UserControl
         tb.Bind(TextBlock.TextProperty, new Binding(propertyName));
         return tb;
     }
+
+    /// <summary>"Not applicable for this kind" placeholder — dimmed em-dash so the row visually
+    /// signals that the column has no meaningful value for the current cue kind (comments don't
+    /// fire, groups don't carry endpoints, etc.).</summary>
+    private static Control BuildInapplicablePlaceholder() => new TextBlock
+    {
+        Text = Strings.EmDash,
+        Opacity = 0.35,
+        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+    };
 
     private static Control BuildTextEditor(CueNodeViewModel row, string propertyName)
     {
@@ -264,6 +277,10 @@ public partial class CuePlayerView : UserControl
 
     private static Control BuildTriggerEditor(CueNodeViewModel row)
     {
+        // Comments are descriptive-only — they never fire, so Trigger is meaningless.
+        if (row.Kind == CueNodeKind.Comment)
+            return BuildInapplicablePlaceholder();
+
         var combo = new ComboBox
         {
             DataContext = row,
@@ -279,6 +296,10 @@ public partial class CuePlayerView : UserControl
 
     private static Control BuildPreWaitEditor(CueNodeViewModel row)
     {
+        // Comments don't fire, so a pre-wait delay has nothing to gate.
+        if (row.Kind == CueNodeKind.Comment)
+            return BuildInapplicablePlaceholder();
+
         var n = new NumericUpDown
         {
             DataContext = row,
@@ -328,7 +349,99 @@ public partial class CuePlayerView : UserControl
             return combo;
         }
 
+        // Comments have no Extra payload (only label + notes).
+        if (row.Kind == CueNodeKind.Comment)
+            return BuildInapplicablePlaceholder();
+
         return BuildTextEditor(row, nameof(CueNodeViewModel.Extra));
+    }
+
+    private static Control BuildSourceOrActionEditor(CueNodeViewModel row)
+    {
+        return row.Kind switch
+        {
+            // Group rows do not use Source/Action payload text.
+            CueNodeKind.Group => BuildInapplicablePlaceholder(),
+            // Comments have no media/action payload either.
+            CueNodeKind.Comment => BuildInapplicablePlaceholder(),
+            _ => BuildTextEditor(row, nameof(CueNodeViewModel.SourceOrAction)),
+        };
+    }
+
+    private static Control BuildEndpointEditor(CuePlayerViewModel vm, CueNodeViewModel row)
+    {
+        if (row.Kind != CueNodeKind.Action)
+            return BuildInapplicablePlaceholder();
+
+        var options = BuildEndpointOptions(vm, row.EndpointIdText);
+        var combo = new ComboBox
+        {
+            DataContext = row,
+            ItemsSource = options,
+            MinWidth = 170,
+        };
+
+        void SyncSelectionFromRow()
+        {
+            var selectedId = (row.EndpointIdText ?? string.Empty).Trim();
+            var selected = options.FirstOrDefault(o =>
+                string.Equals(o.IdText, selectedId, StringComparison.OrdinalIgnoreCase))
+                ?? options.FirstOrDefault();
+            combo.SelectedItem = selected;
+        }
+
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.SelectedItem is EndpointOption selected)
+                row.EndpointIdText = selected.IdText;
+        };
+
+        PropertyChangedEventHandler handler = (_, args) =>
+        {
+            if (args.PropertyName == nameof(CueNodeViewModel.EndpointIdText))
+                SyncSelectionFromRow();
+        };
+        NotifyCollectionChangedEventHandler endpointCollectionHandler = (_, _) =>
+        {
+            options = BuildEndpointOptions(vm, row.EndpointIdText);
+            combo.ItemsSource = options;
+            SyncSelectionFromRow();
+        };
+        row.PropertyChanged += handler;
+        vm.ActionEndpoints.CollectionChanged += endpointCollectionHandler;
+        combo.DetachedFromVisualTree += (_, _) =>
+        {
+            row.PropertyChanged -= handler;
+            vm.ActionEndpoints.CollectionChanged -= endpointCollectionHandler;
+        };
+
+        SyncSelectionFromRow();
+        return combo;
+    }
+
+    private static List<EndpointOption> BuildEndpointOptions(CuePlayerViewModel vm, string endpointIdText)
+    {
+        var options = new List<EndpointOption>
+        {
+            new(string.Empty, Strings.EndpointNoneOptionLabel),
+        };
+
+        foreach (var endpoint in vm.ActionEndpoints.OrderBy(e => e.KindLabel).ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var summary = string.IsNullOrWhiteSpace(endpoint.Summary)
+                ? endpoint.Name
+                : $"{endpoint.Name} · {endpoint.Summary}";
+            options.Add(new EndpointOption(endpoint.Id.ToString(), $"{endpoint.KindLabel}: {summary}"));
+        }
+
+        var trimmed = (endpointIdText ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(trimmed)
+            && options.All(o => !string.Equals(o.IdText, trimmed, StringComparison.OrdinalIgnoreCase)))
+        {
+            options.Add(new EndpointOption(trimmed, Strings.Format(nameof(Strings.EndpointMissingOptionFormat), trimmed)));
+        }
+
+        return options;
     }
 
     private static Control BuildRouteChannelEditor(
@@ -378,7 +491,7 @@ public partial class CuePlayerView : UserControl
         var check = new CheckBox
         {
             DataContext = row,
-            Content = "M",
+            Content = Strings.CueRouteMuteShortLabel,
             FontSize = 10,
             Padding = new Avalonia.Thickness(2, 0),
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
@@ -411,5 +524,10 @@ public partial class CuePlayerView : UserControl
             Mode = BindingMode.TwoWay,
         });
         return combo;
+    }
+
+    private sealed record EndpointOption(string IdText, string Display)
+    {
+        public override string ToString() => Display;
     }
 }

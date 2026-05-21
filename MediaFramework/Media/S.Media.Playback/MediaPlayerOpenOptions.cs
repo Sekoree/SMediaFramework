@@ -1,3 +1,4 @@
+using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Video;
 
@@ -16,7 +17,10 @@ public readonly record struct MediaPlayerOpenOptions(
     /// <summary>Max demuxed audio packets buffered ahead of the audio decoder. <c>0</c> = use the demuxer default (192). Raise for HEVC 4K B-frame reorder.</summary>
     int AudioPacketQueueDepth = 0,
     /// <summary>Max demuxed video packets buffered ahead of the video decoder. <c>0</c> = use the demuxer default (384). Raise for HEVC 4K B-frame reorder.</summary>
-    int VideoPacketQueueDepth = 0)
+    int VideoPacketQueueDepth = 0,
+    /// <summary><see cref="S.Media.Core.Video.VideoPlayer"/> decode queue depth for live opens. <c>0</c> = default (4).</summary>
+    int LiveVideoDecodeQueueCapacity = 0,
+    VideoPresentationMode LiveVideoPresentation = VideoPresentationMode.Scheduled)
 {
     public MediaPlayerOpenOptions()
         : this(
@@ -28,7 +32,9 @@ public readonly record struct MediaPlayerOpenOptions(
             AudioChunkSamples: 480,
             IncludeAudioRouter: true,
             AudioPacketQueueDepth: 0,
-            VideoPacketQueueDepth: 0)
+            VideoPacketQueueDepth: 0,
+            LiveVideoDecodeQueueCapacity: 0,
+            LiveVideoPresentation: VideoPresentationMode.Scheduled)
     {
     }
 

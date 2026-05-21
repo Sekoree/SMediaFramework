@@ -51,6 +51,10 @@ Status legend:
     `NDIRecvColorFormat.UyvyBgra` (instead of `Fastest`) so receiver-side
     conversion stays in known ingest formats; added unpack fallback mappings
     for `Bgrx`/`Rgbx` and first-drop diagnostics when unpack fails.
+  - 2026-05-21 follow-up fix: `NDIVideoFrameUnpack` now accepts
+    `NDIFourCCVideoType.Uyva`, `P216`, and `Pa16` by deriving an 8-bit `Uyvy`
+    frame (alpha ignored in ingest). This closes another live NDI "audio present,
+    black video" path seen with alpha/high-bit-depth senders.
 
 ## Phase C Polish / Follow-Ups
 
@@ -66,25 +70,33 @@ Status legend:
   picks per-source.
 - [x] **Output preset compositor path** (HaPlay file open, 2026-05-21) —
         `OutputPresetVideoSource` + `MediaPlayer.TryOpen(..., videoSourceOverride)`.
-        Idle-image-as-compositor-layer (§8.10) still open.
-- [ ] **Output preset compositor path (idle layer / PiP)** — wire `CompositorVideoSink` /
-  `IVideoCompositor` as the fixed-format program output path for 1080p60,
-  720p60, custom, and idle-image composition. Blocks: Output preset (§4.3.5
-  preset combobox is UI-only today), fade transition, idle-image as
-  compositor layer (§8.10).
-- [~] **Dynamic output-channel capability handshake** — partially landed
-  2026-05-21. `HaPlayPlaybackSession.TryGetEffectiveOutputChannelCount(...)`
-  now exposes runtime-confirmed sink widths from active line wiring
-  (`LineWiring.SinkChannelCount`), and `MediaPlayerViewModel` matrix sizing now
-  consumes that before falling back to output-definition defaults. Remaining
-  follow-up: promote this to an explicit framework-level capability contract for
-  sinks that can renegotiate channels dynamically at runtime.
-  - 2026-05-21 follow-up: framework contract introduced as
-    `IAudioSinkChannelCapabilities` (`AudioSinkChannelCapabilities`), implemented
-    on `PortAudioOutput`, `NDIAudioSink`, and common wrappers (`ResamplingAudioSink`,
-    `AdaptiveRateAudioSink`, `NDIAudioAggregatingSink`, `BusSink`). HaPlay now
-    consults live sink capabilities via `AudioRouter.TryGetSink(...)` in
-    `TryGetEffectiveOutputChannelCount(...)` before using definition-time defaults.
+        2026-05-21 follow-up: idle-image-as-compositor-layer (§8.10) landed by
+        re-rendering idle templates through `CpuVideoCompositor` into each
+        negotiated sink format.
+        2026-05-21 follow-up: live opens now use the same fixed-raster preset
+        path (`PlaybackVideoPipeline.BuildLiveVideoSource` wrapping
+        `MediaPlayer.TryOpenLive` sources), so NDI/PortAudio input playback
+        also honors 1080p60 / 720p60 / Custom output presets.
+        2026-05-21 follow-up: fixed slot-ownership bug in
+        `OutputPresetVideoSource.TryReadNextFrame` (source frame was disposed
+        immediately after `Submit`, which could invalidate live-frame backing
+        before compositor read and manifest as black frames). Added
+        `OutputPresetVideoSourceTests.TryReadNextFrame_DoesNotDisposeSourceBeforeComposition`.
+- [~] **Output preset compositor path (PiP / lower-thirds)** — single-layer preset
+  letterbox + idle-image compositor layer + BGRA layer conversion for
+  `OutputPresetVideoSource` / `LockedFormatVideoSink` are done (2026-05-21).
+  `NDIVideoFrameUnpack` now tightens padded SDK line strides row-by-row (fixes
+  shifting abstract colours on UYVY/NV12/I420 NDI inputs). Remaining follow-up:
+  explicit multi-layer program composition (PiP / lower-third overlays).
+- [x] **Dynamic output-channel capability handshake** — landed end-to-end
+  2026-05-21. Framework-level contract is `IAudioSinkChannelCapabilities`
+  (`AudioSinkChannelCapabilities`), implemented on `PortAudioOutput`,
+  `NDIAudioSink`, and common wrappers (`ResamplingAudioSink`,
+  `AdaptiveRateAudioSink`, `NDIAudioAggregatingSink`, `BusSink`). HaPlay consults
+  live sink capabilities via `AudioRouter.TryGetSink(...)` in
+  `TryGetEffectiveOutputChannelCount(...)` and caches the confirmed sink width in
+  `LineWiring.SinkChannelCount`, with output-definition defaults as fallback when
+  runtime info is unavailable.
 - [x] **Per-cell channel-mix matrix** — shipped 2026-05-20.
   `AudioRouter` now supports multiple routes per `(source, sink)` pair via
   `AddRoute(source, sink, routeId, map, gain)` + `RemoveRouteById` /
@@ -104,10 +116,11 @@ Status legend:
 - [x] **Cue-player pre-roll hooks** (2026-05-21) — file cues via `CuePreRollCache`;
         NDI audio pre-connect via `NdiInputPreConnectCache` (§6.11).
   to keep a bounded cache of ready-to-fire sessions.
-- [~] **Action-cue endpoint health** — first emitter path landed in HaPlay:
-  action cues now execute OSC (`OSCLib`) and MIDI (`PMLib`) with project-level
+- [x] **Action-cue endpoint health** — landed 2026-05-21.
+  Action cues execute OSC (`OSCLib`) and MIDI (`PMLib`) with project-level
   endpoint registry lookup (`HaPlayProject.ActionEndpoints`) and surfaced error
   strings on trigger. OSC/MIDI sidebar workspaces expose management + **Test
-  connection/device** probes (2026-05-21); broken cue endpoint refs flag
-  `IsEndpointBroken` after load. Persistent health LEDs + rebind-missing-endpoints
-  dialog for action targets landed 2026-05-21.
+  connection/device** probes; broken cue endpoint refs flag `IsEndpointBroken`
+  after load; rebind-missing-endpoints dialog for action targets is wired on
+  project open. 2026-05-21 follow-up: endpoint health LEDs now auto-refresh on a
+  5-second timer in addition to manual test actions and endpoint-list edits.

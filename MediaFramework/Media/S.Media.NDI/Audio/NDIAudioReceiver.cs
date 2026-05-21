@@ -41,6 +41,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     private readonly Thread _captureThread;
     private readonly CancellationTokenSource _cts = new();
     private readonly TimeSpan _capacityDuration;
+    private readonly TimeSpan _maxReadLatency;
     /// <summary>Hard floor in frames-per-channel; mirrors the pre-2026-05 minimum to keep tiny durations from producing pathological rings.</summary>
     private const int MinCapacityFrames = 1024;
 
@@ -78,6 +79,9 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 
     public long OverflowSamples => Volatile.Read(ref _overflowSamples);
 
+    /// <summary>Shared ingest clock when paired with <see cref="Video.NDIVideoReceiver"/> on the same source.</summary>
+    public NDIIngestPlaybackClock? IngestClock => _ingestClock;
+
     /// <summary>
     /// Connects to the given NDI source. Capture begins immediately on a
     /// background thread.
@@ -95,10 +99,12 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         NDIDiscoveredSource source,
         string? receiverName = null,
         TimeSpan ringCapacityDuration = default,
-        NDIIngestPlaybackClock? ingestClock = null)
+        NDIIngestPlaybackClock? ingestClock = null,
+        TimeSpan? maxReadLatency = null)
     {
         if (ringCapacityDuration == default)
             ringCapacityDuration = TimeSpan.FromSeconds(2);
+        _maxReadLatency = maxReadLatency ?? ringCapacityDuration;
         if (ringCapacityDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ringCapacityDuration), "must be > 0");
 
@@ -140,6 +146,24 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         _captureThread.Start();
     }
 
+    /// <summary>
+    /// Discards buffered samples and re-anchors the ingest clock for a new play pass.
+    /// Call when transport starts so pre-buffered audio (captured while waiting to play) is not
+    /// heard behind freshly reset video.
+    /// </summary>
+    public void ResetPlaybackBuffer()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var snap = Volatile.Read(ref _state);
+        if (snap is not null)
+        {
+            var write = Volatile.Read(ref snap.WriteIndex);
+            Volatile.Write(ref snap.ReadIndex, write);
+        }
+
+        _ingestClock?.AttachReceiver();
+    }
+
     public int ReadInto(Span<float> dst)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -154,6 +178,8 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         if (dst.Length % channels != 0)
             throw new ArgumentException(
                 $"dst length {dst.Length} is not a multiple of channel count {channels}", nameof(dst));
+
+        TrimExcessBuffered(snap);
 
         var read = Volatile.Read(ref snap.ReadIndex);
         var write = Volatile.Read(ref snap.WriteIndex);
@@ -253,6 +279,25 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames);
         Volatile.Write(ref _state, snap);
         return snap;
+    }
+
+    /// <summary>Drops oldest samples when the ring holds more than <see cref="_maxReadLatency"/> of audio.</summary>
+    private void TrimExcessBuffered(FormatSnapshot snap)
+    {
+        var channels = snap.Channels;
+        var sampleRate = snap.Format.SampleRate;
+        if (sampleRate <= 0 || channels <= 0)
+            return;
+
+        var maxFrames = Math.Max(64, (int)(_maxReadLatency.TotalSeconds * sampleRate));
+        var read = Volatile.Read(ref snap.ReadIndex);
+        var write = Volatile.Read(ref snap.WriteIndex);
+        var bufferedFrames = (int)((write - read) / channels);
+        if (bufferedFrames <= maxFrames)
+            return;
+
+        var skipFrames = bufferedFrames - maxFrames;
+        Volatile.Write(ref snap.ReadIndex, read + (long)skipFrames * channels);
     }
 
     private void EnqueueSamples(FormatSnapshot snap, ReadOnlySpan<float> src)

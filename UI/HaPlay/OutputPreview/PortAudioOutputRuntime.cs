@@ -18,7 +18,7 @@ namespace HaPlay.OutputPreview;
 internal sealed class PortAudioOutputRuntime : IDisposable
 {
     private PortAudioOutputDefinition _definition;
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private PortAudioOutput? _output;
     private int _holders;
     private bool _disposed;
@@ -53,14 +53,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         {
             if (_output is not null)
                 return;
-            // chunk=480 + ringCapacityFrames=sampleRate (1 s of headroom) match HaPlayPlaybackSession's
-            // previous per-session sizing. defaultHighOutputLatency is picked by PortAudioOutput's ctor.
-            var output = new PortAudioOutput(
-                Format,
-                _definition.GlobalDeviceIndex,
-                suggestedLatency: null,
-                framesPerBuffer: 480,
-                ringCapacityFrames: _definition.SampleRate);
+            var output = CreateOutput();
             try
             {
                 output.Start();
@@ -82,7 +75,10 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     /// when the runtime is disposed / never started, or when another acquirer already holds it. The ring
     /// buffer is flushed so the next Submit plays cleanly. Pair every acquire with <see cref="ReleaseFromPlayback"/>.
     /// </summary>
-    public PortAudioOutput? AcquireForPlayback()
+    public PortAudioOutput? AcquireForPlayback(bool liveMonitoring = false) =>
+        AcquireForPlaybackCore(liveMonitoring);
+
+    private PortAudioOutput? AcquireForPlaybackCore(bool liveMonitoring)
     {
         lock (_gate)
         {
@@ -98,12 +94,59 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 return null;
             }
 
-            try { _output.Flush(); }
-            catch (Exception ex) { Trace.LogError(ex, $"PortAudioOutputRuntime '{_definition.DisplayName}' Acquire.Flush"); }
+            if (liveMonitoring)
+            {
+                EnsureLiveSizedOutputLocked();
+                PortAudioLiveMonitoring.ApplyTo(_output, _definition.SampleRate);
+            }
+            else
+            {
+                try { _output.Flush(); }
+                catch (Exception ex) { Trace.LogError(ex, $"PortAudioOutputRuntime '{_definition.DisplayName}' Acquire.Flush"); }
+            }
 
-            Trace.LogDebug("AcquireForPlayback: '{Name}' acquired", _definition.DisplayName);
+            Trace.LogDebug("AcquireForPlayback: '{Name}' acquired liveMonitoring={Live}", _definition.DisplayName, liveMonitoring);
             return _output;
         }
+    }
+
+    /// <summary>
+    /// Reopens the stream with a live-monitoring ring when an older session opened a multi-second buffer.
+    /// </summary>
+    private void EnsureLiveSizedOutputLocked()
+    {
+        if (_output is null)
+            return;
+
+        var liveCap = PortAudioLiveMonitoring.RingCapacityFrames(_definition.SampleRate);
+        if (_output.CapacitySamples <= liveCap * 2)
+            return;
+
+        Trace.LogInformation(
+            "EnsureLiveSizedOutput: '{Name}' reopening stream (capacity={Cap} liveCap={LiveCap})",
+            _definition.DisplayName, _output.CapacitySamples, liveCap);
+
+        try { _output.Stop(); }
+        catch (Exception ex) { Trace.LogWarning(ex, "EnsureLiveSizedOutput Stop"); }
+
+        try { _output.Dispose(); }
+        catch (Exception ex) { Trace.LogWarning(ex, "EnsureLiveSizedOutput Dispose"); }
+
+        var output = CreateOutput();
+        output.Start();
+        _output = output;
+    }
+
+    private PortAudioOutput CreateOutput()
+    {
+        var output = new PortAudioOutput(
+            Format,
+            _definition.GlobalDeviceIndex,
+            suggestedLatency: null,
+            framesPerBuffer: 480,
+            ringCapacityFrames: PortAudioLiveMonitoring.RingCapacityFrames(_definition.SampleRate));
+        output.TargetQueueSamples = PortAudioLiveMonitoring.TargetQueueSamples(_definition.SampleRate);
+        return output;
     }
 
     /// <summary>
@@ -171,12 +214,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
 
             try
             {
-                newOutput = new PortAudioOutput(
-                    new AudioFormat(newDefinition.SampleRate, newDefinition.ChannelCount),
-                    newDefinition.GlobalDeviceIndex,
-                    suggestedLatency: null,
-                    framesPerBuffer: 480,
-                    ringCapacityFrames: newDefinition.SampleRate);
+                newOutput = CreateOutput();
                 newOutput.Start();
             }
             catch

@@ -2,6 +2,7 @@ using Avalonia;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
+using HaPlay.Resources;
 
 namespace HaPlay.ViewModels;
 
@@ -71,7 +72,9 @@ public partial class OutputLineViewModel : ViewModelBase
             if (Definition is not LocalVideoOutputDefinition { CloneOfId: { } parentId } || _host is null)
                 return null;
             var parent = _host.Outputs.FirstOrDefault(o => o.Definition.Id == parentId);
-            return parent is null ? "(parent missing)" : $"clone of {parent.Definition.DisplayName}";
+            return parent is null
+                ? Strings.CloneParentMissingLabel
+                : Strings.Format(nameof(Strings.CloneOfDisplayNameFormat), parent.Definition.DisplayName);
         }
     }
 
@@ -178,10 +181,10 @@ public partial class OutputLineViewModel : ViewModelBase
 
     public string HealthToolTip => Health switch
     {
-        OutputLineHealthState.Healthy => HealthDetail ?? "Output healthy",
-        OutputLineHealthState.Warning => HealthDetail ?? "Elevated drops or queue pressure",
-        OutputLineHealthState.Error => HealthDetail ?? "Sustained frame/chunk drops",
-        _ => HealthDetail ?? "Idle — no active playback on this line",
+        OutputLineHealthState.Healthy => HealthDetail ?? Strings.OutputHealthyTooltip,
+        OutputLineHealthState.Warning => HealthDetail ?? Strings.OutputWarningTooltip,
+        OutputLineHealthState.Error => HealthDetail ?? Strings.OutputErrorTooltip,
+        _ => HealthDetail ?? Strings.OutputIdleTooltip,
     };
 
     partial void OnHealthChanged(OutputLineHealthState value)
@@ -192,7 +195,7 @@ public partial class OutputLineViewModel : ViewModelBase
 
     partial void OnHealthDetailChanged(string? value) => OnPropertyChanged(nameof(HealthToolTip));
 
-    public string NdiRecordingButtonText => IsNdiRecording ? "Stop Rec" : "Record";
+    public string NdiRecordingButtonText => IsNdiRecording ? Strings.StopRecButton : Strings.RecordButton;
 
     partial void OnIsNdiRecordingChanged(bool value)
     {
@@ -212,38 +215,42 @@ public partial class OutputLineViewModel : ViewModelBase
     /// <see cref="KindTechnicalLabel"/> and surface as a tooltip / subtitle in the Outputs view.</summary>
     public string KindLabel => Definition.Kind switch
     {
-        ManagedOutputKind.PortAudio => "Local audio",
-        ManagedOutputKind.NDI => "NDI program",
-        ManagedOutputKind.SdlOpenGlVideo => "Standalone window",
-        ManagedOutputKind.AvaloniaOpenGlVideo => "In-app preview",
+        ManagedOutputKind.PortAudio => Strings.OutputKindLocalAudioLabel,
+        ManagedOutputKind.NDI => Strings.OutputKindNdiProgramLabel,
+        ManagedOutputKind.SdlOpenGlVideo => Strings.EngineStandaloneWindowLabel,
+        ManagedOutputKind.AvaloniaOpenGlVideo => Strings.EngineInAppPreviewLabel,
         _ => Definition.Kind.ToString(),
     };
 
     public string KindTechnicalLabel => Definition.Kind switch
     {
-        ManagedOutputKind.PortAudio => "PortAudio",
-        ManagedOutputKind.NDI => "NDI",
-        ManagedOutputKind.SdlOpenGlVideo => "SDL3 OpenGL",
-        ManagedOutputKind.AvaloniaOpenGlVideo => "Avalonia OpenGL",
+        ManagedOutputKind.PortAudio => Strings.OutputKindTechnicalPortAudio,
+        ManagedOutputKind.NDI => Strings.OutputKindTechnicalNdi,
+        ManagedOutputKind.SdlOpenGlVideo => Strings.OutputKindTechnicalSdlOpenGl,
+        ManagedOutputKind.AvaloniaOpenGlVideo => Strings.OutputKindTechnicalAvaloniaOpenGl,
         _ => Definition.Kind.ToString(),
     };
 
     public string Summary => Definition switch
-    {
+        {
         PortAudioOutputDefinition p =>
-            $"{p.DeviceName} · {p.ChannelCount} ch @ {p.SampleRate} Hz · API {p.HostApiName}",
+            Strings.Format(nameof(Strings.OutputSummaryPortAudioFormat), p.DeviceName, p.ChannelCount, p.SampleRate, p.HostApiName),
         LocalVideoOutputDefinition v =>
-            $"{v.Engine} · {(v.SurfaceMode == VideoSurfaceMode.FullScreen ? "Fullscreen" : "Window")} · screen {v.ScreenIndex}"
+            Strings.Format(
+                nameof(Strings.OutputSummaryLocalVideoBaseFormat),
+                v.Engine,
+                v.SurfaceMode == VideoSurfaceMode.FullScreen ? Strings.FullscreenLabel : Strings.WindowLabel,
+                v.ScreenIndex)
             + (v.SurfaceMode == VideoSurfaceMode.Windowed && v.WindowWidth is { } w && v.WindowHeight is { } h
-                ? $" · {w}×{h}"
+                ? Strings.Format(nameof(Strings.OutputSummaryWindowSizeFormat), w, h)
                 : ""),
         NDIOutputDefinition n => n.StreamMode switch
         {
-            NDIOutputStreamMode.VideoOnly => $"“{n.SourceName}” · video only",
+            NDIOutputStreamMode.VideoOnly => Strings.Format(nameof(Strings.OutputSummaryNdiVideoOnlyFormat), n.SourceName),
             NDIOutputStreamMode.AudioOnly =>
-                $"“{n.SourceName}” · audio only · {n.AudioChannelCount} ch @ {n.AudioSampleRate} Hz",
+                Strings.Format(nameof(Strings.OutputSummaryNdiAudioOnlyFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
             _ =>
-                $"“{n.SourceName}” · video+audio · NDI audio {n.AudioChannelCount} ch @ {n.AudioSampleRate} Hz",
+                Strings.Format(nameof(Strings.OutputSummaryNdiVideoAudioFormat), n.SourceName, n.AudioChannelCount, n.AudioSampleRate),
         },
         _ => Definition.DisplayName,
     };

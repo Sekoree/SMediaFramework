@@ -45,6 +45,37 @@ public sealed record MediaPlayerConfig
 
     public int TransitionDurationMs { get; init; } = 500;
 
+    /// <summary>§4.3.5 — Custom preset width in pixels (only honored when <see cref="OutputPreset"/>
+    /// is <see cref="PlayerOutputPreset.Custom"/>). Defaults to 1920 so an empty config produces a
+    /// sensible Custom raster instead of zero.</summary>
+    public int CustomOutputWidth { get; init; } = 1920;
+
+    /// <summary>§4.3.5 — Custom preset height in pixels (only honored when <see cref="OutputPreset"/>
+    /// is <see cref="PlayerOutputPreset.Custom"/>). Defaults to 1080.</summary>
+    public int CustomOutputHeight { get; init; } = 1080;
+
+    /// <summary>
+    /// §8.2 — enable per-player headphones cue send. The selected cue output line receives this player's
+    /// audio with independent pre/post-fader behavior and cue-send gain.
+    /// </summary>
+    public bool HeadphonesCueEnabled { get; init; }
+
+    /// <summary>Selected PortAudio output definition id for §8.2 cue-send routing. Ignored when
+    /// <see cref="HeadphonesCueSharedBusId"/> is set (the bus's PA output wins).</summary>
+    public Guid? HeadphonesCueOutputId { get; init; }
+
+    /// <summary>§8.2 cross-player follow-up — when non-null, the player's cue send is routed via the
+    /// shared bus (<see cref="SharedHeadphonesBus.Id"/>) instead of the dedicated
+    /// <see cref="HeadphonesCueOutputId"/>. Multiple players targeting the same bus share the same
+    /// PortAudio output line.</summary>
+    public Guid? HeadphonesCueSharedBusId { get; init; }
+
+    /// <summary>§8.2 cue tap point: pre-fader or post-fader.</summary>
+    public HeadphonesCueTapPoint HeadphonesCueTapPoint { get; init; } = HeadphonesCueTapPoint.PreFader;
+
+    /// <summary>§8.2 additional cue-send gain in dB, applied on top of the selected output's gain.</summary>
+    public double HeadphonesCueGainDb { get; init; }
+
     /// <summary>Display names of output lines that were checked for this player when the config was saved.</summary>
     public List<string> SelectedOutputDisplayNames { get; init; } = new();
 
@@ -144,6 +175,12 @@ public enum PlayerTransitionMode
     Cut,
     Fade,
     IdleImage,
+}
+
+public enum HeadphonesCueTapPoint
+{
+    PreFader,
+    PostFader,
 }
 
 [JsonSourceGenerationOptions(

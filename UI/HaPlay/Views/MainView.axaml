@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:models="using:HaPlay.Models"
+             xmlns:res="using:HaPlay.Resources"
              xmlns:views="using:HaPlay.Views"
              mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
              x:Class="HaPlay.Views.MainView"
@@ -50,14 +51,14 @@
 
   <DockPanel>
     <Menu DockPanel.Dock="Top">
-      <MenuItem Header="_File">
-        <MenuItem Header="_New Project" Command="{Binding NewProjectCommand}" InputGesture="Ctrl+N" />
-        <MenuItem Header="_Open Project…" Command="{Binding OpenProjectCommand}" InputGesture="Ctrl+O" />
+      <MenuItem Header="{x:Static res:Strings.MenuFileHeader}">
+        <MenuItem Header="{x:Static res:Strings.MenuNewProjectHeader}" Command="{Binding NewProjectCommand}" InputGesture="Ctrl+N" />
+        <MenuItem Header="{x:Static res:Strings.MenuOpenProjectHeader}" Command="{Binding OpenProjectCommand}" InputGesture="Ctrl+O" />
         <Separator />
-        <MenuItem Header="_Save Project" Command="{Binding SaveProjectCommand}" InputGesture="Ctrl+S" />
-        <MenuItem Header="Save Project _As…" Command="{Binding SaveProjectAsCommand}" InputGesture="Ctrl+Shift+S" />
+        <MenuItem Header="{x:Static res:Strings.MenuSaveProjectHeader}" Command="{Binding SaveProjectCommand}" InputGesture="Ctrl+S" />
+        <MenuItem Header="{x:Static res:Strings.MenuSaveProjectAsHeader}" Command="{Binding SaveProjectAsCommand}" InputGesture="Ctrl+Shift+S" />
         <Separator />
-        <MenuItem Header="_Recent Projects" ItemsSource="{Binding RecentProjects}">
+        <MenuItem Header="{x:Static res:Strings.MenuRecentProjectsHeader}" ItemsSource="{Binding RecentProjects}">
           <MenuItem.ItemTemplate>
             <DataTemplate>
               <TextBlock Text="{Binding}" />
@@ -71,9 +72,9 @@
           </MenuItem.Styles>
         </MenuItem>
       </MenuItem>
-      <MenuItem Header="_View">
-        <MenuItem Header="_Toggle Sidebar" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
-        <MenuItem Header="_Target Configuration…" Command="{Binding OpenTargetConfigurationCommand}" />
+      <MenuItem Header="{x:Static res:Strings.MenuViewHeader}">
+        <MenuItem Header="{x:Static res:Strings.MenuToggleSidebarHeader}" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
+        <MenuItem Header="{x:Static res:Strings.MenuTargetConfigurationHeader}" Command="{Binding OpenTargetConfigurationCommand}" />
       </MenuItem>
     </Menu>
 
@@ -91,8 +92,8 @@
         <Button DockPanel.Dock="Top"
                 Classes="sidebar"
                 Command="{Binding ToggleSidebarCommand}"
-                ToolTip.Tip="Toggle sidebar (Ctrl+B)">
-          <TextBlock Text="☰" Classes="sidebar-glyph" />
+                ToolTip.Tip="{x:Static res:Strings.TooltipToggleSidebar}">
+          <TextBlock Text="{x:Static res:Strings.SidebarToggleGlyph}" Classes="sidebar-glyph" />
         </Button>
 
         <ItemsControl ItemsSource="{Binding Workspaces}">
@@ -135,12 +136,12 @@
           <TextBlock Grid.Column="0" VerticalAlignment="Center"
                      IsVisible="{Binding !IsPlayersTabsLayout}"
                      Opacity="0.75"
-                     Text="All players visible — use the layout combo to switch back to tabs." />
+                     Text="{x:Static res:Strings.PlayersAllVisibleHint}" />
           <ComboBox Grid.Column="1" Margin="6,0,0,0" Width="120"
                     ItemsSource="{Binding PlayersLayoutChoices}"
                     SelectedItem="{Binding PlayersLayout}"
-                    ToolTip.Tip="Tabs: one player at a time. Stacked: scroll through all players vertically. Split: tile players side-by-side." />
-          <Button Grid.Column="2" Content="+ Add player"
+                    ToolTip.Tip="{x:Static res:Strings.PlayersLayoutTooltip}" />
+          <Button Grid.Column="2" Content="{x:Static res:Strings.AddPlayerButton}"
                   Command="{Binding AddPlayerCommand}"
                   VerticalAlignment="Center" Margin="6,0,0,0" />
         </Grid>
@@ -150,7 +151,7 @@
              materialize a second MediaPlayerView for the selected player. -->
         <Border x:Name="PlayersQuickPlayHost"
                 IsVisible="{Binding IsPlayersTabsLayout}"
-                ToolTip.Tip="Drop media files here to play immediately (quick-play)">
+                ToolTip.Tip="{x:Static res:Strings.QuickPlayDropTooltip}">
           <ContentControl Content="{Binding TabsLayoutContent}" />
         </Border>
 
@@ -205,22 +206,22 @@
 
       <DockPanel Margin="16" IsVisible="{Binding IsProjectWorkspaceSelected}">
         <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
-          <TextBlock Text="Project" FontSize="22" FontWeight="SemiBold" />
+          <TextBlock Text="{x:Static res:Strings.ProjectHeader}" FontSize="22" FontWeight="SemiBold" />
           <TextBlock Text="{Binding ProjectTitle}" Opacity="0.85" />
-          <TextBlock Text="{Binding CurrentProjectPath, FallbackValue='(Unsaved — choose Save Project As… to write to disk)'}"
+          <TextBlock Text="{Binding CurrentProjectPath, FallbackValue={x:Static res:Strings.ProjectPathFallback}}"
                      Opacity="0.65" FontSize="12" TextWrapping="Wrap" />
         </StackPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,12">
-          <Button Content="New" Command="{Binding NewProjectCommand}" />
-          <Button Content="Open…" Command="{Binding OpenProjectCommand}" />
-          <Button Content="Save" Command="{Binding SaveProjectCommand}" />
-          <Button Content="Save As…" Command="{Binding SaveProjectAsCommand}" />
+          <Button Content="{x:Static res:Strings.NewButton}" Command="{Binding NewProjectCommand}" />
+          <Button Content="{x:Static res:Strings.OpenButton}" Command="{Binding OpenProjectCommand}" />
+          <Button Content="{x:Static res:Strings.SaveButton}" Command="{Binding SaveProjectCommand}" />
+          <Button Content="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveProjectAsCommand}" />
         </StackPanel>
         <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,12">
           <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="Recent projects" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.RecentProjectsSectionHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
             <TextBlock DockPanel.Dock="Top"
-                       Text="(None yet — recent projects appear after the first Save or Open.)"
+                       Text="{x:Static res:Strings.RecentProjectsEmptyHint}"
                        Opacity="0.55" FontSize="12"
                        IsVisible="{Binding RecentProjects.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
             <ItemsControl ItemsSource="{Binding RecentProjects}">
@@ -240,16 +241,16 @@
         <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
         <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
           <StackPanel Spacing="6">
-            <TextBlock Text="Display" FontWeight="SemiBold" />
+            <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
             <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
-                       Text="Theme and density apply to this machine and persist in app-settings.json — they are not saved in the project." />
+                       Text="{x:Static res:Strings.DisplaySettingsHint}" />
             <Grid ColumnDefinitions="120,*,16,120,*" RowDefinitions="Auto" Margin="0,4,0,0">
-              <TextBlock Grid.Column="0" Text="Theme" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ThemeLabel}" VerticalAlignment="Center" />
               <ComboBox Grid.Column="1"
                         ItemsSource="{Binding ThemeChoices}"
                         SelectedItem="{Binding Theme}"
                         HorizontalAlignment="Stretch" />
-              <TextBlock Grid.Column="3" Text="Density" VerticalAlignment="Center" />
+              <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
               <ComboBox Grid.Column="4"
                         ItemsSource="{Binding DensityChoices}"
                         SelectedItem="{Binding Density}"

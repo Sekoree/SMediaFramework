@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 using S.Media.PortAudio;
 
 namespace HaPlay.ViewModels.Dialogs;
@@ -16,7 +17,7 @@ public partial class AddPortAudioInputDialogViewModel : ViewModelBase
     private Guid? _existingId;
     private PlaylistItem? _existingItem;
 
-    [ObservableProperty] private string _displayName = "Microphone";
+    [ObservableProperty] private string _displayName = Strings.MicrophoneDefaultName;
     [ObservableProperty] private string? _validationMessage;
 
     public ObservableCollection<PortAudioHostApiEntry> HostApis { get; } = new();
@@ -28,8 +29,8 @@ public partial class AddPortAudioInputDialogViewModel : ViewModelBase
     [ObservableProperty] private int _sampleRate = 48000;
 
     public bool IsEditing => _existingId is not null;
-    public string DialogTitle => IsEditing ? "Edit PortAudio input" : "Add PortAudio input";
-    public string PrimaryButtonLabel => IsEditing ? "Save" : "Add";
+    public string DialogTitle => IsEditing ? Strings.EditPortAudioInputDialogTitle : Strings.AddPortAudioInputDialogTitle;
+    public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
     public void ReloadHostApis()
     {
@@ -101,27 +102,29 @@ public partial class AddPortAudioInputDialogViewModel : ViewModelBase
         ValidationMessage = null;
         if (string.IsNullOrWhiteSpace(DisplayName))
         {
-            ValidationMessage = "Display name is required.";
+            ValidationMessage = Strings.ValidationDisplayNameRequired;
             return null;
         }
 
         if (SelectedHostApi is null || SelectedDevice is null)
         {
-            ValidationMessage = "Select a host API and input device.";
+            ValidationMessage = Strings.ValidationSelectHostApiAndInputDevice;
             return null;
         }
 
         var dev = SelectedDevice.Value;
         if (ChannelCount < 1 || ChannelCount > dev.MaxInputChannels)
         {
-            ValidationMessage =
-                $"Channel count must be between 1 and {dev.MaxInputChannels} for this device.";
+            ValidationMessage = string.Format(
+                System.Globalization.CultureInfo.CurrentUICulture,
+                Strings.ValidationChannelCountRangeForDevice,
+                dev.MaxInputChannels);
             return null;
         }
 
         if (SampleRate is < 8000 or > 192_000)
         {
-            ValidationMessage = "Sample rate looks invalid (expected roughly 8 kHz–192 kHz).";
+            ValidationMessage = Strings.ValidationSampleRateInvalid;
             return null;
         }
 

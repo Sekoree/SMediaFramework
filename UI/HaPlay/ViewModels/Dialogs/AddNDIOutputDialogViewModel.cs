@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 using S.Media.Core.Video;
 
 namespace HaPlay.ViewModels.Dialogs;
@@ -21,8 +22,8 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
     /// (W, H) pairs receivers will see regardless of source dimensions.</summary>
     public NDIResolutionChoice[] ResolutionChoices { get; } = NDIResolutionChoice.All;
 
-    [ObservableProperty] private string _displayName = "NDI program";
-    [ObservableProperty] private string _sourceName = "HaPlay Output";
+    [ObservableProperty] private string _displayName = Strings.NdiProgramDefaultName;
+    [ObservableProperty] private string _sourceName = Strings.NdiOutputDefaultSourceName;
     [ObservableProperty] private string? _groups;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowAudioSettings))]
@@ -41,8 +42,8 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
     [ObservableProperty] private string? _validationMessage;
 
     public bool IsEditing => _existingId is not null;
-    public string DialogTitle => IsEditing ? "Edit NDI output" : "Add NDI output";
-    public string PrimaryButtonLabel => IsEditing ? "Save" : "Add";
+    public string DialogTitle => IsEditing ? Strings.EditNdiOutputDialogTitle : Strings.AddNdiOutputDialogTitle;
+    public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
     public void LoadFromExisting(NDIOutputDefinition existing)
     {
@@ -70,13 +71,13 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
         ValidationMessage = null;
         if (string.IsNullOrWhiteSpace(DisplayName))
         {
-            ValidationMessage = "Display name is required.";
+            ValidationMessage = Strings.ValidationDisplayNameRequired;
             return null;
         }
 
         if (string.IsNullOrWhiteSpace(SourceName))
         {
-            ValidationMessage = "NDI source name is required.";
+            ValidationMessage = Strings.ValidationNdiSourceNameRequired;
             return null;
         }
 
@@ -84,13 +85,13 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
         {
             if (AudioChannelCount < 1 || AudioChannelCount > 64)
             {
-                ValidationMessage = "NDI audio channel count must be between 1 and 64.";
+                ValidationMessage = Strings.ValidationNdiAudioChannelCountInvalid;
                 return null;
             }
 
             if (AudioSampleRate is < 8000 or > 192_000)
             {
-                ValidationMessage = "Audio sample rate looks invalid.";
+                ValidationMessage = Strings.ValidationAudioSampleRateInvalid;
                 return null;
             }
         }
@@ -116,16 +117,16 @@ public sealed record NDIPixelFormatChoice(string Label, PixelFormat? PixelFormat
 {
     public override string ToString() => Label;
 
-    public static readonly NDIPixelFormatChoice Auto = new("Auto (match source)", null);
+    public static readonly NDIPixelFormatChoice Auto = new(Strings.NdiPixelFormatAutoLabel, null);
 
     public static readonly NDIPixelFormatChoice[] All =
     [
         Auto,
-        new("UYVY (4:2:2 packed)", S.Media.Core.Video.PixelFormat.Uyvy),
-        new("BGRA32 (8-bit RGBA)", S.Media.Core.Video.PixelFormat.Bgra32),
-        new("RGBA32 (8-bit RGBA)", S.Media.Core.Video.PixelFormat.Rgba32),
-        new("NV12 (4:2:0 semi-planar)", S.Media.Core.Video.PixelFormat.Nv12),
-        new("I420 (4:2:0 planar)", S.Media.Core.Video.PixelFormat.I420),
+        new(Strings.NdiPixelFormatUyvyLabel, S.Media.Core.Video.PixelFormat.Uyvy),
+        new(Strings.NdiPixelFormatBgraLabel, S.Media.Core.Video.PixelFormat.Bgra32),
+        new(Strings.NdiPixelFormatRgbaLabel, S.Media.Core.Video.PixelFormat.Rgba32),
+        new(Strings.NdiPixelFormatNv12Label, S.Media.Core.Video.PixelFormat.Nv12),
+        new(Strings.NdiPixelFormatI420Label, S.Media.Core.Video.PixelFormat.I420),
     ];
 
     public static NDIPixelFormatChoice? FromPixelFormat(PixelFormat pf)
@@ -144,15 +145,15 @@ public sealed record NDIResolutionChoice(string Label, int? Width, int? Height)
 {
     public override string ToString() => Label;
 
-    public static readonly NDIResolutionChoice Auto = new("Auto (match source)", null, null);
+    public static readonly NDIResolutionChoice Auto = new(Strings.NdiResolutionAutoLabel, null, null);
 
     public static readonly NDIResolutionChoice[] All =
     [
         Auto,
-        new("1920 × 1080 (1080p)", 1920, 1080),
-        new("1280 × 720 (720p)", 1280, 720),
-        new("3840 × 2160 (2160p / 4K)", 3840, 2160),
-        new("1024 × 576 (576p widescreen)", 1024, 576),
+        new(Strings.NdiResolution1080Label, 1920, 1080),
+        new(Strings.NdiResolution720Label, 1280, 720),
+        new(Strings.NdiResolution4kLabel, 3840, 2160),
+        new(Strings.NdiResolution576Label, 1024, 576),
     ];
 
     public static NDIResolutionChoice FromLock(int? width, int? height)
@@ -162,6 +163,9 @@ public sealed record NDIResolutionChoice(string Label, int? Width, int? Height)
             if (c.Width == width && c.Height == height)
                 return c;
         // Unknown saved lock — surface as a one-off label so the user sees the values without losing them.
-        return new NDIResolutionChoice($"{width} × {height}", width, height);
+        return new NDIResolutionChoice(
+            string.Format(System.Globalization.CultureInfo.CurrentUICulture, Strings.NdiResolutionCustomLabel, width, height),
+            width,
+            height);
     }
 }

@@ -112,6 +112,40 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void EditingVirtualOutputChannel_Duplicate_AutoResolvesToNextFree()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddVirtualOutputCommand.Execute(null); // default channels are 1,2 -> add 3
+        var third = vm.VisibleVirtualOutputs[2];
+
+        third.Channel = 1; // duplicate with existing VOut 1
+
+        Assert.Equal(3, third.Channel);
+        Assert.Equal(new[] { 1, 2, 3 }, vm.VisibleVirtualOutputs.Select(v => v.Channel).OrderBy(v => v));
+    }
+
+    [Fact]
+    public void ApplyCueLists_DuplicateVirtualOutputs_NormalizesToUniqueChannels()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists(
+        [
+            new CueList
+            {
+                Name = "Dupes",
+                VirtualOutputs =
+                [
+                    new CueVirtualOutputChannel { Channel = 1, Label = "A" },
+                    new CueVirtualOutputChannel { Channel = 1, Label = "B" },
+                    new CueVirtualOutputChannel { Channel = 1, Label = "C" },
+                ],
+            },
+        ]);
+
+        Assert.Equal(new[] { 1, 2, 3 }, vm.VisibleVirtualOutputs.Select(v => v.Channel).OrderBy(v => v));
+    }
+
+    [Fact]
     public void GoAdvancesFromStandbyToNextCue()
     {
         var vm = new CuePlayerViewModel();
@@ -159,6 +193,61 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public async Task Go_AutoContinueDelay_IsDeferredWhilePaused()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddActionCueCommand.Execute(null);
+        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        first.Label = "First";
+
+        vm.AddActionCueCommand.Execute(null);
+        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        second.Label = "Second";
+        second.TriggerMode = CueTriggerMode.AutoContinue;
+        second.PreWaitMs = 200;
+
+        var hits = new List<string>();
+        vm.ActionCueExecutor = (cue, _) =>
+        {
+            lock (hits)
+                hits.Add(cue.Label);
+            return Task.FromResult<string?>("ok");
+        };
+
+        vm.SelectedCueNode = first;
+        vm.StandbySelectedCommand.Execute(null);
+        vm.GoCommand.Execute(null);
+
+        await WaitUntilAsync(() =>
+        {
+            lock (hits)
+                return hits.Count >= 1;
+        }, timeoutMs: 500);
+
+        lock (hits)
+            Assert.Equal(new[] { "First" }, hits);
+
+        vm.PauseCommand.Execute(null);
+        Assert.True(vm.IsTransportPaused);
+
+        await Task.Delay(320);
+        lock (hits)
+            Assert.Single(hits);
+
+        vm.PauseCommand.Execute(null);
+        Assert.False(vm.IsTransportPaused);
+
+        await WaitUntilAsync(() =>
+        {
+            lock (hits)
+                return hits.Count >= 2;
+        }, timeoutMs: 600);
+
+        lock (hits)
+            Assert.Equal(new[] { "First", "Second" }, hits);
+    }
+
+    [Fact]
     public async Task Go_InvokesMediaCueExecutor()
     {
         var vm = new CuePlayerViewModel();
@@ -179,6 +268,17 @@ public sealed class CuePlayerViewModelTests
         await Task.Delay(20);
 
         Assert.Equal(1, callCount);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, int timeoutMs)
+    {
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+                throw new TimeoutException($"Condition not met within {timeoutMs} ms.");
+            await Task.Delay(20);
+        }
     }
 
     [Fact]

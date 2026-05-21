@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Platform;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 
 namespace HaPlay.ViewModels.Dialogs;
 
@@ -14,7 +15,7 @@ public sealed class ScreenListItem
 public sealed class CloneParentChoice
 {
     /// <summary>The "None — not a clone" sentinel. Its <see cref="Definition"/> is null.</summary>
-    public static readonly CloneParentChoice None = new(null, "None — independent output");
+    public static readonly CloneParentChoice None = new(null, Strings.NoneIndependentOutputLabel);
 
     public CloneParentChoice(LocalVideoOutputDefinition? definition, string label)
     {
@@ -35,13 +36,13 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
     /// <summary>User-visible engine choices (§12.3). Subtitle exposes the technical name for power users.</summary>
     public VideoEngineChoice[] Engines { get; } =
     [
-        new(VideoOutputEngine.AvaloniaOpenGl, "In-app preview", "Avalonia — paints on the UI thread, lives inside the app shell"),
-        new(VideoOutputEngine.SdlOpenGl, "Standalone window", "SDL3 — own thread, dedicated fullscreen-capable window"),
+        new(VideoOutputEngine.AvaloniaOpenGl, Strings.EngineInAppPreviewLabel, Strings.EngineInAppPreviewSubtitle),
+        new(VideoOutputEngine.SdlOpenGl, Strings.EngineStandaloneWindowLabel, Strings.EngineStandaloneWindowSubtitle),
     ];
 
     public VideoSurfaceMode[] SurfaceModes { get; } = Enum.GetValues<VideoSurfaceMode>();
 
-    [ObservableProperty] private string _displayName = "Program output";
+    [ObservableProperty] private string _displayName = Strings.ProgramOutputDefaultName;
     [ObservableProperty] private string? _validationMessage;
 
     public ObservableCollection<ScreenListItem> Screens { get; } = new();
@@ -52,8 +53,8 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Engine))]
     private VideoEngineChoice _selectedEngine = new(
-        VideoOutputEngine.SdlOpenGl, "Standalone window",
-        "SDL3 — own thread, dedicated fullscreen-capable window");
+        VideoOutputEngine.SdlOpenGl, Strings.EngineStandaloneWindowLabel,
+        Strings.EngineStandaloneWindowSubtitle);
 
     /// <summary>Convenience accessor for the legacy enum field; bound from <see cref="SelectedEngine"/>.</summary>
     public VideoOutputEngine Engine => SelectedEngine.Value;
@@ -75,9 +76,9 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
     public bool IsEditing => _existingId is not null;
     public bool EngineLockedByEdit => IsEditing;
 
-    public string DialogTitle => IsEditing ? "Edit local video output" : "Add local video output";
+    public string DialogTitle => IsEditing ? Strings.EditLocalVideoOutputDialogTitle : Strings.AddLocalVideoOutputDialogTitle;
 
-    public string PrimaryButtonLabel => IsEditing ? "Save" : "Add";
+    public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
     public void InitializeScreens(IReadOnlyList<Screen> screens)
     {
@@ -140,13 +141,13 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
         ValidationMessage = null;
         if (string.IsNullOrWhiteSpace(DisplayName))
         {
-            ValidationMessage = "Display name is required.";
+            ValidationMessage = Strings.ValidationDisplayNameRequired;
             return null;
         }
 
         if (SelectedScreen is null)
         {
-            ValidationMessage = "Select a display.";
+            ValidationMessage = Strings.ValidationSelectDisplay;
             return null;
         }
 
@@ -154,7 +155,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
         {
             if (WindowWidth < 320 || WindowHeight < 240)
             {
-                ValidationMessage = "Windowed mode needs a reasonable width and height (at least about 320×240).";
+                ValidationMessage = Strings.ValidationWindowedSizeInvalid;
                 return null;
             }
         }

@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 
 namespace HaPlay.ViewModels;
 
@@ -31,10 +32,10 @@ public sealed partial class ActionEndpointRowViewModel : ObservableObject
 
     public string HealthToolTip => Health switch
     {
-        ActionEndpointHealthState.Ok => HealthDetail ?? "Reachable",
-        ActionEndpointHealthState.Failed => HealthDetail ?? "Unreachable",
-        ActionEndpointHealthState.Checking => "Checking…",
-        _ => "Not checked yet",
+        ActionEndpointHealthState.Ok => HealthDetail ?? Strings.EndpointReachableTooltip,
+        ActionEndpointHealthState.Failed => HealthDetail ?? Strings.EndpointUnreachableTooltip,
+        ActionEndpointHealthState.Checking => Strings.EndpointCheckingTooltip,
+        _ => Strings.EndpointNotCheckedTooltip,
     };
 
     public void ReplaceEndpoint(ActionEndpoint endpoint) => Endpoint = endpoint;

@@ -12,6 +12,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Playback;
+using HaPlay.Resources;
 using S.Media.Core.Audio;
 using S.Media.NDI.Audio;
 using S.Media.PortAudio;
@@ -61,6 +62,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     private CueEndBehavior _activeCueEndBehavior = CueEndBehavior.Stop;
+    private bool _syncingHeadphonesCueOutputSelection;
 
     public void InvalidateCuePreRoll()
     {
@@ -70,11 +72,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     public HaPlayFilePlaybackOptions CurrentFilePlaybackOptions() =>
-        new(OutputPreset, TransitionMode, TransitionDurationMs);
+        new(OutputPreset, TransitionMode, TransitionDurationMs,
+            CueFadeInMs: 0, CueFadeOutMs: 0,
+            CustomOutputWidth: CustomOutputWidth, CustomOutputHeight: CustomOutputHeight);
 
     public HaPlayFilePlaybackOptions FilePlaybackOptionsForCue(MediaCueNode cue) =>
         new(OutputPreset, TransitionMode, TransitionDurationMs,
-            Math.Max(0, cue.FadeInMs), Math.Max(0, cue.FadeOutMs));
+            Math.Max(0, cue.FadeInMs), Math.Max(0, cue.FadeOutMs),
+            CustomOutputWidth, CustomOutputHeight);
 
     public void CancelCueEnvelope()
     {
@@ -95,6 +100,47 @@ public partial class MediaPlayerViewModel : ViewModelBase
             return;
         _cueEnvelopeCts = new CancellationTokenSource();
         _ = RunCueEnvelopeAsync(cue, _cueEnvelopeCts.Token);
+    }
+
+    /// <summary>§4.3.5 — Symmetric audio ramp for the player's transition Fade. Mirrors the
+    /// <see cref="FadeFromBlackVideoSource"/> on the video side so audio doesn't cut when the user
+    /// chose Fade with non-zero duration. No-op when a cue envelope is already running, when the
+    /// transition mode isn't Fade, or when duration is zero.</summary>
+    public void BeginTransitionAudioFadeIn(int durationMs)
+    {
+        if (_cueEnvelopeCts is not null)
+            return;
+        if (TransitionMode != PlayerTransitionMode.Fade || durationMs <= 0)
+            return;
+        _cueEnvelopeCts = new CancellationTokenSource();
+        _ = RunTransitionAudioFadeInAsync(durationMs, _cueEnvelopeCts.Token);
+    }
+
+    private async Task RunTransitionAudioFadeInAsync(int durationMs, CancellationToken ct)
+    {
+        try
+        {
+            _cueEnvelope = 0f;
+            await ApplyCueEnvelopeToSessionAsync();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < durationMs)
+            {
+                ct.ThrowIfCancellationRequested();
+                var t = (float)Math.Min(1.0, sw.ElapsedMilliseconds / (double)durationMs);
+                _cueEnvelope = t;
+                await ApplyCueEnvelopeToSessionAsync();
+                await Task.Delay(20, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            /* stop/pause/next item */
+        }
+        finally
+        {
+            _cueEnvelope = 1f;
+            await ApplyCueEnvelopeToSessionAsync();
+        }
     }
 
     private async Task RunCueEnvelopeAsync(MediaCueNode cue, CancellationToken ct)
@@ -245,11 +291,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
 
             var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
+            var liveOpts = CurrentFilePlaybackOptions();
             HaPlayPlaybackSession? created = null;
             string? createErr = null;
             await Task.Run(() =>
             {
-                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, receiver, out created, out createErr))
+                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, receiver, out created, out createErr, liveOpts))
                     created = null;
             }).ConfigureAwait(false);
 
@@ -257,7 +304,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 if (created is null)
                 {
-                    StatusMessage = createErr ?? "Failed to open pre-connected NDI.";
+                    StatusMessage = createErr ?? Strings.FailedToOpenPreconnectedNdi;
                     try { receiver.Dispose(); } catch { /* best effort */ }
                     return;
                 }
@@ -370,11 +417,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
 
             var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
+            var liveOpts = CurrentFilePlaybackOptions();
             HaPlayPlaybackSession? created = null;
             string? createErr = null;
             await Task.Run(() =>
             {
-                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, input, out created, out createErr))
+                if (!HaPlayPlaybackSession.TryCreateLive(item, lines, _outputs, input, out created, out createErr, liveOpts))
                     created = null;
             }).ConfigureAwait(false);
 
@@ -382,7 +430,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 if (created is null)
                 {
-                    StatusMessage = createErr ?? "Failed to open pre-connected PortAudio.";
+                    StatusMessage = createErr ?? Strings.FailedToOpenPreconnectedPortAudio;
                     try { input.Dispose(); } catch { /* best effort */ }
                     return;
                 }
@@ -460,7 +508,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             string? err = null;
             await Task.Run(() =>
             {
-                if (!NdiInputConnector.TryConnectAudio(item, out receiver, out format, out err))
+                if (!NdiInputConnector.TryConnectAudio(item, item.SyncMode, out receiver, out format, out err))
                     receiver = null;
             }, ct).ConfigureAwait(false);
 
@@ -487,7 +535,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             ct.ThrowIfCancellationRequested();
             var fileOpts = new HaPlayFilePlaybackOptions(
-                OutputPreset, TransitionMode, TransitionDurationMs, fadeIn, fadeOut);
+                OutputPreset, TransitionMode, TransitionDurationMs, fadeIn, fadeOut,
+                CustomOutputWidth, CustomOutputHeight);
             var cacheKey = CuePreRollCache.BuildCacheKey(item, lines, fileOpts);
             if (_cuePreRoll.HasMatchingEntry(cueId, cacheKey))
                 continue;
@@ -538,12 +587,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (retrySec > 0)
         {
             _nextRetryAt = DateTime.UtcNow.AddSeconds(retrySec);
-            WaitingForSourceMessage = $"WAITING: {item.DisplayName} — {reason} (retry in {retrySec}s).";
+            WaitingForSourceMessage = Strings.Format(nameof(Strings.WaitingForSourceWithRetryFormat), item.DisplayName, reason, retrySec);
             EnsureLoopTimerStarted();
         }
         else
         {
-            WaitingForSourceMessage = $"WAITING: {item.DisplayName} — {reason}.";
+            WaitingForSourceMessage = Strings.Format(nameof(Strings.WaitingForSourceFormat), item.DisplayName, reason);
         }
         StatusMessage = WaitingForSourceMessage;
     }
@@ -602,8 +651,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private static string OutputChannelSuffix(int outputChannels, int outputChannel) =>
         outputChannels == 2
-            ? $"Out {(outputChannel == 0 ? "L" : "R")}"
-            : $"Out {outputChannel + 1}";
+            ? (outputChannel == 0 ? Strings.ChannelOutLeftLabel : Strings.ChannelOutRightLabel)
+            : Strings.Format(nameof(Strings.ChannelOutNumberFormat), outputChannel + 1);
 
     private AudioMatrixInputTrimViewModel? InputTrim(int inputChannel) =>
         AudioMatrixInputTrims.FirstOrDefault(t => t.InputChannel == inputChannel);
@@ -617,11 +666,52 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private string EffectiveCellGainText(PlayerOutputBinding binding, AudioMatrixCellViewModel cell)
     {
         var (inputTrimDb, inputTrimMuted) = InputTrimValues(cell.InputChannel);
-        if (MasterMuted || binding.IsMuted || cell.Muted || inputTrimMuted)
-            return "-inf dB";
-        var effective = MasterVolumeDb + binding.GainDb + inputTrimDb + cell.GainDb;
-        return $"{effective:0.#} dB";
+        if (cell.Muted || inputTrimMuted)
+            return Strings.NegativeInfinityDbLabel;
+
+        if (!TryGetLineGainDb(binding, out var lineDb))
+            return Strings.NegativeInfinityDbLabel;
+
+        var effective = lineDb + inputTrimDb + cell.GainDb;
+        return Strings.Format(nameof(Strings.DecibelValueFormat), effective);
     }
+
+    private bool IsHeadphonesCueTarget(PlayerOutputBinding binding) =>
+        HeadphonesCueEnabled && SelectedHeadphonesCueOutput == binding.Line;
+
+    private bool TryGetLineGainDb(PlayerOutputBinding binding, out double db)
+    {
+        db = 0.0;
+        if (IsHeadphonesCueTarget(binding))
+        {
+            if (HeadphonesCueTapPoint == HeadphonesCueTapPoint.PreFader)
+            {
+                if (binding.IsMuted)
+                    return false;
+                db = Math.Clamp(binding.GainDb + HeadphonesCueGainDb, -80.0, 24.0);
+                return true;
+            }
+
+            if (MasterMuted || binding.IsMuted)
+                return false;
+            db = Math.Clamp(MasterVolumeDb + binding.GainDb + HeadphonesCueGainDb, -80.0, 24.0);
+            return true;
+        }
+
+        if (MasterMuted || binding.IsMuted)
+            return false;
+        db = Math.Clamp(MasterVolumeDb + binding.GainDb, -80.0, 24.0);
+        return true;
+    }
+
+    private float ToLinearGain(double db, bool includeCueEnvelope)
+    {
+        var linear = (float)Math.Pow(10.0, db / 20.0);
+        return includeCueEnvelope ? linear * _cueEnvelope : linear;
+    }
+
+    private bool ShouldApplyCueEnvelope(PlayerOutputBinding binding) =>
+        !IsHeadphonesCueTarget(binding) || HeadphonesCueTapPoint == HeadphonesCueTapPoint.PostFader;
 
     private async Task WithPlaybackArcAsync(Func<Task> action)
     {
@@ -654,10 +744,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _outputs.OutputLineRemoving += OnOutputLineRemoving;
         _outputs.OutputLineReconfiguringAsync += OnOutputLineReconfiguringAsync;
         _outputs.OutputLineReconfiguredAsync += OnOutputLineReconfiguredAsync;
+        _outputs.SharedHeadphonesBusesChanged += OnSharedHeadphonesBusesChanged;
         _idleSlateSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
         _idleSlateSyncTimer.Tick += (_, _) => SyncIdleSlate();
         _idleSlateSyncTimer.Start();
-        var initialTab = new PlaylistTabViewModel("Set A");
+        var initialTab = new PlaylistTabViewModel(Strings.DefaultPlaylistTabName);
         PlaylistTabs.Add(initialTab);
         SelectedPlaylistTab = initialTab;
         Dispatcher.UIThread.Post(() => SyncIdleSlate(), DispatcherPriority.Loaded);
@@ -709,6 +800,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// to overlapping subsets of outputs (e.g. main → NDI, preview → local SDL).</summary>
     public ObservableCollection<PlayerOutputBinding> Outputs { get; } = new();
 
+    /// <summary>§8.2 — candidate PortAudio lines for the per-player headphones cue send.</summary>
+    public ObservableCollection<OutputLineViewModel> HeadphonesCueOutputs { get; } = new();
+
+    /// <summary>§8.2 cross-player — combobox items: direct PA lines and shared headphones buses
+    /// mixed into one list. <see cref="SelectedHeadphonesCueTarget"/> drives
+    /// <see cref="SelectedHeadphonesCueOutput"/> (the resolved PA line) and is the canonical
+    /// persisted choice.</summary>
+    public ObservableCollection<HeadphonesCueTargetOption> HeadphonesCueTargets { get; } = new();
+
+    public bool HasHeadphonesCueOutputs => HeadphonesCueTargets.Count > 0;
+
     /// <summary>True when no outputs are registered yet — view shows the "click Play to auto-route" hint.</summary>
     public bool HasNoOutputs => Outputs.Count == 0;
 
@@ -719,7 +821,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             var total = Outputs.Count;
             var sel = Outputs.Count(b => b.IsSelected);
-            return total == 0 ? "(no outputs)" : $"{sel} selected of {total}";
+            return total == 0
+                ? Strings.RoutingSummaryNoOutputs
+                : string.Format(
+                    System.Globalization.CultureInfo.CurrentUICulture,
+                    Strings.RoutingSummarySelectedOf,
+                    sel,
+                    total);
         }
     }
 
@@ -729,34 +837,34 @@ public partial class MediaPlayerViewModel : ViewModelBase
         get
         {
             if (!HoldFallbackVideo)
-                return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(off)" : "(off — image set)";
-            return string.IsNullOrWhiteSpace(FallbackImagePath) ? "(on — no image)" : "(on)";
+                return string.IsNullOrWhiteSpace(FallbackImagePath) ? Strings.HoldImageSummaryOff : Strings.HoldImageSummaryOffImageSet;
+            return string.IsNullOrWhiteSpace(FallbackImagePath) ? Strings.HoldImageSummaryOnNoImage : Strings.HoldImageSummaryOn;
         }
     }
 
     /// <summary>Visual label for the Play/Pause toggle.</summary>
-    public string PlayPauseLabel => IsPlaying ? "⏸ Pause" : "▶ Play";
+    public string PlayPauseLabel => IsPlaying ? Strings.PlayPausePlayingLabel : Strings.PlayPausePausedLabel;
 
     /// <summary>One-word kind label for the source-state chip ("Video", "Audio", "Idle").</summary>
     public string SourceKindLabel
     {
         get
         {
-            if (!IsMediaLoaded || _session is null) return "Idle";
+            if (!IsMediaLoaded || _session is null) return Strings.SourceKindIdle;
             // Live items don't carry a container decoder; use negotiated live capabilities.
             if (_session.IsLive)
             {
-                if (_session.LiveHasVideo && _session.LiveHasAudio) return "Live video + audio";
-                if (_session.LiveHasVideo) return "Live video";
-                if (_session.LiveHasAudio) return "Live audio";
-                return "Live";
+                if (_session.LiveHasVideo && _session.LiveHasAudio) return Strings.SourceKindLiveVideoAudio;
+                if (_session.LiveHasVideo) return Strings.SourceKindLiveVideo;
+                if (_session.LiveHasAudio) return Strings.SourceKindLiveAudio;
+                return Strings.SourceKindLive;
             }
             var hasVid = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasVideo;
             var hasAud = _session.Player.HasContainerDecoder && _session.Player.Decoder.HasAudio;
-            if (hasVid && hasAud) return "Video + audio";
-            if (hasVid) return "Video";
-            if (hasAud) return "Audio";
-            return "Empty";
+            if (hasVid && hasAud) return Strings.SourceKindVideoAudio;
+            if (hasVid) return Strings.SourceKindVideo;
+            if (hasAud) return Strings.SourceKindAudio;
+            return Strings.SourceKindEmpty;
         }
     }
 
@@ -775,6 +883,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public IReadOnlyList<PlayerOutputPreset> OutputPresets { get; } = Enum.GetValues<PlayerOutputPreset>();
 
     public IReadOnlyList<PlayerTransitionMode> TransitionModes { get; } = Enum.GetValues<PlayerTransitionMode>();
+
+    public IReadOnlyList<HeadphonesCueTapPoint> HeadphonesCueTapPoints { get; } = Enum.GetValues<HeadphonesCueTapPoint>();
 
     /// <summary>Phase C (§4.3.4) — combobox choices for the per-output channel-mix mode.</summary>
     public IReadOnlyList<AudioRouteMixMode> MixModes { get; } = Enum.GetValues<AudioRouteMixMode>();
@@ -817,7 +927,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public event EventHandler? AudioMatrixLayoutChanged;
 
     [ObservableProperty]
-    private string _name = "Player";
+    private string _name = Strings.PlayerBaseName;
 
     [ObservableProperty]
     private string? _mediaFilePath;
@@ -860,11 +970,27 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private bool _masterMuted;
 
     [ObservableProperty]
+    private bool _headphonesCueEnabled;
+
+    [ObservableProperty]
+    private OutputLineViewModel? _selectedHeadphonesCueOutput;
+
+    [ObservableProperty]
+    private HeadphonesCueTargetOption? _selectedHeadphonesCueTarget;
+
+    [ObservableProperty]
+    private HeadphonesCueTapPoint _headphonesCueTapPoint = HeadphonesCueTapPoint.PreFader;
+
+    [ObservableProperty]
+    private double _headphonesCueGainDb;
+
+    [ObservableProperty]
     private PlayerOutputPreset _outputPreset = PlayerOutputPreset.AsSource;
 
     partial void OnOutputPresetChanged(PlayerOutputPreset value)
     {
         _ = value;
+        OnPropertyChanged(nameof(IsCustomOutputPreset));
         InvalidateCuePreRoll();
     }
 
@@ -885,6 +1011,31 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private int _transitionDurationMs = 500;
+
+    /// <summary>§4.3.5 — Custom preset width in pixels. Only consumed when <see cref="OutputPreset"/>
+    /// is <see cref="PlayerOutputPreset.Custom"/>.</summary>
+    [ObservableProperty]
+    private int _customOutputWidth = 1920;
+
+    /// <summary>§4.3.5 — Custom preset height in pixels.</summary>
+    [ObservableProperty]
+    private int _customOutputHeight = 1080;
+
+    partial void OnCustomOutputWidthChanged(int value)
+    {
+        _ = value;
+        InvalidateCuePreRoll();
+    }
+
+    partial void OnCustomOutputHeightChanged(int value)
+    {
+        _ = value;
+        InvalidateCuePreRoll();
+    }
+
+    /// <summary>True when the player is set to <see cref="PlayerOutputPreset.Custom"/> — drives
+    /// visibility of the custom width/height NumericUpDowns in the view.</summary>
+    public bool IsCustomOutputPreset => OutputPreset == PlayerOutputPreset.Custom;
 
     [ObservableProperty]
     private bool _isMediaLoaded;
@@ -1066,6 +1217,62 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RebuildAudioMatrixRouteRows();
     }
 
+    partial void OnHeadphonesCueEnabledChanged(bool value)
+    {
+        if (value && !TryEnsureHeadphonesCueOutputSelected())
+        {
+            _syncingHeadphonesCueOutputSelection = true;
+            try { HeadphonesCueEnabled = false; }
+            finally { _syncingHeadphonesCueOutputSelection = false; }
+            StatusMessage = Strings.NoPortAudioOutputForHeadphonesCueBus;
+            return;
+        }
+
+        if (value)
+        {
+            _ = TryEnsureHeadphonesCueOutputSelected();
+            if (SelectedHeadphonesCueOutput is { } line)
+            {
+                var binding = Outputs.FirstOrDefault(b => b.Line == line);
+                if (binding is not null && !binding.IsSelected)
+                    binding.IsSelected = true;
+            }
+        }
+
+        ApplyAllOutputGainsToSession();
+        RebuildAudioMatrixRouteRows();
+    }
+
+    partial void OnSelectedHeadphonesCueOutputChanged(OutputLineViewModel? value)
+    {
+        if (_syncingHeadphonesCueOutputSelection)
+            return;
+
+        if (HeadphonesCueEnabled && value is not null)
+        {
+            var binding = Outputs.FirstOrDefault(b => b.Line == value);
+            if (binding is not null && !binding.IsSelected)
+                binding.IsSelected = true;
+        }
+
+        ApplyAllOutputGainsToSession();
+        RebuildAudioMatrixRouteRows();
+    }
+
+    partial void OnHeadphonesCueTapPointChanged(HeadphonesCueTapPoint value)
+    {
+        _ = value;
+        ApplyAllOutputGainsToSession();
+        RebuildAudioMatrixRouteRows();
+    }
+
+    partial void OnHeadphonesCueGainDbChanged(double value)
+    {
+        _ = value;
+        ApplyAllOutputGainsToSession();
+        RebuildAudioMatrixRouteRows();
+    }
+
     /// <summary>Mirror the shared outputs list into per-player bindings, preserving selection on the survivors.
     /// Clones (§3.4) are deliberately excluded — their routing is mirrored from the parent's checkbox by
     /// <see cref="SelectedOutputLines"/>, so showing them as separate checkboxes would be misleading.</summary>
@@ -1088,8 +1295,88 @@ public partial class MediaPlayerViewModel : ViewModelBase
             WatchMatrixCells(binding);
             Outputs.Add(binding);
         }
+
+        RebuildHeadphonesCueOutputs();
         OnPropertyChanged(nameof(HasNoOutputs));
         OnPropertyChanged(nameof(RoutingSummary));
+    }
+
+    private void OnSharedHeadphonesBusesChanged(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        RebuildHeadphonesCueOutputs();
+    }
+
+    private void RebuildHeadphonesCueOutputs()
+    {
+        var previousTargetIdentity = SelectedHeadphonesCueTarget?.Identity;
+        var previousTargetKind = SelectedHeadphonesCueTarget?.Kind;
+        _syncingHeadphonesCueOutputSelection = true;
+        try
+        {
+            HeadphonesCueOutputs.Clear();
+            HeadphonesCueTargets.Clear();
+            foreach (var line in _outputs.Outputs.Where(static l => l.Definition is PortAudioOutputDefinition))
+            {
+                HeadphonesCueOutputs.Add(line);
+                HeadphonesCueTargets.Add(HeadphonesCueTargetOption.ForDirect(line));
+            }
+
+            foreach (var bus in _outputs.SharedHeadphonesBuses)
+            {
+                var resolved = bus.PortAudioOutputId is { } paId
+                    ? _outputs.Outputs.FirstOrDefault(l => l.Definition.Id == paId
+                        && l.Definition is PortAudioOutputDefinition)
+                    : null;
+                HeadphonesCueTargets.Add(HeadphonesCueTargetOption.ForBus(bus, resolved));
+            }
+
+            SelectedHeadphonesCueTarget = previousTargetKind is { } pk && previousTargetIdentity is { } pi
+                ? HeadphonesCueTargets.FirstOrDefault(t => t.Kind == pk && t.Identity == pi)
+                : null;
+            SelectedHeadphonesCueOutput = SelectedHeadphonesCueTarget?.ResolvedLine;
+        }
+        finally
+        {
+            _syncingHeadphonesCueOutputSelection = false;
+        }
+
+        if (HeadphonesCueEnabled && SelectedHeadphonesCueOutput is null)
+            HeadphonesCueEnabled = false;
+
+        OnPropertyChanged(nameof(HasHeadphonesCueOutputs));
+    }
+
+    partial void OnSelectedHeadphonesCueTargetChanged(HeadphonesCueTargetOption? value)
+    {
+        if (_syncingHeadphonesCueOutputSelection)
+            return;
+        _syncingHeadphonesCueOutputSelection = true;
+        try { SelectedHeadphonesCueOutput = value?.ResolvedLine; }
+        finally { _syncingHeadphonesCueOutputSelection = false; }
+    }
+
+    private bool TryEnsureHeadphonesCueOutputSelected()
+    {
+        if (SelectedHeadphonesCueTarget?.ResolvedLine is not null)
+        {
+            SelectedHeadphonesCueOutput = SelectedHeadphonesCueTarget.ResolvedLine;
+            return true;
+        }
+
+        var first = HeadphonesCueTargets.FirstOrDefault(t => t.ResolvedLine is not null);
+        if (first is null)
+            return false;
+
+        _syncingHeadphonesCueOutputSelection = true;
+        try
+        {
+            SelectedHeadphonesCueTarget = first;
+            SelectedHeadphonesCueOutput = first.ResolvedLine;
+        }
+        finally { _syncingHeadphonesCueOutputSelection = false; }
+        return true;
     }
 
     /// <summary>Phase C (§4.3.4) — subscribe to per-cell PropertyChanged so any matrix edit pushes the new
@@ -1159,6 +1446,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         if (e.PropertyName == nameof(PlayerOutputBinding.IsSelected))
         {
+            if (!binding.IsSelected && HeadphonesCueEnabled && SelectedHeadphonesCueOutput == binding.Line)
+                HeadphonesCueEnabled = false;
             OnPropertyChanged(nameof(RoutingSummary));
             RebuildAudioMatrixRows();
             // Hot toggle: if a session is running, mirror the checkbox change into the playback graph so
@@ -1242,9 +1531,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>Linear master × per-output gain (envelope) applied on top of every cell's own gain.</summary>
     private float CompoundEnvelope(PlayerOutputBinding binding)
     {
-        if (MasterMuted || binding.IsMuted) return 0f;
-        var db = Math.Clamp(MasterVolumeDb + binding.GainDb, -80.0, 24.0);
-        return (float)Math.Pow(10.0, db / 20.0) * _cueEnvelope;
+        return TryGetLineGainDb(binding, out var db)
+            ? ToLinearGain(db, includeCueEnvelope: ShouldApplyCueEnvelope(binding))
+            : 0f;
     }
 
     /// <summary>
@@ -1320,7 +1609,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
         foreach (var slot in BuildVirtualOutputMap())
         {
             inputChannels = Math.Max(inputChannels, slot.Binding.Matrix.InputChannelCount);
-            var label = $"VOut {slot.VirtualOutputChannel} · {slot.Binding.Line.Definition.DisplayName} · {OutputChannelSuffix(slot.Binding.Matrix.OutputChannelCount, slot.OutputChannel)}";
+            var label = Strings.Format(
+                nameof(Strings.AudioMatrixVoutRowLabelFormat),
+                slot.VirtualOutputChannel,
+                slot.Binding.Line.Definition.DisplayName,
+                OutputChannelSuffix(slot.Binding.Matrix.OutputChannelCount, slot.OutputChannel));
             AudioMatrixRows.Add(new AudioMatrixRow(slot.Binding, slot.OutputChannel, slot.VirtualOutputChannel, label));
         }
 
@@ -1402,7 +1695,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
             for (var oc = 0; oc < binding.Matrix.OutputChannelCount; oc++)
             {
                 vout++;
-                var outLabel = $"{binding.Line.Definition.DisplayName} · {OutputChannelSuffix(binding.Matrix.OutputChannelCount, oc)}";
+                var outLabel = Strings.Format(
+                    nameof(Strings.AudioMatrixOutputLabelFormat),
+                    binding.Line.Definition.DisplayName,
+                    OutputChannelSuffix(binding.Matrix.OutputChannelCount, oc));
                 var active = binding.Matrix.Cells
                     .Where(c => c.OutputChannel == oc && c.IsAudible)
                     .OrderBy(c => c.InputChannel);
@@ -1438,10 +1734,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private float EffectiveGain(PlayerOutputBinding binding)
     {
-        if (MasterMuted || binding.IsMuted)
-            return 0.0f;
-        var db = Math.Clamp(MasterVolumeDb + binding.GainDb, -80.0, 24.0);
-        return (float)Math.Pow(10.0, db / 20.0);
+        return TryGetLineGainDb(binding, out var db)
+            ? ToLinearGain(db, includeCueEnvelope: false)
+            : 0f;
     }
 
     private bool ShouldRouteLine(OutputLineViewModel line)
@@ -1569,9 +1864,23 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // Synchronous: the management VM is about to dispose the runtime. Drop our route now so the
         // router doesn't keep submitting to a sink that's seconds away from disposal.
         var session = _session;
-        if (session is null) return;
-        try { session.TryRemoveOutput(line, out _); }
-        catch { /* best effort — removal must not block teardown */ }
+        if (session is not null)
+        {
+            try { session.TryRemoveOutput(line, out _); }
+            catch { /* best effort — removal must not block teardown */ }
+        }
+
+        if (SelectedHeadphonesCueOutput == line)
+        {
+            _syncingHeadphonesCueOutputSelection = true;
+            try
+            {
+                SelectedHeadphonesCueOutput = null;
+                SelectedHeadphonesCueTarget = null;
+            }
+            finally { _syncingHeadphonesCueOutputSelection = false; }
+            HeadphonesCueEnabled = false;
+        }
 
         // Clones tied to this parent are removed alongside (Outputs.Remove fires separate events for
         // each clone, so they'll route through this handler in turn).
@@ -1669,7 +1978,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand]
     private void AddPlaylistTab()
     {
-        var tab = new PlaylistTabViewModel($"Set {PlaylistTabs.Count + 1}");
+        var tab = new PlaylistTabViewModel(Strings.Format(nameof(Strings.PlaylistTabNameFormat), PlaylistTabs.Count + 1));
         PlaylistTabs.Add(tab);
         SelectedPlaylistTab = tab;
         RemovePlaylistTabCommand.NotifyCanExecuteChanged();
@@ -1700,12 +2009,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         var opts = new FilePickerSaveOptions
         {
-            Title = "Save playlist tab",
+            Title = Strings.SavePlaylistTabDialogTitle,
             DefaultExtension = PlaylistIO.FileExtension,
             SuggestedFileName = SanitizeFileName(tab.Name, PlaylistIO.FileExtension),
             FileTypeChoices =
             [
-                new FilePickerFileType("HaPlay playlist") { Patterns = ["*." + PlaylistIO.FileExtension] },
+                new FilePickerFileType(Strings.HaPlayPlaylistFileTypeLabel) { Patterns = ["*." + PlaylistIO.FileExtension] },
             ],
         };
         var file = await top.StorageProvider.SaveFilePickerAsync(opts);
@@ -1720,7 +2029,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = $"Save playlist failed: {ex.Message}");
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = Strings.Format(nameof(Strings.SavePlaylistFailedFormat), ex.Message));
         }
     }
 
@@ -1733,13 +2042,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         var opts = new FilePickerOpenOptions
         {
-            Title = "Load playlist tab",
+            Title = Strings.LoadPlaylistTabDialogTitle,
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType("HaPlay playlist") { Patterns = ["*." + PlaylistIO.FileExtension, "*.json"] },
-                new FilePickerFileType("M3U playlist") { Patterns = ["*.m3u", "*.m3u8"] },
-                new FilePickerFileType("All files") { Patterns = ["*"] },
+                new FilePickerFileType(Strings.HaPlayPlaylistFileTypeLabel) { Patterns = ["*." + PlaylistIO.FileExtension, "*.json"] },
+                new FilePickerFileType(Strings.M3uPlaylistFileTypeLabel) { Patterns = ["*.m3u", "*.m3u8"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
             ],
         };
         var files = await top.StorageProvider.OpenFilePickerAsync(opts);
@@ -1763,7 +2072,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = $"Load playlist failed: {ex.Message}");
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = Strings.Format(nameof(Strings.LoadPlaylistFailedFormat), ex.Message));
         }
     }
 
@@ -1841,7 +2150,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (added > 0 && SelectedPlaylistItem is null)
             SelectedPlaylistItem = PlaylistItems[0];
         if (added > 0)
-            StatusMessage = $"Added {added} file(s) to playlist.";
+            StatusMessage = Strings.Format(nameof(Strings.AddedFilesToPlaylistStatusFormat), added);
     }
 
     [RelayCommand]
@@ -1854,11 +2163,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
             var top = TryGetMainWindow();
             if (top is null) { Log("no main window — abort"); return; }
 
-            var opts = new FilePickerOpenOptions { Title = "Add files to playlist", AllowMultiple = true };
+            var opts = new FilePickerOpenOptions { Title = Strings.AddFilesToPlaylistDialogTitle, AllowMultiple = true };
             opts.FileTypeFilter =
             [
-                new FilePickerFileType("Media") { Patterns = ["*.mp4", "*.mkv", "*.mov", "*.webm", "*.m4v", "*.avi", "*.mp3", "*.wav", "*.flac", "*.aac", "*.m4a", "*.ogg"] },
-                new FilePickerFileType("All files") { Patterns = ["*"] },
+                new FilePickerFileType(Strings.MediaFileTypeLabel) { Patterns = ["*.mp4", "*.mkv", "*.mov", "*.webm", "*.m4v", "*.avi", "*.mp3", "*.wav", "*.flac", "*.aac", "*.m4a", "*.ogg"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
             ];
 
             Log("calling OpenFilePickerAsync");
@@ -1988,11 +2297,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         var top = TryGetMainWindow();
         if (top is null) return;
-        var opts = new FilePickerOpenOptions { Title = "Fallback image (PNG / JPEG)", AllowMultiple = false };
+        var opts = new FilePickerOpenOptions { Title = Strings.FallbackImageDialogTitle, AllowMultiple = false };
         opts.FileTypeFilter =
         [
-            new FilePickerFileType("Images") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp"] },
-            new FilePickerFileType("All files") { Patterns = ["*"] },
+            new FilePickerFileType(Strings.ImagesFileTypeLabel) { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.bmp"] },
+            new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
         ];
         var files = await top.StorageProvider.OpenFilePickerAsync(opts);
         var f = files.FirstOrDefault();
@@ -2010,12 +2319,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         var opts = new FilePickerSaveOptions
         {
-            Title = "Save player configuration",
+            Title = Strings.SavePlayerConfigurationDialogTitle,
             DefaultExtension = "haplay.json",
             SuggestedFileName = SanitizeFileName(Name),
             FileTypeChoices =
             [
-                new FilePickerFileType("HaPlay player config") { Patterns = ["*.haplay.json", "*.json"] },
+                new FilePickerFileType(Strings.HaPlayPlayerConfigFileTypeLabel) { Patterns = ["*.haplay.json", "*.json"] },
             ],
         };
         var file = await top.StorageProvider.SaveFilePickerAsync(opts);
@@ -2034,7 +2343,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = $"Save failed: {ex.Message}");
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = Strings.Format(nameof(Strings.SavePlayerConfigFailedFormat), ex.Message));
         }
     }
 
@@ -2046,12 +2355,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         var opts = new FilePickerOpenOptions
         {
-            Title = "Load player configuration",
+            Title = Strings.LoadPlayerConfigurationDialogTitle,
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType("HaPlay player config") { Patterns = ["*.haplay.json", "*.json"] },
-                new FilePickerFileType("All files") { Patterns = ["*"] },
+                new FilePickerFileType(Strings.HaPlayPlayerConfigFileTypeLabel) { Patterns = ["*.haplay.json", "*.json"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
             ],
         };
         var files = await top.StorageProvider.OpenFilePickerAsync(opts);
@@ -2071,7 +2380,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = $"Load failed: {ex.Message}");
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = Strings.Format(nameof(Strings.LoadPlayerConfigFailedFormat), ex.Message));
             return;
         }
 
@@ -2192,6 +2501,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OutputPreset = OutputPreset,
         TransitionMode = TransitionMode,
         TransitionDurationMs = TransitionDurationMs,
+        CustomOutputWidth = CustomOutputWidth,
+        CustomOutputHeight = CustomOutputHeight,
+        HeadphonesCueEnabled = HeadphonesCueEnabled,
+        HeadphonesCueOutputId = SelectedHeadphonesCueTarget is { Kind: HeadphonesCueTargetOption.TargetKind.Direct } direct
+            ? direct.Identity
+            : SelectedHeadphonesCueOutput?.Definition.Id,
+        HeadphonesCueSharedBusId = SelectedHeadphonesCueTarget is { Kind: HeadphonesCueTargetOption.TargetKind.SharedBus } bus
+            ? bus.Identity
+            : null,
+        HeadphonesCueTapPoint = HeadphonesCueTapPoint,
+        HeadphonesCueGainDb = HeadphonesCueGainDb,
         SelectedOutputDisplayNames = Outputs
             .Where(b => b.IsSelected)
             .Select(b => b.Line.Definition.DisplayName)
@@ -2249,7 +2569,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 new()
                 {
-                    Name = "Set A",
+                    Name = Strings.DefaultPlaylistTabName,
                     // v1 player-config fallback: project the top-level flat path list onto the
                     // PlaylistConfig.Paths legacy field; PlaylistTabViewModel.FromConfig promotes those to
                     // FilePlaylistItem entries (§6.8).
@@ -2263,7 +2583,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         foreach (var tabConfig in tabs)
             PlaylistTabs.Add(PlaylistTabViewModel.FromConfig(tabConfig));
         if (PlaylistTabs.Count == 0)
-            PlaylistTabs.Add(new PlaylistTabViewModel("Set A"));
+            PlaylistTabs.Add(new PlaylistTabViewModel(Strings.DefaultPlaylistTabName));
 
         MediaFilePath = config.MediaFilePath;
         _currentPlaylistItem = null;
@@ -2278,6 +2598,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OutputPreset = config.OutputPreset;
         TransitionMode = config.TransitionMode;
         TransitionDurationMs = config.TransitionDurationMs <= 0 ? 500 : config.TransitionDurationMs;
+        CustomOutputWidth = config.CustomOutputWidth >= 16 ? config.CustomOutputWidth : 1920;
+        CustomOutputHeight = config.CustomOutputHeight >= 16 ? config.CustomOutputHeight : 1080;
+        HeadphonesCueTapPoint = config.HeadphonesCueTapPoint;
+        HeadphonesCueGainDb = config.HeadphonesCueGainDb;
 
         var wanted = new HashSet<string>(config.SelectedOutputDisplayNames, StringComparer.OrdinalIgnoreCase);
         var missing = new HashSet<string>(wanted, StringComparer.OrdinalIgnoreCase);
@@ -2296,18 +2620,38 @@ public partial class MediaPlayerViewModel : ViewModelBase
             .Where(t => t.InputChannel >= 0)
             .GroupBy(t => t.InputChannel)
             .ToDictionary(g => g.Key, g => g.Last());
+
+        _syncingHeadphonesCueOutputSelection = true;
+        try
+        {
+            // §8.2 — shared bus id wins when present, falling back to the direct PA id (legacy / no bus).
+            HeadphonesCueTargetOption? target = null;
+            if (config.HeadphonesCueSharedBusId is { } busId)
+                target = HeadphonesCueTargets.FirstOrDefault(t =>
+                    t.Kind == HeadphonesCueTargetOption.TargetKind.SharedBus && t.Identity == busId);
+            if (target is null && config.HeadphonesCueOutputId is { } hpId)
+                target = HeadphonesCueTargets.FirstOrDefault(t =>
+                    t.Kind == HeadphonesCueTargetOption.TargetKind.Direct && t.Identity == hpId);
+            SelectedHeadphonesCueTarget = target;
+            SelectedHeadphonesCueOutput = target?.ResolvedLine;
+        }
+        finally
+        {
+            _syncingHeadphonesCueOutputSelection = false;
+        }
+        HeadphonesCueEnabled = config.HeadphonesCueEnabled && SelectedHeadphonesCueOutput is not null;
         RebuildInputTrimRows(AudioMatrixInputChannelCount);
         RebuildAudioMatrixRouteRows();
 
         StatusMessage = missing.Count > 0
-            ? $"Loaded. Missing outputs: {string.Join(", ", missing)}."
+            ? Strings.Format(nameof(Strings.LoadedMissingOutputsStatusFormat), string.Join(", ", missing))
             : null;
     }
 
     private static string SanitizeFileName(string name, string extension = "haplay.json")
     {
         if (string.IsNullOrWhiteSpace(name))
-            return "player." + extension;
+            return Strings.Format(nameof(Strings.PlayerDefaultFileNameFormat), extension);
         var invalid = Path.GetInvalidFileNameChars();
         var clean = new string(name.Select(c => Array.IndexOf(invalid, c) >= 0 ? '_' : c).ToArray());
         return clean + "." + extension.TrimStart('.');
@@ -2481,9 +2825,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     // loop timer re-attempts to open. Manual-name NDI items and recently-unplugged USB capture
                     // devices both end up here. Files / disabled-retry items just surface the error.
                     if (item.IsLive && GetRetrySeconds(item) > 0)
-                        EnterWaitingForSource(item, createErr ?? "source unavailable");
+                        EnterWaitingForSource(item, createErr ?? Strings.SourceUnavailableReason);
                     else
-                        StatusMessage = createErr ?? "Failed to open media.";
+                        StatusMessage = createErr ?? Strings.FailedToOpenMedia;
                     SyncIdleSlate();
                     return false;
                 }
@@ -2547,7 +2891,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
                         IsPlaying = false;
-                        StatusMessage = "Playback failed to resume after loading.";
+                        StatusMessage = Strings.PlaybackFailedToResumeAfterLoading;
                     });
             }
 
@@ -2765,7 +3109,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             // until task #4 (live wiring) lands.
             if (selected is FilePlaylistItem f && !File.Exists(f.Path))
             {
-                StatusMessage = $"File missing: {f.Path}";
+                StatusMessage = Strings.Format(nameof(Strings.FileMissingStatusFormat), f.Path);
                 return;
             }
             _activePlaybackTab = SelectedPlaylistTab;
@@ -2883,8 +3227,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
             var picked = PickAutoRoute(preferVideo, preferAudio);
             if (picked is null) return;
             picked.IsSelected = true;
-            StatusMessage = $"Auto-routed to {picked.Line.KindLabel} — {picked.Line.Definition.DisplayName}. " +
-                            "Change in Routing below.";
+            StatusMessage = Strings.Format(
+                nameof(Strings.AutoRoutedStatusFormat),
+                picked.Line.KindLabel,
+                picked.Line.Definition.DisplayName);
         });
     }
 
@@ -2929,6 +3275,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 IsPlaying = true;
                 if (HoldFallbackVideo) StartHoldPumpTimer();
                 EnsureLoopTimerStarted();
+                // §4.3.5 — symmetric audio fade-in for non-cue Fade transitions. Cue-driven plays
+                // skip this branch because ApplyCueTransportAsync → BeginCueFades will take over.
+                if (_pendingCueFilePlayback is null)
+                    BeginTransitionAudioFadeIn(TransitionDurationMs);
             });
         }).ConfigureAwait(false);
     }

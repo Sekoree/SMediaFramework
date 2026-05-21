@@ -14,11 +14,14 @@ namespace S.Media.NDI.Video;
 /// </summary>
 public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 {
-    private const int DefaultQueueDepth = 4;
+    private const int DefaultQueueDepth = 8;
+    private const int CaptureTimeoutMs = 16;
+    private const int ReadWaitMs = 16;
 
     private readonly NDIRuntime _runtime;
     private readonly NDIReceiver _receiver;
     private readonly NDIIngestPlaybackClock? _ingestClock;
+    private readonly bool _wallClockPresentation;
     private readonly Thread _captureThread;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentQueue<VideoFrame> _queue = new();
@@ -27,8 +30,9 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
     private VideoFormat _format;
     private PixelFormat[] _native = [];
-    private TimeSpan _ptsStep = TimeSpan.FromMilliseconds(33);
-    private TimeSpan _nextPts;
+    private long _ptsOriginTicks;
+    private bool _ptsOriginSet;
+    private long _syntheticPtsTicks;
     private bool _hasFormat;
     private bool _disposed;
     private long _overflowFrames;
@@ -48,17 +52,22 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
     public long OverflowFrames => Interlocked.Read(ref _overflowFrames);
 
+    /// <summary>Shared ingest clock when this receiver is paired with <see cref="Audio.NDIAudioReceiver"/>.</summary>
+    public NDIIngestPlaybackClock? IngestClock => _ingestClock;
+
     public NDIVideoReceiver(
         NDIDiscoveredSource source,
         string? receiverName = null,
         int maxQueuedFrames = DefaultQueueDepth,
-        NDIIngestPlaybackClock? ingestClock = null)
+        NDIIngestPlaybackClock? ingestClock = null,
+        bool wallClockPresentation = false)
     {
         if (maxQueuedFrames < 1)
             throw new ArgumentOutOfRangeException(nameof(maxQueuedFrames));
 
         _maxQueued = maxQueuedFrames;
         _ingestClock = ingestClock;
+        _wallClockPresentation = wallClockPresentation && ingestClock is not null;
         _ingestClock?.AttachReceiver();
 
         var rc = NDIRuntime.Create(out var rt);
@@ -68,12 +77,12 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
         try
         {
-            // Force receiver-side conversion to formats we currently ingest reliably (UYVY/BGRA).
-            // `Fastest` may surface sender-native formats (for example P216/UYVA) we don't unpack yet.
+            // Prefer BGRA from the SDK so live UI sinks use the same packed path as file/NDI output.
+            // UYVY is still unpacked when a sender delivers it natively (see NDIVideoFrameUnpack).
             var settings = new NDIReceiverSettings
             {
                 ReceiverName = receiverName,
-                ColorFormat = NDIRecvColorFormat.UyvyBgra,
+                ColorFormat = NDIRecvColorFormat.BgrxBgra,
             };
             rc = NDIReceiver.Create(out var recv, settings);
             if (rc != 0 || recv is null)
@@ -100,6 +109,25 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         _captureThread.Start();
     }
 
+    /// <summary>
+    /// Clears queued frames and re-anchors presentation timestamps at the next captured frame.
+    /// Call when transport starts so pre-buffered frames (captured while waiting to play) do not
+    /// present as permanently late relative to the playhead.
+    /// </summary>
+    public void ResetPlaybackTimeline()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        while (_queue.TryDequeue(out var old))
+            old.Dispose();
+
+        _ptsOriginSet = false;
+        _syntheticPtsTicks = 0;
+        _ingestClock?.AttachReceiver();
+
+        lock (_waitGate)
+            Monitor.PulseAll(_waitGate);
+    }
+
     public void SelectOutputFormat(PixelFormat format)
     {
         if (!_hasFormat)
@@ -112,8 +140,14 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     public bool TryReadNextFrame(out VideoFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        while (!_queue.TryDequeue(out frame))
+        while (true)
         {
+            if (_queue.TryDequeue(out var dequeued))
+            {
+                frame = dequeued;
+                return true;
+            }
+
             if (_disposed)
             {
                 frame = null!;
@@ -123,28 +157,27 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             lock (_waitGate)
             {
                 if (_queue.IsEmpty && !_disposed)
-                    Monitor.Wait(_waitGate, 100);
+                    Monitor.Wait(_waitGate, ReadWaitMs);
             }
         }
-
-        return true;
     }
 
     private void CaptureLoop(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
-            var frameType = _receiver.Capture(out var video, out var audio, out var metadata, timeoutMs: 100);
+            var frameType = _receiver.Capture(out var video, out var audio, out var metadata, timeoutMs: CaptureTimeoutMs);
 
             if (frameType == NDIFrameType.Video)
             {
                 try
                 {
-                    if (NDIVideoFrameUnpack.TryUnpack(video, _nextPts, out var vf) && vf is not null)
+                    var pts = MapPresentationTime(in video);
+                    _ingestClock?.NotifyVideoFrame(ref video);
+                    if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
                     {
                         EnsureFormat(vf.Format);
                         EnqueueFrame(vf);
-                        _nextPts += _ptsStep;
                     }
                     else
                     {
@@ -173,6 +206,25 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         }
     }
 
+    private TimeSpan MapPresentationTime(in NDIVideoFrameV2 video)
+    {
+        if (_wallClockPresentation)
+            return _ingestClock!.SnapshotWallPresentationPosition();
+
+        if (NDIFrameTiming.TryMapPresentationTime(
+                video.Timecode,
+                video.Timestamp,
+                ref _ptsOriginTicks,
+                ref _ptsOriginSet,
+                out var pts))
+            return pts;
+
+        var step = NDIFrameTiming.FrameDurationTicks(video.FrameRateN, video.FrameRateD);
+        var synthetic = TimeSpan.FromTicks(_syntheticPtsTicks);
+        _syntheticPtsTicks += step;
+        return synthetic;
+    }
+
     private void EnsureFormat(VideoFormat format)
     {
         if (_hasFormat && _format.PixelFormat == format.PixelFormat
@@ -181,9 +233,6 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
         _format = format;
         _native = [format.PixelFormat];
-        _ptsStep = format.FrameRate.Denominator > 0 && format.FrameRate.ToDouble() > 0
-            ? TimeSpan.FromSeconds(1.0 / format.FrameRate.ToDouble())
-            : TimeSpan.FromMilliseconds(33);
         _hasFormat = true;
     }
 

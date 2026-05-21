@@ -140,6 +140,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabi
         // _playedSamples is preserved (lifetime stat / monotonic clock).
         Volatile.Write(ref _writeIndex, 0);
         Volatile.Write(ref _readIndex, 0);
+        Interlocked.Exchange(ref _underrunSamples, 0);
         // Reset BEFORE Pa_StartStream so the first new-segment callback re-anchors
         // _segmentStreamT0 / _segmentPlayed0Samples to this segment. Writing after
         // StartStream races the callback and leaves ElapsedSinceStart anchored to
@@ -493,7 +494,9 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabi
             if (toRead < totalFloats)
             {
                 output[toRead..].Clear();
-                Interlocked.Add(ref self._underrunSamples, totalFloats - toRead);
+                var underrunFrames = (totalFloats - toRead) / self._format.Channels;
+                if (underrunFrames > 0)
+                    Interlocked.Add(ref self._underrunSamples, underrunFrames);
             }
 
             if (Volatile.Read(ref self._streamSmoothCalibrated) == 0)

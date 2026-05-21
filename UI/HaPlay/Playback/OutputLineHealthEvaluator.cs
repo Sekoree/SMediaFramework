@@ -57,8 +57,10 @@ internal static class OutputLineHealthEvaluator
             audioEnqueued = st.Enqueued;
         }
 
+        var portAudioUnderruns = session.GetPortAudioUnderrunDelta(line);
+
         OutputLineHealthState state;
-        if (videoDropped == 0 && audioDropped == 0 && videoSubmitted + audioEnqueued > 0)
+        if (videoDropped == 0 && audioDropped == 0 && portAudioUnderruns == 0 && videoSubmitted + audioEnqueued > 0)
         {
             if (videoQueueCap > 0 && videoQueueDepth >= Math.Max(1, videoQueueCap * 3 / 4))
                 state = OutputLineHealthState.Warning;
@@ -70,10 +72,12 @@ internal static class OutputLineHealthEvaluator
             var totalSubmitted = Math.Max(1, videoSubmitted + audioEnqueued);
             var totalDropped = videoDropped + audioDropped;
             var dropRatio = (double)totalDropped / totalSubmitted;
+            var underrunHeavy = portAudioUnderruns > 2400;
 
-            if (totalDropped > 120 || dropRatio > 0.05)
+            if (totalDropped > 120 || dropRatio > 0.05 || underrunHeavy)
                 state = OutputLineHealthState.Error;
-            else if (totalDropped > 0 || (videoQueueCap > 0 && videoQueueDepth >= Math.Max(1, videoQueueCap / 2)))
+            else if (totalDropped > 0 || portAudioUnderruns > 0
+                     || (videoQueueCap > 0 && videoQueueDepth >= Math.Max(1, videoQueueCap / 2)))
                 state = OutputLineHealthState.Warning;
             else
                 state = totalSubmitted > 0 ? OutputLineHealthState.Healthy : OutputLineHealthState.Unknown;

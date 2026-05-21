@@ -5,6 +5,7 @@
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:views="using:HaPlay.Views"
              xmlns:models="using:HaPlay.Models"
+             xmlns:res="using:HaPlay.Resources"
              xmlns:tdg="using:Avalonia.Controls"
              mc:Ignorable="d" d:DesignWidth="780" d:DesignHeight="900"
              x:Class="HaPlay.Views.MediaPlayerView"
@@ -67,16 +68,16 @@
             <Grid ColumnDefinitions="*,Auto">
               <TextBlock Grid.Column="0" FontWeight="SemiBold" FontSize="16"
                          VerticalAlignment="Center" Text="{Binding Name}" />
-              <Button Grid.Column="1" Padding="8,4" Content="⚙ Settings"
-                      ToolTip.Tip="Save / load this player's configuration, or remove the player.">
+              <Button Grid.Column="1" Padding="8,4" Content="{x:Static res:Strings.MediaPlayerSettingsButtonLabel}"
+                      ToolTip.Tip="{x:Static res:Strings.MediaPlayerSettingsTooltip}">
                 <Button.Flyout>
                   <MenuFlyout>
-                    <MenuItem Header="Save player config…" Command="{Binding SavePlayerConfigCommand}" />
-                    <MenuItem Header="Load player config…" Command="{Binding LoadPlayerConfigCommand}" />
+                    <MenuItem Header="{x:Static res:Strings.SavePlayerConfigMenuHeader}" Command="{Binding SavePlayerConfigCommand}" />
+                    <MenuItem Header="{x:Static res:Strings.LoadPlayerConfigMenuHeader}" Command="{Binding LoadPlayerConfigCommand}" />
                     <Separator />
-                    <MenuItem Header="Unload current session"
+                    <MenuItem Header="{x:Static res:Strings.UnloadCurrentSessionMenuHeader}"
                               Command="{Binding CloseSessionCommand}" />
-                    <MenuItem Header="Remove this player"
+                    <MenuItem Header="{x:Static res:Strings.RemoveThisPlayerMenuHeader}"
                               Command="{Binding RemovePlayerCommand}"
                               IsVisible="{Binding CanRemove}" />
                   </MenuFlyout>
@@ -88,13 +89,13 @@
             <StackPanel Orientation="Horizontal" Spacing="8">
               <Border Background="#22808080" CornerRadius="3" Padding="6,2"
                       VerticalAlignment="Center"
-                      ToolTip.Tip="What the loaded source contains.">
+                      ToolTip.Tip="{x:Static res:Strings.SourceKindTooltip}">
                 <TextBlock FontSize="11" FontWeight="SemiBold"
                            Text="{Binding SourceKindLabel}" />
               </Border>
               <TextBlock Opacity="0.75" FontSize="12" TextTrimming="CharacterEllipsis"
                          VerticalAlignment="Center"
-                         Text="{Binding CurrentMediaDisplay, FallbackValue='No media loaded — pick an item from the playlist below.', TargetNullValue='No media loaded — pick an item from the playlist below.'}"
+                         Text="{Binding CurrentMediaDisplay, FallbackValue={x:Static res:Strings.NoMediaLoadedHint}, TargetNullValue={x:Static res:Strings.NoMediaLoadedHint}}"
                          ToolTip.Tip="{Binding CurrentMediaDisplay}" />
             </StackPanel>
 
@@ -114,24 +115,24 @@
                     Value="{Binding SeekSliderValue, Mode=TwoWay}"
                     IsEnabled="{Binding IsMediaLoaded}"
                     IsVisible="{Binding IsTransportSeekable}"
-                    ToolTip.Tip="Drag to scrub. Keys: Space play/pause · [ ] prev/next · , . jog ±5 s." />
+                    ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}" />
 
             <!-- Three times: position / remaining / total. Hidden for live items (§6.5). -->
             <Grid ColumnDefinitions="*,*,*" IsVisible="{Binding IsTransportSeekable}">
               <StackPanel Grid.Column="0">
                 <TextBlock Classes="time" HorizontalAlignment="Center"
                            Text="{Binding CurrentPositionText}" />
-                <TextBlock Classes="time-label" Text="Position" />
+                <TextBlock Classes="time-label" Text="{x:Static res:Strings.PositionTimeLabel}" />
               </StackPanel>
               <StackPanel Grid.Column="1">
                 <TextBlock Classes="time" HorizontalAlignment="Center"
                            Text="{Binding RemainingTimeText}" />
-                <TextBlock Classes="time-label" Text="Remaining" />
+                <TextBlock Classes="time-label" Text="{x:Static res:Strings.RemainingTimeLabel}" />
               </StackPanel>
               <StackPanel Grid.Column="2">
                 <TextBlock Classes="time" HorizontalAlignment="Center" Opacity="0.75"
                            Text="{Binding DurationText}" />
-                <TextBlock Classes="time-label" Text="Duration" />
+                <TextBlock Classes="time-label" Text="{x:Static res:Strings.DurationTimeLabel}" />
               </StackPanel>
             </Grid>
 
@@ -139,37 +140,37 @@
             <Grid ColumnDefinitions="*,Auto,*">
               <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
                           HorizontalAlignment="Center">
-                <Button Classes="transport" Content="⏮"
+                <Button Classes="transport" Content="{x:Static res:Strings.PreviousTrackGlyph}"
                         Command="{Binding PreviousTrackCommand}"
-                        ToolTip.Tip="Previous track   [" />
+                        ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}" />
                 <Button Classes="play-pause"
                         Content="{Binding PlayPauseLabel}"
                         Command="{Binding TogglePlayPauseCommand}"
-                        ToolTip.Tip="Play or pause the current track.   Space" />
-                <Button Classes="transport" Content="⏭"
+                        ToolTip.Tip="{x:Static res:Strings.PlayPauseTooltip}" />
+                <Button Classes="transport" Content="{x:Static res:Strings.NextTrackGlyph}"
                         Command="{Binding NextTrackCommand}"
-                        ToolTip.Tip="Next track   ]" />
-                <Button Classes="transport" Content="⏹"
+                        ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}" />
+                <Button Classes="transport" Content="{x:Static res:Strings.StopTrackGlyph}"
                         Command="{Binding StopCommand}"
-                        ToolTip.Tip="Stop and rewind to 00:00." />
+                        ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}" />
               </StackPanel>
               <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
                           HorizontalAlignment="Right">
-                <ToggleButton Content="Mute"
+                <ToggleButton Content="{x:Static res:Strings.MuteToggleLabel}"
                               IsChecked="{Binding MasterMuted}"
                               Padding="10,6"
-                              ToolTip.Tip="Mute this player's audio routes." />
+                              ToolTip.Tip="{x:Static res:Strings.MuteToggleTooltip}" />
                 <Slider Width="120" Minimum="-60" Maximum="12"
                         Value="{Binding MasterVolumeDb, Mode=TwoWay}"
                         VerticalAlignment="Center"
-                        ToolTip.Tip="Master gain in dB." />
+                        ToolTip.Tip="{x:Static res:Strings.MasterGainTooltip}" />
                 <TextBlock Classes="time" Width="56" VerticalAlignment="Center"
                            Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
-                <ToggleButton Content="🔁 Loop" IsChecked="{Binding IsLooping}" Padding="10,6"
-                              ToolTip.Tip="Restart the current track when it ends." />
-                <ToggleButton Content="⏭ Auto-advance"
+                <ToggleButton Content="{x:Static res:Strings.LoopToggleLabel}" IsChecked="{Binding IsLooping}" Padding="10,6"
+                              ToolTip.Tip="{x:Static res:Strings.LoopToggleTooltip}" />
+                <ToggleButton Content="{x:Static res:Strings.AutoAdvanceToggleLabel}"
                               IsChecked="{Binding AutoAdvancePlaylist}" Padding="10,6"
-                              ToolTip.Tip="When on, the next playlist entry loads and plays automatically when the current track ends." />
+                              ToolTip.Tip="{x:Static res:Strings.AutoAdvanceToggleTooltip}" />
               </StackPanel>
             </Grid>
           </StackPanel>
@@ -177,7 +178,7 @@
 
         <!-- Playlist card -->
         <Border Classes="card"
-                ToolTip.Tip="Double-click a row to load + play. Single-click selects so Play loads that file.">
+                ToolTip.Tip="{x:Static res:Strings.PlaylistCardTooltip}">
           <DockPanel LastChildFill="True">
             <DockPanel DockPanel.Dock="Top" LastChildFill="False" Margin="0,0,0,8">
               <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="4" Margin="0,0,0,8">
@@ -193,35 +194,35 @@
                     </DataTemplate>
                   </TabStrip.ItemTemplate>
                 </TabStrip>
-                <Button Content="+" MinWidth="34"
+                <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="34"
                         Command="{Binding AddPlaylistTabCommand}"
-                        ToolTip.Tip="Add playlist tab." />
-                <Button Content="Remove tab"
+                        ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
+                <Button Content="{x:Static res:Strings.RemoveTabButton}"
                         Command="{Binding RemovePlaylistTabCommand}" />
               </StackPanel>
             </DockPanel>
 
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,8" ColumnSpacing="4">
-              <TextBlock Grid.Column="0" Text="Playlist" Classes="section-title" VerticalAlignment="Center" />
-              <Button Grid.Column="1" Content="↑" Command="{Binding MovePlaylistItemUpCommand}"
-                      MinWidth="34" ToolTip.Tip="Move the selected entry up." />
-              <Button Grid.Column="2" Content="↓" Command="{Binding MovePlaylistItemDownCommand}"
-                      MinWidth="34" ToolTip.Tip="Move the selected entry down." />
-              <Button Grid.Column="3" Content="Remove" Command="{Binding RemoveFromPlaylistCommand}"
-                      ToolTip.Tip="Remove the selected entry." />
-              <Button Grid.Column="4" Content="Save tab…"
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.PlaylistSectionTitle}" Classes="section-title" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Content="{x:Static res:Strings.MoveUpButton}" Command="{Binding MovePlaylistItemUpCommand}"
+                      MinWidth="34" ToolTip.Tip="{x:Static res:Strings.MoveUpTooltip}" />
+              <Button Grid.Column="2" Content="{x:Static res:Strings.MoveDownButton}" Command="{Binding MovePlaylistItemDownCommand}"
+                      MinWidth="34" ToolTip.Tip="{x:Static res:Strings.MoveDownTooltip}" />
+              <Button Grid.Column="3" Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveFromPlaylistCommand}"
+                      ToolTip.Tip="{x:Static res:Strings.RemovePlaylistItemTooltip}" />
+              <Button Grid.Column="4" Content="{x:Static res:Strings.SaveTabButton}"
                       Command="{Binding SavePlaylistTabCommand}" />
-              <Button Grid.Column="5" Content="Load tab…"
+              <Button Grid.Column="5" Content="{x:Static res:Strings.LoadTabButton}"
                       Command="{Binding LoadPlaylistTabCommand}" />
-              <Button Grid.Column="6" Content="+ Add files…"
+              <Button Grid.Column="6" Content="{x:Static res:Strings.AddFilesButton}"
                       Command="{Binding AddFilesToPlaylistCommand}" />
-              <Button Grid.Column="7" Content="+ Live input…"
-                      ToolTip.Tip="Add a live source (PortAudio capture device or NDI receiver) to this playlist tab.">
+              <Button Grid.Column="7" Content="{x:Static res:Strings.AddLiveInputButton}"
+                      ToolTip.Tip="{x:Static res:Strings.AddLiveInputTooltip}">
                 <Button.Flyout>
                   <MenuFlyout>
-                    <MenuItem Header="PortAudio input…"
+                    <MenuItem Header="{x:Static res:Strings.PortAudioInputMenuHeader}"
                               Command="{Binding AddPortAudioInputCommand}" />
-                    <MenuItem Header="NDI input…"
+                    <MenuItem Header="{x:Static res:Strings.NdiInputMenuHeader}"
                               Command="{Binding AddNDIInputCommand}" />
                   </MenuFlyout>
                 </Button.Flyout>
@@ -252,7 +253,7 @@
                   HorizontalContentAlignment="Stretch">
           <Expander.Header>
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Text="Routing" FontWeight="SemiBold" />
+              <TextBlock Text="{x:Static res:Strings.RoutingSectionTitle}" FontWeight="SemiBold" />
               <TextBlock Opacity="0.7" Text="{Binding RoutingSummary}" />
             </StackPanel>
           </Expander.Header>
@@ -260,15 +261,15 @@
             <StackPanel Spacing="6">
               <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Grid.Column="0" Opacity="0.7" FontSize="12"
-                           Text="Tick the outputs this player should drive." />
-                <Button Grid.Column="1" Content="+ Add output…" Padding="10,4">
+                           Text="{x:Static res:Strings.RoutingHint}" />
+                <Button Grid.Column="1" Content="{x:Static res:Strings.AddOutputButton}" Padding="10,4">
                   <Button.Flyout>
                     <MenuFlyout>
-                      <MenuItem Header="PortAudio output…"
+                      <MenuItem Header="{x:Static res:Strings.PortAudioOutputMenuHeader}"
                                 Command="{Binding AddPortAudioOutputCommand}" />
-                      <MenuItem Header="Local video output…"
+                      <MenuItem Header="{x:Static res:Strings.LocalVideoOutputMenuHeader}"
                                 Command="{Binding AddLocalVideoOutputCommand}" />
-                      <MenuItem Header="NDI output…"
+                      <MenuItem Header="{x:Static res:Strings.NdiOutputMenuHeader}"
                                 Command="{Binding AddNDIOutputCommand}" />
                     </MenuFlyout>
                   </Button.Flyout>
@@ -285,7 +286,7 @@
                                   ToolTip.Tip="{Binding Line.Summary}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                           <TextBlock FontWeight="SemiBold" Text="{Binding Line.KindLabel}" />
-                          <TextBlock Text="—" Opacity="0.5" />
+                          <TextBlock Text="{x:Static res:Strings.EmDash}" Opacity="0.5" />
                           <TextBlock Text="{Binding Line.Definition.DisplayName}" />
                         </StackPanel>
                       </StackPanel>
@@ -293,9 +294,46 @@
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
+
+              <Border BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0" Margin="0,4,0,0" Padding="0,8,0,0"
+                      IsVisible="{Binding HasHeadphonesCueOutputs}">
+                <StackPanel Spacing="6">
+                  <TextBlock Opacity="0.8" FontSize="12"
+                             Text="{x:Static res:Strings.HeadphonesCueBusLabel}" />
+                  <Grid ColumnDefinitions="Auto,2*,Auto,Auto,140,64" ColumnSpacing="8">
+                    <ToggleButton Grid.Column="0"
+                                  Content="{x:Static res:Strings.Enable}"
+                                  IsChecked="{Binding HeadphonesCueEnabled}" />
+                    <ComboBox Grid.Column="1"
+                              ItemsSource="{Binding HeadphonesCueTargets}"
+                              SelectedItem="{Binding SelectedHeadphonesCueTarget}"
+                              IsEnabled="{Binding HeadphonesCueEnabled}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:HeadphonesCueTargetOption">
+                          <TextBlock Text="{Binding Display}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Grid.Column="2" VerticalAlignment="Center" Text="{x:Static res:Strings.Tap}" />
+                    <ComboBox Grid.Column="3" MinWidth="110"
+                              ItemsSource="{Binding HeadphonesCueTapPoints}"
+                              SelectedItem="{Binding HeadphonesCueTapPoint}"
+                              IsEnabled="{Binding HeadphonesCueEnabled}" />
+                    <NumericUpDown Grid.Column="4"
+                                   Minimum="-60" Maximum="12" Increment="1"
+                                   Value="{Binding HeadphonesCueGainDb}"
+                                   IsEnabled="{Binding HeadphonesCueEnabled}" />
+                    <TextBlock Grid.Column="5" Classes="time" VerticalAlignment="Center"
+                               Text="{Binding HeadphonesCueGainDb, StringFormat='{}{0:0.#} dB'}" />
+                  </Grid>
+                  <TextBlock Opacity="0.55" FontSize="11"
+                             Text="{x:Static res:Strings.HeadphonesCueMatrixHint}" />
+                </StackPanel>
+              </Border>
+
               <TextBlock Opacity="0.55" FontSize="11"
                          IsVisible="{Binding HasNoOutputs}"
-                         Text="No outputs configured yet — add one above. Click Play with nothing selected to auto-route." />
+                         Text="{x:Static res:Strings.NoOutputsConfiguredHint}" />
             </StackPanel>
           </Border>
         </Expander>
@@ -307,8 +345,8 @@
                   HorizontalContentAlignment="Stretch">
           <Expander.Header>
             <StackPanel Orientation="Horizontal" Spacing="8">
-              <TextBlock Text="Audio matrix" FontWeight="SemiBold" />
-              <TextBlock Opacity="0.7" Text="per-cell gain (dB)" />
+              <TextBlock Text="{x:Static res:Strings.AudioMatrixSectionTitle}" FontWeight="SemiBold" />
+              <TextBlock Opacity="0.7" Text="{x:Static res:Strings.AudioMatrixSectionSubtitle}" />
             </StackPanel>
           </Expander.Header>
           <Border Classes="card" Padding="10">
@@ -325,13 +363,13 @@
                       <ComboBox Grid.Column="1" MinWidth="128"
                                 ItemsSource="{Binding $parent[UserControl].((vm:MediaPlayerViewModel)DataContext).MixModes}"
                                 SelectedItem="{Binding MixMode}"
-                                ToolTip.Tip="Preset that overwrites the matrix below for this device — Stereo identity, Swap L↔R, Mono-from-L, Mono-from-R, or Silence." />
-                      <CheckBox Grid.Column="2" Content="Mute"
+                                ToolTip.Tip="{x:Static res:Strings.MixPresetTooltip}" />
+                      <CheckBox Grid.Column="2" Content="{x:Static res:Strings.MuteToggleLabel}"
                                 IsChecked="{Binding IsMuted}"
-                                ToolTip.Tip="Mute this device output entirely." />
+                                ToolTip.Tip="{x:Static res:Strings.DeviceOutputMuteTooltip}" />
                       <Slider Grid.Column="3" Minimum="-60" Maximum="12"
                               Value="{Binding GainDb, Mode=TwoWay}"
-                              ToolTip.Tip="Per-device gain in dB. Composes on top of every cell of the matrix below." />
+                              ToolTip.Tip="{x:Static res:Strings.PerDeviceGainTooltip}" />
                       <TextBlock Grid.Column="4" Classes="time"
                                  Text="{Binding GainText}"
                                  VerticalAlignment="Center" />
@@ -343,14 +381,14 @@
               <Border BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0" Margin="0,2,0,0" Padding="0,8,0,0"
                       IsVisible="{Binding HasAudioMatrixInputTrims}">
                 <StackPanel Spacing="4">
-                  <TextBlock Text="Input trims" FontWeight="SemiBold" />
+                  <TextBlock Text="{x:Static res:Strings.InputTrimsTitle}" FontWeight="SemiBold" />
                   <ItemsControl ItemsSource="{Binding AudioMatrixInputTrims}">
                     <ItemsControl.ItemTemplate>
                       <DataTemplate x:DataType="vm:AudioMatrixInputTrimViewModel">
                         <Grid ColumnDefinitions="80,Auto,140,60" ColumnSpacing="8" Margin="0,1">
                           <TextBlock Grid.Column="0" VerticalAlignment="Center"
                                      Text="{Binding Label}" />
-                          <CheckBox Grid.Column="1" Content="Mute"
+                          <CheckBox Grid.Column="1" Content="{x:Static res:Strings.MuteToggleLabel}"
                                     IsChecked="{Binding Muted}" />
                           <Slider Grid.Column="2" Minimum="-24" Maximum="24"
                                   Value="{Binding GainDb, Mode=TwoWay}" />
@@ -375,11 +413,11 @@
                             ShowColumnHeaders="True" />
               <TextBlock Opacity="0.55" FontSize="11"
                          IsVisible="{Binding !HasAudioMatrix}"
-                         Text="Tick an output above and load media — the per-cell matrix appears here, sized to the source's channel count." />
+                         Text="{x:Static res:Strings.AudioMatrixEmptyHint}" />
 
               <Border BorderBrush="#22FFFFFF" BorderThickness="0,1,0,0" Margin="0,4,0,0" Padding="0,8,0,0">
                 <StackPanel Spacing="6">
-                  <TextBlock Text="Active routes" FontWeight="SemiBold" />
+                  <TextBlock Text="{x:Static res:Strings.ActiveRoutesTitle}" FontWeight="SemiBold" />
                   <TreeDataGrid Name="MatrixRoutesTreeGrid"
                                 MinHeight="96" MaxHeight="220"
                                 IsVisible="{Binding HasAudioMatrixRoutes}"
@@ -388,7 +426,7 @@
                                 ShowColumnHeaders="True" />
                   <TextBlock Opacity="0.55" FontSize="11"
                              IsVisible="{Binding !HasAudioMatrixRoutes}"
-                             Text="No active routes — raise a matrix cell above -60 dB or unmute it." />
+                             Text="{x:Static res:Strings.NoActiveRoutesHint}" />
                 </StackPanel>
               </Border>
             </StackPanel>
@@ -397,20 +435,36 @@
 
         <!-- Output preset + transition controls -->
         <Border Classes="card">
-          <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,Auto" ColumnSpacing="10">
-            <TextBlock Grid.Column="0" Text="Output preset" VerticalAlignment="Center" />
-            <ComboBox Grid.Column="1"
-                      ItemsSource="{Binding OutputPresets}"
-                      SelectedItem="{Binding OutputPreset}" />
-            <TextBlock Grid.Column="2" Text="Transition" VerticalAlignment="Center" />
-            <ComboBox Grid.Column="3"
-                      ItemsSource="{Binding TransitionModes}"
-                      SelectedItem="{Binding TransitionMode}" />
-            <TextBlock Grid.Column="4" Text="ms" VerticalAlignment="Center" />
-            <NumericUpDown Grid.Column="5" Width="92"
-                           Minimum="0" Maximum="10000" Increment="50"
-                           Value="{Binding TransitionDurationMs}" />
-          </Grid>
+          <StackPanel Spacing="6">
+            <Grid ColumnDefinitions="Auto,*,Auto,*,Auto,Auto" ColumnSpacing="10">
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.OutputPresetLabel}" VerticalAlignment="Center" />
+              <ComboBox Grid.Column="1"
+                        ItemsSource="{Binding OutputPresets}"
+                        SelectedItem="{Binding OutputPreset}" />
+              <TextBlock Grid.Column="2" Text="{x:Static res:Strings.TransitionLabel}" VerticalAlignment="Center" />
+              <ComboBox Grid.Column="3"
+                        ItemsSource="{Binding TransitionModes}"
+                        SelectedItem="{Binding TransitionMode}" />
+              <TextBlock Grid.Column="4" Text="{x:Static res:Strings.MillisecondsShort}" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="5" Width="92"
+                             Minimum="0" Maximum="10000" Increment="50"
+                             Value="{Binding TransitionDurationMs}" />
+            </Grid>
+            <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="8"
+                  IsVisible="{Binding IsCustomOutputPreset}"
+                  ToolTip.Tip="{x:Static res:Strings.CustomOutputTooltip}">
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.CustomWidthLabel}" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="1" Width="96"
+                             Minimum="16" Maximum="7680" Increment="2"
+                             Value="{Binding CustomOutputWidth}" />
+              <TextBlock Grid.Column="2" Text="{x:Static res:Strings.CustomHeightLabel}" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="3" Width="96"
+                             Minimum="16" Maximum="4320" Increment="2"
+                             Value="{Binding CustomOutputHeight}" />
+              <TextBlock Grid.Column="4" Opacity="0.55" FontSize="11" VerticalAlignment="Center"
+                         Text="{x:Static res:Strings.CustomOutputAppliedHint}" />
+            </Grid>
+          </StackPanel>
         </Border>
 
         <!-- Idle image expander -->
@@ -418,23 +472,23 @@
                   HorizontalContentAlignment="Stretch">
           <Expander.Header>
             <StackPanel Orientation="Horizontal" Spacing="8"
-                        ToolTip.Tip="Show a still image on every video output instead of decoded pixels — outputs are resized to the image's native dimensions when set.">
-              <TextBlock Text="Idle image" FontWeight="SemiBold" />
+                        ToolTip.Tip="{x:Static res:Strings.IdleImageHeaderTooltip}">
+              <TextBlock Text="{x:Static res:Strings.IdleImageLabel}" FontWeight="SemiBold" />
               <TextBlock Opacity="0.7" Text="{Binding HoldImageSummary}" />
             </StackPanel>
           </Expander.Header>
           <Border Classes="card" Padding="10" HorizontalAlignment="Stretch">
             <StackPanel Spacing="8">
               <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                <TextBox Grid.Column="0" PlaceholderText="PNG / JPEG path…"
+                <TextBox Grid.Column="0" PlaceholderText="{x:Static res:Strings.FallbackPathPlaceholder}"
                          Text="{Binding FallbackImagePath}" />
-                <Button Grid.Column="1" Content="Browse…"
+                <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}"
                         Command="{Binding BrowseFallbackCommand}" />
               </Grid>
-              <ToggleButton Content="Show when no media playing"
+              <ToggleButton Content="{x:Static res:Strings.ShowWhenNoMediaPlaying}"
                             IsChecked="{Binding HoldFallbackVideo}"
                             HorizontalAlignment="Left"
-                            ToolTip.Tip="When on, video outputs resize to the image and display it instead of decoded frames." />
+                            ToolTip.Tip="{x:Static res:Strings.HoldFallbackToggleTooltip}" />
             </StackPanel>
           </Border>
         </Expander>

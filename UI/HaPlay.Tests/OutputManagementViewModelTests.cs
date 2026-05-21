@@ -145,6 +145,36 @@ public sealed class OutputManagementViewModelTests
     }
 
     [Fact]
+    public async Task ReconfigureLineAsync_RaisesHooks_AroundDefinitionSwap()
+    {
+        var vm = new OutputManagementViewModel();
+        var id = Guid.NewGuid();
+        var original = new PortAudioOutputDefinition(id, "PA", 0, "Alsa", 1, "d", 2, 48000);
+        vm.ReplaceDefinitionsForLoad(new OutputDefinition[] { original });
+
+        var line = vm.Outputs[0];
+        var updated = original with { SampleRate = 96000 };
+        var events = new List<string>();
+
+        vm.OutputLineReconfiguringAsync += l =>
+        {
+            var pa = Assert.IsType<PortAudioOutputDefinition>(l.Definition);
+            events.Add($"pre:{pa.SampleRate}");
+            return Task.CompletedTask;
+        };
+        vm.OutputLineReconfiguredAsync += l =>
+        {
+            var pa = Assert.IsType<PortAudioOutputDefinition>(l.Definition);
+            events.Add($"post:{pa.SampleRate}");
+            return Task.CompletedTask;
+        };
+
+        await vm.ReconfigureLineAsync(line, updated);
+
+        Assert.Equal(new[] { "pre:48000", "post:96000" }, events);
+    }
+
+    [Fact]
     public void GetClonesOf_ReturnsLocalVideoLinesWithMatchingCloneOfId()
     {
         var vm = new OutputManagementViewModel();

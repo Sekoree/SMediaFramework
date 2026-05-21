@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Text.Json;
 using System.Threading;
 using Avalonia;
@@ -10,6 +11,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Playback;
+using HaPlay.Resources;
 
 namespace HaPlay.ViewModels;
 
@@ -37,7 +39,9 @@ public sealed partial class CueVirtualOutputChannelViewModel : ObservableObject
     [ObservableProperty]
     private string _label = string.Empty;
 
-    public string DisplayName => string.IsNullOrWhiteSpace(Label) ? $"VOut {Channel}" : $"VOut {Channel} - {Label}";
+    public string DisplayName => string.IsNullOrWhiteSpace(Label)
+        ? Strings.Format(nameof(Strings.VirtualOutputLabelFormat), Channel)
+        : Strings.Format(nameof(Strings.VirtualOutputLabelWithNameFormat), Channel, Label);
 
     partial void OnChannelChanged(int value)
     {
@@ -185,11 +189,11 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     public string KindLabel => Kind switch
     {
-        CueNodeKind.Group => "Group",
-        CueNodeKind.Media => "Media",
-        CueNodeKind.Action => "Action",
-        CueNodeKind.Comment => "Comment",
-        _ => "Cue",
+        CueNodeKind.Group => Strings.CueKindGroupLabel,
+        CueNodeKind.Media => Strings.CueKindMediaLabel,
+        CueNodeKind.Action => Strings.CueKindActionLabel,
+        CueNodeKind.Comment => Strings.CueKindCommentLabel,
+        _ => Strings.CueKindDefaultLabel,
     };
 
     partial void OnExtraChanged(string value)
@@ -229,8 +233,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
         if (Kind != CueNodeKind.Media)
             return;
         Extra = RouteConnections.Count > 0
-            ? $"{RouteConnections.Count} routes"
-            : (VirtualOutputChannels.Count > 0 ? $"VOut {string.Join(",", VirtualOutputChannels)}" : string.Empty);
+            ? Strings.Format(nameof(Strings.CueRouteCountFormat), RouteConnections.Count)
+            : (VirtualOutputChannels.Count > 0
+                ? Strings.Format(nameof(Strings.CueVirtualOutputListFormat), string.Join(",", VirtualOutputChannels))
+                : string.Empty);
     }
 
     public static CueNodeViewModel FromModel(CueNode node)
@@ -303,7 +309,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceOrAction = c.Text,
                 };
             default:
-                return new CueNodeViewModel(CueNodeKind.Comment) { Label = "Unsupported cue node" };
+                return new CueNodeViewModel(CueNodeKind.Comment) { Label = Strings.UnsupportedCueNodeLabel };
         }
     }
 
@@ -405,8 +411,8 @@ public sealed partial class CueListEditorViewModel : ObservableObject
         };
         if (list.VirtualOutputs.Count == 0)
         {
-            vm.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = "Main L" });
-            vm.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = "Main R" });
+            vm.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
+            vm.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
         }
         else
         {
@@ -424,6 +430,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     private CancellationTokenSource? _transportRunCts;
     private CueNodeViewModel? _watchedRouteMediaCue;
     private CueListEditorViewModel? _watchedCueList;
+    private bool _resolvingVirtualOutputCollisions;
+    private readonly Dictionary<CueVirtualOutputChannelViewModel, PropertyChangedEventHandler> _virtualOutputChannelHandlers = [];
 
     /// <summary>
     /// Host-provided media execution callback. When null, media cues only update transport state.
@@ -437,9 +445,9 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public CuePlayerViewModel()
     {
-        var initial = new CueListEditorViewModel("Cue List 1");
-        initial.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = "Main L" });
-        initial.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = "Main R" });
+        var initial = new CueListEditorViewModel(Strings.DefaultCueListName);
+        initial.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
+        initial.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
         CueLists.Add(initial);
         SelectedCueList = initial;
     }
@@ -482,10 +490,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     private CueActionKind _builderActionKind = CueActionKind.OscOut;
 
     [ObservableProperty]
-    private string _oscBuilderAddress = "/address";
+    private string _oscBuilderAddress = Strings.OscBuilderDefaultAddress;
 
     [ObservableProperty]
-    private string _oscBuilderArguments = "1";
+    private string _oscBuilderArguments = Strings.OscBuilderDefaultArgument;
 
     [ObservableProperty]
     private CueMidiCommandType _midiBuilderCommandType = CueMidiCommandType.NoteOn;
@@ -523,16 +531,28 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public string TransportState =>
         CurrentCueNode is null
-            ? $"Standby: {(StandbyCueNode is null ? "(none)" : CueDisplay(StandbyCueNode))}"
-            : $"{(IsTransportPaused ? "Paused" : "Running")}: {CueDisplay(CurrentCueNode)}"
-              + (StandbyCueNode is null ? string.Empty : $" | Next: {CueDisplay(StandbyCueNode)}");
+            ? Strings.Format(
+                nameof(Strings.CueTransportStandbyFormat),
+                StandbyCueNode is null ? Strings.NoneInParensLabel : CueDisplay(StandbyCueNode))
+            : Strings.Format(
+                nameof(Strings.CueTransportRunningFormat),
+                IsTransportPaused ? Strings.CueTransportPausedLabel : Strings.CueTransportRunningLabel,
+                CueDisplay(CurrentCueNode))
+              + (StandbyCueNode is null
+                  ? string.Empty
+                  : Strings.Format(nameof(Strings.CueTransportNextFormat), CueDisplay(StandbyCueNode)));
 
     partial void OnSelectedCueListChanged(CueListEditorViewModel? value)
     {
         UnwatchCueListVirtualOutputs();
         _watchedCueList = value;
         if (_watchedCueList is not null)
+        {
             _watchedCueList.VirtualOutputs.CollectionChanged += OnWatchedVirtualOutputsCollectionChanged;
+            foreach (var output in _watchedCueList.VirtualOutputs)
+                WatchVirtualOutput(output);
+            NormalizeCueListVirtualOutputs(_watchedCueList);
+        }
 
         CancelTransportRun();
         OnPropertyChanged(nameof(VisibleNodes));
@@ -734,9 +754,9 @@ public partial class CuePlayerViewModel : ViewModelBase
     [RelayCommand]
     private void AddCueList()
     {
-        var list = new CueListEditorViewModel($"Cue List {CueLists.Count + 1}");
-        list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = "Main L" });
-        list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = "Main R" });
+        var list = new CueListEditorViewModel(Strings.Format(nameof(Strings.CueListNameFormat), CueLists.Count + 1));
+        list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
+        list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
         CueLists.Add(list);
         SelectedCueList = list;
         StatusMessage = null;
@@ -766,7 +786,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         var vm = new CueVirtualOutputChannelViewModel
         {
             Channel = next,
-            Label = next == 1 ? "Main L" : next == 2 ? "Main R" : string.Empty,
+            Label = next == 1 ? Strings.DefaultCueOutputMainLeft : next == 2 ? Strings.DefaultCueOutputMainRight : string.Empty,
         };
         SelectedCueList.VirtualOutputs.Add(vm);
         SelectedVirtualOutput = vm;
@@ -802,7 +822,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         var row = new CueNodeViewModel(CueNodeKind.Group)
         {
             Number = NextNumber(parent),
-            Label = "Group",
+            Label = Strings.CueNodeDefaultGroupLabel,
             Extra = CueGroupFireMode.FirstCueOnly.ToString(),
         };
         parent.Add(row);
@@ -820,7 +840,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         var row = new CueNodeViewModel(CueNodeKind.Media)
         {
             Number = NextNumber(parent),
-            Label = "Media cue",
+            Label = Strings.CueNodeDefaultMediaLabel,
         };
         parent.Add(row);
         SelectedCueNode = row;
@@ -856,12 +876,12 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (owner is null) return null;
         var opts = new FilePickerOpenOptions
         {
-            Title = "Pick media file",
+            Title = Strings.PickMediaFileDialogTitle,
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType("Media") { Patterns = ["*.mp4", "*.mov", "*.mkv", "*.avi", "*.mp3", "*.wav", "*.flac", "*.m4a"] },
-                new FilePickerFileType("All files") { Patterns = ["*"] },
+                new FilePickerFileType(Strings.MediaFileTypeLabel) { Patterns = ["*.mp4", "*.mov", "*.mkv", "*.avi", "*.mp3", "*.wav", "*.flac", "*.m4a"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
             ],
         };
         var picked = (await owner.StorageProvider.OpenFilePickerAsync(opts)).FirstOrDefault();
@@ -876,7 +896,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         var row = new CueNodeViewModel(CueNodeKind.Action)
         {
             Number = NextNumber(parent),
-            Label = "Action cue",
+            Label = Strings.CueNodeDefaultActionLabel,
             Extra = CueActionKind.OscOut.ToString(),
         };
         if (SelectedActionEndpoint is not null)
@@ -896,8 +916,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         var row = new CueNodeViewModel(CueNodeKind.Comment)
         {
             Number = NextNumber(parent),
-            Label = "Comment",
-            SourceOrAction = "Notes",
+            Label = Strings.CueNodeDefaultCommentLabel,
+            SourceOrAction = Strings.CueNodeDefaultNotesText,
         };
         parent.Add(row);
         SelectedCueNode = row;
@@ -962,8 +982,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         if (SelectedCueList is null || SelectedCueList.VirtualOutputs.Count > 0)
             return;
-        SelectedCueList.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = "Main L" });
-        SelectedCueList.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = "Main R" });
+        SelectedCueList.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
+        SelectedCueList.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
         NotifyVisibleVirtualOutputsChanged();
     }
 
@@ -983,7 +1003,21 @@ public partial class CuePlayerViewModel : ViewModelBase
     private void OnWatchedVirtualOutputsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         _ = sender;
-        _ = e;
+        if (e.OldItems is not null)
+        {
+            foreach (var item in e.OldItems.OfType<CueVirtualOutputChannelViewModel>())
+                UnwatchVirtualOutput(item);
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (var item in e.NewItems.OfType<CueVirtualOutputChannelViewModel>())
+                WatchVirtualOutput(item);
+        }
+
+        if (_watchedCueList is not null)
+            NormalizeCueListVirtualOutputs(_watchedCueList);
+
         NotifyVisibleVirtualOutputsChanged();
         AddRouteConnectionCommand.NotifyCanExecuteChanged();
     }
@@ -1001,7 +1035,75 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (_watchedCueList is null)
             return;
         _watchedCueList.VirtualOutputs.CollectionChanged -= OnWatchedVirtualOutputsCollectionChanged;
+        foreach (var output in _watchedCueList.VirtualOutputs)
+            UnwatchVirtualOutput(output);
         _watchedCueList = null;
+    }
+
+    private void WatchVirtualOutput(CueVirtualOutputChannelViewModel output)
+    {
+        if (_virtualOutputChannelHandlers.ContainsKey(output))
+            return;
+        PropertyChangedEventHandler handler = (_, args) => OnVirtualOutputPropertyChanged(output, args);
+        output.PropertyChanged += handler;
+        _virtualOutputChannelHandlers[output] = handler;
+    }
+
+    private void UnwatchVirtualOutput(CueVirtualOutputChannelViewModel output)
+    {
+        if (!_virtualOutputChannelHandlers.TryGetValue(output, out var handler))
+            return;
+        output.PropertyChanged -= handler;
+        _virtualOutputChannelHandlers.Remove(output);
+    }
+
+    private void OnVirtualOutputPropertyChanged(CueVirtualOutputChannelViewModel output, PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName is not nameof(CueVirtualOutputChannelViewModel.Channel)
+            || _watchedCueList is null)
+            return;
+        EnsureUniqueVirtualOutputChannel(_watchedCueList, output);
+        NotifyVisibleVirtualOutputsChanged();
+    }
+
+    private void NormalizeCueListVirtualOutputs(CueListEditorViewModel list)
+    {
+        foreach (var output in list.VirtualOutputs)
+            EnsureUniqueVirtualOutputChannel(list, output);
+    }
+
+    private void EnsureUniqueVirtualOutputChannel(CueListEditorViewModel list, CueVirtualOutputChannelViewModel edited)
+    {
+        if (_resolvingVirtualOutputCollisions)
+            return;
+
+        var desired = Math.Max(1, edited.Channel);
+        _resolvingVirtualOutputCollisions = true;
+        try
+        {
+            if (edited.Channel != desired)
+            {
+                edited.Channel = desired;
+                return;
+            }
+
+            var hasDuplicate = list.VirtualOutputs.Any(v => !ReferenceEquals(v, edited) && v.Channel == desired);
+            if (!hasDuplicate)
+                return;
+
+            var used = list.VirtualOutputs
+                .Where(v => !ReferenceEquals(v, edited))
+                .Select(v => Math.Max(1, v.Channel))
+                .ToHashSet();
+            var nextFree = 1;
+            while (used.Contains(nextFree))
+                nextFree++;
+            edited.Channel = nextFree;
+        }
+        finally
+        {
+            _resolvingVirtualOutputCollisions = false;
+        }
     }
 
     private bool CanRemoveRouteConnection() =>
@@ -1063,7 +1165,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             cue.EndpointIdText = string.Empty;
         cue.Extra = result.ActionKind.ToString();
         cue.SourceOrAction = result.CommandText;
-        StatusMessage = $"Updated action cue {CueDisplay(cue)}.";
+        StatusMessage = Strings.Format(nameof(Strings.UpdatedActionCueStatusFormat), CueDisplay(cue));
     }
 
     private bool CanEditActionCue() => SelectedCueNode?.Kind == CueNodeKind.Action;
@@ -1078,7 +1180,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (SelectedCueNode.Kind == CueNodeKind.Group && ResolveFireableCue(SelectedCueNode) is null)
             return;
         StandbyCueNode = SelectedCueNode;
-        StatusMessage = $"Standby {CueDisplay(SelectedCueNode)}";
+        StatusMessage = Strings.Format(nameof(Strings.CueStandbyStatusFormat), CueDisplay(SelectedCueNode));
     }
 
     private bool CanStandbySelected() =>
@@ -1096,7 +1198,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (CurrentCueNode is not null && IsTransportPaused)
         {
             IsTransportPaused = false;
-            StatusMessage = $"Resumed {CueDisplay(CurrentCueNode)}";
+            StatusMessage = Strings.Format(nameof(Strings.CueResumedStatusFormat), CueDisplay(CurrentCueNode));
             return;
         }
 
@@ -1113,7 +1215,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         IsTransportPaused = false;
         StandbyCueNode = NextCueAfter(ResolveFireableCue(fire) ?? fire, ordered);
         SelectedCueNode = plan[0].Cue;
-        StatusMessage = $"GO {CueDisplay(fire)} ({plan.Count} trigger{(plan.Count == 1 ? "" : "s")})";
+        StatusMessage = Strings.Format(
+            nameof(Strings.CueGoStatusFormat),
+            CueDisplay(fire),
+            plan.Count,
+            plan.Count == 1 ? string.Empty : Strings.PluralSuffixS);
         PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
 
         _transportRunCts = new CancellationTokenSource();
@@ -1136,8 +1242,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
         IsTransportPaused = !IsTransportPaused;
         StatusMessage = IsTransportPaused
-            ? $"Paused {CueDisplay(CurrentCueNode)}"
-            : $"Resumed {CueDisplay(CurrentCueNode)}";
+            ? Strings.Format(nameof(Strings.CuePausedStatusFormat), CueDisplay(CurrentCueNode))
+            : Strings.Format(nameof(Strings.CueResumedStatusFormat), CueDisplay(CurrentCueNode));
     }
 
     private bool CanPause() => CurrentCueNode is not null;
@@ -1150,7 +1256,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
         CurrentCueNode = null;
         IsTransportPaused = false;
-        StatusMessage = "Stopped.";
+        StatusMessage = Strings.CueStoppedStatus;
     }
 
     [RelayCommand]
@@ -1160,7 +1266,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         CurrentCueNode = null;
         StandbyCueNode = null;
         IsTransportPaused = false;
-        StatusMessage = "Panic stop: all cue transport state cleared.";
+        StatusMessage = Strings.CuePanicStatus;
     }
 
     [RelayCommand(CanExecute = nameof(CanBack))]
@@ -1176,7 +1282,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
         var prev = idx > 0 ? ordered[idx - 1] : ordered[0];
         StandbyCueNode = prev;
-        StatusMessage = $"Standby {CueDisplay(prev)}";
+        StatusMessage = Strings.Format(nameof(Strings.CueStandbyStatusFormat), CueDisplay(prev));
     }
 
     private bool CanBack() => EnumerateFireableCueOrder().Any();
@@ -1230,7 +1336,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     private string BuildOscCommandText()
     {
         var address = string.IsNullOrWhiteSpace(OscBuilderAddress)
-            ? "/address"
+            ? Strings.OscBuilderDefaultAddress
             : OscBuilderAddress.Trim();
         if (!address.StartsWith('/'))
             address = "/" + address;
@@ -1268,8 +1374,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             var raw = cue.SourceOrAction?.Trim() ?? string.Empty;
             if (string.IsNullOrWhiteSpace(raw))
             {
-                OscBuilderAddress = "/address";
-                OscBuilderArguments = "1";
+                OscBuilderAddress = Strings.OscBuilderDefaultAddress;
+                OscBuilderArguments = Strings.OscBuilderDefaultArgument;
                 return;
             }
 
@@ -1394,7 +1500,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         StandbyCueNode = next;
         SelectedCueNode = next;
-        StatusMessage = $"Auto-follow → {CueDisplay(next)}";
+        StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowStatusFormat), CueDisplay(next));
         await Go();
     }
 
@@ -1417,7 +1523,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
 
         if (broken > 0)
-            StatusMessage = $"{broken} action cue(s) reference missing endpoints.";
+            StatusMessage = Strings.Format(nameof(Strings.CueBrokenEndpointCountStatusFormat), broken);
     }
 
     /// <summary>Distinct missing endpoint IDs referenced by action cues.</summary>
@@ -1515,7 +1621,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
 
         if (added > 0)
-            StatusMessage = $"Added {added} media cue(s) from drop.";
+            StatusMessage = Strings.Format(nameof(Strings.CueAddedFromDropStatusFormat), added);
     }
 
     private IEnumerable<CueNodeViewModel> EnumerateAllCueNodes()
@@ -1547,8 +1653,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             SelectedCueNode = step.Cue;
             var exec = await ExecuteCueAsync(step.Cue, ct);
             StatusMessage = string.IsNullOrWhiteSpace(exec)
-                ? $"Triggered {CueDisplay(step.Cue)}"
-                : $"Triggered {CueDisplay(step.Cue)} — {exec}";
+                ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplay(step.Cue))
+                : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(step.Cue), exec);
         }
     }
 
@@ -1558,18 +1664,18 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             case CueNodeKind.Media:
                 if (MediaCueExecutor is null)
-                    return "media execution not configured";
+                    return Strings.CueMediaExecutionNotConfigured;
                 return cue.ToModel() is MediaCueNode media
                     ? await MediaCueExecutor(media, ct)
-                    : "invalid media cue";
+                    : Strings.CueInvalidMediaCue;
             case CueNodeKind.Action:
                 if (ActionCueExecutor is null)
-                    return "action execution not configured";
+                    return Strings.CueActionExecutionNotConfigured;
                 return cue.ToModel() is ActionCueNode action
                     ? await ActionCueExecutor(action, ct)
-                    : "invalid action cue";
+                    : Strings.CueInvalidActionCue;
             case CueNodeKind.Comment:
-                return "comment";
+                return Strings.CueCommentResult;
             case CueNodeKind.Group:
             default:
                 return null;
@@ -1638,9 +1744,9 @@ public partial class CuePlayerViewModel : ViewModelBase
             CueLists.Add(CueListEditorViewModel.FromModel(list));
         if (CueLists.Count == 0)
         {
-            var list = new CueListEditorViewModel("Cue List 1");
-            list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = "Main L" });
-            list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = "Main R" });
+            var list = new CueListEditorViewModel(Strings.DefaultCueListName);
+            list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
+            list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
             CueLists.Add(list);
         }
         SelectedCueList = CueLists[0];
@@ -1659,13 +1765,13 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         var opts = new FilePickerOpenOptions
         {
-            Title = "Open cue list",
+            Title = Strings.OpenCueListDialogTitle,
             AllowMultiple = false,
             FileTypeFilter =
             [
-                new FilePickerFileType("HaPlay cue list") { Patterns = ["*." + CueListIO.FileExtension] },
-                new FilePickerFileType("JSON") { Patterns = ["*.json"] },
-                new FilePickerFileType("All files") { Patterns = ["*"] },
+                new FilePickerFileType(Strings.HaPlayCueListFileTypeLabel) { Patterns = ["*." + CueListIO.FileExtension] },
+                new FilePickerFileType(Strings.JsonFileTypeLabel) { Patterns = ["*.json"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
             ],
         };
 
@@ -1682,11 +1788,11 @@ public partial class CuePlayerViewModel : ViewModelBase
             CueLists.Add(vm);
             SelectedCueList = vm;
             SelectedCueNode = null;
-            StatusMessage = $"Loaded cue list '{Path.GetFileName(path)}'.";
+            StatusMessage = Strings.Format(nameof(Strings.LoadedCueListStatusFormat), Path.GetFileName(path));
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Cue list load failed: {ex.Message}";
+            StatusMessage = Strings.Format(nameof(Strings.CueListLoadFailedStatusFormat), ex.Message);
         }
     }
 
@@ -1702,14 +1808,14 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         var opts = new FilePickerSaveOptions
         {
-            Title = "Save cue list",
+            Title = Strings.SaveCueListDialogTitle,
             DefaultExtension = CueListIO.FileExtension,
             SuggestedFileName = string.IsNullOrWhiteSpace(SelectedCueList.Path)
-                ? $"{SanitizeFileName(SelectedCueList.Name)}.{CueListIO.FileExtension}"
+                ? Strings.Format(nameof(Strings.CueListDefaultFileNameFormat), SanitizeFileName(SelectedCueList.Name), CueListIO.FileExtension)
                 : Path.GetFileName(SelectedCueList.Path),
             FileTypeChoices =
             [
-                new FilePickerFileType("HaPlay cue list") { Patterns = ["*." + CueListIO.FileExtension] },
+                new FilePickerFileType(Strings.HaPlayCueListFileTypeLabel) { Patterns = ["*." + CueListIO.FileExtension] },
             ],
         };
         var picked = await owner.StorageProvider.SaveFilePickerAsync(opts);
@@ -1727,18 +1833,18 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             await CueListIO.SaveAsync(SelectedCueList.ToModel(), path);
             SelectedCueList.Path = path;
-            StatusMessage = $"Saved cue list '{Path.GetFileName(path)}'.";
+            StatusMessage = Strings.Format(nameof(Strings.SavedCueListStatusFormat), Path.GetFileName(path));
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Cue list save failed: {ex.Message}";
+            StatusMessage = Strings.Format(nameof(Strings.CueListSaveFailedStatusFormat), ex.Message);
         }
     }
 
     private static string SanitizeFileName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
-            return "cue-list";
+            return Strings.CueListFileNameFallback;
         var invalid = Path.GetInvalidFileNameChars();
         return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
     }
