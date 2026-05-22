@@ -1,12 +1,13 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 
 namespace HaPlay.ViewModels.Dialogs;
 
 public partial class ActionCueBuilderDialogViewModel : ViewModelBase
 {
-    public string DialogTitle { get; private set; } = "Edit Action Cue";
+    public string DialogTitle { get; private set; } = Strings.EditActionCueDialogTitle;
 
     [ObservableProperty]
     private CueActionKind _actionKind = CueActionKind.OscOut;
@@ -15,7 +16,7 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
     private ActionEndpoint? _selectedEndpoint;
 
     [ObservableProperty]
-    private string _oscAddress = "/address";
+    private string _oscAddress = Strings.OscAddressPlaceholder;
 
     [ObservableProperty]
     private string _oscArguments = "1";
@@ -57,7 +58,9 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
         Guid? endpointId,
         IEnumerable<ActionEndpoint> endpoints)
     {
-        DialogTitle = string.IsNullOrWhiteSpace(cueLabel) ? "Edit Action Cue" : $"Edit Action — {cueLabel.Trim()}";
+        DialogTitle = string.IsNullOrWhiteSpace(cueLabel)
+            ? Strings.EditActionCueDialogTitle
+            : string.Format(System.Globalization.CultureInfo.CurrentUICulture, Strings.EditActionCueDialogTitleWithLabel, cueLabel.Trim());
         OnPropertyChanged(nameof(DialogTitle));
 
         Endpoints.Clear();
@@ -84,7 +87,7 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
 
         if (ActionKind == CueActionKind.OscOut)
         {
-            var address = string.IsNullOrWhiteSpace(OscAddress) ? "/address" : OscAddress.Trim();
+            var address = string.IsNullOrWhiteSpace(OscAddress) ? Strings.OscAddressPlaceholder : OscAddress.Trim();
             if (!address.StartsWith('/'))
                 address = "/" + address;
             commandText = string.IsNullOrWhiteSpace(OscArguments)
@@ -114,7 +117,7 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
         var text = raw?.Trim() ?? string.Empty;
         if (string.IsNullOrWhiteSpace(text))
         {
-            OscAddress = "/address";
+            OscAddress = Strings.OscAddressPlaceholder;
             OscArguments = "1";
             return;
         }

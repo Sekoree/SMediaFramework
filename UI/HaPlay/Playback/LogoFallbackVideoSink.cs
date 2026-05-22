@@ -20,12 +20,11 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     private readonly object _logoGate = new();
     private VideoFormat _format;
     private bool _configured;
-    private VideoFormat? _decoderFormat;
-    private volatile bool _imageOverrideActive;
     private volatile bool _holdFallback;
     private volatile bool _holdEverEngaged;
     private volatile bool _singleFrameSourceMode;
-    private VideoFrame? _holdTemplate;
+    private VideoFrame? _holdTemplateSource;
+    private VideoFrame? _holdTemplateRendered;
     private VideoFrame? _lastRealFrameCache;
     private volatile float _outputOpacity = 1f;
     private VideoCpuFrameConverter? _opacityToBgra;
@@ -51,49 +50,24 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     public void Configure(VideoFormat format)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        // When an image override is in effect, the inner sink stays at the image's format and we just
-        // remember the decoder's negotiated format so we can revert when the override clears. Decoded
-        // frames are still dropped by Submit while hold is on.
-        _decoderFormat = format;
-        if (_imageOverrideActive)
-        {
-            _configured = true;
-            return;
-        }
         _inner.Configure(format);
         _format = format;
         _configured = true;
+        RebuildRenderedHoldTemplate();
     }
 
     /// <summary>
-    /// Phase 3 — switches the wrapped sink to an image-native format (e.g. the dimensions of the
-    /// user-supplied hold image). Subsequent template pushes use the image format; decoded frames are
-    /// already dropped while hold is on. Pass <c>null</c> to revert to the decoder's format.
+    /// Legacy shim: compositor-based hold no longer reconfigures the wrapped sink to image-native
+    /// dimensions. The output format now stays at the negotiated playback format.
     /// </summary>
     public void ApplyImageOverrideFormat(VideoFormat? imageFormat)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (imageFormat is null)
-        {
-            if (!_imageOverrideActive)
-                return;
-            _imageOverrideActive = false;
-            if (_decoderFormat is { } df)
-            {
-                _inner.Configure(df);
-                _format = df;
-            }
-            return;
-        }
-
-        _imageOverrideActive = true;
-        _inner.Configure(imageFormat.Value);
-        _format = imageFormat.Value;
-        _configured = true;
+        _ = imageFormat;
     }
 
-    /// <summary>True while the wrapped sink is presenting at the image-override format.</summary>
-    public bool IsImageOverrideActive => _imageOverrideActive;
+    /// <summary>Compositor hold keeps the wrapped sink at one negotiated output format.</summary>
+    public bool IsImageOverrideActive => false;
 
     public void SetHoldFallback(bool hold)
     {
@@ -119,7 +93,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
         VideoFrame? tpl;
         lock (_logoGate)
         {
-            tpl = _holdTemplate;
+            tpl = _holdTemplateRendered;
         }
 
         if (tpl is null)
@@ -144,11 +118,20 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     /// <summary>Replaces the hold template; disposes any previous template.</summary>
     public void TrySetHoldTemplate(VideoFrame? template)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        VideoFrame? oldSource;
+        VideoFrame? oldRendered;
         lock (_logoGate)
         {
-            _holdTemplate?.Dispose();
-            _holdTemplate = template;
+            oldSource = _holdTemplateSource;
+            oldRendered = _holdTemplateRendered;
+            _holdTemplateSource = template;
+            _holdTemplateRendered = null;
         }
+
+        oldSource?.Dispose();
+        oldRendered?.Dispose();
+        RebuildRenderedHoldTemplate();
     }
 
     public void Submit(VideoFrame frame)
@@ -159,7 +142,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
             VideoFrame? tpl;
             lock (_logoGate)
             {
-                tpl = _holdTemplate;
+                tpl = _holdTemplateRendered;
             }
 
             if (tpl is not null)
@@ -222,6 +205,106 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
         catch
         {
             _inner.Submit(frame);
+        }
+    }
+
+    private void RebuildRenderedHoldTemplate()
+    {
+        VideoFrame? sourceCopy = null;
+        VideoFormat target;
+        lock (_logoGate)
+        {
+            target = _format;
+            if (!_configured || _holdTemplateSource is null)
+            {
+                _holdTemplateRendered?.Dispose();
+                _holdTemplateRendered = null;
+                return;
+            }
+
+            sourceCopy = VideoCpuFrameConverter.DuplicateCpuBacking(
+                _holdTemplateSource,
+                _holdTemplateSource.ColorTransferHint);
+        }
+
+        try
+        {
+            var rendered = RenderTemplateToFormat(sourceCopy, target);
+            lock (_logoGate)
+            {
+                _holdTemplateRendered?.Dispose();
+                _holdTemplateRendered = rendered;
+            }
+        }
+        finally
+        {
+            sourceCopy?.Dispose();
+        }
+    }
+
+    private static VideoFrame? RenderTemplateToFormat(VideoFrame template, VideoFormat target)
+    {
+        VideoFrame? sourceForLayer = null;
+        VideoFrame? renderedBgra = null;
+        try
+        {
+            if (template.Format.PixelFormat == PixelFormat.Bgra32)
+            {
+                sourceForLayer = new VideoFrame(
+                    TimeSpan.Zero,
+                    template.Format,
+                    template.Planes,
+                    template.Strides,
+                    release: null,
+                    metadata: template.Metadata);
+            }
+            else
+            {
+                if (!VideoCpuFrameConverter.CanConvert(
+                        template.Format.PixelFormat, PixelFormat.Bgra32, template.Format.Width, template.Format.Height))
+                    return null;
+
+                using var toBgra = new VideoCpuFrameConverter();
+                toBgra.Configure(template.Format.PixelFormat, PixelFormat.Bgra32, template.Format.Width, template.Format.Height);
+                using var converted = toBgra.Convert(template, template.ColorTransferHint);
+                sourceForLayer = VideoCpuFrameConverter.DuplicateCpuBacking(converted, converted.ColorTransferHint);
+            }
+
+            var composedBgraFormat = new VideoFormat(target.Width, target.Height, PixelFormat.Bgra32, target.FrameRate);
+            using var compositor = new CpuVideoCompositor(composedBgraFormat);
+            using var sink = new CompositorVideoSink(composedBgraFormat, compositor, disposeCompositorOnDispose: false);
+            var slot = sink.AddSlot();
+            slot.Transform = OutputPresetFormats.LetterboxTransform(sourceForLayer.Format, composedBgraFormat);
+            slot.Sink.Configure(sourceForLayer.Format);
+            slot.Sink.Submit(sourceForLayer);
+            sourceForLayer = null;
+
+            if (!sink.TryReadNextFrame(out renderedBgra))
+                return null;
+
+            if (target.PixelFormat == PixelFormat.Bgra32)
+            {
+                var direct = VideoCpuFrameConverter.DuplicateCpuBacking(renderedBgra, renderedBgra.ColorTransferHint);
+                renderedBgra.Dispose();
+                renderedBgra = null;
+                return direct;
+            }
+
+            if (!VideoCpuFrameConverter.CanConvert(PixelFormat.Bgra32, target.PixelFormat, target.Width, target.Height))
+                return null;
+
+            using var fromBgra = new VideoCpuFrameConverter();
+            fromBgra.Configure(PixelFormat.Bgra32, target.PixelFormat, target.Width, target.Height);
+            using var convertedToTarget = fromBgra.Convert(renderedBgra, renderedBgra.ColorTransferHint);
+            var result = VideoCpuFrameConverter.DuplicateCpuBacking(convertedToTarget, convertedToTarget.ColorTransferHint);
+            renderedBgra.Dispose();
+            renderedBgra = null;
+            return result;
+        }
+        finally
+        {
+            sourceForLayer?.Dispose();
+            renderedBgra?.Dispose();
         }
     }
 
@@ -319,8 +402,10 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
         _disposed = true;
         lock (_logoGate)
         {
-            _holdTemplate?.Dispose();
-            _holdTemplate = null;
+            _holdTemplateSource?.Dispose();
+            _holdTemplateSource = null;
+            _holdTemplateRendered?.Dispose();
+            _holdTemplateRendered = null;
             _lastRealFrameCache?.Dispose();
             _lastRealFrameCache = null;
         }

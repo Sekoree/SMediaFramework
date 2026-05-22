@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:port="using:S.Media.PortAudio"
+        xmlns:res="using:HaPlay.Resources"
         xmlns:vm="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.AddPortAudioOutputDialog"
         x:DataType="vm:AddPortAudioOutputDialogViewModel"
@@ -11,7 +12,7 @@
         MinWidth="420" MinHeight="480">
   <DockPanel Margin="16">
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
-      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
       <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
     </StackPanel>
 
@@ -19,10 +20,10 @@
       <StackPanel Spacing="10">
         <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
 
-        <TextBlock Text="Display name" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
         <TextBox Text="{Binding DisplayName}" />
 
-        <TextBlock Text="Host API" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.HostApiLabel}" FontWeight="SemiBold" />
         <ComboBox ItemsSource="{Binding HostApis}"
                   SelectedItem="{Binding SelectedHostApi}">
           <ComboBox.ItemTemplate>
@@ -32,7 +33,7 @@
           </ComboBox.ItemTemplate>
         </ComboBox>
 
-        <TextBlock Text="Output device" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.OutputDeviceLabel}" FontWeight="SemiBold" />
         <ComboBox ItemsSource="{Binding Devices}"
                   SelectedItem="{Binding SelectedDevice}">
           <ComboBox.ItemTemplate>
@@ -42,10 +43,10 @@
           </ComboBox.ItemTemplate>
         </ComboBox>
 
-        <TextBlock Text="Channel count (must be ≤ device maximum)" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.ChannelCountDeviceLimitLabel}" FontWeight="SemiBold" />
         <NumericUpDown Minimum="1" Maximum="64" Value="{Binding ChannelCount}" />
 
-        <TextBlock Text="Sample rate (Hz)" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.SampleRateHzLabel}" FontWeight="SemiBold" />
         <NumericUpDown Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding SampleRate}" />
       </StackPanel>
     </ScrollViewer>

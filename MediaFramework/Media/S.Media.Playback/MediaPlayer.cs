@@ -435,7 +435,15 @@ public sealed class MediaPlayer : IDisposable
             }
 
             var vin = router.AddInput(primaryOutputId);
-            videoPlayer = new VideoPlayer(effectiveVideoSource, vin.Sink, playClock);
+            var liveQueueCap = options.LiveVideoDecodeQueueCapacity > 0
+                ? options.LiveVideoDecodeQueueCapacity
+                : 4;
+            videoPlayer = new VideoPlayer(
+                effectiveVideoSource,
+                vin.Sink,
+                playClock,
+                queueCapacity: liveQueueCap,
+                presentationMode: options.LiveVideoPresentation);
 
             player = new MediaPlayer(
                 router,

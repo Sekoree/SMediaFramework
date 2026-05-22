@@ -11,6 +11,7 @@ using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.OutputPreview;
 using HaPlay.Playback;
+using HaPlay.Resources;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
 using S.Media.Core.Video;
@@ -23,6 +24,13 @@ public partial class OutputManagementViewModel : ViewModelBase
 {
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
     public ObservableCollection<OutputVirtualChannelAssignmentViewModel> VirtualAudioChannelAssignments { get; } = new();
+    /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
+    /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
+    public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();
+
+    /// <summary>§8.2 — pre-filtered view of <see cref="Outputs"/> exposing only PortAudio lines.
+    /// Refreshed every time <see cref="Outputs"/> changes so the shared-bus PA picker stays in sync.</summary>
+    public ObservableCollection<OutputLineViewModel> PortAudioOutputLines { get; } = new();
     private readonly Dictionary<(Guid OutputId, int OutputChannel), int> _virtualAudioChannelMap = new();
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
@@ -75,6 +83,10 @@ public partial class OutputManagementViewModel : ViewModelBase
     public event EventHandler? RoutingTopologyChanged;
     public event EventHandler? VirtualAudioChannelMapChanged;
 
+    /// <summary>§8.2 — raised when the shared-bus list mutates or any bus's PortAudio target /
+    /// label changes. Player VMs use this to refresh their cue target picker.</summary>
+    public event EventHandler? SharedHeadphonesBusesChanged;
+
     [ObservableProperty]
     private bool _hasVirtualChannelCollisions;
 
@@ -101,8 +113,8 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     /// <summary>One-line summary: "5 active · 1 warning · 0 errors" — bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
-        ? "Idle — no active routes"
-        : $"{AggregateActiveCount} active · {AggregateWarningCount} warning · {AggregateErrorCount} error";
+        ? Strings.AggregateSummaryIdle
+        : Strings.Format(nameof(Strings.AggregateSummaryActiveFormat), AggregateActiveCount, AggregateWarningCount, AggregateErrorCount);
 
     partial void OnAggregateActiveCountChanged(int value)
     {
@@ -133,8 +145,95 @@ public partial class OutputManagementViewModel : ViewModelBase
         };
         Outputs.CollectionChanged += (_, _) => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         Outputs.CollectionChanged += (_, _) => RebuildVirtualAudioChannelAssignments();
+        // §8.2 — a removed PA output may have been a bus's target; raise the event so player VMs
+        // can re-resolve and mark buses without a backing PA output as broken.
+        Outputs.CollectionChanged += (_, _) =>
+        {
+            RebuildPortAudioOutputLines();
+            RaiseSharedHeadphonesBusesChanged();
+        };
+        RebuildPortAudioOutputLines();
         VirtualAudioChannelAssignments.CollectionChanged += OnVirtualAudioChannelAssignmentsChanged;
+        SharedHeadphonesBuses.CollectionChanged += OnSharedHeadphonesBusesCollectionChanged;
         RebuildVirtualAudioChannelAssignments();
+    }
+
+    private void OnSharedHeadphonesBusesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        _ = sender;
+        if (e.OldItems is not null)
+            foreach (var removed in e.OldItems.OfType<SharedHeadphonesBusViewModel>())
+                removed.PropertyChanged -= OnSharedHeadphonesBusPropertyChanged;
+        if (e.NewItems is not null)
+            foreach (var added in e.NewItems.OfType<SharedHeadphonesBusViewModel>())
+                added.PropertyChanged += OnSharedHeadphonesBusPropertyChanged;
+        RaiseSharedHeadphonesBusesChanged();
+    }
+
+    private void OnSharedHeadphonesBusPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        RaiseSharedHeadphonesBusesChanged();
+    }
+
+    private void RaiseSharedHeadphonesBusesChanged() =>
+        SharedHeadphonesBusesChanged?.Invoke(this, EventArgs.Empty);
+
+    private void RebuildPortAudioOutputLines()
+    {
+        PortAudioOutputLines.Clear();
+        foreach (var line in Outputs.Where(o => o.Definition is PortAudioOutputDefinition))
+            PortAudioOutputLines.Add(line);
+    }
+
+    [RelayCommand]
+    private void AddSharedHeadphonesBus()
+    {
+        var firstPa = Outputs.FirstOrDefault(o => o.Definition is PortAudioOutputDefinition)?.Definition.Id;
+        SharedHeadphonesBuses.Add(new SharedHeadphonesBusViewModel
+        {
+            Id = Guid.NewGuid(),
+            Label = Strings.Format(nameof(Strings.SharedHeadphonesBusNameFormat), SharedHeadphonesBuses.Count + 1),
+            PortAudioOutputId = firstPa,
+        });
+    }
+
+    [RelayCommand]
+    private void RemoveSharedHeadphonesBus(SharedHeadphonesBusViewModel? bus)
+    {
+        if (bus is null) return;
+        SharedHeadphonesBuses.Remove(bus);
+    }
+
+    /// <summary>Returns the PortAudio <see cref="OutputLineViewModel"/> backing the bus, or
+    /// <c>null</c> when the bus has no target / the target was removed (broken).</summary>
+    public OutputLineViewModel? ResolveSharedBusOutput(Guid busId)
+    {
+        var bus = SharedHeadphonesBuses.FirstOrDefault(b => b.Id == busId);
+        if (bus?.PortAudioOutputId is not { } paId)
+            return null;
+        return Outputs.FirstOrDefault(o => o.Definition.Id == paId && o.Definition is PortAudioOutputDefinition);
+    }
+
+    public IReadOnlyList<SharedHeadphonesBus> BuildSharedHeadphonesBusesSnapshot() =>
+        SharedHeadphonesBuses.Select(b => new SharedHeadphonesBus
+        {
+            Id = b.Id,
+            Label = b.Label,
+            PortAudioOutputId = b.PortAudioOutputId,
+        }).ToList();
+
+    public void ApplySharedHeadphonesBuses(IReadOnlyList<SharedHeadphonesBus> buses)
+    {
+        SharedHeadphonesBuses.Clear();
+        foreach (var b in buses)
+            SharedHeadphonesBuses.Add(new SharedHeadphonesBusViewModel
+            {
+                Id = b.Id,
+                Label = string.IsNullOrWhiteSpace(b.Label) ? Strings.SharedHeadphonesBusDefaultName : b.Label,
+                PortAudioOutputId = b.PortAudioOutputId,
+            });
     }
 
     private void RaiseTopologyChanged() => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
@@ -578,7 +677,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// isn't started yet, or another session already holds it. Callers MUST pair every successful acquire
     /// with <see cref="ReleasePortAudioForPlayback"/>.
     /// </summary>
-    internal PortAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line)
+    internal PortAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line, bool liveMonitoring = false)
     {
         PortAudioOutputRuntime? rt;
         lock (_portAudioOutputsGate)
@@ -587,7 +686,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 return null;
         }
 
-        return rt.AcquireForPlayback();
+        return rt.AcquireForPlayback(liveMonitoring);
     }
 
     /// <summary>Releases the acquirer hold added by <see cref="TryAcquirePortAudioForPlayback"/>.</summary>
@@ -756,7 +855,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     {
         var dlg = new Window
         {
-            Title = "Apply edit while output is in use?",
+            Title = Strings.OutputEditInUseDialogTitle,
             Width = 480,
             Height = 200,
             CanResize = false,
@@ -764,8 +863,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             ShowInTaskbar = false,
         };
 
-        var ok = new Button { Content = "Apply (brief glitch)", IsDefault = true };
-        var cancel = new Button { Content = "Cancel", IsCancel = true };
+        var ok = new Button { Content = Strings.OutputEditInUseApplyButton, IsDefault = true };
+        var cancel = new Button { Content = Strings.CancelButton, IsCancel = true };
 
         var tcs = new TaskCompletionSource<bool>();
         ok.Click += (_, _) => { tcs.TrySetResult(true); dlg.Close(); };
@@ -785,10 +884,7 @@ public partial class OutputManagementViewModel : ViewModelBase
 
         var message = new TextBlock
         {
-            Text =
-                $"'{line.Definition.DisplayName}' is currently delivering audio/video to a running player. " +
-                "Applying the edit will cause a brief silence / black-frame on that output (typically 1–2 frames). " +
-                "Continue?",
+            Text = Strings.Format(nameof(Strings.OutputEditInUseDialogMessageFormat), line.Definition.DisplayName),
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
         };
 
@@ -995,19 +1091,30 @@ public partial class OutputManagementViewModel : ViewModelBase
             return state switch
             {
                 OutputLineHealthState.Healthy =>
-                    $"Video pump OK ({vm.SubmittedFrames} submitted, queue {vm.CurrentQueuedDepth}/{vm.MaxQueueDepth})",
-                _ => $"Video drops {vm.DroppedFrames} / {vm.SubmittedFrames}, queue {vm.CurrentQueuedDepth}/{vm.MaxQueueDepth}",
+                    Strings.Format(nameof(Strings.OutputHealthVideoPumpOkFormat), vm.SubmittedFrames, vm.CurrentQueuedDepth, vm.MaxQueueDepth),
+                _ => Strings.Format(nameof(Strings.OutputHealthVideoDropsFormat), vm.DroppedFrames, vm.SubmittedFrames, vm.CurrentQueuedDepth, vm.MaxQueueDepth),
             };
         }
 
         if (session.TryGetAudioSinkId(line, out var sid) && session.Player.Audio is not null)
         {
             var st = session.Player.Audio.Router.GetPumpStats(sid);
-            return state switch
+            var detail = state switch
             {
-                OutputLineHealthState.Healthy => $"Audio pump OK ({st.Processed} chunks)",
-                _ => $"Audio drops {st.Dropped} / {st.Enqueued}",
+                OutputLineHealthState.Healthy => Strings.Format(nameof(Strings.OutputHealthAudioPumpOkFormat), st.Processed),
+                _ => Strings.Format(nameof(Strings.OutputHealthAudioDropsFormat), st.Dropped, st.Enqueued),
             };
+            if (session.TryGetPortAudioOutput(line, out var pa) && pa is not null)
+            {
+                var underrunDelta = session.GetPortAudioUnderrunDelta(line);
+                if (underrunDelta > 0)
+                {
+                    detail += " " + Strings.Format(nameof(Strings.OutputHealthPortAudioUnderrunsFormat), underrunDelta,
+                        pa.QueuedSamples);
+                }
+            }
+
+            return detail;
         }
 
         return state.ToString();
@@ -1037,8 +1144,8 @@ public sealed partial class OutputVirtualChannelAssignmentViewModel : Observable
 
     public string OutputChannelLabel =>
         OutputChannelCount == 2
-            ? $"Out {(OutputChannel == 0 ? "L" : "R")}"
-            : $"Out {OutputChannel + 1}";
+            ? (OutputChannel == 0 ? Strings.ChannelOutLeftLabel : Strings.ChannelOutRightLabel)
+            : Strings.Format(nameof(Strings.ChannelOutNumberFormat), OutputChannel + 1);
 
     [ObservableProperty]
     private int _virtualOutputChannel;

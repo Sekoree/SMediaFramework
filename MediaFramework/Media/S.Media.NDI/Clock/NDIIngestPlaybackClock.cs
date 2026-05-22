@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using NDILib;
 using S.Media.Core.Clock;
+using S.Media.NDI;
 
 namespace S.Media.NDI.Clock;
 
@@ -29,6 +30,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     private readonly Lock _gate = new();
     private readonly Func<long> _getTimestamp;
 
+    private long _liveWallEpochTicks;
     private long _sessionOriginTicks;
     private long _lastStreamEndTicks;
     private long _lastWallTicks;
@@ -81,6 +83,7 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
     {
         lock (_gate)
         {
+            _liveWallEpochTicks = _getTimestamp();
             _captureStopped = false;
             _paused = false;
             _sessionStarted = false;
@@ -90,9 +93,23 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
         }
     }
 
+    /// <summary>
+    /// Wall time since the last <see cref="AttachReceiver"/> — used for live playout PTS so video
+    /// matches the audio ring (arrival order) and PortAudio, not the sender's NDI timecode.
+    /// </summary>
+    public TimeSpan SnapshotWallPresentationPosition()
+    {
+        lock (_gate)
+            return Stopwatch.GetElapsedTime(_liveWallEpochTicks);
+    }
+
     /// <summary>Updates the media timeline from a captured <see cref="NDIAudioFrameV3"/> (call before freeing the frame).</summary>
     public void NotifyAudioFrame(ref readonly NDIAudioFrameV3 audio) =>
         NotifyAudioFrame(audio.SampleRate, audio.NoSamples, audio.Timecode, audio.Timestamp);
+
+    /// <summary>Updates the media timeline from a captured <see cref="NDIVideoFrameV2"/> (call before freeing the frame).</summary>
+    public void NotifyVideoFrame(ref readonly NDIVideoFrameV2 video) =>
+        NotifyVideoFrame(video.FrameRateN, video.FrameRateD, video.Timecode, video.Timestamp);
 
     /// <summary>Updates the media timeline from raw SDK fields (100 ns timebase where applicable).</summary>
     public void NotifyAudioFrame(int sampleRate, int noSamples, long timecode100Ns, long timestamp100Ns)
@@ -113,7 +130,44 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
 
             var wallNow = _getTimestamp();
             long startTicks;
-            if (TryGetFrameStartTicks(timecode100Ns, timestamp100Ns, out var absoluteStart))
+            if (NDIFrameTiming.TryGetFrameStartTicks(timecode100Ns, timestamp100Ns, out var absoluteStart))
+                startTicks = absoluteStart;
+            else
+                startTicks = _sessionStarted ? _lastStreamEndTicks : 0;
+
+            var endTicks = startTicks + durationTicks;
+            if (_sessionStarted)
+                endTicks = Math.Max(endTicks, _lastStreamEndTicks);
+
+            if (!_sessionStarted)
+            {
+                _sessionOriginTicks = startTicks;
+                _sessionStarted = true;
+            }
+
+            _lastStreamEndTicks = endTicks;
+            _lastWallTicks = wallNow;
+            _advancing = true;
+        }
+    }
+
+    /// <summary>Updates the media timeline from a video frame (100 ns timebase where applicable).</summary>
+    public void NotifyVideoFrame(int frameRateN, int frameRateD, long timecode100Ns, long timestamp100Ns)
+    {
+        var durationTicks = NDIFrameTiming.FrameDurationTicks(frameRateN, frameRateD);
+        if (durationTicks <= 0)
+            return;
+
+        lock (_gate)
+        {
+            if (_captureStopped)
+                return;
+            if (_paused && _sessionStarted)
+                return;
+
+            var wallNow = _getTimestamp();
+            long startTicks;
+            if (NDIFrameTiming.TryGetFrameStartTicks(timecode100Ns, timestamp100Ns, out var absoluteStart))
                 startTicks = absoluteStart;
             else
                 startTicks = _sessionStarted ? _lastStreamEndTicks : 0;
@@ -214,24 +268,6 @@ public sealed class NDIIngestPlaybackClock : IPlaybackClock
         var wallExtras = Stopwatch.GetElapsedTime(_lastWallTicks, wallNow);
         var total = media + wallExtras;
         return total < TimeSpan.Zero ? TimeSpan.Zero : total;
-    }
-
-    private static bool TryGetFrameStartTicks(long timecode100Ns, long timestamp100Ns, out long startTicks)
-    {
-        if (timecode100Ns != NDIConstants.TimecodeSynthesize)
-        {
-            startTicks = timecode100Ns;
-            return true;
-        }
-
-        if (timestamp100Ns != NDIConstants.TimestampUndefined)
-        {
-            startTicks = timestamp100Ns;
-            return true;
-        }
-
-        startTicks = 0;
-        return false;
     }
 
     private static long FrameDurationTicks(int sampleRate, int samples) =>

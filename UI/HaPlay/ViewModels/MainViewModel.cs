@@ -13,6 +13,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Playback;
+using HaPlay.Resources;
 using OSCLib;
 using PMLib;
 using PMLib.Devices;
@@ -27,6 +28,8 @@ public partial class MainViewModel : ViewModelBase
     private readonly object _midiInitSync = new();
     private bool _midiInitialized;
     private CancellationTokenSource? _endpointHealthCts;
+    private DispatcherTimer? _endpointHealthTimer;
+    private int _endpointHealthRefreshInFlight;
 
     public MainViewModel()
     {
@@ -48,6 +51,14 @@ public partial class MainViewModel : ViewModelBase
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         RefreshMidiDeviceCatalog();
         _ = RefreshAllEndpointHealthAsync();
+        // Keep endpoint LEDs current even when devices/network state changes after project load.
+        _endpointHealthTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) =>
+        {
+            _ = RefreshAllEndpointHealthAsync();
+        })
+        {
+            IsEnabled = true,
+        };
 
         // Phase B (§3.6) — give the Edit dialog a way to ask "is any player playing through this line?".
         // Iterating the Players collection on each probe is fine: outputs are edited rarely, never
@@ -403,16 +414,33 @@ public partial class MainViewModel : ViewModelBase
 
     public async Task RefreshAllEndpointHealthAsync()
     {
+        if (Interlocked.CompareExchange(ref _endpointHealthRefreshInFlight, 1, 0) != 0)
+            return;
+
+        CancellationTokenSource? newCts = null;
         _endpointHealthCts?.Cancel();
         _endpointHealthCts?.Dispose();
-        _endpointHealthCts = new CancellationTokenSource();
-        var ct = _endpointHealthCts.Token;
+        _endpointHealthCts = newCts = new CancellationTokenSource();
+        var ct = newCts.Token;
 
-        foreach (var row in OscEndpointRows.Concat(MidiEndpointRows))
+        try
         {
-            if (ct.IsCancellationRequested)
-                return;
-            await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
+            foreach (var row in OscEndpointRows.Concat(MidiEndpointRows))
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+                await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            // Keep the latest CTS alive for targeted manual probes; only dispose if this run's CTS was replaced.
+            if (!ReferenceEquals(_endpointHealthCts, newCts))
+            {
+                try { newCts.Dispose(); } catch { /* best effort */ }
+            }
+
+            Interlocked.Exchange(ref _endpointHealthRefreshInFlight, 0);
         }
     }
 
@@ -428,7 +456,7 @@ public partial class MainViewModel : ViewModelBase
         {
             OscActionEndpoint osc => await ActionEndpointProbe.TryProbeOscAsync(osc, ct).ConfigureAwait(false),
             MidiActionEndpoint midi => ActionEndpointProbe.TryProbeMidi(midi, EnsureMidiInitialized),
-            _ => (false, "Unknown endpoint kind"),
+            _ => (false, Strings.UnknownEndpointKind),
         };
 
         if (ct.IsCancellationRequested)
@@ -447,7 +475,7 @@ public partial class MainViewModel : ViewModelBase
         var n = ActionEndpoints.OfType<OscActionEndpoint>().Count() + 1;
         var endpoint = new OscActionEndpoint
         {
-            Name = $"OSC {n}",
+            Name = Strings.Format(nameof(Strings.OscEndpointNameFormat), n),
             Host = "127.0.0.1",
             Port = 9000,
         };
@@ -461,7 +489,7 @@ public partial class MainViewModel : ViewModelBase
         var n = ActionEndpoints.OfType<MidiActionEndpoint>().Count() + 1;
         var endpoint = new MidiActionEndpoint
         {
-            Name = $"MIDI {n}",
+            Name = Strings.Format(nameof(Strings.MidiEndpointNameFormat), n),
             Channel = 0,
         };
         ActionEndpoints.Add(endpoint);
@@ -543,14 +571,14 @@ public partial class MainViewModel : ViewModelBase
         var inputs = PMUtil.GetInputDevices();
         MidiInputOptions.Clear();
         foreach (var dev in inputs)
-            MidiInputOptions.Add(new MidiInputOption(dev.Id, dev.Name ?? $"Device {dev.Id}"));
+            MidiInputOptions.Add(new MidiInputOption(dev.Id, dev.Name ?? Strings.Format(nameof(Strings.DeviceWithIdFormat), dev.Id)));
 
         var outputs = PMUtil.GetOutputDevices();
         MidiOutputOptions.Clear();
         foreach (var dev in outputs)
-            MidiOutputOptions.Add(new MidiOutputOption(dev.Id, dev.Name ?? $"Device {dev.Id}"));
+            MidiOutputOptions.Add(new MidiOutputOption(dev.Id, dev.Name ?? Strings.Format(nameof(Strings.DeviceWithIdFormat), dev.Id)));
 
-        MidiDeviceStatus = $"MIDI devices: {inputs.Count} input, {outputs.Count} output.";
+        MidiDeviceStatus = Strings.Format(nameof(Strings.MidiDeviceCatalogStatusFormat), inputs.Count, outputs.Count);
     }
 
     [RelayCommand]
@@ -575,7 +603,7 @@ public partial class MainViewModel : ViewModelBase
 
     private MediaPlayerViewModel CreatePlayer(bool removable)
     {
-        var name = $"Player {_nextPlayerNumber++}";
+        var name = Strings.Format(nameof(Strings.PlayerNameFormat), _nextPlayerNumber++);
         var player = new MediaPlayerViewModel(OutputManagement, name, removable ? RemovePlayer : null);
         player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         return player;
@@ -591,7 +619,7 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            CuePlayer.StatusMessage = $"Auto-follow failed: {ex.Message}";
+            CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
         }
     }
 
@@ -610,7 +638,7 @@ public partial class MainViewModel : ViewModelBase
             return;
         ActionEndpoints.Add(new OscActionEndpoint
         {
-            Name = "OSC Localhost",
+            Name = Strings.OscLocalhostEndpointName,
             Host = "127.0.0.1",
             Port = 9000,
         });
@@ -620,16 +648,16 @@ public partial class MainViewModel : ViewModelBase
     {
         var player = SelectedPlayer;
         if (player is null)
-            return "no selected player";
+            return Strings.CueExecuteNoSelectedPlayer;
         if (cue.Source is null)
-            return "no media source";
+            return Strings.CueExecuteNoMediaSource;
 
         player.ConfigureCueTransport(cue);
         player.ApplyCueRouteOverrides(cue);
         var preRolled = await player.TryPlayCueMediaAsync(cue, ct).ConfigureAwait(false);
         _ = RefreshCuePreRollAsync();
         return preRolled
-            ? $"{cue.Source.DisplayName} (pre-roll)"
+            ? Strings.Format(nameof(Strings.CuePreRollResultFormat), cue.Source.DisplayName)
             : cue.Source.DisplayName;
     }
 
@@ -664,7 +692,7 @@ public partial class MainViewModel : ViewModelBase
             {
                 CueActionKind.OscOut => await ExecuteCueOscAsync(cue, ct),
                 CueActionKind.MidiOut => await Task.Run(() => ExecuteCueMidi(cue, ct), ct),
-                _ => $"action kind '{cue.ActionKind}' not wired",
+                _ => Strings.Format(nameof(Strings.ActionKindNotWiredFormat), cue.ActionKind),
             };
         }
         catch (Exception ex)
@@ -682,13 +710,13 @@ public partial class MainViewModel : ViewModelBase
                 .OfType<OscActionEndpoint>()
                 .FirstOrDefault(e => e.Id == endpointId);
             if (endpoint is null)
-                return $"OSC endpoint missing: {endpointId}";
+                return Strings.Format(nameof(Strings.OscEndpointMissingFormat), endpointId);
         }
 
         var spec = ParseOscSpec(cue.AddressOrMessage, endpoint);
         using var client = await OSCClient.CreateAsync(spec.Host, spec.Port, cancellationToken: ct);
         await client.SendMessageAsync(spec.Address, spec.Arguments, ct);
-        return $"OSC {spec.Host}:{spec.Port}{spec.Address}";
+        return Strings.Format(nameof(Strings.OscSendResultFormat), spec.Host, spec.Port, spec.Address);
     }
 
     private string ExecuteCueMidi(ActionCueNode cue, CancellationToken ct)
@@ -698,7 +726,7 @@ public partial class MainViewModel : ViewModelBase
             ? ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault(e => e.Id == endpointId)
             : ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault();
         if (cue.EndpointId is not null && endpoint is null)
-            return $"MIDI endpoint missing: {cue.EndpointId}";
+            return Strings.Format(nameof(Strings.MidiEndpointMissingFormat), cue.EndpointId);
 
         var initErr = EnsureMidiInitialized();
         if (initErr is not null)
@@ -706,23 +734,23 @@ public partial class MainViewModel : ViewModelBase
 
         var devices = PMUtil.GetOutputDevices();
         if (devices.Count == 0)
-            return "no MIDI output devices";
+            return Strings.MidiNoOutputDevices;
 
         var device = ResolveMidiDevice(endpoint, devices);
         if (device is null)
             return endpoint is null
-                ? "no suitable MIDI output device"
-                : $"MIDI endpoint device not found: {endpoint.DeviceName ?? endpoint.DeviceId?.ToString() ?? "(unset)"}";
+                ? Strings.MidiNoSuitableOutputDevice
+                : Strings.Format(nameof(Strings.MidiEndpointDeviceNotFoundFormat), endpoint.DeviceName ?? endpoint.DeviceId?.ToString() ?? Strings.UnsetLabel);
 
         var spec = ParseMidiSpec(cue.AddressOrMessage, endpoint, device.Value.Id);
         using var outDevice = new MIDIOutputDevice(spec.DeviceId);
         var openErr = outDevice.Open();
         if (openErr != PmError.NoError)
-            return $"MIDI open failed: {PMUtil.GetErrorText(openErr) ?? openErr.ToString()}";
+            return Strings.Format(nameof(Strings.MidiOpenFailedFormat), PMUtil.GetErrorText(openErr) ?? openErr.ToString());
         var writeErr = outDevice.Write(spec.Message);
         if (writeErr != PmError.NoError)
-            return $"MIDI write failed: {PMUtil.GetErrorText(writeErr) ?? writeErr.ToString()}";
-        return $"MIDI {device.Value.Name ?? $"#{device.Value.Id}"} {spec.Description}";
+            return Strings.Format(nameof(Strings.MidiWriteFailedFormat), PMUtil.GetErrorText(writeErr) ?? writeErr.ToString());
+        return Strings.Format(nameof(Strings.MidiSendResultFormat), device.Value.Name ?? Strings.Format(nameof(Strings.DeviceHashIdFormat), device.Value.Id), spec.Description);
     }
 
     private string? EnsureMidiInitialized()
@@ -733,7 +761,7 @@ public partial class MainViewModel : ViewModelBase
                 return null;
             var err = PMUtil.Initialize();
             if (err != PmError.NoError)
-                return $"MIDI init failed: {PMUtil.GetErrorText(err) ?? err.ToString()}";
+                return Strings.Format(nameof(Strings.MidiInitFailedFormat), PMUtil.GetErrorText(err) ?? err.ToString());
             _midiInitialized = true;
             return null;
         }
@@ -809,7 +837,7 @@ public partial class MainViewModel : ViewModelBase
             .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
         if (tokens.Count == 0)
-            throw new InvalidOperationException("MIDI action requires a message (e.g. 'noteon 60 100').");
+            throw new InvalidOperationException(Strings.MidiActionRequiresMessage);
 
         byte channel = (byte)Math.Clamp(endpoint?.Channel ?? 0, 0, 15);
         var idx = 0;
@@ -822,7 +850,7 @@ public partial class MainViewModel : ViewModelBase
         }
 
         if (idx >= tokens.Count)
-            throw new InvalidOperationException("MIDI action command missing.");
+            throw new InvalidOperationException(Strings.MidiActionCommandMissing);
 
         var cmd = tokens[idx++].ToLowerInvariant();
         IMIDIMessage msg = cmd switch
@@ -832,19 +860,19 @@ public partial class MainViewModel : ViewModelBase
                 idx < tokens.Count ? ParseByte(tokens, idx++, "velocity") : (byte)0),
             "cc" => new ControlChange(channel, ParseByte(tokens, idx++, "controller"), ParseByte(tokens, idx++, "value")),
             "pc" or "program" => new ProgramChange(channel, ParseByte(tokens, idx++, "program")),
-            _ => throw new InvalidOperationException($"Unsupported MIDI command '{cmd}'. Use noteon/noteoff/cc/pc."),
+            _ => throw new InvalidOperationException(Strings.Format(nameof(Strings.UnsupportedMidiCommandFormat), cmd)),
         };
 
         var deviceId = endpoint?.DeviceId ?? fallbackDeviceId;
-        return new MidiSpec(deviceId, msg, $"{cmd} ch{channel + 1}");
+        return new MidiSpec(deviceId, msg, Strings.Format(nameof(Strings.MidiSpecDescriptionFormat), cmd, channel + 1));
     }
 
     private static byte ParseByte(IReadOnlyList<string> tokens, int index, string name)
     {
         if (index < 0 || index >= tokens.Count)
-            throw new InvalidOperationException($"MIDI argument '{name}' is missing.");
+            throw new InvalidOperationException(Strings.Format(nameof(Strings.MidiArgumentMissingFormat), name));
         if (!int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
-            throw new InvalidOperationException($"MIDI argument '{name}' is invalid: '{tokens[index]}'.");
+            throw new InvalidOperationException(Strings.Format(nameof(Strings.MidiArgumentInvalidFormat), name, tokens[index]));
         return (byte)Math.Clamp(value, 0, 127);
     }
 
@@ -877,6 +905,7 @@ public partial class MainViewModel : ViewModelBase
             ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
         Outputs = OutputManagement.Outputs.Select(o => o.Definition).ToList(),
         VirtualAudioChannels = OutputManagement.BuildVirtualAudioChannelAssignmentsSnapshot().ToList(),
+        SharedHeadphonesBuses = OutputManagement.BuildSharedHeadphonesBusesSnapshot().ToList(),
         Players = Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList(),
         ActionEndpoints = ActionEndpoints.ToList(),
         CueLists = CuePlayer.BuildCueListsSnapshot(),
@@ -899,6 +928,7 @@ public partial class MainViewModel : ViewModelBase
         // "rebind missing devices" flow (§7.3, §7.4); for now we just project the definitions.
         OutputManagement.ReplaceDefinitionsForLoad(project.Outputs);
         OutputManagement.ApplyVirtualAudioChannelAssignments(project.VirtualAudioChannels);
+        OutputManagement.ApplySharedHeadphonesBuses(project.SharedHeadphonesBuses);
         ActionEndpoints.Clear();
         foreach (var endpoint in project.ActionEndpoints)
             ActionEndpoints.Add(endpoint);
@@ -909,7 +939,7 @@ public partial class MainViewModel : ViewModelBase
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)
-            Players.Add(new MediaPlayerViewModel(OutputManagement, $"Player {_nextPlayerNumber++}", RemovePlayer));
+            Players.Add(new MediaPlayerViewModel(OutputManagement, Strings.Format(nameof(Strings.PlayerNameFormat), _nextPlayerNumber++), RemovePlayer));
         while (Players.Count > project.Players.Count && Players.Count > 1)
             Players.RemoveAt(Players.Count - 1);
 
@@ -937,8 +967,8 @@ public partial class MainViewModel : ViewModelBase
 
     public string ProjectTitle =>
         string.IsNullOrEmpty(CurrentProjectPath)
-            ? "HaPlay — Untitled"
-            : $"HaPlay — {Path.GetFileNameWithoutExtension(CurrentProjectPath)}";
+            ? Strings.ProjectTitleUntitled
+            : Strings.Format(nameof(Strings.ProjectTitleFormat), Path.GetFileNameWithoutExtension(CurrentProjectPath));
 
     /// <summary>Default location for project files (§7.3 — ~/Documents/HaPlay Projects/).</summary>
     public static string DefaultProjectsFolder
@@ -971,13 +1001,13 @@ public partial class MainViewModel : ViewModelBase
         var startFolder = await TryGetStartLocationAsync(owner);
         var opts = new FilePickerOpenOptions
         {
-            Title = "Open HaPlay project",
+            Title = Strings.OpenProjectDialogTitle,
             AllowMultiple = false,
             SuggestedStartLocation = startFolder,
             FileTypeFilter =
             [
-                new FilePickerFileType("HaPlay project") { Patterns = ["*." + ProjectIO.FileExtension] },
-                new FilePickerFileType("All files") { Patterns = ["*"] },
+                new FilePickerFileType(Strings.HaPlayProjectFileTypeLabel) { Patterns = ["*." + ProjectIO.FileExtension] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
             ],
         };
         var picks = await owner.StorageProvider.OpenFilePickerAsync(opts);
@@ -998,12 +1028,12 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (UnsupportedSchemaVersionException ex)
         {
-            ProjectStatus = $"Open failed: {ex.Message}";
+            ProjectStatus = Strings.Format(nameof(Strings.ProjectOpenFailedFormat), ex.Message);
             return;
         }
         catch (Exception ex)
         {
-            ProjectStatus = $"Open failed: {ex.Message}";
+            ProjectStatus = Strings.Format(nameof(Strings.ProjectOpenFailedFormat), ex.Message);
             return;
         }
 
@@ -1039,11 +1069,11 @@ public partial class MainViewModel : ViewModelBase
         await PromptRebindMissingActionEndpointsAsync();
         _ = RefreshAllEndpointHealthAsync();
 
-        var statusParts = new List<string> { $"Loaded '{Path.GetFileName(path)}'." };
+        var statusParts = new List<string> { Strings.Format(nameof(Strings.ProjectLoadedStatusFormat), Path.GetFileName(path)) };
         if (missing.Count > 0)
-            statusParts.Add($"{missing.Count} player route(s) still reference missing outputs: {string.Join(", ", missing)}.");
+            statusParts.Add(Strings.Format(nameof(Strings.ProjectMissingRoutesStatusFormat), missing.Count, string.Join(", ", missing)));
         if (outputStartErrors.Count > 0)
-            statusParts.Add($"{outputStartErrors.Count} output runtime(s) could not start: {string.Join("; ", outputStartErrors)}.");
+            statusParts.Add(Strings.Format(nameof(Strings.ProjectOutputRuntimesStartFailedFormat), outputStartErrors.Count, string.Join("; ", outputStartErrors)));
         ProjectStatus = string.Join(" ", statusParts);
     }
 
@@ -1060,15 +1090,15 @@ public partial class MainViewModel : ViewModelBase
         var startFolder = await TryGetStartLocationAsync(owner);
         var opts = new FilePickerSaveOptions
         {
-            Title = "Save HaPlay project",
+            Title = Strings.SaveProjectDialogTitle,
             DefaultExtension = ProjectIO.FileExtension,
             SuggestedFileName = string.IsNullOrEmpty(CurrentProjectPath)
-                ? "project." + ProjectIO.FileExtension
+                ? Strings.Format(nameof(Strings.ProjectDefaultFileNameFormat), ProjectIO.FileExtension)
                 : Path.GetFileName(CurrentProjectPath),
             SuggestedStartLocation = startFolder,
             FileTypeChoices =
             [
-                new FilePickerFileType("HaPlay project") { Patterns = ["*." + ProjectIO.FileExtension] },
+                new FilePickerFileType(Strings.HaPlayProjectFileTypeLabel) { Patterns = ["*." + ProjectIO.FileExtension] },
             ],
         };
         var picked = await owner.StorageProvider.SaveFilePickerAsync(opts);
@@ -1086,11 +1116,11 @@ public partial class MainViewModel : ViewModelBase
             await ProjectIO.SaveAsync(snapshot, path);
             CurrentProjectPath = path;
             PushRecentProject(path);
-            ProjectStatus = $"Saved '{Path.GetFileName(path)}'.";
+            ProjectStatus = Strings.Format(nameof(Strings.ProjectSavedStatusFormat), Path.GetFileName(path));
         }
         catch (Exception ex)
         {
-            ProjectStatus = $"Save failed: {ex.Message}";
+            ProjectStatus = Strings.Format(nameof(Strings.ProjectSaveFailedFormat), ex.Message);
         }
     }
 
@@ -1158,13 +1188,13 @@ public partial class MainViewModel : ViewModelBase
         if (row is null)
             return;
 
-        EndpointTestStatus = "Testing OSC…";
+        EndpointTestStatus = Strings.TestingOscStatus;
         await ProbeEndpointRowAsync(row, CancellationToken.None);
         EndpointTestStatus = row.Health switch
         {
-            ActionEndpointHealthState.Ok => $"OSC {row.HealthDetail}",
-            ActionEndpointHealthState.Failed => $"OSC failed: {row.HealthDetail}",
-            _ => "OSC test finished.",
+            ActionEndpointHealthState.Ok => Strings.Format(nameof(Strings.OscTestOkStatusFormat), row.HealthDetail),
+            ActionEndpointHealthState.Failed => Strings.Format(nameof(Strings.OscTestFailedStatusFormat), row.HealthDetail),
+            _ => Strings.OscTestFinishedStatus,
         };
     }
 
@@ -1179,13 +1209,13 @@ public partial class MainViewModel : ViewModelBase
         if (row is null)
             return;
 
-        EndpointTestStatus = "Testing MIDI…";
+        EndpointTestStatus = Strings.TestingMidiStatus;
         await ProbeEndpointRowAsync(row, CancellationToken.None);
         EndpointTestStatus = row.Health switch
         {
-            ActionEndpointHealthState.Ok => $"MIDI {row.HealthDetail}",
-            ActionEndpointHealthState.Failed => $"MIDI failed: {row.HealthDetail}",
-            _ => "MIDI test finished.",
+            ActionEndpointHealthState.Ok => Strings.Format(nameof(Strings.MidiTestOkStatusFormat), row.HealthDetail),
+            ActionEndpointHealthState.Failed => Strings.Format(nameof(Strings.MidiTestFailedStatusFormat), row.HealthDetail),
+            _ => Strings.MidiTestFinishedStatus,
         };
     }
 

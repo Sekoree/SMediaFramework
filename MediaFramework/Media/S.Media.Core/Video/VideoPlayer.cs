@@ -52,6 +52,7 @@ public sealed class VideoPlayer : IDisposable
     private SemaphoreSlim _slotsAvailable;
     private readonly int _queueCapacity;
     private readonly TimeSpan _decodePollInterval;
+    private readonly VideoPresentationMode _presentationMode;
     private readonly Lock _gate = new();
 
     private Thread? _decodeThread;
@@ -150,7 +151,8 @@ public sealed class VideoPlayer : IDisposable
 
     public VideoPlayer(IVideoSource source, IVideoSink sink, IMediaClock clock,
                        int queueCapacity = 4, TimeSpan? decodePollInterval = null,
-                       Func<PixelFormat, bool>? negotiatePixelFormats = null)
+                       Func<PixelFormat, bool>? negotiatePixelFormats = null,
+                       VideoPresentationMode presentationMode = VideoPresentationMode.Scheduled)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(sink);
@@ -160,6 +162,7 @@ public sealed class VideoPlayer : IDisposable
         _source = source;
         _sink = sink;
         _clock = clock;
+        _presentationMode = presentationMode;
         _queueCapacity = queueCapacity;
         _slotsAvailable = new SemaphoreSlim(queueCapacity, queueCapacity);
         _decodePollInterval = decodePollInterval ?? TimeSpan.FromMilliseconds(5);
@@ -370,8 +373,14 @@ public sealed class VideoPlayer : IDisposable
         if (!IsRunning) return;
 
         if (Interlocked.Exchange(ref _firstTickLogged, 1) == 0)
-            Trace.LogDebug("OnVideoTick: first tick (playhead={Playhead} queued={Queued})",
-                _clock.CurrentPosition, _queue.Count);
+            Trace.LogDebug("OnVideoTick: first tick (playhead={Playhead} queued={Queued} mode={Mode})",
+                _clock.CurrentPosition, _queue.Count, _presentationMode);
+
+        if (_presentationMode == VideoPresentationMode.LatestOnTick)
+        {
+            PresentLatestQueuedFrame();
+            return;
+        }
 
         var playhead = _clock.CurrentPosition;
         var early = playhead + EarlyTolerance;
@@ -462,6 +471,35 @@ public sealed class VideoPlayer : IDisposable
         {
             // Property toggled off mid-hold — drop the snapshot.
             ReleaseHeldFrame();
+        }
+    }
+
+    private void PresentLatestQueuedFrame()
+    {
+        VideoFrame? latest = null;
+        while (_queue.TryDequeue(out var frame))
+        {
+            _slotsAvailable.Release();
+            latest?.Dispose();
+            latest = frame;
+        }
+
+        if (latest is null)
+            return;
+
+        try
+        {
+            _sink.Submit(latest);
+            Interlocked.Increment(ref _displayed);
+            FramePresentationTimePresented?.Invoke(latest.PresentationTime);
+        }
+        catch (Exception ex)
+        {
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "VideoPlayer.PresentLatestQueuedFrame sink Submit");
+#endif
+            try { latest.Dispose(); } catch { /* best effort */ }
+            _ = ex;
         }
     }
 

@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 
 namespace HaPlay.ViewModels;
 
@@ -37,5 +38,5 @@ public sealed partial class PlayerOutputBinding : ObservableObject
     /// source channel count is known (on session open).</summary>
     public AudioMatrixViewModel Matrix { get; } = new();
 
-    public string GainText => IsMuted ? "Muted" : $"{GainDb:0.#} dB";
+    public string GainText => IsMuted ? Strings.MutedLabel : Strings.Format(nameof(Strings.DecibelValueFormat), GainDb);
 }

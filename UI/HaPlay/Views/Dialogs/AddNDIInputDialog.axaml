@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
         xmlns:vm="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.AddNDIInputDialog"
         x:DataType="vm:AddNDIInputDialogViewModel"
@@ -10,7 +11,7 @@
         MinWidth="460" MinHeight="520">
   <DockPanel Margin="16">
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
-      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
       <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
     </StackPanel>
 
@@ -18,15 +19,15 @@
       <StackPanel Spacing="10">
         <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
 
-        <TextBlock Text="Display name" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
         <TextBox Text="{Binding DisplayName}" />
 
         <Grid ColumnDefinitions="*,Auto" Margin="0,8,0,0">
-          <ToggleButton Grid.Column="0" Content="Live-discovered sources"
+          <ToggleButton Grid.Column="0" Content="{x:Static res:Strings.LiveDiscoveredSourcesToggle}"
                         IsChecked="{Binding UseDiscovery}"
                         HorizontalContentAlignment="Center"
-                        ToolTip.Tip="Pick from NDI sources currently visible on the network." />
-          <Button Grid.Column="1" Content="↻ Rescan" Margin="6,0,0,0"
+                        ToolTip.Tip="{x:Static res:Strings.LiveDiscoveredSourcesTooltip}" />
+          <Button Grid.Column="1" Content="{x:Static res:Strings.RescanButton}" Margin="6,0,0,0"
                   Command="{Binding RefreshCommand}"
                   IsEnabled="{Binding UseDiscovery}" />
         </Grid>
@@ -39,29 +40,35 @@
         </StackPanel>
 
         <StackPanel Spacing="6" IsVisible="{Binding !UseDiscovery}">
-          <TextBlock Text="Manual source name (e.g. MACHINE (Instance))" FontWeight="SemiBold" />
-          <TextBox Text="{Binding SourceName}" PlaceholderText="MACHINE (Camera 1)" />
+          <TextBlock Text="{x:Static res:Strings.ManualSourceNameLabel}" FontWeight="SemiBold" />
+          <TextBox Text="{Binding SourceName}" PlaceholderText="{x:Static res:Strings.ManualSourceNamePlaceholder}" />
           <TextBlock Opacity="0.7" FontSize="11" TextWrapping="Wrap"
-                     Text="Manual entries load even if the source is offline today — the playlist enters 'waiting for source' on Play until the sender appears." />
+                     Text="{x:Static res:Strings.ManualSourceNameHint}" />
         </StackPanel>
 
         <Border Background="#15808080" CornerRadius="4" Padding="10" Margin="0,8,0,0">
           <StackPanel Spacing="6">
-            <TextBlock Text="Connection hints" FontWeight="SemiBold" />
-            <CheckBox Content="Low bandwidth (preview stream, NDI 5+)" IsChecked="{Binding LowBandwidth}" />
-            <CheckBox Content="Audio only (ignore sender's video)" IsChecked="{Binding AudioOnly}" />
-            <CheckBox Content="Video only (ignore sender's audio)" IsChecked="{Binding VideoOnly}" />
+            <TextBlock Text="{x:Static res:Strings.ConnectionHintsLabel}" FontWeight="SemiBold" />
+            <CheckBox Content="{x:Static res:Strings.LowBandwidthPreviewCheckbox}" IsChecked="{Binding LowBandwidth}" />
+            <CheckBox Content="{x:Static res:Strings.AudioOnlyCheckbox}" IsChecked="{Binding AudioOnly}" />
+            <CheckBox Content="{x:Static res:Strings.VideoOnlyCheckbox}" IsChecked="{Binding VideoOnly}" />
+            <TextBlock Text="{x:Static res:Strings.NdiSyncModeLabel}" FontWeight="SemiBold" Margin="0,4,0,0" />
+            <RadioButton GroupName="NdiSyncMode" Content="{x:Static res:Strings.NdiSyncModeNdiClock}"
+                         IsChecked="{Binding IsNdiClockSync}" />
+            <RadioButton GroupName="NdiSyncMode" Content="{x:Static res:Strings.NdiSyncModeLowLatency}"
+                         IsChecked="{Binding IsLowLatencySync}" />
+            <TextBlock Text="{x:Static res:Strings.NdiSyncModeHint}" Opacity="0.7" FontSize="11" TextWrapping="Wrap" />
             <StackPanel Orientation="Horizontal" Spacing="6">
-              <TextBlock VerticalAlignment="Center" Text="Reconnect interval (s)" />
+              <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.ReconnectIntervalSecondsLabel}" />
               <NumericUpDown Minimum="0" Maximum="600" Increment="1" Value="{Binding RetrySeconds}" Width="100" />
               <TextBlock VerticalAlignment="Center" Opacity="0.7" FontSize="11"
-                         Text="0 disables retries." />
+                         Text="{x:Static res:Strings.ZeroDisablesRetriesHint}" />
             </StackPanel>
           </StackPanel>
         </Border>
 
         <TextBlock TextWrapping="Wrap" Opacity="0.7" FontSize="11" Margin="0,4,0,0"
-                   Text="Video-only items drive NDI video without audio. Audio+video items use separate receivers on the same source name." />
+                   Text="{x:Static res:Strings.NdiVideoOnlyBehaviorHint}" />
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

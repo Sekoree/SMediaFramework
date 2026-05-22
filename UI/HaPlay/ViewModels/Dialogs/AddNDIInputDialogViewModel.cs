@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 using NDILib;
 
 namespace HaPlay.ViewModels.Dialogs;
@@ -25,7 +26,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     private NDIFinder? _finder;
     private DispatcherTimer? _discoveryTimer;
 
-    [ObservableProperty] private string _displayName = "NDI input";
+    [ObservableProperty] private string _displayName = Strings.NdiInputDefaultName;
     [ObservableProperty] private string _sourceName = string.Empty;
     [ObservableProperty] private string? _validationMessage;
     [ObservableProperty] private bool _useDiscovery = true;
@@ -33,6 +34,25 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private bool _audioOnly;
     [ObservableProperty] private bool _videoOnly;
     [ObservableProperty] private int _retrySeconds = 5;
+    [ObservableProperty] private NdiInputSyncMode _syncMode = NdiInputSyncMode.NdiFrameSync;
+
+    public bool IsNdiClockSync
+    {
+        get => SyncMode == NdiInputSyncMode.NdiFrameSync;
+        set { if (value) SyncMode = NdiInputSyncMode.NdiFrameSync; }
+    }
+
+    public bool IsLowLatencySync
+    {
+        get => SyncMode == NdiInputSyncMode.LowLatency;
+        set { if (value) SyncMode = NdiInputSyncMode.LowLatency; }
+    }
+
+    partial void OnSyncModeChanged(NdiInputSyncMode value)
+    {
+        OnPropertyChanged(nameof(IsNdiClockSync));
+        OnPropertyChanged(nameof(IsLowLatencySync));
+    }
     [ObservableProperty] private bool _isScanning;
     [ObservableProperty] private string? _discoveryStatus;
 
@@ -42,8 +62,8 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private string? _selectedDiscoveredSource;
 
     public bool IsEditing => _existingId is not null;
-    public string DialogTitle => IsEditing ? "Edit NDI input" : "Add NDI input";
-    public string PrimaryButtonLabel => IsEditing ? "Save" : "Add";
+    public string DialogTitle => IsEditing ? Strings.EditNdiInputDialogTitle : Strings.AddNdiInputDialogTitle;
+    public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
     public void LoadFromExisting(NDIInputPlaylistItem existing)
     {
@@ -54,6 +74,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         AudioOnly = existing.AudioOnly;
         VideoOnly = existing.VideoOnly;
         RetrySeconds = existing.RetrySeconds;
+        SyncMode = existing.SyncMode;
         // Default to manual-name when editing — the saved name is authoritative and shouldn't be silently
         // replaced by a discovery match with the same human label but a different transport address.
         UseDiscovery = false;
@@ -72,7 +93,10 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             var rc = NDIFinder.Create(out var f, new NDIFinderSettings { ShowLocalSources = true });
             if (rc != 0 || f is null)
             {
-                DiscoveryStatus = $"NDI discovery unavailable (rc={rc}). Switch to manual name.";
+                DiscoveryStatus = string.Format(
+                    System.Globalization.CultureInfo.CurrentUICulture,
+                    Strings.NdiDiscoveryUnavailableStatus,
+                    rc);
                 UseDiscovery = false;
                 return Task.CompletedTask;
             }
@@ -97,7 +121,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     private async Task RefreshAsync()
     {
         IsScanning = true;
-        DiscoveryStatus = "Scanning…";
+        DiscoveryStatus = Strings.NdiDiscoveryScanningStatus;
         try
         {
             await StartDiscoveryAsync().ConfigureAwait(false);
@@ -144,12 +168,18 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
                 ? p
                 : DiscoveredSources.FirstOrDefault();
             DiscoveryStatus = newNames.Count == 0
-                ? "No NDI sources visible yet — check sender power, network, and groups."
-                : $"{newNames.Count} source(s) visible.";
+                ? Strings.NdiDiscoveryNoSourcesStatus
+                : string.Format(
+                    System.Globalization.CultureInfo.CurrentUICulture,
+                    Strings.NdiDiscoverySourceCountStatus,
+                    newNames.Count);
         }
         catch (Exception ex)
         {
-            DiscoveryStatus = $"Scan failed: {ex.Message}";
+            DiscoveryStatus = string.Format(
+                System.Globalization.CultureInfo.CurrentUICulture,
+                Strings.NdiDiscoveryScanFailedStatus,
+                ex.Message);
         }
     }
 
@@ -170,7 +200,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         ValidationMessage = null;
         if (string.IsNullOrWhiteSpace(DisplayName))
         {
-            ValidationMessage = "Display name is required.";
+            ValidationMessage = Strings.ValidationDisplayNameRequired;
             return null;
         }
 
@@ -178,20 +208,20 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         if (string.IsNullOrWhiteSpace(name))
         {
             ValidationMessage = UseDiscovery
-                ? "Pick a discovered source, or switch to manual name."
-                : "Enter the NDI source name (e.g. 'MACHINE (Instance)').";
+                ? Strings.ValidationDiscoveryPickOrManual
+                : Strings.ValidationNdiSourceNameExample;
             return null;
         }
 
         if (AudioOnly && VideoOnly)
         {
-            ValidationMessage = "Audio-only and video-only can't both be set.";
+            ValidationMessage = Strings.ValidationAudioOnlyAndVideoOnlyMutuallyExclusive;
             return null;
         }
 
         if (RetrySeconds is < 0 or > 600)
         {
-            ValidationMessage = "Retry interval must be between 0 and 600 seconds.";
+            ValidationMessage = Strings.ValidationRetryIntervalRange;
             return null;
         }
 
@@ -205,6 +235,7 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             AudioOnly = AudioOnly,
             VideoOnly = VideoOnly,
             RetrySeconds = RetrySeconds,
+            SyncMode = SyncMode,
         };
     }
 }

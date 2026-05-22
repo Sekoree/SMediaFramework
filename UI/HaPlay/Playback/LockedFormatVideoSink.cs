@@ -1,5 +1,6 @@
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
+using S.Media.FFmpeg.Video;
 using Microsoft.Extensions.Logging;
 
 namespace HaPlay.Playback;
@@ -38,6 +39,7 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
 
     private CompositorVideoSink? _scaler;
     private CompositorVideoSink.Slot? _scalerSlot;
+    private VideoCpuFrameConverter? _toBgra;
     private VideoFormat _negotiatedFormat;
     private VideoFormat _innerFormat;
     private bool _configured;
@@ -143,8 +145,18 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
             return;
         }
 
-        // Slot takes ownership of the source frame; pull the composited result and forward.
-        _scalerSlot.Sink.Submit(frame);
+        if (!CompositorLayerConverter.TryToBgraLayer(frame, ref _toBgra, out var layer, out var convertedToBgra)
+            || layer is null)
+        {
+            frame.Dispose();
+            return;
+        }
+
+        if (convertedToBgra)
+            frame.Dispose();
+
+        _scalerSlot.Sink.Configure(layer.Format);
+        _scalerSlot.Sink.Submit(layer);
         if (_scaler.TryReadNextFrame(out var scaled))
             _inner.Submit(scaled);
     }
@@ -154,6 +166,9 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
         var s = _scaler;
         _scaler = null;
         _scalerSlot = null;
+        try { _toBgra?.Dispose(); }
+        catch { /* best effort */ }
+        _toBgra = null;
         if (s is null) return;
         try { s.Dispose(); }
         catch { /* best effort */ }

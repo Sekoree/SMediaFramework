@@ -1,4 +1,5 @@
 using HaPlay.Models;
+using HaPlay.Resources;
 using OSCLib;
 using PMLib;
 using PMLib.Devices;
@@ -15,7 +16,7 @@ internal static class ActionEndpointProbe
         {
             using var client = await OSCClient.CreateAsync(osc.Host, osc.Port, cancellationToken: ct).ConfigureAwait(false);
             await client.SendMessageAsync("/haplay/ping", [OSCArgument.Int32(1)], ct).ConfigureAwait(false);
-            return (true, $"OK — {osc.Host}:{osc.Port}");
+            return (true, Strings.Format(nameof(Strings.EndpointProbeOkHostPortFormat), osc.Host, osc.Port));
         }
         catch (Exception ex)
         {
@@ -34,14 +35,16 @@ internal static class ActionEndpointProbe
             var devices = PMUtil.GetOutputDevices();
             var device = ResolveMidiDevice(midi, devices);
             if (device is null)
-                return (false, "Output device not found.");
+                return (false, Strings.OutputDeviceNotFound);
 
             using var outDevice = new MIDIOutputDevice(device.Value.Id);
             var openErr = outDevice.Open();
             if (openErr != PmError.NoError)
                 return (false, PMUtil.GetErrorText(openErr) ?? openErr.ToString());
 
-            return (true, $"OK — {device.Value.Name ?? $"#{device.Value.Id}"}");
+            return (true, Strings.Format(
+                nameof(Strings.EndpointProbeOkDeviceFormat),
+                device.Value.Name ?? Strings.Format(nameof(Strings.DeviceHashIdFormat), device.Value.Id)));
         }
         catch (Exception ex)
         {

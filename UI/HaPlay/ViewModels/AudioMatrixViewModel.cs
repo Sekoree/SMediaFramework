@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
+using HaPlay.Resources;
 
 namespace HaPlay.ViewModels;
 
@@ -35,7 +36,7 @@ public sealed partial class AudioMatrixCellViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(IsAudible))]
     private bool _muted;
 
-    public string GainText => Muted ? "Mute" : $"{GainDb:0.#} dB";
+    public string GainText => Muted ? Strings.MuteLabel : Strings.Format(nameof(Strings.DecibelValueFormat), GainDb);
 
     /// <summary>True when this cell will install a router route at the next matrix push.</summary>
     public bool IsAudible => !Muted && GainDb > AudioMatrixDefaults.MutedFloorDb;
@@ -68,8 +69,8 @@ public sealed partial class AudioMatrixInputTrimViewModel : ObservableObject
 
     public string Label =>
         InputChannelCount == 2
-            ? $"In {(InputChannel == 0 ? "L" : "R")}"
-            : $"In {InputChannel + 1}";
+            ? (InputChannel == 0 ? Strings.ChannelInLeftLabel : Strings.ChannelInRightLabel)
+            : Strings.Format(nameof(Strings.ChannelInNumberFormat), InputChannel + 1);
 
     [ObservableProperty]
     private double _gainDb;
@@ -289,7 +290,7 @@ public sealed class AudioMatrixRouteRow
 
     public int VirtualOutputChannel { get; }
 
-    public string VirtualOutputLabel => $"VOut {VirtualOutputChannel}";
+    public string VirtualOutputLabel => Strings.Format(nameof(Strings.VirtualOutputLabelFormat), VirtualOutputChannel);
 
     public string OutputLabel { get; }
 
@@ -299,8 +300,8 @@ public sealed class AudioMatrixRouteRow
 
     public string InputLabel =>
         InputChannelCount == 2
-            ? $"In {(InputChannel == 0 ? "L" : "R")}"
-            : $"In {InputChannel + 1}";
+            ? (InputChannel == 0 ? Strings.ChannelInLeftLabel : Strings.ChannelInRightLabel)
+            : Strings.Format(nameof(Strings.ChannelInNumberFormat), InputChannel + 1);
 
     public AudioMatrixCellViewModel Cell { get; }
 
