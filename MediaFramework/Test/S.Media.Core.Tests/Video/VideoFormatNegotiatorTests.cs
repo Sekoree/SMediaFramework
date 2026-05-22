@@ -1,4 +1,5 @@
 using S.Media.Core.Video;
+using S.Media.Effects;
 using Xunit;
 
 namespace S.Media.Core.Tests.Video;

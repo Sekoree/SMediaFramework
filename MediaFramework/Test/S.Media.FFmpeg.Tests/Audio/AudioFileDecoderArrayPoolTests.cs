@@ -1,3 +1,4 @@
+using S.Media.Core;
 using S.Media.Core.Audio;
 using Xunit;
 
@@ -18,7 +19,7 @@ public sealed class AudioFileDecoderArrayPoolTests
     {
         var calls = 0;
         var frame = new AudioFrame(TimeSpan.Zero, new AudioFormat(48000, 2), 480, new float[960],
-            Release: () => calls++);
+            Release: DisposableRelease.Wrap(() => calls++));
         frame.Dispose();
         Assert.Equal(1, calls);
     }

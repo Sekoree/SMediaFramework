@@ -144,7 +144,7 @@ public sealed class BobDeinterlacer : IDeinterlacer
 
         var owned = buffer;
         return new VideoFrame(pts, src.Format, new ReadOnlyMemory<byte>(buffer, 0, byteCount), dstStride,
-            release: () => ArrayPool<byte>.Shared.Return(owned, clearArray: false),
+            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)),
             metadata: src.Metadata with { FieldOrder = VideoFieldOrder.Progressive });
     }
 
@@ -212,7 +212,7 @@ public sealed class BobDeinterlacer : IDeinterlacer
         };
         var strides = new[] { yDstStride, cDstStride, cDstStride };
         return new VideoFrame(pts, src.Format, planes, strides,
-            release: () => ArrayPool<byte>.Shared.Return(owned, clearArray: false),
+            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)),
             metadata: src.Metadata with { FieldOrder = VideoFieldOrder.Progressive });
     }
 
@@ -267,7 +267,7 @@ public sealed class BobDeinterlacer : IDeinterlacer
         };
         var strides = new[] { yDstStride, uvDstStride };
         return new VideoFrame(pts, src.Format, planes, strides,
-            release: () => ArrayPool<byte>.Shared.Return(owned, clearArray: false),
+            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)),
             metadata: src.Metadata with { FieldOrder = VideoFieldOrder.Progressive });
     }
 

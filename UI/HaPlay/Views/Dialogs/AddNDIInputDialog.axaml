@@ -52,12 +52,6 @@
             <CheckBox Content="{x:Static res:Strings.LowBandwidthPreviewCheckbox}" IsChecked="{Binding LowBandwidth}" />
             <CheckBox Content="{x:Static res:Strings.AudioOnlyCheckbox}" IsChecked="{Binding AudioOnly}" />
             <CheckBox Content="{x:Static res:Strings.VideoOnlyCheckbox}" IsChecked="{Binding VideoOnly}" />
-            <TextBlock Text="{x:Static res:Strings.NdiSyncModeLabel}" FontWeight="SemiBold" Margin="0,4,0,0" />
-            <RadioButton GroupName="NdiSyncMode" Content="{x:Static res:Strings.NdiSyncModeNdiClock}"
-                         IsChecked="{Binding IsNdiClockSync}" />
-            <RadioButton GroupName="NdiSyncMode" Content="{x:Static res:Strings.NdiSyncModeLowLatency}"
-                         IsChecked="{Binding IsLowLatencySync}" />
-            <TextBlock Text="{x:Static res:Strings.NdiSyncModeHint}" Opacity="0.7" FontSize="11" TextWrapping="Wrap" />
             <StackPanel Orientation="Horizontal" Spacing="6">
               <TextBlock VerticalAlignment="Center" Text="{x:Static res:Strings.ReconnectIntervalSecondsLabel}" />
               <NumericUpDown Minimum="0" Maximum="600" Increment="1" Value="{Binding RetrySeconds}" Width="100" />

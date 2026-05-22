@@ -146,7 +146,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
     /// <param name="win32D3D11DeviceComPtrForNv12">Borrowed libav or host <c>ID3D11Device</c> for Win32 NV12; <c>0</c> defers binding when <paramref name="allowLazyWin32Nv12UploaderFromDecodedFrame"/> is <see langword="true"/>.</param>
     /// <param name="allowLazyWin32Nv12UploaderFromDecodedFrame">
     /// When <see langword="true"/> (Windows NV12 only, and <paramref name="win32D3D11DeviceComPtrForNv12"/> is <c>0</c>), the uploader is created from
-    /// <see cref="VideoWin32Nv12Backing.LibavD3D11DeviceComPtr"/> on the first Win32 NV12 frame (true zero-host: no SDL-owned <c>D3D11GlInteropDeviceHost</c>).
+    /// <see cref="Win32SharedNv12Backing.LibavD3D11DeviceComPtr"/> on the first Win32 NV12 frame (true zero-host: no SDL-owned <c>D3D11GlInteropDeviceHost</c>).
     /// </param>
     public YuvVideoRenderer(GL gl, VideoFormat format, YuvColorSpace? colorSpace = null,
         bool sharedShaderPrograms = false, bool yPlaneMipmaps = false, YuvDmabufEglInterop? eglDmabufInterop = null,
@@ -313,7 +313,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         return true;
     }
 
-    private bool EnsureNv12UploaderForWin32Backing(VideoWin32Nv12Backing backing)
+    private bool EnsureNv12UploaderForWin32Backing(Win32SharedNv12Backing backing)
     {
         if (backing.LibavD3D11DeviceComPtr != 0)
             return TryEnsureNv12Win32SharedUploader(backing.LibavD3D11DeviceComPtr);

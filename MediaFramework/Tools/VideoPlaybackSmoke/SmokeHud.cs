@@ -48,11 +48,11 @@ public static class SmokeHud
         long pumpDr = 0, paUnd = 0, paDr = 0, ndiDr = 0;
         if (audioHost is not null)
         {
-            pumpDr = audioHost.Player.Router.GetPumpStats(audioHost.PrimaryOutputId).Dropped;
+            pumpDr = audioHost.Router.GetPumpStats(audioHost.PrimaryOutputId).Dropped;
             paUnd = audioHost.MainOutput.UnderrunSamples;
             paDr = audioHost.MainOutput.DroppedSamples;
             if (ndiAudioOutputId is not null)
-                ndiDr = audioHost.Player.Router.GetPumpStats(ndiAudioOutputId).Dropped;
+                ndiDr = audioHost.Router.GetPumpStats(ndiAudioOutputId).Dropped;
         }
 
         long ndiVidDr = 0;

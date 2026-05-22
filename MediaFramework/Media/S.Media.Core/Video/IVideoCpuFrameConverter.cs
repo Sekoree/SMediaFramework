@@ -1,4 +1,5 @@
 using System.Buffers;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.Core.Video;
 
@@ -28,13 +29,23 @@ public interface IVideoCpuFrameConverter : IDisposable
 public static class VideoCpuFrameConverterRegistry
 {
     /// <summary>Returns a fresh <see cref="IVideoCpuFrameConverter"/> instance. <c>null</c> until a package installs one.</summary>
-    public static Func<IVideoCpuFrameConverter>? Factory { get; set; }
+    [Obsolete("Use MediaFrameworkPlugins.VideoCpuFrameConverterFactory")]
+    public static Func<IVideoCpuFrameConverter>? Factory
+    {
+        get => MediaFrameworkPlugins.VideoCpuFrameConverterFactory;
+        set => MediaFrameworkPlugins.VideoCpuFrameConverterFactory = value;
+    }
 
     /// <summary>
     /// Probes whether the registered converter can build a scaler for the given pair. <c>null</c>
     /// until installed; treated as "no" by the fan-out picker so it falls through to alternatives.
     /// </summary>
-    public static Func<PixelFormat, PixelFormat, int, int, bool>? CanConvertProbe { get; set; }
+    [Obsolete("Use MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe")]
+    public static Func<PixelFormat, PixelFormat, int, int, bool>? CanConvertProbe
+    {
+        get => MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe;
+        set => MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = value;
+    }
 
     /// <summary>Creates a converter from <see cref="Factory"/>; throws when no factory is registered.</summary>
     public static IVideoCpuFrameConverter Create() =>
@@ -91,11 +102,11 @@ public static class VideoFrameCpuClone
             }
 
             return new VideoFrame(source.PresentationTime, source.Format, planes, stridesOut,
-                release: () =>
+                release: DisposableRelease.Wrap(() =>
                 {
                     foreach (var b in rentedBuffers)
                         ArrayPool<byte>.Shared.Return(b);
-                },
+                }),
                 metadata: source.Metadata with { ColorTransferHint = hint });
         }
         catch

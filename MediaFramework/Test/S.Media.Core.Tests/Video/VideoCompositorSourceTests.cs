@@ -1,4 +1,5 @@
 using S.Media.Core.Video;
+using S.Media.Effects;
 using Xunit;
 
 namespace S.Media.Core.Tests.Video;
@@ -116,7 +117,7 @@ public sealed class VideoCompositorSourceTests
         slot.Output.Configure(compositor.OutputFormat);
         var disposed = false;
         var frame = new VideoFrame(TimeSpan.Zero, compositor.OutputFormat,
-            new byte[4 * 4 * 4], 4 * 4, release: () => disposed = true);
+            new byte[4 * 4 * 4], 4 * 4, release: DisposableRelease.Wrap(() => disposed = true));
         slot.Output.Submit(frame);
 
         output.Dispose();

@@ -102,7 +102,7 @@ public sealed class MediaClock : IMediaClock, IDisposable
         get { lock (_gate) return _isRunning; }
     }
 
-    /// <inheritdoc cref="IPlaybackTimeline.PlaybackRate"/>
+    /// <inheritdoc cref="IPlayhead.PlaybackRate"/>
     public double PlaybackRate => 1.0;
 
     public void Start()

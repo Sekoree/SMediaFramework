@@ -1,6 +1,6 @@
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
-using S.Media.FFmpeg.Video;
+using S.Media.Effects;
 using Microsoft.Extensions.Logging;
 
 namespace HaPlay.Playback;
@@ -10,22 +10,6 @@ namespace HaPlay.Playback;
 /// <see cref="IVideoOutput"/> wrapper that pins the negotiated pixel format and/or dimensions an NDI
 /// (or any) output presents to its receivers, regardless of what the source produces.
 /// </summary>
-/// <remarks>
-/// <para>
-/// The UI side stores <c>PixelFormatLock</c> + <c>ResolutionLockWidth</c> / <c>Height</c> on
-/// <see cref="HaPlay.Models.NDIOutputDefinition"/> and round-trips them through the project file
-/// (Phase A forward-compat). This wrapper is the runtime-side honour: <see cref="AcceptedPixelFormats"/>
-/// constrains the <see cref="VideoFormatNegotiator"/> to the lock, and <see cref="Submit"/>
-/// letterboxes incoming frames into the locked raster via a <see cref="VideoCompositorSource"/> +
-/// <see cref="CpuVideoCompositor"/> (same pattern as <see cref="OutputPresetVideoSource"/> but on the
-/// output side so it can be applied per-NDI-output without affecting other branches).
-/// </para>
-/// <para>
-/// When the lock isn't accepted by the inner output the wrapper degrades gracefully: the output keeps
-/// reporting the inner's full preference list and frames pass straight through. This means saving an
-/// NDI lock for a format the inner output later drops doesn't silently break playback.
-/// </para>
-/// </remarks>
 internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.LockedFormatVideoSink");
@@ -37,9 +21,7 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
     private readonly int? _resolutionLockHeight;
     private readonly string _name;
 
-    private VideoCompositorSource? _scaler;
-    private VideoCompositorSource.Slot? _scalerSlot;
-    private VideoCpuFrameConverter? _toBgra;
+    private CompositorOutputScaler? _scaler;
     private VideoFormat _negotiatedFormat;
     private VideoFormat _innerFormat;
     private bool _configured;
@@ -62,9 +44,6 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
         _disposeInnerOnDispose = disposeInnerOnDispose;
     }
 
-    /// <summary>When the pixel-format lock is active AND the inner output accepts it, present a
-    /// one-element list so the format negotiator must pick the locked format. Otherwise fall through
-    /// to the inner output's full preference list (graceful degradation).</summary>
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats
     {
         get
@@ -90,7 +69,6 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
         var lockedH = _resolutionLockHeight ?? format.Height;
         var lockedPf = _pixelFormatLock ?? format.PixelFormat;
 
-        // No actual constraint different from the source: pass through.
         if (lockedW == format.Width && lockedH == format.Height && lockedPf == format.PixelFormat)
         {
             DisposeScaler();
@@ -103,11 +81,7 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
 
         var target = new VideoFormat(lockedW, lockedH, lockedPf, format.FrameRate);
 
-        // Reuse the existing scaler when the in/out shape hasn't changed (router re-Configures the
-        // primary on every TryAddRoute — see [[video_sink_pump_reconfigure]]).
-        if (_scaler is not null && _scalerSlot is not null
-            && _innerFormat == target
-            && _scalerSlot.Output.Format == format)
+        if (_scaler is not null && _innerFormat == target)
         {
             _inner.Configure(target);
             _configured = true;
@@ -115,13 +89,7 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
         }
 
         DisposeScaler();
-
-        var compositor = new CpuVideoCompositor(target);
-        _scaler = new VideoCompositorSource(target, compositor, disposeCompositorOnDispose: true);
-        _scalerSlot = _scaler.AddSlot();
-        _scalerSlot.Transform = OutputPresetFormats.LetterboxTransform(format, target);
-        _scalerSlot.Output.Configure(format);
-
+        _scaler = new CompositorOutputScaler(target, LayerConfig.Background);
         _innerFormat = target;
         _inner.Configure(target);
         _configured = true;
@@ -138,37 +106,26 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
             throw new InvalidOperationException("LockedFormatVideoSink.Submit called before Configure");
         }
 
-        // Pass-through: no scaler installed.
-        if (_scaler is null || _scalerSlot is null)
+        if (_scaler is null)
         {
             _inner.Submit(frame);
             return;
         }
 
-        if (!CompositorLayerConverter.TryToBgraLayer(frame, ref _toBgra, out var layer, out var convertedToBgra)
-            || layer is null)
+        if (!_scaler.TryComposite(frame, out var scaled) || scaled is null)
         {
             frame.Dispose();
             return;
         }
 
-        if (convertedToBgra)
-            frame.Dispose();
-
-        _scalerSlot.Output.Configure(layer.Format);
-        _scalerSlot.Output.Submit(layer);
-        if (_scaler.TryReadNextFrame(out var scaled))
-            _inner.Submit(scaled);
+        frame.Dispose();
+        _inner.Submit(scaled);
     }
 
     private void DisposeScaler()
     {
         var s = _scaler;
         _scaler = null;
-        _scalerSlot = null;
-        try { _toBgra?.Dispose(); }
-        catch { /* best effort */ }
-        _toBgra = null;
         if (s is null) return;
         try { s.Dispose(); }
         catch { /* best effort */ }

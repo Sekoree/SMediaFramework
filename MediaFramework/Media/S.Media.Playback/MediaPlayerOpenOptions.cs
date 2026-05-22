@@ -4,7 +4,7 @@ using S.Media.FFmpeg.Video;
 
 namespace S.Media.Playback;
 
-/// <summary>Decoder and audio-router flags for <see cref="MediaPlayer.TryOpen"/> — no output libraries.</summary>
+/// <summary>Decoder and audio-router flags for <see cref="MediaPlayer.Open(string)"/> builders — no output libraries.</summary>
 public readonly record struct MediaPlayerOpenOptions(
     bool TryHardwareAcceleration = true,
     bool RetainDmabufForGl = false,
@@ -20,7 +20,11 @@ public readonly record struct MediaPlayerOpenOptions(
     int VideoPacketQueueDepth = 0,
     /// <summary><see cref="S.Media.Core.Video.VideoPlayer"/> decode queue depth for live opens. <c>0</c> = default (4).</summary>
     int LiveVideoDecodeQueueCapacity = 0,
-    VideoPresentationMode LiveVideoPresentation = VideoPresentationMode.Scheduled)
+    VideoPresentationMode LiveVideoPresentation = VideoPresentationMode.Scheduled,
+    /// <summary>When true, <see cref="MediaPlayer.TryOpenStream"/> spools to disk instead of AVIO.</summary>
+    bool SpoolStreamToDisk = false,
+    /// <summary>When true (and not spooling), allows libav seek on the input stream.</summary>
+    bool StreamIsSeekable = false)
 {
     public MediaPlayerOpenOptions()
         : this(
@@ -34,7 +38,9 @@ public readonly record struct MediaPlayerOpenOptions(
             AudioPacketQueueDepth: 0,
             VideoPacketQueueDepth: 0,
             LiveVideoDecodeQueueCapacity: 0,
-            LiveVideoPresentation: VideoPresentationMode.Scheduled)
+            LiveVideoPresentation: VideoPresentationMode.Scheduled,
+            SpoolStreamToDisk: false,
+            StreamIsSeekable: false)
     {
     }
 

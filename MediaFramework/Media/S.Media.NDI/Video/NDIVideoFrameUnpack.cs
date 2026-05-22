@@ -319,7 +319,7 @@ internal static class NDIVideoFrameUnpack
                 format,
                 tight.AsMemory(0, tightBytes),
                 visibleStride,
-                release: () => ArrayPool<byte>.Shared.Return(tight),
+                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(tight)),
                 metadata: NdiSdrFullRangeBt709);
         }
         catch
@@ -361,11 +361,11 @@ internal static class NDIVideoFrameUnpack
                 format,
                 [yBuf.AsMemory(0, yTight), uvBuf.AsMemory(0, uvTight)],
                 [width, width],
-                release: () =>
+                release: DisposableRelease.Wrap(() =>
                 {
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
-                },
+                }),
                 metadata: NdiSdrFullRangeBt709);
         }
         catch
@@ -408,11 +408,11 @@ internal static class NDIVideoFrameUnpack
                 format,
                 [yBuf.AsMemory(0, yTight), uBuf.AsMemory(0, uTight), vBuf.AsMemory(0, vTight)],
                 [width, chromaW, chromaW],
-                release: () =>
+                release: DisposableRelease.Wrap(() =>
                 {
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
-                },
+                }),
                 metadata: NdiSdrFullRangeBt709);
         }
         catch
@@ -457,11 +457,11 @@ internal static class NDIVideoFrameUnpack
                 format,
                 [yBuf.AsMemory(0, yTight), uBuf.AsMemory(0, uTight), vBuf.AsMemory(0, vTight)],
                 [width, chromaW, chromaW],
-                release: () =>
+                release: DisposableRelease.Wrap(() =>
                 {
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
-                },
+                }),
                 metadata: NdiSdrFullRangeBt709);
         }
         catch
@@ -539,7 +539,7 @@ internal static class NDIVideoFrameUnpack
                 uyvyFormat,
                 uyvyBuffer.AsMemory(0, uyvyBytes),
                 uyvyStride,
-                release: () => ArrayPool<byte>.Shared.Return(uyvyBuffer),
+                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(uyvyBuffer)),
                 metadata: NdiSdrFullRangeBt709);
         }
         catch

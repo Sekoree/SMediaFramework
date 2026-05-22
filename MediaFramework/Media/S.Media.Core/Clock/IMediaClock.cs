@@ -1,6 +1,10 @@
 namespace S.Media.Core.Clock;
 
-public interface IMediaClock : IPlaybackTimeline
+/// <summary>
+/// Master playback driver: <see cref="IPlayhead"/> plus tick events, transport controls,
+/// and optional slaving to an <see cref="IPlaybackClock"/> (typically the audio output).
+/// </summary>
+public interface IMediaClock : IPlayhead
 {
     public event EventHandler<TimeSpan>? PositionChanged;
 

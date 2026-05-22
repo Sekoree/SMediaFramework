@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Threading;
+using S.Media.Core;
 using S.Media.Core.Audio;
 
 namespace S.Media.FFmpeg.Audio;
@@ -399,11 +400,11 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
             Format,
             converted,
             samples.AsMemory(0, converted * Format.Channels),
-            Release: () =>
+            Release: DisposableRelease.Wrap(() =>
             {
                 if (Interlocked.Exchange(ref released, 1) == 0)
                     ArrayPool<float>.Shared.Return(owned, clearArray: false);
-            });
+            }));
     }
 
     private TimeSpan ResolvePts()

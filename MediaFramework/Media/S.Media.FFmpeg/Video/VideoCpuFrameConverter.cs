@@ -169,11 +169,11 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
 
             var fmt = new VideoFormat(_width, _height, _dst, source.Format.FrameRate);
             return new VideoFrame(source.PresentationTime, fmt, dstMemories, dstStrides,
-                release: () =>
+                release: DisposableRelease.Wrap(() =>
                 {
                     foreach (var b in dstBuffers)
                         ArrayPool<byte>.Shared.Return(b);
-                },
+                }),
                 metadata: source.Metadata with { ColorTransferHint = hint });
         }
         finally

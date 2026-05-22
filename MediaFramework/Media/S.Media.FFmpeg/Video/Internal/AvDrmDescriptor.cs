@@ -87,7 +87,7 @@ internal struct AvDrmFrameDescriptorInterop
 /// <summary>Parses DRM PRIME frame metadata (<see cref="AVPixelFormat.AV_PIX_FMT_DRM_PRIME" />) into NV12 dma-bufs.</summary>
 internal static unsafe class DrmPrimeNv12BackingFactory
 {
-    internal static VideoDmabufNv12Backing? TryCreateBacking(AVFrame* frame)
+    internal static DmabufNv12Backing? TryCreateBacking(AVFrame* frame)
     {
         if (!OperatingSystem.IsLinux())
             return null;
@@ -95,7 +95,7 @@ internal static unsafe class DrmPrimeNv12BackingFactory
         return TryParseNv12(frame);
     }
 
-    private static VideoDmabufNv12Backing? TryParseNv12(AVFrame* frame)
+    private static DmabufNv12Backing? TryParseNv12(AVFrame* frame)
     {
         if (!TryParseTwoPlaneLayer(frame, DrmPixelFormats.Nv12, out var pY, out var pUv, out var hdr))
             return null;
@@ -121,7 +121,7 @@ internal static unsafe class DrmPrimeNv12BackingFactory
             if (yPitch <= 0 || yPitch > int.MaxValue || uvPitch <= 0 || uvPitch > int.MaxValue)
                 throw new InvalidOperationException("invalid DRM dma-buf pitch.");
 
-            return new VideoDmabufNv12Backing(dupY, pY.OffsetBytes, (int)yPitch,
+            return new DmabufNv12Backing(dupY, pY.OffsetBytes, (int)yPitch,
                 dupUv, pUv.OffsetBytes, (int)uvPitch, yObj.FormatModifier, uvObj.FormatModifier);
         }
         catch
@@ -181,7 +181,7 @@ internal static unsafe class DrmPrimeNv12BackingFactory
 /// <summary>Parses DRM PRIME metadata into P010 semi-planar dma-bufs (two-plane <c>DRM_FORMAT_P010</c> layer).</summary>
 internal static unsafe class DrmPrimeP010BackingFactory
 {
-    internal static VideoDmabufP010Backing? TryCreateBacking(AVFrame* frame)
+    internal static DmabufP010Backing? TryCreateBacking(AVFrame* frame)
     {
         if (!OperatingSystem.IsLinux())
             return null;
@@ -211,7 +211,7 @@ internal static unsafe class DrmPrimeP010BackingFactory
             if (yPitch <= 0 || yPitch > int.MaxValue || uvPitch <= 0 || uvPitch > int.MaxValue)
                 throw new InvalidOperationException("invalid DRM dma-buf pitch.");
 
-            return new VideoDmabufP010Backing(dupY, pY.OffsetBytes, (int)yPitch,
+            return new DmabufP010Backing(dupY, pY.OffsetBytes, (int)yPitch,
                 dupUv, pUv.OffsetBytes, (int)uvPitch, yObj.FormatModifier, uvObj.FormatModifier);
         }
         catch
@@ -226,7 +226,7 @@ internal static unsafe class DrmPrimeP010BackingFactory
 /// <summary>Parses DRM PRIME metadata into P016 semi-planar dma-bufs (two-plane <c>DRM_FORMAT_P016</c> layer).</summary>
 internal static unsafe class DrmPrimeP016BackingFactory
 {
-    internal static VideoDmabufP016Backing? TryCreateBacking(AVFrame* frame)
+    internal static DmabufP016Backing? TryCreateBacking(AVFrame* frame)
     {
         if (!OperatingSystem.IsLinux())
             return null;
@@ -256,7 +256,7 @@ internal static unsafe class DrmPrimeP016BackingFactory
             if (yPitch <= 0 || yPitch > int.MaxValue || uvPitch <= 0 || uvPitch > int.MaxValue)
                 throw new InvalidOperationException("invalid DRM dma-buf pitch.");
 
-            return new VideoDmabufP016Backing(dupY, pY.OffsetBytes, (int)yPitch,
+            return new DmabufP016Backing(dupY, pY.OffsetBytes, (int)yPitch,
                 dupUv, pUv.OffsetBytes, (int)uvPitch, yObj.FormatModifier, uvObj.FormatModifier);
         }
         catch

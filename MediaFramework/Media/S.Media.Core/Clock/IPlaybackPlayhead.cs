@@ -1,10 +1,10 @@
 namespace S.Media.Core.Clock;
 
 /// <summary>
-/// Read-only playhead slice of <see cref="IPlaybackTimeline"/> (strategy B): position, running state, and nominal rate
-/// without <see cref="IPlaybackTimeline.Seek"/>. Hosts can depend on this type where cooperative seek must stay on
-/// <see cref="Playback.MediaPlaybackSession"/> / <see cref="Playback.AvPlaybackCoordinator"/>.
+/// Read-only playhead slice without <see cref="IPlayhead.Seek"/>.
+/// Prefer <see cref="IPlayhead"/> or <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/> for new code.
 /// </summary>
+[Obsolete("Use IPlayhead for the full surface, or AsPlayhead() for a seek-free view. This alias will be removed in a future release.")]
 public interface IPlaybackPlayhead
 {
     TimeSpan CurrentPosition { get; }

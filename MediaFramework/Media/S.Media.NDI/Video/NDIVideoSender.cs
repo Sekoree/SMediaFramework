@@ -53,10 +53,12 @@ namespace S.Media.NDI.Video;
 /// <strong>Debug</strong> via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues freeing remaining slots.
 /// </para>
 /// </remarks>
-public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
+internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats =
     [
+        PixelFormat.P216,
+        PixelFormat.Pa16,
         PixelFormat.Uyvy,
         PixelFormat.Bgra32,
         PixelFormat.Rgba32,
@@ -168,7 +170,7 @@ public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
             throw new NotSupportedException(
                 $"NDIVideoSender does not accept pixel format {format.PixelFormat}; supported: {string.Join(", ", AcceptedFormats)}");
         // Planar 4:2:0 formats need even dimensions so chroma grids align.
-        if ((format.PixelFormat == PixelFormat.I420 || format.PixelFormat == PixelFormat.Nv12)
+        if ((format.PixelFormat is PixelFormat.I420 or PixelFormat.Nv12 or PixelFormat.P216 or PixelFormat.Pa16)
             && (format.Width % 2 != 0 || format.Height % 2 != 0))
             throw new ArgumentException(
                 $"{format.PixelFormat} requires even width/height (got {format.Width}x{format.Height})",
@@ -326,6 +328,12 @@ public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
             case PixelFormat.I420:
                 PackI420(frame, dst);
                 break;
+            case PixelFormat.P216:
+                PackP216(frame, dst);
+                break;
+            case PixelFormat.Pa16:
+                PackPa16(frame, dst);
+                break;
             default:
                 throw new NotSupportedException($"PackInto: {_format.PixelFormat}");
         }
@@ -386,6 +394,57 @@ public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
                 srcRow.CopyTo(new Span<byte>(uvDstBase + row * width, width));
             }
         }
+    }
+
+    private void PackP216(VideoFrame frame, byte* dst)
+    {
+        var width = _format.Width;
+        var height = _format.Height;
+        var yStride = frame.Strides[0];
+        var uvStride = frame.Strides[1];
+        var lineStride = width * sizeof(ushort);
+
+        if (yStride < lineStride || uvStride < lineStride)
+            throw new ArgumentException("P216 frame strides must be at least width*2 bytes per row.");
+
+        var ySrc = frame.Planes[0].Span;
+        var yBytes = lineStride * height;
+        CopyPlaneRows(ySrc, yStride, dst, lineStride, lineStride, height);
+
+        var uvDstBase = dst + yBytes;
+        var uvSrc = frame.Planes[1].Span;
+        CopyPlaneRows(uvSrc, uvStride, uvDstBase, lineStride, lineStride, height);
+    }
+
+    private void PackPa16(VideoFrame frame, byte* dst)
+    {
+        PackP216(frame, dst);
+        var width = _format.Width;
+        var height = _format.Height;
+        var lineStride = width * sizeof(ushort);
+        var yBytes = lineStride * height;
+        var uvBytes = lineStride * height;
+        var aDstBase = dst + yBytes + uvBytes;
+        var aStride = frame.Strides[2];
+        if (aStride < lineStride)
+            throw new ArgumentException("PA16 alpha stride must be at least width*2 bytes per row.");
+        CopyPlaneRows(frame.Planes[2].Span, aStride, aDstBase, lineStride, lineStride, height);
+    }
+
+    private static void CopyPlaneRows(ReadOnlySpan<byte> src, int srcStride, byte* dst, int dstStride, int rowBytes, int rows)
+    {
+        if (srcStride == rowBytes)
+        {
+            var total = rowBytes * rows;
+            if (src.Length >= total)
+            {
+                src.Slice(0, total).CopyTo(new Span<byte>(dst, total));
+                return;
+            }
+        }
+
+        for (var row = 0; row < rows; row++)
+            src.Slice(row * srcStride, rowBytes).CopyTo(new Span<byte>(dst + row * dstStride, rowBytes));
     }
 
     private void PackI420(VideoFrame frame, byte* dst)
@@ -479,6 +538,8 @@ public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
         PixelFormat.Uyvy   => fmt.Width * fmt.Height * 2,
         PixelFormat.Nv12   => fmt.Width * fmt.Height * 3 / 2,
         PixelFormat.I420   => fmt.Width * fmt.Height * 3 / 2,
+        PixelFormat.P216   => fmt.Width * fmt.Height * 4,
+        PixelFormat.Pa16   => fmt.Width * fmt.Height * 6,
         _ => throw new NotSupportedException($"StagingBytes: {fmt.PixelFormat}"),
     };
 
@@ -491,6 +552,7 @@ public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
         // (and equals the visible width in our tightly-packed layout).
         PixelFormat.Nv12   => fmt.Width,
         PixelFormat.I420   => fmt.Width,
+        PixelFormat.P216 or PixelFormat.Pa16 => fmt.Width * sizeof(ushort),
         _ => throw new NotSupportedException($"LineStrideForFormat: {fmt.PixelFormat}"),
     };
 
@@ -509,6 +571,8 @@ public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
         PixelFormat.Uyvy   => NDIFourCCVideoType.Uyvy,
         PixelFormat.Nv12   => NDIFourCCVideoType.Nv12,
         PixelFormat.I420   => NDIFourCCVideoType.I420,
+        PixelFormat.P216   => NDIFourCCVideoType.P216,
+        PixelFormat.Pa16   => NDIFourCCVideoType.Pa16,
         _ => throw new NotSupportedException($"ToFourCC: {format}"),
     };
 }

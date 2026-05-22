@@ -9,6 +9,11 @@
     </PropertyGroup>
 
     <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Playback.Tests" />
+        <InternalsVisibleTo Include="S.Media.PortAudio" />
+    </ItemGroup>
+
+    <ItemGroup>
         <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
         <ProjectReference Include="..\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
     </ItemGroup>

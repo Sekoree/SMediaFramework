@@ -27,7 +27,7 @@ namespace S.Media.Core.Audio;
 /// <see cref="RetargetSlaveClock"/> cannot deadlock with the run loop.
 /// </para>
 /// </remarks>
-public sealed class OutputSlavedRouterClock : IRouterClock
+internal sealed class OutputSlavedRouterClock : IRouterClock
 {
     private readonly object _fallbackGate = new();
     private readonly Func<IClockedOutput?> _resolveSink;

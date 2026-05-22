@@ -36,6 +36,9 @@ public sealed class FfmpegVideoPixelMapsCoverageTests
     [InlineData(PixelFormat.Yuva444P16Le)]
     [InlineData(PixelFormat.Yuv422P12Le)]
     [InlineData(PixelFormat.Yuv444P12Le)]
+    [InlineData(PixelFormat.Rgba16)]
+    [InlineData(PixelFormat.Rgba16F)]
+    [InlineData(PixelFormat.P216)]
     public void NewFormats_MapToSpecificAvPixelFormat(PixelFormat fmt)
     {
         var av = FfmpegVideoPixelMaps.ToAvPixelFormat(fmt);
@@ -55,6 +58,9 @@ public sealed class FfmpegVideoPixelMapsCoverageTests
             PixelFormat.Yuva444P16Le => AVPixelFormat.AV_PIX_FMT_YUVA444P16LE,
             PixelFormat.Yuv422P12Le => AVPixelFormat.AV_PIX_FMT_YUV422P12LE,
             PixelFormat.Yuv444P12Le => AVPixelFormat.AV_PIX_FMT_YUV444P12LE,
+            PixelFormat.Rgba16 => AVPixelFormat.AV_PIX_FMT_RGBA64LE,
+            PixelFormat.Rgba16F => AVPixelFormat.AV_PIX_FMT_RGBAF16LE,
+            PixelFormat.P216 => AVPixelFormat.AV_PIX_FMT_P216LE,
             _ => throw new System.ArgumentOutOfRangeException(nameof(fmt)),
         };
         Assert.Equal(expected, av);
@@ -78,6 +84,10 @@ public sealed class FfmpegVideoPixelMapsCoverageTests
     [InlineData(PixelFormat.Yuva444P16Le, 4, true, true)]
     [InlineData(PixelFormat.Yuv422P12Le, 3, false, true)]
     [InlineData(PixelFormat.Yuv444P12Le, 3, false, true)]
+    [InlineData(PixelFormat.Rgba16, 1, true, true)]
+    [InlineData(PixelFormat.Rgba16F, 1, true, true)]
+    [InlineData(PixelFormat.P216, 2, false, true)]
+    [InlineData(PixelFormat.Pa16, 3, true, true)]
     public void NewFormats_PixelFormatInfo_Coherent(PixelFormat fmt, int planeCount, bool alpha, bool highBit)
     {
         Assert.Equal(planeCount, PixelFormatInfo.PlaneCount(fmt));

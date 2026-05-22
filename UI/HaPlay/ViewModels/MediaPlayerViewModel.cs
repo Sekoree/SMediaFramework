@@ -249,7 +249,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task OpenPreconnectedNdiAsync(
         NDIInputPlaylistItem item,
-        NDILiveReceiver receiver,
+        NDISource receiver,
         MediaCueNode cueRoutes,
         CancellationToken ct)
     {
@@ -470,7 +470,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (_ndiPreConnect.HasMatchingEntry(cueId, cacheKey))
                 continue;
 
-            NDILiveReceiver? receiver = null;
+            NDISource? receiver = null;
             AudioFormat format = default;
             string? err = null;
             await Task.Run(() =>
@@ -2806,7 +2806,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 // Use audio's natural completion when an audio router is present (covers both audio-only
                 // and audio+video sources). Falls back to video for video-only files where audio is null.
-                var loopReady = session.Player.Audio?.Router is { } loopAr
+                var loopReady = session.Player.AudioRouter is { } loopAr
                     ? !loopAr.IsRunning && loopAr.CompletedNaturally
                     : session.Player.Video.CompletedNaturally;
                 if (!loopReady) return;
@@ -2827,7 +2827,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 return;
             }
 
-            var fileEnded = session.Player.Audio?.Router is { } ar
+            var fileEnded = session.Player.AudioRouter is { } ar
                 ? !ar.IsRunning && ar.CompletedNaturally
                 : session.Player.Video.CompletedNaturally;
             if (!fileEnded) return;

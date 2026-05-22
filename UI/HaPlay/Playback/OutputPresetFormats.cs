@@ -1,5 +1,6 @@
 using HaPlay.Models;
 using S.Media.Core.Video;
+using S.Media.Effects;
 
 namespace HaPlay.Playback;
 
@@ -40,18 +41,6 @@ internal static class OutputPresetFormats
         }
     }
 
-    public static LayerTransform2D LetterboxTransform(VideoFormat source, VideoFormat target)
-    {
-        if (source.Width <= 0 || source.Height <= 0)
-            return LayerTransform2D.Identity;
-
-        var scale = Math.Min((float)target.Width / source.Width, (float)target.Height / source.Height);
-        var scaledW = source.Width * scale;
-        var scaledH = source.Height * scale;
-        var tx = (target.Width - scaledW) * 0.5f;
-        var ty = (target.Height - scaledH) * 0.5f;
-        return LayerTransform2D.Compose(
-            LayerTransform2D.Translate(tx, ty),
-            LayerTransform2D.Scale(scale, scale));
-    }
+    public static LayerTransform2D LetterboxTransform(VideoFormat source, VideoFormat target) =>
+        LayerConfig.Background.ToTransform(source, target);
 }

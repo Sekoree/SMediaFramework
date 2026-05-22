@@ -23,7 +23,7 @@ namespace S.Media.SDL3;
 /// unless <paramref name="borrowD3D11DeviceComPtrForNv12Gl"/> supplies libav's device (same adapter as decoded textures),
 /// or <see cref="VideoFormatNegotiator.Connect"/> wires an <see cref="IHardwareD3D11GlInteropSource"/> via <see cref="IVideoOutputD3D11GlBorrowSetup"/>.
 /// When <paramref name="createFallbackD3D11InteropDeviceForWin32Nv12"/> is <see langword="false"/>, SDL does not create that helper device;
-/// <see cref="YuvVideoRenderer"/> then binds from <see cref="VideoWin32Nv12Backing.LibavD3D11DeviceComPtr"/> on the first frame (true zero-host; requires D3D11VA COM pointers on the backing or a negotiated borrow).
+/// <see cref="YuvVideoRenderer"/> then binds from <see cref="Win32SharedNv12Backing.LibavD3D11DeviceComPtr"/> on the first frame (true zero-host; requires D3D11VA COM pointers on the backing or a negotiated borrow).
 /// </para>
 /// <para>
 /// Pixel-format support matches <see cref="YuvVideoRenderer.SupportedPixelFormats"/>
@@ -55,6 +55,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     private readonly bool _ownsThread;
 
     private GlVideoOutputHdrPreference _hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints;
+    private GlOutputBitDepth _swapchainBitDepth = GlOutputBitDepth.Eight;
+    private static int _swapchainTenBitFallbackLogged;
 
     private readonly Win32Nv12GlUploadDeviceResolver _win32Nv12Device;
 
@@ -121,6 +123,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     public SDL3GLVideoOutput(string title = "SDL3 GL Video", int initialWidth = 1280, int initialHeight = 720,
                           bool vsync = true, bool ownsThread = true,
                           GlVideoOutputHdrPreference hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints,
+                          GlOutputBitDepth swapchainBitDepth = GlOutputBitDepth.Auto,
                           nint borrowD3D11DeviceComPtrForNv12Gl = 0,
                           bool createFallbackD3D11InteropDeviceForWin32Nv12 = true,
                           SDL3GLVideoOutput? textureMirrorAnchor = null)
@@ -141,6 +144,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         _vsync = vsync;
         _ownsThread = ownsThread;
         _hdrPreference = hdrPreference;
+        _swapchainBitDepth = swapchainBitDepth;
         _viewportWidth = initialWidth;
         _viewportHeight = initialHeight;
         _win32Nv12Device = new Win32Nv12GlUploadDeviceResolver(borrowD3D11DeviceComPtrForNv12Gl,
@@ -155,12 +159,17 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     /// </summary>
     public static SDL3GLVideoOutput CreateTextureMirror(SDL3GLVideoOutput anchor, string title = "SDL3 GL (mirror)",
         int initialWidth = 1280, int initialHeight = 720, bool vsync = true,
-        GlVideoOutputHdrPreference hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints)
+        GlVideoOutputHdrPreference hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints,
+        GlOutputBitDepth swapchainBitDepth = GlOutputBitDepth.Auto)
     {
         ArgumentNullException.ThrowIfNull(anchor);
         return new SDL3GLVideoOutput(title, initialWidth, initialHeight, vsync, ownsThread: false, hdrPreference,
+            swapchainBitDepth,
             borrowD3D11DeviceComPtrForNv12Gl: 0, createFallbackD3D11InteropDeviceForWin32Nv12: true, textureMirrorAnchor: anchor);
     }
+
+    /// <summary>Requested drawable bit depth (actual depth may differ when <see cref="GlOutputBitDepth.Auto"/> falls back).</summary>
+    public GlOutputBitDepth SwapchainBitDepth => _swapchainBitDepth;
 
     /// <summary>
     /// After both outputs are <see cref="Configure"/>d with the same format, register this mirror so the anchor presents it each frame.
@@ -610,6 +619,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         SDL.GLSetSwapInterval(_vsync ? 1 : 0);
 
         _gl = SilkGL.GetApi(name => SDL.GLGetProcAddress(name));
+        VerifySwapchainBitDepth();
 
         _renderer = BuildRendererForCurrentFormat();
 
@@ -636,17 +646,48 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             allowLazyWin32Nv12UploaderFromDecodedFrame: allowLazyNv12);
     }
 
-    private static void ApplyStandardGlContextAttributes()
+    private void ApplyStandardGlContextAttributes()
     {
         SDL.GLSetAttribute(SDL.GLAttr.ContextMajorVersion, 3);
         SDL.GLSetAttribute(SDL.GLAttr.ContextMinorVersion, 3);
         SDL.GLSetAttribute(SDL.GLAttr.ContextProfileMask, (int)SDL.GLProfile.Core);
         SDL.GLSetAttribute(SDL.GLAttr.DoubleBuffer, 1);
-        SDL.GLSetAttribute(SDL.GLAttr.RedSize, 8);
-        SDL.GLSetAttribute(SDL.GLAttr.GreenSize, 8);
-        SDL.GLSetAttribute(SDL.GLAttr.BlueSize, 8);
-        SDL.GLSetAttribute(SDL.GLAttr.AlphaSize, 0);
+        var useTenBit = _swapchainBitDepth is GlOutputBitDepth.Ten or GlOutputBitDepth.Auto;
+        if (useTenBit)
+        {
+            SDL.GLSetAttribute(SDL.GLAttr.RedSize, 10);
+            SDL.GLSetAttribute(SDL.GLAttr.GreenSize, 10);
+            SDL.GLSetAttribute(SDL.GLAttr.BlueSize, 10);
+            SDL.GLSetAttribute(SDL.GLAttr.AlphaSize, 2);
+        }
+        else
+        {
+            SDL.GLSetAttribute(SDL.GLAttr.RedSize, 8);
+            SDL.GLSetAttribute(SDL.GLAttr.GreenSize, 8);
+            SDL.GLSetAttribute(SDL.GLAttr.BlueSize, 8);
+            SDL.GLSetAttribute(SDL.GLAttr.AlphaSize, 0);
+        }
+
         SDL.GLSetAttribute(SDL.GLAttr.DepthSize, 0);
+    }
+
+    private void VerifySwapchainBitDepth()
+    {
+        if (!SDL.GLGetAttribute(SDL.GLAttr.RedSize, out var red)
+            || !SDL.GLGetAttribute(SDL.GLAttr.GreenSize, out var green)
+            || !SDL.GLGetAttribute(SDL.GLAttr.BlueSize, out var blue))
+            return;
+
+        var gotTenBit = red >= 10 && green >= 10 && blue >= 10;
+        if (_swapchainBitDepth is GlOutputBitDepth.Ten or GlOutputBitDepth.Auto)
+        {
+            if (!gotTenBit && Interlocked.Exchange(ref _swapchainTenBitFallbackLogged, 1) == 0)
+            {
+                MediaDiagnostics.LogWarning(
+                    "SDL3GLVideoOutput: 10-bit swapchain unavailable (R/G/B bits={Red}/{Green}/{Blue}); using 8-bit drawable.",
+                    red, green, blue);
+            }
+        }
     }
 
     private void TeardownGraphics()

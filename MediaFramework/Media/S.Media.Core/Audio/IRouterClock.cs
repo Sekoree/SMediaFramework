@@ -17,7 +17,7 @@ namespace S.Media.Core.Audio;
 /// Implementations are called from a single thread and don't need to be
 /// thread-safe themselves.
 /// </remarks>
-public interface IRouterClock
+internal interface IRouterClock
 {
     /// <summary>Called once when the router starts. Reset any internal pacing state.</summary>
     void Reset();

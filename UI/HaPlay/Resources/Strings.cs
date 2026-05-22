@@ -217,10 +217,6 @@ public static class Strings
     public static string NdiOutputDefaultSourceName => Get(nameof(NdiOutputDefaultSourceName));
     public static string MicrophoneDefaultName => Get(nameof(MicrophoneDefaultName));
     public static string NdiInputDefaultName => Get(nameof(NdiInputDefaultName));
-    public static string NdiSyncModeLabel => Get(nameof(NdiSyncModeLabel));
-    public static string NdiSyncModeNdiClock => Get(nameof(NdiSyncModeNdiClock));
-    public static string NdiSyncModeLowLatency => Get(nameof(NdiSyncModeLowLatency));
-    public static string NdiSyncModeHint => Get(nameof(NdiSyncModeHint));
     public static string NdiLiveAudioResampleHint => Get(nameof(NdiLiveAudioResampleHint));
     public static string EngineInAppPreviewLabel => Get(nameof(EngineInAppPreviewLabel));
     public static string EngineInAppPreviewSubtitle => Get(nameof(EngineInAppPreviewSubtitle));

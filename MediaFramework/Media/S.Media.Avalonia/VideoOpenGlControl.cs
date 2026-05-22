@@ -34,6 +34,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
 
     private readonly Win32Nv12GlUploadDeviceResolver _win32Nv12Device;
     private GlVideoOutputHdrPreference _hdrPreference;
+    private GlOutputBitDepth _swapchainBitDepth = GlOutputBitDepth.Eight;
 
     private readonly Lock _configureLock = new();
     private VideoFormat _format;
@@ -55,10 +56,12 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
 
     public VideoOpenGlControl(
         GlVideoOutputHdrPreference hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints,
+        GlOutputBitDepth swapchainBitDepth = GlOutputBitDepth.Eight,
         nint borrowD3D11DeviceComPtrForNv12Gl = 0,
         bool createFallbackD3D11InteropDeviceForWin32Nv12 = true)
     {
         _hdrPreference = hdrPreference;
+        _swapchainBitDepth = swapchainBitDepth;
         _win32Nv12Device = new Win32Nv12GlUploadDeviceResolver(borrowD3D11DeviceComPtrForNv12Gl,
             createFallbackD3D11InteropDeviceForWin32Nv12,
             nameof(VideoOpenGlControl));
@@ -71,6 +74,16 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
     {
         get => _hdrPreference;
         set => _hdrPreference = value;
+    }
+
+    /// <summary>
+    /// Requested drawable bit depth. Avalonia's OpenGL surface may ignore 10-bit attributes on some backends;
+    /// use <see cref="S.Media.SDL3.SDL3GLVideoOutput"/> when a 10-bit swapchain is required.
+    /// </summary>
+    public GlOutputBitDepth SwapchainBitDepth
+    {
+        get => _swapchainBitDepth;
+        set => _swapchainBitDepth = value;
     }
 
     public IReadOnlyList<VideoPixelFormat> AcceptedPixelFormats => AcceptedFormats;

@@ -26,7 +26,8 @@ public sealed class PortAudioPlaybackHostTests
             Assert.Same(dec, host.Container);
             Assert.False(string.IsNullOrEmpty(host.SourceId));
             Assert.False(string.IsNullOrEmpty(host.PrimaryOutputId));
-            Assert.Same(host.Player.Clock, host.Player.Timeline);
+            Assert.Contains(host.SourceId, host.Router.SourceIds);
+            Assert.Contains(host.PrimaryOutputId, host.Router.SinkIds);
         }
         finally
         {
@@ -51,7 +52,8 @@ public sealed class PortAudioPlaybackHostTests
                 PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer);
             if (host is null)
                 return;
-            host.Player.Dispose();
+            host.Router.Dispose();
+            host.Clock.Dispose();
             host.Dispose();
             host.Dispose();
         }

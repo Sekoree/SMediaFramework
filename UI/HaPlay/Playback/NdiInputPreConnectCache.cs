@@ -4,7 +4,7 @@ using S.Media.NDI;
 
 namespace HaPlay.Playback;
 
-/// <summary>Pre-connected <see cref="NDILiveReceiver"/> instances for upcoming NDI media cues (§6.11).</summary>
+/// <summary>Pre-connected <see cref="NDISource"/> instances for upcoming NDI media cues (§6.11).</summary>
 internal sealed class NdiInputPreConnectCache : IDisposable
 {
     private readonly object _gate = new();
@@ -24,7 +24,7 @@ internal sealed class NdiInputPreConnectCache : IDisposable
         }
     }
 
-    public bool TryTake(Guid cueId, string cacheKey, out NDILiveReceiver? receiver, out AudioFormat format)
+    public bool TryTake(Guid cueId, string cacheKey, out NDISource? receiver, out AudioFormat format)
     {
         receiver = null;
         format = default;
@@ -43,7 +43,7 @@ internal sealed class NdiInputPreConnectCache : IDisposable
         }
     }
 
-    public void Store(Guid cueId, string cacheKey, NDILiveReceiver receiver, AudioFormat format)
+    public void Store(Guid cueId, string cacheKey, NDISource receiver, AudioFormat format)
     {
         ArgumentNullException.ThrowIfNull(receiver);
         lock (_gate)
@@ -108,9 +108,9 @@ internal sealed class NdiInputPreConnectCache : IDisposable
         }
     }
 
-    private sealed record Entry(string CacheKey, NDILiveReceiver Receiver, AudioFormat Format, DateTime CreatedUtc)
+    private sealed record Entry(string CacheKey, NDISource Receiver, AudioFormat Format, DateTime CreatedUtc)
     {
-        public Entry(string cacheKey, NDILiveReceiver receiver, AudioFormat format)
+        public Entry(string cacheKey, NDISource receiver, AudioFormat format)
             : this(cacheKey, receiver, format, DateTime.UtcNow)
         {
         }

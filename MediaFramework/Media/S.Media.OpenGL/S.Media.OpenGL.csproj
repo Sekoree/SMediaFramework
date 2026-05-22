@@ -9,6 +9,7 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.OpenGL.Tests" />
+        <InternalsVisibleTo Include="S.Media.Effects" />
     </ItemGroup>
 
     <ItemGroup>

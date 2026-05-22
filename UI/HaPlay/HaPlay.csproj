@@ -29,6 +29,7 @@
     <ItemGroup>
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Avalonia\S.Media.Avalonia.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Core\S.Media.Core.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Effects\S.Media.Effects.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.NDI\S.Media.NDI.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Playback\S.Media.Playback.csproj" />

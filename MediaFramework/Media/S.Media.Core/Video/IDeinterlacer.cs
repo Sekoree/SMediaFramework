@@ -1,3 +1,5 @@
+using S.Media.Core.Diagnostics;
+
 namespace S.Media.Core.Video;
 
 /// <summary>
@@ -50,7 +52,12 @@ public interface IDeinterlacer : IDisposable
 public static class VideoDeinterlacerRegistry
 {
     /// <summary>Returns a fresh <see cref="IDeinterlacer"/> instance configured for <paramref name="input"/>. <c>null</c> until a package installs one.</summary>
-    public static Func<VideoFormat, IDeinterlacer>? Factory { get; set; }
+    [Obsolete("Use MediaFrameworkPlugins.VideoDeinterlacerFactory")]
+    public static Func<VideoFormat, IDeinterlacer>? Factory
+    {
+        get => MediaFrameworkPlugins.VideoDeinterlacerFactory;
+        set => MediaFrameworkPlugins.VideoDeinterlacerFactory = value;
+    }
 
     /// <summary>Creates a deinterlacer via the registered <see cref="Factory"/>, or a <see cref="BobDeinterlacer"/> when none is installed.</summary>
     public static IDeinterlacer Create(VideoFormat input) =>

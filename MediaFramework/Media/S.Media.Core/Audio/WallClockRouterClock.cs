@@ -13,7 +13,7 @@ namespace S.Media.Core.Audio;
 /// quartz wins. For sample-accurate pacing, slave the router to a
 /// <see cref="IClockedOutput"/> via <see cref="OutputSlavedRouterClock"/>.
 /// </remarks>
-public sealed class WallClockRouterClock : IRouterClock
+internal sealed class WallClockRouterClock : IRouterClock
 {
     private readonly TimeSpan _chunkDuration;
     private readonly Stopwatch _stopwatch = new();

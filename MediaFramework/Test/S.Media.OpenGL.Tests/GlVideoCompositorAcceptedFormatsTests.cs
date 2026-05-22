@@ -1,5 +1,6 @@
 using System.Linq;
 using S.Media.Core.Video;
+using S.Media.Effects.OpenGL;
 using S.Media.OpenGL;
 using Xunit;
 

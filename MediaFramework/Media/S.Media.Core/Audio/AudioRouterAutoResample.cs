@@ -1,3 +1,5 @@
+using S.Media.Core.Diagnostics;
+
 namespace S.Media.Core.Audio;
 
 /// <summary>
@@ -24,5 +26,10 @@ public static class AudioRouterAutoResample
     /// Factory: <c>(innerSource, targetSampleRate) =&gt; wrappedSource</c>. <c>null</c> until a
     /// resampler package installs one. The wrapper assumes ownership of <c>inner</c>.
     /// </summary>
-    public static Func<IAudioSource, int, IAudioSource>? SourceWrapper { get; set; }
+    [Obsolete("Use MediaFrameworkPlugins.AudioResampleSourceWrapper")]
+    public static Func<IAudioSource, int, IAudioSource>? SourceWrapper
+    {
+        get => MediaFrameworkPlugins.AudioResampleSourceWrapper;
+        set => MediaFrameworkPlugins.AudioResampleSourceWrapper = value;
+    }
 }

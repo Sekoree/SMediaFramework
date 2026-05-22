@@ -3,26 +3,28 @@ using S.Media.Core.Playback;
 namespace S.Media.Core.Clock;
 
 /// <summary>
-/// Strategy‑B helpers: <see cref="IPlaybackTimeline"/> does not carry tick events — use <see cref="IMediaClock"/>
-/// (or this type's extensions) to subscribe to <see cref="IMediaClock.PositionChanged"/>.
-/// Use <see cref="AsPlayhead"/> when a consumer should not see <see cref="IPlaybackTimeline.Seek"/>.
+/// Helpers for <see cref="IPlayhead"/> and <see cref="IMediaClock"/>.
 /// </summary>
 public static class PlaybackTimelineClockExtensions
 {
     /// <summary>
-    /// Returns a seek-free view of <paramref name="timeline"/> (same <see cref="IPlaybackTimeline.CurrentPosition"/> /
-    /// <see cref="IPlaybackTimeline.IsRunning"/> / <see cref="IPlaybackTimeline.PlaybackRate"/> instance).
+    /// Returns a seek-free view of <paramref name="playhead"/> (same position / running / rate).
     /// </summary>
-    public static IPlaybackPlayhead AsPlayhead(this IPlaybackTimeline timeline)
+    public static IPlaybackPlayhead AsPlayhead(this IPlayhead playhead)
     {
-        ArgumentNullException.ThrowIfNull(timeline);
-        return new PlaybackPlayheadAdapter(timeline);
+        ArgumentNullException.ThrowIfNull(playhead);
+        return new PlaybackPlayheadAdapter(playhead);
     }
+
+    /// <summary>Obsolete overload — use <see cref="AsPlayhead(IPlayhead)"/>.</summary>
+    [Obsolete("Use AsPlayhead(IPlayhead).")]
+    public static IPlaybackPlayhead AsPlayhead(this IPlaybackTimeline timeline) =>
+        AsPlayhead((IPlayhead)timeline);
 
     /// <summary>
     /// Subscribes <paramref name="handler"/> to <see cref="IAvPlaybackSession.Clock"/> <see cref="IMediaClock.PositionChanged"/>.
     /// </summary>
-    public static IDisposable SubscribePositionChanged(this IAvPlaybackSession session, EventHandler<TimeSpan> handler)
+    internal static IDisposable SubscribePositionChanged(this IAvPlaybackSession session, EventHandler<TimeSpan> handler)
     {
         ArgumentNullException.ThrowIfNull(session);
         return session.Clock.SubscribePositionChanged(handler);
@@ -58,7 +60,7 @@ public static class PlaybackTimelineClockExtensions
         }
     }
 
-    private sealed class PlaybackPlayheadAdapter(IPlaybackTimeline inner) : IPlaybackPlayhead
+    private sealed class PlaybackPlayheadAdapter(IPlayhead inner) : IPlaybackPlayhead
     {
         public TimeSpan CurrentPosition => inner.CurrentPosition;
 

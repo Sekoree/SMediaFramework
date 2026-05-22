@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using S.Media.Core.Video;
+using S.Media.Effects;
 using S.Media.FFmpeg.Video;
 
 namespace HaPlay.Playback;
@@ -27,11 +28,7 @@ internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
     private VideoFrame? _holdTemplateRendered;
     private VideoFrame? _lastRealFrameCache;
     private volatile float _outputOpacity = 1f;
-    private VideoCpuFrameConverter? _opacityToBgra;
-    private VideoCpuFrameConverter? _opacityFromBgra;
-    private PixelFormat _opacityCachedFormat;
-    private int _opacityCachedWidth;
-    private int _opacityCachedHeight;
+    private VideoCpuFrameConverter? _fromBgra;
     private bool _disposed;
 
     /// <summary>Linear opacity applied to decoded CPU frames (fade toward black / neutral chroma). 1 = pass-through.</summary>
@@ -198,7 +195,7 @@ internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
 
         try
         {
-            var faded = ApplyOutputOpacity(frame, opacity);
+            var faded = ApplyOutputOpacityViaCompositor(frame, opacity);
             _inner.Submit(faded);
             frame.Dispose();
         }
@@ -271,16 +268,10 @@ internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
             }
 
             var composedBgraFormat = new VideoFormat(target.Width, target.Height, PixelFormat.Bgra32, target.FrameRate);
-            using var compositor = new CpuVideoCompositor(composedBgraFormat);
-            using var output = new VideoCompositorSource(composedBgraFormat, compositor, disposeCompositorOnDispose: false);
-            var slot = output.AddSlot();
-            slot.Transform = OutputPresetFormats.LetterboxTransform(sourceForLayer.Format, composedBgraFormat);
-            slot.Output.Configure(sourceForLayer.Format);
-            slot.Output.Submit(sourceForLayer);
-            sourceForLayer = null;
-
-            if (!output.TryReadNextFrame(out renderedBgra))
+            using var scaler = new CompositorOutputScaler(composedBgraFormat, LayerConfig.Background);
+            if (!scaler.TryComposite(sourceForLayer, out renderedBgra) || renderedBgra is null)
                 return null;
+            sourceForLayer = null;
 
             if (target.PixelFormat == PixelFormat.Bgra32)
             {
@@ -308,54 +299,26 @@ internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
         }
     }
 
-    private VideoFrame ApplyOutputOpacity(VideoFrame frame, float opacity)
+    private VideoFrame ApplyOutputOpacityViaCompositor(VideoFrame frame, float opacity)
     {
-        var pf = frame.Format.PixelFormat;
-        var w = frame.Format.Width;
-        var h = frame.Format.Height;
-        var hint = frame.ColorTransferHint;
-        var range = frame.ColorRange;
+        var fmt = frame.Format;
+        var bgraOut = new VideoFormat(fmt.Width, fmt.Height, PixelFormat.Bgra32, fmt.FrameRate);
+        var fadeConfig = new LayerConfig(LayerPosition.Center, 1f, opacity);
+        using var scaler = new CompositorOutputScaler(bgraOut, fadeConfig);
+        if (!scaler.TryComposite(frame, out var bgra) || bgra is null)
+            throw new NotSupportedException($"Cannot fade {fmt.PixelFormat} via compositor.");
 
-        if (VideoCpuOpacity.SupportsInPlace(pf))
-        {
-            var dup = VideoCpuFrameConverter.DuplicateCpuBacking(frame, hint);
-            VideoCpuOpacity.ApplyInPlace(dup, opacity, range);
-            return dup;
-        }
+        if (fmt.PixelFormat == PixelFormat.Bgra32)
+            return bgra;
 
-        if (!VideoCpuFrameConverter.CanConvert(pf, PixelFormat.Bgra32, w, h)
-            || !VideoCpuFrameConverter.CanConvert(PixelFormat.Bgra32, pf, w, h))
-            throw new NotSupportedException($"Cannot fade {pf} via CPU opacity or BGRA conversion.");
+        if (!VideoCpuFrameConverter.CanConvert(PixelFormat.Bgra32, fmt.PixelFormat, fmt.Width, fmt.Height))
+            throw new NotSupportedException($"Cannot convert faded BGRA back to {fmt.PixelFormat}.");
 
-        EnsureOpacityConverters(pf, w, h);
-        var dupSrc = VideoCpuFrameConverter.DuplicateCpuBacking(frame, hint);
-        VideoFrame? bgra = null;
-        try
-        {
-            bgra = _opacityToBgra!.Convert(dupSrc, hint);
-            dupSrc.Dispose();
-            VideoCpuOpacity.ApplyInPlace(bgra, opacity, range);
-            return _opacityFromBgra!.Convert(bgra, hint);
-        }
-        finally
-        {
-            bgra?.Dispose();
-        }
-    }
-
-    private void EnsureOpacityConverters(PixelFormat src, int width, int height)
-    {
-        if (_opacityToBgra is not null && _opacityCachedFormat == src
-                                      && _opacityCachedWidth == width && _opacityCachedHeight == height)
-            return;
-
-        _opacityToBgra ??= new VideoCpuFrameConverter();
-        _opacityFromBgra ??= new VideoCpuFrameConverter();
-        _opacityToBgra.Configure(src, PixelFormat.Bgra32, width, height);
-        _opacityFromBgra.Configure(PixelFormat.Bgra32, src, width, height);
-        _opacityCachedFormat = src;
-        _opacityCachedWidth = width;
-        _opacityCachedHeight = height;
+        _fromBgra ??= new VideoCpuFrameConverter();
+        _fromBgra.Configure(PixelFormat.Bgra32, fmt.PixelFormat, fmt.Width, fmt.Height);
+        var restored = _fromBgra.Convert(bgra, frame.ColorTransferHint);
+        bgra.Dispose();
+        return restored;
     }
 
     /// <summary>
@@ -413,9 +376,7 @@ internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
         if (_disposeInner && _inner is IDisposable d)
             d.Dispose();
 
-        _opacityToBgra?.Dispose();
-        _opacityFromBgra?.Dispose();
-        _opacityToBgra = null;
-        _opacityFromBgra = null;
+        _fromBgra?.Dispose();
+        _fromBgra = null;
     }
 }

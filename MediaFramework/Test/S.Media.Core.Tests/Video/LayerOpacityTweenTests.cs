@@ -1,4 +1,5 @@
 using S.Media.Core.Video;
+using S.Media.Effects;
 using Xunit;
 
 namespace S.Media.Core.Tests.Video;
@@ -44,6 +45,14 @@ public sealed class LayerOpacityTweenTests
         var q = t.OpacityAt(TimeSpan.FromMilliseconds(250));
         // Linear would give 0.25; ease-in-out-sine is shallower in the first half.
         Assert.True(q < 0.25f, $"ease-in-out-sine at 0.25 should be < 0.25, got {q}");
+    }
+
+    [Fact]
+    public void EaseInOutCubic_Quarter_IsBelowLinear()
+    {
+        var t = new LayerOpacityTween(0f, 1f, TimeSpan.FromSeconds(1), LayerEasing.EaseInOutCubic);
+        var q = t.OpacityAt(TimeSpan.FromMilliseconds(250));
+        Assert.True(q < 0.25f, $"ease-in-out-cubic at 0.25 should be < 0.25, got {q}");
     }
 
     [Fact]

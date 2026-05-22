@@ -66,20 +66,20 @@ public static class FFmpegRuntime
             // disposeInnerWhenDisposed: false so the router-disposed wrapper never reaches into
             // the caller's source. Last write wins on the static slot; other resampler packages
             // (if any) can replace it after FFmpegRuntime.EnsureInitialized() returns.
-            AudioRouterAutoResample.SourceWrapper ??=
+            MediaFrameworkPlugins.AudioResampleSourceWrapper ??=
                 (inner, targetRate) => new ResamplingAudioSource(inner, targetRate, disposeInnerWhenDisposed: false);
 
             // Install the swscale-backed CPU video converter so the Core VideoRouter can do branch
             // pixel conversion without referencing FFmpeg. Last write wins on the static slots —
             // other packages can replace these after FFmpegRuntime.EnsureInitialized() returns.
-            VideoCpuFrameConverterRegistry.Factory ??= () => new VideoCpuFrameConverter();
-            VideoCpuFrameConverterRegistry.CanConvertProbe ??= VideoCpuFrameConverter.CanConvert;
+            MediaFrameworkPlugins.VideoCpuFrameConverterFactory ??= () => new VideoCpuFrameConverter();
+            MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe ??= VideoCpuFrameConverter.CanConvert;
 
             // Install yadif-based deinterlacer so Core consumers get it via
             // VideoDeinterlacerRegistry.Create(input) when they reference S.Media.FFmpeg. Any
             // YadifDeinterlacer-supported planar layout (I420 / NV12 / Yuv422P / Yuv444P) routes
             // through libavfilter; anything else falls back to BobDeinterlacer.
-            VideoDeinterlacerRegistry.Factory ??= input =>
+            MediaFrameworkPlugins.VideoDeinterlacerFactory ??= input =>
             {
                 if (input.PixelFormat is CorePixelFormat.I420
                     or CorePixelFormat.Nv12

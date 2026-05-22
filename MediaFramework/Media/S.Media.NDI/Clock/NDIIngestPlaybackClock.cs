@@ -6,14 +6,16 @@ using S.Media.NDI;
 namespace S.Media.NDI.Clock;
 
 /// <summary>
-/// <see cref="IPlaybackClock"/> driven by NDI receiver audio frame timecode / timestamp
+/// Public NDI ingest master: <see cref="IPlaybackClock"/> driven by receiver audio timecode / timestamp
 /// (100 ns units, same as <see cref="TimeSpan.Ticks"/>) plus wall-clock extrapolation between
 /// captures — analogous to <see cref="VideoPtsClock"/> but fed from ingest.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Wire <see cref="MediaClock.SetMaster"/> to this instance when playing out with NDI as the
-/// timing authority. Pass the clock into <see cref="Audio.NDIAudioReceiver"/> so the capture
+/// timing authority. Call <see cref="Audio.AudioRouterNdiExtensions.SlaveToNdi"/> on an
+/// <see cref="S.Media.Core.Audio.AudioRouter"/> to pace decode from ingest media time.
+/// Pass the clock into <see cref="Audio.NDIAudioReceiver"/> so the capture
 /// thread calls <see cref="NotifyAudioFrame"/> before <c>NDIlib_recv_free_audio</c>.
 /// </para>
 /// <para>

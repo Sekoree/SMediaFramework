@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace S.Media.Core.Clock;
 
 /// <summary>
-/// Merges several <see cref="IPlaybackClock"/> instances by <strong>priority</strong>:
+/// Public master clock: merges several <see cref="IPlaybackClock"/> instances by <strong>priority</strong>:
 /// the active clock is the highest-priority candidate whose <see cref="IPlaybackClock.IsAdvancing"/>
 /// is <c>true</c>. <see cref="ElapsedSinceStart"/> follows that clock unless a <see cref="CompositePlaybackClockBlend"/>
 /// enables <see cref="CompositePlaybackClockBlend.HandoffCrossFade"/> and/or <see cref="CompositePlaybackClockBlend.CoAdvanceSmoothingTau"/>.

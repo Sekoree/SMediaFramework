@@ -33,7 +33,7 @@ namespace S.Media.NDI.Audio;
 /// <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> builds continue best-effort.
 /// </para>
 /// </remarks>
-public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
+internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 {
     private readonly NDIRuntime _runtime;
     private readonly NDIReceiver _receiver;

@@ -49,27 +49,27 @@ public sealed class MediaContainerPlaybackBundleTests
     }
 
     [Fact]
-    public void SmokeToolDefaultOwnership_includes_AudioPlayer_when_true()
+    public void SmokeToolDefaultOwnership_includes_AudioRouter_when_true()
     {
-        var audio = MediaContainerPlaybackBundleOwnedParts.AudioPlayer;
+        var audio = MediaContainerPlaybackBundleOwnedParts.AudioRouter;
         Assert.Equal(
             MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer | audio,
-            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(false, false, hasAudioPlayer: true));
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(false, false, hasAudioRouter: true));
 
         Assert.Equal(
             MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
             | MediaContainerPlaybackBundleOwnedParts.VideoRouter | audio,
-            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(true, false, hasAudioPlayer: true));
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(true, false, hasAudioRouter: true));
 
         Assert.Equal(
             MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
             | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock | audio,
-            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(false, true, hasAudioPlayer: true));
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(false, true, hasAudioRouter: true));
 
         Assert.Equal(
             MediaContainerPlaybackBundleOwnedParts.Decoder | MediaContainerPlaybackBundleOwnedParts.VideoPlayer
             | MediaContainerPlaybackBundleOwnedParts.VideoRouter | MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock | audio,
-            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(true, true, hasAudioPlayer: true));
+            MediaContainerPlaybackBundle.SmokeToolDefaultOwnership(true, true, hasAudioRouter: true));
     }
 
     [Fact]
@@ -90,11 +90,13 @@ public sealed class MediaContainerPlaybackBundleTests
                     dec,
                     video,
                     clock,
-                    audio: null,
+                    audioRouter: null,
+                    audioClock: null,
+                    audioSourceId: null,
                     videoRouter: null,
                     freerunClockToDispose: null,
-                    MediaContainerPlaybackBundleOwnedParts.AudioPlayer));
-                Assert.Contains("audio", ex.ParamName ?? "", StringComparison.Ordinal);
+                    MediaContainerPlaybackBundleOwnedParts.AudioRouter));
+                Assert.Contains("audioRouter", ex.ParamName ?? "", StringComparison.Ordinal);
             }
             finally
             {
@@ -125,7 +127,9 @@ public sealed class MediaContainerPlaybackBundleTests
                     dec,
                     video,
                     clock,
-                    audio: null,
+                    audioRouter: null,
+                    audioClock: null,
+                    audioSourceId: null,
                     videoRouter: null,
                     freerunClockToDispose: null,
                     MediaContainerPlaybackBundleOwnedParts.VideoRouter));
@@ -160,7 +164,9 @@ public sealed class MediaContainerPlaybackBundleTests
                     dec,
                     video,
                     clock,
-                    audio: null,
+                    audioRouter: null,
+                    audioClock: null,
+                    audioSourceId: null,
                     videoRouter: null,
                     freerunClockToDispose: null,
                     MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock));
@@ -193,7 +199,9 @@ public sealed class MediaContainerPlaybackBundleTests
                 dec,
                 video,
                 clock,
-                audio: null,
+                audioRouter: null,
+                audioClock: null,
+                audioSourceId: null,
                 videoRouter: null,
                 freerunClockToDispose: clock,
                 MediaContainerPlaybackBundleOwnedParts.Decoder
@@ -228,7 +236,9 @@ public sealed class MediaContainerPlaybackBundleTests
                 dec,
                 video,
                 clock,
-                audio: null,
+                audioRouter: null,
+                audioClock: null,
+                audioSourceId: null,
                 videoRouter: router,
                 freerunClockToDispose: clock,
                 MediaContainerPlaybackBundleOwnedParts.Decoder

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using S.Media.Core.Audio;
+using S.Media.Core.Clock;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
@@ -109,6 +110,30 @@ public class AudioRouterClockingTests
     }
 
     [Fact]
+    public void SlaveToIngest_PacesAgainstPlaybackClock()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        var src = new TestSource(Stereo, _ => 1f);
+        var ingest = new AdvancingIngestClock();
+
+        r.AddSource(src, "src");
+        r.AddOutput(new CountingOutput(Stereo), "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+        r.SlaveToIngest(ingest);
+
+        r.Start();
+        for (var i = 0; i < 30; i++)
+        {
+            ingest.Advance(TimeSpan.FromMilliseconds(5));
+            Thread.Sleep(5);
+        }
+
+        var produced = r.ChunksProduced;
+        r.Stop();
+        Assert.InRange(produced, 10, 80);
+    }
+
+    [Fact]
     public void SetClock_WhileRunning_Throws()
     {
         using var r = new AudioRouter(SampleRate);
@@ -173,5 +198,15 @@ public class AudioRouterClockingTests
             }
             return false;
         }
+    }
+
+    private sealed class AdvancingIngestClock : IPlaybackClock
+    {
+        private TimeSpan _elapsed;
+
+        public TimeSpan ElapsedSinceStart => _elapsed;
+        public bool IsAdvancing => true;
+
+        public void Advance(TimeSpan delta) => _elapsed += delta;
     }
 }

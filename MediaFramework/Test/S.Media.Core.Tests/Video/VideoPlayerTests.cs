@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Video;
+using S.Media.Effects;
 using Xunit;
 
 namespace S.Media.Core.Tests.Video;
@@ -255,7 +256,7 @@ internal sealed class FakeVideoSource : IVideoSource
         }
         Interlocked.Increment(ref _outstanding);
         frame = new VideoFrame(f.pts, _format, f.data, f.stride,
-            release: () => Interlocked.Decrement(ref _outstanding));
+            release: DisposableRelease.Wrap(() => Interlocked.Decrement(ref _outstanding)));
         return true;
     }
 }

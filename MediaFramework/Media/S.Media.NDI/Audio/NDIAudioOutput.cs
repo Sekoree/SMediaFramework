@@ -38,7 +38,7 @@ namespace S.Media.NDI.Audio;
 /// <see cref="Dispose"/> frees the native packed buffer; <strong>Debug</strong> builds log failures via <see cref="MediaDiagnostics.LogError"/>.
 /// </para>
 /// </remarks>
-public sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IDisposable
+internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IDisposable
 {
     private readonly NDISender _sender;
     private readonly AudioFormat _format;

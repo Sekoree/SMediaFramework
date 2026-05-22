@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.FFmpeg;
 using S.Media.Playback;
 using Xunit;
 
@@ -6,6 +7,44 @@ namespace S.Media.Playback.Tests;
 
 public sealed class MediaPlayerTests
 {
+    public MediaPlayerTests() => FFmpegRuntime.EnsureInitialized();
+    [Fact]
+    public async Task OpenFileBuilder_OpenAsync_returns_player()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mf_open_async_{Guid.NewGuid():N}.wav");
+        File.WriteAllBytes(path, CreateWavBytes());
+        try
+        {
+            using var player = await MediaPlayer.OpenFile(path).OpenAsync();
+            Assert.NotNull(player.AudioRouter);
+        }
+        finally
+        {
+            TryDelete(path);
+        }
+    }
+
+    [Fact]
+    public void OpenFileBuilder_WithOptions_mutate_works()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mf_open_mut_{Guid.NewGuid():N}.wav");
+        File.WriteAllBytes(path, CreateWavBytes());
+        try
+        {
+            Assert.True(
+                MediaPlayer.OpenFile(path)
+                    .WithOptions(o => o with { AudioChunkSamples = 960 })
+                    .TryBuild(out var p, out var err),
+                err);
+            using var player = p!;
+            Assert.Equal(960, player.AudioRouter!.ChunkSamples);
+        }
+        finally
+        {
+            TryDelete(path);
+        }
+    }
+
     [Fact]
     public void MediaPlayerOpenOptions_Default_uses_constructor_defaults()
     {
@@ -22,19 +61,19 @@ public sealed class MediaPlayerTests
     }
 
     [Fact]
-    public void TryOpen_missing_file_returns_false()
+    public void OpenFileBuilder_missing_file_returns_false()
     {
         var path = "/nonexistent/path/that/does/not/exist-" + Guid.NewGuid();
-        Assert.False(MediaPlayer.TryOpen(path, MediaPlayerOpenOptions.Default, null, false, out var p, out var err));
+        Assert.False(MediaPlayer.OpenFile(path).TryBuild(out var p, out var err));
         Assert.Null(p);
         Assert.False(string.IsNullOrEmpty(err));
     }
 
     [Fact]
-    public void TryOpenFile_missing_file_returns_false()
+    public void OpenFileBuilder_with_options_missing_file_returns_false()
     {
         var path = "/nonexistent/path/that/does/not/exist-" + Guid.NewGuid();
-        Assert.False(MediaPlayer.TryOpenFile(path, MediaPlayerOpenOptions.Default, null, false, out var p, out var err));
+        Assert.False(MediaPlayer.OpenFile(path).WithOptions(MediaPlayerOpenOptions.Default).TryBuild(out var p, out var err));
         Assert.Null(p);
         Assert.False(string.IsNullOrEmpty(err));
     }
@@ -46,10 +85,31 @@ public sealed class MediaPlayerTests
         File.WriteAllBytes(path, CreateWavBytes());
         try
         {
-            Assert.True(MediaPlayer.TryOpenUri(new Uri(path), MediaPlayerOpenOptions.Default, null, false, out var p, out var err), err);
+            Assert.True(MediaPlayer.OpenUri(new Uri(path)).TryBuild(out var p, out var err), err);
             using var player = p;
             Assert.NotNull(player);
             Assert.True(player.Decoder.HasAudio);
+        }
+        finally
+        {
+            TryDelete(path);
+        }
+    }
+
+    [Fact]
+    public void TryOpen_wav_play_pause_advances_audio_router()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mf_player_play_{Guid.NewGuid():N}.wav");
+        File.WriteAllBytes(path, CreateWavBytes());
+        try
+        {
+            Assert.True(MediaPlayer.OpenFile(path).TryBuild(out var p, out var err), err);
+            using var player = p!;
+            Assert.NotNull(player.AudioRouter);
+            player.Play();
+            Thread.Sleep(120);
+            player.Pause();
+            Assert.True(player.AudioRouter!.ChunksProduced > 0);
         }
         finally
         {
@@ -62,7 +122,7 @@ public sealed class MediaPlayerTests
     {
         using var stream = new MemoryStream(CreateWavBytes());
 
-        Assert.True(MediaPlayer.TryOpenStream(stream, "clip.wav", MediaPlayerOpenOptions.Default, null, false, out var p, out var err), err);
+        Assert.True(MediaPlayer.OpenStream(stream).WithInputName("clip.wav").TryBuild(out var p, out var err), err);
         using var player = p;
         Assert.NotNull(player);
         Assert.True(player.Decoder.HasAudio);
@@ -74,24 +134,18 @@ public sealed class MediaPlayerTests
         using var audio = new SilenceSource(new AudioFormat(48_000, 2));
 
         Assert.True(
-            MediaPlayer.TryOpenLive(
-                audio,
-                videoSource: null,
-                MediaPlayerOpenOptions.Default,
-                videoNegotiationLead: null,
-                disposeNegotiationLead: false,
-                disposeSourcesOnDispose: false,
-                out var p,
-                out var err),
+            MediaPlayer.OpenLive(audio, videoSource: null)
+                .WithDisposeSourcesOnPlayerDispose(false)
+                .TryBuild(out var p, out var err),
             err);
 
         using var player = p;
         Assert.NotNull(player);
         Assert.True(player.IsLive);
         Assert.False(player.HasContainerDecoder);
-        Assert.NotNull(player.Audio);
+        Assert.NotNull(player.AudioRouter);
+        Assert.NotNull(player.AudioClock);
         Assert.NotNull(player.AudioSourceId);
-        Assert.NotNull(player.PlaybackSession);
         Assert.Throws<InvalidOperationException>(() => { _ = player.Decoder; });
         Assert.Throws<InvalidOperationException>(() => { _ = player.Bundle; });
         Assert.Throws<InvalidOperationException>(() => { _ = player.Session; });
@@ -104,15 +158,9 @@ public sealed class MediaPlayerTests
         var audio = new SilenceSource(new AudioFormat(48_000, 2));
 
         Assert.True(
-            MediaPlayer.TryOpenLive(
-                audio,
-                videoSource: null,
-                MediaPlayerOpenOptions.Default,
-                videoNegotiationLead: null,
-                disposeNegotiationLead: false,
-                disposeSourcesOnDispose: true,
-                out var p,
-                out var err),
+            MediaPlayer.OpenLive(audio, videoSource: null)
+                .WithDisposeSourcesOnPlayerDispose(true)
+                .TryBuild(out var p, out var err),
             err);
 
         p!.Dispose();
@@ -123,14 +171,7 @@ public sealed class MediaPlayerTests
     public void TryOpenLive_without_sources_returns_false()
     {
         Assert.False(
-            MediaPlayer.TryOpenLive(
-                audioSource: null,
-                videoSource: null,
-                MediaPlayerOpenOptions.Default,
-                videoNegotiationLead: null,
-                disposeNegotiationLead: false,
-                out var p,
-                out var err));
+            MediaPlayer.OpenLive(audioSource: null, videoSource: null).TryBuild(out var p, out var err));
 
         Assert.Null(p);
         Assert.False(string.IsNullOrWhiteSpace(err));
@@ -140,17 +181,12 @@ public sealed class MediaPlayerTests
     public void TryOpenLive_audio_only_without_audio_router_returns_false()
     {
         using var audio = new SilenceSource(new AudioFormat(48_000, 2));
-        var options = new MediaPlayerOpenOptions(IncludeAudioRouter: false);
+        var options = MediaPlayerOpenOptions.Default with { IncludeAudioRouter = false };
 
         Assert.False(
-            MediaPlayer.TryOpenLive(
-                audio,
-                videoSource: null,
-                options,
-                videoNegotiationLead: null,
-                disposeNegotiationLead: false,
-                out var p,
-                out var err));
+            MediaPlayer.OpenLive(audio, videoSource: null)
+                .WithOptions(options)
+                .TryBuild(out var p, out var err));
 
         Assert.Null(p);
         Assert.False(string.IsNullOrWhiteSpace(err));

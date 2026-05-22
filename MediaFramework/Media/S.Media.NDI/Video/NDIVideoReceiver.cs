@@ -12,7 +12,7 @@ namespace S.Media.NDI.Video;
 /// copies frames into pool-backed <see cref="VideoFrame"/> instances, and queues them for
 /// <see cref="TryReadNextFrame"/>.
 /// </summary>
-public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
+internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 {
     private const int DefaultQueueDepth = 4;
 

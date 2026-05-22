@@ -585,18 +585,6 @@
   <data name="NdiInputDefaultName" xml:space="preserve">
     <value>NDI input</value>
   </data>
-  <data name="NdiSyncModeLabel" xml:space="preserve">
-    <value>Timing</value>
-  </data>
-  <data name="NdiSyncModeNdiClock" xml:space="preserve">
-    <value>NDI clock (lip-sync via PortAudio)</value>
-  </data>
-  <data name="NdiSyncModeLowLatency" xml:space="preserve">
-    <value>Low latency (newest video frame, like NDI Monitor)</value>
-  </data>
-  <data name="NdiSyncModeHint" xml:space="preserve">
-    <value>NDI clock: lip-sync via PortAudio timing (match your output device sample rate to the NDI stream, typically 48 kHz). Low latency: newest video frame; audio stays near live edge.</value>
-  </data>
   <data name="NdiLiveAudioResampleHint" xml:space="preserve">
     <value>NDI sample rate differs from this output — resampling adds delay and may cause drops. Set the PortAudio device to 48 kHz if the NDI source is 48 kHz.</value>
   </data>

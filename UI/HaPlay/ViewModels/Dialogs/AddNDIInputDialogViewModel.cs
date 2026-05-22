@@ -34,25 +34,6 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
     [ObservableProperty] private bool _audioOnly;
     [ObservableProperty] private bool _videoOnly;
     [ObservableProperty] private int _retrySeconds = 5;
-    [ObservableProperty] private NdiInputSyncMode _syncMode = NdiInputSyncMode.NdiFrameSync;
-
-    public bool IsNdiClockSync
-    {
-        get => SyncMode == NdiInputSyncMode.NdiFrameSync;
-        set { if (value) SyncMode = NdiInputSyncMode.NdiFrameSync; }
-    }
-
-    public bool IsLowLatencySync
-    {
-        get => SyncMode == NdiInputSyncMode.LowLatency;
-        set { if (value) SyncMode = NdiInputSyncMode.LowLatency; }
-    }
-
-    partial void OnSyncModeChanged(NdiInputSyncMode value)
-    {
-        OnPropertyChanged(nameof(IsNdiClockSync));
-        OnPropertyChanged(nameof(IsLowLatencySync));
-    }
     [ObservableProperty] private bool _isScanning;
     [ObservableProperty] private string? _discoveryStatus;
 
@@ -74,7 +55,6 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
         AudioOnly = existing.AudioOnly;
         VideoOnly = existing.VideoOnly;
         RetrySeconds = existing.RetrySeconds;
-        SyncMode = existing.SyncMode;
         // Default to manual-name when editing — the saved name is authoritative and shouldn't be silently
         // replaced by a discovery match with the same human label but a different transport address.
         UseDiscovery = false;
@@ -235,7 +215,6 @@ public partial class AddNDIInputDialogViewModel : ViewModelBase, IDisposable
             AudioOnly = AudioOnly,
             VideoOnly = VideoOnly,
             RetrySeconds = RetrySeconds,
-            SyncMode = SyncMode,
         };
     }
 }

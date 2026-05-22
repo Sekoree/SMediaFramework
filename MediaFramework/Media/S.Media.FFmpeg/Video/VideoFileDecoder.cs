@@ -671,11 +671,11 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
         var clonePtr = (nint)clone;
         return new VideoFrame(pts, Format, planes, strides,
-            release: () =>
+            release: DisposableRelease.Wrap(() =>
             {
                 FreeAVFrame(clonePtr);
                 _passThroughArena.Return(in passHandle);
-            },
+            }),
             metadata: meta);
     }
 
@@ -738,7 +738,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
         byte[] pooled = rented;
         return new VideoFrame(pts, Format, dstMem, stride,
-            release: () => ArrayPool<byte>.Shared.Return(pooled),
+            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(pooled)),
             metadata: meta);
     }
 
@@ -820,11 +820,11 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
         var captured = buffers;
         return new VideoFrame(pts, Format, memories, strides,
-            release: () =>
+            release: DisposableRelease.Wrap(() =>
             {
                 foreach (var b in captured)
                     ArrayPool<byte>.Shared.Return(b);
-            },
+            }),
             metadata: meta);
     }
 

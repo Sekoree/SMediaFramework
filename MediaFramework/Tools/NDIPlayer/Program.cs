@@ -64,21 +64,21 @@ if (opt.Verbose)
     WriteStartupDiagnostics(mediaPath, ndiName, dec, ndi, opt);
 
 long sessionStartTs = 0;
-NDIAudioOutput? ndAudio = null;
+IAudioOutput? ndAudio = null;
 
 if (!opt.AudioOnly)
 {
-    VideoFormatNegotiator.Connect(dec.Video, ndi.VideoOutput);
+    VideoFormatNegotiator.Connect(dec.Video, ndi.Video);
     sessionStartTs = Stopwatch.GetTimestamp();
 
     if (!opt.VideoOnly && dec.HasAudio)
         ndAudio = ndi.EnableAudio(dec.Audio.Format);
 
     if (opt.VideoOnly || !dec.HasAudio)
-        PumpVideo(dec.Video, ndi.VideoOutput, dbg, pumpsFinished, ref sessionStartTs, opt.WallPace, opt.WallDriftCorrect,
+        PumpVideo(dec.Video, ndi.Video, dbg, pumpsFinished, ref sessionStartTs, opt.WallPace, opt.WallDriftCorrect,
             cts.Token);
     else if (ndAudio is not null)
-        PumpMuxOrdered(dec, ndi.VideoOutput, ndAudio, dbg, pumpsFinished, ref sessionStartTs, opt.WallPace,
+        PumpMuxOrdered(dec, ndi.Video, ndAudio, dbg, pumpsFinished, ref sessionStartTs, opt.WallPace,
             opt.WallDriftCorrect, cts.Token);
 }
 else if (!opt.VideoOnly)
@@ -253,7 +253,7 @@ static void DebugHudLoop(NDIOutput ndi, MediaContainerDecoder dec, NDIDebugState
 static void PumpMuxOrdered(
     MediaContainerDecoder dec,
     IVideoOutput videoSink,
-    NDIAudioOutput audioSink,
+    IAudioOutput audioSink,
     NDIDebugState? dbg,
     CountdownEvent? pumpsFinished,
     ref long wallAnchorTicks,
@@ -322,7 +322,7 @@ static void PumpMuxOrdered(
                 {
                     dbg?.OnAudioFrame(in aFrame);
                     PaceToPresentationTime(aFrame.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
-                    audioSink.Submit(in aFrame);
+                    audioSink.Submit(aFrame.Samples.Span);
                 }
                 finally
                 {
@@ -369,7 +369,7 @@ static void PumpVideo(IVideoSource src, IVideoOutput output, NDIDebugState? dbg,
     }
 }
 
-static void PumpAudio(IAudioSource src, NDIAudioOutput output, NDIDebugState? dbg, CountdownEvent? pumpsFinished,
+static void PumpAudio(IAudioSource src, IAudioOutput output, NDIDebugState? dbg, CountdownEvent? pumpsFinished,
     ref long wallAnchorTicks, bool wallPace, bool wallDriftCorrect, CancellationToken ct)
 {
     try
@@ -381,9 +381,9 @@ static void PumpAudio(IAudioSource src, NDIAudioOutput output, NDIDebugState? db
 
             try
             {
-                dbg?.OnAudioFrame(in frame);
+                dbg?.OnAudioFrame(frame);
                 PaceToPresentationTime(frame.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
-                output.Submit(in frame);
+                output.Submit(frame.Samples.Span);
             }
             finally
             {

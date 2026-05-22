@@ -3,7 +3,7 @@ using System.Diagnostics;
 namespace S.Media.Core.Clock;
 
 /// <summary>
-/// Playback clock driven by the most recently presented video frame PTS plus
+/// Public master clock: driven by the most recently presented video frame PTS plus
 /// wall-clock delta. Intended for file or VFR video when no audio
 /// <see cref="IPlaybackClock"/> is available as a <see cref="MediaClock"/> master.
 /// </summary>

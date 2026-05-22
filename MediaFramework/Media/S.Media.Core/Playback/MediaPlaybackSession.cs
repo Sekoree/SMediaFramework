@@ -5,63 +5,46 @@ using S.Media.Core.Video;
 namespace S.Media.Core.Playback;
 
 /// <summary>
-/// Holds the usual <see cref="VideoPlayer"/> + <see cref="IMediaClock"/> (+ optional
-/// <see cref="AudioPlayer"/>) and forwards <see cref="Play"/>, <see cref="Pause"/>,
-/// <see cref="Seek"/>, and <see cref="SeekCoordinated"/> to <see cref="AvPlaybackCoordinator"/> with consistent ordering.
-/// Implements <see cref="IAvPlaybackSession"/> for hosts that want a single façade type.
+/// Holds <see cref="VideoPlayer"/> + <see cref="IMediaClock"/> (+ optional audio router/clock) for coordinated transport.
 /// </summary>
-/// <remarks>
-/// <para>
-/// This type does not own disposal of the players — the host keeps existing
-/// <c>using</c> patterns on <see cref="VideoPlayer"/> and <see cref="AudioPlayer"/>.
-/// It is <strong>not</strong> <see cref="IDisposable"/> (no composite <c>Dispose</c> on the session itself).
-/// Tools such as <c>VideoPlaybackSmoke</c> compose <see cref="S.Media.PortAudio.PortAudioPlaybackHost"/> (mux → PortAudio),
-/// <see cref="S.Media.FFmpeg.MediaContainerSession"/>, and this session so
-/// <c>S.Media.FFmpeg.MediaContainerDecoder.FlushCodecPipelines</c> runs after <see cref="Pause(CancellationToken, Action?)"/> by default.
-/// </para>
-/// <para>
-/// <strong>Lock order</strong>: avoid holding unrelated host mutexes across these calls.
-/// If your host mutates <see cref="AudioRouter"/> routes on the same thread as playback
-/// control, follow the synchronization assumptions documented on <see cref="AudioRouter.Pause"/>.
-/// </para>
-/// <para>
-/// Wiring <see cref="IMediaClock.SetMaster"/> / <see cref="MediaClockExtensions.SetMasterChain"/> here does not implement coordinated multi-output master PPM or synchronized drop/repeat — that remains host-owned; see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/>.
-/// </para>
-/// <para>
-/// For a seek-free view of <see cref="IAvPlaybackSession.Timeline"/>, use <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/>.
-/// </para>
-/// </remarks>
-public sealed class MediaPlaybackSession : IAvPlaybackSession
+internal sealed class MediaPlaybackSession : IAvPlaybackSession
 {
-    public MediaPlaybackSession(VideoPlayer video, IMediaClock clock, AudioPlayer? audio = null)
+    public MediaPlaybackSession(
+        VideoPlayer video,
+        IMediaClock clock,
+        AudioRouter? audioRouter = null,
+        MediaClock? audioClock = null,
+        string? audioSourceId = null)
     {
         Video = video ?? throw new ArgumentNullException(nameof(video));
         Clock = clock ?? throw new ArgumentNullException(nameof(clock));
-        Audio = audio;
+        AudioRouter = audioRouter;
+        AudioClock = audioClock;
+        AudioSourceId = audioSourceId;
     }
 
     public VideoPlayer Video { get; }
     public IMediaClock Clock { get; }
-    public AudioPlayer? Audio { get; }
+    public AudioRouter? AudioRouter { get; }
+    public MediaClock? AudioClock { get; }
+    public string? AudioSourceId { get; }
 
-    /// <inheritdoc cref="AvPlaybackCoordinator.Play(VideoPlayer, AudioPlayer?, Action?, Action?, IPlaybackClock?, Func{bool}?)"/>
     public void Play(
         Action? prefillBeforeHardware = null,
         Action? startHardware = null,
         IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null) =>
-        AvPlaybackCoordinator.Play(Video, Audio, prefillBeforeHardware, startHardware, videoOnlyMaster,
+        AvPlaybackCoordinator.Play(Video, AudioRouter, AudioClock, prefillBeforeHardware, startHardware, videoOnlyMaster,
             verifyPrebufferAfterPrefill);
 
-    /// <inheritdoc cref="AvPlaybackCoordinator.Pause(VideoPlayer, AudioPlayer?, CancellationToken, Action?)"/>
     public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
-        AvPlaybackCoordinator.Pause(Video, Audio, cancellationToken, flushSharedMuxAfterPause);
+        AvPlaybackCoordinator.Pause(Video, AudioRouter, AudioClock, cancellationToken, flushSharedMuxAfterPause);
 
-    /// <inheritdoc cref="AvPlaybackCoordinator.Seek(VideoPlayer, AudioPlayer, TimeSpan)"/>
-    public void Seek(TimeSpan position) => AvPlaybackCoordinator.Seek(Video, Audio, position);
+    public void Seek(TimeSpan position) =>
+        AvPlaybackCoordinator.Seek(Video, AudioRouter, AudioClock, AudioSourceId, position);
 
-    /// <inheritdoc cref="AvPlaybackCoordinator.SeekCoordinated(VideoPlayer, AudioPlayer?, TimeSpan, CancellationToken, Action?)"/>
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
         Action? flushSharedMuxAfterPause = null) =>
-        AvPlaybackCoordinator.SeekCoordinated(Video, Audio, position, cancellationToken, flushSharedMuxAfterPause);
+        AvPlaybackCoordinator.SeekCoordinated(Video, AudioRouter, AudioClock, AudioSourceId, position, cancellationToken,
+            flushSharedMuxAfterPause);
 }

@@ -1,6 +1,7 @@
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Video;
 using S.Media.NDI.Audio;
 using S.Media.NDI.Video;
 
@@ -69,7 +70,7 @@ public sealed class NDIOutput : IDisposable
     /// Video output — always available; format negotiated via
     /// <see cref="Core.Video.IVideoOutput.Configure"/>.
     /// </summary>
-    public NDIVideoSender VideoOutput
+    public IVideoOutput Video
     {
         get
         {
@@ -77,6 +78,12 @@ public sealed class NDIOutput : IDisposable
             return _videoOutput ??= CreateVideoOutputLocked();
         }
     }
+
+    /// <summary>Same instance as <see cref="Video"/> (typed for in-assembly callers).</summary>
+    internal NDIVideoSender VideoSender => (NDIVideoSender)Video;
+
+    /// <summary>Non-null after <see cref="EnableAudio"/>.</summary>
+    public IAudioOutput? Audio => _audioOutput;
 
     /// <summary>
     /// Construct an NDI source. <paramref name="clockVideo"/> /
@@ -135,7 +142,7 @@ public sealed class NDIOutput : IDisposable
     /// subsequent calls (an NDI source has at most one audio stream). Throws
     /// if already created with a different format.
     /// </summary>
-    public NDIAudioOutput EnableAudio(AudioFormat format)
+    public IAudioOutput EnableAudio(AudioFormat format)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)

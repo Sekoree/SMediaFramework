@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using S.Media.Core;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Video;
 using Xunit;
@@ -91,7 +92,7 @@ public sealed class VideoRouterTests
         var releaseCalls = 0;
         var y = new byte[64 * 64];
         var uv = new byte[64 * 32];
-        var frame = new VideoFrame(TimeSpan.Zero, vf, [y, uv], [64, 64], release: () => Interlocked.Increment(ref releaseCalls));
+        var frame = new VideoFrame(TimeSpan.Zero, vf, [y, uv], [64, 64], release: DisposableRelease.Wrap(() => Interlocked.Increment(ref releaseCalls)));
         vin.Output.Submit(frame);
 
         Assert.Equal(1, s0.SubmitCount);
@@ -173,7 +174,7 @@ public sealed class VideoRouterTests
         var baseFd = checked((int)h.DangerousGetHandle());
         var y = LinuxSyscall.dup(baseFd);
         var uv = LinuxSyscall.dup(baseFd);
-        var backing = new VideoDmabufNv12Backing(y, 0, 64, uv, 0, 64, 0, 0);
+        var backing = new DmabufNv12Backing(y, 0, 64, uv, 0, 64, 0, 0);
         var frame = VideoFrame.CreateNv12Dmabuf(TimeSpan.Zero, vfFormat, backing);
         vin.Output.Submit(frame);
 
@@ -202,7 +203,7 @@ public sealed class VideoRouterTests
         var baseFd = checked((int)h.DangerousGetHandle());
         var y = LinuxSyscall.dup(baseFd);
         var uv = LinuxSyscall.dup(baseFd);
-        var backing = new VideoDmabufP016Backing(y, 0, 4, uv, 0, 4, 0, 0);
+        var backing = new DmabufP016Backing(y, 0, 4, uv, 0, 4, 0, 0);
         var frame = VideoFrame.CreateP016Dmabuf(TimeSpan.Zero, vfFormat, backing);
         vin.Output.Submit(frame);
 
@@ -261,7 +262,7 @@ public sealed class VideoRouterTests
         var vfFormat = new VideoFormat(w, h, PixelFormat.Nv12, new Rational(24, 1));
         vin.Output.Configure(vfFormat);
 
-        using var backing = new VideoDmabufNv12Backing(fd, 0, yPitch, fd, ySize, uvPitch, 0, 0);
+        using var backing = new DmabufNv12Backing(fd, 0, yPitch, fd, ySize, uvPitch, 0, 0);
         var frame = VideoFrame.CreateNv12Dmabuf(TimeSpan.Zero, vfFormat, backing);
         vin.Output.Submit(frame);
 
@@ -290,7 +291,7 @@ public sealed class VideoRouterTests
         var baseFd = checked((int)h.DangerousGetHandle());
         var y = LinuxSyscall.dup(baseFd);
         var uv = LinuxSyscall.dup(baseFd);
-        var backing = new VideoDmabufNv12Backing(y, 0, 64, uv, 0, 64, 0, 0);
+        var backing = new DmabufNv12Backing(y, 0, 64, uv, 0, 64, 0, 0);
         var frame = VideoFrame.CreateNv12Dmabuf(TimeSpan.Zero, vfFormat, backing);
 
         var ex = Assert.Throws<NotSupportedException>(() => vin.Output.Submit(frame));

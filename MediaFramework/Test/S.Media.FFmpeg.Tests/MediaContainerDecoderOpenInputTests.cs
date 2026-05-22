@@ -37,14 +37,14 @@ public sealed class MediaContainerDecoderOpenInputTests
     public void OpenStream_FiniteStream_ReadsAudio()
     {
         using var stream = new MemoryStream(CreateWavBytes());
-        using var decoder = MediaContainerDecoder.OpenStream(stream, "clip.wav");
+        using var decoder = MediaContainerDecoder.OpenStream(stream, isSeekable: true, probeHintName: "clip.wav");
 
         Assert.True(decoder.HasAudio);
         var buffer = new float[decoder.Audio.Format.Channels * 128];
         Assert.True(decoder.Audio.ReadInto(buffer) > 0);
     }
 
-    private static byte[] CreateWavBytes()
+    internal static byte[] CreateWavBytes()
     {
         const int sampleRate = 48_000;
         const short channels = 1;

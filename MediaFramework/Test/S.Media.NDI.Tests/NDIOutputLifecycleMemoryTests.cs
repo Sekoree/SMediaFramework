@@ -122,8 +122,8 @@ public sealed class NDIOutputLifecycleMemoryTests
             o.ResetVideoPresentationTimecodeAnchor();
             _ = o.EnableAudio(new AudioFormat(48_000, 2));
             var fmt = new VideoFormat(64, 64, PixelFormat.Bgra32, new Rational(30, 1));
-            o.VideoOutput.Configure(fmt);
-            _ = o.VideoOutput.Format;
+            o.Video.Configure(fmt);
+            _ = o.Video.Format;
 
             if (LabEnabled && (i + 1) % 500 == 0)
                 GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false);
@@ -164,8 +164,8 @@ public sealed class NDIOutputLifecycleMemoryTests
             o.ResetVideoPresentationTimecodeAnchor();
             _ = o.EnableAudio(new AudioFormat(48_000, 2));
             var fmt = new VideoFormat(64, 64, PixelFormat.Bgra32, new Rational(30, 1));
-            o.VideoOutput.Configure(fmt);
-            _ = o.VideoOutput.Format;
+            o.Video.Configure(fmt);
+            _ = o.Video.Format;
         }
 
         compactingCollect();
@@ -210,8 +210,8 @@ public sealed class NDIOutputLifecycleMemoryTests
             o.ResetVideoPresentationTimecodeAnchor();
             _ = o.EnableAudio(new AudioFormat(48_000, 2));
             var fmt = new VideoFormat(64, 64, PixelFormat.Bgra32, new Rational(30, 1));
-            o.VideoOutput.Configure(fmt);
-            _ = o.VideoOutput.Format;
+            o.Video.Configure(fmt);
+            _ = o.Video.Format;
         }
 
         compactingCollect();

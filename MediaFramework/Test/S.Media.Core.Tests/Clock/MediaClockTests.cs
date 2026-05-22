@@ -10,15 +10,15 @@ public class MediaClockTests
     private const int SettleMs = 80;
 
     [Fact]
-    public void MediaClock_IsAssignableToIPlaybackTimeline()
+    public void MediaClock_IsAssignableToIPlayhead()
     {
         using var clock = new MediaClock();
-        IPlaybackTimeline timeline = clock;
-        Assert.Equal(TimeSpan.Zero, timeline.CurrentPosition);
-        Assert.False(timeline.IsRunning);
-        Assert.Equal(1.0, timeline.PlaybackRate);
-        timeline.Seek(TimeSpan.FromSeconds(1));
-        Assert.Equal(TimeSpan.FromSeconds(1), timeline.CurrentPosition);
+        IPlayhead playhead = clock;
+        Assert.Equal(TimeSpan.Zero, playhead.CurrentPosition);
+        Assert.False(playhead.IsRunning);
+        Assert.Equal(1.0, playhead.PlaybackRate);
+        playhead.Seek(TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), playhead.CurrentPosition);
     }
 
     [Fact]

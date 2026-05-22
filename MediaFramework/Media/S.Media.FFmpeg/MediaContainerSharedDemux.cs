@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
+using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
@@ -45,6 +46,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private volatile bool _fileReadCompleted;
     private Thread? _demuxerThread;
     private AVFormatContext* _fmt;
+    private StreamAvioBridge? _streamIo;
+    private bool _inputSeekable = true;
     private AVPacket* _demuxPkt;
 
     private readonly Queue<nint> _audioPacketQ = new();
@@ -131,6 +134,25 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
     }
 
+    internal static MediaContainerSharedDemux Open(
+        Stream stream,
+        bool isSeekable,
+        string? probeHintName,
+        VideoDecoderOpenOptions? videoOptions)
+    {
+        var d = new MediaContainerSharedDemux();
+        try
+        {
+            d.OpenInternalFromStream(stream, isSeekable, probeHintName, videoOptions);
+            return d;
+        }
+        catch
+        {
+            d.Dispose();
+            throw;
+        }
+    }
+
     internal bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr)
     {
         deviceComPtr = _hwAccel?.TryGetD3D11DeviceComPtr() ?? 0;
@@ -148,12 +170,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private void OpenInternal(string path, VideoDecoderOpenOptions? videoOptions)
     {
-        var aDepth = videoOptions?.AudioPacketQueueDepth ?? 0;
-        var vDepth = videoOptions?.VideoPacketQueueDepth ?? 0;
-        if (aDepth < 0) throw new ArgumentOutOfRangeException(nameof(videoOptions), "AudioPacketQueueDepth must be >= 0");
-        if (vDepth < 0) throw new ArgumentOutOfRangeException(nameof(videoOptions), "VideoPacketQueueDepth must be >= 0");
-        if (aDepth > 0) _maxAudioPacketsQueued = aDepth;
-        if (vDepth > 0) _maxVideoPacketsQueued = vDepth;
+        ApplyQueueDepthOptions(videoOptions);
+        _inputSeekable = true;
 
         AVFormatContext* fmt = null;
         var ret = avformat_open_input(&fmt, path, null, null);
@@ -163,6 +181,37 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         ret = avformat_find_stream_info(_fmt, null);
         FFmpegException.ThrowIfError(ret, nameof(avformat_find_stream_info));
 
+        OpenInternalAfterFormatOpen(videoOptions);
+    }
+
+    private void OpenInternalFromStream(
+        Stream stream,
+        bool isSeekable,
+        string? probeHintName,
+        VideoDecoderOpenOptions? videoOptions)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ApplyQueueDepthOptions(videoOptions);
+        _inputSeekable = isSeekable && stream.CanSeek;
+        _streamIo = StreamAvioBridge.Create(stream, _inputSeekable);
+        _fmt = _streamIo.OpenFormatContext(probeHintName);
+        OpenInternalAfterFormatOpen(videoOptions);
+    }
+
+    private void ApplyQueueDepthOptions(VideoDecoderOpenOptions? videoOptions)
+    {
+        var aDepth = videoOptions?.AudioPacketQueueDepth ?? 0;
+        var vDepth = videoOptions?.VideoPacketQueueDepth ?? 0;
+        if (aDepth < 0) throw new ArgumentOutOfRangeException(nameof(videoOptions), "AudioPacketQueueDepth must be >= 0");
+        if (vDepth < 0) throw new ArgumentOutOfRangeException(nameof(videoOptions), "VideoPacketQueueDepth must be >= 0");
+        if (aDepth > 0) _maxAudioPacketsQueued = aDepth;
+        if (vDepth > 0) _maxVideoPacketsQueued = vDepth;
+    }
+
+    private void OpenInternalAfterFormatOpen(VideoDecoderOpenOptions? videoOptions)
+    {
+        int ret;
+        AVStream* aSt = null;
         AVCodec* aCodec = null;
         _aStream = av_find_best_stream(_fmt, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &aCodec, 0);
         _hasAudio = _aStream >= 0 && aCodec != null;
@@ -179,7 +228,6 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 throw new FFmpegException(_vStream, "no decodable audio or video stream found");
         }
 
-        AVStream* aSt = null;
         if (_hasAudio)
         {
             aSt = _fmt->streams[_aStream];
@@ -600,6 +648,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(position));
+        if (!_inputSeekable)
+            throw new NotSupportedException("cannot seek a non-seekable stream-backed container");
 
         lock (_lifecycleLock)
         {
@@ -703,7 +753,16 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
             MediaDiagnostics.SwallowDisposeErrors(_passThroughArena.Dispose, "MediaContainerSharedDemux.Dispose: _passThroughArena");
 
-            if (_fmt != null) { var f = _fmt; avformat_close_input(&f); _fmt = null; }
+            if (_fmt != null)
+            {
+                var f = _fmt;
+                f->pb = null;
+                avformat_close_input(&f);
+                _fmt = null;
+            }
+
+            _streamIo?.Dispose();
+            _streamIo = null;
         }
     }
 
@@ -862,11 +921,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             Audio.Format,
             converted,
             samples.AsMemory(0, converted * Audio.Format.Channels),
-            Release: () =>
+            Release: DisposableRelease.Wrap(() =>
             {
                 if (Interlocked.Exchange(ref released, 1) == 0)
                     ArrayPool<float>.Shared.Return(owned, clearArray: false);
-            });
+            }));
     }
 
     internal void RequestVideoDecodeYield()
@@ -1142,12 +1201,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         var clonePtr = (nint)clone;
         return new VideoFrame(pts, Video.Format, planes, strides,
-            release: () =>
+            release: DisposableRelease.Wrap(() =>
             {
                 var f = (AVFrame*)clonePtr;
                 av_frame_free(&f);
                 _passThroughArena.Return(in passHandle);
-            },
+            }),
             metadata: meta);
     }
 
@@ -1206,7 +1265,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         byte[] pooled = rented;
         return new VideoFrame(pts, Video.Format, dstMem, stride,
-            release: () => ArrayPool<byte>.Shared.Return(pooled),
+            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(pooled)),
             metadata: meta);
     }
 
@@ -1294,11 +1353,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         var captured = buffers;
         return new VideoFrame(pts, Video.Format, memories, strides,
-            release: () =>
+            release: DisposableRelease.Wrap(() =>
             {
                 foreach (var b in captured)
                     ArrayPool<byte>.Shared.Return(b);
-            },
+            }),
             metadata: meta);
     }
 

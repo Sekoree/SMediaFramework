@@ -138,8 +138,8 @@ try
             ticker.Restart();
         }
 
-        var audioNaturally = audioHost?.Player.Router.CompletedNaturally ?? true;
-        var routerEof = audioHost?.Player.Router.CompletedNaturally == true;
+        var audioNaturally = audioHost?.Router.CompletedNaturally ?? true;
+        var routerEof = audioHost?.Router.CompletedNaturally == true;
 
         if (videoSource.IsExhausted && audioNaturally &&
             (videoPlayer.CompletedNaturally || routerEof))
@@ -168,7 +168,7 @@ try
         Console.Error.WriteLine("[smoke] av session paused.");
     videoPtsClock?.Pause();
     if (audioHost is null)
-        session.Core.Audio?.Clock.Stop(CancellationToken.None);
+        session.Core.AudioClock?.Stop(CancellationToken.None);
 }
 finally
 {
@@ -377,7 +377,7 @@ Smoke test for video + mastered audio clock (SDL3 GL by default).
   --drm-gl            (Linux only) Prefer DRM PRIME EGL semi-planar (NV12 / P010 / P016) dma-bufs to GL (do not combine with --ndi).
   --d3d11-gl          (Windows only) Prefer D3D11 NV12 shared handles + GL upload (do not combine with --ndi).
   --d3d11-gl-zero-host  (Windows, with --d3d11-gl) Do not create SDL's fallback D3D11GlInteropDeviceHost; bind the GL uploader from libav's ID3D11Device on the first decoded frame (true zero-host; requires LibavD3D11DeviceComPtr on Win32 NV12 backing or negotiator borrow).
-  --d3d11-gl-shared-handle-only  (Windows, with --d3d11-gl) Omit libav ID3D11Device/ID3D11Texture2D COM pointers on VideoWin32Nv12Backing (DXGI NT handle path only; incompatible with --d3d11-gl-zero-host). SDL D3D11GlInteropDeviceHost must create the D3D11 device used for OpenSharedResource. Lab: same with MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY=1 (or true) and --d3d11-gl (omit this flag).
+  --d3d11-gl-shared-handle-only  (Windows, with --d3d11-gl) Omit libav ID3D11Device/ID3D11Texture2D COM pointers on Win32SharedNv12Backing (DXGI NT handle path only; incompatible with --d3d11-gl-zero-host). SDL D3D11GlInteropDeviceHost must create the D3D11 device used for OpenSharedResource. Lab: same with MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY=1 (or true) and --d3d11-gl (omit this flag).
 
   --chunk-samples=n   AudioRouter chunk span (default 960 ≈ 20 ms @ 48 kHz).
   --device-latency-ms=n  PortAudio suggested latency (ms) + larger TargetQueueSamples floor (JACK/ALSA-hw).

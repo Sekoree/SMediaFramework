@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using S.Media.Core;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Internal;
 using S.Media.FFmpeg.Video;
@@ -60,7 +61,7 @@ public class VideoCpuFrameConverterTests
         using var src = new VideoFrame(TimeSpan.Zero, fmt,
             [mmY.Memory, mmU.Memory, mmV.Memory],
             [yStride, uvStride, uvStride],
-            release: () => NativeMemory.AlignedFree(pool));
+            release: DisposableRelease.Wrap(() => NativeMemory.AlignedFree(pool)));
 
         using var conv = new VideoCpuFrameConverter();
         conv.Configure(PixelFormat.Yuv422P10Le, PixelFormat.Uyvy, w, h);

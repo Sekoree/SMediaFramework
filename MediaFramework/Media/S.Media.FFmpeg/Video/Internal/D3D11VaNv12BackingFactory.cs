@@ -10,17 +10,17 @@ namespace S.Media.FFmpeg.Video.Internal;
 /// <summary>
 /// Maps libav <see cref="AVPixelFormat.AV_PIX_FMT_D3D11"/> frames (see libavutil
 /// <c>hwcontext_d3d11va.h</c> — <c>AVFrame.data[0]</c> texture, <c>data[1]</c> array index)
-/// into <see cref="VideoWin32Nv12Backing"/> via DXGI shared NT handles. When <paramref name="sharedHandleOnly"/> is false,
+/// into <see cref="Win32SharedNv12Backing"/> via DXGI shared NT handles. When <paramref name="sharedHandleOnly"/> is false,
 /// also records libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers for same-device GL upload (no <c>OpenSharedResource</c>).
 /// </summary>
 /// <remarks>
-/// <c>S.Media.OpenGL.Nv12Win32SharedHandleGpuUploader</c> uses <see cref="VideoWin32Nv12Backing.LibavD3D11Texture2DComPtr"/>
-/// when its D3D11 device matches <see cref="VideoWin32Nv12Backing.LibavD3D11DeviceComPtr"/>; otherwise it falls back to
-/// the NT-handle path on <see cref="VideoWin32Nv12Backing.SharedLumaNtHandle"/>.
+/// <c>S.Media.OpenGL.Nv12Win32SharedHandleGpuUploader</c> uses <see cref="Win32SharedNv12Backing.LibavD3D11Texture2DComPtr"/>
+/// when its D3D11 device matches <see cref="Win32SharedNv12Backing.LibavD3D11DeviceComPtr"/>; otherwise it falls back to
+/// the NT-handle path on <see cref="Win32SharedNv12Backing.SharedLumaNtHandle"/>.
 /// </remarks>
 internal static unsafe class D3D11VaNv12BackingFactory
 {
-    internal static VideoWin32Nv12Backing? TryCreateBacking(AVFrame* frame, bool sharedHandleOnly)
+    internal static Win32SharedNv12Backing? TryCreateBacking(AVFrame* frame, bool sharedHandleOnly)
     {
         if (!OperatingSystem.IsWindows() || frame == null)
             return null;
@@ -59,9 +59,9 @@ internal static unsafe class D3D11VaNv12BackingFactory
             }
 
             if (sharedHandleOnly)
-                return new VideoWin32Nv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, 0, 0);
+                return new Win32SharedNv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, 0, 0);
 
-            return new VideoWin32Nv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, deviceComPtr, (nint)pTex);
+            return new Win32SharedNv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, deviceComPtr, (nint)pTex);
         }
         finally
         {

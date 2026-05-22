@@ -1,37 +1,15 @@
-using System.Linq;
 using S.Media.Core.Audio;
+using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
-using S.Media.Core.Playback;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 
 namespace S.Media.PortAudio;
 
 /// <summary>
-/// Wires <see cref="MediaContainerDecoder"/> shared-mux audio into an <see cref="AudioPlayer"/> with a primary
-/// <see cref="PortAudioOutput"/> (borrowed <see cref="MediaContainerDecoder.Audio"/> source, same prefill / stream-open
-/// ordering as <c>VideoPlaybackSmoke</c>). Does <strong>not</strong> own the decoder — the caller keeps its <c>using</c> on
-/// <see cref="MediaContainerDecoder"/> and disposes this host (which disposes the player and the PortAudio device,
-/// unless <see cref="PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer"/> was selected at creation).
+/// Wires <see cref="MediaContainerDecoder"/> shared-mux audio into an <see cref="AudioRouter"/> + <see cref="MediaClock"/>
+/// with a primary <see cref="PortAudioOutput"/>.
 /// </summary>
-/// <remarks>
-/// <para>
-/// Video routing (<see cref="S.Media.Core.Video.VideoRouter"/>), GL outputs, and NDI remain caller-owned; use
-/// <see cref="CreateContainerSession"/> with an <see cref="IAvPlaybackSession"/> built from the same
-/// <see cref="MediaContainerDecoder"/> and <see cref="AudioPlayer.Clock"/> graph. For optional single-<see cref="IDisposable.Dispose"/>
-/// of the decoder plus <see cref="VideoPlayer"/> / optional <see cref="VideoRouter"/> / freerun <see cref="MediaClock"/>
-/// when you inject outputs yourself, see <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/>.
-/// </para>
-/// <para>
-/// When wiring the same <see cref="AudioPlayer"/> into <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/>, use
-/// <see cref="PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer"/>, dispose the bundle first (so the player and router stop),
-/// then dispose this host to close <see cref="MainOutput"/> only.
-/// </para>
-/// <para>
-/// <see cref="Dispose"/> tears down in fixed order (player when owned, then <see cref="MainOutput"/>). In <c>DEBUG</c> builds,
-/// a failure from one step is logged via <see cref="MediaDiagnostics"/> and teardown continues; <c>Release</c> remains best-effort silent.
-/// </para>
-/// </remarks>
 public sealed class PortAudioPlaybackHost : IDisposable
 {
     private readonly PortAudioPlaybackHostPlayerOwnership _playerOwnership;
@@ -39,43 +17,36 @@ public sealed class PortAudioPlaybackHost : IDisposable
 
     private PortAudioPlaybackHost(
         MediaContainerDecoder container,
-        AudioPlayer player,
+        AudioRouter router,
+        MediaClock clock,
         string sourceId,
         PortAudioOutput mainOutput,
         string primarySinkId,
         PortAudioPlaybackHostPlayerOwnership playerOwnership)
     {
         Container = container;
-        Player = player;
+        Router = router;
+        Clock = clock;
         SourceId = sourceId;
         MainOutput = mainOutput;
         PrimaryOutputId = primarySinkId;
         _playerOwnership = playerOwnership;
     }
 
-    /// <summary>Shared demux — same instance the host was constructed with.</summary>
     public MediaContainerDecoder Container { get; }
 
-    public AudioPlayer Player { get; }
+    public AudioRouter Router { get; }
 
-    /// <summary>Router id returned by <see cref="AudioRouter.AddSource"/> for <see cref="MediaContainerDecoder.Audio"/>.</summary>
+    public MediaClock Clock { get; }
+
     public string SourceId { get; }
 
     public PortAudioOutput MainOutput { get; }
 
-    /// <summary>Router id of <see cref="MainOutput"/> (for <see cref="AudioRouter.GetPumpStats"/>).</summary>
     public string PrimaryOutputId { get; }
 
     public AudioFormat AudioFormat => Container.Audio.Format;
 
-    /// <summary>
-    /// Attempts PortAudio-backed wiring for <paramref name="container"/>. On failure invokes
-    /// <paramref name="onWireFailedMessage"/> with a short reason (when not <c>null</c>) and returns <c>null</c>.
-    /// </summary>
-    /// <param name="playerOwnership">
-    /// Use <see cref="PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer"/> when bundling <see cref="Player"/> into
-    /// <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/>; dispose that bundle before calling <see cref="Dispose"/> here.
-    /// </param>
     public static PortAudioPlaybackHost? TryCreatePortAudioMain(
         MediaContainerDecoder container,
         int chunkSamples = 480,
@@ -87,7 +58,9 @@ public sealed class PortAudioPlaybackHost : IDisposable
         try
         {
             var audioSource = container.Audio;
-            var player = new AudioPlayer(audioSource.Format.SampleRate, chunkSamples);
+            var clock = new MediaClock();
+            var router = new AudioRouter(audioSource.Format.SampleRate, chunkSamples);
+            router.AttachMasterClock(clock);
 
             double? latencySec = deviceLatencyMs is > 0 ? deviceLatencyMs.Value / 1000.0 : null;
             var output = new PortAudioOutput(
@@ -108,11 +81,11 @@ public sealed class PortAudioPlaybackHost : IDisposable
 
             output.TargetQueueSamples = target;
 
-            string sourceId = player.Router.AddSource(audioSource);
-            string sinkMain = player.AddOutput(output);
-            player.Connect(sourceId, sinkMain);
+            string sourceId = router.AddSource(audioSource);
+            string sinkMain = router.AddOutput(output);
+            router.Connect(sourceId, sinkMain);
 
-            return new PortAudioPlaybackHost(container, player, sourceId, output, sinkMain, playerOwnership);
+            return new PortAudioPlaybackHost(container, router, clock, sourceId, output, sinkMain, playerOwnership);
         }
         catch (Exception ex)
         {
@@ -121,14 +94,10 @@ public sealed class PortAudioPlaybackHost : IDisposable
         }
     }
 
-    /// <summary>
-    /// Wires a default <see cref="PortAudioOutput"/> into an <see cref="AudioPlayer"/> that already has
-    /// <see cref="MediaContainerDecoder.Audio"/> registered as <paramref name="decoderMuxAudioSourceId"/> (same pattern as
-    /// <see cref="TryCreatePortAudioMain"/>, without creating a new player).
-    /// </summary>
-    public static PortAudioPlaybackHost? TryWirePortAudioMainForPlayer(
+    public static PortAudioPlaybackHost? TryWirePortAudioMainForRouter(
         MediaContainerDecoder container,
-        AudioPlayer player,
+        AudioRouter router,
+        MediaClock clock,
         string decoderMuxAudioSourceId,
         int chunkSamples = 480,
         int? deviceLatencyMs = null,
@@ -136,13 +105,14 @@ public sealed class PortAudioPlaybackHost : IDisposable
         PortAudioPlaybackHostPlayerOwnership playerOwnership = PortAudioPlaybackHostPlayerOwnership.HostDisposesPlayer)
     {
         ArgumentNullException.ThrowIfNull(container);
-        ArgumentNullException.ThrowIfNull(player);
+        ArgumentNullException.ThrowIfNull(router);
+        ArgumentNullException.ThrowIfNull(clock);
         ArgumentException.ThrowIfNullOrEmpty(decoderMuxAudioSourceId);
         try
         {
-            if (!player.Router.SourceIds.Contains(decoderMuxAudioSourceId))
+            if (!router.SourceIds.Contains(decoderMuxAudioSourceId))
             {
-                onWireFailedMessage?.Invoke($"AudioPlayer has no source '{decoderMuxAudioSourceId}'.");
+                onWireFailedMessage?.Invoke($"AudioRouter has no source '{decoderMuxAudioSourceId}'.");
                 return null;
             }
 
@@ -166,10 +136,10 @@ public sealed class PortAudioPlaybackHost : IDisposable
 
             output.TargetQueueSamples = target;
 
-            string sinkMain = player.AddOutput(output);
-            player.Connect(decoderMuxAudioSourceId, sinkMain);
+            string sinkMain = router.AddOutput(output);
+            router.Connect(decoderMuxAudioSourceId, sinkMain);
 
-            return new PortAudioPlaybackHost(container, player, decoderMuxAudioSourceId, output, sinkMain, playerOwnership);
+            return new PortAudioPlaybackHost(container, router, clock, decoderMuxAudioSourceId, output, sinkMain, playerOwnership);
         }
         catch (Exception ex)
         {
@@ -178,30 +148,30 @@ public sealed class PortAudioPlaybackHost : IDisposable
         }
     }
 
-    /// <inheritdoc cref="AudioPlayerPortAudioExtensions.TryPrefillPrimaryPortAudio"/>
     public void PrefillMainOutputDirectFromDecoder(TimeSpan timeout, IAudioOutput? mirrorPackedFloats = null)
     {
-        if (!Player.TryPrefillPrimaryPortAudio(Container.Audio, timeout, mirrorPackedFloats))
+        if (!Router.TryPrefillPrimaryPortAudio(Container.Audio, timeout, mirrorPackedFloats))
             throw new InvalidOperationException("Primary output must be PortAudio for hardware prefill.");
     }
 
-    /// <summary>Opens the native PortAudio stream after <see cref="PrefillMainOutputDirectFromDecoder"/>.</summary>
     public void StartHardwareOutput() => MainOutput.Start();
 
-    /// <summary>Builds a <see cref="MediaContainerSession"/> for this container — <paramref name="session"/> must use the same clock graph.</summary>
-    public MediaContainerSession CreateContainerSession(IAvPlaybackSession session) => new(Container, session);
+    public MediaContainerSession CreateContainerSession(VideoPlayer video, IMediaClock playClock) =>
+        MediaContainerSession.Create(Container, video, playClock, Router, Clock, SourceId);
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
         if (_playerOwnership == PortAudioPlaybackHostPlayerOwnership.HostDisposesPlayer)
-            TryDisposeOwned(() => Player.Dispose(), "PortAudioPlaybackHost.Dispose: AudioPlayer");
+        {
+            TryDisposeOwned(() => Router.Dispose(), "PortAudioPlaybackHost.Dispose: AudioRouter");
+            TryDisposeOwned(() => Clock.Dispose(), "PortAudioPlaybackHost.Dispose: MediaClock");
+        }
+
         TryDisposeOwned(() => MainOutput.Dispose(), "PortAudioPlaybackHost.Dispose: MainOutput");
     }
 
-    private static void TryDisposeOwned(Action dispose, string debugLabel)
-    {
+    private static void TryDisposeOwned(Action dispose, string debugLabel) =>
         MediaDiagnostics.SwallowDisposeErrors(dispose, debugLabel);
-    }
 }

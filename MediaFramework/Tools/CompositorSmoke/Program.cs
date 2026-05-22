@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using S.Media.Core.Video;
+using S.Media.Effects;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Video;
 using S.Media.OpenGL;
@@ -93,18 +94,20 @@ try
 {
     var gl = SilkGL.GetApi(SDL.GLGetProcAddress);
 
-    // 3. Composite: foreground (SourceOver) over background (Source). Both layers use the full canvas.
+    // 3. Composite via VideoCompositor API: background (Source) then foreground (SourceOver), cover-fit.
     var output = new VideoFormat(w, h, PixelFormat.Bgra32, bgFrame.Format.FrameRate);
-    using var compositor = new GlVideoCompositor(gl, output);
-    var bgLayer = new CompositorLayer(bgFrame, LayerTransform2D.Identity, 1f, BlendMode.Source);
-    // The foreground may be a different size — stretch it to fit the canvas via Scale.
-    var fgTransform = (fgFrame.Format.Width == w && fgFrame.Format.Height == h)
-        ? LayerTransform2D.Identity
-        : LayerTransform2D.Scale((float)w / fgFrame.Format.Width, (float)h / fgFrame.Format.Height);
-    var fgLayer = new CompositorLayer(fgFrame, fgTransform, 1f, BlendMode.SourceOver);
+    using var bgSrc = StaticFrameSource.FromFrame(bgFrame, copyBacking: true);
+    using var fgSrc = StaticFrameSource.FromFrame(fgFrame, copyBacking: true);
+    using var program = VideoCompositor.Create(
+        output,
+        VideoCompositorBackend.Gl,
+        new VideoCompositorOptions { Gl = gl });
+    program.AddLayer(bgSrc, new LayerConfig(LayerPosition.Cover, 1f, 1f, 0f, BlendMode.Source));
+    program.AddLayer(fgSrc, new LayerConfig(LayerPosition.Cover, 1f, 1f, 0f, BlendMode.SourceOver));
 
     var t0 = Stopwatch.GetTimestamp();
-    var resultFrame = compositor.Composite([bgLayer, fgLayer], TimeSpan.Zero);
+    if (!program.TryReadNextFrame(out var resultFrame))
+        throw new InvalidOperationException("VideoCompositor produced no frame.");
     var elapsedMs = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
     Console.WriteLine($"composite  : {w}x{h} BGRA32  ({elapsedMs:F2} ms incl. readback)");
 
@@ -221,9 +224,9 @@ USAGE:
         --background <bg.mov> --foreground <fg.mov> [--out out.png] [--gl 3.3] \
         [--seek <seconds>] [--seek-bg <seconds>] [--seek-fg <seconds>]
 
-The first decoded video frame from each input is fed to GlVideoCompositor as a layer:
-  - Background: Source blend, identity transform.
-  - Foreground: SourceOver blend, scaled to the background's canvas size.
+The first decoded video frame from each input is fed to VideoCompositor (GL backend) as layers:
+  - Background: Source blend, cover-fit.
+  - Foreground: SourceOver blend, cover-fit to the background canvas.
 
 Native pixel formats are passed through directly — no upstream BGRA32 conversion.
 Inspect the reported `background:` / `foreground:` lines to confirm yuva444p12le /

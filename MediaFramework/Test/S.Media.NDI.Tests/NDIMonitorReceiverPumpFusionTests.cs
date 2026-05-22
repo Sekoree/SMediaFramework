@@ -35,7 +35,7 @@ public sealed class NDIMonitorReceiverPumpFusionTests
         using var o = new NDIOutput($"mf-ndi-fusion-{Guid.NewGuid():N}", clockVideo: false, clockAudio: false,
             videoTimecodeMode: NDIVideoTimecodeMode.Synthesize);
         _ = o.EnableAudio(new AudioFormat(48_000, 2));
-        o.VideoOutput.Configure(new VideoFormat(64, 64, PixelFormat.Bgra32, new Rational(30, 1)));
+        o.Video.Configure(new VideoFormat(64, 64, PixelFormat.Bgra32, new Rational(30, 1)));
 
         var f = o.TryPollMonitorReceiverPumpFusion(0, false,
             ndiVideoPumpDropped: 11,

@@ -7,12 +7,12 @@ using S.Media.NDI;
 
 namespace HaPlay.Playback;
 
-/// <summary>Resolves an NDI source and opens one combined <see cref="NDILiveReceiver"/> (§6.11).</summary>
+/// <summary>Resolves an NDI source and opens one combined <see cref="NDISource"/>.</summary>
 internal static class NdiInputConnector
 {
     public static bool TryConnectLive(
         NDIInputPlaylistItem item,
-        [NotNullWhen(true)] out NDILiveReceiver? receiver,
+        [NotNullWhen(true)] out NDISource? receiver,
         out AudioFormat audioFormat,
         out VideoFormat videoFormat,
         out string? errorMessage)
@@ -36,44 +36,32 @@ internal static class NdiInputConnector
             return false;
         }
 
-        NDIFinder? finder = null;
+        NDIDiscoveredSource? match = null;
+        foreach (var src in NDISource.Find(TimeSpan.FromSeconds(1)))
+        {
+            if (string.Equals(src.Name, item.SourceName, StringComparison.Ordinal))
+            {
+                match = src;
+                break;
+            }
+        }
+
+        if (match is null)
+        {
+            errorMessage = $"NDI source '{item.SourceName}' not currently visible on the network.";
+            return false;
+        }
+
         try
         {
-            var rc = NDIFinder.Create(out finder, new NDIFinderSettings { ShowLocalSources = true });
-            if (rc != 0 || finder is null)
-            {
-                errorMessage = $"NDI finder unavailable (rc={rc}).";
-                return false;
-            }
-
-            NDIDiscoveredSource? match = null;
-            for (var attempt = 0; attempt < 4; attempt++)
-            {
-                finder.WaitForSources(250);
-                foreach (var src in finder.GetCurrentSources())
-                {
-                    if (string.Equals(src.Name, item.SourceName, StringComparison.Ordinal))
-                    {
-                        match = src;
-                        break;
-                    }
-                }
-
-                if (match is not null)
-                    break;
-            }
-
-            if (match is null)
-            {
-                errorMessage = $"NDI source '{item.SourceName}' not currently visible on the network.";
-                return false;
-            }
-
-            receiver = new NDILiveReceiver(
+            receiver = NDISource.Open(
                 match.Value,
-                receiveAudio: wantAudio,
-                receiveVideo: wantVideo,
-                bandwidth: ResolveBandwidth(wantAudio, wantVideo, item.LowBandwidth));
+                new NDISourceOptions
+                {
+                    ReceiveAudio = wantAudio,
+                    ReceiveVideo = wantVideo,
+                    Bandwidth = ResolveBandwidth(wantAudio, wantVideo, item.LowBandwidth),
+                });
 
             var deadline = DateTime.UtcNow.AddSeconds(2);
             while (DateTime.UtcNow < deadline)
@@ -115,10 +103,6 @@ internal static class NdiInputConnector
             receiver = null;
             return false;
         }
-        finally
-        {
-            try { finder?.Dispose(); } catch { /* best effort */ }
-        }
     }
 
     private static NDIRecvBandwidth ResolveBandwidth(bool wantAudio, bool wantVideo, bool lowBandwidth)
@@ -128,7 +112,7 @@ internal static class NdiInputConnector
         return lowBandwidth ? NDIRecvBandwidth.Lowest : NDIRecvBandwidth.Highest;
     }
 
-    private static void CleanupReceiver(NDILiveReceiver? receiver)
+    private static void CleanupReceiver(NDISource? receiver)
     {
         try { receiver?.Dispose(); } catch { /* best effort */ }
     }

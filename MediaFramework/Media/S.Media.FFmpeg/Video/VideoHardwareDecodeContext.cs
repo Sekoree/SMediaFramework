@@ -44,7 +44,7 @@ public sealed class VideoDecoderOpenOptions
     public bool RetainD3D11SharedHandleForGl { get; init; }
 
     /// <summary>
-    /// When true together with <see cref="RetainD3D11SharedHandleForGl"/>, build <see cref="VideoWin32Nv12Backing"/>
+    /// When true together with <see cref="RetainD3D11SharedHandleForGl"/>, build <see cref="Win32SharedNv12Backing"/>
     /// from DXGI NT shared handles only (omit non-owning libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers on the backing).
     /// GL import then uses <c>OpenSharedResource</c> on a host-owned D3D11 device (e.g. SDL <c>D3D11GlInteropDeviceHost</c> or
     /// <see cref="IVideoOutputD3D11GlBorrowSetup"/>). Incompatible with lazy true zero-host that binds the uploader solely from the first frame's

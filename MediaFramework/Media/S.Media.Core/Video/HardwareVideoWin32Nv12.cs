@@ -3,13 +3,13 @@ using System.Diagnostics.CodeAnalysis;
 namespace S.Media.Core.Video;
 
 /// <summary>
-/// Builds <see cref="VideoWin32Nv12Backing"/> from a <see cref="HardwareVideoSurfaceDescriptor"/> so GL / upload
+/// Builds <see cref="Win32SharedNv12Backing"/> from a <see cref="HardwareVideoSurfaceDescriptor"/> so GL / upload
 /// hosts can import NV12 without constructing a full <see cref="VideoFrame"/>.
 /// </summary>
 /// <remarks>
 /// <see cref="HardwareVideoMemoryKind.Win32SharedHandle"/> descriptors carry DXGI NT handles only
 /// (<see cref="HardwareVideoSurfaceDescriptor.D3D11DeviceComPtr"/> must be zero). That clears libav COM
-/// from the portable descriptor and from <see cref="VideoWin32Nv12Backing"/> for the handle-only decode export path;
+/// from the portable descriptor and from <see cref="Win32SharedNv12Backing"/> for the handle-only decode export path;
 /// the GL stack still binds a consumer <c>ID3D11Device</c> (negotiated borrow, SDL interop host, or lazy
 /// creation from a decoded COM-backed frame) to call <c>OpenSharedResource</c> on those handles. Full
 /// “zero COM on the descriptor” including removing that consumer-device dependency is **PO-01**
@@ -24,7 +24,7 @@ public static class HardwareVideoWin32Nv12
     /// </summary>
     public static bool TryCreateWin32Nv12Backing(
         in HardwareVideoSurfaceDescriptor descriptor,
-        [NotNullWhen(true)] out VideoWin32Nv12Backing? backing,
+        [NotNullWhen(true)] out Win32SharedNv12Backing? backing,
         out string? failureMessage)
     {
         backing = null;
@@ -61,7 +61,7 @@ public static class HardwareVideoWin32Nv12
                 return false;
             }
 
-            backing = new VideoWin32Nv12Backing(
+            backing = new Win32SharedNv12Backing(
                 p0.HandleOrDescriptor,
                 chroma,
                 (int)p0.RowPitchBytes,
@@ -100,7 +100,7 @@ public static class HardwareVideoWin32Nv12
             }
 
             var slice = (int)p0.Modifier;
-            backing = new VideoWin32Nv12Backing(
+            backing = new Win32SharedNv12Backing(
                 sharedLumaNtHandle: 0,
                 sharedChromaNtHandle: 0,
                 (int)p0.RowPitchBytes,

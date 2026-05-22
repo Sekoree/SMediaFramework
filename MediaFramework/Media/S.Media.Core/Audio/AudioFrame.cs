@@ -1,3 +1,5 @@
+using S.Media.Core;
+
 namespace S.Media.Core.Audio;
 
 /// <summary>
@@ -18,7 +20,7 @@ namespace S.Media.Core.Audio;
 /// <c>S.Media.FFmpeg.Audio.AudioFileDecoder.TryReadNextFrame</c> which now uses
 /// <see cref="System.Buffers.ArrayPool{T}"/>) pass a non-null <see cref="Release"/> callback that returns the buffer
 /// to its pool. Consumers must call <see cref="Dispose"/> when done; calling it multiple times is safe — only
-/// the producer's <see cref="Release"/> fires, and only once.
+/// the producer's release runs once.
 /// </para>
 /// </remarks>
 public readonly record struct AudioFrame(
@@ -26,8 +28,17 @@ public readonly record struct AudioFrame(
     AudioFormat Format,
     int SamplesPerChannel,
     ReadOnlyMemory<float> Samples,
-    Action? Release = null)
+    IDisposable? Release = null)
 {
-    /// <summary>Invokes the producer's <see cref="Release"/> callback if set; otherwise a no-op.</summary>
-    public void Dispose() => Release?.Invoke();
+    /// <summary>Builds an audio frame with an <see cref="Action"/> release (wrapped as <see cref="IDisposable"/>).</summary>
+    public static AudioFrame WithActionRelease(
+        TimeSpan presentationTime,
+        AudioFormat format,
+        int samplesPerChannel,
+        ReadOnlyMemory<float> samples,
+        Action? release) =>
+        new(presentationTime, format, samplesPerChannel, samples, DisposableRelease.Wrap(release));
+
+    /// <summary>Invokes the producer's release if set; otherwise a no-op.</summary>
+    public void Dispose() => Release?.Dispose();
 }

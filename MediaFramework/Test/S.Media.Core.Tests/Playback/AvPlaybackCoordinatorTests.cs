@@ -21,7 +21,7 @@ public class AvPlaybackCoordinatorTests
         using var video = new VideoPlayer(src, output, clock);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            AvPlaybackCoordinator.Play(video, null,
+            AvPlaybackCoordinator.Play(video, null, null,
                 prefillBeforeHardware: () => { },
                 startHardware: () => { },
                 videoOnlyMaster: null,
@@ -45,7 +45,7 @@ public class AvPlaybackCoordinatorTests
         video.Play();
         output.WaitForConfigured();
 
-        AvPlaybackCoordinator.SeekCoordinated(video, null, TimeSpan.FromSeconds(1));
+        AvPlaybackCoordinator.SeekCoordinated(video, null, null, null, TimeSpan.FromSeconds(1));
 
         Assert.False(video.IsRunning);
     }
@@ -64,7 +64,7 @@ public class AvPlaybackCoordinatorTests
         output.WaitForConfigured();
 
         var flushCalls = 0;
-        AvPlaybackCoordinator.Pause(video, null, default, () => flushCalls++);
+        AvPlaybackCoordinator.Pause(video, null, null, default, () => flushCalls++);
 
         Assert.False(video.IsRunning);
         Assert.Equal(1, flushCalls);
@@ -121,16 +121,16 @@ public class AvPlaybackCoordinatorTests
 
         Assert.Same(video, session.Video);
         Assert.Same(clock, session.Clock);
-        Assert.Null(session.Audio);
-        Assert.Same(clock, session.Timeline);
-        Assert.Equal(1.0, session.Timeline.PlaybackRate);
+        Assert.Null(session.AudioRouter);
+        Assert.Same(clock, session.Clock);
+        Assert.Equal(1.0, session.Clock.PlaybackRate);
     }
 
     [Fact]
-    public void IPlaybackTimeline_AsPlayhead_mirrors_position_rate_running()
+    public void IPlayhead_AsPlayhead_mirrors_position_rate_running()
     {
         using var clock = new MediaClock();
-        IPlaybackTimeline t = clock;
+        IPlayhead t = clock;
         var ph = t.AsPlayhead();
         Assert.Equal(clock.CurrentPosition, ph.CurrentPosition);
         Assert.Equal(clock.IsRunning, ph.IsRunning);
@@ -151,7 +151,7 @@ public class AvPlaybackCoordinatorTests
         video.Play();
         output.WaitForConfigured();
 
-        AvPlaybackCoordinator.Pause(video, null, default, () => { });
+        AvPlaybackCoordinator.Pause(video, null, null, default, () => { });
 
         Assert.False(clock.IsRunning);
         Assert.False(video.IsRunning);

@@ -199,10 +199,10 @@ public class PortAudioOutputTests
         if (!HasOutputDevice()) return;
 
         using var pa = new PortAudioOutput(StereoFormat, ringCapacityFrames: 4096);
-        using var player = new AudioPlayer(StereoFormat.SampleRate, chunkSamples: 480);
-        player.AddOutput(pa);
+        using var router = new AudioRouter(StereoFormat.SampleRate, chunkSamples: 480);
+        router.AddOutput(pa);
         var source = new TestFrameSource(StereoFormat, totalFrames: 8_000);
-        Assert.True(player.TryPrefillPrimaryPortAudio(source, TimeSpan.FromSeconds(2), null, 450));
+        Assert.True(router.TryPrefillPrimaryPortAudio(source, TimeSpan.FromSeconds(2), null, 450));
         Assert.True(pa.QueuedSamples >= 450);
     }
 

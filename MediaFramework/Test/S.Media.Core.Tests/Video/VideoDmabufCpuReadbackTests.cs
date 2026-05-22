@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using S.Media.Core.Video;
+using S.Media.Effects;
 using Xunit;
 
 namespace S.Media.Core.Tests.Video;
@@ -67,7 +68,7 @@ public sealed class VideoDmabufCpuReadbackTests
             _ = munmap(mapped, (UIntPtr)total);
         }
 
-        using var backing = new VideoDmabufNv12Backing(fd, 0, yPitch, fd, ySize, uvPitch, 0, 0);
+        using var backing = new DmabufNv12Backing(fd, 0, yPitch, fd, ySize, uvPitch, 0, 0);
         var vf = new VideoFormat(w, h, PixelFormat.Nv12, new Rational(30, 1));
         using var frame = VideoFrame.CreateNv12Dmabuf(TimeSpan.Zero, vf, backing);
         Assert.True(VideoDmabufCpuReadback.TryCreateNv12CpuCopy(frame, out var cpu));

@@ -296,7 +296,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
             var owned = buffer;
             return new VideoFrame(
                 original.PresentationTime, _output, planes, strides,
-                release: () => ArrayPool<byte>.Shared.Return(owned, clearArray: false),
+                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)),
                 metadata: original.Metadata with { FieldOrder = VideoFieldOrder.Progressive });
         }
         else
@@ -323,7 +323,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
             var owned = buffer;
             return new VideoFrame(
                 original.PresentationTime, _output, planes, strides,
-                release: () => ArrayPool<byte>.Shared.Return(owned, clearArray: false),
+                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)),
                 metadata: original.Metadata with { FieldOrder = VideoFieldOrder.Progressive });
         }
     }

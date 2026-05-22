@@ -64,7 +64,7 @@ public sealed class MediaContainerDecoder : IDisposable
     public bool UsesSharedDemux => true;
 
     /// <summary>
-    /// True when Windows D3D11 NV12 decode exports <see cref="VideoWin32Nv12Backing"/> with DXGI NT shared handle only
+    /// True when Windows D3D11 NV12 decode exports <see cref="Win32SharedNv12Backing"/> with DXGI NT shared handle only
     /// (no libav <c>ID3D11Device</c>/<c>ID3D11Texture2D</c> COM pointers on the backing). See
     /// <see cref="VideoDecoderOpenOptions.Win32Nv12SharedHandleOnlyExport"/> and <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c>.
     /// </summary>
@@ -96,10 +96,40 @@ public sealed class MediaContainerDecoder : IDisposable
     }
 
     /// <summary>
-    /// Opens a finite media stream by spooling it to a temporary file owned by the decoder.
-    /// For live/network streams, prefer <see cref="OpenUri"/> so FFmpeg can use protocol-native I/O.
+    /// Opens a finite media stream via in-memory AVIO (no temp-file spool by default).
+    /// Use <see cref="OpenStreamSpooled"/> or <see cref="MediaContainerOpenStreamOptions.SpoolToDisk"/> when probing requires a full file on disk.
     /// </summary>
     public static MediaContainerDecoder OpenStream(
+        Stream stream,
+        bool isSeekable = false,
+        string? probeHintName = null,
+        VideoDecoderOpenOptions? videoOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        if (!stream.CanRead)
+            throw new ArgumentException("media stream must be readable.", nameof(stream));
+
+        FFmpegRuntime.EnsureInitialized();
+
+        var shared = MediaContainerSharedDemux.Open(stream, isSeekable, probeHintName, videoOptions ?? new VideoDecoderOpenOptions());
+        return new MediaContainerDecoder(shared);
+    }
+
+    /// <summary>Opens a stream with explicit <see cref="MediaContainerOpenStreamOptions"/>.</summary>
+    public static MediaContainerDecoder OpenStream(Stream stream, MediaContainerOpenStreamOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(options);
+        return options.SpoolToDisk
+            ? OpenStreamSpooled(stream, options.ProbeHintName, options.VideoOptions)
+            : OpenStream(stream, options.IsSeekable, options.ProbeHintName, options.VideoOptions);
+    }
+
+    /// <summary>
+    /// Opens a finite media stream by spooling it to a temporary file owned by the decoder.
+    /// Prefer <see cref="OpenStream"/> for in-memory AVIO when the full stream is already available.
+    /// </summary>
+    public static MediaContainerDecoder OpenStreamSpooled(
         Stream stream,
         string? inputName = null,
         VideoDecoderOpenOptions? videoOptions = null)

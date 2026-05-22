@@ -22,7 +22,8 @@ public static class PixelFormatInfo
         PixelFormat.I420 or PixelFormat.Yv12 or PixelFormat.Yuv422P10Le or PixelFormat.Yuv422P or PixelFormat.Yuv444P
             or PixelFormat.Yuv420P10Le or PixelFormat.Yuv420P12Le or PixelFormat.Yuv444P10Le
             or PixelFormat.Yuv422P12Le or PixelFormat.Yuv444P12Le => 3,
-        PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.P010 or PixelFormat.P016 => 2,
+        PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.P010 or PixelFormat.P016 or PixelFormat.P216 => 2,
+        PixelFormat.Pa16 => 3,
         PixelFormat.Yuva420p or PixelFormat.Yuva422P or PixelFormat.Yuva444P
             or PixelFormat.Yuva420P10Le or PixelFormat.Yuva422P10Le or PixelFormat.Yuva444P10Le
             or PixelFormat.Yuva422P12Le or PixelFormat.Yuva444P12Le
@@ -43,6 +44,8 @@ public static class PixelFormatInfo
             when planeIndex is 1 or 2 => ChromaHeight420(frameHeight),
         PixelFormat.Nv12 or PixelFormat.Nv21 or PixelFormat.P010 or PixelFormat.P016 when planeIndex == 1 =>
             ChromaHeight420(frameHeight),
+        PixelFormat.P216 when planeIndex == 1 => frameHeight,
+        PixelFormat.Pa16 when planeIndex == 2 => frameHeight,
         // 4:2:0 YUVA: planes 1/2 chroma half-height; plane 3 alpha full-height (falls through).
         PixelFormat.Yuva420p or PixelFormat.Yuva420P10Le or PixelFormat.Yuva420P16Le
             when planeIndex is 1 or 2 => ChromaHeight420(frameHeight),
@@ -65,6 +68,11 @@ public static class PixelFormatInfo
         PixelFormat.Nv12 or PixelFormat.Nv21 when planeIndex == 1 => ChromaWidth420(frameWidth) * 2,
         PixelFormat.P010 or PixelFormat.P016 when planeIndex == 0 => frameWidth * 2,
         PixelFormat.P010 or PixelFormat.P016 when planeIndex == 1 => ChromaWidth420(frameWidth) * 4,
+        PixelFormat.P216 when planeIndex == 0 => frameWidth * 2,
+        PixelFormat.P216 when planeIndex == 1 => frameWidth * 2,
+        PixelFormat.Pa16 when planeIndex == 0 => frameWidth * 2,
+        PixelFormat.Pa16 when planeIndex == 1 => frameWidth * 2,
+        PixelFormat.Pa16 when planeIndex == 2 => frameWidth * 2,
         // 8-bit planar 4:2:2 (3 planes: full-W Y, half-W U, half-W V)
         PixelFormat.Yuv422P when planeIndex == 0 => frameWidth,
         PixelFormat.Yuv422P when planeIndex > 0 => ChromaWidth422(frameWidth),
@@ -94,6 +102,7 @@ public static class PixelFormatInfo
         PixelFormat.Yuva444P10Le or PixelFormat.Yuva444P12Le or PixelFormat.Yuva444P16Le => frameWidth * 2,
         // Packed RGB / RGBA
         PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Argb32 or PixelFormat.Abgr32 => frameWidth * 4,
+        PixelFormat.Rgba16 or PixelFormat.Rgba16F => frameWidth * 8,
         PixelFormat.Bgr24 or PixelFormat.Rgb24 => frameWidth * 3,
         // Packed 4:2:2
         PixelFormat.Uyvy or PixelFormat.Yuyv => frameWidth * 2,
@@ -107,19 +116,22 @@ public static class PixelFormatInfo
     public static int BytesPerSample(PixelFormat format) => format switch
     {
         PixelFormat.Yuv422P10Le or PixelFormat.Yuv422P12Le or PixelFormat.P010 or PixelFormat.P016
+            or PixelFormat.P216 or PixelFormat.Pa16
             or PixelFormat.Yuv420P10Le or PixelFormat.Yuv420P12Le
             or PixelFormat.Yuv444P10Le or PixelFormat.Yuv444P12Le
             or PixelFormat.Yuva420P10Le or PixelFormat.Yuva422P10Le or PixelFormat.Yuva444P10Le
             or PixelFormat.Yuva422P12Le or PixelFormat.Yuva444P12Le
             or PixelFormat.Yuva420P16Le or PixelFormat.Yuva422P16Le or PixelFormat.Yuva444P16Le
-            or PixelFormat.Gray16 => 2,
+            or PixelFormat.Gray16 or PixelFormat.Rgba16 or PixelFormat.Rgba16F => 2,
         _ => 1,
     };
 
     /// <summary>True if the format may carry a meaningful alpha channel for compositing.</summary>
     public static bool IsAlphaCarrying(PixelFormat format) => format switch
     {
-        PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Argb32 or PixelFormat.Abgr32 => true,
+        PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Rgba16 or PixelFormat.Rgba16F
+            or PixelFormat.Argb32 or PixelFormat.Abgr32 => true,
+        PixelFormat.Pa16 => true,
         PixelFormat.Yuva420p or PixelFormat.Yuva422P or PixelFormat.Yuva444P
             or PixelFormat.Yuva420P10Le or PixelFormat.Yuva422P10Le or PixelFormat.Yuva444P10Le
             or PixelFormat.Yuva422P12Le or PixelFormat.Yuva444P12Le
@@ -131,12 +143,13 @@ public static class PixelFormatInfo
     public static bool IsHighBitDepth(PixelFormat format) => format switch
     {
         PixelFormat.Yuv422P10Le or PixelFormat.Yuv422P12Le or PixelFormat.P010 or PixelFormat.P016
+            or PixelFormat.P216 or PixelFormat.Pa16
             or PixelFormat.Yuv420P10Le or PixelFormat.Yuv420P12Le
             or PixelFormat.Yuv444P10Le or PixelFormat.Yuv444P12Le
             or PixelFormat.Yuva420P10Le or PixelFormat.Yuva422P10Le or PixelFormat.Yuva444P10Le
             or PixelFormat.Yuva422P12Le or PixelFormat.Yuva444P12Le
             or PixelFormat.Yuva420P16Le or PixelFormat.Yuva422P16Le or PixelFormat.Yuva444P16Le
-            or PixelFormat.Gray16 => true,
+            or PixelFormat.Gray16 or PixelFormat.Rgba16 or PixelFormat.Rgba16F => true,
         _ => false,
     };
 

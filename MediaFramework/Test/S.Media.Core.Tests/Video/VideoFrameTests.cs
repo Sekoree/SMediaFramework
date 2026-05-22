@@ -1,4 +1,5 @@
 using S.Media.Core.Video;
+using S.Media.Effects;
 using Xunit;
 
 namespace S.Media.Core.Tests.Video;
@@ -71,7 +72,7 @@ public class VideoFrameTests
         var calls = 0;
         var y = new byte[64 * 64];
         var uv = new byte[64 * 32];
-        var source = new VideoFrame(TimeSpan.Zero, vf, [y, uv], [64, 64], release: () => Interlocked.Increment(ref calls));
+        var source = new VideoFrame(TimeSpan.Zero, vf, [y, uv], [64, 64], release: DisposableRelease.Wrap(() => Interlocked.Increment(ref calls)));
 
         Assert.True(VideoFrame.TryCreateNv12CpuFanOutViews(source, 3, default, out var views));
         source.Dispose();
@@ -98,7 +99,7 @@ public class VideoFrameTests
     public void Dispose_InvokesReleaseExactlyOnce()
     {
         var calls = 0;
-        var frame = new VideoFrame(TimeSpan.Zero, Bgra1080P, new byte[1], 1, release: () => Interlocked.Increment(ref calls));
+        var frame = new VideoFrame(TimeSpan.Zero, Bgra1080P, new byte[1], 1, release: DisposableRelease.Wrap(() => Interlocked.Increment(ref calls)));
 
         frame.Dispose();
         frame.Dispose();

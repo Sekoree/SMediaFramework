@@ -12,6 +12,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.Core\S.Media.Core.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.Effects\S.Media.Effects.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.OpenGL\S.Media.OpenGL.csproj" />
         <ProjectReference Include="..\..\Media\S.Media.SDL3\S.Media.SDL3.csproj" />

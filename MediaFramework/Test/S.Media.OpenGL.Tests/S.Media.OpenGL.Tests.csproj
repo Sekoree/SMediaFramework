@@ -16,6 +16,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.OpenGL\S.Media.OpenGL.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.Effects\S.Media.Effects.csproj" />
     </ItemGroup>
 
 </Project>

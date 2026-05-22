@@ -131,7 +131,7 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
     }
 
     /// <inheritdoc />
-    public bool TryUpload(uint texYId, uint texUvId, in VideoFormat format, VideoDmabufNv12Backing dma)
+    public bool TryUpload(uint texYId, uint texUvId, in VideoFormat format, DmabufNv12Backing dma)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -201,7 +201,7 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
     }
 
     /// <summary>P010 semi-planar: Y as <see cref="DrmPixelFormats.R16"/>, UV as <see cref="DrmPixelFormats.Gr1616"/>.</summary>
-    public bool TryUploadP010(uint texYId, uint texUvId, in VideoFormat format, VideoDmabufP010Backing dma)
+    public bool TryUploadP010(uint texYId, uint texUvId, in VideoFormat format, DmabufP010Backing dma)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -271,7 +271,7 @@ public sealed unsafe class Nv12DmabufGpuUploader : IDisposable
     }
 
     /// <summary>P016 semi-planar: same EGL plane FOURCCs as <see cref="TryUploadP010"/> (16-bit words in memory).</summary>
-    public bool TryUploadP016(uint texYId, uint texUvId, in VideoFormat format, VideoDmabufP016Backing dma)
+    public bool TryUploadP016(uint texYId, uint texUvId, in VideoFormat format, DmabufP016Backing dma)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 

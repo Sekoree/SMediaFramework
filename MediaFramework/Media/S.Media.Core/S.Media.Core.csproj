@@ -10,6 +10,9 @@
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.Core.Tests" />
         <InternalsVisibleTo Include="S.Media.Core.Benchmarks" />
+        <InternalsVisibleTo Include="S.Media.Playback" />
+        <InternalsVisibleTo Include="S.Media.FFmpeg" />
+        <InternalsVisibleTo Include="HaPlay" />
     </ItemGroup>
 
     <ItemGroup>

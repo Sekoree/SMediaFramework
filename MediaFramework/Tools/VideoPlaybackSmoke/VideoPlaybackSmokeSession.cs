@@ -54,7 +54,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     public SDL3GLVideoOutput GlWindowOutput { get; }
 
-    public IVideoOutput? NDIProgramVideoOutput => NDI?.VideoOutput;
+    public IVideoOutput? NDIProgramVideoOutput => NDI?.Video;
 
     public VideoRouter VideoRouter => Core.VideoRouter;
 
@@ -234,14 +234,11 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                 AudioChunkSamples: opt.AudioChunkSamples,
                 IncludeAudioRouter: true);
 
-            if (!S.Media.Playback.MediaPlayer.TryOpen(
-                    media,
-                    mpOpt,
-                    sdlGl,
-                    disposeNegotiationLead: true,
-                    MediaPlayerDecoderOwnership.BundleDisposesDecoder,
-                    out core,
-                    out errorMessage))
+            if (!S.Media.Playback.MediaPlayer.Open(media)
+                    .WithOptions(mpOpt)
+                    .WithVideoLead(sdlGl, disposeOnPlayerDispose: true)
+                    .WithDecoderOwnership(MediaPlayerDecoderOwnership.BundleDisposesDecoder)
+                    .TryBuild(out core, out errorMessage))
             {
                 media = null;
                 sdlGl = null;
@@ -259,16 +256,17 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                     minimumVideoSubmitSpacing: wallPace,
                     videoTimecodeMode: opt.NDIVideoTimecodeMode);
 
-                ndiVideoOutputId = core!.VideoRouter.AddOutput(ndi.VideoOutput, "ndi", disposeOutputOnRouterDispose: true,
+                ndiVideoOutputId = core!.VideoRouter.AddOutput(ndi.Video, "ndi", disposeOutputOnRouterDispose: true,
                     asyncPump: new VideoOutputPumpAttachOptions(opt.NDIVideoPumpFrames, "ndi-video", null,
                         DisposeInnerOutputWhenPumpDisposes: false));
                 if (!core.VideoRouter.TryAddRoute(core.VideoRouterInputId, ndiVideoOutputId, out var routeErr))
                     throw new InvalidOperationException(routeErr ?? "VideoRouter.TryAddRoute(ndi) failed");
             }
 
-            audioHost = PortAudioPlaybackHost.TryWirePortAudioMainForPlayer(
+            audioHost = PortAudioPlaybackHost.TryWirePortAudioMainForRouter(
                 core!.Decoder,
-                core.Audio!,
+                core.AudioRouter!,
+                core.AudioClock!,
                 core.AudioSourceId!,
                 opt.AudioChunkSamples,
                 opt.DeviceLatencyMs,
@@ -293,10 +291,9 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                     ndAudio = ndiAudioAgg;
                 }
 
-                ndiAudioOutputId = audioHost.Player.AddOutput(ndAudio,
-                    outputPumpCapacityChunks: opt.NDIAudioPumpCapacityChunks);
+                ndiAudioOutputId = audioHost.Router.AddOutput(ndAudio, pumpCapacityChunks: opt.NDIAudioPumpCapacityChunks);
 
-                audioHost.Player.Connect(audioHost.SourceId, ndiAudioOutputId,
+                audioHost.Router.Connect(audioHost.SourceId, ndiAudioOutputId,
                     ChannelMap.Identity(Math.Min(2, audioHost.AudioFormat.Channels)));
 
                 ndiMirrorPrefill = ndAudio;

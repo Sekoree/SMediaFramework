@@ -16,9 +16,9 @@ using GlTextureUnit = Silk.NET.OpenGL.TextureUnit;
 namespace S.Media.OpenGL;
 
 /// <summary>
-/// Windows-only: imports <see cref="VideoWin32Nv12Backing"/> via DXGI NT shared <c>OpenSharedResource</c>
+/// Windows-only: imports <see cref="Win32SharedNv12Backing"/> via DXGI NT shared <c>OpenSharedResource</c>
 /// (using this instance’s consumer <see cref="ID3D11Device"/> from <see cref="TryCreate"/>) when only NT handles
-/// are populated on the backing, or, when <see cref="VideoWin32Nv12Backing.LibavD3D11Texture2DComPtr"/> matches the uploader device,
+/// are populated on the backing, or, when <see cref="Win32SharedNv12Backing.LibavD3D11Texture2DComPtr"/> matches the uploader device,
 /// uses the libav-held <c>ID3D11Texture2D</c> COM pointer directly (no duplicate open).
 /// <see href="https://registry.khronos.org/OpenGL/extensions/NV/WGL_NV_DX_interop.txt">WGL_NV_DX_interop</see>
 /// (GPU path) and falls back to a D3D11 staging <c>Map</c> + <c>glTexSubImage2D</c> upload if interop is unavailable
@@ -158,7 +158,7 @@ void main()
     }
 
     /// <summary>Uploads NV12 from shared D3D11 memory into existing GL texture objects (texture unit 0 = Y, 1 = UV).</summary>
-    public bool TryUpload(uint texYId, uint texUvId, in VideoFormat format, VideoWin32Nv12Backing backing)
+    public bool TryUpload(uint texYId, uint texUvId, in VideoFormat format, Win32SharedNv12Backing backing)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (format.PixelFormat != global::S.Media.Core.Video.PixelFormat.Nv12)
@@ -239,7 +239,7 @@ void main()
         return false;
     }
 
-    private bool TryOpenD3D11GpuTexture(VideoWin32Nv12Backing backing, out ID3D11Texture2D? gpuTex, out uint subresourceIndex)
+    private bool TryOpenD3D11GpuTexture(Win32SharedNv12Backing backing, out ID3D11Texture2D? gpuTex, out uint subresourceIndex)
     {
         gpuTex = null;
         subresourceIndex = 0;
@@ -369,7 +369,7 @@ void main()
         _gl.BindTexture(GlTextureTarget.Texture2D, 0);
     }
 
-    private bool TryUploadInterop(uint texYId, uint texUvId, in VideoFormat format, VideoWin32Nv12Backing backing)
+    private bool TryUploadInterop(uint texYId, uint texUvId, in VideoFormat format, Win32SharedNv12Backing backing)
     {
         if (_wglInteropDisabled || !EnsureWglDevice() || !EnsureInteropPrograms() || !EnsureInteropFboAndTexture())
             return false;
@@ -593,7 +593,7 @@ void main()
         return s;
     }
 
-    private bool TryUploadStaging(uint texYId, uint texUvId, in VideoFormat format, VideoWin32Nv12Backing backing)
+    private bool TryUploadStaging(uint texYId, uint texUvId, in VideoFormat format, Win32SharedNv12Backing backing)
     {
         var w = format.Width;
         var h = format.Height;

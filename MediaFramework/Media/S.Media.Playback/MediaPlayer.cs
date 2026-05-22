@@ -12,7 +12,7 @@ namespace S.Media.Playback;
 
 /// <summary>
 /// Opens a shared-mux <see cref="MediaContainerDecoder"/> with a <see cref="VideoRouter"/> (always),
-/// optional <see cref="AudioPlayer"/> wired to decoder audio (no PortAudio / SDL / NDI — add outputs from optional packages),
+/// optional <see cref="AudioRouter"/> + <see cref="MediaClock"/> wired to decoder audio (no PortAudio / SDL / NDI — add outputs from optional packages),
 /// and <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/> for safe teardown.
 /// </summary>
 /// <remarks>
@@ -22,7 +22,7 @@ namespace S.Media.Playback;
 /// <see cref="IVideoOutput"/> outputs later via <see cref="VideoRouter.AddOutput"/> and <see cref="VideoRouter.TryAddRoute"/>.
 /// </para>
 /// <para>
-/// Audio: when <see cref="MediaPlayerOpenOptions.IncludeAudioRouter"/> is true (default), an <see cref="AudioPlayer"/> owns
+/// Audio: when <see cref="MediaPlayerOpenOptions.IncludeAudioRouter"/> is true (default), an <see cref="AudioRouter"/> owns
 /// <see cref="MediaContainerDecoder.Audio"/> and drives <see cref="IMediaClock"/> for video. You can run with no audio outputs
 /// (router consumes the mux audio stream every chunk). Add PortAudio, NDI, or other outputs from their respective assemblies.
 /// </para>
@@ -33,7 +33,8 @@ public sealed class MediaPlayer : IDisposable
     private readonly MediaPlaybackSession? _liveSession;
     private readonly VideoRouter? _liveVideoRouter;
     private readonly VideoPlayer? _liveVideo;
-    private readonly AudioPlayer? _liveAudio;
+    private readonly AudioRouter? _liveAudioRouter;
+    private readonly MediaClock? _liveAudioClock;
     private readonly IMediaClock? _liveClock;
     private readonly MediaClock? _liveFreerun;
     private readonly List<IDisposable> _ownedLiveDisposables = [];
@@ -63,7 +64,8 @@ public sealed class MediaPlayer : IDisposable
         VideoRouter videoRouter,
         VideoPlayer video,
         IMediaClock clock,
-        AudioPlayer? audio,
+        AudioRouter? audioRouter,
+        MediaClock? audioClock,
         MediaClock? freerun,
         string videoRouterInputId,
         IVideoOutput videoInput,
@@ -73,9 +75,10 @@ public sealed class MediaPlayer : IDisposable
         _liveVideoRouter = videoRouter;
         _liveVideo = video;
         _liveClock = clock;
-        _liveAudio = audio;
+        _liveAudioRouter = audioRouter;
+        _liveAudioClock = audioClock;
         _liveFreerun = freerun;
-        _liveSession = new MediaPlaybackSession(video, clock, audio);
+        _liveSession = new MediaPlaybackSession(video, clock, audioRouter, audioClock, audioSourceId);
         _videoRouterInputId = videoRouterInputId;
         _videoInput = videoInput;
         _audioSourceId = audioSourceId;
@@ -109,14 +112,17 @@ public sealed class MediaPlayer : IDisposable
     public VideoPlayer Video => _bundle?.Video ?? _liveVideo!;
 
     /// <summary>Present when <see cref="MediaPlayerOpenOptions.IncludeAudioRouter"/> was true at open time.</summary>
-    public AudioPlayer? Audio => _bundle?.Audio ?? _liveAudio;
+    public AudioRouter? AudioRouter => _bundle?.AudioRouter ?? _liveAudioRouter;
 
-    /// <summary>Router source id for <see cref="MediaContainerDecoder.Audio"/> when <see cref="Audio"/> is non-null.</summary>
+    /// <summary>Media clock paired with <see cref="AudioRouter"/> when audio is wired.</summary>
+    public MediaClock? AudioClock => _bundle?.AudioClock ?? _liveAudioClock;
+
+    /// <summary>Router source id for <see cref="MediaContainerDecoder.Audio"/> when <see cref="AudioRouter"/> is non-null.</summary>
     public string? AudioSourceId => _audioSourceId;
 
     public IMediaClock PlayClock => _bundle?.Clock ?? _liveClock!;
 
-    /// <summary>Non-null only when there was no <see cref="AudioPlayer"/> (video clocked from a freerun <see cref="MediaClock"/>).</summary>
+    /// <summary>Non-null only when there was no audio router (video clocked from a freerun <see cref="MediaClock"/>).</summary>
     public MediaClock? FreerunClock => _freerun ?? _liveFreerun;
 
     public MediaContainerPlaybackBundle Bundle =>
@@ -124,9 +130,60 @@ public sealed class MediaPlayer : IDisposable
 
     public MediaContainerSession Session =>
         _bundle?.Session
-        ?? throw new InvalidOperationException("This MediaPlayer was opened from live sources; use PlaybackSession.");
+        ?? throw new InvalidOperationException("This MediaPlayer was opened from live sources; use Play/Pause/Seek on MediaPlayer.");
 
-    public IAvPlaybackSession PlaybackSession => _bundle?.Session.Session ?? _liveSession!;
+    public void Play(
+        Action? prefillBeforeHardware = null,
+        Action? startHardware = null,
+        IPlaybackClock? videoOnlyMaster = null,
+        Func<bool>? verifyPrebufferAfterPrefill = null)
+    {
+        if (_bundle is not null)
+            _bundle.Session.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+        else
+            _liveSession!.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+    }
+
+    public void Pause(CancellationToken cancellationToken = default,
+        PauseFlushPolicy flushPolicy = PauseFlushPolicy.FlushCodecPipelines)
+    {
+        var flush = ResolveFlushAction(flushPolicy);
+        if (_bundle is not null)
+            _bundle.Session.Pause(cancellationToken, flush);
+        else
+            _liveSession!.Pause(cancellationToken, flush);
+    }
+
+    public void PauseWithFlushAction(Action flushAction, CancellationToken cancellationToken = default)
+    {
+        if (_bundle is not null)
+            _bundle.Session.Pause(cancellationToken, flushAction);
+        else
+            _liveSession!.Pause(cancellationToken, flushAction);
+    }
+
+    public void Seek(TimeSpan position)
+    {
+        if (_bundle is not null)
+            _bundle.Session.Seek(position);
+        else
+            _liveSession!.Seek(position);
+    }
+
+    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
+        PauseFlushPolicy flushPolicy = PauseFlushPolicy.FlushCodecPipelines)
+    {
+        var flush = ResolveFlushAction(flushPolicy);
+        if (_bundle is not null)
+            _bundle.Session.SeekCoordinated(position, cancellationToken, flush);
+        else
+            _liveSession!.SeekCoordinated(position, cancellationToken, flush);
+    }
+
+    private Action? ResolveFlushAction(PauseFlushPolicy policy) =>
+        policy == PauseFlushPolicy.FlushCodecPipelines && _bundle is not null
+            ? _bundle.Decoder.FlushCodecPipelines
+            : null;
 
     public void Dispose()
     {
@@ -139,7 +196,8 @@ public sealed class MediaPlayer : IDisposable
         }
 
         TryDispose(() => _liveVideo?.Dispose(), "MediaPlayer.Dispose: live VideoPlayer");
-        TryDispose(() => _liveAudio?.Dispose(), "MediaPlayer.Dispose: live AudioPlayer");
+        TryDispose(() => _liveAudioRouter?.Dispose(), "MediaPlayer.Dispose: live AudioRouter");
+        TryDispose(() => _liveAudioClock?.Dispose(), "MediaPlayer.Dispose: live AudioClock");
         TryDispose(() => _liveVideoRouter?.Dispose(), "MediaPlayer.Dispose: live VideoRouter");
         TryDispose(() => _liveFreerun?.Dispose(), "MediaPlayer.Dispose: live MediaClock");
         foreach (var d in _ownedLiveDisposables)
@@ -164,7 +222,21 @@ public sealed class MediaPlayer : IDisposable
         };
     }
 
+    /// <summary>Opens a local media file path (not a URI string — use <see cref="OpenUri"/> for <c>http:</c> / <c>rtsp:</c>).</summary>
+    public static MediaPlayerOpenFileBuilder OpenFile(string filePath) => MediaPlayerOpen.File(filePath);
+
+    public static MediaPlayerOpenUriBuilder OpenUri(Uri mediaUri) => MediaPlayerOpen.Uri(mediaUri);
+
+    public static MediaPlayerOpenStreamBuilder OpenStream(Stream mediaStream) => MediaPlayerOpen.Stream(mediaStream);
+
+    public static MediaPlayerOpenLiveBuilder OpenLive(IAudioSource? audioSource, IVideoSource? videoSource) =>
+        MediaPlayerOpen.Live(audioSource, videoSource);
+
+    public static MediaPlayerOpenDecoderBuilder Open(MediaContainerDecoder decoder) =>
+        MediaPlayerOpen.Decoder(decoder);
+
     /// <summary>Opens from a media file path (decoder owned by the bundle).</summary>
+    [Obsolete("Use MediaPlayer.Open(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -185,6 +257,7 @@ public sealed class MediaPlayer : IDisposable
     /// Opens from a local media file path (decoder owned by the bundle). Prefer this explicit helper
     /// when user input is known to be a file path; use <see cref="TryOpenUri"/> for network/protocol URLs.
     /// </summary>
+    [Obsolete("Use MediaPlayer.Open(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenFile(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -195,6 +268,7 @@ public sealed class MediaPlayer : IDisposable
         TryOpen(mediaPath, options, videoNegotiationLead, disposeNegotiationLead, out player, out errorMessage);
 
     /// <summary>Opens from a media file path with explicit decoder ownership.</summary>
+    [Obsolete("Use MediaPlayer.Open(path).WithDecoderOwnership(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -252,6 +326,7 @@ public sealed class MediaPlayer : IDisposable
     /// Opens from a media URI. <c>file:</c> URIs are validated as local files; non-file absolute URIs
     /// are passed through to FFmpeg protocol I/O (for example <c>http:</c>, <c>https:</c>, or <c>rtsp:</c>).
     /// </summary>
+    [Obsolete("Use MediaPlayer.Open(uri).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenUri(
         Uri mediaUri,
         in MediaPlayerOpenOptions options,
@@ -272,9 +347,11 @@ public sealed class MediaPlayer : IDisposable
     }
 
     /// <summary>
-    /// Opens from a finite readable media stream by spooling it to a temporary file owned by the decoder.
+    /// Opens from a finite readable media stream (in-memory AVIO by default; set
+    /// <see cref="MediaPlayerOpenOptions.SpoolStreamToDisk"/> to spool to a temp file).
     /// For live/network streams, prefer <see cref="TryOpenUri"/> so FFmpeg can use protocol-native I/O.
     /// </summary>
+    [Obsolete("Use MediaPlayer.Open(stream).WithInputName(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenStream(
         Stream mediaStream,
         string? inputName,
@@ -285,8 +362,15 @@ public sealed class MediaPlayer : IDisposable
         out string? errorMessage)
     {
         var openOptions = options;
+        var videoOpts = openOptions.ToVideoDecoderOpenOptions();
         return TryOpenFromDecoderFactory(
-            () => MediaContainerDecoder.OpenStream(mediaStream, inputName, openOptions.ToVideoDecoderOpenOptions()),
+            () => openOptions.SpoolStreamToDisk
+                ? MediaContainerDecoder.OpenStreamSpooled(mediaStream, inputName, videoOpts)
+                : MediaContainerDecoder.OpenStream(
+                    mediaStream,
+                    openOptions.StreamIsSeekable || mediaStream.CanSeek,
+                    inputName,
+                    videoOpts),
             openOptions,
             videoNegotiationLead,
             disposeNegotiationLead,
@@ -296,8 +380,9 @@ public sealed class MediaPlayer : IDisposable
     }
 
     /// <summary>
-    /// Opens from a finite readable media stream by spooling it to a temporary file owned by the decoder.
+    /// Opens from a finite readable media stream (AVIO by default).
     /// </summary>
+    [Obsolete("Use MediaPlayer.Open(stream).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenStream(
         Stream mediaStream,
         in MediaPlayerOpenOptions options,
@@ -320,6 +405,7 @@ public sealed class MediaPlayer : IDisposable
     /// receivers, and other inputs that already expose <see cref="IAudioSource"/>
     /// / <see cref="IVideoSource"/>.
     /// </summary>
+    [Obsolete("Use MediaPlayer.OpenLive(audio, video).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenLive(
         IAudioSource? audioSource,
         IVideoSource? videoSource,
@@ -342,8 +428,9 @@ public sealed class MediaPlayer : IDisposable
     /// Opens a player graph from live sources. When
     /// <paramref name="disposeSourcesOnDispose"/> is true, the live video source
     /// is disposed with the player; the live audio source is owned by
-    /// <see cref="AudioPlayer"/> when it is wired.
+    /// <see cref="AudioRouter"/> when it is wired.
     /// </summary>
+    [Obsolete("Use MediaPlayer.OpenLive(audio, video).WithDisposeSourcesOnPlayerDispose(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenLive(
         IAudioSource? audioSource,
         IVideoSource? videoSource,
@@ -374,7 +461,8 @@ public sealed class MediaPlayer : IDisposable
 
         FFmpegRuntime.EnsureInitialized();
 
-        AudioPlayer? audioPlayer = null;
+        AudioRouter? audioRouter = null;
+        MediaClock? audioClock = null;
         string? audioSourceId = null;
         MediaClock? freerun = null;
         IMediaClock playClock;
@@ -387,11 +475,13 @@ public sealed class MediaPlayer : IDisposable
         {
             if (options.IncludeAudioRouter && audioSource is not null)
             {
-                audioPlayer = new AudioPlayer(audioSource.Format.SampleRate, options.AudioChunkSamples);
+                audioClock = new MediaClock();
+                audioRouter = new AudioRouter(audioSource.Format.SampleRate, options.AudioChunkSamples);
+                audioRouter.AttachMasterClock(audioClock);
                 audioSourceId = disposeSourcesOnDispose
-                    ? audioPlayer.AddOwnedSource(audioSource)
-                    : audioPlayer.Router.AddSource(audioSource);
-                playClock = audioPlayer.Clock;
+                    ? audioRouter.AddOwnedSource(audioSource)
+                    : audioRouter.AddSource(audioSource);
+                playClock = audioClock;
             }
             else
             {
@@ -435,8 +525,9 @@ public sealed class MediaPlayer : IDisposable
                 router,
                 videoPlayer,
                 playClock,
-                audioPlayer,
-                audioPlayer is null ? freerun : null,
+                audioRouter,
+                audioClock,
+                audioRouter is null ? freerun : null,
                 vin.Id,
                 vin.Output,
                 audioSourceId,
@@ -456,7 +547,8 @@ public sealed class MediaPlayer : IDisposable
             errorMessage = ex.Message;
             Trace.LogError(ex, "TryOpenLive failed");
             TryDispose(() => videoPlayer?.Dispose(), "MediaPlayer.TryOpenLive: VideoPlayer");
-            TryDispose(() => audioPlayer?.Dispose(), "MediaPlayer.TryOpenLive: AudioPlayer");
+            TryDispose(() => audioRouter?.Dispose(), "MediaPlayer.TryOpenLive: AudioRouter");
+            TryDispose(() => audioClock?.Dispose(), "MediaPlayer.TryOpenLive: AudioClock");
             TryDispose(() => router?.Dispose(), "MediaPlayer.TryOpenLive: VideoRouter");
             TryDispose(() => freerun?.Dispose(), "MediaPlayer.TryOpenLive: MediaClock");
             foreach (var d in ownedDisposables)
@@ -471,6 +563,7 @@ public sealed class MediaPlayer : IDisposable
     /// When non-null, drives <see cref="VideoPlayer"/> instead of <see cref="MediaContainerDecoder.Video"/>
     /// (preset scaling, fade wrappers, etc.). The decoder is still used for audio and container metadata.
     /// </param>
+    [Obsolete("Use MediaPlayer.Open(decoder).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpen(
         MediaContainerDecoder decoder,
         in MediaPlayerOpenOptions options,
@@ -563,7 +656,8 @@ public sealed class MediaPlayer : IDisposable
         errorMessage = null;
 
         MediaClock? freerun = null;
-        AudioPlayer? audioPlayer = null;
+        AudioRouter? audioRouter = null;
+        MediaClock? audioClock = null;
         string? audioSourceId = null;
         IMediaClock playClock;
         VideoRouter? router = null;
@@ -596,13 +690,15 @@ public sealed class MediaPlayer : IDisposable
         {
             if (options.IncludeAudioRouter && media.HasAudio)
             {
-                audioPlayer = new AudioPlayer(media.Audio.Format.SampleRate, options.AudioChunkSamples);
-                audioSourceId = audioPlayer.AddOwnedSource(media.Audio);
-                playClock = audioPlayer.Clock;
+                audioClock = new MediaClock();
+                audioRouter = new AudioRouter(media.Audio.Format.SampleRate, options.AudioChunkSamples);
+                audioRouter.AttachMasterClock(audioClock);
+                audioSourceId = audioRouter.AddOwnedSource(media.Audio);
+                playClock = audioClock;
             }
             else
             {
-                // No AudioPlayer either because the caller asked for video-only routing or because the
+                // No audio router either because the caller asked for video-only routing or because the
                 // container has no audio stream. Drive the visible clock from a freerun MediaClock that
                 // <see cref="AvPlaybackCoordinator.Play"/> starts manually when there's no audio master.
                 freerun = new MediaClock();
@@ -637,19 +733,21 @@ public sealed class MediaPlayer : IDisposable
             var bundleOwned = ComputeOwnedParts(
                 ownDecoder: ownDecoder,
                 hasFreerun: freerun is not null,
-                hasAudio: audioPlayer is not null,
+                hasAudio: audioRouter is not null,
                 hasVideo: true);
 
             bundle = new MediaContainerPlaybackBundle(
                 media,
                 videoPlayer,
                 playClock,
-                audioPlayer,
+                audioRouter,
+                audioClock,
+                audioSourceId,
                 router,
                 freerun,
                 bundleOwned);
 
-            player = new MediaPlayer(bundle, vin.Id, vin.Output, audioSourceId, audioPlayer is null ? freerun : null);
+            player = new MediaPlayer(bundle, vin.Id, vin.Output, audioSourceId, audioRouter is null ? freerun : null);
             Trace.LogInformation("TryOpenCore: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
                 media.HasAudio, media.HasVideo,
                 media.HasAudio ? media.Audio.Format.SampleRate : 0,
@@ -678,7 +776,7 @@ public sealed class MediaPlayer : IDisposable
         if (hasFreerun)
             o |= MediaContainerPlaybackBundleOwnedParts.FreerunMediaClock;
         if (hasAudio)
-            o |= MediaContainerPlaybackBundleOwnedParts.AudioPlayer;
+            o |= MediaContainerPlaybackBundleOwnedParts.AudioRouter;
         return o;
     }
 

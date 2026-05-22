@@ -63,9 +63,6 @@ public sealed record NDIInputPlaylistItem(string SourceName) : PlaylistItem
     /// <summary>Reconnect interval (seconds) when the source disappears. 0 disables retries.</summary>
     public int RetrySeconds { get; init; } = 5;
 
-    /// <summary>NDI A/V timing: <see cref="NdiInputSyncMode.NdiFrameSync"/> vs low-latency preview.</summary>
-    public NdiInputSyncMode SyncMode { get; init; } = NdiInputSyncMode.NdiFrameSync;
-
     public override string DisplayName =>
         !string.IsNullOrWhiteSpace(CustomDisplayName) ? CustomDisplayName!
         : string.IsNullOrWhiteSpace(SourceName) ? "(NDI source unset)"

@@ -17,6 +17,12 @@ public enum PixelFormat
     // Packed RGB / RGBA
     Bgra32,
     Rgba32,
+
+    /// <summary>16-bit unsigned-normalized packed RGBA (8 bytes/pixel, LE) — FFmpeg <c>RGBA64LE</c>.</summary>
+    Rgba16,
+
+    /// <summary>16-bit IEEE half-float packed RGBA (8 bytes/pixel, LE) — FFmpeg <c>RGBAF16LE</c>.</summary>
+    Rgba16F,
     Bgr24,
     Rgb24,
 
@@ -48,6 +54,12 @@ public enum PixelFormat
 
     /// <summary>Semi-planar 4:2:0, 16-bit little-endian samples per component (NV12 layout).</summary>
     P016,
+
+    /// <summary>Semi-planar 4:2:2, 16-bit LE (NDI <c>P216</c> / FFmpeg <c>P216LE</c>).</summary>
+    P216,
+
+    /// <summary>Semi-planar 4:2:2 + full-resolution 16-bit alpha (NDI <c>PA16</c>).</summary>
+    Pa16,
 
     /// <summary>
     /// Packed 32 bpp. Memory order follows FFmpeg <c>AV_PIX_FMT_ARGB</c>:

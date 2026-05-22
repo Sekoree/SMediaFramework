@@ -1,4 +1,5 @@
 using HaPlay.Playback;
+using S.Media.Core;
 using S.Media.Core.Video;
 using Xunit;
 
@@ -59,11 +60,11 @@ public sealed class OutputPresetVideoSourceTests
             format,
             payload,
             stride: 2 * 4,
-            release: () =>
+            release: DisposableRelease.Wrap(() =>
             {
                 disposed++;
                 Array.Clear(payload);
-            });
+            }));
 
         using var src = new OneShotSource(format, frame);
         using var wrapped = new OutputPresetVideoSource(src, format);
