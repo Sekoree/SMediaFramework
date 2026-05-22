@@ -29,6 +29,26 @@ Status legend:
 - [x] **NDI input video receiver** — landed 2026-05-21. `NDIVideoReceiver` +
   `NDIVideoFrameUnpack` (`S.Media.NDI`); HaPlay opens video-only, audio-only, or
   combined NDI input items via `TryCreateLive`.
+- [x] **NDI input audio jitter buffer** — landed 2026-05-22. `NDIAudioReceiver`
+  now takes a `minBufferedDuration` (default 50 ms) and serves
+  `max(0, available − holdback)` from `ReadInto`, so the burst pattern of NDI's
+  per-video-frame audio delivery (≈16.7 ms at 60p, 33.3 ms at 30p) no longer
+  drains the ring below the router's 10 ms chunk size and the silence-pad path
+  in `AudioRouter.RunLoop` is avoided. Capped at half the ring capacity so the
+  holdback can never starve the entire ring. `NDIAudioReceiverHoldbackTests`
+  pins the policy.
+- [x] **Live source `RebaseToLatest`** — landed 2026-05-22. The holdback alone
+  doesn't unblock the connect-to-Play stale-samples symptom: NDI/PortAudio
+  receivers run from connect, so by the time Play fires their rings already
+  hold seconds of FIFO-ordered samples (and the video-frame PTS counter has
+  advanced past the freshly-zeroed playback clock, leaving video black while it
+  waits for the playhead to catch up). `NDIAudioReceiver.RebaseToLatest` /
+  `PortAudioInput.RebaseToLatest` advance the read pointer to keep ≤ 100 ms
+  buffered; `NDIVideoReceiver.RebaseToLatest` drains its queue and resets
+  `_nextPts = 0` under a per-frame lock so a concurrent capture can't enqueue a
+  stale-PTS frame. HaPlay calls these via
+  `HaPlayPlaybackSession.RebaseLiveSourcesForPlay()` at every `Router.Play`
+  site (initial play, seek-with-resume, playlist advance, loop wrap).
   - 2026-05-21 follow-up fix: live open now wires `HaPlayPlaybackSession` through
     `MediaPlayer.PlaybackSession` (instead of container-only `Session`) so NDI/live
     sessions no longer throw `InvalidOperationException` during post-open wiring.

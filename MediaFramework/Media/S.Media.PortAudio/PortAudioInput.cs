@@ -76,6 +76,33 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     /// <summary>Samples dropped by the callback because the ring buffer was full.</summary>
     public long OverflowSamples => Volatile.Read(ref _overflowSamples);
 
+    /// <summary>
+    /// Skips ahead to the most recent samples by advancing the read pointer so the ring holds no
+    /// more than <paramref name="keepBuffered"/> of capture. Mirrors
+    /// <c>NDIAudioReceiver.RebaseToLatest</c>: the capture callback runs continuously from
+    /// <see cref="Start"/>, so by the time a HaPlay session reaches Play the ring may already hold
+    /// seconds of stale audio. Without this call the router would consume that backlog in FIFO order
+    /// and audio would play back <c>Tconnect</c> seconds behind real time.
+    /// </summary>
+    /// <param name="keepBuffered">Default 100 ms keeps a small jitter cushion. Clamped to ≥ 20 ms.</param>
+    public void RebaseToLatest(TimeSpan keepBuffered = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (keepBuffered <= TimeSpan.Zero) keepBuffered = TimeSpan.FromMilliseconds(100);
+        if (keepBuffered < TimeSpan.FromMilliseconds(20)) keepBuffered = TimeSpan.FromMilliseconds(20);
+
+        var keepFrames = Math.Max(0, (int)(keepBuffered.TotalSeconds * _format.SampleRate));
+        var keepFloats = checked(keepFrames * _format.Channels);
+
+        var write = Volatile.Read(ref _writeIndex);
+        var read = Volatile.Read(ref _readIndex);
+        var buffered = (int)(write - read);
+        if (buffered <= keepFloats) return;
+
+        var skip = buffered - keepFloats;
+        Volatile.Write(ref _readIndex, read + skip);
+    }
+
     /// <summary>Non-zero if the native stream callback caught an exception.</summary>
     public bool CallbackFaulted => Volatile.Read(ref _callbackFaulted) != 0;
 

@@ -13,7 +13,7 @@ using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Playback;
 using S.Media.Core.Audio;
-using S.Media.NDI.Audio;
+using S.Media.NDI;
 using S.Media.PortAudio;
 
 namespace HaPlay.ViewModels;
@@ -235,7 +235,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task OpenPreconnectedNdiAsync(
         NDIInputPlaylistItem item,
-        NDIAudioReceiver receiver,
+        NDILiveReceiver receiver,
         MediaCueNode cueRoutes,
         CancellationToken ct)
     {
@@ -317,6 +317,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     if (playing)
                     {
                         session.PrepareOutputsBeforePlay(holdFb);
+                        session.RebaseLiveSourcesForPlay();
                         session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
                     }
                 },
@@ -455,12 +456,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (_ndiPreConnect.HasMatchingEntry(cueId, cacheKey))
                 continue;
 
-            NDIAudioReceiver? receiver = null;
+            NDILiveReceiver? receiver = null;
             AudioFormat format = default;
             string? err = null;
             await Task.Run(() =>
             {
-                if (!NdiInputConnector.TryConnectAudio(item, out receiver, out format, out err))
+                if (!NdiInputConnector.TryConnectLive(item, out receiver, out format, out _, out err))
                     receiver = null;
             }, ct).ConfigureAwait(false);
 
@@ -2540,6 +2541,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 var ok = await RunBoundedAsync(() =>
                 {
                     s.PrepareOutputsBeforePlay(hf);
+                    s.RebaseLiveSourcesForPlay();
                     s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
                 }, TimeSpan.FromSeconds(8));
 
@@ -2670,6 +2672,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                         // No NDI warmup on loop wrap — receivers are already locked on and a silence gap would
                         // be audible between the last and first samples of the loop.
                         session.PrepareOutputsBeforePlay(holdFb);
+                        session.RebaseLiveSourcesForPlay();
                         session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
                     },
                     innerTimeout: TimeSpan.FromSeconds(3),
@@ -2738,6 +2741,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 // Playlist advance — receivers may have drained between tracks.
                 s.PrepareOutputsBeforePlay(holdForPrime);
+                s.RebaseLiveSourcesForPlay();
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
             }, TimeSpan.FromSeconds(6));
 
@@ -2920,6 +2924,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 // Play from a non-playing state — NDI receivers may have drained their buffers since the last
                 // Pause/Stop, so push silence ahead of the first real samples.
                 s.PrepareOutputsBeforePlay(holdFb);
+                // Live sessions only: discard any audio/video the receivers buffered between connect and
+                // Play so we don't start the router on stale FIFO samples (audio) or stale PTS-counter
+                // frames (video). No-op for file sessions. Must run before Router.Play so VideoPlayer.Play
+                // doesn't kick off DecodeLoop on stale-PTS frames.
+                s.RebaseLiveSourcesForPlay();
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
             }, TimeSpan.FromSeconds(6));
 
@@ -3100,6 +3109,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     {
                         // No NDI warmup on seek — silence at the seek target would be obviously wrong audio.
                         session.PrepareOutputsBeforePlay(holdFb);
+                        session.RebaseLiveSourcesForPlay();
                         session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
                     }
                 },

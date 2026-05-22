@@ -69,6 +69,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     private IAudioSource? _liveAudioSource;
     private IVideoSource? _liveVideoSource;
     private PortAudioInput? _livePortAudioInput;
+    private NDILiveReceiver? _liveNdiReceiver;
 
     /// <summary>
     /// True when the live capture/receiver should be treated as ended (PortAudio fault, disposed source).
@@ -262,7 +263,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             case PortAudioInputPlaylistItem pa:
                 return TryCreateLive(pa, selectedOutputs, outputs, preconnectedInput: null, out session, out errorMessage);
             case NDIInputPlaylistItem nd:
-                return TryCreateLive(nd, selectedOutputs, outputs, preconnectedAudio: null, out session, out errorMessage);
+                return TryCreateLive(nd, selectedOutputs, outputs, preconnectedReceiver: null, out session, out errorMessage);
             default:
                 errorMessage = $"Unsupported playlist item kind: {item?.GetType().Name ?? "(null)"}";
                 return false;
@@ -547,13 +548,13 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             logo.SetOutputOpacity(o);
     }
 
-    /// <summary>Phase C.5 (§6.3, §6.5) — wire NDI audio and/or video receivers as live sources.</summary>
-    /// <param name="preconnectedAudio">When set (§6.11 pre-connect), session takes ownership of audio capture.</param>
+    /// <summary>Phase C.5 (§6.3, §6.5) — wire a combined NDI audio/video receiver as live sources.</summary>
+    /// <param name="preconnectedReceiver">When set (§6.11 pre-connect), session takes ownership of the running receiver.</param>
     public static bool TryCreateLive(
         NDIInputPlaylistItem item,
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
         OutputManagementViewModel outputs,
-        NDIAudioReceiver? preconnectedAudio,
+        NDILiveReceiver? preconnectedReceiver,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
         out string? errorMessage)
     {
@@ -563,29 +564,27 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         var wantAudio = !item.VideoOnly;
         var wantVideo = !item.AudioOnly;
 
-        NDIAudioReceiver? audioReceiver = preconnectedAudio;
-        NDIVideoReceiver? videoReceiver = null;
+        NDILiveReceiver? receiver = preconnectedReceiver;
         try
         {
-            if (wantAudio && audioReceiver is null)
+            if (receiver is null)
             {
-                Trace.LogInformation("TryCreateLive(NDI): audio source='{Src}'", item.SourceName);
-                if (!NdiInputConnector.TryConnectAudio(item, out audioReceiver, out var audioFmt, out errorMessage))
+                Trace.LogInformation("TryCreateLive(NDI): source='{Src}' audio={Audio} video={Video}",
+                    item.SourceName, wantAudio, wantVideo);
+                if (!NdiInputConnector.TryConnectLive(item, out receiver, out _, out _, out errorMessage))
                     return false;
             }
-            else if (wantAudio && audioReceiver is not null && !audioReceiver.IsConnected)
+            else
             {
-                errorMessage = $"NDI source '{item.SourceName}' pre-connect audio is no longer connected.";
-                return false;
-            }
-
-            if (wantVideo)
-            {
-                Trace.LogInformation("TryCreateLive(NDI): video source='{Src}'", item.SourceName);
-                if (!NdiInputConnector.TryConnectVideo(item, out videoReceiver, out errorMessage))
+                if (wantAudio && !receiver.IsAudioConnected)
                 {
-                    if (preconnectedAudio is null)
-                        try { audioReceiver?.Dispose(); } catch { /* best effort */ }
+                    errorMessage = $"NDI source '{item.SourceName}' pre-connect audio is no longer connected.";
+                    return false;
+                }
+
+                if (wantVideo && !receiver.IsVideoConnected)
+                {
+                    errorMessage = $"NDI source '{item.SourceName}' pre-connect video is no longer connected.";
                     return false;
                 }
             }
@@ -596,24 +595,26 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                 return false;
             }
 
-            var audioFmtLive = wantAudio && audioReceiver is not null ? audioReceiver.Format : default;
-            IAudioSource? audioSource = wantAudio ? audioReceiver : null;
-            IVideoSource? videoSource = wantVideo ? videoReceiver : null;
+            var audioFmtLive = wantAudio ? receiver.AudioFormat : default;
+            IAudioSource? audioSource = wantAudio ? receiver.AudioSource : null;
+            IVideoSource? videoSource = wantVideo ? receiver.VideoSource : null;
 
-            return TryCreateLiveCore(
-                new LiveOpenSources(audioSource, audioFmtLive, videoSource, DisposeSourcesOnDispose: true),
+            var ok = TryCreateLiveCore(
+                new LiveOpenSources(audioSource, audioFmtLive, videoSource, DisposeSourcesOnDispose: true, receiver),
                 lines,
                 outputs,
                 out session,
                 out errorMessage);
+            if (!ok && preconnectedReceiver is null)
+                try { receiver.Dispose(); } catch { /* best effort */ }
+            return ok;
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "TryCreateLive(NDI) failed");
             errorMessage = ex.Message;
-            if (preconnectedAudio is null)
-                try { audioReceiver?.Dispose(); } catch { /* best effort */ }
-            try { videoReceiver?.Dispose(); } catch { /* best effort */ }
+            if (preconnectedReceiver is null)
+                try { receiver?.Dispose(); } catch { /* best effort */ }
             return false;
         }
     }
@@ -622,7 +623,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         IAudioSource? Audio,
         AudioFormat AudioFormat,
         IVideoSource? Video,
-        bool DisposeSourcesOnDispose);
+        bool DisposeSourcesOnDispose,
+        NDILiveReceiver? NdiReceiver = null);
 
     /// <summary>Shared wire-up for live PortAudio / NDI sources (audio, video, or both).</summary>
     private static bool TryCreateLiveCore(
@@ -699,21 +701,13 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             }
         }
 
-        IVideoSink? negotiationLead = null;
-        var disposeNegotiationLead = false;
-        if (hasVideo && videoChains.Count > 0)
-        {
-            negotiationLead = videoChains[0].Sink;
-            disposeNegotiationLead = true;
-        }
-
         var mpOpt = new MediaPlayerOpenOptions(IncludeAudioRouter: hasAudio);
         if (!MediaPlayer.TryOpenLive(
                 sources.Audio,
                 sources.Video,
                 mpOpt,
-                negotiationLead,
-                disposeNegotiationLead,
+                videoNegotiationLead: null,
+                disposeNegotiationLead: true,
                 disposeSourcesOnDispose: sources.DisposeSourcesOnDispose,
                 out var player,
                 out errorMessage))
@@ -737,6 +731,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             pendingPlayback._liveAudioSource = sources.Audio;
             pendingPlayback._liveVideoSource = sources.Video;
             pendingPlayback._livePortAudioInput = sources.Audio as PortAudioInput;
+            pendingPlayback._liveNdiReceiver = sources.NdiReceiver;
             pendingPlayback._acquiredCarriers.AddRange(acquiredCarriers);
             pendingPlayback._acquiredLocalVideoLines.AddRange(acquiredLocalLines);
 
@@ -868,6 +863,29 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     }
                     playback._acquiredPortAudioLines.Add(line);
 
+                    int? previousTargetQueue = null;
+                    PortAudioOutput? targetQueueOwner = null;
+                    if (playback.IsLive)
+                    {
+                        // Live sources (NDI / PortAudio capture) hand the router exactly as many samples as
+                        // arrive in real time. The default `TargetQueueSamples` (half the PortAudio ring,
+                        // ~340 ms at 48 kHz) makes the router race to fill that target on startup, firing
+                        // chunks faster than the per-sink pump's capacity (8 chunks ≈ 80 ms) and dropping
+                        // the surplus — which then pops the output line into the Warning health state.
+                        // Cap live sessions to a small ring so the router paces against the hardware drain
+                        // from chunk #1. Restored on unwire so file sessions still see the full target.
+                        const int liveTargetFrames = 480 * 4; // ~40 ms @ 48 kHz, scales linearly at other rates
+                        var capped = Math.Min(outDev.TargetQueueSamples, liveTargetFrames);
+                        if (capped < outDev.TargetQueueSamples)
+                        {
+                            previousTargetQueue = outDev.TargetQueueSamples;
+                            targetQueueOwner = outDev;
+                            outDev.TargetQueueSamples = capped;
+                            Trace.LogDebug("WireAudio (live): PortAudio '{Name}' TargetQueueSamples {Prev} → {New}",
+                                pa.DisplayName, previousTargetQueue, capped);
+                        }
+                    }
+
                     IAudioSink routerSink = outDev;
                     var needsResample = outDev.Format.SampleRate != dec.SampleRate || outDev.Format.Channels != sinkChannels;
                     if (needsResample)
@@ -891,6 +909,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     wiring.SinkChannelCount = sinkChannels;
                     wiring.Resampler = routerSink is ResamplingAudioSink ? (ResamplingAudioSink)routerSink : wiring.Resampler;
                     wiring.AcquiredKind = AcquireKind.PortAudio;
+                    wiring.PortAudioForTargetRestore = targetQueueOwner;
+                    wiring.PreviousPortAudioTargetQueue = previousTargetQueue;
                     break;
                 }
                 case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly:
@@ -1334,6 +1354,43 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         // MediaContainerSession.Play(startHardware: ...) callback signature is unchanged.
     }
 
+    /// <summary>
+    /// Phase C.5 (2026-05-22): for live sessions only, discards any audio/video that the receivers
+    /// buffered between connect and the Play call (the "1 s behind" symptom). Must run before
+    /// <see cref="PlaybackRouter.Play"/> so the audio router doesn't pick up stale FIFO samples and
+    /// <see cref="S.Media.Core.Video.VideoPlayer.Play"/> starts its decode loop on frames whose PTS
+    /// is aligned to the current playback clock.
+    /// </summary>
+    public void RebaseLiveSourcesForPlay()
+    {
+        if (!IsLive) return;
+        try
+        {
+            if (_liveNdiReceiver is not null)
+            {
+                _liveNdiReceiver.RebaseToLatest(Player.PlayClock.CurrentPosition);
+                return;
+            }
+
+            switch (_liveAudioSource)
+            {
+                case NDIAudioReceiver ndiAudio:
+                    ndiAudio.RebaseToLatest();
+                    break;
+                case PortAudioInput paIn:
+                    paIn.RebaseToLatest();
+                    break;
+            }
+
+            if (_liveVideoSource is NDIVideoReceiver ndiVideo)
+                ndiVideo.RebaseToLatest(Player.PlayClock.CurrentPosition);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "RebaseLiveSourcesForPlay: rebase threw (continuing)");
+        }
+    }
+
     private int _primedOnce;
 
     /// <summary>Primes the video logo branches with a few black frames before <see cref="MediaContainerSession.Play"/>
@@ -1678,6 +1735,25 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             try { wiring.Resampler.Dispose(); }
             catch { /* best effort */ }
         }
+
+        RestorePortAudioTargetQueueIfNeeded(wiring);
+    }
+
+    /// <summary>Phase C.5 — undo the live-session <c>TargetQueueSamples</c> override so the next
+    /// (possibly file-based) acquirer of the persistent PortAudio runtime sees the original target.</summary>
+    private static void RestorePortAudioTargetQueueIfNeeded(LineWiring wiring)
+    {
+        if (wiring.PortAudioForTargetRestore is { } pa && wiring.PreviousPortAudioTargetQueue is { } prev)
+        {
+            try { pa.TargetQueueSamples = prev; }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "RestorePortAudioTargetQueueIfNeeded: TargetQueueSamples reset to {Prev} threw", prev);
+            }
+
+            wiring.PortAudioForTargetRestore = null;
+            wiring.PreviousPortAudioTargetQueue = null;
+        }
     }
 
     private void ReleaseRuntimeForLine(OutputLineViewModel line)
@@ -1715,6 +1791,16 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         public LogoFallbackVideoSink? LogoSink { get; set; }
         public ResamplingAudioSink? Resampler { get; set; }
         public AcquireKind AcquiredKind { get; set; }
+
+        /// <summary>Phase C.5 — live sessions lower the wrapped PortAudio's <c>TargetQueueSamples</c>
+        /// to avoid the startup chunk-burst that would overflow the per-sink pump. Held here so we can
+        /// restore the original target when the wiring is torn down (the persistent runtime keeps the
+        /// stream and would otherwise hand the modified target to the next session).</summary>
+        public PortAudioOutput? PortAudioForTargetRestore { get; set; }
+
+        /// <summary>Previous <c>TargetQueueSamples</c> recorded before the live-session override —
+        /// paired with <see cref="PortAudioForTargetRestore"/>. <c>null</c> when no override was applied.</summary>
+        public int? PreviousPortAudioTargetQueue { get; set; }
 
         /// <summary>Phase C (§4.3.4) — when the per-cell matrix is in use, the list of router route ids
         /// installed for each non-zero cell. Empty when the line is using the single-route mix-mode path.</summary>
@@ -1761,6 +1847,9 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         _portAudioResamplers.Clear();
+
+        foreach (var w in _lineWiring.Values)
+            RestorePortAudioTargetQueueIfNeeded(w);
 
         foreach (var line in _acquiredPortAudioLines)
         {
@@ -1811,6 +1900,9 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         _portAudioResamplers.Clear();
+
+        foreach (var w in _lineWiring.Values)
+            RestorePortAudioTargetQueueIfNeeded(w);
 
         foreach (var line in _acquiredPortAudioLines)
         {

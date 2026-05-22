@@ -41,8 +41,11 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     private readonly Thread _captureThread;
     private readonly CancellationTokenSource _cts = new();
     private readonly TimeSpan _capacityDuration;
+    private readonly TimeSpan _minBufferedDuration;
     /// <summary>Hard floor in frames-per-channel; mirrors the pre-2026-05 minimum to keep tiny durations from producing pathological rings.</summary>
     private const int MinCapacityFrames = 1024;
+    /// <summary>Default jitter-buffer prime threshold. Covers the worst-case inter-NDI-frame gap (33 ms at 30p) plus a margin so router pulls can ride over burst timing.</summary>
+    public static readonly TimeSpan DefaultMinBufferedDuration = TimeSpan.FromMilliseconds(50);
 
     private FormatSnapshot? _state;
     private long _overflowSamples;
@@ -79,6 +82,40 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     public long OverflowSamples => Volatile.Read(ref _overflowSamples);
 
     /// <summary>
+    /// Skips ahead to the most recent samples by advancing the consumer's read pointer so the ring
+    /// holds no more than <paramref name="keepBuffered"/> of audio. Intended for the play-start moment
+    /// in HaPlay: the receiver runs continuously from connect, so when the operator finally hits Play
+    /// the ring already contains seconds of stale samples that the router would otherwise consume in
+    /// FIFO order — making audio play <c>Tconnect</c> seconds behind real time.
+    /// </summary>
+    /// <param name="keepBuffered">
+    /// Default <see cref="TimeSpan.Zero"/> falls back to twice <see cref="DefaultMinBufferedDuration"/>
+    /// (100 ms), enough to absorb the worst-case NDI burst gap (33 ms at 30p) plus the receiver-side
+    /// jitter reserve. Clamped to <see cref="DefaultMinBufferedDuration"/> minimum so callers can't
+    /// accidentally choose a value below the steady-state holdback.
+    /// </param>
+    public void RebaseToLatest(TimeSpan keepBuffered = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var snap = Volatile.Read(ref _state);
+        if (snap is null) return; // No frames captured yet — nothing to discard.
+
+        var keep = keepBuffered <= TimeSpan.Zero
+            ? TimeSpan.FromTicks(DefaultMinBufferedDuration.Ticks * 2)
+            : (keepBuffered < DefaultMinBufferedDuration ? DefaultMinBufferedDuration : keepBuffered);
+        var keepFrames = Math.Max(0, (int)(keep.TotalSeconds * snap.Format.SampleRate));
+        var keepFloats = checked(keepFrames * snap.Channels);
+
+        var write = Volatile.Read(ref snap.WriteIndex);
+        var read = Volatile.Read(ref snap.ReadIndex);
+        var buffered = (int)(write - read);
+        if (buffered <= keepFloats) return;
+
+        var skip = buffered - keepFloats;
+        Volatile.Write(ref snap.ReadIndex, read + skip);
+    }
+
+    /// <summary>
     /// Connects to the given NDI source. Capture begins immediately on a
     /// background thread.
     /// </summary>
@@ -90,17 +127,32 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     /// sends 44.1, 48 or 96 kHz. A floor of <c>1024</c> frames is enforced so very short durations at low
     /// sample rates still yield a usable ring (matches the pre-<see cref="TimeSpan"/> minimum).
     /// </param>
+    /// <param name="minBufferedDuration">
+    /// Jitter-buffer holdback. NDI senders deliver audio in bursts aligned to video frames (typically
+    /// 16.7 ms at 60p or 33.3 ms at 30p). The <c>AudioRouter</c> pulls fixed-size chunks at a faster
+    /// cadence, so without a holdback the ring frequently drains to fewer samples than the router asks
+    /// for and the router silence-pads the tail — audible as "lots of small dropouts." This holdback is
+    /// the amount of samples the ring accumulates before <see cref="ReadInto"/> starts handing audio
+    /// out after startup or underrun. Once primed, the buffered reserve is consumable so bursty NDI
+    /// delivery can be smoothed into smaller router chunks. <c>null</c> uses
+    /// <see cref="DefaultMinBufferedDuration"/> (50 ms); <see cref="TimeSpan.Zero"/> opts out and
+    /// restores the pre-2026-05 zero-latency behaviour. Clamped to half the ring capacity.
+    /// </param>
     /// <param name="ingestClock">Optional <see cref="S.Media.Core.Clock.IPlaybackClock"/> implementation updated from this receiver's capture thread.</param>
     public NDIAudioReceiver(
         NDIDiscoveredSource source,
         string? receiverName = null,
         TimeSpan ringCapacityDuration = default,
+        TimeSpan? minBufferedDuration = null,
         NDIIngestPlaybackClock? ingestClock = null)
     {
         if (ringCapacityDuration == default)
             ringCapacityDuration = TimeSpan.FromSeconds(2);
         if (ringCapacityDuration <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(ringCapacityDuration), "must be > 0");
+        var resolvedMinBuffered = minBufferedDuration ?? DefaultMinBufferedDuration;
+        if (resolvedMinBuffered < TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(minBufferedDuration), "must be >= 0");
 
         _ingestClock = ingestClock;
         _ingestClock?.AttachReceiver();
@@ -131,6 +183,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         }
 
         _capacityDuration = ringCapacityDuration;
+        _minBufferedDuration = resolvedMinBuffered;
 
         _captureThread = new Thread(() => CaptureLoop(_cts.Token))
         {
@@ -158,7 +211,9 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         var read = Volatile.Read(ref snap.ReadIndex);
         var write = Volatile.Read(ref snap.WriteIndex);
         var available = (int)(write - read);
-        var toRead = Math.Min(dst.Length, available);
+        var primed = Volatile.Read(ref snap.Primed) != 0;
+        var toRead = ComputeReadCount(dst.Length, available, snap.MinBufferedFloats, ref primed);
+        Volatile.Write(ref snap.Primed, primed ? 1 : 0);
         if (toRead == 0) return 0;
 
         var startIdx = (int)(read & snap.RingMask);
@@ -250,29 +305,90 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         // — format changes are rare and a brief discontinuity at the
         // boundary is preferable to copying state across.
         var capacityFrames = Math.Max(MinCapacityFrames, (int)(_capacityDuration.TotalSeconds * sampleRate));
-        var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames);
+        var minBufferedFrames = ComputeMinBufferedFrames(_minBufferedDuration, sampleRate, capacityFrames);
+        var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
         Volatile.Write(ref _state, snap);
         return snap;
     }
 
-    private void EnqueueSamples(FormatSnapshot snap, ReadOnlySpan<float> src)
+    /// <summary>
+    /// Computes the jitter-buffer holdback in frames-per-channel for a given sample rate and ring
+    /// capacity. Capped at half the ring capacity so the holdback can never starve the consumer of
+    /// the entire ring; clamped to zero for non-positive durations so callers can opt out.
+    /// </summary>
+    internal static int ComputeMinBufferedFrames(TimeSpan minBufferedDuration, int sampleRate, int capacityFrames)
     {
-        var write = Volatile.Read(ref snap.WriteIndex);
-        var read = Volatile.Read(ref snap.ReadIndex);
-        var freeFloats = snap.RingBuffer.Length - (int)(write - read);
-        var toWrite = Math.Min(src.Length, freeFloats);
+        if (minBufferedDuration <= TimeSpan.Zero || sampleRate <= 0 || capacityFrames <= 0)
+            return 0;
+        var requested = (int)(minBufferedDuration.TotalSeconds * sampleRate);
+        if (requested <= 0) return 0;
+        var cap = Math.Max(0, capacityFrames / 2);
+        return Math.Min(cap, requested);
+    }
 
-        if (toWrite > 0)
+    /// <summary>
+    /// Jitter-buffer read policy. The holdback is a startup/recovery threshold, not a permanent floor:
+    /// once primed, the consumer may read from the buffered reserve so NDI's video-frame-sized audio
+    /// bursts can be smoothed into smaller router chunks.
+    /// </summary>
+    internal static int ComputeReadCount(int requestedFloats, int availableFloats, int minBufferedFloats, ref bool primed)
+    {
+        if (requestedFloats <= 0 || availableFloats <= 0)
+            return 0;
+
+        if (minBufferedFloats <= 0)
         {
-            var startIdx = (int)(write & snap.RingMask);
-            var firstChunk = Math.Min(toWrite, snap.RingBuffer.Length - startIdx);
-            src[..firstChunk].CopyTo(snap.RingBuffer.AsSpan(startIdx));
-            if (firstChunk < toWrite)
-                src.Slice(firstChunk, toWrite - firstChunk).CopyTo(snap.RingBuffer.AsSpan(0));
-            Volatile.Write(ref snap.WriteIndex, write + toWrite);
+            primed = true;
+            return Math.Min(requestedFloats, availableFloats);
         }
 
-        var dropped = src.Length - toWrite;
+        if (!primed)
+        {
+            if (availableFloats < minBufferedFloats)
+                return 0;
+            primed = true;
+        }
+
+        var toRead = Math.Min(requestedFloats, availableFloats);
+        if (toRead < requestedFloats)
+            primed = false;
+        return toRead;
+    }
+
+    private void EnqueueSamples(FormatSnapshot snap, ReadOnlySpan<float> src)
+    {
+        var capacity = snap.UsableFloats;
+        if (capacity <= 0) return;
+
+        var dropped = 0;
+        if (src.Length > capacity)
+        {
+            dropped += src.Length - capacity;
+            src = src[^capacity..];
+        }
+
+        var write = Volatile.Read(ref snap.WriteIndex);
+        var read = Volatile.Read(ref snap.ReadIndex);
+        var buffered = (int)(write - read);
+        var freeFloats = capacity - buffered;
+        if (src.Length > freeFloats)
+        {
+            // Live receivers should keep the newest audio, especially when pre-connected before Play.
+            // Drop oldest buffered samples rather than rejecting fresh network samples.
+            var dropOld = src.Length - freeFloats;
+            read += dropOld;
+            dropped += dropOld;
+            Volatile.Write(ref snap.ReadIndex, read);
+            Volatile.Write(ref snap.Primed, 0);
+        }
+
+        var startIdx = (int)(write & snap.RingMask);
+        var firstChunk = Math.Min(src.Length, snap.RingBuffer.Length - startIdx);
+        src[..firstChunk].CopyTo(snap.RingBuffer.AsSpan(startIdx));
+        if (firstChunk < src.Length)
+            src[firstChunk..].CopyTo(snap.RingBuffer.AsSpan(0));
+        Volatile.Write(ref snap.WriteIndex, write + src.Length);
+
         if (dropped > 0)
             Interlocked.Add(ref _overflowSamples, dropped);
     }
@@ -379,10 +495,14 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         public readonly int Channels;
         public readonly float[] RingBuffer;
         public readonly int RingMask;
+        public readonly int UsableFloats;
+        /// <summary>Jitter-buffer holdback in floats (channel-aligned). See <see cref="ReadInto"/>.</summary>
+        public readonly int MinBufferedFloats;
+        public int Primed;
         public long WriteIndex;
         public long ReadIndex;
 
-        public FormatSnapshot(AudioFormat format, int capacityFrames)
+        public FormatSnapshot(AudioFormat format, int capacityFrames, int minBufferedFrames)
         {
             Format = format;
             Channels = format.Channels;
@@ -391,6 +511,8 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
             while (rounded < capFloats) rounded <<= 1;
             RingBuffer = new float[rounded];
             RingMask = rounded - 1;
+            UsableFloats = rounded - (rounded % Channels);
+            MinBufferedFloats = checked(minBufferedFrames * format.Channels);
         }
     }
 }

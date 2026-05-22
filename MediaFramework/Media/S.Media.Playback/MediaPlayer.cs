@@ -386,6 +386,8 @@ public sealed class MediaPlayer : IDisposable
             return false;
         }
 
+        FFmpegRuntime.EnsureInitialized();
+
         AudioPlayer? audioPlayer = null;
         string? audioSourceId = null;
         MediaClock? freerun = null;

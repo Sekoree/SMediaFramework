@@ -3,69 +3,21 @@ using HaPlay.Models;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Video;
-using S.Media.NDI.Audio;
-using S.Media.NDI.Video;
+using S.Media.NDI;
 
 namespace HaPlay.Playback;
 
-/// <summary>Resolves an NDI source and opens <see cref="NDIAudioReceiver"/> / <see cref="NDIVideoReceiver"/> (§6.11).</summary>
+/// <summary>Resolves an NDI source and opens one combined <see cref="NDILiveReceiver"/> (§6.11).</summary>
 internal static class NdiInputConnector
 {
-    public static bool TryConnectAudio(
+    public static bool TryConnectLive(
         NDIInputPlaylistItem item,
-        [NotNullWhen(true)] out NDIAudioReceiver? receiver,
-        out AudioFormat format,
-        out string? errorMessage) =>
-        TryConnectReceiver(
-            item,
-            rejectWhen: static i => i.VideoOnly,
-            rejectMessage: "NDI input is video-only.",
-            waitForAudio: true,
-            waitForVideo: false,
-            openAudio: true,
-            openVideo: false,
-            out receiver,
-            out _,
-            out format,
-            out _,
-            out errorMessage);
-
-    public static bool TryConnectVideo(
-        NDIInputPlaylistItem item,
-        [NotNullWhen(true)] out NDIVideoReceiver? receiver,
-        out string? errorMessage) =>
-        TryConnectReceiver(
-            item,
-            rejectWhen: static i => i.AudioOnly,
-            rejectMessage: "NDI input is audio-only.",
-            waitForAudio: false,
-            waitForVideo: true,
-            openAudio: false,
-            openVideo: true,
-            out _,
-            out receiver,
-            out _,
-            out _,
-            out errorMessage);
-
-    private delegate bool ItemReject(NDIInputPlaylistItem item);
-
-    private static bool TryConnectReceiver(
-        NDIInputPlaylistItem item,
-        ItemReject rejectWhen,
-        string rejectMessage,
-        bool waitForAudio,
-        bool waitForVideo,
-        bool openAudio,
-        bool openVideo,
-        out NDIAudioReceiver? audioReceiver,
-        out NDIVideoReceiver? videoReceiver,
+        [NotNullWhen(true)] out NDILiveReceiver? receiver,
         out AudioFormat audioFormat,
         out VideoFormat videoFormat,
         out string? errorMessage)
     {
-        audioReceiver = null;
-        videoReceiver = null;
+        receiver = null;
         audioFormat = default;
         videoFormat = default;
         errorMessage = null;
@@ -76,9 +28,11 @@ internal static class NdiInputConnector
             return false;
         }
 
-        if (rejectWhen(item))
+        var wantAudio = !item.VideoOnly;
+        var wantVideo = !item.AudioOnly;
+        if (!wantAudio && !wantVideo)
         {
-            errorMessage = rejectMessage;
+            errorMessage = "NDI input has neither audio nor video enabled.";
             return false;
         }
 
@@ -115,46 +69,50 @@ internal static class NdiInputConnector
                 return false;
             }
 
-            if (openAudio)
-                audioReceiver = new NDIAudioReceiver(match.Value);
-            if (openVideo)
-                videoReceiver = new NDIVideoReceiver(match.Value);
+            receiver = new NDILiveReceiver(
+                match.Value,
+                receiveAudio: wantAudio,
+                receiveVideo: wantVideo,
+                bandwidth: ResolveBandwidth(wantAudio, wantVideo, item.LowBandwidth));
 
             var deadline = DateTime.UtcNow.AddSeconds(2);
             while (DateTime.UtcNow < deadline)
             {
-                var audioReady = !waitForAudio || audioReceiver is { IsConnected: true };
-                var videoReady = !waitForVideo || videoReceiver is { IsConnected: true };
+                var audioReady = !wantAudio || receiver.IsAudioConnected;
+                var videoReady = !wantVideo || receiver.IsVideoConnected;
                 if (audioReady && videoReady)
                     break;
                 Thread.Sleep(50);
             }
 
-            if (waitForAudio && audioReceiver is not { IsConnected: true })
+            if (wantAudio && !receiver.IsAudioConnected)
             {
                 errorMessage = $"NDI source '{item.SourceName}' resolved but delivered no audio in 2 s.";
-                CleanupReceivers(audioReceiver, videoReceiver);
+                CleanupReceiver(receiver);
+                receiver = null;
                 return false;
             }
 
-            if (waitForVideo && videoReceiver is not { IsConnected: true })
+            if (wantVideo && !receiver.IsVideoConnected)
             {
                 errorMessage = $"NDI source '{item.SourceName}' resolved but delivered no video in 2 s.";
-                CleanupReceivers(audioReceiver, videoReceiver);
+                CleanupReceiver(receiver);
+                receiver = null;
                 return false;
             }
 
-            if (audioReceiver is not null)
-                audioFormat = audioReceiver.Format;
-            if (videoReceiver is not null)
-                videoFormat = videoReceiver.Format;
+            if (wantAudio)
+                audioFormat = receiver.AudioFormat;
+            if (wantVideo)
+                videoFormat = receiver.VideoFormat;
 
             return true;
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
-            CleanupReceivers(audioReceiver, videoReceiver);
+            CleanupReceiver(receiver);
+            receiver = null;
             return false;
         }
         finally
@@ -163,9 +121,15 @@ internal static class NdiInputConnector
         }
     }
 
-    private static void CleanupReceivers(NDIAudioReceiver? audio, NDIVideoReceiver? video)
+    private static NDIRecvBandwidth ResolveBandwidth(bool wantAudio, bool wantVideo, bool lowBandwidth)
     {
-        try { audio?.Dispose(); } catch { /* best effort */ }
-        try { video?.Dispose(); } catch { /* best effort */ }
+        if (wantAudio && !wantVideo)
+            return NDIRecvBandwidth.AudioOnly;
+        return lowBandwidth ? NDIRecvBandwidth.Lowest : NDIRecvBandwidth.Highest;
+    }
+
+    private static void CleanupReceiver(NDILiveReceiver? receiver)
+    {
+        try { receiver?.Dispose(); } catch { /* best effort */ }
     }
 }

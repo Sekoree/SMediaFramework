@@ -23,6 +23,10 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentQueue<VideoFrame> _queue = new();
     private readonly object _waitGate = new();
+    /// <summary>Guards <see cref="_nextPts"/> and <see cref="_queue"/> drainage against the
+    /// <see cref="RebaseToLatest"/> path. Held briefly per captured frame (during unpack + enqueue +
+    /// PTS increment) so a concurrent rebase can't observe an in-flight stale-PTS frame.</summary>
+    private readonly object _ptsLock = new();
     private readonly int _maxQueued;
 
     private VideoFormat _format;
@@ -47,6 +51,28 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     public bool IsExhausted => _disposed;
 
     public long OverflowFrames => Interlocked.Read(ref _overflowFrames);
+
+    /// <summary>
+    /// Discards any frames currently queued and resets the PTS counter so the next captured frame is
+    /// presented at <paramref name="nextPresentationTime"/>. Intended for the play-start moment: the receiver runs
+    /// continuously from connect, so by the time the operator hits Play the PTS counter has advanced
+    /// to <c>Tconnect</c> seconds while the consumer's playback clock may be at a fresh playhead —
+    /// <see cref="S.Media.Core.Video.VideoPlayer"/> would then sit waiting for the playhead to catch
+    /// up, leaving the output black. Calling this immediately before Play rebases the source so video
+    /// presents in sync with the playback clock.
+    /// </summary>
+    public void RebaseToLatest(TimeSpan nextPresentationTime = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (nextPresentationTime < TimeSpan.Zero)
+            nextPresentationTime = TimeSpan.Zero;
+        lock (_ptsLock)
+        {
+            while (_queue.TryDequeue(out var frame))
+                frame.Dispose();
+            _nextPts = nextPresentationTime;
+        }
+    }
 
     public NDIVideoReceiver(
         NDIDiscoveredSource source,
@@ -112,7 +138,8 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     public bool TryReadNextFrame(out VideoFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        while (!_queue.TryDequeue(out frame))
+        VideoFrame? next;
+        while (!_queue.TryDequeue(out next))
         {
             if (_disposed)
             {
@@ -127,6 +154,7 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             }
         }
 
+        frame = next;
         return true;
     }
 
@@ -140,20 +168,26 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             {
                 try
                 {
-                    if (NDIVideoFrameUnpack.TryUnpack(video, _nextPts, out var vf) && vf is not null)
+                    // Hold _ptsLock across unpack+enqueue+increment so a concurrent RebaseToLatest
+                    // cannot observe an in-flight stale-PTS frame: either it runs before us (we then
+                    // read _nextPts = 0) or after us (it drains the just-enqueued frame).
+                    lock (_ptsLock)
                     {
-                        EnsureFormat(vf.Format);
-                        EnqueueFrame(vf);
-                        _nextPts += _ptsStep;
-                    }
-                    else
-                    {
-                        var drops = Interlocked.Increment(ref _unpackDrops);
-                        if (drops <= 5)
+                        if (NDIVideoFrameUnpack.TryUnpack(video, _nextPts, out var vf) && vf is not null)
                         {
-                            MediaDiagnostics.LogWarning(
-                                "NDIVideoReceiver: dropped video frame (unpack failed) fourCC={FourCc} size={W}x{H} stride={Stride}",
-                                video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes);
+                            EnsureFormat(vf.Format);
+                            EnqueueFrame(vf);
+                            _nextPts += _ptsStep;
+                        }
+                        else
+                        {
+                            var drops = Interlocked.Increment(ref _unpackDrops);
+                            if (drops <= 5)
+                            {
+                                MediaDiagnostics.LogWarning(
+                                    "NDIVideoReceiver: dropped video frame (unpack failed) fourCC={FourCc} size={W}x{H} stride={Stride}",
+                                    video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes);
+                            }
                         }
                     }
                 }

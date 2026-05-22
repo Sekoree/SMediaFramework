@@ -229,6 +229,20 @@ Each item links back to the plan section that motivates it.
 - [x] **`NDIVideoReceiver` backfill** (§8.9) — landed 2026-05-21. `NDIVideoReceiver` +
   `NDIVideoFrameUnpack` in `S.Media.NDI`; HaPlay live open wires audio and/or video via
   `NdiInputConnector` + unified `TryCreateLiveCore` (video-only, audio-only, or both).
+- [x] **NDI live audio dropouts (jitter buffer + live PortAudio target + rebase)** —
+  landed 2026-05-22. Three-part fix: (a) `NDIAudioReceiver` gains a configurable
+  `minBufferedDuration` holdback (default 50 ms, see framework checklist entry) so
+  bursty NDI delivery no longer trips the router's silence-pad path; (b)
+  `HaPlayPlaybackSession.WireAudio` lowers the wrapped PortAudio's
+  `TargetQueueSamples` to ~40 ms while a live session is wired (restored on unwire)
+  so the router doesn't fire the startup chunk-burst that overflowed the per-sink
+  pump and tripped the output-line Warning LED; (c) the receivers expose
+  `RebaseToLatest` (audio: advance read pointer; video: drain queue + reset PTS
+  counter) and `HaPlayPlaybackSession.RebaseLiveSourcesForPlay()` is called from
+  every `Router.Play` site so the connect-to-Play stale-samples backlog is
+  discarded and video starts in sync with the freshly-zeroed playback clock
+  (without this last piece, audio plays ~1 s late and video sits black waiting
+  for the playhead to catch up to the receiver's pre-advanced PTS counter).
 
 ## Phase D — Cue Player
 
