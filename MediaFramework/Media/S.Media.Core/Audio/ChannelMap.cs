@@ -25,7 +25,7 @@ namespace S.Media.Core.Audio;
 /// <list type="bullet">
 /// <item><c>new ChannelMap([0, 1])</c> — identity stereo.</item>
 /// <item><c>new ChannelMap([1, 0])</c> — swap L/R.</item>
-/// <item><c>new ChannelMap([0, 0, 1, 1])</c> — stereo into a 4-channel sink, L→1+2, R→3+4.</item>
+/// <item><c>new ChannelMap([0, 0, 1, 1])</c> — stereo into a 4-channel output, L→1+2, R→3+4.</item>
 /// <item><c>new ChannelMap([-1, 0, 0, -1])</c> — center channels carry the source, sides silent.</item>
 /// <item><c>new ChannelMap([0, 0])</c> — duplicate L to both outputs (stereo source).</item>
 /// <item><c>new ChannelMap([1, 1])</c> — duplicate R to both outputs.</item>

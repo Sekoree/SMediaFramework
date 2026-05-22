@@ -3,11 +3,8 @@ namespace S.Media.Core.Video;
 /// <summary>
 /// Optional platform/hardware video plumbing (Vulkan external memory,
 /// DRM PRIME FDs, DXGI shared handles, Metal IOSurface, …). Defaults are no-ops until a backend
-/// populates descriptors. Concrete packers include <see cref="LinuxDmabufNv12Interop"/>,
-/// <see cref="WindowsNv12SharedHandleInterop"/>, <see cref="WindowsNv12SharedHandleInterop.AllocToken(VideoWin32Nv12Backing, int, int)"/>,
-/// <see cref="WindowsNv12D3D11TextureInterop"/> (libav-held D3D11 NV12 texture + device),
-/// <see cref="VulkanExternalNv12Interop"/>, and
-/// <see cref="MetalIosurfaceNv12Interop"/>.
+/// populates <see cref="HardwareVideoSurfaceDescriptor"/>s; <see cref="HardwareVideoWin32Nv12"/>
+/// shows the consumer-side import shape used by the OpenGL backend.
 /// </summary>
 public interface IHardwareVideoInterop
 {

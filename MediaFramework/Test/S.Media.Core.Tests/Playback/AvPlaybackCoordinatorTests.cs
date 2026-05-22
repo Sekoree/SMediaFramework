@@ -16,9 +16,9 @@ public class AvPlaybackCoordinatorTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
             AvPlaybackCoordinator.Play(video, null,
@@ -39,11 +39,11 @@ public class AvPlaybackCoordinatorTests
         var frameBytes = new byte[stride * 16];
         var inner = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
         var src = new SeekableFakeVideoSource(inner);
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         video.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
 
         AvPlaybackCoordinator.SeekCoordinated(video, null, TimeSpan.FromSeconds(1));
 
@@ -57,11 +57,11 @@ public class AvPlaybackCoordinatorTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         video.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
 
         var flushCalls = 0;
         AvPlaybackCoordinator.Pause(video, null, default, () => flushCalls++);
@@ -77,9 +77,9 @@ public class AvPlaybackCoordinatorTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         var session = new MediaPlaybackSession(video, clock);
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -95,9 +95,9 @@ public class AvPlaybackCoordinatorTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         var session = new MediaPlaybackSession(video, clock);
 
         var flushCalls = 0;
@@ -114,9 +114,9 @@ public class AvPlaybackCoordinatorTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         IAvPlaybackSession session = new MediaPlaybackSession(video, clock);
 
         Assert.Same(video, session.Video);
@@ -144,12 +144,12 @@ public class AvPlaybackCoordinatorTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         using var clock = new MediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         clock.Start();
         video.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
 
         AvPlaybackCoordinator.Pause(video, null, default, () => { });
 
@@ -164,9 +164,9 @@ public class AvPlaybackCoordinatorTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         IAvPlaybackSession session = new MediaPlaybackSession(video, clock);
         var hits = 0;
         void Handler(object? _, TimeSpan __) => System.Threading.Interlocked.Increment(ref hits);

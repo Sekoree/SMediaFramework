@@ -2,11 +2,11 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Subset of pixel layouts the framework knows how to talk about.
-/// Sources/sinks declare which formats they accept; the mixer/scaler is
+/// Sources/outputs declare which formats they accept; the mixer/scaler is
 /// responsible for any conversion in between.
 /// </summary>
 /// <remarks>
-/// Intentionally tiny — add formats here as concrete sources/sinks need them.
+/// Intentionally tiny — add formats here as concrete sources/outputs need them.
 /// Component order in names follows native byte order, e.g. <see cref="Bgra32"/>
 /// is B,G,R,A in memory (Avalonia/SDL surfaces).
 /// </remarks>

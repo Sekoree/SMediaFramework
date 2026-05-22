@@ -182,7 +182,7 @@ public class PortAudioOutputTests
         if (!HasOutputDevice()) return;
 
         using var output = new PortAudioOutput(StereoFormat, ringCapacityFrames: 4096);
-        var mirror = new FloatCountingSink(StereoFormat);
+        var mirror = new FloatCountingOutput(StereoFormat);
         var source = new TestFrameSource(StereoFormat, totalFrames: 10_000);
         const int target = 400;
         output.PrefillFrom(source, TimeSpan.FromSeconds(2), chunkSamples: 480, mirror, target);
@@ -194,7 +194,7 @@ public class PortAudioOutputTests
     }
 
     [Fact]
-    public void TryPrefillPrimaryPortAudio_UsesPrimaryPortAudioSink()
+    public void TryPrefillPrimaryPortAudio_UsesPrimaryPortAudioOutput()
     {
         if (!HasOutputDevice()) return;
 
@@ -233,9 +233,9 @@ public class PortAudioOutputTests
         }
     }
 
-    private sealed class FloatCountingSink : IAudioSink
+    private sealed class FloatCountingOutput : IAudioOutput
     {
-        public FloatCountingSink(AudioFormat format) => Format = format;
+        public FloatCountingOutput(AudioFormat format) => Format = format;
         public AudioFormat Format { get; }
         public int SubmittedFloats { get; private set; }
 

@@ -16,7 +16,7 @@ public interface IMediaClock : IPlaybackTimeline
 
     /// <summary>
     /// Slave the clock's position to an external <see cref="IPlaybackClock"/>
-    /// (typically the audio sink). Pass <c>null</c> to revert to the internal
+    /// (typically the audio output). Pass <c>null</c> to revert to the internal
     /// stopwatch. Position is preserved across the swap — no jump.
     /// </summary>
     public void SetMaster(IPlaybackClock? master);

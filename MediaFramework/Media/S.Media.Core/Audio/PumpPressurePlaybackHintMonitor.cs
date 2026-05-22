@@ -3,21 +3,21 @@ using S.Media.Core.Diagnostics;
 namespace S.Media.Core.Audio;
 
 /// <summary>
-/// Observes <see cref="AudioRouter.PumpPressure"/> (sink queue drops) and maintains a bounded
+/// Observes <see cref="AudioRouter.PumpPressure"/> (output queue drops) and maintains a bounded
 /// playback-rate hint in parts-per-million. A negative value suggests slowing the master clock
-/// slightly so the router produces fewer chunks ahead of a slow sink.
+/// slightly so the router produces fewer chunks ahead of a slow output.
 /// </summary>
 /// <remarks>
 /// <para>
 /// This is intentionally minimal — no automatic clock wiring. Hosts subscribe to
 /// <see cref="HintPpmBiasChanged"/> or poll <see cref="HintPpmBias"/> and apply bias to
 /// <see cref="Clock.IPlaybackClock"/> (or logging / metrics) as they see fit.
-/// Use the overload with a sink id when several pumps are active so hints are not
-/// conflated across sinks.
+/// Use the overload with a output id when several pumps are active so hints are not
+/// conflated across outputs.
 /// </para>
 /// <para>
-/// Coordinated <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong> policies across multiple sinks are out of scope here —
-/// this type only derives a scalar hint from queue pressure. Per-sink rate nudging without retuning the whole graph lives in FFmpeg <c>AdaptiveRateAudioSink</c> instead.
+/// Coordinated <strong>master</strong> clock ppm and synchronized <strong>drop/repeat</strong> policies across multiple outputs are out of scope here —
+/// this type only derives a scalar hint from queue pressure. Per-output rate nudging without retuning the whole graph lives in FFmpeg <c>AdaptiveRateAudioOutput</c> instead.
 /// </para>
 /// <para>
 /// <see cref="Dispose"/> unsubscribes from <see cref="AudioRouter.PumpPressure"/>; <strong>Debug</strong> builds log a failed unsubscribe via <see cref="MediaDiagnostics.LogError"/>.
@@ -54,9 +54,9 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
     }
 
     /// <summary>
-    /// Observes pump pressure for a single sink id (per-sink drops). Other sinks' drops are ignored.
+    /// Observes pump pressure for a single output id (per-output drops). Other outputs' drops are ignored.
     /// </summary>
-    /// <param name="observeSinkId">Non-empty sink id to match against <see cref="AudioRouterPumpPressureEventArgs.SinkId"/>.</param>
+    /// <param name="observeSinkId">Non-empty output id to match against <see cref="AudioRouterPumpPressureEventArgs.SinkId"/>.</param>
     public PumpPressurePlaybackHintMonitor(
         AudioRouter router,
         string observeSinkId,
@@ -141,19 +141,6 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try
-        {
-            _router.PumpPressure -= OnPumpPressure;
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "PumpPressurePlaybackHintMonitor.Dispose: PumpPressure unsubscribe");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _router.PumpPressure -= OnPumpPressure, "PumpPressurePlaybackHintMonitor.Dispose: PumpPressure unsubscribe");
     }
 }

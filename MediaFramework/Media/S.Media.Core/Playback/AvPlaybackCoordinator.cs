@@ -20,8 +20,8 @@ namespace S.Media.Core.Playback;
 /// so the visible playhead matches.
 /// </para>
 /// <para>
-/// Coordinated graph-wide master PPM, synchronized multi-sink drop/repeat, or other timing policy beyond
-/// per-sink hints is <strong>not</strong> implemented here — see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/>.
+/// Coordinated graph-wide master PPM, synchronized multi-output drop/repeat, or other timing policy beyond
+/// per-output hints is <strong>not</strong> implemented here — see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/>.
 /// </para>
 /// <para>
 /// When both streams use <c>MediaContainerDecoder</c>, pass <c>decoder.FlushCodecPipelines</c> (or a lambda

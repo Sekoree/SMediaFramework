@@ -15,7 +15,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\OSC\OSCLib\OSCLib.csproj" />
+        <ProjectReference Include="..\..\Extras\OSC\OSCLib\OSCLib.csproj" />
     </ItemGroup>
 
 </Project>

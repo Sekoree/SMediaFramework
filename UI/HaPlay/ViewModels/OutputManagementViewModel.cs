@@ -347,7 +347,7 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// <summary>
     /// Phase B follow-up — raised *before* a line's runtime is torn down so any active
     /// <c>HaPlayPlaybackSession</c> can call <c>TryRemoveOutput</c> first and avoid Submit'ing to a
-    /// disposed sink. Subscribers must run synchronously: by the time the event returns, the runtime
+    /// disposed output. Subscribers must run synchronously: by the time the event returns, the runtime
     /// stop / dispose path is about to run.
     /// </summary>
     public event EventHandler<OutputLineViewModel>? OutputLineRemoving;
@@ -623,27 +623,27 @@ public partial class OutputManagementViewModel : ViewModelBase
     internal void StopPreviewsForPlayback(IEnumerable<OutputLineViewModel> lines)
     {
         // Both NDI carriers and local-video previews now stay alive across playback — sessions acquire the
-        // existing sink via TryAcquireLocalVideoSinkForPlayback / TryAcquireNDICarrierForPlayback so the
+        // existing output via TryAcquireLocalVideoOutputForPlayback / TryAcquireNDICarrierForPlayback so the
         // window doesn't flash on each media change. Kept for API stability; intentional no-op.
         _ = lines;
     }
 
     /// <summary>
-    /// Returns the persistent local-video sink (SDL or Avalonia) so a playback session can route decoded
+    /// Returns the persistent local-video output (SDL or Avalonia) so a playback session can route decoded
     /// frames into the existing window. Returns <c>null</c> when the line isn't a local-video output,
     /// the preview isn't running, or another playback session already holds it. Callers MUST pair every
-    /// successful acquire with <see cref="ReleaseLocalVideoSinkForPlayback"/>.
+    /// successful acquire with <see cref="ReleaseLocalVideoOutputForPlayback"/>.
     /// </summary>
-    internal IVideoSink? TryAcquireLocalVideoSinkForPlayback(OutputLineViewModel line)
+    internal IVideoOutput? TryAcquireLocalVideoOutputForPlayback(OutputLineViewModel line)
     {
         if (!_localPreviews.TryGetValue(line, out var rt))
             return null;
         return rt.AcquireForPlayback();
     }
 
-    /// <summary>Releases a sink acquired via <see cref="TryAcquireLocalVideoSinkForPlayback"/> and resets it
+    /// <summary>Releases a output acquired via <see cref="TryAcquireLocalVideoOutputForPlayback"/> and resets it
     /// to the idle preview frame so the window keeps showing something.</summary>
-    internal void ReleaseLocalVideoSinkForPlayback(OutputLineViewModel line)
+    internal void ReleaseLocalVideoOutputForPlayback(OutputLineViewModel line)
     {
         if (!_localPreviews.TryGetValue(line, out var rt))
             return;
@@ -723,7 +723,7 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     /// <summary>
     /// §8.8 UI-side recording control: toggles per-line record intent for NDI outputs.
-    /// Backend recording-sink wiring remains a separate framework follow-up.
+    /// Backend recording-output wiring remains a separate framework follow-up.
     /// </summary>
     internal void ToggleNdiRecording(OutputLineViewModel line)
     {

@@ -2,48 +2,48 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Picks the cheapest pixel format that an <see cref="IVideoSource"/> and an
-/// <see cref="IVideoSink"/> can agree on, then wires both ends to it.
+/// <see cref="IVideoOutput"/> can agree on, then wires both ends to it.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Walk the sink's preferences in order and pick the first one the source can
+/// Walk the output's preferences in order and pick the first one the source can
 /// deliver natively <strong>and</strong> that passes an optional filter. If no
-/// format is both native-overlap and filtered, fall back to the first sink
+/// format is both native-overlap and filtered, fall back to the first output
 /// preference that passes the filter (forces a converter on whichever side).
 /// </para>
 /// <para>
-/// When none of the sink preferences pass <paramref name="formatFilter"/> an
-/// <see cref="InvalidOperationException"/> is thrown. When the sink lists no
+/// When none of the output preferences pass <paramref name="formatFilter"/> an
+/// <see cref="InvalidOperationException"/> is thrown. When the output lists no
 /// preferences, choose the first source-native format passing the filter.
 /// </para>
 /// </remarks>
 public static class VideoFormatNegotiator
 {
-    /// <inheritdoc cref="Negotiate(IVideoSource,IVideoSink,Func{PixelFormat,bool}?)"/>
-    public static PixelFormat Negotiate(IVideoSource source, IVideoSink sink) =>
-        Negotiate(source, sink, formatFilter: null);
+    /// <inheritdoc cref="Negotiate(IVideoSource,IVideoOutput,Func{PixelFormat,bool}?)"/>
+    public static PixelFormat Negotiate(IVideoSource source, IVideoOutput output) =>
+        Negotiate(source, output, formatFilter: null);
 
     /// <summary>
     /// Returns the pixel format both ends will use after <see cref="Connect"/>.
     /// Does not touch either component — pure decision.
     /// </summary>
     /// <param name="formatFilter">When non-null, only formats for which this returns true may be negotiated.</param>
-    public static PixelFormat Negotiate(IVideoSource source, IVideoSink sink, Func<PixelFormat, bool>? formatFilter)
+    public static PixelFormat Negotiate(IVideoSource source, IVideoOutput output, Func<PixelFormat, bool>? formatFilter)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(output);
 
         static bool Allows(Func<PixelFormat, bool>? f, PixelFormat p) =>
             f is null || f.Invoke(p);
 
-        var sinkAccepted = sink.AcceptedPixelFormats;
+        var sinkAccepted = output.AcceptedPixelFormats;
         var sourceNative = source.NativePixelFormats;
 
         if (sinkAccepted.Count == 0)
         {
             if (sourceNative.Count == 0)
                 throw new InvalidOperationException(
-                    "neither source nor sink declared any pixel formats — cannot negotiate");
+                    "neither source nor output declared any pixel formats — cannot negotiate");
 
             for (var i = 0; i < sourceNative.Count; i++)
             {
@@ -71,37 +71,37 @@ public static class VideoFormatNegotiator
         }
 
         throw new InvalidOperationException(
-            "none of the sink's preferred pixel formats satisfied the negotiated format filter.");
+            "none of the output's preferred pixel formats satisfied the negotiated format filter.");
     }
 
     /// <summary>
     /// Negotiate, then call <see cref="IVideoSource.SelectOutputFormat"/> and
-    /// <see cref="IVideoSink.Configure"/>.
+    /// <see cref="IVideoOutput.Configure"/>.
     /// </summary>
-    public static VideoFormat Connect(IVideoSource source, IVideoSink sink) =>
-        Connect(source, sink, formatFilter: null);
+    public static VideoFormat Connect(IVideoSource source, IVideoOutput output) =>
+        Connect(source, output, formatFilter: null);
 
-    /// <inheritdoc cref="Connect(IVideoSource,IVideoSink)"/>
+    /// <inheritdoc cref="Connect(IVideoSource,IVideoOutput)"/>
     /// <param name="formatFilter">When non-null, only formats for which this returns true may be negotiated.</param>
-    public static VideoFormat Connect(IVideoSource source, IVideoSink sink, Func<PixelFormat, bool>? formatFilter)
+    public static VideoFormat Connect(IVideoSource source, IVideoOutput output, Func<PixelFormat, bool>? formatFilter)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(output);
 
-        var pf = Negotiate(source, sink, formatFilter);
+        var pf = Negotiate(source, output, formatFilter);
         source.SelectOutputFormat(pf);
-        ApplyD3D11GlBorrowFromVideoSourceIfSupported(source, sink);
-        sink.Configure(source.Format);
+        ApplyD3D11GlBorrowFromVideoSourceIfSupported(source, output);
+        output.Configure(source.Format);
         return source.Format;
     }
 
     /// <summary>
-    /// When <paramref name="sink"/> supports <see cref="IVideoSinkD3D11GlBorrowSetup"/>, forwards the active
-    /// <paramref name="source"/> so Win32 NV12 GL sinks can resolve libav's <c>ID3D11Device</c> before <see cref="IVideoSink.Configure"/>.
+    /// When <paramref name="output"/> supports <see cref="IVideoOutputD3D11GlBorrowSetup"/>, forwards the active
+    /// <paramref name="source"/> so Win32 NV12 GL outputs can resolve libav's <c>ID3D11Device</c> before <see cref="IVideoOutput.Configure"/>.
     /// </summary>
-    private static void ApplyD3D11GlBorrowFromVideoSourceIfSupported(IVideoSource source, IVideoSink sink)
+    private static void ApplyD3D11GlBorrowFromVideoSourceIfSupported(IVideoSource source, IVideoOutput output)
     {
-        if (sink is not IVideoSinkD3D11GlBorrowSetup borrowSink)
+        if (output is not IVideoOutputD3D11GlBorrowSetup borrowSink)
             return;
         if (source is IHardwareD3D11GlInteropSource)
             borrowSink.SetBorrowVideoSourceForWin32Nv12Gl(source);

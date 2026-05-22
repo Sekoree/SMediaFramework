@@ -32,7 +32,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     private NDIOutputDefinition _definition;
     private readonly object _gate = new();
     private NDIOutput? _output;
-    private NDIAudioSink? _audio;
+    private NDIAudioOutput? _audio;
     private Timer? _videoTimer;
     private Timer? _audioTimer;
     private float[]? _silenceScratch;
@@ -93,7 +93,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
             if (HasVideoStream(mode))
             {
-                output.VideoSink.Configure(CarrierVideoFormat);
+                output.VideoOutput.Configure(CarrierVideoFormat);
                 StartVideoTimerLocked();
             }
 
@@ -164,7 +164,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 _videoAcquired = true;
                 _videoTimer?.Dispose();
                 _videoTimer = null;
-                try { _output.VideoSink.ResetPresentationTimecodeAnchor(); }
+                try { _output.VideoOutput.ResetPresentationTimecodeAnchor(); }
                 catch { /* best effort */ }
             }
 
@@ -212,10 +212,10 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                     // carrier — saves an unnecessary format flip (which receivers can see as a glitch).
                     try
                     {
-                        if (!CurrentSinkFormatMatchesCarrier(_output.VideoSink))
+                        if (!CurrentOutputFormatMatchesCarrier(_output.VideoOutput))
                         {
-                            _output.VideoSink.Configure(CarrierVideoFormat);
-                            _output.VideoSink.ResetPresentationTimecodeAnchor();
+                            _output.VideoOutput.Configure(CarrierVideoFormat);
+                            _output.VideoOutput.ResetPresentationTimecodeAnchor();
                         }
                     }
                     catch (Exception ex)
@@ -265,11 +265,11 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         _audioTimer = new Timer(OnAudioTick, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(periodMs));
     }
 
-    private static bool CurrentSinkFormatMatchesCarrier(NDIVideoSender sink)
+    private static bool CurrentOutputFormatMatchesCarrier(NDIVideoSender output)
     {
         try
         {
-            var f = sink.Format;
+            var f = output.Format;
             var c = CarrierVideoFormat;
             return f.Width == c.Width && f.Height == c.Height && f.PixelFormat == c.PixelFormat;
         }
@@ -301,7 +301,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 var frame = _logoTemplate is { } tpl
                     ? CloneLogoFrame(tpl, pt)
                     : PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat, pt);
-                _output.VideoSink.Submit(frame);
+                _output.VideoOutput.Submit(frame);
                 var dur = Environment.TickCount64 - tickStart;
                 // ~33ms is one frame period. NDI SDK's clockVideo:true can pace the send internally,
                 // so a slow tick here just means the SDK was throttling — only worth reading at Trace.
@@ -416,7 +416,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
             VideoFrame? logoToCarryOver;
             lock (_gate)
             {
-                // Tear down the old carrier (timers + NDIOutput + audio sink) while the gate is held so
+                // Tear down the old carrier (timers + NDIOutput + audio output) while the gate is held so
                 // no tick fires against the dying sender. Preserve any logo template so the new carrier
                 // resumes the same idle slate after restart.
                 _videoTimer?.Dispose();

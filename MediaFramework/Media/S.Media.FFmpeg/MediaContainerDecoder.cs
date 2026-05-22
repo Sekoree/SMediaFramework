@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Audio;
 using S.Media.FFmpeg.Video;
@@ -68,12 +69,6 @@ public sealed class MediaContainerDecoder : IDisposable
     /// <see cref="VideoDecoderOpenOptions.Win32Nv12SharedHandleOnlyExport"/> and <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c>.
     /// </summary>
     public bool Win32Nv12SharedHandleOnlyActive => _shared.Win32Nv12SharedHandleOnlyActive;
-
-    /// <summary>Reserved for API stability; always <c>null</c> (no dual <c>AVFormatContext</c> path).</summary>
-    public AudioFileDecoder? LegacyAudio => null;
-
-    /// <summary>Reserved for API stability; always <c>null</c>.</summary>
-    public VideoFileDecoder? LegacyVideo => null;
 
     public static MediaContainerDecoder Open(string path, VideoDecoderOpenOptions? videoOptions = null) =>
         OpenInput(path, videoOptions, validateLocalFile: true, ownedTempPath: null);
@@ -195,15 +190,10 @@ public sealed class MediaContainerDecoder : IDisposable
 
     private static void TryDeleteTempFile(string path)
     {
-        try
+        MediaDiagnostics.SwallowDisposeErrors(() =>
         {
             if (File.Exists(path))
                 File.Delete(path);
-        }
-#if DEBUG
-        catch (Exception ex) { S.Media.Core.Diagnostics.MediaDiagnostics.LogError(ex, "MediaContainerDecoder: temp stream delete"); }
-#else
-        catch { /* ignored */ }
-#endif
+        }, "MediaContainerDecoder: temp stream delete");
     }
 }

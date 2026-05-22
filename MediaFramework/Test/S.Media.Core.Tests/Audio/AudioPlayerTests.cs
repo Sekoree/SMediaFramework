@@ -10,31 +10,31 @@ public class AudioPlayerTests
     private static readonly AudioFormat Stereo = new(SampleRate, 2);
 
     [Fact]
-    public void AddOutput_AutoWiresFirstClockedPlaybackSink_AsPrimary()
+    public void AddOutput_AutoWiresFirstClockedPlaybackOutput_AsPrimary()
     {
         using var player = new AudioPlayer(SampleRate);
-        var primary = new ClockedPlaybackSink(Stereo);
+        var primary = new ClockedPlaybackOutput(Stereo);
 
         var id = player.AddOutput(primary, "speakers");
 
-        Assert.Equal("speakers", player.PrimarySinkId);
+        Assert.Equal("speakers", player.PrimaryOutputId);
         Assert.Same(primary, player.Clock.Master);
     }
 
     [Fact]
-    public void AddOutput_SinkPumpCapacity_IsVisibleInRouterStats()
+    public void AddOutput_OutputPumpCapacity_IsVisibleInRouterStats()
     {
         using var player = new AudioPlayer(SampleRate, chunkSamples: 480);
-        var id = player.AddOutput(new PlainSink(Stereo), "x", sinkPumpCapacityChunks: 40);
+        var id = player.AddOutput(new PlainOutput(Stereo), "x", outputPumpCapacityChunks: 40);
         Assert.Equal(40, player.Router.GetPumpStats(id).PumpCapacityChunks);
     }
 
     [Fact]
-    public void AddOutput_NonClockedSink_NotPrimary()
+    public void AddOutput_NonClockedOutput_NotPrimary()
     {
         using var player = new AudioPlayer(SampleRate);
-        player.AddOutput(new PlainSink(Stereo), "out");
-        Assert.Null(player.PrimarySinkId);
+        player.AddOutput(new PlainOutput(Stereo), "out");
+        Assert.Null(player.PrimaryOutputId);
         Assert.Null(player.Clock.Master);
     }
 
@@ -42,17 +42,17 @@ public class AudioPlayerTests
     public void AutoWirePrimary_False_DoesNotWire()
     {
         using var player = new AudioPlayer(SampleRate) { AutoWirePrimary = false };
-        player.AddOutput(new ClockedPlaybackSink(Stereo), "speakers");
-        Assert.Null(player.PrimarySinkId);
+        player.AddOutput(new ClockedPlaybackOutput(Stereo), "speakers");
+        Assert.Null(player.PrimaryOutputId);
         Assert.Null(player.Clock.Master);
     }
 
     [Fact]
-    public void Connect_WithoutMap_UsesIdentitySizedToSink()
+    public void Connect_WithoutMap_UsesIdentitySizedToOutput()
     {
         using var player = new AudioPlayer(SampleRate);
         player.AddOwnedSource(new ConstantSource(Stereo, 1f), "src");
-        player.AddOutput(new PlainSink(Stereo), "out");
+        player.AddOutput(new PlainOutput(Stereo), "out");
 
         player.Connect("src", "out");
         // Identity stereo created and registered.
@@ -65,7 +65,7 @@ public class AudioPlayerTests
     {
         using var player = new AudioPlayer(SampleRate, chunkSamples: 64);
         player.AddOwnedSource(new ConstantSource(Stereo, 1f), "src");
-        player.AddOutput(new PlainSink(Stereo), "out");
+        player.AddOutput(new PlainOutput(Stereo), "out");
         player.Connect("src", "out");
 
         player.Play();
@@ -81,7 +81,7 @@ public class AudioPlayerTests
     {
         using var player = new AudioPlayer(SampleRate, chunkSamples: 64);
         player.AddOwnedSource(new ConstantSource(Stereo, 1f), "src");
-        player.AddOutput(new PlainSink(Stereo), "out");
+        player.AddOutput(new PlainOutput(Stereo), "out");
         player.Connect("src", "out");
 
         player.Play();
@@ -101,7 +101,7 @@ public class AudioPlayerTests
         using var player = new AudioPlayer(SampleRate);
         var src = new SeekableSource(Stereo);
         player.AddOwnedSource(src, "src");
-        player.AddOutput(new PlainSink(Stereo), "out");
+        player.AddOutput(new PlainOutput(Stereo), "out");
         player.Connect("src", "out");
 
         player.Play();
@@ -115,29 +115,29 @@ public class AudioPlayerTests
     }
 
     [Fact]
-    public void RemoveOutput_AfterPrimaryRemoved_SecondClockedSinkBecomesPrimary()
+    public void RemoveOutput_AfterPrimaryRemoved_SecondClockedOutputBecomesPrimary()
     {
         using var player = new AudioPlayer(SampleRate);
-        var first = new ClockedPlaybackSink(Stereo);
-        var second = new ClockedPlaybackSink(Stereo);
+        var first = new ClockedPlaybackOutput(Stereo);
+        var second = new ClockedPlaybackOutput(Stereo);
         player.AddOutput(first, "a");
         player.AddOutput(second, "b");
 
-        Assert.Equal("a", player.PrimarySinkId);
+        Assert.Equal("a", player.PrimaryOutputId);
         Assert.True(player.RemoveOutput("a"));
-        Assert.Equal("b", player.PrimarySinkId);
+        Assert.Equal("b", player.PrimaryOutputId);
         Assert.Same(second, player.Clock.Master);
     }
 
     [Fact]
-    public void RemoveOutput_PrimarySink_ClearsMasterAndPrimaryId()
+    public void RemoveOutput_PrimaryOutput_ClearsMasterAndPrimaryId()
     {
         using var player = new AudioPlayer(SampleRate);
-        var primary = new ClockedPlaybackSink(Stereo);
+        var primary = new ClockedPlaybackOutput(Stereo);
         player.AddOutput(primary, "speakers");
 
         Assert.True(player.RemoveOutput("speakers"));
-        Assert.Null(player.PrimarySinkId);
+        Assert.Null(player.PrimaryOutputId);
         Assert.Null(player.Clock.Master);
     }
 
@@ -153,25 +153,25 @@ public class AudioPlayerTests
     }
 
     [Fact]
-    public void Dispose_DoesNotDisposeSinks()
+    public void Dispose_DoesNotDisposeOutputs()
     {
-        var sink = new DisposableTrackingSink(Stereo);
+        var output = new DisposableTrackingOutput(Stereo);
         using (var player = new AudioPlayer(SampleRate))
         {
-            player.AddOutput(sink, "out");
+            player.AddOutput(output, "out");
         }
-        Assert.False(sink.Disposed);
+        Assert.False(output.Disposed);
     }
 
     // --- helpers ----------------------------------------------------------
 
-    private sealed class PlainSink(AudioFormat fmt) : IAudioSink
+    private sealed class PlainOutput(AudioFormat fmt) : IAudioOutput
     {
         public AudioFormat Format { get; } = fmt;
         public void Submit(ReadOnlySpan<float> packedSamples) { }
     }
 
-    private sealed class ClockedPlaybackSink(AudioFormat fmt) : IAudioSink, IClockedSink, IPlaybackClock
+    private sealed class ClockedPlaybackOutput(AudioFormat fmt) : IAudioOutput, IClockedOutput, IPlaybackClock
     {
         public AudioFormat Format { get; } = fmt;
         public TimeSpan ElapsedSinceStart { get; set; } = TimeSpan.Zero;
@@ -215,7 +215,7 @@ public class AudioPlayerTests
         public void Dispose() => Disposed = true;
     }
 
-    private sealed class DisposableTrackingSink(AudioFormat fmt) : IAudioSink, IDisposable
+    private sealed class DisposableTrackingOutput(AudioFormat fmt) : IAudioOutput, IDisposable
     {
         public AudioFormat Format { get; } = fmt;
         public bool Disposed { get; private set; }

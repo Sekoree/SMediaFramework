@@ -18,7 +18,7 @@ namespace S.Media.Core.Clock;
 /// </para>
 /// <para>
 /// This API selects which <see cref="IPlaybackClock"/> drives <see cref="MediaClock"/>; it does not implement
-/// graph-wide coordinated master PPM or synchronized multi-sink drop/repeat — see <see cref="MediaClock"/> and
+/// graph-wide coordinated master PPM or synchronized multi-output drop/repeat — see <see cref="MediaClock"/> and
 /// <see cref="S.Media.Core.Audio.AudioRouter"/>.
 /// </para>
 /// </remarks>

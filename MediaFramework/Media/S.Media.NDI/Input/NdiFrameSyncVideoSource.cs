@@ -42,7 +42,7 @@ public sealed class NdiFrameSyncVideoSource : IVideoSource, IDisposable
             throw new InvalidOperationException("Format is not known until the first frame arrives.");
         if (format != _format.PixelFormat)
             throw new InvalidOperationException(
-                $"NDI frame-sync delivers {_format.PixelFormat} only; sink requested {format}.");
+                $"NDI frame-sync delivers {_format.PixelFormat} only; output requested {format}.");
     }
 
     public bool TryReadNextFrame(out VideoFrame frame)

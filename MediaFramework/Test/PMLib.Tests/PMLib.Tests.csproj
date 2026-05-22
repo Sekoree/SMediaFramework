@@ -15,7 +15,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\..\MIDI\PMLib\PMLib.csproj" />
+        <ProjectReference Include="..\..\Extras\MIDI\PMLib\PMLib.csproj" />
     </ItemGroup>
 
 </Project>

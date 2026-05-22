@@ -110,7 +110,7 @@ public sealed class ImageFileSource : IVideoSource, IDisposable
     {
         if (format != _format.PixelFormat)
             throw new InvalidOperationException(
-                $"ImageFileSource only delivers {_format.PixelFormat}; sink requested {format}. " +
+                $"ImageFileSource only delivers {_format.PixelFormat}; output requested {format}. " +
                 "Re-decode via a converter or use a different SkiaSharp pixel target.");
     }
 

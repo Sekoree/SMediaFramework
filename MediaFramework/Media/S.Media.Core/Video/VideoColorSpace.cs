@@ -2,7 +2,7 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// YCbCr → RGB color-space hint attached to decoded frames (<see cref="VideoFrame.ColorSpace"/>).
-/// Lets sinks pick the right conversion matrix (BT.709 vs BT.601 vs BT.2020) without each renderer
+/// Lets outputs pick the right conversion matrix (BT.709 vs BT.601 vs BT.2020) without each renderer
 /// re-implementing FFmpeg metadata mapping.
 /// </summary>
 /// <remarks>

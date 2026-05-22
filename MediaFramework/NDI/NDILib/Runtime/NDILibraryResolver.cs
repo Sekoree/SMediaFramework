@@ -75,12 +75,8 @@ public static class NDILibraryResolver
     }
 
     private static string[] GetCandidates()
-    {
-        if (OperatingSystem.IsWindows())
-            return NDILibraryNames.WindowsCandidates;
-        if (OperatingSystem.IsMacOS())
-            return NDILibraryNames.MacCandidates;
-        return NDILibraryNames.LinuxCandidates;
-    }
+        => OperatingSystem.IsWindows()
+            ? NDILibraryNames.WindowsCandidates
+            : NDILibraryNames.LinuxCandidates;
 }
 

@@ -64,12 +64,7 @@ public sealed class MediaContainerDecoderSoakTests : IDisposable
     {
         if (_mediaPath is not null)
         {
-            try { File.Delete(_mediaPath); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderSoakTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(_mediaPath), $"{nameof(MediaContainerDecoderSoakTests)}: temp media delete");
         }
     }
 

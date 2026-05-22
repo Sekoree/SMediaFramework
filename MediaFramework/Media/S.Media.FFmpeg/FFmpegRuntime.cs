@@ -55,7 +55,7 @@ public static class FFmpegRuntime
 
             if (rootPath is not null)
                 ffmpeg.RootPath = rootPath;
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            else if (OperatingSystem.IsLinux())
                 ffmpeg.RootPath = "";
 
             DynamicallyLoadedBindings.Initialize();

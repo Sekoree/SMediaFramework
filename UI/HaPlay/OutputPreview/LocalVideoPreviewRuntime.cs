@@ -17,7 +17,7 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
 
     /// <summary>
     /// Raised after <see cref="ReconfigureAsync"/> applies new placement / sizing to the window. Active
-    /// playback sessions don't need to re-acquire (the underlying sink reference stays valid — only its
+    /// playback sessions don't need to re-acquire (the underlying output reference stays valid — only its
     /// window framing changes), but Phase B may use this hook to refresh UI bindings.
     /// </summary>
     event EventHandler? Reconfigured;
@@ -27,15 +27,15 @@ internal interface ILocalVideoPreviewRuntime : IDisposable
     void SetFullscreen(bool fullscreen);
 
     /// <summary>
-    /// Hands the underlying <see cref="IVideoSink"/> to a playback session so it can route decoded frames
-    /// to the existing window (no new window). The session will <see cref="IVideoSink.Configure"/> the sink
+    /// Hands the underlying <see cref="IVideoOutput"/> to a playback session so it can route decoded frames
+    /// to the existing window (no new window). The session will <see cref="IVideoOutput.Configure"/> the output
     /// for the media's negotiated format. Returns <c>null</c> when the preview isn't ready or another
     /// acquirer holds it. Pair every successful acquire with <see cref="ReleaseFromPlayback"/>.
     /// </summary>
-    IVideoSink? AcquireForPlayback();
+    IVideoOutput? AcquireForPlayback();
 
     /// <summary>
-    /// Returns the sink to "idle preview" mode after a playback session ends — reconfigures it to a
+    /// Returns the output to "idle preview" mode after a playback session ends — reconfigures it to a
     /// small black frame so the window keeps showing something even with no media loaded.
     /// </summary>
     void ReleaseFromPlayback();
@@ -120,7 +120,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
     private LocalVideoOutputDefinition _definition;
     private readonly OutputLineViewModel _line;
     private readonly OutputManagementViewModel _owner;
-    private SDL3GLVideoSink? _sink;
+    private SDL3GLVideoOutput? _sink;
     private int _closeHandlerPosted;
     private int _playbackHolders;
 
@@ -144,22 +144,22 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         {
             cancellationToken.ThrowIfCancellationRequested();
             var (iw, ih) = LocalVideoWindowPlacement.InitialWindowPixelSize(_definition);
-            var sink = new SDL3GLVideoSink(_definition.DisplayName, iw, ih)
+            var output = new SDL3GLVideoOutput(_definition.DisplayName, iw, ih)
             {
                 // Local previews should preserve the source's aspect ratio (letterbox / pillarbox)
                 // instead of stretching to fill the window.
                 ViewportFit = S.Media.OpenGL.VideoViewportFit.Contain,
             };
-            sink.CloseRequested += OnSdlCloseRequested;
+            output.CloseRequested += OnSdlCloseRequested;
             var format = PreviewVideoFrames.PreviewFormat(iw, ih);
-            sink.Configure(format);
-            sink.ApplyWindowPlacement(
+            output.Configure(format);
+            output.ApplyWindowPlacement(
                 _definition.ScreenIndex,
                 _definition.SurfaceMode == VideoSurfaceMode.FullScreen,
                 _definition.WindowWidth,
                 _definition.WindowHeight);
-            sink.Submit(PreviewVideoFrames.CreateBlackBgra(format));
-            Interlocked.Exchange(ref _sink, sink);
+            output.Submit(PreviewVideoFrames.CreateBlackBgra(format));
+            Interlocked.Exchange(ref _sink, output);
         }, cancellationToken).ConfigureAwait(false);
     }
 
@@ -202,10 +202,10 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         return Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var sink = _sink;
-            if (sink is null)
+            var output = _sink;
+            if (output is null)
                 return;
-            sink.ApplyWindowPlacement(
+            output.ApplyWindowPlacement(
                 newDefinition.ScreenIndex,
                 newDefinition.SurfaceMode == VideoSurfaceMode.FullScreen,
                 newDefinition.WindowWidth,
@@ -214,33 +214,33 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         }, cancellationToken);
     }
 
-    public IVideoSink? AcquireForPlayback()
+    public IVideoOutput? AcquireForPlayback()
     {
-        var sink = _sink;
-        if (sink is null)
+        var output = _sink;
+        if (output is null)
             return null;
         if (Interlocked.CompareExchange(ref _playbackHolders, 1, 0) != 0)
             return null;
-        return sink;
+        return output;
     }
 
     public void ReleaseFromPlayback()
     {
         // Reset to the idle preview frame so the window keeps showing something between sessions —
-        // the SDL3GLVideoSink retains its existing window/GL context across the reconfigure.
-        var sink = _sink;
-        if (sink is not null)
+        // the SDL3GLVideoOutput retains its existing window/GL context across the reconfigure.
+        var output = _sink;
+        if (output is not null)
         {
             try
             {
                 var (iw, ih) = LocalVideoWindowPlacement.InitialWindowPixelSize(_definition);
                 var fmt = PreviewVideoFrames.PreviewFormat(iw, ih);
-                sink.Configure(fmt);
-                sink.Submit(PreviewVideoFrames.CreateBlackBgra(fmt));
+                output.Configure(fmt);
+                output.Submit(PreviewVideoFrames.CreateBlackBgra(fmt));
             }
             catch
             {
-                /* best effort — the sink may have been closed by the user */
+                /* best effort — the output may have been closed by the user */
             }
         }
 
@@ -363,7 +363,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
         Reconfigured?.Invoke(this, EventArgs.Empty);
     }
 
-    public IVideoSink? AcquireForPlayback()
+    public IVideoOutput? AcquireForPlayback()
     {
         var win = _window;
         if (win is null)

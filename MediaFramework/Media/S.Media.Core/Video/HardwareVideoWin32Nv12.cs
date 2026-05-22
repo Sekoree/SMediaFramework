@@ -7,18 +7,20 @@ namespace S.Media.Core.Video;
 /// hosts can import NV12 without constructing a full <see cref="VideoFrame"/>.
 /// </summary>
 /// <remarks>
-/// <see cref="HardwareVideoMemoryKind.Win32SharedHandle"/> descriptors produced by
-/// <see cref="WindowsNv12SharedHandleInterop"/> carry DXGI NT handles only (<see cref="HardwareVideoSurfaceDescriptor.D3D11DeviceComPtr"/>
-/// must be zero). That clears libav COM from the portable descriptor and from <see cref="VideoWin32Nv12Backing"/>
-/// for the handle-only decode export path; the GL stack still binds a consumer <c>ID3D11Device</c> (negotiated borrow,
-/// SDL interop host, or lazy creation from a decoded COM-backed frame) to call <c>OpenSharedResource</c> on those handles.
-/// Full “zero COM on the descriptor” including removing that consumer-device dependency is **PO-01** (<c>Doc/Todo.md</c>).
+/// <see cref="HardwareVideoMemoryKind.Win32SharedHandle"/> descriptors carry DXGI NT handles only
+/// (<see cref="HardwareVideoSurfaceDescriptor.D3D11DeviceComPtr"/> must be zero). That clears libav COM
+/// from the portable descriptor and from <see cref="VideoWin32Nv12Backing"/> for the handle-only decode export path;
+/// the GL stack still binds a consumer <c>ID3D11Device</c> (negotiated borrow, SDL interop host, or lazy
+/// creation from a decoded COM-backed frame) to call <c>OpenSharedResource</c> on those handles. Full
+/// “zero COM on the descriptor” including removing that consumer-device dependency is **PO-01**
+/// (<c>Doc/Todo.md</c>).
 /// </remarks>
 public static class HardwareVideoWin32Nv12
 {
     /// <summary>
-    /// Supports Windows NV12 descriptors produced by <see cref="WindowsNv12SharedHandleInterop"/> or
-    /// <see cref="WindowsNv12D3D11TextureInterop"/> (COM-only: zero NT handles when the decode device matches the GL D3D11 device).
+    /// Supports both Windows NV12 descriptor flavours: <see cref="HardwareVideoMemoryKind.Win32SharedHandle"/>
+    /// (DXGI NT handles, zero device-COM) and <see cref="HardwareVideoMemoryKind.Win32D3D11Nv12Texture"/>
+    /// (single COM texture + matching device when the decode device equals the GL D3D11 device).
     /// </summary>
     public static bool TryCreateWin32Nv12Backing(
         in HardwareVideoSurfaceDescriptor descriptor,

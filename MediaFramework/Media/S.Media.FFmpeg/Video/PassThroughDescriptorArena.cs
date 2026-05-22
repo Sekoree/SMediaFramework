@@ -147,21 +147,7 @@ internal sealed class PassThroughDescriptorArena : IDisposable
         {
             if (profile)
             {
-                try
-                {
-                    PassThroughArenaProfiling.RecordClear(Stopwatch.GetTimestamp() - t0);
-                }
-#if DEBUG
-                catch (Exception ex)
-                {
-                    MediaDiagnostics.LogError(ex, "PassThroughDescriptorArena.Dispose: RecordClear");
-                }
-#else
-                catch
-                {
-                    // best effort — profiling must not block arena shutdown bookkeeping
-                }
-#endif
+                MediaDiagnostics.SwallowDisposeErrors(() => PassThroughArenaProfiling.RecordClear(Stopwatch.GetTimestamp() - t0), "PassThroughDescriptorArena.Dispose: RecordClear");
             }
         }
     }

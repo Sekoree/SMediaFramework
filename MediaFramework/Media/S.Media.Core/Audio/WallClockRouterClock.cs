@@ -5,13 +5,13 @@ namespace S.Media.Core.Audio;
 /// <summary>
 /// Free-running deadline-based pacing: produce a chunk every
 /// <c>chunkSamples / sampleRate</c> of wall time. Default <see cref="AudioRouter"/>
-/// clock — appropriate when no sink owns an authoritative consumption clock.
+/// clock — appropriate when no output owns an authoritative consumption clock.
 /// </summary>
 /// <remarks>
 /// Drift vs. real consumers (PortAudio audio thread, NDI sender's clocking) is
 /// the cost — over long runs ring buffers fill or empty depending on whose
 /// quartz wins. For sample-accurate pacing, slave the router to a
-/// <see cref="IClockedSink"/> via <see cref="SinkSlavedRouterClock"/>.
+/// <see cref="IClockedOutput"/> via <see cref="OutputSlavedRouterClock"/>.
 /// </remarks>
 public sealed class WallClockRouterClock : IRouterClock
 {

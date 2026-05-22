@@ -57,11 +57,7 @@ public static class PortAudioLibraryResolver
     }
 
     private static string[] GetCandidates()
-    {
-        if (OperatingSystem.IsWindows())
-            return PortAudioLibraryNames.WindowsCandidates;
-        if (OperatingSystem.IsMacOS())
-            return PortAudioLibraryNames.MacCandidates;
-        return PortAudioLibraryNames.LinuxCandidates;
-    }
+        => OperatingSystem.IsWindows()
+            ? PortAudioLibraryNames.WindowsCandidates
+            : PortAudioLibraryNames.LinuxCandidates;
 }

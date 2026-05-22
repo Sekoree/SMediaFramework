@@ -10,8 +10,8 @@ namespace HaPlay.Playback;
 internal sealed class OutputPresetVideoSource : IVideoSource, IDisposable
 {
     private readonly IVideoSource _inner;
-    private readonly CompositorVideoSink _programSink;
-    private readonly CompositorVideoSink.Slot _slot;
+    private readonly VideoCompositorSource _programSink;
+    private readonly VideoCompositorSource.Slot _slot;
     private readonly VideoFormat _target;
     private readonly bool _disposeInner;
     private VideoCpuFrameConverter? _toBgra;
@@ -26,7 +26,7 @@ internal sealed class OutputPresetVideoSource : IVideoSource, IDisposable
         _disposeInner = disposeInner;
         _target = target;
         var compositor = new CpuVideoCompositor(target);
-        _programSink = new CompositorVideoSink(target, compositor, disposeCompositorOnDispose: true);
+        _programSink = new VideoCompositorSource(target, compositor, disposeCompositorOnDispose: true);
         _slot = _programSink.AddSlot();
         _slot.Transform = OutputPresetFormats.LetterboxTransform(inner.Format, target);
         _lastLayerWidth = inner.Format.Width;
@@ -67,9 +67,9 @@ internal sealed class OutputPresetVideoSource : IVideoSource, IDisposable
             _slot.Transform = OutputPresetFormats.LetterboxTransform(layer.Format, _target);
         }
 
-        _slot.Sink.Configure(layer.Format);
+        _slot.Output.Configure(layer.Format);
         // Slot ownership contract: Submit transfers frame ownership to the slot (disposed by compositor).
-        _slot.Sink.Submit(layer);
+        _slot.Output.Submit(layer);
         return _programSink.TryReadNextFrame(out frame);
     }
 

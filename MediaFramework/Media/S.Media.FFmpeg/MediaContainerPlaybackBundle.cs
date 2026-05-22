@@ -45,14 +45,14 @@ public enum MediaContainerPlaybackBundleOwnedParts
 /// <para>
 /// <see cref="MediaContainerSession"/> on its own only groups references — callers keep separate <c>using</c>
 /// scopes. This type is for hosts that want a single <c>using</c> (or one explicit <see cref="Dispose"/>) while still
-/// injecting GL, PortAudio, NDI, or test sinks into <see cref="VideoPlayer"/> and optional PortAudio wiring via
+/// injecting GL, PortAudio, NDI, or test outputs into <see cref="VideoPlayer"/> and optional PortAudio wiring via
 /// <c>S.Media.PortAudio.PortAudioPlaybackHost.TryCreatePortAudioMain</c>.
 /// </para>
 /// <para>
 /// Pre-baked ownership profiles: <see cref="SmokeToolDefaultOwnership"/> matches the <c>Tools/VideoPlaybackSmoke</c>
 /// wiring; <see cref="DefaultBundledHostOwnership"/> matches <see cref="S.Media.Playback.MediaPlayer"/>. For a
 /// host-platform-free single-file playback path use
-/// <see cref="S.Media.Playback.MediaPlayer.TryOpen(string,S.Media.Playback.MediaPlayerOpenOptions,S.Media.Core.Video.IVideoSink?,bool,out S.Media.Playback.MediaPlayer?,out string?)"/>.
+/// <see cref="S.Media.Playback.MediaPlayer.TryOpen(string,S.Media.Playback.MediaPlayerOpenOptions,S.Media.Core.Video.IVideoOutput?,bool,out S.Media.Playback.MediaPlayer?,out string?)"/>.
 /// Worked example (GL + NDI + PortAudio fan-out, ownership flags, `finally`-order) in
 /// <c>Doc/MediaFramework-Architecture.md</c>.
 /// </para>
@@ -169,20 +169,6 @@ public sealed class MediaContainerPlaybackBundle : IDisposable
 
     private static void TryDisposeOwned(Action dispose, string debugLabel)
     {
-        try
-        {
-            dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, debugLabel);
-        }
-#else
-        catch
-        {
-            // best effort — continue bundle teardown
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(dispose, debugLabel);
     }
 }

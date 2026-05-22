@@ -117,21 +117,11 @@ public sealed unsafe class AudioResampler : IDisposable
         if (_disposed) return;
         _disposed = true;
         if (_swr == null) return;
-        try
+        MediaDiagnostics.SwallowDisposeErrors(() =>
         {
             var s = _swr;
             swr_free(&s);
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "AudioResampler.Dispose");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        }, "AudioResampler.Dispose");
         _swr = null;
     }
 }

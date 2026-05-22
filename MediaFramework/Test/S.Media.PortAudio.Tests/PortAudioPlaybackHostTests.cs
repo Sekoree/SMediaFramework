@@ -13,7 +13,7 @@ public sealed class PortAudioPlaybackHostTests
     public PortAudioPlaybackHostTests() => FFmpegRuntime.EnsureInitialized();
 
     [Fact]
-    public void TryCreatePortAudioMain_WiresSourceAndSink()
+    public void TryCreatePortAudioMain_WiresSourceAndOutput()
     {
         var path = Path.Combine(Path.GetTempPath(), $"mcp_host_{Guid.NewGuid():N}.mp4");
         if (!TryGenerateAudioVideo(path))
@@ -25,17 +25,12 @@ public sealed class PortAudioPlaybackHostTests
             Assert.NotNull(host);
             Assert.Same(dec, host.Container);
             Assert.False(string.IsNullOrEmpty(host.SourceId));
-            Assert.False(string.IsNullOrEmpty(host.PrimarySinkId));
+            Assert.False(string.IsNullOrEmpty(host.PrimaryOutputId));
             Assert.Same(host.Player.Clock, host.Player.Timeline);
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(PortAudioPlaybackHostTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(PortAudioPlaybackHostTests)}: temp media delete");
         }
     }
 
@@ -62,12 +57,7 @@ public sealed class PortAudioPlaybackHostTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(PortAudioPlaybackHostTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(PortAudioPlaybackHostTests)}: temp media delete");
         }
     }
 

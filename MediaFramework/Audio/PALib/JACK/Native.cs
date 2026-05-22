@@ -7,7 +7,7 @@ namespace PALib.JACK;
 internal static partial class Native
 {
     private const string LibraryName = PortAudioLibraryNames.Default;
-    private static bool IsSupportedPlatform => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
+    private static bool IsSupportedPlatform => OperatingSystem.IsLinux();
 
     [LibraryImport(LibraryName, EntryPoint = "PaJack_SetClientName", StringMarshalling = StringMarshalling.Utf8)]
     private static partial PaError PaJack_SetClientName_Import(string name);

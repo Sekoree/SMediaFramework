@@ -599,7 +599,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Configured sink channel count for one output line. Audio-capable outputs return at least 1.
+    /// Configured output channel count for one output line. Audio-capable outputs return at least 1.
     /// Video-only outputs return 0 so they drop out of matrix/route grids.
     /// </summary>
     private int OutputChannelCountOrZero(OutputLineViewModel line)
@@ -1672,7 +1672,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void OnOutputLineRemoving(object? sender, OutputLineViewModel line)
     {
         // Synchronous: the management VM is about to dispose the runtime. Drop our route now so the
-        // router doesn't keep submitting to a sink that's seconds away from disposal.
+        // router doesn't keep submitting to a output that's seconds away from disposal.
         var session = _session;
         if (session is null) return;
         try { session.TryRemoveOutput(line, out _); }
@@ -2475,7 +2475,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (snapshot is not null)
         {
             // Two-tier wall: 2s inner ct keeps Pause from hanging; 8s outer wall lets Dispose finish even on slow
-            // sinks. A previous 50s outer cap would freeze the UI for nearly a minute if a sink blocked.
+            // outputs. A previous 50s outer cap would freeze the UI for nearly a minute if a output blocked.
             await RunBoundedAsync(() =>
             {
                 try
@@ -2647,7 +2647,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 if (!string.IsNullOrWhiteSpace(FallbackImagePath))
                     created.ApplyFallbackImage(FallbackImagePath);
                 created.SetHoldFallback(HoldFallbackVideo);
-                // Size every binding's matrix to the source channel count and the configured sink-channel
+                // Size every binding's matrix to the source channel count and the configured output-channel
                 // count of that output line, then push matrices into the session so cell
                 // routes are installed before the first chunk runs. Live items (§6.5) use the negotiated
                 // live-source channel count surfaced via SourceAudioFormat.
@@ -2723,7 +2723,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void OnHoldPumpTick(object? state)
     {
-        // Drop-not-queue if a previous tick is still in flight (sink Submit can briefly block on NDI
+        // Drop-not-queue if a previous tick is still in flight (output Submit can briefly block on NDI
         // SDK lock). Better to skip a frame than to stack tick handlers.
         if (Interlocked.CompareExchange(ref _holdPumpReentry, 1, 0) != 0)
             return;
@@ -2734,7 +2734,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 return;
             var pt = session.Player.PlayClock.CurrentPosition;
             try { session.PumpHoldFrames(pt); }
-            catch { /* best effort — sink torn down mid-tick */ }
+            catch { /* best effort — output torn down mid-tick */ }
         }
         finally
         {

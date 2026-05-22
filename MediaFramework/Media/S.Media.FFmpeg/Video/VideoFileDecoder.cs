@@ -102,7 +102,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
     /// <summary>
     /// When Windows D3D11VA NV12 shared-handle decode is active, returns libav's <c>ID3D11Device</c> COM pointer
-    /// (same device as decoded textures). Pass to <c>SDL3GLVideoSink</c> so GL does not create a second device.
+    /// (same device as decoded textures). Pass to <c>SDL3GLVideoOutput</c> so GL does not create a second device.
     /// </summary>
     public bool TryGetHardwareD3D11DeviceForWin32Gl(out nint deviceComPtr)
     {
@@ -283,20 +283,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (_disposed) return;
         _disposed = true;
 
-        try
-        {
-            _primedAfterSeek?.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "VideoFileDecoder.Dispose: _primedAfterSeek");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _primedAfterSeek?.Dispose(), "VideoFileDecoder.Dispose: _primedAfterSeek");
         _primedAfterSeek = null;
 
         if (_packet != null)    { var p = _packet;     av_packet_free(&p);          _packet = null; }
@@ -310,36 +297,10 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             _codecCtx = null;
         }
 
-        try
-        {
-            _hwAccel?.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "VideoFileDecoder.Dispose: _hwAccel");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _hwAccel?.Dispose(), "VideoFileDecoder.Dispose: _hwAccel");
         _hwAccel = null;
 
-        try
-        {
-            _passThroughArena.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "VideoFileDecoder.Dispose: _passThroughArena");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(_passThroughArena.Dispose, "VideoFileDecoder.Dispose: _passThroughArena");
 
         if (_formatCtx != null) { var f = _formatCtx;  avformat_close_input(&f);    _formatCtx = null; }
     }
@@ -625,10 +586,10 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
                 return VideoFrame.CreateNv12Dmabuf(pts, format, nv12, meta);
             if (p016 != null)
                 throw new InvalidOperationException(
-                    "DRM PRIME frame is P016 (DRM_FORMAT_P016) but the decoder negotiated NV12 output. Re-open the source as 12-bit or select P016 for sinks.");
+                    "DRM PRIME frame is P016 (DRM_FORMAT_P016) but the decoder negotiated NV12 output. Re-open the source as 12-bit or select P016 for outputs.");
             if (p010 != null)
                 throw new InvalidOperationException(
-                    "DRM PRIME frame is P010 (DRM_FORMAT_P010) but the decoder negotiated NV12 output. Re-open the source as 10-bit or select P010 for sinks.");
+                    "DRM PRIME frame is P010 (DRM_FORMAT_P010) but the decoder negotiated NV12 output. Re-open the source as 10-bit or select P010 for outputs.");
             throw new InvalidOperationException(
                 "DRM PRIME frame could not be mapped to NV12 dma-bufs. Disable decoder option RetainDmabufForGl or try a CPU upload path.");
         }
@@ -1037,7 +998,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         _ => 0,
     };
 
-    /// <summary>Maps libav <see cref="AVColorTransferCharacteristic"/> to a Core hint consumed by HDR-aware sinks.</summary>
+    /// <summary>Maps libav <see cref="AVColorTransferCharacteristic"/> to a Core hint consumed by HDR-aware outputs.</summary>
     internal static VideoTransferHint MapTransferHint(AVColorTransferCharacteristic trc) => trc switch
     {
         AVColorTransferCharacteristic.AVCOL_TRC_SMPTE2084 => VideoTransferHint.FromPq,

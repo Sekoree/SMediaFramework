@@ -84,8 +84,8 @@ public sealed class MediaContainerPlaybackBundleTests
             try
             {
                 using var clock = new MediaClock();
-                var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
-                using var video = new VideoPlayer(dec.Video, sink, clock);
+                var output = new DropVideoOutput(dec.Video.NativePixelFormats.ToArray());
+                using var video = new VideoPlayer(dec.Video, output, clock);
                 var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerPlaybackBundle(
                     dec,
                     video,
@@ -119,8 +119,8 @@ public sealed class MediaContainerPlaybackBundleTests
             try
             {
                 using var clock = new MediaClock();
-                var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
-                using var video = new VideoPlayer(dec.Video, sink, clock);
+                var output = new DropVideoOutput(dec.Video.NativePixelFormats.ToArray());
+                using var video = new VideoPlayer(dec.Video, output, clock);
                 var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerPlaybackBundle(
                     dec,
                     video,
@@ -154,8 +154,8 @@ public sealed class MediaContainerPlaybackBundleTests
             try
             {
                 using var clock = new MediaClock();
-                var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
-                using var video = new VideoPlayer(dec.Video, sink, clock);
+                var output = new DropVideoOutput(dec.Video.NativePixelFormats.ToArray());
+                using var video = new VideoPlayer(dec.Video, output, clock);
                 var ex = Assert.Throws<ArgumentException>(() => _ = new MediaContainerPlaybackBundle(
                     dec,
                     video,
@@ -187,8 +187,8 @@ public sealed class MediaContainerPlaybackBundleTests
         {
             var dec = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
             var clock = new MediaClock();
-            var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
-            var video = new VideoPlayer(dec.Video, sink, clock);
+            var output = new DropVideoOutput(dec.Video.NativePixelFormats.ToArray());
+            var video = new VideoPlayer(dec.Video, output, clock);
             var mega = new MediaContainerPlaybackBundle(
                 dec,
                 video,
@@ -219,11 +219,11 @@ public sealed class MediaContainerPlaybackBundleTests
         {
             var dec = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
             var clock = new MediaClock();
-            var sink = new DropVideoSink(dec.Video.NativePixelFormats.ToArray());
+            var output = new DropVideoOutput(dec.Video.NativePixelFormats.ToArray());
             var router = new VideoRouter(null);
-            var outId = router.AddOutput(sink, "o", disposeSinkOnRouterDispose: true, synchronous: true);
+            var outId = router.AddOutput(output, "o", disposeOutputOnRouterDispose: true, synchronous: true);
             var vin = router.AddInput(outId);
-            var video = new VideoPlayer(dec.Video, vin.Sink, clock);
+            var video = new VideoPlayer(dec.Video, vin.Output, clock);
             using var mega = new MediaContainerPlaybackBundle(
                 dec,
                 video,
@@ -246,18 +246,7 @@ public sealed class MediaContainerPlaybackBundleTests
 
     private static void TryDelete(string path)
     {
-        try
-        {
-            File.Delete(path);
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerPlaybackBundleTests)}: temp media delete");
-        }
-#else
-        catch { /* ignored */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerPlaybackBundleTests)}: temp media delete");
     }
 
     private static bool TryGenerateAudioVideo(string path)
@@ -294,11 +283,11 @@ public sealed class MediaContainerPlaybackBundleTests
         }
     }
 
-    private sealed class DropVideoSink : IVideoSink
+    private sealed class DropVideoOutput : IVideoOutput
     {
         private readonly PixelFormat[] _accepted;
 
-        public DropVideoSink(PixelFormat[] accepted) => _accepted = accepted;
+        public DropVideoOutput(PixelFormat[] accepted) => _accepted = accepted;
 
         public VideoFormat Format { get; private set; }
 

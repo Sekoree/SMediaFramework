@@ -16,11 +16,11 @@ namespace S.Media.PortAudio;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Video routing (<see cref="S.Media.Core.Video.VideoRouter"/>), GL sinks, and NDI remain caller-owned; use
+/// Video routing (<see cref="S.Media.Core.Video.VideoRouter"/>), GL outputs, and NDI remain caller-owned; use
 /// <see cref="CreateContainerSession"/> with an <see cref="IAvPlaybackSession"/> built from the same
 /// <see cref="MediaContainerDecoder"/> and <see cref="AudioPlayer.Clock"/> graph. For optional single-<see cref="IDisposable.Dispose"/>
 /// of the decoder plus <see cref="VideoPlayer"/> / optional <see cref="VideoRouter"/> / freerun <see cref="MediaClock"/>
-/// when you inject sinks yourself, see <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/>.
+/// when you inject outputs yourself, see <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/>.
 /// </para>
 /// <para>
 /// When wiring the same <see cref="AudioPlayer"/> into <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/>, use
@@ -49,7 +49,7 @@ public sealed class PortAudioPlaybackHost : IDisposable
         Player = player;
         SourceId = sourceId;
         MainOutput = mainOutput;
-        PrimarySinkId = primarySinkId;
+        PrimaryOutputId = primarySinkId;
         _playerOwnership = playerOwnership;
     }
 
@@ -64,7 +64,7 @@ public sealed class PortAudioPlaybackHost : IDisposable
     public PortAudioOutput MainOutput { get; }
 
     /// <summary>Router id of <see cref="MainOutput"/> (for <see cref="AudioRouter.GetPumpStats"/>).</summary>
-    public string PrimarySinkId { get; }
+    public string PrimaryOutputId { get; }
 
     public AudioFormat AudioFormat => Container.Audio.Format;
 
@@ -179,10 +179,10 @@ public sealed class PortAudioPlaybackHost : IDisposable
     }
 
     /// <inheritdoc cref="AudioPlayerPortAudioExtensions.TryPrefillPrimaryPortAudio"/>
-    public void PrefillMainOutputDirectFromDecoder(TimeSpan timeout, IAudioSink? mirrorPackedFloats = null)
+    public void PrefillMainOutputDirectFromDecoder(TimeSpan timeout, IAudioOutput? mirrorPackedFloats = null)
     {
         if (!Player.TryPrefillPrimaryPortAudio(Container.Audio, timeout, mirrorPackedFloats))
-            throw new InvalidOperationException("Primary sink must be PortAudio for hardware prefill.");
+            throw new InvalidOperationException("Primary output must be PortAudio for hardware prefill.");
     }
 
     /// <summary>Opens the native PortAudio stream after <see cref="PrefillMainOutputDirectFromDecoder"/>.</summary>
@@ -202,20 +202,6 @@ public sealed class PortAudioPlaybackHost : IDisposable
 
     private static void TryDisposeOwned(Action dispose, string debugLabel)
     {
-        try
-        {
-            dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, debugLabel);
-        }
-#else
-        catch
-        {
-            // best effort — continue host teardown
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(dispose, debugLabel);
     }
 }

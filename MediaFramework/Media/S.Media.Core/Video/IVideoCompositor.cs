@@ -2,7 +2,7 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Combines N <see cref="CompositorLayer"/>s back-to-front into a single output <see cref="VideoFrame"/>.
-/// Used by <see cref="CompositorVideoSink"/> to back picture-in-picture, lower-thirds, text overlays,
+/// Used by <see cref="VideoCompositorSource"/> to back picture-in-picture, lower-thirds, text overlays,
 /// and transition effects.
 /// </summary>
 /// <remarks>
@@ -18,13 +18,13 @@ namespace S.Media.Core.Video;
 /// <para>
 /// <strong>Frame ownership:</strong> the returned <see cref="VideoFrame"/> is owned by the caller —
 /// it carries a <c>release</c> callback that returns any pooled buffers when the frame is disposed.
-/// Layer frames passed in remain owned by their submitter (typically a <see cref="CompositorVideoSink"/>
+/// Layer frames passed in remain owned by their submitter (typically a <see cref="VideoCompositorSource"/>
 /// slot) and are not disposed by the compositor.
 /// </para>
 /// <para>
 /// <strong>Format negotiation:</strong> all layer frames must use one of the pixel formats listed in
-/// <see cref="AcceptedLayerPixelFormats"/>. <see cref="CompositorVideoSink"/> exposes this list on each
-/// slot's <see cref="IVideoSink.AcceptedPixelFormats"/> so the upstream router can pick a compatible
+/// <see cref="AcceptedLayerPixelFormats"/>. <see cref="VideoCompositorSource"/> exposes this list on each
+/// slot's <see cref="IVideoOutput.AcceptedPixelFormats"/> so the upstream router can pick a compatible
 /// branch format automatically.
 /// </para>
 /// </remarks>

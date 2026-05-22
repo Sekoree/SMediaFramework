@@ -8,7 +8,7 @@ namespace S.Media.Core.Video;
 /// <paramref name="targetPixelFormat"/> via <see cref="VideoCpuFrameConverterRegistry"/>.
 /// </summary>
 /// <remarks>
-/// Used for live NDI (UYVY) into local SDL/Avalonia sinks that are most reliable on BGRA32.
+/// Used for live NDI (UYVY) into local SDL/Avalonia outputs that are most reliable on BGRA32.
 /// </remarks>
 public sealed class PixelFormatConvertingVideoSource : IVideoSource, IDisposable
 {

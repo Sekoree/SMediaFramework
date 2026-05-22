@@ -1,6 +1,6 @@
 namespace S.Media.Core.Video;
 
-/// <summary>Wall-clock pacing helpers for video sinks (NDI throttling, etc.).</summary>
+/// <summary>Wall-clock pacing helpers for video outputs (NDI throttling, etc.).</summary>
 public static class VideoFormatPacing
 {
     /// <summary>Wall throttle slightly below one frame period (e.g. NDI video pacing).</summary>

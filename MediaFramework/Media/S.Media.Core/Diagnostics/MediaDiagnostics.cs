@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace S.Media.Core.Diagnostics;
 
 /// <summary>
-/// Optional framework-wide logger plumbing for subscriber/sink failures, informational
+/// Optional framework-wide logger plumbing for subscriber/output failures, informational
 /// diagnostics, and verbose trace logs at the playback pipeline boundaries.
 /// </summary>
 /// <remarks>
@@ -125,5 +125,31 @@ public static class MediaDiagnostics
             log.LogError(exception, "{Context}", context);
         else
             Debug.WriteLine($"[Media] {context}: {exception}");
+    }
+
+    /// <summary>
+    /// Run <paramref name="dispose"/> and swallow any exception. In <c>DEBUG</c> builds the
+    /// exception is forwarded to <see cref="LogError(Exception, string)"/> with <paramref name="label"/>;
+    /// in release the action is best-effort silent. Used by every <c>Dispose</c>/teardown that
+    /// must tolerate sub-disposable failures without aborting the rest of the cleanup chain.
+    /// </summary>
+    public static void SwallowDisposeErrors(Action dispose, string label)
+    {
+        ArgumentNullException.ThrowIfNull(dispose);
+        try
+        {
+            dispose();
+        }
+#if DEBUG
+        catch (Exception ex)
+        {
+            LogError(ex, label);
+        }
+#else
+        catch
+        {
+            // best-effort shutdown
+        }
+#endif
     }
 }

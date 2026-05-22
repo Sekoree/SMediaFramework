@@ -47,7 +47,7 @@ public sealed class VideoDecoderOpenOptions
     /// When true together with <see cref="RetainD3D11SharedHandleForGl"/>, build <see cref="VideoWin32Nv12Backing"/>
     /// from DXGI NT shared handles only (omit non-owning libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers on the backing).
     /// GL import then uses <c>OpenSharedResource</c> on a host-owned D3D11 device (e.g. SDL <c>D3D11GlInteropDeviceHost</c> or
-    /// <see cref="IVideoSinkD3D11GlBorrowSetup"/>). Incompatible with lazy true zero-host that binds the uploader solely from the first frame's
+    /// <see cref="IVideoOutputD3D11GlBorrowSetup"/>). Incompatible with lazy true zero-host that binds the uploader solely from the first frame's
     /// <c>LibavD3D11DeviceComPtr</c> — keep SDL's interop device or a pre-bound renderer device when this is enabled.
     /// </summary>
     /// <remarks>
@@ -171,7 +171,7 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
 
     /// <summary>
     /// Libav's D3D11VA <c>ID3D11Device</c> pointer (COM) from <c>AVHWDeviceContext</c>, when this context uses D3D11VA.
-    /// Use for Win32 NV12 GL upload without creating a second D3D11 device in the video sink.
+    /// Use for Win32 NV12 GL upload without creating a second D3D11 device in the video output.
     /// </summary>
     internal nint TryGetD3D11DeviceComPtr()
     {
@@ -333,60 +333,27 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
 
         if (_swScratch != null)
         {
-            try
+            MediaDiagnostics.SwallowDisposeErrors(() =>
             {
                 var f = _swScratch;
                 av_frame_free(&f);
-            }
-#if DEBUG
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, "VideoHardwareDecodeContext.Dispose: scratch AVFrame");
-            }
-#else
-            catch
-            {
-            }
-#endif
+            }, "VideoHardwareDecodeContext.Dispose: scratch AVFrame");
             _swScratch = null;
         }
 
         if (_deviceRef != null)
         {
-            try
+            MediaDiagnostics.SwallowDisposeErrors(() =>
             {
                 var dev = _deviceRef;
                 av_buffer_unref(&dev);
-            }
-#if DEBUG
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, "VideoHardwareDecodeContext.Dispose: device AVBufferRef");
-            }
-#else
-            catch
-            {
-            }
-#endif
+            }, "VideoHardwareDecodeContext.Dispose: device AVBufferRef");
             _deviceRef = null;
         }
 
         if (_self.IsAllocated)
         {
-            try
-            {
-                _self.Free();
-            }
-#if DEBUG
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, "VideoHardwareDecodeContext.Dispose: GCHandle.Free");
-            }
-#else
-            catch
-            {
-            }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(_self.Free, "VideoHardwareDecodeContext.Dispose: GCHandle.Free");
         }
     }
 }

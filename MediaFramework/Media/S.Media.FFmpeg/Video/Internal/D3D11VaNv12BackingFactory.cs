@@ -14,11 +14,9 @@ namespace S.Media.FFmpeg.Video.Internal;
 /// also records libav <c>ID3D11Device</c> / <c>ID3D11Texture2D</c> COM pointers for same-device GL upload (no <c>OpenSharedResource</c>).
 /// </summary>
 /// <remarks>
-/// For a <b>Core-only</b> portable descriptor of the same libav-held <c>ID3D11Texture2D</c> (no NT handle
-/// duplication), see <see cref="WindowsNv12D3D11TextureInterop.AllocToken"/> after resolving the decode
-/// <c>ID3D11Device</c> COM pointer (e.g. from <see cref="VideoHardwareDecodeContext"/>).
 /// <c>S.Media.OpenGL.Nv12Win32SharedHandleGpuUploader</c> uses <see cref="VideoWin32Nv12Backing.LibavD3D11Texture2DComPtr"/>
-/// when its D3D11 device matches <see cref="VideoWin32Nv12Backing.LibavD3D11DeviceComPtr"/>.
+/// when its D3D11 device matches <see cref="VideoWin32Nv12Backing.LibavD3D11DeviceComPtr"/>; otherwise it falls back to
+/// the NT-handle path on <see cref="VideoWin32Nv12Backing.SharedLumaNtHandle"/>.
 /// </remarks>
 internal static unsafe class D3D11VaNv12BackingFactory
 {

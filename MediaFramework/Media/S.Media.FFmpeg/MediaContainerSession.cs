@@ -28,10 +28,10 @@ namespace S.Media.FFmpeg;
 /// <c>Doc/MediaFramework-Architecture.md</c>.
 /// </para>
 /// <para>
-/// Graph-wide master-clock PPM correction and synchronized multi-sink drop/repeat are <strong>not</strong> implemented
+/// Graph-wide master-clock PPM correction and synchronized multi-output drop/repeat are <strong>not</strong> implemented
 /// here — see <see cref="MediaClock"/> / <see cref="MediaClockExtensions.SetMasterChain"/>,
-/// <see cref="S.Media.Core.Audio.AudioRouter"/>, and per-sink resampling hints
-/// (<see cref="Audio.AdaptiveRateAudioSink"/>).
+/// <see cref="S.Media.Core.Audio.AudioRouter"/>, and per-output resampling hints
+/// (<see cref="Audio.AdaptiveRateAudioOutput"/>).
 /// </para>
 /// </remarks>
 public sealed class MediaContainerSession

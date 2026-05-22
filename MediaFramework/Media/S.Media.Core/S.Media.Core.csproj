@@ -9,9 +9,6 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.Core.Tests" />
-        <InternalsVisibleTo Include="S.Media.PortAudio" />
-        <InternalsVisibleTo Include="S.Media.SDL3" />
-        <InternalsVisibleTo Include="S.Media.Avalonia" />
         <InternalsVisibleTo Include="S.Media.Core.Benchmarks" />
     </ItemGroup>
 

@@ -23,7 +23,7 @@ public enum TextAlignment
 /// <remarks>
 /// <para>
 /// Output is BGRA32 with alpha (transparent background by default), suitable for compositing as
-/// an overlay layer on a <see cref="CompositorVideoSink"/>. The frame layout matches
+/// an overlay layer on a <see cref="VideoCompositorSource"/>. The frame layout matches
 /// <c>SKAlphaType.Premul</c> — premultiplied — same as <see cref="ImageFileSource"/>.
 /// </para>
 /// <para>
@@ -153,7 +153,7 @@ public sealed class TextLayerSource : IVideoSource, IDisposable
     {
         if (format != PixelFormat.Bgra32)
             throw new InvalidOperationException(
-                $"TextLayerSource only delivers BGRA32; sink requested {format}.");
+                $"TextLayerSource only delivers BGRA32; output requested {format}.");
     }
 
     public bool TryReadNextFrame(out VideoFrame frame)

@@ -121,7 +121,7 @@ internal static class NDIVideoFrameUnpack
                 NDIFourCCVideoType.Uyva =>
                     UnpackPacked(native, format, stride, presentationTime),
                 // High bit-depth 4:2:2 paths (P216/PA16) are converted to 8-bit UYVY so
-                // the existing sinks/renderers can display them without dropping frames.
+                // the existing outputs/renderers can display them without dropping frames.
                 NDIFourCCVideoType.P216 or NDIFourCCVideoType.Pa16 =>
                     UnpackP216LikeToUyvy(native, format, stride, presentationTime),
                 _ => pixelFormat switch

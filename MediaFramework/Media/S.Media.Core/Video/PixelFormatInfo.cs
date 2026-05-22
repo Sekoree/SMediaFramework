@@ -2,7 +2,7 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Static descriptors for the <see cref="PixelFormat"/> values: plane count and
-/// per-plane vertical subsampling. Shared by decoders, sinks, and any conversion
+/// per-plane vertical subsampling. Shared by decoders, outputs, and any conversion
 /// node that needs to reason about plane layout.
 /// </summary>
 public static class PixelFormatInfo

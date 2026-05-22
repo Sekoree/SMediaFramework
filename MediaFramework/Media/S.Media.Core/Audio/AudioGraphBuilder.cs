@@ -2,14 +2,14 @@ namespace S.Media.Core.Audio;
 
 /// <summary>
 /// Fluent helper for the most common <see cref="AudioRouter"/> wiring pattern: add a source, add a
-/// sink, route them. Returns the builder from every method so a chain can collapse the boilerplate
-/// of <see cref="AudioRouter.AddSource"/> → <see cref="AudioRouter.AddSink"/> →
+/// output, route them. Returns the builder from every method so a chain can collapse the boilerplate
+/// of <see cref="AudioRouter.AddSource"/> → <see cref="AudioRouter.AddOutput"/> →
 /// <see cref="AudioRouter.AddRoute"/> into one statement.
 /// </summary>
 /// <remarks>
 /// <para>
 /// This is a thin convenience — every operation forwards immediately to the underlying router (no
-/// deferred apply). The builder remembers the last added source / sink id so the most common case
+/// deferred apply). The builder remembers the last added source / output id so the most common case
 /// ("connect the thing I just added to the other thing I just added") collapses to
 /// <see cref="ConnectLast"/>.
 /// </para>
@@ -17,7 +17,7 @@ namespace S.Media.Core.Audio;
 /// <code>
 /// new AudioGraphBuilder(router)
 ///     .AddSource(decoder, "music", autoResample: true)
-///     .AddSink(speakers, "main")
+///     .AddOutput(speakers, "main")
 ///     .Connect("music", "main", gain: 0.8f);
 /// </code>
 /// </example>
@@ -26,7 +26,7 @@ namespace S.Media.Core.Audio;
 /// // Connect-last shorthand for the soundboard one-clip-one-output case:
 /// new AudioGraphBuilder(router)
 ///     .AddSource(clipDecoder, autoResample: true)
-///     .AddSink(deviceOutput)
+///     .AddOutput(deviceOutput)
 ///     .ConnectLast();
 /// </code>
 /// </example>
@@ -49,8 +49,8 @@ public sealed class AudioGraphBuilder
     /// <summary>Id of the most recently added source (via this builder). <c>null</c> until <see cref="AddSource"/> runs.</summary>
     public string? LastSourceId => _lastSourceId;
 
-    /// <summary>Id of the most recently added sink (via this builder). <c>null</c> until <see cref="AddSink"/> runs.</summary>
-    public string? LastSinkId => _lastSinkId;
+    /// <summary>Id of the most recently added output (via this builder). <c>null</c> until <see cref="AddOutput"/> runs.</summary>
+    public string? LastOutputId => _lastSinkId;
 
     /// <summary>
     /// Adds a source to the router. <paramref name="autoResample"/> forwards to
@@ -63,43 +63,43 @@ public sealed class AudioGraphBuilder
         return this;
     }
 
-    /// <summary>Adds a sink to the router with the standard pump capacity (or an override).</summary>
-    public AudioGraphBuilder AddSink(IAudioSink sink, string? id = null, int? pumpCapacityChunks = null)
+    /// <summary>Adds a output to the router with the standard pump capacity (or an override).</summary>
+    public AudioGraphBuilder AddOutput(IAudioOutput output, string? id = null, int? pumpCapacityChunks = null)
     {
-        _lastSinkId = _router.AddSink(sink, id, pumpCapacityChunks);
+        _lastSinkId = _router.AddOutput(output, id, pumpCapacityChunks);
         return this;
     }
 
     /// <summary>
-    /// Routes <paramref name="sourceId"/> to <paramref name="sinkId"/>. When <paramref name="map"/>
-    /// is <c>null</c>, an <see cref="ChannelMap.Identity"/> sized to the sink's channel count is used.
+    /// Routes <paramref name="sourceId"/> to <paramref name="outputId"/>. When <paramref name="map"/>
+    /// is <c>null</c>, an <see cref="ChannelMap.Identity"/> sized to the output's channel count is used.
     /// </summary>
-    public AudioGraphBuilder Connect(string sourceId, string sinkId, ChannelMap? map = null, float gain = 1.0f)
+    public AudioGraphBuilder Connect(string sourceId, string outputId, ChannelMap? map = null, float gain = 1.0f)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
-        ArgumentException.ThrowIfNullOrEmpty(sinkId);
-        var effective = map ?? ResolveIdentityMap(sinkId);
-        _router.AddRoute(sourceId, sinkId, effective, gain);
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
+        var effective = map ?? ResolveIdentityMap(outputId);
+        _router.AddRoute(sourceId, outputId, effective, gain);
         return this;
     }
 
     /// <summary>
-    /// Routes <see cref="LastSourceId"/> to <see cref="LastSinkId"/>. Use this when you just added
-    /// one source and one sink and want them wired with an identity channel map.
+    /// Routes <see cref="LastSourceId"/> to <see cref="LastOutputId"/>. Use this when you just added
+    /// one source and one output and want them wired with an identity channel map.
     /// </summary>
     public AudioGraphBuilder ConnectLast(ChannelMap? map = null, float gain = 1.0f)
     {
         if (_lastSourceId is null)
             throw new InvalidOperationException("AudioGraphBuilder.ConnectLast: no source has been added yet — call AddSource first.");
         if (_lastSinkId is null)
-            throw new InvalidOperationException("AudioGraphBuilder.ConnectLast: no sink has been added yet — call AddSink first.");
+            throw new InvalidOperationException("AudioGraphBuilder.ConnectLast: no output has been added yet — call AddOutput first.");
         return Connect(_lastSourceId, _lastSinkId, map, gain);
     }
 
-    private ChannelMap ResolveIdentityMap(string sinkId)
+    private ChannelMap ResolveIdentityMap(string outputId)
     {
-        if (!_router.TryGetSink(sinkId, out var sink) || sink is null)
-            throw new ArgumentException($"unknown sink id '{sinkId}'", nameof(sinkId));
-        return ChannelMap.Identity(sink.Format.Channels);
+        if (!_router.TryGetOutput(outputId, out var output) || output is null)
+            throw new ArgumentException($"unknown output id '{outputId}'", nameof(outputId));
+        return ChannelMap.Identity(output.Format.Channels);
     }
 }

@@ -9,10 +9,10 @@ namespace S.Media.Core.Audio;
 /// Two implementations ship with the framework:
 /// <list type="bullet">
 ///   <item><see cref="WallClockRouterClock"/> — free-running stopwatch deadline,
-///   appropriate when no sink can authoritatively pace the producer.</item>
-///   <item><see cref="SinkSlavedRouterClock"/> — defers to an
-///   <see cref="IClockedSink"/> looked up by ID, with a wall-clock fallback so
-///   removing the slaved sink mid-run doesn't stall the router.</item>
+///   appropriate when no output can authoritatively pace the producer.</item>
+///   <item><see cref="OutputSlavedRouterClock"/> — defers to an
+///   <see cref="IClockedOutput"/> looked up by ID, with a wall-clock fallback so
+///   removing the slaved output mid-run doesn't stall the router.</item>
 /// </list>
 /// Implementations are called from a single thread and don't need to be
 /// thread-safe themselves.

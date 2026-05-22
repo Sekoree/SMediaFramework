@@ -5,7 +5,7 @@ namespace S.Media.FFmpeg.Audio;
 
 /// <summary>
 /// Presents an inner <see cref="IAudioSource"/> at a different sample rate. Mirror of
-/// <see cref="ResamplingAudioSink"/> for the source (input) direction — used by
+/// <see cref="ResamplingAudioOutput"/> for the source (input) direction — used by
 /// <see cref="AudioRouter.AddSource(IAudioSource, string?, bool)"/> with <c>autoResample: true</c>
 /// when a source's rate doesn't match the router (e.g. a 44.1 kHz clip feeding a 48 kHz router).
 /// </summary>
@@ -105,24 +105,11 @@ public sealed class ResamplingAudioSource : IAudioSource, IDisposable
         if (_disposed)
             return;
         _disposed = true;
-        try
-        {
-            _swr?.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "ResamplingAudioSource.Dispose: swr"); }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _swr?.Dispose(), "ResamplingAudioSource.Dispose: swr");
         _swr = null;
         if (_disposeInner && _inner is IDisposable d)
         {
-            try { d.Dispose(); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, "ResamplingAudioSource.Dispose: inner"); }
-#else
-            catch { /* best effort */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(d.Dispose, "ResamplingAudioSource.Dispose: inner");
         }
     }
 

@@ -204,19 +204,6 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
     {
         if (_disposed) return;
         _disposed = true;
-        try
-        {
-            ReleaseCtx();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "VideoCpuFrameConverter.Dispose");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(ReleaseCtx, "VideoCpuFrameConverter.Dispose");
     }
 }

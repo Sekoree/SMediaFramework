@@ -6,7 +6,7 @@ namespace S.Media.PortAudio;
 public static class AudioPlayerPortAudioExtensions
 {
     /// <summary>
-    /// If the player's <see cref="AudioPlayer.PrimarySinkId"/> resolves to a
+    /// If the player's <see cref="AudioPlayer.PrimaryOutputId"/> resolves to a
     /// <see cref="PortAudioOutput"/>, fills its ring via
     /// <see cref="PortAudioOutput.PrefillFrom"/> using <see cref="AudioRouter.ChunkSamples"/>.
     /// </summary>
@@ -15,16 +15,16 @@ public static class AudioPlayerPortAudioExtensions
         this AudioPlayer player,
         IAudioSource source,
         TimeSpan timeout,
-        IAudioSink? mirror = null,
+        IAudioOutput? mirror = null,
         int? targetQueuedSamples = null)
     {
         ArgumentNullException.ThrowIfNull(player);
         ArgumentNullException.ThrowIfNull(source);
 
-        var id = player.PrimarySinkId;
+        var id = player.PrimaryOutputId;
         if (string.IsNullOrEmpty(id))
             return false;
-        if (!player.Router.TryGetSink(id, out var sink) || sink is not PortAudioOutput pa)
+        if (!player.Router.TryGetOutput(id, out var output) || output is not PortAudioOutput pa)
             return false;
 
         pa.PrefillFrom(source, timeout, player.Router.ChunkSamples, mirror, targetQueuedSamples);

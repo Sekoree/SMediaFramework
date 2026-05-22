@@ -6,82 +6,82 @@ namespace S.Media.Core.Tests.Video;
 public class VideoFormatNegotiatorTests
 {
     [Fact]
-    public void Negotiate_PrefersNativeWhenSinkAccepts()
+    public void Negotiate_PrefersNativeWhenOutputAccepts()
     {
         var src = new FakeSource([PixelFormat.I420, PixelFormat.Nv12]);
-        var sink = new FakeSink([PixelFormat.Bgra32, PixelFormat.Nv12, PixelFormat.I420]);
+        var output = new FakeOutput([PixelFormat.Bgra32, PixelFormat.Nv12, PixelFormat.I420]);
 
-        // Walks sink preferences in order — Nv12 is the first overlap.
-        Assert.Equal(PixelFormat.Nv12, VideoFormatNegotiator.Negotiate(src, sink));
+        // Walks output preferences in order — Nv12 is the first overlap.
+        Assert.Equal(PixelFormat.Nv12, VideoFormatNegotiator.Negotiate(src, output));
     }
 
     [Fact]
-    public void Negotiate_FallsBackToSinkFirstChoiceWhenNoOverlap()
+    public void Negotiate_FallsBackToOutputFirstChoiceWhenNoOverlap()
     {
         var src = new FakeSource([PixelFormat.I420]);
-        var sink = new FakeSink([PixelFormat.Bgra32, PixelFormat.Rgba32]);
+        var output = new FakeOutput([PixelFormat.Bgra32, PixelFormat.Rgba32]);
 
-        Assert.Equal(PixelFormat.Bgra32, VideoFormatNegotiator.Negotiate(src, sink));
+        Assert.Equal(PixelFormat.Bgra32, VideoFormatNegotiator.Negotiate(src, output));
     }
 
     [Fact]
-    public void Negotiate_SinkAcceptsAnything_ReturnsSourceFirstNative()
+    public void Negotiate_OutputAcceptsAnything_ReturnsSourceFirstNative()
     {
         var src = new FakeSource([PixelFormat.Nv12, PixelFormat.I420]);
-        var sink = new FakeSink([]);
+        var output = new FakeOutput([]);
 
-        Assert.Equal(PixelFormat.Nv12, VideoFormatNegotiator.Negotiate(src, sink));
+        Assert.Equal(PixelFormat.Nv12, VideoFormatNegotiator.Negotiate(src, output));
     }
 
     [Fact]
     public void Negotiate_BothEmpty_Throws()
     {
         var src = new FakeSource([]);
-        var sink = new FakeSink([]);
+        var output = new FakeOutput([]);
 
-        Assert.Throws<InvalidOperationException>(() => VideoFormatNegotiator.Negotiate(src, sink));
+        Assert.Throws<InvalidOperationException>(() => VideoFormatNegotiator.Negotiate(src, output));
     }
 
     [Fact]
     public void Connect_SelectsAndConfigures()
     {
         var src = new FakeSource([PixelFormat.I420]);
-        var sink = new FakeSink([PixelFormat.I420]);
+        var output = new FakeOutput([PixelFormat.I420]);
 
-        var fmt = VideoFormatNegotiator.Connect(src, sink);
+        var fmt = VideoFormatNegotiator.Connect(src, output);
 
         Assert.Equal(PixelFormat.I420, fmt.PixelFormat);
         Assert.Equal(PixelFormat.I420, src.SelectedFormat);
-        Assert.Equal(PixelFormat.I420, sink.ConfiguredFormat?.PixelFormat);
+        Assert.Equal(PixelFormat.I420, output.ConfiguredFormat?.PixelFormat);
     }
 
     [Fact]
-    public void Negotiate_WithFilter_SkipsFirstSinkPreference_InOverlap()
+    public void Negotiate_WithFilter_SkipsFirstOutputPreference_InOverlap()
     {
         var src = new FakeSource([PixelFormat.I420, PixelFormat.Nv12]);
-        var sink = new FakeSink([PixelFormat.Bgra32, PixelFormat.Nv12, PixelFormat.I420]);
+        var output = new FakeOutput([PixelFormat.Bgra32, PixelFormat.Nv12, PixelFormat.I420]);
 
-        var pf = VideoFormatNegotiator.Negotiate(src, sink, pf => pf != PixelFormat.Nv12);
+        var pf = VideoFormatNegotiator.Negotiate(src, output, pf => pf != PixelFormat.Nv12);
         Assert.Equal(PixelFormat.I420, pf);
     }
 
     [Fact]
-    public void Negotiate_WithFilter_FallbackToFilteredSinkPreferenceWhenNoNativeOverlap()
+    public void Negotiate_WithFilter_FallbackToFilteredOutputPreferenceWhenNoNativeOverlap()
     {
         var src = new FakeSource([PixelFormat.I420]);
-        var sink = new FakeSink([PixelFormat.Bgra32, PixelFormat.Rgba32]);
+        var output = new FakeOutput([PixelFormat.Bgra32, PixelFormat.Rgba32]);
 
-        var pf = VideoFormatNegotiator.Negotiate(src, sink, pf => pf == PixelFormat.Rgba32);
+        var pf = VideoFormatNegotiator.Negotiate(src, output, pf => pf == PixelFormat.Rgba32);
         Assert.Equal(PixelFormat.Rgba32, pf);
     }
 
     [Fact]
-    public void Negotiate_WithFilter_SinkAnything_PicksFilteredNativeSecond()
+    public void Negotiate_WithFilter_OutputAnything_PicksFilteredNativeSecond()
     {
         var src = new FakeSource([PixelFormat.Bgra32, PixelFormat.Nv12]);
-        var sink = new FakeSink([]);
+        var output = new FakeOutput([]);
 
-        var pf = VideoFormatNegotiator.Negotiate(src, sink, pf => pf == PixelFormat.Nv12);
+        var pf = VideoFormatNegotiator.Negotiate(src, output, pf => pf == PixelFormat.Nv12);
         Assert.Equal(PixelFormat.Nv12, pf);
     }
 
@@ -89,42 +89,42 @@ public class VideoFormatNegotiatorTests
     public void Negotiate_WithFilter_RejectsEverything_Throws()
     {
         var src = new FakeSource([PixelFormat.I420]);
-        var sink = new FakeSink([PixelFormat.Bgra32]);
+        var output = new FakeOutput([PixelFormat.Bgra32]);
 
         Assert.Throws<InvalidOperationException>(() =>
-            VideoFormatNegotiator.Negotiate(src, sink, static _ => false));
+            VideoFormatNegotiator.Negotiate(src, output, static _ => false));
     }
 
     [Fact]
-    public void Negotiate_WithFilter_EmptySink_RejectsEveryNative_Throws()
+    public void Negotiate_WithFilter_EmptyOutput_RejectsEveryNative_Throws()
     {
         var src = new FakeSource([PixelFormat.Bgra32, PixelFormat.I420]);
-        var sink = new FakeSink([]);
+        var output = new FakeOutput([]);
 
         Assert.Throws<InvalidOperationException>(() =>
-            VideoFormatNegotiator.Negotiate(src, sink, static _ => false));
+            VideoFormatNegotiator.Negotiate(src, output, static _ => false));
     }
 
     [Fact]
-    public void Connect_WiresD3D11GlBorrowWhenSourceAndSinkSupport()
+    public void Connect_WiresD3D11GlBorrowWhenSourceAndOutputSupport()
     {
         var src = new FakeHardwareSource(PixelFormat.Nv12);
-        var sink = new FakeBorrowSink(PixelFormat.Nv12);
+        var output = new FakeBorrowOutput(PixelFormat.Nv12);
 
-        VideoFormatNegotiator.Connect(src, sink);
+        VideoFormatNegotiator.Connect(src, output);
 
-        Assert.Same(src, sink.LastBorrowSource);
+        Assert.Same(src, output.LastBorrowSource);
     }
 
     [Fact]
     public void Connect_ClearsBorrowWhenSourceDoesNotExposeHardwareD3D11()
     {
         var src = new FakeSource([PixelFormat.I420]);
-        var sink = new FakeBorrowSink(PixelFormat.I420);
+        var output = new FakeBorrowOutput(PixelFormat.I420);
 
-        VideoFormatNegotiator.Connect(src, sink);
+        VideoFormatNegotiator.Connect(src, output);
 
-        Assert.Null(sink.LastBorrowSource);
+        Assert.Null(output.LastBorrowSource);
     }
 
     private sealed class FakeHardwareSource : FakeSource, IHardwareD3D11GlInteropSource
@@ -144,9 +144,9 @@ public class VideoFormatNegotiatorTests
         }
     }
 
-    private sealed class FakeBorrowSink : FakeSink, IVideoSinkD3D11GlBorrowSetup
+    private sealed class FakeBorrowOutput : FakeOutput, IVideoOutputD3D11GlBorrowSetup
     {
-        public FakeBorrowSink(params PixelFormat[] accepted) : base(accepted) { }
+        public FakeBorrowOutput(params PixelFormat[] accepted) : base(accepted) { }
 
         public IVideoSource? LastBorrowSource { get; private set; }
 
@@ -171,7 +171,7 @@ public class VideoFormatNegotiatorTests
         public bool TryReadNextFrame(out VideoFrame frame) { frame = null!; return false; }
     }
 
-    private class FakeSink(PixelFormat[] accepted) : IVideoSink
+    private class FakeOutput(PixelFormat[] accepted) : IVideoOutput
     {
         public VideoFormat Format { get; private set; }
         public IReadOnlyList<PixelFormat> AcceptedPixelFormats => accepted;

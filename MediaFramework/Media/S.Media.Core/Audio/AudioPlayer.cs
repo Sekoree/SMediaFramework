@@ -12,7 +12,7 @@ namespace S.Media.Core.Audio;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The first output that implements <see cref="IClockedSink"/> (typically
+/// The first output that implements <see cref="IClockedOutput"/> (typically
 /// PortAudio for pacing) becomes the <strong>primary</strong> for the router.
 /// If it also implements <see cref="IPlaybackClock"/>, the
 /// <see cref="Clock"/> masters to it so position tracks played samples;
@@ -24,7 +24,7 @@ namespace S.Media.Core.Audio;
 /// <para>
 /// Sources passed to <see cref="AddOwnedSource"/> (for example an
 /// <c>AudioFileDecoder</c> opened by the caller) are owned by the player and
-/// disposed with it. Sinks are <strong>not</strong>
+/// disposed with it. Outputs are <strong>not</strong>
 /// owned — the caller decides when to dispose hardware resources, since they
 /// often outlive a single player instance.
 /// </para>
@@ -65,12 +65,12 @@ public sealed class AudioPlayer : IDisposable
     /// <summary>True while the router is producing chunks (false when stopped or paused).</summary>
     public bool IsPlaying => _router.IsRunning;
 
-    /// <summary>The current primary sink (whose clock paces production), or <c>null</c> if none.</summary>
-    public string? PrimarySinkId { get { lock (_gate) return _primarySinkId; } }
+    /// <summary>The current primary output (whose clock paces production), or <c>null</c> if none.</summary>
+    public string? PrimaryOutputId { get { lock (_gate) return _primarySinkId; } }
 
     /// <summary>
-    /// When <c>true</c> (default), the first sink that implements
-    /// <see cref="IClockedSink"/> becomes the pacing primary automatically.
+    /// When <c>true</c> (default), the first output that implements
+    /// <see cref="IClockedOutput"/> becomes the pacing primary automatically.
     /// <see cref="AddOutput"/> if you want to manage clocking manually.
     /// </summary>
     public bool AutoWirePrimary { get; set; } = true;
@@ -90,72 +90,72 @@ public sealed class AudioPlayer : IDisposable
     // --- attaching pieces -------------------------------------------------
 
     /// <summary>
-    /// Register an output sink with the router. See <see cref="AutoWirePrimary"/>
+    /// Register an output output with the router. See <see cref="AutoWirePrimary"/>
     /// for clock/pacing wiring.
     /// </summary>
-    /// <param name="sinkPumpCapacityChunks">
-    /// Optional per-sink pump queue depth (mixed chunks). <c>null</c> inherits the router
-    /// default (currently 8 → ≈ 80&#160;ms at chunkSamples=480 / 48&#160;kHz). For hardware sinks
-    /// implementing <see cref="IClockedSink"/> a smaller value (2–4) keeps end-to-end latency
-    /// down — they have their own ring. See <see cref="AudioRouter.AddSink"/> for the full
+    /// <param name="outputPumpCapacityChunks">
+    /// Optional per-output pump queue depth (mixed chunks). <c>null</c> inherits the router
+    /// default (currently 8 → ≈ 80&#160;ms at chunkSamples=480 / 48&#160;kHz). For hardware outputs
+    /// implementing <see cref="IClockedOutput"/> a smaller value (2–4) keeps end-to-end latency
+    /// down — they have their own ring. See <see cref="AudioRouter.AddOutput"/> for the full
     /// latency-budget discussion.
     /// </param>
-    public string AddOutput(IAudioSink sink, string? id = null, int? sinkPumpCapacityChunks = null)
+    public string AddOutput(IAudioOutput output, string? id = null, int? outputPumpCapacityChunks = null)
     {
-        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(output);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var sinkId = _router.AddSink(sink, id, sinkPumpCapacityChunks);
+        var outputId = _router.AddOutput(output, id, outputPumpCapacityChunks);
 
         lock (_gate)
         {
-            _sinkFormats[sinkId] = sink.Format;
-            if (AutoWirePrimary && _primarySinkId is null && sink is IClockedSink)
+            _sinkFormats[outputId] = output.Format;
+            if (AutoWirePrimary && _primarySinkId is null && output is IClockedOutput)
             {
-                _router.SlaveTo(sinkId);
-                if (sink is IPlaybackClock pc)
+                _router.SlaveTo(outputId);
+                if (output is IPlaybackClock pc)
                 {
                     _clock.SetMaster(pc);
-                    Trace.LogDebug("AddOutput: promoted sink {SinkId} to primary, master clock set ({ClockType})",
-                        sinkId, pc.GetType().Name);
+                    Trace.LogDebug("AddOutput: promoted output {SinkId} to primary, master clock set ({ClockType})",
+                        outputId, pc.GetType().Name);
                 }
                 else
                 {
-                    Trace.LogDebug("AddOutput: sink {SinkId} promoted to primary (IClockedSink, but no IPlaybackClock — media clock stays in stopwatch mode)",
-                        sinkId);
+                    Trace.LogDebug("AddOutput: output {SinkId} promoted to primary (IClockedOutput, but no IPlaybackClock — media clock stays in stopwatch mode)",
+                        outputId);
                 }
-                _primarySinkId = sinkId;
+                _primarySinkId = outputId;
             }
             else if (AutoWirePrimary && _primarySinkId is null)
             {
-                Trace.LogTrace("AddOutput: sink {SinkId} ({SinkType}) does not implement IClockedSink — not eligible as router master",
-                    sinkId, sink.GetType().Name);
+                Trace.LogTrace("AddOutput: output {SinkId} ({SinkType}) does not implement IClockedOutput — not eligible as router master",
+                    outputId, output.GetType().Name);
             }
         }
-        return sinkId;
+        return outputId;
     }
 
     /// <summary>
-    /// Remove an output sink. Cleans up the player's metadata and forwards
-    /// to <see cref="AudioRouter.RemoveSink"/>. If this was the primary sink,
+    /// Remove an output output. Cleans up the player's metadata and forwards
+    /// to <see cref="AudioRouter.RemoveOutput"/>. If this was the primary output,
     /// the clock master is detached. When <see cref="AutoWirePrimary"/> is
-    /// <c>true</c>, another sink that implements <see cref="IClockedSink"/> is
+    /// <c>true</c>, another output that implements <see cref="IClockedOutput"/> is
     /// promoted (router pacing + optional <see cref="IPlaybackClock"/> master)
     /// if one remains.
     /// </summary>
-    public bool RemoveOutput(string sinkId)
+    public bool RemoveOutput(string outputId)
     {
-        ArgumentException.ThrowIfNullOrEmpty(sinkId);
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         bool removed;
         string? promoteTo = null;
         lock (_gate)
         {
-            removed = _router.RemoveSink(sinkId);
+            removed = _router.RemoveOutput(outputId);
             if (!removed) return false;
-            _sinkFormats.Remove(sinkId);
-            if (_primarySinkId == sinkId)
+            _sinkFormats.Remove(outputId);
+            if (_primarySinkId == outputId)
             {
                 _primarySinkId = null;
                 _clock.SetMaster(null);
@@ -163,8 +163,8 @@ public sealed class AudioPlayer : IDisposable
                 {
                     foreach (var id in _router.SinkIds.Order(StringComparer.Ordinal))
                     {
-                        if (id == sinkId) continue;
-                        if (!_router.TryGetSink(id, out var s) || s is not IClockedSink) continue;
+                        if (id == outputId) continue;
+                        if (!_router.TryGetOutput(id, out var s) || s is not IClockedOutput) continue;
                         promoteTo = id;
                         break;
                     }
@@ -177,7 +177,7 @@ public sealed class AudioPlayer : IDisposable
             _router.RetargetSlaveClock(promoteTo);
             lock (_gate)
             {
-                if (_router.TryGetSink(promoteTo, out var s) && s is IPlaybackClock pc)
+                if (_router.TryGetOutput(promoteTo, out var s) && s is IPlaybackClock pc)
                     _clock.SetMaster(pc);
                 _primarySinkId = promoteTo;
             }
@@ -216,10 +216,10 @@ public sealed class AudioPlayer : IDisposable
 
     /// <summary>
     /// Convenience: register a route from <paramref name="sourceId"/> to
-    /// <paramref name="sinkId"/>. <paramref name="map"/> defaults to identity
-    /// sized to the sink's channel count.
+    /// <paramref name="outputId"/>. <paramref name="map"/> defaults to identity
+    /// sized to the output's channel count.
     /// </summary>
-    public void Connect(string sourceId, string sinkId, ChannelMap? map = null, float gain = 1.0f)
+    public void Connect(string sourceId, string outputId, ChannelMap? map = null, float gain = 1.0f)
     {
         ChannelMap effective;
         if (map is { } m)
@@ -231,13 +231,13 @@ public sealed class AudioPlayer : IDisposable
             int channels;
             lock (_gate)
             {
-                if (!_sinkFormats.TryGetValue(sinkId, out var fmt))
-                    throw new ArgumentException($"unknown sink '{sinkId}'", nameof(sinkId));
+                if (!_sinkFormats.TryGetValue(outputId, out var fmt))
+                    throw new ArgumentException($"unknown output '{outputId}'", nameof(outputId));
                 channels = fmt.Channels;
             }
             effective = ChannelMap.Identity(channels);
         }
-        _router.AddRoute(sourceId, sinkId, effective, gain);
+        _router.AddRoute(sourceId, outputId, effective, gain);
     }
 
     // --- lifecycle --------------------------------------------------------
@@ -246,7 +246,7 @@ public sealed class AudioPlayer : IDisposable
     public void Play()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        Trace.LogDebug("Play: primary={Primary} sinks={SinkCount} sources={SourceCount}",
+        Trace.LogDebug("Play: primary={Primary} outputs={SinkCount} sources={SourceCount}",
             _primarySinkId ?? "(none)", _router.SinkIds.Count, _router.SourceIds.Count);
         _router.Start();
         _clock.Start();
@@ -254,7 +254,7 @@ public sealed class AudioPlayer : IDisposable
 
     /// <summary>
     /// Immediate-silence pause: aborts the audio device buffer (via
-    /// <see cref="IFlushableSink"/>) and freezes the clock. <see cref="Resume"/>
+    /// <see cref="IFlushableOutput"/>) and freezes the clock. <see cref="Resume"/>
     /// continues from the current position.
     /// </summary>
     public void Pause()
@@ -309,35 +309,25 @@ public sealed class AudioPlayer : IDisposable
 
     /// <summary>
     /// Set the gain on the route from <paramref name="sourceId"/> to
-    /// <paramref name="sinkId"/>. The change linearly fades over the next
+    /// <paramref name="outputId"/>. The change linearly fades over the next
     /// chunk (click-free).
     /// </summary>
-    public void SetVolume(string sourceId, string sinkId, float gain)
+    public void SetVolume(string sourceId, string outputId, float gain)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        _router.SetRouteGain(sourceId, sinkId, gain);
+        _router.SetRouteGain(sourceId, outputId, gain);
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        try { Stop(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "AudioPlayer.Dispose: Stop"); }
-#else
-        catch { /* best-effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(Stop, "AudioPlayer.Dispose: Stop");
         _router.Dispose();
         _clock.Dispose();
         foreach (var d in _ownedDisposables)
         {
-            try { d.Dispose(); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, "AudioPlayer.Dispose: owned disposable"); }
-#else
-            catch { /* don't let one disposal swallow others */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(d.Dispose, "AudioPlayer.Dispose: owned disposable");
         }
         _ownedDisposables.Clear();
     }

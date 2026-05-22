@@ -18,8 +18,8 @@ namespace S.Media.OpenGL;
 /// <para>
 /// <strong>Threading:</strong> the caller must make a GL context current on the same thread before
 /// constructing the compositor and before every <see cref="Composite"/>. Disposal must run on that
-/// thread too. <c>CompositorVideoSink.TryReadNextFrame</c> is what calls <see cref="Composite"/>, so
-/// the downstream consumer of the sink's output must run on the GL thread.
+/// thread too. <c>VideoCompositorSource.TryReadNextFrame</c> is what calls <see cref="Composite"/>, so
+/// the downstream consumer of the output's output must run on the GL thread.
 /// </para>
 /// <para>
 /// <strong>Layer pixel-format support:</strong> accepts every format <see cref="YuvVideoRenderer"/> accepts
@@ -47,7 +47,7 @@ namespace S.Media.OpenGL;
 /// <para>
 /// <strong>State hygiene:</strong> <see cref="Composite"/> saves and restores the current framebuffer
 /// binding, viewport, program, VAO, blend enable/func, and scissor enable so it can be embedded
-/// inside another sink's render path without trashing host state.
+/// inside another output's render path without trashing host state.
 /// </para>
 /// </remarks>
 public sealed class GlVideoCompositor : IVideoCompositor

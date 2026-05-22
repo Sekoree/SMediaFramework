@@ -6,7 +6,7 @@ namespace S.Media.Core.Video;
 /// <summary>
 /// Best-effort Linux <strong>mmap</strong> readback from DRM PRIME / dma-buf file descriptors into CPU-backed
 /// <see cref="VideoFrame"/> planes for <see cref="PixelFormat.Nv12"/>, <see cref="PixelFormat.P010"/>, and
-/// <see cref="PixelFormat.P016"/> semi-planar layouts. Intended for FFmpeg <c>VideoRouter</c> branch <c>swscale</c> conversion when hardware frames cannot be shared with every sink.
+/// <see cref="PixelFormat.P016"/> semi-planar layouts. Intended for FFmpeg <c>VideoRouter</c> branch <c>swscale</c> conversion when hardware frames cannot be shared with every output.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -15,7 +15,7 @@ namespace S.Media.Core.Video;
 /// blocking full-frame copy — use sparingly (e.g. one mixed fan-out branch).
 /// </para>
 /// <para>
-/// <strong>Win32</strong> shared NV12 textures are not supported here — callers should keep using all-NV12 sinks,
+/// <strong>Win32</strong> shared NV12 textures are not supported here — callers should keep using all-NV12 outputs,
 /// a single output, or software decode until a D3D11 staging readback exists.
 /// </para>
 /// </remarks>

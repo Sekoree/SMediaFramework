@@ -270,7 +270,7 @@ public sealed unsafe class NDILiveReceiver : IDisposable
             throw new InvalidOperationException("Format is not known until the first video frame arrives.");
         if (format != _videoFormat.PixelFormat)
             throw new InvalidOperationException(
-                $"NDILiveReceiver delivers {_videoFormat.PixelFormat} only; sink requested {format}.");
+                $"NDILiveReceiver delivers {_videoFormat.PixelFormat} only; output requested {format}.");
     }
 
     private void CaptureLoop(CancellationToken token)

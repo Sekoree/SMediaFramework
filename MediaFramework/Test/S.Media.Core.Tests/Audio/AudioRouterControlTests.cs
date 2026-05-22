@@ -11,14 +11,14 @@ public class AudioRouterControlTests
     // --- pause / resume ---------------------------------------------------
 
     [Fact]
-    public void Pause_StopsProductionAndFlushesSinks()
+    public void Pause_StopsProductionAndFlushesOutputs()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new TestSource(Stereo, _ => 1f);
-        var sink = new FlushableSink(Stereo);
+        var output = new FlushableOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
 
         r.Start();
@@ -30,7 +30,7 @@ public class AudioRouterControlTests
         r.Pause();
 
         Assert.False(r.IsRunning);
-        Assert.True(sink.FlushCount >= 1, "Pause should call Flush on flushable sinks");
+        Assert.True(output.FlushCount >= 1, "Pause should call Flush on flushable outputs");
 
         var producedAfterPause = r.ChunksProduced;
         Thread.Sleep(50);
@@ -42,10 +42,10 @@ public class AudioRouterControlTests
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new TestSource(Stereo, _ => 1f);
-        var sink = new FlushableSink(Stereo);
+        var output = new FlushableOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
 
         r.Start();
@@ -63,17 +63,17 @@ public class AudioRouterControlTests
     }
 
     [Fact]
-    public void NaturalEof_FlushesFlushableSinks()
+    public void NaturalEof_FlushesFlushableOutputs()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new FiniteTestSource(Stereo, samplesPerChannelTotal: 200);
-        var sink = new FlushableSink(Stereo);
+        var output = new FlushableOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
 
-        var flushBefore = sink.FlushCount;
+        var flushBefore = output.FlushCount;
         r.Start();
         var deadline = DateTime.UtcNow.AddSeconds(2);
         while (r.IsRunning && DateTime.UtcNow < deadline)
@@ -81,8 +81,8 @@ public class AudioRouterControlTests
 
         Assert.False(r.IsRunning);
         Assert.True(r.CompletedNaturally);
-        Assert.True(sink.FlushCount > flushBefore,
-            "natural EOF should call IFlushableSink.Flush from FinishRunLoopThreadLifetime");
+        Assert.True(output.FlushCount > flushBefore,
+            "natural EOF should call IFlushableOutput.Flush from FinishRunLoopThreadLifetime");
     }
 
     [Fact]
@@ -100,10 +100,10 @@ public class AudioRouterControlTests
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new SeekableTestSource(Stereo);
-        var sink = new FlushableSink(Stereo);
+        var output = new FlushableOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
 
         r.Start();
@@ -113,7 +113,7 @@ public class AudioRouterControlTests
 
         Assert.Equal(TimeSpan.FromSeconds(30), src.LastSeekTo);
         Assert.True(r.IsRunning, "router should still be running after seek");
-        Assert.True(sink.FlushCount >= 1, "seek should flush downstream sinks");
+        Assert.True(output.FlushCount >= 1, "seek should flush downstream outputs");
     }
 
     [Fact]
@@ -157,10 +157,10 @@ public class AudioRouterControlTests
         // chunk boundary (~10ms with 480 samples @ 48kHz).
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new TestSource(Stereo, _ => 4f);
-        var sink = new CapturingSink(Stereo);
+        var output = new CapturingOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2), gain: 1f);
 
         r.Start();
@@ -175,7 +175,7 @@ public class AudioRouterControlTests
         bool sawNewGain = false;
         while (DateTime.UtcNow < deadline)
         {
-            var captured = sink.LastChunk;
+            var captured = output.LastChunk;
             if (captured != null && Math.Abs(captured[0] - 1.0f) < 0.001f)
             {
                 sawNewGain = true;
@@ -185,7 +185,7 @@ public class AudioRouterControlTests
         }
         r.Stop();
         Assert.True(sawNewGain,
-            $"new gain (4 × 0.25 = 1.0) should appear in capture within 1s; last value was {sink.LastChunk?[0]}");
+            $"new gain (4 × 0.25 = 1.0) should appear in capture within 1s; last value was {output.LastChunk?[0]}");
 
         // And it took only a handful of chunks.
         var produced = r.ChunksProduced - beforeChange;
@@ -201,15 +201,15 @@ public class AudioRouterControlTests
         const int chunk = 64;
         using var r = new AudioRouter(SampleRate, chunkSamples: chunk);
         var src = new TestSource(Stereo, _ => 4f);
-        var sink = new ChunkLogSink(Stereo);
+        var output = new ChunkLogOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2), gain: 1f);
 
         r.Start();
         Thread.Sleep(40);                     // let some steady-state chunks land
-        var chunksBeforeMutation = sink.AllChunks.Count;
+        var chunksBeforeMutation = output.AllChunks.Count;
         r.SetRouteGain("src", "out", 0.5f);
         Thread.Sleep(40);
         r.Stop();
@@ -217,7 +217,7 @@ public class AudioRouterControlTests
         // Between reading Count and calling SetRouteGain, the router can still
         // deliver one steady-state chunk (gain 1.0). Scan forward — the ramp
         // chunk has first≈4, last≈2.
-        var captured = sink.AllChunks;
+        var captured = output.AllChunks;
         Assert.True(captured.Count > chunksBeforeMutation + 1,
             $"need chunks after mutation start, countBefore={chunksBeforeMutation} total={captured.Count}");
         float[]? rampChunk = null;
@@ -264,18 +264,18 @@ public class AudioRouterControlTests
         // unchanged chunks — they should be exactly constant.
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, _ => 4f);
-        var sink = new ChunkLogSink(Stereo);
+        var output = new ChunkLogOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2), gain: 0.5f);
 
         r.Start();
         Thread.Sleep(40);
         r.Stop();
 
-        Assert.NotEmpty(sink.AllChunks);
-        var any = sink.AllChunks[0];
+        Assert.NotEmpty(output.AllChunks);
+        var any = output.AllChunks[0];
         for (var i = 0; i < any.Length; i++)
             Assert.Equal(2.0f, any[i], precision: 4);
     }
@@ -286,7 +286,7 @@ public class AudioRouterControlTests
         using var r = new AudioRouter(44100, chunkSamples: 128);
         var f = new AudioFormat(44100, 2);
         r.AddSource(new TestSource(f), "s");
-        r.AddSink(new FlushableSink(f), "o");
+        r.AddOutput(new FlushableOutput(f), "o");
         r.AddRoute("s", "o", ChannelMap.Identity(2));
         r.ReconfigureSampleRate(44100);
         Assert.Equal(44100, r.SampleRate);
@@ -298,7 +298,7 @@ public class AudioRouterControlTests
         using var r = new AudioRouter(48000);
         var f48 = new AudioFormat(48000, 2);
         r.AddSource(new TestSource(f48), "s");
-        r.AddSink(new FlushableSink(f48), "o");
+        r.AddOutput(new FlushableOutput(f48), "o");
         r.AddRoute("s", "o", ChannelMap.Identity(2));
         Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRate(44100));
     }
@@ -309,7 +309,7 @@ public class AudioRouterControlTests
         using var r = new AudioRouter(48000, chunkSamples: 480);
         var f = new AudioFormat(48000, 2);
         r.AddSource(new TestSource(f), "s");
-        r.AddSink(new FlushableSink(f), "o");
+        r.AddOutput(new FlushableOutput(f), "o");
         r.AddRoute("s", "o", ChannelMap.Identity(2));
         r.Start();
         Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRate(48000));
@@ -322,7 +322,7 @@ public class AudioRouterControlTests
         using var r = new AudioRouter(48000, chunkSamples: 64);
         var f = new AudioFormat(48000, 2);
         r.AddSource(new TestSource(f), "s");
-        r.AddSink(new ImmediateClockedSink(f), "p");
+        r.AddOutput(new ImmediateClockedOutput(f), "p");
         r.AddRoute("s", "p", ChannelMap.Identity(2));
         r.SlaveTo("p");
         r.ReconfigureSampleRate(48000);
@@ -335,7 +335,7 @@ public class AudioRouterControlTests
         using var r = new AudioRouter(48000, chunkSamples: 64);
         var f = new AudioFormat(48000, 2);
         r.AddSource(new TestSource(f), "s");
-        r.AddSink(new FlushableSink(f), "o");
+        r.AddOutput(new FlushableOutput(f), "o");
         r.AddRoute("s", "o", ChannelMap.Identity(2));
         Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRateWhileRunning(44100));
     }
@@ -345,14 +345,14 @@ public class AudioRouterControlTests
     {
         using var r = new AudioRouter(48000, chunkSamples: 64);
         var src = new SwitchableSource(new AudioFormat(48000, 2));
-        var sink = new SwitchableSink(new AudioFormat(48000, 2));
+        var output = new SwitchableOutput(new AudioFormat(48000, 2));
         r.AddSource(src, "s");
-        r.AddSink(sink, "o");
+        r.AddOutput(output, "o");
         r.AddRoute("s", "o", ChannelMap.Identity(2));
         r.Start();
         Thread.Sleep(30);
         src.FormatValue = new AudioFormat(44100, 2);
-        sink.FormatValue = new AudioFormat(44100, 2);
+        output.FormatValue = new AudioFormat(44100, 2);
         r.ReconfigureSampleRateWhileRunning(44100);
         Assert.Equal(44100, r.SampleRate);
         Thread.Sleep(30);
@@ -364,12 +364,12 @@ public class AudioRouterControlTests
     {
         using var r = new AudioRouter(48000, chunkSamples: 64);
         var src = new SwitchableSource(new AudioFormat(48000, 2));
-        var sink = new SwitchableSink(new AudioFormat(48000, 2));
+        var output = new SwitchableOutput(new AudioFormat(48000, 2));
         r.AddSource(src, "s");
-        r.AddSink(sink, "o");
+        r.AddOutput(output, "o");
         r.AddRoute("s", "o", ChannelMap.Identity(2));
         r.Start();
-        sink.FormatValue = new AudioFormat(44100, 2);
+        output.FormatValue = new AudioFormat(44100, 2);
         Assert.Throws<InvalidOperationException>(() => r.ReconfigureSampleRateWhileRunning(44100));
         r.Stop();
     }
@@ -379,15 +379,15 @@ public class AudioRouterControlTests
     {
         using var r = new AudioRouter(48000, chunkSamples: 64);
         var src = new SwitchableSource(new AudioFormat(48000, 2));
-        var sink = new SwitchableClockedSink(new AudioFormat(48000, 2));
+        var output = new SwitchableClockedOutput(new AudioFormat(48000, 2));
         r.AddSource(src, "s");
-        r.AddSink(sink, "p");
+        r.AddOutput(output, "p");
         r.AddRoute("s", "p", ChannelMap.Identity(2));
         r.SlaveTo("p");
         r.Start();
         Thread.Sleep(25);
         src.FormatValue = new AudioFormat(44100, 2);
-        sink.FormatValue = new AudioFormat(44100, 2);
+        output.FormatValue = new AudioFormat(44100, 2);
         r.ReconfigureSampleRateWhileRunning(44100);
         Assert.Equal(44100, r.SampleRate);
         r.Stop();
@@ -454,7 +454,7 @@ public class AudioRouterControlTests
         }
     }
 
-    private sealed class FlushableSink(AudioFormat fmt) : IAudioSink, IFlushableSink
+    private sealed class FlushableOutput(AudioFormat fmt) : IAudioOutput, IFlushableOutput
     {
         public AudioFormat Format { get; } = fmt;
         public int FlushCount { get; private set; }
@@ -462,7 +462,7 @@ public class AudioRouterControlTests
         public void Flush() => FlushCount++;
     }
 
-    private sealed class CapturingSink(AudioFormat fmt) : IAudioSink
+    private sealed class CapturingOutput(AudioFormat fmt) : IAudioOutput
     {
         private readonly Lock _gate = new();
         private float[]? _last;
@@ -476,7 +476,7 @@ public class AudioRouterControlTests
         }
     }
 
-    private sealed class ChunkLogSink(AudioFormat fmt) : IAudioSink
+    private sealed class ChunkLogOutput(AudioFormat fmt) : IAudioOutput
     {
         private readonly Lock _gate = new();
         private readonly List<float[]> _chunks = [];
@@ -491,7 +491,7 @@ public class AudioRouterControlTests
         }
     }
 
-    private sealed class ImmediateClockedSink(AudioFormat fmt) : IAudioSink, IClockedSink
+    private sealed class ImmediateClockedOutput(AudioFormat fmt) : IAudioOutput, IClockedOutput
     {
         public AudioFormat Format { get; } = fmt;
         public void Submit(ReadOnlySpan<float> packedSamples) { }
@@ -511,14 +511,14 @@ public class AudioRouterControlTests
         }
     }
 
-    private sealed class SwitchableSink(AudioFormat initial) : IAudioSink
+    private sealed class SwitchableOutput(AudioFormat initial) : IAudioOutput
     {
         public AudioFormat FormatValue { get; set; } = initial;
         public AudioFormat Format => FormatValue;
         public void Submit(ReadOnlySpan<float> packedSamples) { }
     }
 
-    private sealed class SwitchableClockedSink(AudioFormat initial) : IAudioSink, IClockedSink
+    private sealed class SwitchableClockedOutput(AudioFormat initial) : IAudioOutput, IClockedOutput
     {
         public AudioFormat FormatValue { get; set; } = initial;
         public AudioFormat Format => FormatValue;

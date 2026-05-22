@@ -16,41 +16,41 @@ namespace S.Media.Core.Video;
 public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, PixelFormat PixelFormat, bool UsesRouterCpuConverter);
 
 /// <summary>
-/// Routes one or more logical video inputs to many <see cref="IVideoSink"/> outputs.
+/// Routes one or more logical video inputs to many <see cref="IVideoOutput"/> outputs.
 /// Each <strong>output</strong> may receive from <strong>at most one</strong> input at a time
-/// (unlike <see cref="Audio.AudioRouter"/>, which sums many sources into one sink).
+/// (unlike <see cref="Audio.AudioRouter"/>, which sums many sources into one output).
 /// A single input may still fan out to many outputs (one stream, multiple displays / encoders).
 /// </summary>
 /// <remarks>
 /// <para>
 /// Pixel negotiation uses the <strong>primary</strong> output registered with
-/// <see cref="AddInput"/> — its <see cref="IVideoSink.AcceptedPixelFormats"/> are re-exposed
-/// on the returned <see cref="IVideoSink"/>. Branch outputs receive
+/// <see cref="AddInput"/> — its <see cref="IVideoOutput.AcceptedPixelFormats"/> are re-exposed
+/// on the returned <see cref="IVideoOutput"/>. Branch outputs receive
 /// <see cref="IVideoCpuFrameConverter"/> conversion (via <see cref="VideoCpuFrameConverterRegistry"/>)
 /// when needed; the shipping converter is FFmpeg's swscale-backed implementation.
 /// </para>
 /// <para>
-/// <strong>DRM dma-buf NV12</strong> can fan out to multiple sinks when every
+/// <strong>DRM dma-buf NV12</strong> can fan out to multiple outputs when every
 /// branch accepts the same negotiated <see cref="PixelFormat.Nv12"/> (no
 /// per-branch <see cref="IVideoCpuFrameConverter"/>). <strong>P010</strong> and <strong>P016</strong> dma-buf fan-out follow the same rule
 /// when every branch stays <see cref="PixelFormat.P010"/> or <see cref="PixelFormat.P016"/> via <see cref="VideoFrame.CreateP010DmabufSharedReference"/> or <see cref="VideoFrame.CreateP016DmabufSharedReference"/>.
 /// Each NV12 output receives an independent <see cref="VideoFrame"/> sharing refcounted fds via
 /// <see cref="VideoFrame.CreateNv12DmabufSharedReference"/>; each P010 output uses <see cref="VideoFrame.CreateP010DmabufSharedReference"/>; each P016 output uses <see cref="VideoFrame.CreateP016DmabufSharedReference"/>.
-/// <strong>CPU NV12</strong> with the same constraints uses <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> so every sink shares one backing instead of <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/>.
+/// <strong>CPU NV12</strong> with the same constraints uses <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> so every output shares one backing instead of <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/>.
 /// When a branch needs a different pixel format and the input is Linux DRM dma-buf semi-planar, <see cref="VideoDmabufCpuReadback"/> performs a best-effort <c>mmap</c> copy into CPU memory for that branch’s <see cref="IVideoCpuFrameConverter"/> (may fail for tiled / protected buffers — see that type).
-/// <strong>Win32</strong> shared NV12 with a branch CPU converter remains unsupported at <see cref="IVideoSink.Submit"/> time.
+/// <strong>Win32</strong> shared NV12 with a branch CPU converter remains unsupported at <see cref="IVideoOutput.Submit"/> time.
 /// Configure-time cannot know whether NV12, P010, or P016 frames will be CPU-backed or hardware-backed; when hardware-backed semi-planar dma-buf frames are delivered,
 /// the router logs a warning if any branch uses a CPU converter (see <see cref="InputRegistration.ApplyConfigureLocked"/>).
 /// </para>
 /// <para>
-/// For slow sinks (NDI, remote encoders), pass <see cref="VideoSinkPumpAttachOptions"/> to
-/// <see cref="AddOutput"/> or wrap the sink in <see cref="VideoSinkPump"/> before registering.
-/// Use <see cref="TryGetVideoSinkPumpMetrics(string, out VideoSinkPumpMetrics)"/> for queue depth, drops, and capacity.
-/// Subscribe to <see cref="PumpPressure"/> when an output uses <see cref="VideoSinkPumpAttachOptions"/> to react to queue-full drops without polling metrics (same role as <see cref="S.Media.Core.Audio.AudioRouter.PumpPressure"/> for audio).
+/// For slow outputs (NDI, remote encoders), pass <see cref="VideoOutputPumpAttachOptions"/> to
+/// <see cref="AddOutput"/> or wrap the output in <see cref="VideoOutputPump"/> before registering.
+/// Use <see cref="TryGetVideoOutputPumpMetrics(string, out VideoOutputPumpMetrics)"/> for queue depth, drops, and capacity.
+/// Subscribe to <see cref="PumpPressure"/> when an output uses <see cref="VideoOutputPumpAttachOptions"/> to react to queue-full drops without polling metrics (same role as <see cref="S.Media.Core.Audio.AudioRouter.PumpPressure"/> for audio).
 /// </para>
 /// <para>
-/// <see cref="Dispose"/> tears down inputs then owned output sinks under the router lock. In <c>DEBUG</c> builds, failures from
-/// <see cref="InputRegistration.TearDownPaths"/>, <see cref="IVideoSink.MarkDisposed"/>, or an individual sink <see cref="IDisposable.Dispose"/>
+/// <see cref="Dispose"/> tears down inputs then owned output outputs under the router lock. In <c>DEBUG</c> builds, failures from
+/// <see cref="InputRegistration.TearDownPaths"/>, <see cref="IVideoOutput.MarkDisposed"/>, or an individual output <see cref="IDisposable.Dispose"/>
 /// are logged via <see cref="MediaDiagnostics"/> and teardown continues; <c>Release</c> remains best-effort silent.
 /// </para>
 /// </remarks>
@@ -70,36 +70,36 @@ public sealed class VideoRouter : IDisposable
 
     public VideoRouter(ILogger? logger = null) => _log = logger;
 
-    /// <summary>Optional: raised when an async <see cref="VideoSinkPump"/> on an output drops an oldest frame; arguments include <see cref="VideoRouterPumpPressureEventArgs.OutputId"/> and cumulative drops. Handler runs on the pump's <see cref="IVideoSink.Submit"/> caller thread (typically the router input path).</summary>
+    /// <summary>Optional: raised when an async <see cref="VideoOutputPump"/> on an output drops an oldest frame; arguments include <see cref="VideoRouterPumpPressureEventArgs.OutputId"/> and cumulative drops. Handler runs on the pump's <see cref="IVideoOutput.Submit"/> caller thread (typically the router input path).</summary>
     public event EventHandler<VideoRouterPumpPressureEventArgs>? PumpPressure
     {
         add => _pumpPressure += value;
         remove => _pumpPressure -= value;
     }
 
-    /// <summary>Registers a sink. <paramref name="id"/> defaults to <c>vout_1</c>, <c>vout_2</c>, …</summary>
+    /// <summary>Registers a output. <paramref name="id"/> defaults to <c>vout_1</c>, <c>vout_2</c>, …</summary>
     /// <param name="asyncPump">
-    /// Explicit <see cref="VideoSinkPump"/> attach options. Overrides the default pump-by-default path
+    /// Explicit <see cref="VideoOutputPump"/> attach options. Overrides the default pump-by-default path
     /// described under <paramref name="synchronous"/>. The router always disposes the pump on
-    /// <see cref="Dispose"/> (the pump is the registered sink); the pump itself disposes the inner sink
-    /// only when <see cref="VideoSinkPumpAttachOptions.DisposeInnerSinkWhenPumpDisposes"/> is set.
+    /// <see cref="Dispose"/> (the pump is the registered output); the pump itself disposes the inner output
+    /// only when <see cref="VideoOutputPumpAttachOptions.DisposeInnerOutputWhenPumpDisposes"/> is set.
     /// </param>
     /// <param name="synchronous">
-    /// When <c>true</c>, the sink is registered as-is — <see cref="IVideoSink.Submit"/> runs on the
-    /// clock-driver thread. Use this for sinks that are guaranteed to return promptly
-    /// (e.g. <see cref="DiscardingVideoSink"/>) or that manage their own threading. Mutually exclusive
+    /// When <c>true</c>, the output is registered as-is — <see cref="IVideoOutput.Submit"/> runs on the
+    /// clock-driver thread. Use this for outputs that are guaranteed to return promptly
+    /// (e.g. <see cref="DiscardingVideoOutput"/>) or that manage their own threading. Mutually exclusive
     /// with <paramref name="asyncPump"/>; passing both throws <see cref="ArgumentException"/>.
     ///
     /// When <c>false</c> (default) <strong>and</strong> <paramref name="asyncPump"/> is <c>null</c>,
-    /// the sink is wrapped in a <see cref="VideoSinkPump"/> with default capacity so a slow
-    /// <see cref="IVideoSink.Submit"/> cannot stall the clock thread. The pump propagates dispose to
-    /// the inner sink only when <paramref name="disposeSinkOnRouterDispose"/> is <c>true</c>; the pump
+    /// the output is wrapped in a <see cref="VideoOutputPump"/> with default capacity so a slow
+    /// <see cref="IVideoOutput.Submit"/> cannot stall the clock thread. The pump propagates dispose to
+    /// the inner output only when <paramref name="disposeOutputOnRouterDispose"/> is <c>true</c>; the pump
     /// itself is always disposed with the router.
     /// </param>
-    public string AddOutput(IVideoSink sink, string? id = null, bool disposeSinkOnRouterDispose = false,
-        VideoSinkPumpAttachOptions? asyncPump = null, bool synchronous = false)
+    public string AddOutput(IVideoOutput output, string? id = null, bool disposeOutputOnRouterDispose = false,
+        VideoOutputPumpAttachOptions? asyncPump = null, bool synchronous = false)
     {
-        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(output);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (synchronous && asyncPump is not null)
@@ -107,13 +107,13 @@ public sealed class VideoRouter : IDisposable
                 "synchronous: true is mutually exclusive with asyncPump — pick one.",
                 nameof(synchronous));
 
-        // Default ergonomics (Phase 2): pump-by-default so new sinks don't silently stall the clock
-        // thread on a slow Submit. Callers that know their sink is prompt opt out with synchronous: true;
+        // Default ergonomics (Phase 2): pump-by-default so new outputs don't silently stall the clock
+        // thread on a slow Submit. Callers that know their output is prompt opt out with synchronous: true;
         // callers that want a tuned pump pass asyncPump explicitly.
         if (!synchronous && asyncPump is null)
         {
-            asyncPump = new VideoSinkPumpAttachOptions(
-                DisposeInnerSinkWhenPumpDisposes: disposeSinkOnRouterDispose);
+            asyncPump = new VideoOutputPumpAttachOptions(
+                DisposeInnerOutputWhenPumpDisposes: disposeOutputOnRouterDispose);
         }
 
         lock (_gate)
@@ -126,18 +126,18 @@ public sealed class VideoRouter : IDisposable
             {
                 if (ap.MaxQueuedFrames < 1)
                     throw new ArgumentOutOfRangeException(nameof(asyncPump), "MaxQueuedFrames must be >= 1");
-                var pumpName = ap.ThreadName ?? $"VideoSinkPump-{id}";
-                var pump = new VideoSinkPump(sink, ap.MaxQueuedFrames, pumpName, ap.Logger,
-                    disposeInnerOnDispose: ap.DisposeInnerSinkWhenPumpDisposes);
+                var pumpName = ap.ThreadName ?? $"VideoOutputPump-{id}";
+                var pump = new VideoOutputPump(output, ap.MaxQueuedFrames, pumpName, ap.Logger,
+                    disposeInnerOnDispose: ap.DisposeInnerOutputWhenPumpDisposes);
                 var outputId = id;
                 pump.PumpPressure += (_, e) => RaisePumpPressure(outputId, e.DroppedFramesTotal);
-                sink = pump;
-                disposeSinkOnRouterDispose = true;
+                output = pump;
+                disposeOutputOnRouterDispose = true;
             }
 
-            _outputs.Add(id, new OutputRegistration(id, sink, disposeSinkOnRouterDispose));
+            _outputs.Add(id, new OutputRegistration(id, output, disposeOutputOnRouterDispose));
             Trace.LogDebug("AddOutput: id={OutputId} type={SinkType} async={IsAsync} disposeOnRouterDispose={Dispose}",
-                id, sink.GetType().Name, sink is VideoSinkPump, disposeSinkOnRouterDispose);
+                id, output.GetType().Name, output is VideoOutputPump, disposeOutputOnRouterDispose);
             return id;
         }
     }
@@ -193,7 +193,7 @@ public sealed class VideoRouter : IDisposable
                 throw new InvalidOperationException(msg);
             }
 
-            var accepted = primaryOut.Sink.AcceptedPixelFormats;
+            var accepted = primaryOut.Output.AcceptedPixelFormats;
             var reg = new InputRegistration(this, inputId, primaryOutputId, accepted);
             _inputs.Add(inputId, reg);
             _outputOwner[primaryOutputId] = inputId;
@@ -201,7 +201,7 @@ public sealed class VideoRouter : IDisposable
             reg.RoutedSet.Add(primaryOutputId);
             Trace.LogDebug("AddInput: id={InputId} primaryOut={Primary} acceptedFormats=[{Accepted}]",
                 inputId, primaryOutputId, string.Join(",", accepted));
-            return new VideoRouterInputRegistration(inputId, reg.Sink);
+            return new VideoRouterInputRegistration(inputId, reg.Output);
         }
     }
 
@@ -303,13 +303,13 @@ public sealed class VideoRouter : IDisposable
         foreach (var oid in reg.RoutedOutputIds)
             _outputOwner.Remove(oid);
         reg.TearDownPaths();
-        reg.Sink.MarkDisposed();
+        reg.Output.MarkDisposed();
         return true;
     }
 
     /// <summary>
     /// When <paramref name="inputId"/> is configured, returns the negotiated stream <see cref="VideoFormat"/> and
-    /// each routed output's sink pixel format in route order (primary output first).
+    /// each routed output's output pixel format in route order (primary output first).
     /// </summary>
     /// <returns>
     /// False when <paramref name="inputId"/> is unknown or not yet configured. On false, <paramref name="negotiated"/> is
@@ -334,7 +334,7 @@ public sealed class VideoRouter : IDisposable
             {
                 if (!_outputs.TryGetValue(oid, out var oreg))
                     continue;
-                var px = oreg.Sink.Format.PixelFormat;
+                var px = oreg.Output.Format.PixelFormat;
                 list.Add(new VideoRouterFanOutPixelFormat(oid, px, reg.BranchUsesCpuConverter(oid)));
             }
 
@@ -352,53 +352,28 @@ public sealed class VideoRouter : IDisposable
         {
             foreach (var reg in _inputs.Values)
             {
-                try
+                MediaDiagnostics.SwallowDisposeErrors(() =>
                 {
                     reg.TearDownPaths();
-                    reg.Sink.MarkDisposed();
-                }
-#if DEBUG
-                catch (Exception ex)
-                {
-                    MediaDiagnostics.LogError(ex, "VideoRouter.Dispose: input teardown");
-                }
-#else
-                catch
-                {
-                    // best effort — continue clearing router inputs
-                }
-#endif
+                    reg.Output.MarkDisposed();
+                }, "VideoRouter.Dispose: input teardown");
             }
 
             _inputs.Clear();
             _outputOwner.Clear();
             foreach (var o in _outputs.Values)
             {
-                if (!o.DisposeSinkOnRouterDispose || o.Sink is not IDisposable d)
+                if (!o.DisposeOutputOnRouterDispose || o.Output is not IDisposable d)
                     continue;
-                try
-                {
-                    d.Dispose();
-                }
-#if DEBUG
-                catch (Exception ex)
-                {
-                    MediaDiagnostics.LogError(ex, $"VideoRouter.Dispose: output sink '{o.Id}'");
-                }
-#else
-                catch
-                {
-                    // best effort — continue disposing other outputs
-                }
-#endif
+                MediaDiagnostics.SwallowDisposeErrors(d.Dispose, $"VideoRouter.Dispose: output output '{o.Id}'");
             }
 
             _outputs.Clear();
         }
     }
 
-    /// <summary>When <paramref name="outputId"/> was registered with an async <see cref="VideoSinkPump"/>, returns its counters.</summary>
-    public bool TryGetVideoSinkPumpMetrics(string outputId, out VideoSinkPumpMetrics metrics)
+    /// <summary>When <paramref name="outputId"/> was registered with an async <see cref="VideoOutputPump"/>, returns its counters.</summary>
+    public bool TryGetVideoOutputPumpMetrics(string outputId, out VideoOutputPumpMetrics metrics)
     {
         metrics = default;
         ArgumentException.ThrowIfNullOrEmpty(outputId);
@@ -406,9 +381,9 @@ public sealed class VideoRouter : IDisposable
         {
             if (!_outputs.TryGetValue(outputId, out var reg))
                 return false;
-            if (reg.Sink is VideoSinkPump pump)
+            if (reg.Output is VideoOutputPump pump)
             {
-                metrics = new VideoSinkPumpMetrics(
+                metrics = new VideoOutputPumpMetrics(
                     pump.DroppedFrames,
                     pump.SubmittedFrames,
                     pump.MaxQueueDepth,
@@ -420,10 +395,10 @@ public sealed class VideoRouter : IDisposable
         return false;
     }
 
-    /// <summary>When <paramref name="outputId"/> was registered with an async <see cref="VideoSinkPump"/>, returns dropped and submitted counts.</summary>
-    public bool TryGetVideoSinkPumpMetrics(string outputId, out long droppedFrames, out long submittedFrames)
+    /// <summary>When <paramref name="outputId"/> was registered with an async <see cref="VideoOutputPump"/>, returns dropped and submitted counts.</summary>
+    public bool TryGetVideoOutputPumpMetrics(string outputId, out long droppedFrames, out long submittedFrames)
     {
-        if (!TryGetVideoSinkPumpMetrics(outputId, out var m))
+        if (!TryGetVideoOutputPumpMetrics(outputId, out var m))
         {
             droppedFrames = 0;
             submittedFrames = 0;
@@ -438,9 +413,9 @@ public sealed class VideoRouter : IDisposable
     private void RaisePumpPressure(string outputId, long droppedFramesTotal) =>
         _pumpPressure?.Invoke(this, new VideoRouterPumpPressureEventArgs(outputId, droppedFramesTotal));
 
-    private static void ApplyD3D11GlBorrowVideoSourceToSink(IVideoSink sink, IVideoSource? videoSource)
+    private static void ApplyD3D11GlBorrowVideoSourceToOutput(IVideoOutput output, IVideoSource? videoSource)
     {
-        if (sink is not IVideoSinkD3D11GlBorrowSetup borrowSetup)
+        if (output is not IVideoOutputD3D11GlBorrowSetup borrowSetup)
             return;
         if (videoSource is IHardwareD3D11GlInteropSource)
             borrowSetup.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
@@ -455,11 +430,11 @@ public sealed class VideoRouter : IDisposable
         reg.ApplyConfigureLocked(fmt);
     }
 
-    private sealed class OutputRegistration(string Id, IVideoSink Sink, bool DisposeSinkOnRouterDispose)
+    private sealed class OutputRegistration(string Id, IVideoOutput Output, bool DisposeOutputOnRouterDispose)
     {
         public string Id { get; } = Id;
-        public IVideoSink Sink { get; } = Sink;
-        public bool DisposeSinkOnRouterDispose { get; } = DisposeSinkOnRouterDispose;
+        public IVideoOutput Output { get; } = Output;
+        public bool DisposeOutputOnRouterDispose { get; } = DisposeOutputOnRouterDispose;
     }
 
     private sealed class InputRegistration
@@ -467,7 +442,7 @@ public sealed class VideoRouter : IDisposable
         private readonly VideoRouter _owner;
         public string Id { get; }
         public string PrimaryOutputId { get; }
-        public VideoRouterInputSink Sink { get; }
+        public VideoRouterInputOutput Output { get; }
         public List<string> RoutedOutputIds { get; } = [];
         public HashSet<string> RoutedSet { get; } = new(StringComparer.Ordinal);
         public bool Configured { get; private set; }
@@ -481,7 +456,7 @@ public sealed class VideoRouter : IDisposable
             _owner = owner;
             Id = id;
             PrimaryOutputId = primaryOutputId;
-            Sink = new VideoRouterInputSink(owner, this, accepted);
+            Output = new VideoRouterInputOutput(owner, this, accepted);
         }
 
         public bool RemoveOutputFromRoutes(string outputId)
@@ -503,16 +478,16 @@ public sealed class VideoRouter : IDisposable
             VideoRouter.Trace.LogDebug("ApplyConfigure: input={InputId} negotiated={Format} routedOutputs=[{Outputs}]",
                 Id, negotiated, string.Join(",", RoutedOutputIds));
             NegotiatedFormat = negotiated;
-            var primarySink = _owner._outputs[PrimaryOutputId].Sink;
-            VideoRouter.ApplyD3D11GlBorrowVideoSourceToSink(primarySink, _borrowVideoSourceForWin32Nv12Gl);
+            var primarySink = _owner._outputs[PrimaryOutputId].Output;
+            VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primarySink, _borrowVideoSourceForWin32Nv12Gl);
             primarySink.Configure(negotiated);
             _paths.Clear();
 
             for (var i = 1; i < RoutedOutputIds.Count; i++)
             {
                 var oid = RoutedOutputIds[i];
-                var branchSink = _owner._outputs[oid].Sink;
-                var branchFmt = VideoSinkFanoutFormats.PickBranchPixelFormat(negotiated, branchSink.AcceptedPixelFormats);
+                var branchSink = _owner._outputs[oid].Output;
+                var branchFmt = VideoOutputFanoutFormats.PickBranchPixelFormat(negotiated, branchSink.AcceptedPixelFormats);
                 var needsConversion = branchFmt != negotiated.PixelFormat;
                 IVideoCpuFrameConverter? conv = null;
                 if (needsConversion)
@@ -558,8 +533,8 @@ public sealed class VideoRouter : IDisposable
         internal void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource)
         {
             _borrowVideoSourceForWin32Nv12Gl = videoSource;
-            var primarySink = _owner._outputs[PrimaryOutputId].Sink;
-            VideoRouter.ApplyD3D11GlBorrowVideoSourceToSink(primarySink, _borrowVideoSourceForWin32Nv12Gl);
+            var primarySink = _owner._outputs[PrimaryOutputId].Output;
+            VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primarySink, _borrowVideoSourceForWin32Nv12Gl);
         }
 
         public void SubmitLocked(VideoFrame frame)
@@ -591,7 +566,7 @@ public sealed class VideoRouter : IDisposable
                 {
                     frame.Dispose();
                     throw new NotSupportedException(
-                        $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 sinks for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                        $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 outputs for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
                 }
 
                 if (frame.DmabufNv12 is not null)
@@ -600,7 +575,7 @@ public sealed class VideoRouter : IDisposable
                     {
                         frame.Dispose();
                         throw new NotSupportedException(
-                            $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter — use matching sinks, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                            $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
                     }
                 }
                 else if (frame.DmabufP010 is not null)
@@ -609,7 +584,7 @@ public sealed class VideoRouter : IDisposable
                     {
                         frame.Dispose();
                         throw new NotSupportedException(
-                            $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter — use matching sinks, a single output, or software decode.");
+                            $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
                     }
                 }
                 else if (frame.DmabufP016 is not null)
@@ -618,14 +593,14 @@ public sealed class VideoRouter : IDisposable
                     {
                         frame.Dispose();
                         throw new NotSupportedException(
-                            $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter — use matching sinks, a single output, or software decode.");
+                            $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
                     }
                 }
             }
 
             if (RoutedOutputIds.Count == 1)
             {
-                _owner._outputs[RoutedOutputIds[0]].Sink.Submit(frame);
+                _owner._outputs[RoutedOutputIds[0]].Output.Submit(frame);
                 return;
             }
 
@@ -683,7 +658,7 @@ public sealed class VideoRouter : IDisposable
                 converterReadback?.Dispose();
                 converterReadback = null;
 
-                _owner._outputs[PrimaryOutputId].Sink.Submit(frame);
+                _owner._outputs[PrimaryOutputId].Output.Submit(frame);
                 frame = null!;
 
                 for (var i = 0; i < branchFrames.Length; i++)
@@ -691,7 +666,7 @@ public sealed class VideoRouter : IDisposable
                     var oid = RoutedOutputIds[i + 1];
                     var f = branchFrames[i]!;
                     branchFrames[i] = null;
-                    _owner._outputs[oid].Sink.Submit(f);
+                    _owner._outputs[oid].Output.Submit(f);
                 }
             }
             catch
@@ -708,14 +683,14 @@ public sealed class VideoRouter : IDisposable
     /// <param name="Converter">When null, branch uses <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/> for CPU frames unless <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> applies (negotiated <see cref="PixelFormat.Nv12"/>, no dma-buf / Win32 backings, no branch converter).</param>
     private readonly record struct OutputPathState(IVideoCpuFrameConverter? Converter);
 
-    private sealed class VideoRouterInputSink : IVideoSink, IVideoSinkD3D11GlBorrowSetup
+    private sealed class VideoRouterInputOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup
     {
         private readonly VideoRouter _owner;
         private readonly InputRegistration _reg;
         private readonly IReadOnlyList<PixelFormat> _accepted;
         private bool _sinkDisposed;
 
-        public VideoRouterInputSink(VideoRouter owner, InputRegistration reg, IReadOnlyList<PixelFormat> accepted)
+        public VideoRouterInputOutput(VideoRouter owner, InputRegistration reg, IReadOnlyList<PixelFormat> accepted)
         {
             _owner = owner;
             _reg = reg;
@@ -734,7 +709,7 @@ public sealed class VideoRouter : IDisposable
                 {
                     ObjectDisposedException.ThrowIf(_sinkDisposed, this);
                     if (!_reg.Configured || _reg.NegotiatedFormat is not { } f)
-                        throw new InvalidOperationException("VideoRouter input sink is not configured yet.");
+                        throw new InvalidOperationException("VideoRouter input output is not configured yet.");
                     return f;
                 }
             }
@@ -774,5 +749,5 @@ public sealed class VideoRouter : IDisposable
     }
 }
 
-/// <summary>Return value of <see cref="VideoRouter.AddInput"/> — stable id plus the <see cref="IVideoSink"/> the decoder connects to.</summary>
-public readonly record struct VideoRouterInputRegistration(string Id, IVideoSink Sink);
+/// <summary>Return value of <see cref="VideoRouter.AddInput"/> — stable id plus the <see cref="IVideoOutput"/> the decoder connects to.</summary>
+public readonly record struct VideoRouterInputRegistration(string Id, IVideoOutput Output);

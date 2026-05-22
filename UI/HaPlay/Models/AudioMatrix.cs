@@ -14,7 +14,7 @@ public sealed record AudioMatrixCellConfig
     /// <summary>Source (input) channel index. 0 = L for a stereo source.</summary>
     public int InputChannel { get; init; }
 
-    /// <summary>Sink (output device) channel index. 0 = L for a stereo sink.</summary>
+    /// <summary>Output (output device) channel index. 0 = L for a stereo output.</summary>
     public int OutputChannel { get; init; }
 
     /// <summary>Per-cell gain in dB. Composed multiplicatively with master and per-output gain at routing time.</summary>

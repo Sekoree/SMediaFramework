@@ -126,12 +126,12 @@ public class MediaClockMasterTests
         clock.Pause();
         var paused = clock.CurrentPosition;
 
-        // Master jumps ahead while paused (real audio sink kept playing).
+        // Master jumps ahead while paused (real audio output kept playing).
         master.ElapsedSinceStart = TimeSpan.FromSeconds(30);
         clock.Start();
 
         // Right after resume, position includes elapsed master time accrued while paused
-        // so the timeline stays aligned with audio that continued in the sink buffer.
+        // so the timeline stays aligned with audio that continued in the output buffer.
         var afterResume = clock.CurrentPosition;
         Assert.True(afterResume > paused + TimeSpan.FromSeconds(20));
 

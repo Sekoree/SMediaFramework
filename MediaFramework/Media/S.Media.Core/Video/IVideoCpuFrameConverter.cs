@@ -6,7 +6,7 @@ namespace S.Media.Core.Video;
 /// Pluggable CPU pixel-format converter (libswscale-style). The shipping implementation lives in
 /// <c>S.Media.FFmpeg</c> and is installed via <see cref="VideoCpuFrameConverterRegistry.Factory"/>
 /// during <c>FFmpegRuntime.EnsureInitialized()</c>. Core uses the interface so <see cref="VideoRouter"/>
-/// and <see cref="VideoSinkFanoutFormats"/> can do branch conversion without referencing FFmpeg.
+/// and <see cref="VideoOutputFanoutFormats"/> can do branch conversion without referencing FFmpeg.
 /// </summary>
 public interface IVideoCpuFrameConverter : IDisposable
 {

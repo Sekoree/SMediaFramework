@@ -989,7 +989,7 @@ public readonly partial struct ChannelMap
 
     /// <summary>
     /// Packed interleaved identity: <c>map[i] == i</c> for every output, and
-    /// <c>srcChannels == dstChannels == OutputChannels</c> (e.g. 5.1 passthrough into a same-width sink).
+    /// <c>srcChannels == dstChannels == OutputChannels</c> (e.g. 5.1 passthrough into a same-width output).
     /// </summary>
     internal static bool TryAccumulatePackedIdentityInterleaved(
         ReadOnlySpan<float> src, int srcChannels,

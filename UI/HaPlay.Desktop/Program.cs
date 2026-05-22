@@ -27,7 +27,7 @@ sealed class Program
             .LogToTrace();
 
     /// <summary>
-    /// Wires <see cref="MediaDiagnostics.LoggerFactory"/> to console + rolling file sinks. Runs
+    /// Wires <see cref="MediaDiagnostics.LoggerFactory"/> to console + rolling file outputs. Runs
     /// before <see cref="BuildAvaloniaApp"/> so any static-field logger captured by media framework
     /// classes resolves through this factory.
     /// </summary>

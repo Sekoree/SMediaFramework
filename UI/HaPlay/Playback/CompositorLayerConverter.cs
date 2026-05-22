@@ -4,7 +4,7 @@ using S.Media.FFmpeg.Video;
 namespace HaPlay.Playback;
 
 /// <summary>
-/// Prepares frames for <see cref="CpuVideoCompositor"/> / <see cref="CompositorVideoSink"/> slots
+/// Prepares frames for <see cref="CpuVideoCompositor"/> / <see cref="VideoCompositorSource"/> slots
 /// (BGRA32 layers only).
 /// </summary>
 internal static class CompositorLayerConverter

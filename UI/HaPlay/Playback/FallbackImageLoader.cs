@@ -113,7 +113,7 @@ internal static class FallbackImageLoader
         }
     }
 
-    /// <summary>Deep-copies a template so each sink can own its own instance.</summary>
+    /// <summary>Deep-copies a template so each output can own its own instance.</summary>
     public static VideoFrame CloneHoldTemplate(VideoFrame template) =>
         VideoCpuFrameConverter.DuplicateCpuBacking(template, template.ColorTransferHint);
 

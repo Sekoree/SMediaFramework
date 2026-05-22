@@ -298,12 +298,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
 
         if (_nv12Win32SharedUploader is not null)
         {
-            try { _nv12Win32SharedUploader.Dispose(); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, "YuvVideoRenderer.TryEnsureNv12Win32SharedUploader: dispose prior uploader"); }
-#else
-            catch { /* best-effort */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(_nv12Win32SharedUploader.Dispose, "YuvVideoRenderer.TryEnsureNv12Win32SharedUploader: dispose prior uploader");
             _nv12Win32SharedUploader = null;
             _nv12Win32UploaderDeviceComPtr = 0;
         }
@@ -364,7 +359,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             {
                 var hint = _allowLazyWin32Nv12UploaderFromDecodedFrame
                     ? "First Win32 NV12 frame must carry LibavD3D11DeviceComPtr on the backing (D3D11VA decode), or configure VideoFormatNegotiator / pass win32D3D11DeviceComPtrForNv12 when only NT shared handles are available. If Win32Nv12SharedHandleOnlyExport is enabled, bind SDL D3D11GlInteropDeviceHost or a negotiator device before the first frame."
-                    : "Pass a non-zero win32D3D11DeviceComPtrForNv12 when constructing YuvVideoRenderer, or enable SDL3GLVideoSink deferred libav binding for true zero-host.";
+                    : "Pass a non-zero win32D3D11DeviceComPtrForNv12 when constructing YuvVideoRenderer, or enable SDL3GLVideoOutput deferred libav binding for true zero-host.";
                 throw new InvalidOperationException(
                     "NV12 Win32 D3D11 upload has no ID3D11Device yet. " + hint);
             }
@@ -683,18 +678,8 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        try { _nv12DmabufGpuUploader?.Dispose(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "YuvVideoRenderer.Dispose: dmabuf uploader"); }
-#else
-        catch { /* best-effort */ }
-#endif
-        try { _nv12Win32SharedUploader?.Dispose(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "YuvVideoRenderer.Dispose: Win32 uploader"); }
-#else
-        catch { /* best-effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _nv12DmabufGpuUploader?.Dispose(), "YuvVideoRenderer.Dispose: dmabuf uploader");
+        MediaDiagnostics.SwallowDisposeErrors(() => _nv12Win32SharedUploader?.Dispose(), "YuvVideoRenderer.Dispose: Win32 uploader");
         _nv12Win32UploaderDeviceComPtr = 0;
 
         for (var i = 0; i < _textures.Length; i++)

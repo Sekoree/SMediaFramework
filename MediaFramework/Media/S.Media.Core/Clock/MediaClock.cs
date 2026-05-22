@@ -9,7 +9,7 @@ namespace S.Media.Core.Clock;
 /// Master playback clock. Free-running by default (backed by
 /// <see cref="Stopwatch"/>); call <see cref="SetMaster"/> (or
 /// <see cref="MediaClockExtensions.SetMasterChain"/> for <see cref="IMediaClock"/>) to slave it to an external
-/// <see cref="IPlaybackClock"/> (typically the audio sink) so reported position
+/// <see cref="IPlaybackClock"/> (typically the audio output) so reported position
 /// tracks actual played samples instead of wall time.
 /// </summary>
 /// <remarks>
@@ -34,10 +34,10 @@ namespace S.Media.Core.Clock;
 /// the playhead stays aligned with heard audio.
 /// </para>
 /// <para>
-/// Graph-wide coordinated master pitch (PPM), synchronized drop/repeat across multiple sinks, or other
+/// Graph-wide coordinated master pitch (PPM), synchronized drop/repeat across multiple outputs, or other
 /// timing policy beyond what individual <see cref="IPlaybackClock"/> instances report is <strong>host-owned</strong>
 /// (see <see cref="Audio.AudioRouter"/> remarks, <see cref="Audio.PumpPressurePlaybackHintMonitor"/> for queue-drop hints,
-/// and the FFmpeg <c>AdaptiveRateAudioSink</c> adapter for optional per-sink resampling).
+/// and the FFmpeg <c>AdaptiveRateAudioOutput</c> adapter for optional per-output resampling).
 /// </para>
 /// </remarks>
 public sealed class MediaClock : IMediaClock, IDisposable

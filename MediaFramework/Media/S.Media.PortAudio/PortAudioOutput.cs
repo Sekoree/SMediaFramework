@@ -8,7 +8,7 @@ using S.Media.Core.Diagnostics;
 namespace S.Media.PortAudio;
 
 /// <summary>
-/// Audio sink backed by a PortAudio output stream. Producers call
+/// Audio output backed by a PortAudio output stream. Producers call
 /// <see cref="Submit"/> with packed float32 frames; PortAudio's audio-thread
 /// callback drains an SPSC ring buffer and fills silence on underrun.
 /// </summary>
@@ -23,7 +23,7 @@ namespace S.Media.PortAudio;
 /// <see cref="Dispose"/> calls <see cref="Stop"/> then <see cref="PortAudioRuntime.Release"/>; each step is wrapped so <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
 /// </para>
 /// </remarks>
-public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabilities, IClockedSink, IFlushableSink, IPlaybackClock, IDisposable
+public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IFlushableOutput, IPlaybackClock, IDisposable
 {
     private readonly AudioFormat _format;
     private readonly int _deviceIndex;
@@ -59,7 +59,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabi
     private int _streamSmoothCalibrated;
 
     public AudioFormat Format => _format;
-    public AudioSinkChannelCapabilities ChannelCapabilities =>
+    public AudioOutputChannelCapabilities ChannelCapabilities =>
         new(CurrentChannels: _format.Channels, MinChannels: 1, MaxChannels: _maxOutputChannels,
             SupportsRuntimeChannelReconfigure: false);
     public bool IsRunning => Volatile.Read(ref _isRunning);
@@ -124,7 +124,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabi
     public bool IsAdvancing => _stream != nint.Zero && (int)Native.Pa_IsStreamActive(_stream) == 1;
 
     /// <summary>
-    /// <see cref="IFlushableSink.Flush"/>: aborts the PortAudio stream
+    /// <see cref="IFlushableOutput.Flush"/>: aborts the PortAudio stream
     /// (discards anything in the OS buffer), zeroes the ring counters, and
     /// restarts the stream. There is a brief audible gap (typically a few ms);
     /// in exchange the very next <see cref="Submit"/> plays without first
@@ -352,14 +352,14 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabi
         IAudioSource source,
         TimeSpan timeout,
         int chunkSamples,
-        IAudioSink? mirrorPackedFloats = null,
+        IAudioOutput? mirrorPackedFloats = null,
         int? targetQueuedSamplesOverride = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         if (source.Format != _format)
             throw new ArgumentException("Source format must match this output's format.", nameof(source));
         if (mirrorPackedFloats is not null && mirrorPackedFloats.Format != _format)
-            throw new ArgumentException("Mirror sink format must match this output's format.", nameof(mirrorPackedFloats));
+            throw new ArgumentException("Mirror output format must match this output's format.", nameof(mirrorPackedFloats));
         if (chunkSamples < 16)
             throw new ArgumentOutOfRangeException(nameof(chunkSamples));
         if (timeout <= TimeSpan.Zero)
@@ -383,7 +383,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabi
     }
 
     /// <summary>
-    /// <see cref="IClockedSink"/> implementation: paces the router against the
+    /// <see cref="IClockedOutput"/> implementation: paces the router against the
     /// device's actual playback rate. Returns when adding
     /// <paramref name="chunkSamples"/> per channel would still leave the queued
     /// total at or below <see cref="TargetQueueSamples"/>; otherwise sleeps
@@ -531,33 +531,7 @@ public sealed unsafe class PortAudioOutput : IAudioSink, IAudioSinkChannelCapabi
     {
         if (_disposed) return;
         _disposed = true;
-        try
-        {
-            Stop();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "PortAudioOutput.Dispose: Stop");
-        }
-#else
-        catch
-        {
-        }
-#endif
-        try
-        {
-            PortAudioRuntime.Release();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "PortAudioOutput.Dispose: PortAudioRuntime.Release");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(Stop, "PortAudioOutput.Dispose: Stop");
+        MediaDiagnostics.SwallowDisposeErrors(PortAudioRuntime.Release, "PortAudioOutput.Dispose: PortAudioRuntime.Release");
     }
 }

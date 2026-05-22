@@ -9,57 +9,57 @@ public class AudioRouterClockingTests
     private const int SampleRate = 48000;
     private static readonly AudioFormat Stereo = new(SampleRate, 2);
 
-    // --- per-sink isolation -----------------------------------------------
+    // --- per-output isolation -----------------------------------------------
 
     [Fact]
-    public void SlowSink_DoesNotThrottleFastSink()
+    public void SlowOutput_DoesNotThrottleFastOutput()
     {
         // sinkSlow blocks for 50 ms inside Submit (simulating a clocked NDI
-        // sender). With the SinkPump model, this must NOT slow the router or
-        // the fast sink — its drainer thread is independent.
+        // sender). With the OutputPump model, this must NOT slow the router or
+        // the fast output — its drainer thread is independent.
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new TestSource(Stereo, _ => 1f);
-        var sinkFast = new CountingSink(Stereo, blockMs: 0);
-        var sinkSlow = new CountingSink(Stereo, blockMs: 50);
+        var sinkFast = new CountingOutput(Stereo, blockMs: 0);
+        var sinkSlow = new CountingOutput(Stereo, blockMs: 50);
 
         r.AddSource(src, "src");
-        r.AddSink(sinkFast, "fast");
-        r.AddSink(sinkSlow, "slow");
+        r.AddOutput(sinkFast, "fast");
+        r.AddOutput(sinkSlow, "slow");
         r.AddRoute("src", "fast", ChannelMap.Identity(2));
         r.AddRoute("src", "slow", ChannelMap.Identity(2));
 
         r.Start();
         // 480 samples @ 48kHz = 10ms/chunk. In ~250ms we'd expect ~25 chunks
-        // produced. Without isolation, the slow sink (50ms/chunk) would cap
+        // produced. Without isolation, the slow output (50ms/chunk) would cap
         // production at ~5 chunks.
         Thread.Sleep(250);
         var produced = r.ChunksProduced;
         r.Stop();
 
         Assert.True(produced >= 15,
-            $"expected at least 15 chunks in 250ms with isolated sinks, got {produced}");
+            $"expected at least 15 chunks in 250ms with isolated outputs, got {produced}");
 
-        // Fast sink got most of the production; slow sink may have dropped.
+        // Fast output got most of the production; slow output may have dropped.
         var fastStats = r.GetPumpStats("fast");
         var slowStats = r.GetPumpStats("slow");
         Assert.True(fastStats.Processed > slowStats.Processed,
-            $"fast sink should outpace slow sink (fast={fastStats.Processed}, slow={slowStats.Processed})");
+            $"fast output should outpace slow output (fast={fastStats.Processed}, slow={slowStats.Processed})");
     }
 
     // --- slaved clock ------------------------------------------------------
 
     [Fact]
-    public void SlaveTo_PacesAgainstSinkClock()
+    public void SlaveTo_PacesAgainstOutputClock()
     {
-        // The clocked sink only signals "ready" once per 5 ms. The router
+        // The clocked output only signals "ready" once per 5 ms. The router
         // should produce roughly one chunk every 5 ms, regardless of what
         // the wall-clock chunk duration would dictate.
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);  // 10 ms wall-clock chunk
         var src = new TestSource(Stereo, _ => 1f);
-        var sink = new ManualClockSink(Stereo, perChunkMs: 5);
+        var output = new ManualClockOutput(Stereo, perChunkMs: 5);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
         r.SlaveTo("out");
 
@@ -73,28 +73,28 @@ public class AudioRouterClockingTests
     }
 
     [Fact]
-    public void SlaveTo_NonClockedSink_Throws()
+    public void SlaveTo_NonClockedOutput_Throws()
     {
         using var r = new AudioRouter(SampleRate);
-        r.AddSink(new CountingSink(Stereo), "out");
+        r.AddOutput(new CountingOutput(Stereo), "out");
         Assert.Throws<ArgumentException>(() => r.SlaveTo("out"));
     }
 
     [Fact]
-    public void SlaveTo_RemovedSink_FallsBackToWallClock()
+    public void SlaveTo_RemovedOutput_FallsBackToWallClock()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
         var src = new TestSource(Stereo, _ => 1f);
-        var sink = new ManualClockSink(Stereo, perChunkMs: 5);
+        var output = new ManualClockOutput(Stereo, perChunkMs: 5);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
         r.SlaveTo("out");
 
         r.Start();
         Thread.Sleep(50);
-        Assert.True(r.RemoveSink("out"));
+        Assert.True(r.RemoveOutput("out"));
 
         // After remove, the slaved clock falls back to wall-clock pacing
         // (10 ms/chunk). Router shouldn't stall.
@@ -105,7 +105,7 @@ public class AudioRouterClockingTests
         r.Stop();
 
         Assert.True(producedAfter > producedAtRemove,
-            $"router should keep producing after slaved sink removed (was {producedAtRemove}, now {producedAfter})");
+            $"router should keep producing after slaved output removed (was {producedAtRemove}, now {producedAfter})");
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class AudioRouterClockingTests
         }
     }
 
-    private sealed class CountingSink(AudioFormat fmt, int blockMs = 0) : IAudioSink
+    private sealed class CountingOutput(AudioFormat fmt, int blockMs = 0) : IAudioOutput
     {
         public AudioFormat Format { get; } = fmt;
 
@@ -147,8 +147,8 @@ public class AudioRouterClockingTests
         }
     }
 
-    /// <summary>Sink that paces the router via <see cref="IClockedSink"/>: ready once every <c>perChunkMs</c> ms.</summary>
-    private sealed class ManualClockSink(AudioFormat fmt, int perChunkMs) : IAudioSink, IClockedSink
+    /// <summary>Output that paces the router via <see cref="IClockedOutput"/>: ready once every <c>perChunkMs</c> ms.</summary>
+    private sealed class ManualClockOutput(AudioFormat fmt, int perChunkMs) : IAudioOutput, IClockedOutput
     {
         private readonly Stopwatch _sw = Stopwatch.StartNew();
         private long _readyCount;

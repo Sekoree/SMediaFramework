@@ -146,7 +146,7 @@ public sealed record InputChannelTrimConfig
 /// <summary>
 /// Phase C (§4.3.4) first-cut channel routing mode. The full N×M cell-grid matrix needs the framework
 /// "Per-cell channel-mix matrix" gap to land; until then these five fixed presets cover the common
-/// stereo source → stereo sink reroutes via a single <c>ChannelMap</c> per route.
+/// stereo source → stereo output reroutes via a single <c>ChannelMap</c> per route.
 /// </summary>
 public enum AudioRouteMixMode
 {

@@ -9,7 +9,7 @@ using S.Media.NDI;
 namespace S.Media.NDI.Video;
 
 /// <summary>
-/// <see cref="IVideoSink"/> backed by an NDI sender. Constructed only via
+/// <see cref="IVideoOutput"/> backed by an NDI sender. Constructed only via
 /// <see cref="NDIOutput"/> (which owns the underlying <see cref="NDISender"/>
 /// so audio + video share one NDI source on the wire).
 /// </summary>
@@ -22,7 +22,7 @@ namespace S.Media.NDI.Video;
 /// </para>
 /// <para>
 /// When <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected via <see cref="NDIOutput"/>,
-/// video and <see cref="NDIAudioSink"/> share one internal presentation anchor so NDI timecodes
+/// video and <see cref="NDIAudioOutput"/> share one internal presentation anchor so NDI timecodes
 /// match on both streams. Without that wiring (no shared timeline), the sender keeps a private anchor.
 /// <see cref="NDIVideoTimecodeMode.MuxerPresentationTicks"/> uses absolute mux PTS ticks on every frame.
 /// </para>
@@ -53,7 +53,7 @@ namespace S.Media.NDI.Video;
 /// <strong>Debug</strong> via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues freeing remaining slots.
 /// </para>
 /// </remarks>
-public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
+public sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats =
     [
@@ -460,29 +460,13 @@ public sealed unsafe class NDIVideoSender : IVideoSink, IDisposable
         // staging buffer before we free it.
         if (_hasInFlight)
         {
-            try { _sender.FlushAsync(); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, "NDIVideoSender.Dispose: FlushAsync"); }
-#else
-            catch { /* best effort */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(_sender.FlushAsync, "NDIVideoSender.Dispose: FlushAsync");
             _hasInFlight = false;
         }
         for (var i = 0; i < _staging.Length; i++)
         {
             if (_staging[i] == null) continue;
-            try
-            {
-                NativeMemory.Free(_staging[i]);
-            }
-#if DEBUG
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, $"NDIVideoSender.Dispose: staging[{i}]");
-            }
-#else
-            catch { /* best effort */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => NativeMemory.Free(_staging[i]), $"NDIVideoSender.Dispose: staging[{i}]");
             _staging[i] = null;
             _stagingCapacity[i] = 0;
         }

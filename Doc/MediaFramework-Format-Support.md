@@ -147,7 +147,7 @@ Optional `VideoFrameMetadata` carries `Timecode` (SMPTE LTC / S12M with drop-fra
 
 ### Internal representation
 
-The framework's mixer rail is **packed (interleaved) 32-bit float** (`float` / `System.Single`, IEEE 754). Every source / sink declares its `AudioFormat` and the router fans samples between them. There is no internal multi-sample-format pipeline — sources convert at their boundary; sinks consume float directly.
+The framework's mixer rail is **packed (interleaved) 32-bit float** (`float` / `System.Single`, IEEE 754). Every source / output declares its `AudioFormat` and the router fans samples between them. There is no internal multi-sample-format pipeline — sources convert at their boundary; outputs consume float directly.
 
 | Aspect | Type / value |
 |---|---|
@@ -168,13 +168,13 @@ Any positive `int` is accepted. The router and players validate `> 0` at every p
 | 96 000 Hz | Studio masters, high-rate captures |
 | 176 400 Hz / 192 000 Hz | Archival / measurement |
 
-Cross-rate routing is handled via `S.Media.FFmpeg.Audio.ResamplingAudioSource` (wraps the inner source in a libswresample resampler) and `ResamplingAudioSink` (sink side). The router supports `AddSource(..., autoResample: true)` to auto-wrap a mismatched-rate source via the FFmpeg factory installed by `FFmpegRuntime.EnsureInitialized`.
+Cross-rate routing is handled via `S.Media.FFmpeg.Audio.ResamplingAudioSource` (wraps the inner source in a libswresample resampler) and `ResamplingAudioOutput` (output side). The router supports `AddSource(..., autoResample: true)` to auto-wrap a mismatched-rate source via the FFmpeg factory installed by `FFmpegRuntime.EnsureInitialized`.
 
-`AudioRouter.ReconfigureSampleRate` / `ReconfigureSampleRateWhileRunning` change the router's nominal Hz after every registered source and sink already reports the new rate.
+`AudioRouter.ReconfigureSampleRate` / `ReconfigureSampleRateWhileRunning` change the router's nominal Hz after every registered source and output already reports the new rate.
 
 ### Channel counts and layouts
 
-Any positive `int` is accepted. The framework does not enforce a fixed set of layouts — `ChannelMap` is the explicit mapping table from source channels to sink channels (route-specific). Common per-format channel counts:
+Any positive `int` is accepted. The framework does not enforce a fixed set of layouts — `ChannelMap` is the explicit mapping table from source channels to output channels (route-specific). Common per-format channel counts:
 
 | Channels | Typical layout |
 |---|---|
@@ -201,25 +201,25 @@ Higher-order ambisonics or unusual layouts work mechanically through `ChannelMap
 | `S.Media.FFmpeg.Audio.ResamplingAudioSource` | FFmpeg | Wraps an inner `IAudioSource` in a libswresample rate converter. Used by the router's `autoResample: true` path. |
 | `S.Media.PortAudio.PortAudioInput` | PortAudio | Capture device (lock-free SPSC ring + native callback). |
 | `S.Media.NDI.Audio.NDIAudioReceiver` | NDI | NDI receiver ring (time-based capacity, see Phase 2 ergonomics). |
-| `S.Media.Core.Audio.BusSink` | Core | Dual-role sub-mix bus — implements both `IAudioSink` and `IAudioSource`. |
+| `S.Media.Core.Audio.AudioBus` | Core | Dual-role sub-mix bus — implements both `IAudioOutput` and `IAudioSource`. |
 
-### Sinks
+### Outputs
 
-| Sink | Project | Notes |
+| Output | Project | Notes |
 |---|---|---|
-| `S.Media.PortAudio.PortAudioOutput` | PortAudio | Implements `IClockedSink` + `IPlaybackClock`. Defaults to `defaultHighOutputLatency` + prebuffer before `Pa_StartStream` (see project memory). |
-| `S.Media.NDI.Audio.NDIAudioSink` | NDI | Sender side; synchronous span read, no buffer retention. |
-| `S.Media.FFmpeg.Audio.ResamplingAudioSink` | FFmpeg | Per-sink rate conversion wrapper. |
-| `S.Media.FFmpeg.Audio.AdaptiveRateAudioSink` | FFmpeg | Per-sink ±ppm tweak driven by `PumpPressurePlaybackHintMonitor` for drift correction without retuning the master clock. |
-| `S.Media.Core.Audio.BusSink` | Core | Sub-mix bus (see above). |
-| `S.Media.Core.Audio.DiscardingAudioSink` | Core | Test / null sink. |
+| `S.Media.PortAudio.PortAudioOutput` | PortAudio | Implements `IClockedOutput` + `IPlaybackClock`. Defaults to `defaultHighOutputLatency` + prebuffer before `Pa_StartStream` (see project memory). |
+| `S.Media.NDI.Audio.NDIAudioOutput` | NDI | Sender side; synchronous span read, no buffer retention. |
+| `S.Media.FFmpeg.Audio.ResamplingAudioOutput` | FFmpeg | Per-output rate conversion wrapper. |
+| `S.Media.FFmpeg.Audio.AdaptiveRateAudioOutput` | FFmpeg | Per-output ±ppm tweak driven by `PumpPressurePlaybackHintMonitor` for drift correction without retuning the master clock. |
+| `S.Media.Core.Audio.AudioBus` | Core | Sub-mix bus (see above). |
+| `S.Media.Core.Audio.DiscardingAudioSink` | Core | Test / null output. |
 
 ### Routing and clocking
 
-- `S.Media.Core.Audio.AudioRouter` orchestrates: explicit `Route(sourceId, sinkId, channelMap, gain)` entries; sinks sum contributions from every route targeting them.
-- Pacing via `IRouterClock`. Default `WallClockRouterClock`; `SlaveTo(sinkId)` binds production to a specific `IClockedSink` (typically PortAudio output) for sample-accurate sync.
+- `S.Media.Core.Audio.AudioRouter` orchestrates: explicit `Route(sourceId, outputId, channelMap, gain)` entries; outputs sum contributions from every route targeting them.
+- Pacing via `IRouterClock`. Default `WallClockRouterClock`; `SlaveTo(outputId)` binds production to a specific `IClockedOutput` (typically PortAudio output) for sample-accurate sync.
 - Click-free volume changes: `SetRouteGain` linearly interpolates from the previously-applied gain to the new target across the chunk's samples.
-- Per-sink pump queue depth tunable via `AddSink(..., pumpCapacityChunks: ...)` — defaults sized for ~80 ms at framework defaults; hardware sinks typically want 2–4 chunks, network sinks the default 8. See `AudioRouter.AddSink` XML remarks for the latency budget formula.
+- Per-output pump queue depth tunable via `AddOutput(..., pumpCapacityChunks: ...)` — defaults sized for ~80 ms at framework defaults; hardware outputs typically want 2–4 chunks, network outputs the default 8. See `AudioRouter.AddOutput` XML remarks for the latency budget formula.
 
 See `Doc/MediaFramework-Architecture.md` for the in-depth discussion of multi-output drift, the optional profiling envvar, and the worked-example bundle wiring.
 

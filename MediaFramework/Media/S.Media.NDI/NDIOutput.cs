@@ -8,18 +8,18 @@ namespace S.Media.NDI;
 
 /// <summary>
 /// One NDI source on the network — owns a single <see cref="NDISender"/> plus
-/// the <see cref="NDIRuntime"/> ref-count, and exposes child sinks for audio
+/// the <see cref="NDIRuntime"/> ref-count, and exposes child outputs for audio
 /// and video. Receivers see one combined source carrying both streams.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Audio-only / video-only is just a matter of which children you enable.
-/// <see cref="EnableAudio"/> creates the audio sink; <see cref="VideoSink"/>
+/// <see cref="EnableAudio"/> creates the audio output; <see cref="VideoOutput"/>
 /// is lazy and created on first access. Don't touch the side you don't
 /// need and the SDK simply won't transmit that stream.
 /// </para>
 /// <para>
-/// Lifetime: child sinks must not outlive this <see cref="NDIOutput"/>.
+/// Lifetime: child outputs must not outlive this <see cref="NDIOutput"/>.
 /// They share the parent's sender; disposing the parent invalidates them.
 /// </para>
 /// <para>
@@ -35,7 +35,7 @@ namespace S.Media.NDI;
 /// <see cref="AddConnectionMetadata"/> (UTF-8 XML strings per NDI SDK rules).
 /// </para>
 /// <para>
-/// <see cref="Dispose"/> tears down video sink, audio sink, <see cref="NDISender"/>, then <see cref="NDIRuntime"/>; each step is wrapped so
+/// <see cref="Dispose"/> tears down video output, audio output, <see cref="NDISender"/>, then <see cref="NDIRuntime"/>; each step is wrapped so
 /// <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
 /// </para>
 /// </remarks>
@@ -44,14 +44,14 @@ public sealed class NDIOutput : IDisposable
     private readonly TimeSpan? _minimumVideoSubmitSpacing;
     private readonly NDIVideoTimecodeMode _videoTimecodeMode;
 
-    /// <summary>When <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected, shared by video + audio sinks.</summary>
+    /// <summary>When <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected, shared by video + audio outputs.</summary>
     private readonly NDIEgressPresentationTimeline? _egressPresentationTimeline;
 
     private readonly NDIRuntime _runtime;
     private readonly NDISender _sender;
     private readonly object _gate = new();
-    private NDIAudioSink? _audioSink;
-    private NDIVideoSender? _videoSink;
+    private NDIAudioOutput? _audioOutput;
+    private NDIVideoSender? _videoOutput;
     private bool _disposed;
 
     public string SourceName { get; }
@@ -66,15 +66,15 @@ public sealed class NDIOutput : IDisposable
     public int GetReceiverConnectionCount(uint timeoutMs = 0) => _sender.GetConnectionCount(timeoutMs);
 
     /// <summary>
-    /// Video sink — always available; format negotiated via
-    /// <see cref="Core.Video.IVideoSink.Configure"/>.
+    /// Video output — always available; format negotiated via
+    /// <see cref="Core.Video.IVideoOutput.Configure"/>.
     /// </summary>
-    public NDIVideoSender VideoSink
+    public NDIVideoSender VideoOutput
     {
         get
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            return _videoSink ??= CreateVideoSinkLocked();
+            return _videoOutput ??= CreateVideoOutputLocked();
         }
     }
 
@@ -91,7 +91,7 @@ public sealed class NDIOutput : IDisposable
     /// <param name="videoTimecodeMode">
     /// How <see cref="NDIVideoSender"/> fills NDI video timecodes — use
     /// <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> for an explicit timeline aligned with
-    /// <see cref="NDIAudioSink"/> when muxing file A/V.
+    /// <see cref="NDIAudioOutput"/> when muxing file A/V.
     /// </param>
     public NDIOutput(string sourceName, string? groups = null, bool clockVideo = true, bool clockAudio = true,
         TimeSpan? minimumVideoSubmitSpacing = null,
@@ -131,33 +131,33 @@ public sealed class NDIOutput : IDisposable
     }
 
     /// <summary>
-    /// Create the audio sink. Idempotent: returns the same instance on
+    /// Create the audio output. Idempotent: returns the same instance on
     /// subsequent calls (an NDI source has at most one audio stream). Throws
     /// if already created with a different format.
     /// </summary>
-    public NDIAudioSink EnableAudio(AudioFormat format)
+    public NDIAudioOutput EnableAudio(AudioFormat format)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
-            if (_audioSink is not null)
+            if (_audioOutput is not null)
             {
-                if (_audioSink.Format != format)
+                if (_audioOutput.Format != format)
                     throw new InvalidOperationException(
-                        $"audio sink already configured with format {_audioSink.Format}; cannot reconfigure to {format}");
-                return _audioSink;
+                        $"audio output already configured with format {_audioOutput.Format}; cannot reconfigure to {format}");
+                return _audioOutput;
             }
 
-            _audioSink = new NDIAudioSink(_sender, format, _egressPresentationTimeline);
-            return _audioSink;
+            _audioOutput = new NDIAudioOutput(_sender, format, _egressPresentationTimeline);
+            return _audioOutput;
         }
     }
 
-    private NDIVideoSender CreateVideoSinkLocked()
+    private NDIVideoSender CreateVideoOutputLocked()
     {
         lock (_gate)
         {
-            return _videoSink ??= new NDIVideoSender(_sender, _minimumVideoSubmitSpacing, _videoTimecodeMode,
+            return _videoOutput ??= new NDIVideoSender(_sender, _minimumVideoSubmitSpacing, _videoTimecodeMode,
                 _egressPresentationTimeline);
         }
     }
@@ -165,7 +165,7 @@ public sealed class NDIOutput : IDisposable
     /// <summary>
     /// Resets the presentation-time anchor used when <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/>
     /// is active (for example after <see cref="S.Media.Core.Video.VideoPlayer.Seek"/>). Clears the shared
-    /// presentation anchor used by both <see cref="NDIVideoSender"/> and <see cref="NDIAudioSink"/> when
+    /// presentation anchor used by both <see cref="NDIVideoSender"/> and <see cref="NDIAudioOutput"/> when
     /// <see cref="NDIVideoTimecodeMode.PresentationRelativeTicks"/> is selected on this output.
     /// </summary>
     public void ResetVideoPresentationTimecodeAnchor()
@@ -174,7 +174,7 @@ public sealed class NDIOutput : IDisposable
         lock (_gate)
         {
             _egressPresentationTimeline?.Reset();
-            _videoSink?.ResetPresentationTimecodeAnchor();
+            _videoOutput?.ResetPresentationTimecodeAnchor();
         }
     }
 
@@ -270,55 +270,11 @@ public sealed class NDIOutput : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        // Tear down the video sink first so any in-flight async send is
+        // Tear down the video output first so any in-flight async send is
         // flushed against a still-valid sender.
-        try
-        {
-            _videoSink?.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: video sink");
-        }
-#else
-        catch { /* best effort */ }
-#endif
-        try
-        {
-            _audioSink?.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: audio sink");
-        }
-#else
-        catch { /* best effort */ }
-#endif
-        try
-        {
-            _sender.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: NDISender");
-        }
-#else
-        catch { /* best effort */ }
-#endif
-        try
-        {
-            _runtime.Dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "NDIOutput.Dispose: NDIRuntime");
-        }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _videoOutput?.Dispose(), "NDIOutput.Dispose: video output");
+        MediaDiagnostics.SwallowDisposeErrors(() => _audioOutput?.Dispose(), "NDIOutput.Dispose: audio output");
+        MediaDiagnostics.SwallowDisposeErrors(_sender.Dispose, "NDIOutput.Dispose: NDISender");
+        MediaDiagnostics.SwallowDisposeErrors(_runtime.Dispose, "NDIOutput.Dispose: NDIRuntime");
     }
 }

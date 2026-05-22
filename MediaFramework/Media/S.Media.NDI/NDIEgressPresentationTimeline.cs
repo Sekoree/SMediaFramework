@@ -6,7 +6,7 @@ namespace S.Media.NDI;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <see cref="NDIOutput"/> wires one instance to both <see cref="Audio.NDIAudioSink"/> and <see cref="Video.NDIVideoSender"/>
+/// <see cref="NDIOutput"/> wires one instance to both <see cref="Audio.NDIAudioOutput"/> and <see cref="Video.NDIVideoSender"/>
 /// so whichever stream submits first establishes the anchor and both streams stay on one relative timeline.
 /// </para>
 /// <para>

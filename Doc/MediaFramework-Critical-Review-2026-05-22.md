@@ -11,7 +11,7 @@
 > - Biggest individual files: `MediaContainerSharedDemux.cs` (1591), `AudioRouter.cs` (1479) +
 >   `ChannelMap.SimdAccumulate.cs` (1831), `YuvVideoRenderer.cs` (1448), `VideoFileDecoder.cs` (1141),
 >   `Nv12Win32SharedHandleGpuUploader.cs` (789), `VideoRouter.cs` (778).
-> - 13 audio/video interfaces in `S.Media.Core` (sources/sinks/clocks/converters/deinterlacers/etc.).
+> - 13 audio/video interfaces in `S.Media.Core` (sources/outputs/clocks/converters/deinterlacers/etc.).
 >
 > Breaking API changes are explicitly on the table. The goal is **a leaner, easier-to-consume
 > framework for downstream library users**, while preserving the heavy lifting (hardware decode,
@@ -54,7 +54,7 @@ but the *surface area is overwhelming for new consumers*. Several themes:
    `FFmpegRuntime.EnsureInitialized` form an implicit "you must call init somewhere
    first" contract that is invisible at the API site.
 5. **Pump/clock language is internally consistent but externally dense**.
-   `IRouterClock`, `SinkSlavedRouterClock`, `IClockedSink`, `IPlaybackClock`,
+   `IRouterClock`, `OutputSlavedRouterClock`, `IClockedOutput`, `IPlaybackClock`,
    `IMediaClock`, `IPlaybackTimeline`, `IPlaybackPlayhead`, `CompositePlaybackClock`,
    `VideoPtsClock`, `NDIIngestPlaybackClock`, `NDIEgressMuxPlayheadClock`,
    `NDIAlignedRouterClock`, `IngestSlavedRouterClock`, `WallClockRouterClock`
@@ -73,7 +73,7 @@ Below is per-area detail plus a prioritized refactor plan.
 
 ### 2.1 `S.Media.Core` — what works
 
-- `IAudioSource`/`IAudioSink` and `IVideoSource`/`IVideoSink` are tight and
+- `IAudioSource`/`IAudioOutput` and `IVideoSource`/`IVideoOutput` are tight and
   reasonable. The two videos sides differ from audio in pulling **frames** vs.
   filling **chunks**, which is the right shape for the two domains.
 - The `AudioRouter` "explicit per‑route ChannelMap + per‑route gain" model is
@@ -82,7 +82,7 @@ Below is per-area detail plus a prioritized refactor plan.
 - `MediaClock` driving `AudioTick`/`VideoTick`/`PositionChanged` from one
   driver thread with burst-tolerance is solid. The master swap that preserves
   position is exactly the behaviour a host needs and is hard to do right.
-- The `IVideoSinkD3D11GlBorrowSetup` cooperative-borrow protocol for Win32 NV12
+- The `IVideoOutputD3D11GlBorrowSetup` cooperative-borrow protocol for Win32 NV12
   is non-trivial to design and the comment trail is good.
 
 ### 2.2 `S.Media.Core` — what's heavy
@@ -113,14 +113,14 @@ Proposed change (breaking):
 
 #### 2.2.2 `VideoRouter` vs `AudioRouter` — asymmetric semantics for similar names
 
-`AudioRouter`: multi-source → multi-sink, sinks **sum**; routes have ChannelMap +
+`AudioRouter`: multi-source → multi-output, outputs **sum**; routes have ChannelMap +
 gain; nominal sample rate fixed; dynamic mutation; immutable state snapshots.
 `VideoRouter`: **one** input per output (exclusive ownership), multiple outputs
 allowed per input; pixel-format negotiation lead is the "primary"; branch
 converters per output. Different conceptual model, same name suffix.
 
 Two-source: this is the **right** model for video (compositing happens via
-`CompositorVideoSink`/`IVideoCompositor`, not router summing). But the shared
+`VideoCompositorSource`/`IVideoCompositor`, not router summing). But the shared
 name causes consumer confusion and the routers don't actually share code or an
 interface despite the obvious overlap (id management, pump pressure events,
 dispose order).
@@ -134,7 +134,7 @@ document the asymmetry on the type docs explicitly).
 
 `IMediaClock` (UI-facing), `IPlaybackTimeline`/`IPlaybackPlayhead` (read-only
 views), `IPlaybackClock` (master input), `MediaClock` (driver),
-`WallClockRouterClock`/`SinkSlavedRouterClock`/`IngestSlavedRouterClock`
+`WallClockRouterClock`/`OutputSlavedRouterClock`/`IngestSlavedRouterClock`
 (producer pacing), `VideoPtsClock` (PTS-derived playback clock),
 `CompositePlaybackClock` + `CompositePlaybackClockBlend` (priority merge),
 `NDIIngestPlaybackClock`/`NDIEgressMuxPlayheadClock`/`NDIAlignedRouterClock`
@@ -143,7 +143,7 @@ views), `IPlaybackClock` (master input), `MediaClock` (driver),
 
 What consumers actually want:
 - A **playhead** they can read and seek.
-- An **audio-mastered** mode (sink reports samples played, clock follows).
+- An **audio-mastered** mode (output reports samples played, clock follows).
 - A **video-PTS** mode (clock follows last presented frame PTS).
 - A **free-running** mode (wall clock).
 - The router pacing is an implementation detail of the framework, not the
@@ -153,7 +153,7 @@ Proposed change (breaking but big win):
 
 - Collapse `IPlaybackClock`, `IPlaybackTimeline`, `IPlaybackPlayhead` into one
   `IPlayhead` (read) + `IPlaybackController` (Start/Pause/Seek/SetMaster).
-- Hide `IRouterClock`/`WallClockRouterClock`/`SinkSlavedRouterClock` as
+- Hide `IRouterClock`/`WallClockRouterClock`/`OutputSlavedRouterClock` as
   `internal` — consumers never construct them; the router decides.
 - Keep `CompositePlaybackClock`, `VideoPtsClock`, `NDIIngestPlaybackClock` as
   the three named time sources end users construct, document them as
@@ -164,8 +164,8 @@ Proposed change (breaking but big win):
 #### 2.2.4 `AudioRouter`/`AudioPlayer`/`AudioGraphBuilder` — three ways to wire the same graph
 
 A consumer can:
-1. Construct an `AudioRouter`, call `AddSource`/`AddSink`/`AddRoute` manually.
-2. Use `AudioGraphBuilder` for `.AddSource().AddSink().Connect()` fluent.
+1. Construct an `AudioRouter`, call `AddSource`/`AddOutput`/`AddRoute` manually.
+2. Use `AudioGraphBuilder` for `.AddSource().AddOutput().Connect()` fluent.
 3. Use `AudioPlayer.AddOwnedSource/AddOutput/Connect` (which forwards to router).
 
 All three exist, all do the same thing, none of them is clearly "the" entry
@@ -180,9 +180,9 @@ Proposed change:
   as the only fluent wrapper users see for the rare case they touch the router
   directly.
 
-#### 2.2.5 Legacy `AddRoute(sourceId, sinkId, ...)` vs. explicit `routeId`
+#### 2.2.5 Legacy `AddRoute(sourceId, outputId, ...)` vs. explicit `routeId`
 
-Two overloads exist; the legacy one synthesizes a `routeId` from the (src,sink)
+Two overloads exist; the legacy one synthesizes a `routeId` from the (src,output)
 pair using `` as a separator and supports replace-by-pair semantics. The
 explicit `routeId` overload was added in "Phase C" for per-cell matrix routes
 (HaPlay's audio matrix wants multiple routes per pair).
@@ -207,7 +207,7 @@ These exist in `S.Media.Core/Video/`:
   - `LinuxDmabufNv12Interop` (83 LOC)
 
 That's ~580 LOC of dead scaffolding shipped in `S.Media.Core`. Either drive a
-real consumer (e.g. a Vulkan or Metal sink) or delete them; they're not pulling
+real consumer (e.g. a Vulkan or Metal output) or delete them; they're not pulling
 their weight as "future‑proofing."
 
 #### 2.2.7 Video CPU helpers, fade/cut sources
@@ -216,7 +216,7 @@ their weight as "future‑proofing."
   `UI/HaPlay/Playback/PlaybackVideoPipeline.cs`.
 - `PixelFormatConvertingVideoSource` is used only by HaPlay too.
 - `StaticFrameSource` is used only inside Core.
-- `CompositorVideoSink` (323 LOC) + `CpuVideoCompositor` (359 LOC) + `BlendMode`
+- `VideoCompositorSource` (323 LOC) + `CpuVideoCompositor` (359 LOC) + `BlendMode`
   + `LayerOpacityTween` + `LayerTransform2D` — referenced from CompositorSmoke
   and HaPlay's LogoFallbackVideoSink (uses `VideoCpuOpacity`). The CPU
   compositor is the **only** consumer of `BlendMode` outside the GL one.
@@ -402,7 +402,7 @@ public surface (one `Upload(VideoWin32Nv12Backing, ...)` method).
 ### 2.7 `S.Media.PortAudio`
 
 - `PortAudioOutput` (563 LOC) — well-structured. The ring + callback +
-  `IClockedSink` + `IFlushableSink` + `IPlaybackClock` combo is a lot of
+  `IClockedOutput` + `IFlushableOutput` + `IPlaybackClock` combo is a lot of
   interfaces, but each is reasonable and tested.
 - `PortAudioPlaybackHost` (221 LOC) — two near-identical factories
   (`TryCreatePortAudioMain` and `TryWirePortAudioMainForPlayer`) that compute
@@ -416,7 +416,7 @@ public surface (one `Upload(VideoWin32Nv12Backing, ...)` method).
 
 ### 2.8 `S.Media.SDL3`, `S.Media.Avalonia`, `S.Media.SkiaSharp`, `S.Media.Quick`
 
-- `S.Media.SDL3` has both `SDL3VideoSink` and `SDL3GLVideoSink` — the latter
+- `S.Media.SDL3` has both `SDL3VideoOutput` and `SDL3GLVideoOutput` — the latter
   is used by `QuickPlayer`. Check if the non-GL one is dead too (a quick grep
   shows it is referenced from tests and `S.Media.SDL3` itself only).
 - `S.Media.Avalonia` is one 383-LOC file — a single `OpenGlControlBase` that
@@ -425,7 +425,7 @@ public surface (one `Upload(VideoWin32Nv12Backing, ...)` method).
 - `S.Media.Quick` is the right idea (one-call open-and-play). Currently
   hard-codes SDL3 GL window + PortAudio output. Worth either renaming to
   `S.Media.SoundboardQuick` so the assumption is explicit, or splitting the
-  "image vs media" decision out so consumers can plug in their own sink
+  "image vs media" decision out so consumers can plug in their own output
   factories.
 
 ### 2.9 Auxiliary libs (PMLib / OSCLib / PALib / JackLib / NDILib)
@@ -510,24 +510,24 @@ dependencies a project has taken on.
 ```
 
 Tests and Benchmarks are fine. The other three suggest that Core had to
-expose details to specific sinks. Audit: if `S.Media.PortAudio`/`SDL3`/`Avalonia`
+expose details to specific outputs. Audit: if `S.Media.PortAudio`/`SDL3`/`Avalonia`
 only need a handful of internals, promote those few members to `public` (or
 `internal` + `[Friend]` style if you really want them scoped). Letting
 backend packages reach into Core internals freely makes it impossible to
 refactor Core without touching the backends.
 
-### 2.13 Cross-cutting: `IAudioSinkChannelCapabilities` is the only "advanced sink trait" that ships
+### 2.13 Cross-cutting: `IAudioOutputChannelCapabilities` is the only "advanced output trait" that ships
 
-Audio sinks today implement potentially:
-- `IAudioSink` (required)
-- `IClockedSink` (optional pacing)
-- `IFlushableSink` (optional flush)
+Audio outputs today implement potentially:
+- `IAudioOutput` (required)
+- `IClockedOutput` (optional pacing)
+- `IFlushableOutput` (optional flush)
 - `IPlaybackClock` (optional master clock)
-- `IAudioSinkChannelCapabilities` (optional channel reconfig)
+- `IAudioOutputChannelCapabilities` (optional channel reconfig)
 
 That's 5 optional capability interfaces. The pattern works but the surface
 is wide. Consider replacing them with a single
-`AudioSinkCapabilities Capabilities { get; }` flags struct on `IAudioSink`:
+`AudioSinkCapabilities Capabilities { get; }` flags struct on `IAudioOutput`:
 
 ```csharp
 [Flags] enum AudioSinkCapability {
@@ -537,12 +537,12 @@ is wide. Consider replacing them with a single
 ```
 
 …with the actual `WaitForCapacity`, `Flush`, etc. methods promoted to virtual
-on a small abstract base or kept as `if (sink is IClockedSink c)` patterns
+on a small abstract base or kept as `if (output is IClockedOutput c)` patterns
 behind the flag. (Trade-off: flags interrogation is less idiomatic .NET than
 `is IXxx`. Hold this one for discussion, but the cap-by-cap interface
 proliferation is worth noting.)
 
-Video has the same shape forming: `IVideoSink` + `IVideoSinkD3D11GlBorrowSetup`
+Video has the same shape forming: `IVideoOutput` + `IVideoOutputD3D11GlBorrowSetup`
 + inner-disposable + future `IHardwareVideoInterop`. Watch that it doesn't
 follow the audio side's growth.
 
@@ -575,11 +575,11 @@ registration, not a hunt through several namespaces.
 `MediaFrameworkExtensionRegistry` (extension → factory) would let
 `QuickPlayer.Open(".raw" / ".dpx")` work without touching the core code.
 
-### 3.3 Encoder / writer sinks
+### 3.3 Encoder / writer outputs
 
 Today the framework decodes. There is no `IFileVideoSink` / `IFileAudioSink`
 that wraps libavformat encoding. Many "play" applications eventually want
-"record". The `IVideoSink` / `IAudioSink` shape already supports it — there's
+"record". The `IVideoOutput` / `IAudioOutput` shape already supports it — there's
 just no implementation. Adding one (or a `S.Media.FFmpeg.Encode` project that
 implements them) is straightforward and unlocks recording, transcoding,
 "save what I just received".
@@ -604,13 +604,13 @@ to a worker thread) is a small change for big usability gain.
 ### 3.6 First-class metrics surface
 
 Right now metrics are spread across `AudioRouter.GetPumpStats` /
-`GetAggregatePumpStats`, `VideoRouter.TryGetVideoSinkPumpMetrics`, `VideoPlayer.DroppedLate`,
+`GetAggregatePumpStats`, `VideoRouter.TryGetVideoOutputPumpMetrics`, `VideoPlayer.DroppedLate`,
 `PortAudioOutput.PlayedSamples` / `DroppedSamples` / `UnderrunSamples` /
 `CallbackCount`, `NDILiveReceiver.AudioOverflowFloats` etc. Each is well-named
 but they're scattered.
 
 A `MediaPlayer.GetMetrics()` returning one structured snapshot (audio router
-stats + per-sink + video router + per-output + decoder + clock) gives
+stats + per-output + video router + per-output + decoder + clock) gives
 dashboards and tools one place to read from.
 
 ### 3.7 Tests at the public API
@@ -619,7 +619,7 @@ The framework has thorough internal tests (S.Media.FFmpeg.Tests etc.) — but
 relatively few "smoke" tests against `MediaPlayer.TryOpen`. A
 `MediaPlayer.Tests` project that exercises the consumer API on a few canonical
 samples (file with audio+video, image, audio-only, NDI source-not-found,
-seek round-trip, mid-play sink swap) would catch most of the surface
+seek round-trip, mid-play output swap) would catch most of the surface
 regressions a refactor like the one below could cause.
 
 ---
@@ -649,7 +649,7 @@ Risk: ~0.
 
 ### Phase R1 — Reorganise without breaking
 
-1. **Move video effects out of Core**: `CompositorVideoSink`, `CpuVideoCompositor`,
+1. **Move video effects out of Core**: `VideoCompositorSource`, `CpuVideoCompositor`,
    `BlendMode`, `LayerOpacityTween`, `LayerTransform2D`, `VideoCpuOpacity`,
    `FadeFromBlackVideoSource`, `CutVideoSource`, `StaticFrameSource`,
    `PixelFormatConvertingVideoSource` → `S.Media.Effects` project.
@@ -697,7 +697,7 @@ LOC saved: ~1000 (mostly overload forwarding). Breaking: yes.
 
 1. Collapse `IPlaybackTimeline` / `IPlaybackPlayhead` into `IPlayhead`.
 2. Make `IRouterClock` and its impls (`WallClockRouterClock`,
-   `SinkSlavedRouterClock`, `IngestSlavedRouterClock`) `internal`.
+   `OutputSlavedRouterClock`, `IngestSlavedRouterClock`) `internal`.
 3. Keep `MediaClock`, `CompositePlaybackClock`, `VideoPtsClock`,
    `NDIIngestPlaybackClock` as the four public time concepts.
 4. Document them on one page: "pick `MediaClock` if you don't know what to do.
@@ -735,7 +735,7 @@ Breaking: yes for power users; ergonomic for everyone else.
 2. `MediaPlayer.GetMetrics()` aggregate.
 3. `MediaFrameworkExtensionRegistry` for image-extension → factory.
 4. `S.Media.FFmpeg.Encode` project (or `S.Media.Encode`) implementing
-   `IAudioSink` / `IVideoSink` against libavformat encoders.
+   `IAudioOutput` / `IVideoOutput` against libavformat encoders.
 
 No breaking changes; pure additions.
 
@@ -743,7 +743,7 @@ No breaking changes; pure additions.
 
 ## 5. Suggested API "happy path" for a brand-new consumer
 
-> Below already adopts the §10 follow-up naming (`Output` instead of `Sink`,
+> Below already adopts the §10 follow-up naming (`Output` instead of `Output`,
 > `NDISource` + `NDIOutput` for the AV-coupled NDI surface).
 
 After R0–R3 the canonical wiring for the four common cases would look like:
@@ -794,7 +794,7 @@ fan-out, NDI sender) remain available as `player.AudioRouter` / `player.VideoRou
 ## 6. What I'd *not* change
 
 - The `AudioRouter` core algorithm — channel-map mixing, click-free fades,
-  SIMD fast paths, per-sink pump with drop-oldest, slave-clock model. This is
+  SIMD fast paths, per-output pump with drop-oldest, slave-clock model. This is
   the framework's strongest asset; resist temptation to "modernise" the
   internals.
 - `VideoRouter`'s one-input-per-output exclusivity. This is the right
@@ -863,9 +863,9 @@ fan-out, NDI sender) remain available as `player.AudioRouter` / `player.VideoRou
 - **No headless GL test harness**. `S.Media.OpenGL.Tests` is static-only.
   Either drop in a swiftshader/Mesa LLVMpipe pipeline or accept that GL is
   validated by the smoke tool. Don't grow the test gap further.
-- **No automatic per-leaf rate adaptation policy**. `AdaptiveRateAudioSink`
+- **No automatic per-leaf rate adaptation policy**. `AdaptiveRateAudioOutput`
   exists as a primitive but the framework doesn't auto-wire it. After R1's
-  plugin consolidation, a one-line "register me on every non-master sink" is
+  plugin consolidation, a one-line "register me on every non-master output" is
   a nice ergonomic touch.
 
 ---
@@ -877,47 +877,47 @@ the earlier sections wherever they conflict.
 
 ### 10.1 Vocabulary: `Source` and `Output` everywhere
 
-Today the framework mixes terminology: audio uses `IAudioSink` for the device
-side, video uses `IVideoSink` for displays/encoders but the router method is
-`AddOutput`. The internal classes pile on:`SinkPump`, `VideoSinkPump`,
-`VideoSinkPumpAttachOptions`, `VideoSinkPumpMetrics`, `DiscardingVideoSink`,
-`DiscardingAudioSink`, `IClockedSink`, `IFlushableSink`,
-`IAudioSinkChannelCapabilities`, `BusSink`, `CompositorVideoSink`, etc. — 30+
-type names ending in `Sink`.
+Today the framework mixes terminology: audio uses `IAudioOutput` for the device
+side, video uses `IVideoOutput` for displays/encoders but the router method is
+`AddOutput`. The internal classes pile on:`OutputPump`, `VideoOutputPump`,
+`VideoOutputPumpAttachOptions`, `VideoOutputPumpMetrics`, `DiscardingVideoOutput`,
+`DiscardingAudioSink`, `IClockedOutput`, `IFlushableOutput`,
+`IAudioOutputChannelCapabilities`, `AudioBus`, `VideoCompositorSource`, etc. — 30+
+type names ending in `Output`.
 
 **Rule**: keep `Source` for everything that produces frames/samples; use
-`Output` for everything that consumes them. Drop `Sink` entirely.
+`Output` for everything that consumes them. Drop `Output` entirely.
 
 Rename pass (the heavy ones):
 
 | Today | Becomes |
 |---|---|
-| `IAudioSink` | `IAudioOutput` |
-| `IVideoSink` | `IVideoOutput` |
-| `IClockedSink` | `IClockedOutput` |
-| `IFlushableSink` | `IFlushableOutput` |
-| `IAudioSinkChannelCapabilities` | `IAudioOutputChannelCapabilities` |
-| `AudioRouter.AddSink / RemoveSink` | `AddOutput / RemoveOutput` (already in `VideoRouter`) |
-| `AudioRouter.SinkPump` (internal) | `OutputPump` |
-| `AudioRouter.SinkPumpStats` | `OutputPumpStats` |
-| `AudioRouterSinkErrorEventArgs` | `AudioRouterOutputErrorEventArgs` |
-| `VideoSinkPump` / `VideoSinkPumpAttachOptions` / `VideoSinkPumpMetrics` | `VideoOutputPump` / `VideoOutputPumpAttachOptions` / `VideoOutputPumpMetrics` |
-| `IVideoSinkD3D11GlBorrowSetup` | `IVideoOutputD3D11GlBorrowSetup` |
-| `DiscardingAudioSink` / `DiscardingVideoSink` | `DiscardingAudioOutput` / `DiscardingVideoOutput` |
-| `BusSink` | `AudioBus` (it's also a source — `Sink` understates its dual role) |
-| `CompositorVideoSink` | `VideoCompositorSource` (it's an `IVideoSource` whose inputs are slots — see §10.6) |
+| `IAudioOutput` | `IAudioOutput` |
+| `IVideoOutput` | `IVideoOutput` |
+| `IClockedOutput` | `IClockedOutput` |
+| `IFlushableOutput` | `IFlushableOutput` |
+| `IAudioOutputChannelCapabilities` | `IAudioOutputChannelCapabilities` |
+| `AudioRouter.AddOutput / RemoveOutput` | `AddOutput / RemoveOutput` (already in `VideoRouter`) |
+| `AudioRouter.OutputPump` (internal) | `OutputPump` |
+| `AudioRouter.OutputPumpStats` | `OutputPumpStats` |
+| `AudioRouterOutputErrorEventArgs` | `AudioRouterOutputErrorEventArgs` |
+| `VideoOutputPump` / `VideoOutputPumpAttachOptions` / `VideoOutputPumpMetrics` | `VideoOutputPump` / `VideoOutputPumpAttachOptions` / `VideoOutputPumpMetrics` |
+| `IVideoOutputD3D11GlBorrowSetup` | `IVideoOutputD3D11GlBorrowSetup` |
+| `DiscardingAudioSink` / `DiscardingVideoOutput` | `DiscardingAudioOutput` / `DiscardingVideoOutput` |
+| `AudioBus` | `AudioBus` (it's also a source — `Output` understates its dual role) |
+| `VideoCompositorSource` | `VideoCompositorSource` (it's an `IVideoSource` whose inputs are slots — see §10.6) |
 | `AudioPlayer.AddOutput` | already correctly named |
-| `MediaContainerSession` "primary sink" | "primary output" |
+| `MediaContainerSession` "primary output" | "primary output" |
 | `IAudioSource` / `IVideoSource` | unchanged — already the right name |
 
 Symbol replacement is mechanical; the only place where care matters is
-`CompositorVideoSink` (it's currently named "sink" because each layer slot
-implements `IVideoSink` even though the type itself is a source). Renaming to
+`VideoCompositorSource` (it's currently named "output" because each layer slot
+implements `IVideoOutput` even though the type itself is a source). Renaming to
 `VideoCompositorSource` and exposing `compositor.AddLayer(...)` returning an
 `IVideoOutput` slot makes the "slot is a target, the whole thing is a source"
 shape obvious.
 
-Side benefit: it kills the "what kind of sink does this mean" cognitive cost
+Side benefit: it kills the "what kind of output does this mean" cognitive cost
 when reading code that hops between audio and video.
 
 ### 10.2 NDI: one source, one output (A+V coupled)
@@ -925,7 +925,7 @@ when reading code that hops between audio and video.
 The NDI SDK treats audio and video as separate streams but always belonging to
 the same `NDIlib_send_instance_t` / `NDIlib_recv_instance_t`. The framework
 currently splits them into ~6 types (`NDIVideoReceiver`, `NDIAudioReceiver`,
-`NDILiveReceiver`, `NDIVideoSender`, `NDIAudioSink`, `NDIOutput`) plus the
+`NDILiveReceiver`, `NDIVideoSender`, `NDIAudioOutput`, `NDIOutput`) plus the
 parallel `NdiFrameSync*` pull-mode path. Two practical problems:
 
 - **Drift on independent capture/render threads**. Even when you wire both
@@ -968,7 +968,7 @@ public sealed class NDIOutput : IDisposable
 ```
 
 `NDIVideoReceiver` / `NDIAudioReceiver` go internal (or get deleted in favor
-of one combined receiver). `NDIVideoSender` / `NDIAudioSink` go internal as
+of one combined receiver). `NDIVideoSender` / `NDIAudioOutput` go internal as
 the backing for `NDIOutput.Audio` / `NDIOutput.Video`. The three "monitor /
 pump fusion / tally" auxiliary types become properties / methods on
 `NDIOutput`. `NdiFrameSync*` deleted (the few legitimate "pull mode" callers
@@ -1076,7 +1076,7 @@ That's six end-user statements after `Init`. The framework already supports
 this shape today, but several details get in the way:
 
 - The simplest entry verb is currently `AudioPlayer`, which auto-wires master
-  clock + primary sink — fine for the soundboard case but it conceals what
+  clock + primary output — fine for the soundboard case but it conceals what
   is happening.
 - `AudioRouter.AddSource` doesn't have an `autoResample` overload that knows
   the router's rate without poking at it (caller currently passes the rate
@@ -1172,7 +1172,7 @@ display" helper but make `VideoRouter` adequate without it.)
 Composition today requires:
 
 - Construct a `GlVideoCompositor` (GL context required) or `CpuVideoCompositor`.
-- Wrap it in a `CompositorVideoSink` (which exposes per-slot `Opacity`,
+- Wrap it in a `VideoCompositorSource` (which exposes per-slot `Opacity`,
   `Transform`, `BlendMode` mutable state on each `Slot`).
 - For animations, manually update the slot fields from a `LayerOpacityTween`
   or hand-tick from the clock.
@@ -1291,7 +1291,7 @@ public enum VideoCompositorBackend { Auto, Cpu, Gl }
 
 Implementation notes:
 
-- `VideoCompositor` swallows the existing `CompositorVideoSink` +
+- `VideoCompositor` swallows the existing `VideoCompositorSource` +
   `CpuVideoCompositor` / `GlVideoCompositor` pair (per §2.2.7 they move to the
   new effects project). The user never touches the internal `IVideoCompositor`.
 - Transitions are evaluated **once per output frame** on `TryReadNextFrame`,
@@ -1356,7 +1356,7 @@ Promote into Phase R2:
 Insert into Phase R1 (or R2 — separate scope):
 
 - **`S.Media.Effects` houses the composition API** in §10.6. The shipping
-  `CompositorVideoSink` / `CpuVideoCompositor` / `GlVideoCompositor` are the
+  `VideoCompositorSource` / `CpuVideoCompositor` / `GlVideoCompositor` are the
   internal implementation; the public surface is `VideoCompositor` +
   `LayerHandle` + `LayerConfig` + `Transition`.
 
@@ -1369,11 +1369,11 @@ Additions to the table in §8:
 | `MediaFramework/Audio/PALib/CoreAudio/` | **Delete** | macOS scaffolding |
 | Every `OperatingSystem.IsMacOS()` branch | **Delete** | Linux+Windows only |
 | `osx-*` RIDs in `Directory.Packages.props` | **Remove** | Same |
-| All `*Sink` interfaces/classes/events | **Rename** to `*Output` | §10.1 |
-| `CompositorVideoSink` | **Rename** to `VideoCompositorSource` | Reflects role |
-| `BusSink` | **Rename** to `AudioBus` | Dual-role |
+| All `*Output` interfaces/classes/events | **Rename** to `*Output` | §10.1 |
+| `VideoCompositorSource` | **Rename** to `VideoCompositorSource` | Reflects role |
+| `AudioBus` | **Rename** to `AudioBus` | Dual-role |
 | `NDIVideoReceiver`, `NDIAudioReceiver` | **Internal** + delete from public surface; expose only via `NDISource` | §10.2 |
-| `NDIVideoSender`, `NDIAudioSink` | **Internal**; expose only via `NDIOutput.Audio` / `.Video` | §10.2 |
+| `NDIVideoSender`, `NDIAudioOutput` | **Internal**; expose only via `NDIOutput.Audio` / `.Video` | §10.2 |
 | `NDILiveReceiver` | **Rename** to `NDISource` (or fold its capture logic into a fresh `NDISource`) | §10.2 |
 | `NdiFrameSyncSession`, `NdiFrameSyncAudioSource`, `NdiFrameSyncVideoSource`, `NdiAudioFrameConverter` | **Delete** | Redundant pull-mode |
 | `S.Media.Quick.QuickPlayer` | Replace with §10.5 minimal-API doc + `MediaPlayer.Open(...).OpenAsync()` builder | One concept |
@@ -1388,7 +1388,7 @@ Rough back-of-envelope after the rename + NDI collapse + macOS strip +
 
 | Project | Today | After §10 |
 |---|---:|---:|
-| `S.Media.Core`         | 13 323 | ~11 000 (effects out, BusSink/AudioPlayer/AudioGraphBuilder absorbed, no macOS) |
+| `S.Media.Core`         | 13 323 | ~11 000 (effects out, AudioBus/AudioPlayer/AudioGraphBuilder absorbed, no macOS) |
 | `S.Media.FFmpeg`       | 6 749 | ~5 400 (VideoFileDecoder/Audio… deleted, StreamAvioBridge added) |
 | `S.Media.NDI`          | 4 031 | ~2 400 (collapsed to NDISource + NDIOutput) |
 | `S.Media.OpenGL`       | 4 631 | ~4 500 (mostly file-split, ~0 deletion) |
@@ -1407,7 +1407,7 @@ project is the only addition.
 
 Order of operations once consumers approve:
 
-1. **Rename pass (mechanical).** One PR, no behaviour change. `Sink` → `Output`
+1. **Rename pass (mechanical).** One PR, no behaviour change. `Output` → `Output`
    everywhere except `IAudioSource`/`IVideoSource`. Rider's "Rename" handles
    nearly all of it; manual fixups in XML doc comments.
 2. **Drop macOS.** Delete `PALib/CoreAudio/`, `MetalIosurfaceNv12Interop.cs`,
@@ -1599,7 +1599,7 @@ unlocks a real broadcast workflow.
 
 #### 10.11.5 Encoder output (looking ahead)
 
-When the §3.3 encoder sinks land (`S.Media.FFmpeg.Encode`), the natural
+When the §3.3 encoder outputs land (`S.Media.FFmpeg.Encode`), the natural
 inputs are `Yuv420P10Le` / `P010` / `Yuv444P12Le` / `Yuva444P12Le`. The
 RGBA16F path described in §10.11.2(B) makes that conversion *lossless* up to
 the encoder's chroma subsampling — which is the right precision contract for
@@ -1641,7 +1641,7 @@ What 10/12-bit content looks like after R7 (best case, per stage):
 | Compositor → CPU frame | `Bgra32` only | **`Bgra32` / `Rgba16` / `Rgba16F`** |
 | Direct GL display swapchain | 8-bit | **10-bit on supported HW (opt-in)** |
 | NDI sender output | 8-bit (BGRA/UYVY/I420) | **16-bit (P216/PA16) opt-in** |
-| File / encoder sink | n/a | 10/12/16-bit native via the §3.3 encoder project |
+| File / encoder output | n/a | 10/12/16-bit native via the §3.3 encoder project |
 
 ---
 

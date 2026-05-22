@@ -5,7 +5,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <RootNamespace>S.Media.Playback</RootNamespace>
-        <Description>Product playback entry (<c>MediaPlayer</c>): shared mux + <c>VideoRouter</c> + optional <c>AudioPlayer</c> — add sinks from optional media packages.</Description>
+        <Description>Product playback entry (<c>MediaPlayer</c>): shared mux + <c>VideoRouter</c> + optional <c>AudioPlayer</c> — add outputs from optional media packages.</Description>
     </PropertyGroup>
 
     <ItemGroup>

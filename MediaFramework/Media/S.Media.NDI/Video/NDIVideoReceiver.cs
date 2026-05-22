@@ -132,7 +132,7 @@ public sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             throw new InvalidOperationException("Format is not known until the first frame arrives.");
         if (format != _format.PixelFormat)
             throw new InvalidOperationException(
-                $"NDIVideoReceiver delivers {_format.PixelFormat} only; sink requested {format}.");
+                $"NDIVideoReceiver delivers {_format.PixelFormat} only; output requested {format}.");
     }
 
     public bool TryReadNextFrame(out VideoFrame frame)

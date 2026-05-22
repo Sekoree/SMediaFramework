@@ -7,8 +7,8 @@ namespace HaPlay.Playback;
 
 /// <summary>
 /// Phase C polish (§4.3.5 follow-up / framework gap "NDI pixel-format / resolution lock") — per-branch
-/// <see cref="IVideoSink"/> wrapper that pins the negotiated pixel format and/or dimensions an NDI
-/// (or any) sink presents to its receivers, regardless of what the source produces.
+/// <see cref="IVideoOutput"/> wrapper that pins the negotiated pixel format and/or dimensions an NDI
+/// (or any) output presents to its receivers, regardless of what the source produces.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -16,29 +16,29 @@ namespace HaPlay.Playback;
 /// <see cref="HaPlay.Models.NDIOutputDefinition"/> and round-trips them through the project file
 /// (Phase A forward-compat). This wrapper is the runtime-side honour: <see cref="AcceptedPixelFormats"/>
 /// constrains the <see cref="VideoFormatNegotiator"/> to the lock, and <see cref="Submit"/>
-/// letterboxes incoming frames into the locked raster via a <see cref="CompositorVideoSink"/> +
+/// letterboxes incoming frames into the locked raster via a <see cref="VideoCompositorSource"/> +
 /// <see cref="CpuVideoCompositor"/> (same pattern as <see cref="OutputPresetVideoSource"/> but on the
-/// sink side so it can be applied per-NDI-output without affecting other branches).
+/// output side so it can be applied per-NDI-output without affecting other branches).
 /// </para>
 /// <para>
-/// When the lock isn't accepted by the inner sink the wrapper degrades gracefully: the sink keeps
+/// When the lock isn't accepted by the inner output the wrapper degrades gracefully: the output keeps
 /// reporting the inner's full preference list and frames pass straight through. This means saving an
-/// NDI lock for a format the inner sink later drops doesn't silently break playback.
+/// NDI lock for a format the inner output later drops doesn't silently break playback.
 /// </para>
 /// </remarks>
-internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
+internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.LockedFormatVideoSink");
 
-    private readonly IVideoSink _inner;
+    private readonly IVideoOutput _inner;
     private readonly bool _disposeInnerOnDispose;
     private readonly PixelFormat? _pixelFormatLock;
     private readonly int? _resolutionLockWidth;
     private readonly int? _resolutionLockHeight;
     private readonly string _name;
 
-    private CompositorVideoSink? _scaler;
-    private CompositorVideoSink.Slot? _scalerSlot;
+    private VideoCompositorSource? _scaler;
+    private VideoCompositorSource.Slot? _scalerSlot;
     private VideoCpuFrameConverter? _toBgra;
     private VideoFormat _negotiatedFormat;
     private VideoFormat _innerFormat;
@@ -46,7 +46,7 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
     private bool _disposed;
 
     public LockedFormatVideoSink(
-        IVideoSink inner,
+        IVideoOutput inner,
         PixelFormat? pixelFormatLock,
         int? resolutionLockWidth,
         int? resolutionLockHeight,
@@ -62,9 +62,9 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
         _disposeInnerOnDispose = disposeInnerOnDispose;
     }
 
-    /// <summary>When the pixel-format lock is active AND the inner sink accepts it, present a
+    /// <summary>When the pixel-format lock is active AND the inner output accepts it, present a
     /// one-element list so the format negotiator must pick the locked format. Otherwise fall through
-    /// to the inner sink's full preference list (graceful degradation).</summary>
+    /// to the inner output's full preference list (graceful degradation).</summary>
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats
     {
         get
@@ -107,7 +107,7 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
         // primary on every TryAddRoute — see [[video_sink_pump_reconfigure]]).
         if (_scaler is not null && _scalerSlot is not null
             && _innerFormat == target
-            && _scalerSlot.Sink.Format == format)
+            && _scalerSlot.Output.Format == format)
         {
             _inner.Configure(target);
             _configured = true;
@@ -117,10 +117,10 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
         DisposeScaler();
 
         var compositor = new CpuVideoCompositor(target);
-        _scaler = new CompositorVideoSink(target, compositor, disposeCompositorOnDispose: true);
+        _scaler = new VideoCompositorSource(target, compositor, disposeCompositorOnDispose: true);
         _scalerSlot = _scaler.AddSlot();
         _scalerSlot.Transform = OutputPresetFormats.LetterboxTransform(format, target);
-        _scalerSlot.Sink.Configure(format);
+        _scalerSlot.Output.Configure(format);
 
         _innerFormat = target;
         _inner.Configure(target);
@@ -155,8 +155,8 @@ internal sealed class LockedFormatVideoSink : IVideoSink, IDisposable
         if (convertedToBgra)
             frame.Dispose();
 
-        _scalerSlot.Sink.Configure(layer.Format);
-        _scalerSlot.Sink.Submit(layer);
+        _scalerSlot.Output.Configure(layer.Format);
+        _scalerSlot.Output.Submit(layer);
         if (_scaler.TryReadNextFrame(out var scaled))
             _inner.Submit(scaled);
     }

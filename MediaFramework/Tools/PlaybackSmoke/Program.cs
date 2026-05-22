@@ -30,7 +30,7 @@ Console.WriteLine($"  pa dev  : {output.DeviceIndex} (capacity {output.CapacityS
 var chunkSamples = decoder.Format.SampleRate / 100;
 using var router = new AudioRouter(decoder.Format.SampleRate, chunkSamples);
 router.AddSource(decoder, "music");
-router.AddSink(output, "speakers");
+router.AddOutput(output, "speakers");
 router.AddRoute("music", "speakers", ChannelMap.Identity(decoder.Format.Channels));
 
 // Prebuffer ~250 ms by submitting silent chunks via the router's pre-roll path.

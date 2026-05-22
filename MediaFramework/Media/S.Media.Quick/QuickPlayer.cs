@@ -19,7 +19,7 @@ namespace S.Media.Quick;
 /// <remarks>
 /// <para>
 /// Sensible defaults: audio auto-resamples to match the decoder rate (Phase 2 ergonomics), video
-/// sinks are pump-wrapped automatically (Phase 2 default), and image cues hold the final frame on
+/// outputs are pump-wrapped automatically (Phase 2 default), and image cues hold the final frame on
 /// screen indefinitely (Phase 3 ergonomics). Hides the router / clock / ownership ceremony that
 /// <see cref="MediaPlayer.TryOpen"/> exposes for power users.
 /// </para>
@@ -63,24 +63,24 @@ public static class QuickPlayer
     private static QuickPlayback OpenImage(string path, string title, int initialWidth, int initialHeight)
     {
         var image = ImageFileSource.OpenFromFile(path);
-        SDL3GLVideoSink? sink = null;
+        SDL3GLVideoOutput? output = null;
         VideoPlayer? video = null;
         MediaClock? clock = null;
         try
         {
-            sink = new SDL3GLVideoSink(title,
+            output = new SDL3GLVideoOutput(title,
                 initialWidth: Math.Min(image.Format.Width, initialWidth),
                 initialHeight: Math.Min(image.Format.Height, initialHeight));
             clock = new MediaClock();
-            video = new VideoPlayer(image, sink, clock) { HoldLastFrameAtEnd = true };
+            video = new VideoPlayer(image, output, clock) { HoldLastFrameAtEnd = true };
             return new QuickPlayback(QuickPlaybackKind.Image, mediaPlayer: null, audioHost: null,
-                sink, video, clock, ownedDisposable: image);
+                output, video, clock, ownedDisposable: image);
         }
         catch
         {
             video?.Dispose();
             clock?.Dispose();
-            sink?.Dispose();
+            output?.Dispose();
             image.Dispose();
             throw;
         }
@@ -89,12 +89,12 @@ public static class QuickPlayer
     private static QuickPlayback OpenMedia(string path, string title, int initialWidth, int initialHeight)
     {
         FFmpegRuntime.EnsureInitialized();
-        SDL3GLVideoSink? sink = null;
+        SDL3GLVideoOutput? output = null;
         MediaPlayer? player = null;
         PortAudioPlaybackHost? audioHost = null;
         try
         {
-            sink = new SDL3GLVideoSink(title, initialWidth, initialHeight);
+            output = new SDL3GLVideoOutput(title, initialWidth, initialHeight);
 
             var openOptions = new MediaPlayerOpenOptions(
                 TryHardwareAcceleration: true,
@@ -103,12 +103,12 @@ public static class QuickPlayer
             if (!MediaPlayer.TryOpen(
                     path,
                     openOptions,
-                    sink,
+                    output,
                     disposeNegotiationLead: true,
                     out player,
                     out var errorMessage))
             {
-                sink = null;
+                output = null;
                 throw new InvalidOperationException(
                     $"QuickPlayer.OpenMedia: MediaPlayer.TryOpen failed for '{path}' — {errorMessage}");
             }
@@ -126,14 +126,14 @@ public static class QuickPlayer
                     PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer);
             }
 
-            return new QuickPlayback(QuickPlaybackKind.Media, player, audioHost, sink,
+            return new QuickPlayback(QuickPlaybackKind.Media, player, audioHost, output,
                 video: null, clock: null, ownedDisposable: null);
         }
         catch
         {
             audioHost?.Dispose();
             player?.Dispose();
-            sink?.Dispose();
+            output?.Dispose();
             throw;
         }
     }
@@ -148,7 +148,7 @@ public enum QuickPlaybackKind
 
 /// <summary>
 /// Handle returned by <see cref="QuickPlayer.Open"/>. Disposing tears down every owned resource
-/// (sink, clock, decoder, audio host, image source) in the right order.
+/// (output, clock, decoder, audio host, image source) in the right order.
 /// </summary>
 public sealed class QuickPlayback : IDisposable
 {
@@ -156,7 +156,7 @@ public sealed class QuickPlayback : IDisposable
 
     private readonly MediaPlayer? _mediaPlayer;
     private readonly PortAudioPlaybackHost? _audioHost;
-    private readonly SDL3GLVideoSink _sink;
+    private readonly SDL3GLVideoOutput _sink;
     private readonly VideoPlayer? _imageVideoPlayer;
     private readonly MediaClock? _imageClock;
     private readonly IDisposable? _ownedDisposable;
@@ -164,13 +164,13 @@ public sealed class QuickPlayback : IDisposable
     private bool _disposed;
 
     internal QuickPlayback(QuickPlaybackKind kind, MediaPlayer? mediaPlayer,
-        PortAudioPlaybackHost? audioHost, SDL3GLVideoSink sink, VideoPlayer? video, MediaClock? clock,
+        PortAudioPlaybackHost? audioHost, SDL3GLVideoOutput output, VideoPlayer? video, MediaClock? clock,
         IDisposable? ownedDisposable)
     {
         Kind = kind;
         _mediaPlayer = mediaPlayer;
         _audioHost = audioHost;
-        _sink = sink;
+        _sink = output;
         _imageVideoPlayer = video;
         _imageClock = clock;
         _ownedDisposable = ownedDisposable;
@@ -182,7 +182,7 @@ public sealed class QuickPlayback : IDisposable
     }
 
     public QuickPlaybackKind Kind { get; }
-    public SDL3GLVideoSink WindowSink => _sink;
+    public SDL3GLVideoOutput WindowOutput => _sink;
     public MediaPlayer? MediaPlayer => _mediaPlayer;
     public VideoPlayer? ImageVideo => _imageVideoPlayer;
 

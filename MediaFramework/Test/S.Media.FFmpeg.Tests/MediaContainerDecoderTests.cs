@@ -27,8 +27,6 @@ public class MediaContainerDecoderTests
         {
             using var c = MediaContainerDecoder.Open(path);
             Assert.True(c.UsesSharedDemux);
-            Assert.Null(c.LegacyAudio);
-            Assert.Null(c.LegacyVideo);
             Assert.InRange(c.Duration.TotalSeconds, 0.8, 1.2);
 
             var scratch = new float[c.Audio.Format.Channels * 512];
@@ -40,12 +38,7 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp media delete");
         }
     }
 
@@ -67,12 +60,7 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp media delete");
         }
     }
 
@@ -90,12 +78,7 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp media delete");
         }
     }
 
@@ -129,12 +112,7 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp media delete");
         }
     }
 
@@ -156,12 +134,7 @@ public class MediaContainerDecoderTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerDecoderTests)}: temp video-only delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp video-only delete");
         }
     }
 

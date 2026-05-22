@@ -779,11 +779,6 @@ void main()
         _staging = null;
 
         // Balance the COM reference taken by `new ID3D11Device(comPtr)` in TryCreate (borrowed or shared host pointer).
-        try { _device.Dispose(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "Nv12Win32SharedHandleGpuUploader.Dispose: device"); }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(_device.Dispose, "Nv12Win32SharedHandleGpuUploader.Dispose: device");
     }
 }

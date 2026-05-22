@@ -11,7 +11,7 @@ public enum LayerEasing
 }
 
 /// <summary>
-/// Tween helper for driving <see cref="CompositorVideoSink.Slot.Opacity"/> over time. Stateless —
+/// Tween helper for driving <see cref="VideoCompositorSource.Slot.Opacity"/> over time. Stateless —
 /// callers feed a timeline-relative elapsed time and apply the result to the slot.
 /// </summary>
 /// <param name="StartOpacity">Opacity at <c>elapsed = 0</c>.</param>

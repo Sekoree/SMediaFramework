@@ -13,7 +13,7 @@ namespace HaPlay.Playback;
 /// is open. For NDI outputs, the image is installed on the persistent <c>NDIOutputPreviewRuntime</c> carrier
 /// (via <see cref="OutputManagementViewModel.SetNDICarrierLogo"/>) so receivers see the slate over the same
 /// sender they were already locked onto — no NDI re-discovery. For SDL3 OpenGL outputs, a dedicated logo
-/// sink + pump is created here.
+/// output + pump is created here.
 /// </summary>
 internal sealed class IdleLogoSlateSession : IDisposable
 {
@@ -107,7 +107,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
                     {
                         var (sw, sh) = InitialSdlSize(lv);
                         var sdlFmt = new VideoFormat(sw, sh, PixelFormat.Bgra32, new Rational(60, 1));
-                        var sdl = new SDL3GLVideoSink(lv.DisplayName, sw, sh);
+                        var sdl = new SDL3GLVideoOutput(lv.DisplayName, sw, sh);
                         var logo = new LogoFallbackVideoSink(sdl, disposeInnerOnDispose: true);
                         logo.Configure(sdlFmt);
                         var sdlProto = FallbackImageLoader.TryBuildHoldCpuFrame(sdlFmt, imagePath);

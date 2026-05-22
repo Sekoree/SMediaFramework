@@ -14,8 +14,8 @@ using VideoPixelFormat = S.Media.Core.Video.PixelFormat;
 namespace S.Media.Avalonia;
 
 /// <summary>
-/// Avalonia <see cref="OpenGlControlBase"/> that implements <see cref="IVideoSink"/> using the same
-/// <see cref="YuvVideoRenderer"/> / shader pipeline as <c>SDL3GLVideoSink</c> (<see cref="S.Media.OpenGL"/>).
+/// Avalonia <see cref="OpenGlControlBase"/> that implements <see cref="IVideoOutput"/> using the same
+/// <see cref="YuvVideoRenderer"/> / shader pipeline as <c>SDL3GLVideoOutput</c> (<see cref="S.Media.OpenGL"/>).
 /// </summary>
 /// <remarks>
 /// <para>
@@ -28,12 +28,12 @@ namespace S.Media.Avalonia;
 /// <c>eglGetProcAddress</c> from libEGL (same pattern as SDL's EGL resolve). GLX-only contexts leave dma-buf import disabled.
 /// </para>
 /// </remarks>
-public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSinkD3D11GlBorrowSetup
+public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideoOutputD3D11GlBorrowSetup
 {
     private static readonly VideoPixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
 
     private readonly Win32Nv12GlUploadDeviceResolver _win32Nv12Device;
-    private GlVideoSinkHdrPreference _hdrPreference;
+    private GlVideoOutputHdrPreference _hdrPreference;
 
     private readonly Lock _configureLock = new();
     private VideoFormat _format;
@@ -54,7 +54,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
     private readonly object _frameLock = new();
 
     public VideoOpenGlControl(
-        GlVideoSinkHdrPreference hdrPreference = GlVideoSinkHdrPreference.FollowFrameHints,
+        GlVideoOutputHdrPreference hdrPreference = GlVideoOutputHdrPreference.FollowFrameHints,
         nint borrowD3D11DeviceComPtrForNv12Gl = 0,
         bool createFallbackD3D11InteropDeviceForWin32Nv12 = true)
     {
@@ -67,7 +67,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
     /// <summary>Letterboxing / stretch for <see cref="YuvVideoRenderer.Render(int,int,VideoViewportFit)"/>.</summary>
     public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Stretch;
 
-    public GlVideoSinkHdrPreference HdrPreference
+    public GlVideoOutputHdrPreference HdrPreference
     {
         get => _hdrPreference;
         set => _hdrPreference = value;
@@ -143,7 +143,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
             || frame.Format.PixelFormat != _format.PixelFormat)
         {
             frame.Dispose();
-            throw new ArgumentException($"frame format {frame.Format} does not match sink format {_format}", nameof(frame));
+            throw new ArgumentException($"frame format {frame.Format} does not match output format {_format}", nameof(frame));
         }
 
         VideoFrame? prev;
@@ -194,27 +194,12 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
 
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
-        try { _renderer?.Dispose(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(VideoOpenGlControl)}: renderer dispose"); }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _renderer?.Dispose(), $"{nameof(VideoOpenGlControl)}: renderer dispose");
         _renderer = null;
 
-        try { _win32Nv12Device.DisposeOwnedInteropHost(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(VideoOpenGlControl)}: Win32 NV12 resolver"); }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(_win32Nv12Device.DisposeOwnedInteropHost, $"{nameof(VideoOpenGlControl)}: Win32 NV12 resolver");
 
-        try { _gl?.Dispose(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(VideoOpenGlControl)}: GL dispose"); }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _gl?.Dispose(), $"{nameof(VideoOpenGlControl)}: GL dispose");
         _gl = null;
     }
 
@@ -249,7 +234,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
         {
             try
             {
-                GlVideoSinkHdr.ApplyTransferHint(renderer, frame, _hdrPreference);
+                GlVideoOutputHdr.ApplyTransferHint(renderer, frame, _hdrPreference);
                 renderer.Upload(frame);
                 renderer.Render(w, h, ViewportFit);
                 _gl.Flush();
@@ -306,12 +291,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoSink, IVideoSi
 
             if (_rendererNeedsRebuild && _renderer is not null)
             {
-                try { _renderer.Dispose(); }
-#if DEBUG
-                catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(VideoOpenGlControl)}: renderer dispose during reconfigure"); }
-#else
-                catch { /* best effort */ }
-#endif
+                MediaDiagnostics.SwallowDisposeErrors(_renderer.Dispose, $"{nameof(VideoOpenGlControl)}: renderer dispose during reconfigure");
                 _renderer = null;
                 _rendererNeedsRebuild = false;
             }

@@ -6,7 +6,7 @@ namespace S.Media.OpenGL;
 
 /// <summary>
 /// Resolves the Win32 <c>ID3D11Device</c> COM pointer used when constructing <see cref="YuvVideoRenderer"/> for NV12
-/// (shared by <c>SDL3GLVideoSink</c> and Avalonia GL video).
+/// (shared by <c>SDL3GLVideoOutput</c> and Avalonia GL video).
 /// </summary>
 public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
 {
@@ -42,15 +42,10 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
         return win32D3d11DevicePtr;
     }
 
-    /// <summary>Disposes any sink-owned <see cref="D3D11GlInteropDeviceHost"/> after the GL renderer is torn down.</summary>
+    /// <summary>Disposes any output-owned <see cref="D3D11GlInteropDeviceHost"/> after the GL renderer is torn down.</summary>
     public void DisposeOwnedInteropHost()
     {
-        try { _nv12D3d11Host?.Dispose(); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{_logPrefix}: DisposeOwnedInteropHost"); }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => _nv12D3d11Host?.Dispose(), $"{_logPrefix}: DisposeOwnedInteropHost");
         _nv12D3d11Host = null;
     }
 
@@ -94,7 +89,7 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
                 libavErr,
                 _createFallbackD3D11InteropDeviceForWin32Nv12
                     ? " — trying owned interop device instead."
-                    : " — true zero-host mode will not create a sink-owned D3D11 device.");
+                    : " — true zero-host mode will not create a output-owned D3D11 device.");
         }
 
         if (_createFallbackD3D11InteropDeviceForWin32Nv12)
@@ -121,7 +116,7 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
         if (win32D3d11DevicePtr == 0 && Interlocked.Exchange(ref _nv12ZeroHostModeLogged, 1) == 0)
         {
             MediaDiagnostics.LogInformation(
-                "{0}: Win32 NV12 true zero-host — skipping sink-owned D3D11GlInteropDeviceHost; YuvVideoRenderer will use libav ID3D11Device from the first Win32 NV12 frame (requires LibavD3D11DeviceComPtr on backing or negotiator-borrowed device).",
+                "{0}: Win32 NV12 true zero-host — skipping output-owned D3D11GlInteropDeviceHost; YuvVideoRenderer will use libav ID3D11Device from the first Win32 NV12 frame (requires LibavD3D11DeviceComPtr on backing or negotiator-borrowed device).",
                 _logPrefix);
         }
     }

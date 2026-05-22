@@ -382,33 +382,7 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try
-        {
-            Stop();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "PortAudioInput.Dispose: Stop");
-        }
-#else
-        catch
-        {
-        }
-#endif
-        try
-        {
-            PortAudioRuntime.Release();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "PortAudioInput.Dispose: PortAudioRuntime.Release");
-        }
-#else
-        catch
-        {
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(Stop, "PortAudioInput.Dispose: Stop");
+        MediaDiagnostics.SwallowDisposeErrors(PortAudioRuntime.Release, "PortAudioInput.Dispose: PortAudioRuntime.Release");
     }
 }

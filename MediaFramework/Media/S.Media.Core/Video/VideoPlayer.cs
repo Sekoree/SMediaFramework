@@ -8,24 +8,24 @@ using S.Media.Core.Threading;
 namespace S.Media.Core.Video;
 
 /// <summary>
-/// Glues an <see cref="IVideoSource"/>, an <see cref="IVideoSink"/>, and an
+/// Glues an <see cref="IVideoSource"/>, an <see cref="IVideoOutput"/>, and an
 /// <see cref="IMediaClock"/> together. A background decode thread keeps a
 /// small presentation queue full; on each <see cref="IMediaClock.VideoTick"/>
 /// the player picks the most recent frame whose PTS is at or before the
-/// playhead, drops anything stale, and submits to the sink.
+/// playhead, drops anything stale, and submits to the output.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Pacing model: the master clock decides when frames display; the source
 /// just provides them in PTS order. For audio-mastered playback this means
-/// the audio sink's <see cref="IPlaybackClock"/> drives the
+/// the audio output's <see cref="IPlaybackClock"/> drives the
 /// <see cref="MediaClock"/>, and the video player follows along. With no
 /// master attached (free-running stopwatch), wall time paces the playback.
 /// </para>
 /// <para>
-/// Thread safety / latency: <see cref="IVideoSink.Submit"/> runs on the
+/// Thread safety / latency: <see cref="IVideoOutput.Submit"/> runs on the
 /// <see cref="IMediaClock.VideoTick"/> thread (the clock's driver thread),
-/// so sinks must return promptly — typically by handing the frame to a
+/// so outputs must return promptly — typically by handing the frame to a
 /// render thread of their own. A slow Submit delays subsequent ticks for
 /// every other subscriber on the same clock.
 /// </para>
@@ -33,7 +33,7 @@ namespace S.Media.Core.Video;
 /// Frame negotiation runs at construction via
 /// <see cref="VideoFormatNegotiator.Connect"/> (optional
 /// <c>negotiatePixelFormats</c> predicate excludes pixel formats Core would
-/// otherwise pick). The source and sink agree on a format before <see cref="Play"/>.
+/// otherwise pick). The source and output agree on a format before <see cref="Play"/>.
 /// </para>
 /// <para>
 /// On <see cref="Pause"/> / <see cref="Dispose"/>, when the <see cref="IVideoSource"/> implements
@@ -46,7 +46,7 @@ namespace S.Media.Core.Video;
 public sealed class VideoPlayer : IDisposable
 {
     private readonly IVideoSource _source;
-    private readonly IVideoSink _sink;
+    private readonly IVideoOutput _sink;
     private readonly IMediaClock _clock;
     private readonly ConcurrentQueue<VideoFrame> _queue = new();
     private SemaphoreSlim _slotsAvailable;
@@ -83,7 +83,7 @@ public sealed class VideoPlayer : IDisposable
     private long _holdSubmitCount;
 
     /// <summary>
-    /// Raised after a frame is successfully submitted to the sink with its
+    /// Raised after a frame is successfully submitted to the output with its
     /// <see cref="VideoFrame.PresentationTime"/> (for example to feed a
     /// <see cref="VideoPtsClock"/>).
     /// </summary>
@@ -101,7 +101,7 @@ public sealed class VideoPlayer : IDisposable
 
     /// <summary>Total frames pulled from the source.</summary>
     public long DecodedCount => Volatile.Read(ref _decoded);
-    /// <summary>Total frames handed to the sink.</summary>
+    /// <summary>Total frames handed to the output.</summary>
     public long DisplayedCount => Volatile.Read(ref _displayed);
     /// <summary>Frames dropped because the playhead had advanced past them by more than <see cref="LateThreshold"/>.</summary>
     public long DroppedLate => Volatile.Read(ref _droppedLate);
@@ -137,7 +137,7 @@ public sealed class VideoPlayer : IDisposable
     /// <para>
     /// Setting this to <c>false</c> after a hold has started releases the captured planes on the
     /// next tick; calling <see cref="Play"/> or <see cref="Seek"/> also resets the held state.
-    /// Held frames advance their PTS with the playhead so the sink keeps receiving monotonically
+    /// Held frames advance their PTS with the playhead so the output keeps receiving monotonically
     /// timestamped frames (matches the live-decode contract).
     /// </para>
     /// </remarks>
@@ -149,25 +149,25 @@ public sealed class VideoPlayer : IDisposable
     /// <summary>True when the player has frozen a final frame and is re-submitting it under <see cref="HoldLastFrameAtEnd"/>.</summary>
     public bool IsHoldingLastFrame => _heldPlanes is not null;
 
-    public VideoPlayer(IVideoSource source, IVideoSink sink, IMediaClock clock,
+    public VideoPlayer(IVideoSource source, IVideoOutput output, IMediaClock clock,
                        int queueCapacity = 4, TimeSpan? decodePollInterval = null,
                        Func<PixelFormat, bool>? negotiatePixelFormats = null,
                        VideoPresentationMode presentationMode = VideoPresentationMode.Scheduled)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(clock);
         if (queueCapacity < 1) throw new ArgumentOutOfRangeException(nameof(queueCapacity), "must be >= 1");
 
         _source = source;
-        _sink = sink;
+        _sink = output;
         _clock = clock;
         _presentationMode = presentationMode;
         _queueCapacity = queueCapacity;
         _slotsAvailable = new SemaphoreSlim(queueCapacity, queueCapacity);
         _decodePollInterval = decodePollInterval ?? TimeSpan.FromMilliseconds(5);
 
-        // Negotiate format up front so the sink is configured before any
+        // Negotiate format up front so the output is configured before any
         // frame arrives. Either side throws here if no compatible format.
         VideoFormatNegotiator.Connect(_source, _sink, negotiatePixelFormats);
     }
@@ -239,12 +239,7 @@ public sealed class VideoPlayer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        try { StopInternal(CancellationToken.None); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, "VideoPlayer.Dispose: StopInternal"); }
-#else
-        catch { /* best effort */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => StopInternal(CancellationToken.None), "VideoPlayer.Dispose: StopInternal");
         _slotsAvailable.Dispose();
     }
 
@@ -420,7 +415,7 @@ public sealed class VideoPlayer : IDisposable
         {
             // Capture a managed snapshot of the last-frame plane data the moment we know this
             // is the final frame the source will produce — must happen before _sink.Submit takes
-            // ownership (the sink may free the underlying buffers via the frame's release).
+            // ownership (the output may free the underlying buffers via the frame's release).
             // Skipped for hardware-backed frames: their lifetime is tied to the source's release
             // and there's no portable way to fork an additional refcounted view here.
             if (HoldLastFrameAtEnd && _heldPlanes is null
@@ -442,9 +437,9 @@ public sealed class VideoPlayer : IDisposable
             catch (Exception ex)
             {
 #if DEBUG
-                MediaDiagnostics.LogError(ex, "VideoPlayer.OnVideoTick sink Submit");
+                MediaDiagnostics.LogError(ex, "VideoPlayer.OnVideoTick output Submit");
 #endif
-                // Sink threw — make sure the frame is released to avoid a
+                // Output threw — make sure the frame is released to avoid a
                 // native buffer leak; rethrow would kill MediaClock's driver.
                 try { toShow.Dispose(); }
 #if DEBUG
@@ -496,7 +491,7 @@ public sealed class VideoPlayer : IDisposable
         catch (Exception ex)
         {
 #if DEBUG
-            MediaDiagnostics.LogError(ex, "VideoPlayer.PresentLatestQueuedFrame sink Submit");
+            MediaDiagnostics.LogError(ex, "VideoPlayer.PresentLatestQueuedFrame output Submit");
 #endif
             try { latest.Dispose(); } catch { /* best effort */ }
             _ = ex;
@@ -557,7 +552,7 @@ public sealed class VideoPlayer : IDisposable
         catch (Exception ex)
         {
 #if DEBUG
-            MediaDiagnostics.LogError(ex, "VideoPlayer.TrySubmitHeldFrame: sink Submit");
+            MediaDiagnostics.LogError(ex, "VideoPlayer.TrySubmitHeldFrame: output Submit");
 #else
             _ = ex;
 #endif

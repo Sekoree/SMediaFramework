@@ -71,7 +71,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     }
 
     /// <summary>
-    /// Returns the persistent <see cref="PortAudioOutput"/> for use as an audio sink. Returns <c>null</c>
+    /// Returns the persistent <see cref="PortAudioOutput"/> for use as an audio output. Returns <c>null</c>
     /// when the runtime is disposed / never started, or when another acquirer already holds it. The ring
     /// buffer is flushed so the next Submit plays cleanly. Pair every acquire with <see cref="ReleaseFromPlayback"/>.
     /// </summary>

@@ -39,7 +39,7 @@ internal static class OutputLineHealthEvaluator
         long audioDropped = 0;
         long audioEnqueued = 0;
 
-        if (session.TryGetVideoHealthMetrics(line, out VideoSinkPumpMetrics vm))
+        if (session.TryGetVideoHealthMetrics(line, out VideoOutputPumpMetrics vm))
         {
             videoDropped = vm.DroppedFrames;
             videoSubmitted = vm.SubmittedFrames;

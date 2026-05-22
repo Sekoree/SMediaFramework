@@ -283,7 +283,7 @@ internal static class GlVideoFormatSupport
     internal static bool TryGetRecipe(CorePixelFormat pf, out GlFormatRecipe r) => Recipes.TryGetValue(pf, out r);
 
     /// <summary>
-    /// Sink-side negotiation order: higher-fidelity YUV (e.g. ProRes 422 10-bit) is preferred before
+    /// Output-side negotiation order: higher-fidelity YUV (e.g. ProRes 422 10-bit) is preferred before
     /// NV12 so hardware decode paths that expose multiple natives do not pick 8-bit 4:2:0 by default.
     /// </summary>
     private static readonly CorePixelFormat[] SupportedPixelFormatsOrder =

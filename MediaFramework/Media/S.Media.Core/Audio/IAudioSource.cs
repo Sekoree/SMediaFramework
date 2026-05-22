@@ -24,9 +24,9 @@ public interface IAudioSource
     /// </summary>
     /// <remarks>
     /// On <see langword="true"/> the caller owns <paramref name="frame"/> and must call
-    /// <see cref="AudioFrame.Dispose"/> exactly once after the consuming sink's <c>Submit</c>
-    /// returns. Sinks like <see cref="IAudioSink.Submit(System.ReadOnlySpan{float})"/> and
-    /// <c>NDIAudioSink.Submit(in AudioFrame)</c> read the samples synchronously and do not
+    /// <see cref="AudioFrame.Dispose"/> exactly once after the consuming output's <c>Submit</c>
+    /// returns. Outputs like <see cref="IAudioOutput.Submit(System.ReadOnlySpan{float})"/> and
+    /// <c>NDIAudioOutput.Submit(in AudioFrame)</c> read the samples synchronously and do not
     /// retain the buffer — failing to dispose leaks the producer's pooled backing buffer.
     /// Implementations that lease buffers from a pool guarantee single-shot Release, so
     /// double-Dispose is safe.

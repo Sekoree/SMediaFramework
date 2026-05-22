@@ -16,7 +16,7 @@ namespace S.Media.Core.Video;
 /// native format). A consumer that wants something else calls
 /// <see cref="SelectOutputFormat"/>; the source either matches it natively or
 /// inserts an internal converter and updates <see cref="Format"/> to reflect
-/// the new layout. Pair this with <see cref="IVideoSink.AcceptedPixelFormats"/>
+/// the new layout. Pair this with <see cref="IVideoOutput.AcceptedPixelFormats"/>
 /// via <see cref="VideoFormatNegotiator"/> to wire up the cheapest path.
 /// </para>
 /// </remarks>
@@ -28,7 +28,7 @@ public interface IVideoSource
     /// <summary>
     /// Pixel formats the source can deliver without a CPU-side conversion.
     /// Producers should list every layout they can hand out zero-copy; the
-    /// negotiator picks the first one a sink also supports.
+    /// negotiator picks the first one a output also supports.
     /// </summary>
     IReadOnlyList<PixelFormat> NativePixelFormats { get; }
 
@@ -40,7 +40,7 @@ public interface IVideoSource
     /// If the format is in <see cref="NativePixelFormats"/> the source operates
     /// pass-through; otherwise it inserts an internal converter (e.g. sws_scale)
     /// — callers should prefer one of <see cref="NativePixelFormats"/> when the
-    /// sink accepts it.
+    /// output accepts it.
     /// </summary>
     void SelectOutputFormat(PixelFormat format);
 

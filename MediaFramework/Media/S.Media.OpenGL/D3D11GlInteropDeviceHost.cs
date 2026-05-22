@@ -6,7 +6,7 @@ namespace S.Media.OpenGL;
 
 /// <summary>
 /// Owns a default Direct3D 11 device suitable for <see cref="Nv12Win32SharedHandleGpuUploader"/>
-/// when the host does not borrow libav's <c>ID3D11Device</c> (same creation flags as <c>SDL3GLVideoSink</c>).
+/// when the host does not borrow libav's <c>ID3D11Device</c> (same creation flags as <c>SDL3GLVideoOutput</c>).
 /// </summary>
 /// <remarks>
 /// This is a small lifetime boundary for the "zero-host" backlog: callers that need a D3D11 device aligned

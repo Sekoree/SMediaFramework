@@ -5,8 +5,8 @@ namespace S.Media.Core.Video;
 /// <c>ID3D11Device</c> when hardware NV12 shared-handle decode is active (same adapter as decoded textures).
 /// </summary>
 /// <remarks>
-/// Implemented by FFmpeg decoders when D3D11 shared-handle export is enabled. GL sinks such as
-/// <c>SDL3GLVideoSink</c> can call <see cref="TryGetHardwareD3D11DeviceForWin32Gl"/> during setup so
+/// Implemented by FFmpeg decoders when D3D11 shared-handle export is enabled. GL outputs such as
+/// <c>SDL3GLVideoOutput</c> can call <see cref="TryGetHardwareD3D11DeviceForWin32Gl"/> during setup so
 /// <c>OpenSharedResource</c> uses the same device as the decoder without a second host-created D3D11 device.
 /// <see cref="TryGetHardwareD3D11AdapterLuid"/> is optional metadata (DXGI adapter LUID) for diagnostics and multi-GPU mismatch warnings.
 /// </remarks>

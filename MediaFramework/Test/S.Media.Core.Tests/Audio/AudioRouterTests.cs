@@ -49,11 +49,11 @@ public class AudioRouterTests
     }
 
     [Fact]
-    public void AddSink_PerSinkPumpCapacity_OverridesRouterDefault()
+    public void AddOutput_PerOutputPumpCapacity_OverridesRouterDefault()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 480, pumpCapacityChunks: 8);
-        r.AddSink(new TestSink(Stereo), "narrow", pumpCapacityChunks: 8);
-        r.AddSink(new TestSink(Stereo), "wide", pumpCapacityChunks: 40);
+        r.AddOutput(new TestOutput(Stereo), "narrow", pumpCapacityChunks: 8);
+        r.AddOutput(new TestOutput(Stereo), "wide", pumpCapacityChunks: 40);
         Assert.Equal(8, r.GetPumpStats("narrow").PumpCapacityChunks);
         Assert.Equal(40, r.GetPumpStats("wide").PumpCapacityChunks);
     }
@@ -74,8 +74,8 @@ public class AudioRouterTests
     public void GetAggregatePumpStats_matches_sum_of_GetPumpStats_per_sink()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 480, pumpCapacityChunks: 8);
-        r.AddSink(new TestSink(Stereo), "narrow", pumpCapacityChunks: 8);
-        r.AddSink(new TestSink(Stereo), "wide", pumpCapacityChunks: 40);
+        r.AddOutput(new TestOutput(Stereo), "narrow", pumpCapacityChunks: 8);
+        r.AddOutput(new TestOutput(Stereo), "wide", pumpCapacityChunks: 40);
         var agg = r.GetAggregatePumpStats();
         Assert.Equal(2, agg.SinkCount);
         Assert.Equal(40, agg.MaxPumpCapacityChunks);
@@ -87,28 +87,28 @@ public class AudioRouterTests
     }
 
     [Fact]
-    public void AddSink_PumpCapacityBelow2_Throws()
+    public void AddOutput_PumpCapacityBelow2_Throws()
     {
         using var r = new AudioRouter(SampleRate);
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            r.AddSink(new TestSink(Stereo), "x", pumpCapacityChunks: 1));
+            r.AddOutput(new TestOutput(Stereo), "x", pumpCapacityChunks: 1));
     }
 
     [Fact]
     public void AddRoute_UnknownSource_Throws()
     {
         using var r = new AudioRouter(SampleRate);
-        r.AddSink(new TestSink(Stereo), "out");
+        r.AddOutput(new TestOutput(Stereo), "out");
         Assert.Throws<ArgumentException>(() => r.AddRoute("missing", "out", ChannelMap.Identity(2)));
     }
 
     [Fact]
-    public void AddRoute_MapDoesntMatchSinkChannels_Throws()
+    public void AddRoute_MapDoesntMatchOutputChannels_Throws()
     {
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src");
-        r.AddSink(new TestSink(Quad), "dst");
-        // map outputs 2 channels, sink expects 4
+        r.AddOutput(new TestOutput(Quad), "dst");
+        // map outputs 2 channels, output expects 4
         Assert.Throws<InvalidOperationException>(() =>
             r.AddRoute("src", "dst", ChannelMap.Identity(2)));
     }
@@ -118,7 +118,7 @@ public class AudioRouterTests
     {
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Mono), "src");
-        r.AddSink(new TestSink(Stereo), "dst");
+        r.AddOutput(new TestOutput(Stereo), "dst");
         // map references source ch 1 but mono source only has ch 0
         Assert.Throws<InvalidOperationException>(() =>
             r.AddRoute("src", "dst", new ChannelMap([0, 1])));
@@ -129,7 +129,7 @@ public class AudioRouterTests
     {
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src");
-        r.AddSink(new TestSink(Stereo), "dst");
+        r.AddOutput(new TestOutput(Stereo), "dst");
         r.AddRoute("src", "dst", ChannelMap.Identity(2), gain: 0.5f);
         r.AddRoute("src", "dst", new ChannelMap([1, 0]), gain: 0.25f);  // replace
         Assert.Single(r.Routes);
@@ -140,14 +140,14 @@ public class AudioRouterTests
     [Fact]
     public void AddRoute_ByRouteId_AllowsMultipleRoutesPerPair()
     {
-        // Phase C (§4.3.4) — per-cell audio matrix needs multiple routes per (source, sink) pair.
+        // Phase C (§4.3.4) — per-cell audio matrix needs multiple routes per (source, output) pair.
         // The run loop already sums additively, so two routes feeding cell-disjoint output channels
-        // produce the union of their contributions on the same sink.
+        // produce the union of their contributions on the same output.
         using var r = new AudioRouter(SampleRate, chunkSamples: 32);
         var src = new TestSource(Stereo, c => c == 0 ? 3f : 4f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
         r.AddSource(src, "music");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("music", "out", "cell_L", new ChannelMap([0, -1]), gain: 1f);
         r.AddRoute("music", "out", "cell_R", new ChannelMap([-1, 1]), gain: 1f);
 
@@ -158,7 +158,7 @@ public class AudioRouterTests
         WaitForChunks(r, 3);
         r.Stop();
         // Identity-equivalent split across two routes — left cell carries src L, right cell carries src R.
-        AssertFramePattern(sink.Captured[0], expected: [3f, 4f]);
+        AssertFramePattern(output.Captured[0], expected: [3f, 4f]);
     }
 
     [Fact]
@@ -167,7 +167,7 @@ public class AudioRouterTests
         // Each cell route is identified separately so gain rides apply per-cell without disturbing siblings.
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src");
-        r.AddSink(new TestSink(Stereo), "dst");
+        r.AddOutput(new TestOutput(Stereo), "dst");
         r.AddRoute("src", "dst", "cell_L", new ChannelMap([0, -1]), gain: 1f);
         r.AddRoute("src", "dst", "cell_R", new ChannelMap([-1, 1]), gain: 1f);
 
@@ -186,7 +186,7 @@ public class AudioRouterTests
     {
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src");
-        r.AddSink(new TestSink(Stereo), "dst");
+        r.AddOutput(new TestOutput(Stereo), "dst");
         r.AddRoute("src", "dst", "cell_L", new ChannelMap([0, -1]), gain: 1f);
         r.AddRoute("src", "dst", "cell_R", new ChannelMap([-1, 1]), gain: 1f);
 
@@ -199,11 +199,11 @@ public class AudioRouterTests
     [Fact]
     public void RemoveRoute_LegacyPairOverload_RemovesAllRoutesForPair()
     {
-        // Back-compat: callers that didn't opt into route ids see "one logical edge" — RemoveRoute(src,sink)
+        // Back-compat: callers that didn't opt into route ids see "one logical edge" — RemoveRoute(src,output)
         // sweeps every route between them, mirroring the pre-Phase-C single-route-per-pair contract.
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src");
-        r.AddSink(new TestSink(Stereo), "dst");
+        r.AddOutput(new TestOutput(Stereo), "dst");
         r.AddRoute("src", "dst", "cell_L", new ChannelMap([0, -1]), gain: 1f);
         r.AddRoute("src", "dst", "cell_R", new ChannelMap([-1, 1]), gain: 1f);
 
@@ -214,12 +214,12 @@ public class AudioRouterTests
     [Fact]
     public void AddRoute_RouteIdCollisionAcrossPairs_Rejected()
     {
-        // Reusing a routeId for a different (source, sink) pair would silently steer subsequent
+        // Reusing a routeId for a different (source, output) pair would silently steer subsequent
         // SetRouteGainById / RemoveRouteById calls at the wrong cell — reject loudly.
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src1");
         r.AddSource(new TestSource(Stereo), "src2");
-        r.AddSink(new TestSink(Stereo), "dst");
+        r.AddOutput(new TestOutput(Stereo), "dst");
         r.AddRoute("src1", "dst", "shared", ChannelMap.Identity(2));
         Assert.Throws<ArgumentException>(() =>
             r.AddRoute("src2", "dst", "shared", ChannelMap.Identity(2)));
@@ -231,7 +231,7 @@ public class AudioRouterTests
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "a");
         r.AddSource(new TestSource(Stereo), "b");
-        r.AddSink(new TestSink(Stereo), "out");
+        r.AddOutput(new TestOutput(Stereo), "out");
         r.AddRoute("a", "out", ChannelMap.Identity(2));
         r.AddRoute("b", "out", ChannelMap.Identity(2));
 
@@ -241,16 +241,16 @@ public class AudioRouterTests
     }
 
     [Fact]
-    public void RemoveSink_AlsoRemovesItsRoutes()
+    public void RemoveOutput_AlsoRemovesItsRoutes()
     {
         using var r = new AudioRouter(SampleRate);
         r.AddSource(new TestSource(Stereo), "src");
-        r.AddSink(new TestSink(Stereo), "x");
-        r.AddSink(new TestSink(Stereo), "y");
+        r.AddOutput(new TestOutput(Stereo), "x");
+        r.AddOutput(new TestOutput(Stereo), "y");
         r.AddRoute("src", "x", ChannelMap.Identity(2));
         r.AddRoute("src", "y", ChannelMap.Identity(2));
 
-        Assert.True(r.RemoveSink("x"));
+        Assert.True(r.RemoveOutput("x"));
         Assert.Single(r.Routes);
         Assert.Equal("y", r.Routes[0].SinkId);
     }
@@ -261,19 +261,19 @@ public class AudioRouterTests
     public void RunLoop_DirectRouting_AppliesPerRouteMap()
     {
         // Stereo source carrying L=1, R=2 fans out to:
-        //   sink A: identity stereo  → expect [1, 2]
-        //   sink B: swapped stereo   → expect [2, 1]
-        //   sink C: 4-channel duplicate → expect [1, 1, 2, 2]
+        //   output A: identity stereo  → expect [1, 2]
+        //   output B: swapped stereo   → expect [2, 1]
+        //   output C: 4-channel duplicate → expect [1, 1, 2, 2]
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, perChannelValue: c => c == 0 ? 1f : 2f);
-        var sinkA = new TestSink(Stereo);
-        var sinkB = new TestSink(Stereo);
-        var sinkC = new TestSink(Quad);
+        var sinkA = new TestOutput(Stereo);
+        var sinkB = new TestOutput(Stereo);
+        var sinkC = new TestOutput(Quad);
 
         r.AddSource(src, "music");
-        r.AddSink(sinkA, "a");
-        r.AddSink(sinkB, "b");
-        r.AddSink(sinkC, "c");
+        r.AddOutput(sinkA, "a");
+        r.AddOutput(sinkB, "b");
+        r.AddOutput(sinkC, "c");
         r.AddRoute("music", "a", ChannelMap.Identity(2));
         r.AddRoute("music", "b", new ChannelMap([1, 0]));
         r.AddRoute("music", "c", new ChannelMap([0, 0, 1, 1]));
@@ -288,19 +288,19 @@ public class AudioRouterTests
     }
 
     [Fact]
-    public void RunLoop_TwoSourcesRoutedToOneSink_Sum()
+    public void RunLoop_TwoSourcesRoutedToOneOutput_Sum()
     {
-        // src1 → sink at gain 1.0  (contributes [3, 4])
-        // src2 → sink at gain 1.0  (contributes [10, 20])
+        // src1 → output at gain 1.0  (contributes [3, 4])
+        // src2 → output at gain 1.0  (contributes [10, 20])
         // Expected sum: [13, 24]
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src1 = new TestSource(Stereo, perChannelValue: c => c == 0 ? 3f : 4f);
         var src2 = new TestSource(Stereo, perChannelValue: c => c == 0 ? 10f : 20f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(src1, "a");
         r.AddSource(src2, "b");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("a", "out", ChannelMap.Identity(2));
         r.AddRoute("b", "out", ChannelMap.Identity(2));
 
@@ -308,7 +308,7 @@ public class AudioRouterTests
         WaitForChunks(r, 5);
         r.Stop();
 
-        AssertFramePattern(sink.Captured[0], expected: [13f, 24f]);
+        AssertFramePattern(output.Captured[0], expected: [13f, 24f]);
     }
 
     [Fact]
@@ -319,12 +319,12 @@ public class AudioRouterTests
         var srcA = new TestSource(Stereo, c => c == 0 ? 3f : 4f);
         var srcB = new TestSource(Stereo, c => c == 0 ? 10f : 20f);
         var srcC = new TestSource(Stereo, c => c == 0 ? 1f : 2f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(srcA, "a");
         r.AddSource(srcB, "b");
         r.AddSource(srcC, "c");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("a", "out", ChannelMap.Identity(2), gain: 0.5f);
         r.AddRoute("b", "out", new ChannelMap([-1, 0]), gain: 0.25f);
         r.AddRoute("c", "out", new ChannelMap([1, -1]), gain: 1f);
@@ -333,7 +333,7 @@ public class AudioRouterTests
         WaitForChunks(r, 3);
         r.Stop();
 
-        AssertFramePattern(sink.Captured[0], expected: [3.5f, 4.5f]);
+        AssertFramePattern(output.Captured[0], expected: [3.5f, 4.5f]);
     }
 
     [Fact]
@@ -343,11 +343,11 @@ public class AudioRouterTests
         using var r = new AudioRouter(SampleRate, chunkSamples: 32);
         var srcA = new TestSource(Stereo, c => c == 0 ? 3f : 4f);
         var srcB = new TestSource(Stereo, c => c == 0 ? 99f : 100f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(srcA, "a");
         r.AddSource(srcB, "b");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("a", "out", new ChannelMap([0, 0]), gain: 1f);
         r.AddRoute("b", "out", new ChannelMap([-1, -1]), gain: 999f);
 
@@ -355,26 +355,26 @@ public class AudioRouterTests
         WaitForChunks(r, 3);
         r.Stop();
 
-        AssertFramePattern(sink.Captured[0], expected: [3f, 3f]);
+        AssertFramePattern(output.Captured[0], expected: [3f, 3f]);
     }
 
     [Fact]
     public void RunLoop_GainScalesContribution()
     {
-        // src: [10, 20]  →  sink with gain 0.5  →  expected [5, 10]
+        // src: [10, 20]  →  output with gain 0.5  →  expected [5, 10]
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, perChannelValue: c => c == 0 ? 10f : 20f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2), gain: 0.5f);
 
         r.Start();
         WaitForChunks(r, 5);
         r.Stop();
 
-        AssertFramePattern(sink.Captured[0], expected: [5f, 10f]);
+        AssertFramePattern(output.Captured[0], expected: [5f, 10f]);
     }
 
     [Fact]
@@ -383,11 +383,11 @@ public class AudioRouterTests
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var loud = new TestSource(Stereo, perChannelValue: _ => 999f);
         var quiet = new TestSource(Stereo, perChannelValue: _ => 1f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(loud, "loud");
         r.AddSource(quiet, "quiet");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("loud", "out", ChannelMap.Identity(2), gain: 0f);
         r.AddRoute("quiet", "out", ChannelMap.Identity(2), gain: 1f);
 
@@ -395,7 +395,7 @@ public class AudioRouterTests
         WaitForChunks(r, 5);
         r.Stop();
 
-        AssertFramePattern(sink.Captured[0], expected: [1f, 1f]);
+        AssertFramePattern(output.Captured[0], expected: [1f, 1f]);
     }
 
     [Fact]
@@ -403,10 +403,10 @@ public class AudioRouterTests
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, perChannelValue: _ => 4f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2), gain: 1f);
 
         r.Start();
@@ -417,27 +417,27 @@ public class AudioRouterTests
         r.Stop();
 
         // Find a chunk after the change and verify the value is scaled.
-        var lastFrame = sink.Captured[^1];
+        var lastFrame = output.Captured[^1];
         AssertFramePattern(lastFrame, expected: [1f, 1f]);  // 4 × 0.25 = 1
     }
 
     [Fact]
-    public void DynamicAddSink_StartsReceivingMidStream()
+    public void DynamicAddOutput_StartsReceivingMidStream()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, perChannelValue: _ => 7f);
-        var sinkA = new TestSink(Stereo);
-        var sinkB = new TestSink(Stereo);
+        var sinkA = new TestOutput(Stereo);
+        var sinkB = new TestOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sinkA, "a");
+        r.AddOutput(sinkA, "a");
         r.AddRoute("src", "a", ChannelMap.Identity(2));
 
         r.Start();
         WaitForChunks(r, 3);
 
-        // Add second sink + route while running.
-        r.AddSink(sinkB, "b");
+        // Add second output + route while running.
+        r.AddOutput(sinkB, "b");
         r.AddRoute("src", "b", ChannelMap.Identity(2));
 
         var chunkAtAdd = r.ChunksProduced;
@@ -449,24 +449,24 @@ public class AudioRouterTests
     }
 
     [Fact]
-    public void DynamicRemoveSink_StopsReceivingMidStream()
+    public void DynamicRemoveOutput_StopsReceivingMidStream()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, perChannelValue: _ => 1f);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
 
         r.Start();
         WaitForChunks(r, 3);
-        Assert.True(r.RemoveSink("out"));
+        Assert.True(r.RemoveOutput("out"));
 
-        var beforeRemoveCount = sink.Captured.Count;
+        var beforeRemoveCount = output.Captured.Count;
         WaitForChunks(r, r.ChunksProduced + 5);
         r.Stop();
-        var afterRemoveCount = sink.Captured.Count;
+        var afterRemoveCount = output.Captured.Count;
 
         Assert.Equal(beforeRemoveCount, afterRemoveCount);
     }
@@ -476,10 +476,10 @@ public class AudioRouterTests
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);
         var src = new TestSource(Stereo, finiteSamplesPerChannel: 200);
-        var sink = new TestSink(Stereo);
+        var output = new TestOutput(Stereo);
 
         r.AddSource(src, "src");
-        r.AddSink(sink, "out");
+        r.AddOutput(output, "out");
         r.AddRoute("src", "out", ChannelMap.Identity(2));
 
         r.Start();
@@ -532,7 +532,7 @@ public class AudioRouterTests
         }
     }
 
-    private sealed class TestSink(AudioFormat fmt) : IAudioSink
+    private sealed class TestOutput(AudioFormat fmt) : IAudioOutput
     {
         private readonly Lock _gate = new();
         private readonly List<float[]> _captured = [];

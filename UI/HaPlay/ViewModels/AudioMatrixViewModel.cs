@@ -96,7 +96,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
     [ObservableProperty]
     private int _inputChannelCount;
 
-    /// <summary>Sink channel count this matrix was last sized to (typically 2 — see <see cref="HaPlayPlaybackSession.WireAudio"/>).</summary>
+    /// <summary>Output channel count this matrix was last sized to (typically 2 — see <see cref="HaPlayPlaybackSession.WireAudio"/>).</summary>
     [ObservableProperty]
     private int _outputChannelCount;
 
@@ -104,7 +104,7 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
 
     /// <summary>Phase C — rebuild cells for the new channel count. Preserves cells that map cleanly into the
     /// new layout (same input/output index) and defaults the rest. The "identity" default sets diagonal cells
-    /// to 0 dB and the rest to silence so a stereo source → stereo sink resolves to L→L, R→R.</summary>
+    /// to 0 dB and the rest to silence so a stereo source → stereo output resolves to L→L, R→R.</summary>
     public void Resize(int inputChannels, int outputChannels)
     {
         if (inputChannels == InputChannelCount && outputChannels == OutputChannelCount && Cells.Count > 0)

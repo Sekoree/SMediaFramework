@@ -75,7 +75,7 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
     {
         if (format != _format.PixelFormat)
             throw new InvalidOperationException(
-                $"StaticFrameSource only delivers {_format.PixelFormat}; sink requested {format}. " +
+                $"StaticFrameSource only delivers {_format.PixelFormat}; output requested {format}. " +
                 "Pre-build the planes in the target format or wrap with a converter.");
     }
 

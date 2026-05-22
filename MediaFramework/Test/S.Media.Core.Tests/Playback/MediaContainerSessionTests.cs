@@ -21,9 +21,9 @@ public sealed class MediaContainerSessionTests
         var stride = 16 * 4;
         var frameBytes = new byte[stride * 16];
         var src = new FakeVideoSource(fmt, (TimeSpan.Zero, frameBytes, stride));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
-        using var video = new VideoPlayer(src, sink, clock);
+        using var video = new VideoPlayer(src, output, clock);
         var session = new MediaPlaybackSession(video, clock);
 
         Assert.Throws<ArgumentNullException>(() => new MediaContainerSession(null!, session));
@@ -42,12 +42,7 @@ public sealed class MediaContainerSessionTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerSessionTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerSessionTests)}: temp media delete");
         }
     }
 
@@ -61,13 +56,13 @@ public sealed class MediaContainerSessionTests
         {
             using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
             using var clock = new MediaClock();
-            var sink = new FakeVideoSink(c.Video.NativePixelFormats.ToArray());
-            using var video = new VideoPlayer(c.Video, sink, clock);
+            var output = new FakeVideoOutput(c.Video.NativePixelFormats.ToArray());
+            using var video = new VideoPlayer(c.Video, output, clock);
             var session = new MediaPlaybackSession(video, clock);
             var router = new MediaContainerSession(c, session);
 
             router.Play();
-            sink.WaitForConfigured();
+            output.WaitForConfigured();
             Thread.Sleep(120);
             router.Pause();
 
@@ -80,12 +75,7 @@ public sealed class MediaContainerSessionTests
         }
         finally
         {
-            try { File.Delete(path); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(MediaContainerSessionTests)}: temp media delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerSessionTests)}: temp media delete");
         }
     }
 

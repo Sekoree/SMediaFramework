@@ -5,7 +5,7 @@ using S.Media.FFmpeg.Video;
 namespace HaPlay.Playback;
 
 /// <summary>
-/// Wraps a video sink and can substitute a static logo frame (for example during live faults).
+/// Wraps a video output and can substitute a static logo frame (for example during live faults).
 /// Template pixels match the negotiated <see cref="VideoFormat"/> (including NV12 / UYVY, not only BGRA).
 /// When hold is on and a template is set, decoded frames are dropped and the UI pumps
 /// <see cref="SubmitTemplateFrame"/> so outputs stay live from the play clock alone.
@@ -13,9 +13,9 @@ namespace HaPlay.Playback;
 /// can restore the source after the user toggles hold off — important for single-frame sources
 /// (audio with cover art) where the decoder doesn't produce more frames on its own.
 /// </summary>
-internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
+internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
 {
-    private readonly IVideoSink _inner;
+    private readonly IVideoOutput _inner;
     private readonly bool _disposeInner;
     private readonly object _logoGate = new();
     private VideoFormat _format;
@@ -37,7 +37,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     /// <summary>Linear opacity applied to decoded CPU frames (fade toward black / neutral chroma). 1 = pass-through.</summary>
     public void SetOutputOpacity(float opacity) => _outputOpacity = Math.Clamp(opacity, 0f, 1f);
 
-    public LogoFallbackVideoSink(IVideoSink inner, bool disposeInnerOnDispose = true)
+    public LogoFallbackVideoSink(IVideoOutput inner, bool disposeInnerOnDispose = true)
     {
         _inner = inner;
         _disposeInner = disposeInnerOnDispose;
@@ -57,7 +57,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
     }
 
     /// <summary>
-    /// Legacy shim: compositor-based hold no longer reconfigures the wrapped sink to image-native
+    /// Legacy shim: compositor-based hold no longer reconfigures the wrapped output to image-native
     /// dimensions. The output format now stays at the negotiated playback format.
     /// </summary>
     public void ApplyImageOverrideFormat(VideoFormat? imageFormat)
@@ -66,7 +66,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
         _ = imageFormat;
     }
 
-    /// <summary>Compositor hold keeps the wrapped sink at one negotiated output format.</summary>
+    /// <summary>Compositor hold keeps the wrapped output at one negotiated output format.</summary>
     public bool IsImageOverrideActive => false;
 
     public void SetHoldFallback(bool hold)
@@ -108,7 +108,7 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
         _inner.Submit(logoFrame);
     }
 
-    /// <summary>Submits a frame directly to the inner sink (used for black priming; inner takes ownership / disposes).</summary>
+    /// <summary>Submits a frame directly to the inner output (used for black priming; inner takes ownership / disposes).</summary>
     internal void SubmitBypassHold(VideoFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -272,14 +272,14 @@ internal sealed class LogoFallbackVideoSink : IVideoSink, IDisposable
 
             var composedBgraFormat = new VideoFormat(target.Width, target.Height, PixelFormat.Bgra32, target.FrameRate);
             using var compositor = new CpuVideoCompositor(composedBgraFormat);
-            using var sink = new CompositorVideoSink(composedBgraFormat, compositor, disposeCompositorOnDispose: false);
-            var slot = sink.AddSlot();
+            using var output = new VideoCompositorSource(composedBgraFormat, compositor, disposeCompositorOnDispose: false);
+            var slot = output.AddSlot();
             slot.Transform = OutputPresetFormats.LetterboxTransform(sourceForLayer.Format, composedBgraFormat);
-            slot.Sink.Configure(sourceForLayer.Format);
-            slot.Sink.Submit(sourceForLayer);
+            slot.Output.Configure(sourceForLayer.Format);
+            slot.Output.Submit(sourceForLayer);
             sourceForLayer = null;
 
-            if (!sink.TryReadNextFrame(out renderedBgra))
+            if (!output.TryReadNextFrame(out renderedBgra))
                 return null;
 
             if (target.PixelFormat == PixelFormat.Bgra32)

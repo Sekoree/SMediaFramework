@@ -28,9 +28,9 @@ public static class SmokeHud
         IVideoSource videoSource,
         VideoPlayer videoPlayer,
         MediaContainerDecoder media,
-        IVideoSink windowPresentationSink,
+        IVideoOutput windowPresentationOutput,
         PortAudioPlaybackHost? audioHost,
-        string? ndiAudioSinkId,
+        string? ndiAudioOutputId,
         VideoRouter videoRouter,
         string? ndiVideoOutputId,
         NDIOutput? ndi)
@@ -48,11 +48,11 @@ public static class SmokeHud
         long pumpDr = 0, paUnd = 0, paDr = 0, ndiDr = 0;
         if (audioHost is not null)
         {
-            pumpDr = audioHost.Player.Router.GetPumpStats(audioHost.PrimarySinkId).Dropped;
+            pumpDr = audioHost.Player.Router.GetPumpStats(audioHost.PrimaryOutputId).Dropped;
             paUnd = audioHost.MainOutput.UnderrunSamples;
             paDr = audioHost.MainOutput.DroppedSamples;
-            if (ndiAudioSinkId is not null)
-                ndiDr = audioHost.Player.Router.GetPumpStats(ndiAudioSinkId).Dropped;
+            if (ndiAudioOutputId is not null)
+                ndiDr = audioHost.Player.Router.GetPumpStats(ndiAudioOutputId).Dropped;
         }
 
         long ndiVidDr = 0;
@@ -60,7 +60,7 @@ public static class SmokeHud
         long ndiVidSub = 0;
         int ndiVidMaxQ = 0;
         if (ndiVideoOutputId is not null
-            && videoRouter.TryGetVideoSinkPumpMetrics(ndiVideoOutputId, out var vpMetrics))
+            && videoRouter.TryGetVideoOutputPumpMetrics(ndiVideoOutputId, out var vpMetrics))
         {
             ndiVidDr = vpMetrics.DroppedFrames;
             ndiVidQ = vpMetrics.CurrentQueuedDepth;
@@ -79,7 +79,7 @@ public static class SmokeHud
 
         var vPts = (videoSource as ISeekableSource)?.Position ?? TimeSpan.Zero;
 
-        var glDroppedNewer = windowPresentationSink is SDL3GLVideoSink gl ? gl.DroppedNewer : 0L;
+        var glDroppedNewer = windowPresentationOutput is SDL3GLVideoOutput gl ? gl.DroppedNewer : 0L;
 
         return new PlaybackHudSnapshot(
             playClock.CurrentPosition,

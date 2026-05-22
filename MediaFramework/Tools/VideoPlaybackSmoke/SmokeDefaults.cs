@@ -9,7 +9,7 @@ public static class SmokeDefaults
 
     public const int DefaultAudioChunkSamples = 960;
 
-    public const int DefaultNDIAudioSinkPumpCapacityChunks = 24;
+    public const int DefaultNDIAudioOutputPumpCapacityChunks = 24;
 
     public const int MaxSdlWindowWidth = 1920;
 

@@ -12,19 +12,19 @@ namespace S.Media.Playback;
 
 /// <summary>
 /// Opens a shared-mux <see cref="MediaContainerDecoder"/> with a <see cref="VideoRouter"/> (always),
-/// optional <see cref="AudioPlayer"/> wired to decoder audio (no PortAudio / SDL / NDI — add sinks from optional packages),
+/// optional <see cref="AudioPlayer"/> wired to decoder audio (no PortAudio / SDL / NDI — add outputs from optional packages),
 /// and <see cref="S.Media.FFmpeg.MediaContainerPlaybackBundle"/> for safe teardown.
 /// </summary>
 /// <remarks>
 /// <para>
-/// When <paramref name="videoNegotiationLead"/> is <c>null</c>, a <see cref="DiscardingVideoSink"/> is registered as the router
-/// primary so decode and <see cref="VideoPlayer"/> can run with <strong>zero</strong> user video sinks; attach real
-/// <see cref="IVideoSink"/> outputs later via <see cref="VideoRouter.AddOutput"/> and <see cref="VideoRouter.TryAddRoute"/>.
+/// When <paramref name="videoNegotiationLead"/> is <c>null</c>, a <see cref="DiscardingVideoOutput"/> is registered as the router
+/// primary so decode and <see cref="VideoPlayer"/> can run with <strong>zero</strong> user video outputs; attach real
+/// <see cref="IVideoOutput"/> outputs later via <see cref="VideoRouter.AddOutput"/> and <see cref="VideoRouter.TryAddRoute"/>.
 /// </para>
 /// <para>
 /// Audio: when <see cref="MediaPlayerOpenOptions.IncludeAudioRouter"/> is true (default), an <see cref="AudioPlayer"/> owns
-/// <see cref="MediaContainerDecoder.Audio"/> and drives <see cref="IMediaClock"/> for video. You can run with no audio sinks
-/// (router consumes the mux audio stream every chunk). Add PortAudio, NDI, or other sinks from their respective assemblies.
+/// <see cref="MediaContainerDecoder.Audio"/> and drives <see cref="IMediaClock"/> for video. You can run with no audio outputs
+/// (router consumes the mux audio stream every chunk). Add PortAudio, NDI, or other outputs from their respective assemblies.
 /// </para>
 /// </remarks>
 public sealed class MediaPlayer : IDisposable
@@ -38,7 +38,7 @@ public sealed class MediaPlayer : IDisposable
     private readonly MediaClock? _liveFreerun;
     private readonly List<IDisposable> _ownedLiveDisposables = [];
     private readonly string _videoRouterInputId;
-    private readonly IVideoSink _videoInputSink;
+    private readonly IVideoOutput _videoInput;
     private readonly string? _audioSourceId;
     private readonly MediaClock? _freerun;
     private bool _disposed;
@@ -48,13 +48,13 @@ public sealed class MediaPlayer : IDisposable
     private MediaPlayer(
         MediaContainerPlaybackBundle bundle,
         string videoRouterInputId,
-        IVideoSink videoInputSink,
+        IVideoOutput videoInput,
         string? audioSourceId,
         MediaClock? freerun)
     {
         _bundle = bundle;
         _videoRouterInputId = videoRouterInputId;
-        _videoInputSink = videoInputSink;
+        _videoInput = videoInput;
         _audioSourceId = audioSourceId;
         _freerun = freerun;
     }
@@ -66,7 +66,7 @@ public sealed class MediaPlayer : IDisposable
         AudioPlayer? audio,
         MediaClock? freerun,
         string videoRouterInputId,
-        IVideoSink videoInputSink,
+        IVideoOutput videoInput,
         string? audioSourceId,
         IEnumerable<IDisposable>? ownedLiveDisposables)
     {
@@ -77,7 +77,7 @@ public sealed class MediaPlayer : IDisposable
         _liveFreerun = freerun;
         _liveSession = new MediaPlaybackSession(video, clock, audio);
         _videoRouterInputId = videoRouterInputId;
-        _videoInputSink = videoInputSink;
+        _videoInput = videoInput;
         _audioSourceId = audioSourceId;
         if (ownedLiveDisposables is not null)
             _ownedLiveDisposables.AddRange(ownedLiveDisposables);
@@ -100,11 +100,11 @@ public sealed class MediaPlayer : IDisposable
     public string VideoRouterInputId => _videoRouterInputId;
 
     /// <summary>
-    /// The router input sink the decoder feeds into. Submit pre-Play priming or warmup frames here
-    /// rather than directly to per-branch leaf sinks so the router's pixel-format converters run for
+    /// The router input output the decoder feeds into. Submit pre-Play priming or warmup frames here
+    /// rather than directly to per-branch leaf outputs so the router's pixel-format converters run for
     /// every branch (Avalonia keeps the source format, NDI gets the post-conversion format, etc.).
     /// </summary>
-    public IVideoSink VideoInputSink => _videoInputSink;
+    public IVideoOutput VideoInput => _videoInput;
 
     public VideoPlayer Video => _bundle?.Video ?? _liveVideo!;
 
@@ -150,21 +150,7 @@ public sealed class MediaPlayer : IDisposable
     {
         if (dispose is null)
             return;
-        try
-        {
-            dispose();
-        }
-#if DEBUG
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, debugLabel);
-        }
-#else
-        catch
-        {
-            // best effort — continue teardown
-        }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(dispose, debugLabel);
     }
 
     /// <summary>Registers <see cref="Console.CancelKeyPress"/> to cancel <paramref name="cts"/> while swallowing process exit.</summary>
@@ -182,7 +168,7 @@ public sealed class MediaPlayer : IDisposable
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage) =>
@@ -202,7 +188,7 @@ public sealed class MediaPlayer : IDisposable
     public static bool TryOpenFile(
         string mediaPath,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage) =>
@@ -212,7 +198,7 @@ public sealed class MediaPlayer : IDisposable
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         MediaPlayerDecoderOwnership decoderOwnership,
         [NotNullWhen(true)] out MediaPlayer? player,
@@ -269,7 +255,7 @@ public sealed class MediaPlayer : IDisposable
     public static bool TryOpenUri(
         Uri mediaUri,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage)
@@ -293,7 +279,7 @@ public sealed class MediaPlayer : IDisposable
         Stream mediaStream,
         string? inputName,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage)
@@ -315,7 +301,7 @@ public sealed class MediaPlayer : IDisposable
     public static bool TryOpenStream(
         Stream mediaStream,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage) =>
@@ -338,7 +324,7 @@ public sealed class MediaPlayer : IDisposable
         IAudioSource? audioSource,
         IVideoSource? videoSource,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage) =>
@@ -362,7 +348,7 @@ public sealed class MediaPlayer : IDisposable
         IAudioSource? audioSource,
         IVideoSource? videoSource,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         bool disposeSourcesOnDispose,
         [NotNullWhen(true)] out MediaPlayer? player,
@@ -422,16 +408,16 @@ public sealed class MediaPlayer : IDisposable
             string primaryOutputId;
             if (videoNegotiationLead is null)
             {
-                var discard = new DiscardingVideoSink();
+                var discard = new DiscardingVideoOutput();
                 primaryOutputId = router.AddOutput(discard, "_discard",
-                    disposeSinkOnRouterDispose: true, synchronous: true);
+                    disposeOutputOnRouterDispose: true, synchronous: true);
             }
             else
             {
                 primaryOutputId = router.AddOutput(
                     videoNegotiationLead,
                     "_primary",
-                    disposeSinkOnRouterDispose: disposeNegotiationLead);
+                    disposeOutputOnRouterDispose: disposeNegotiationLead);
             }
 
             var vin = router.AddInput(primaryOutputId);
@@ -440,7 +426,7 @@ public sealed class MediaPlayer : IDisposable
                 : 4;
             videoPlayer = new VideoPlayer(
                 effectiveVideoSource,
-                vin.Sink,
+                vin.Output,
                 playClock,
                 queueCapacity: liveQueueCap,
                 presentationMode: options.LiveVideoPresentation);
@@ -452,7 +438,7 @@ public sealed class MediaPlayer : IDisposable
                 audioPlayer,
                 audioPlayer is null ? freerun : null,
                 vin.Id,
-                vin.Sink,
+                vin.Output,
                 audioSourceId,
                 ownedDisposables);
 
@@ -488,7 +474,7 @@ public sealed class MediaPlayer : IDisposable
     public static bool TryOpen(
         MediaContainerDecoder decoder,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         MediaPlayerDecoderOwnership decoderOwnership,
         [NotNullWhen(true)] out MediaPlayer? player,
@@ -524,7 +510,7 @@ public sealed class MediaPlayer : IDisposable
     private static bool TryOpenFromDecoderFactory(
         Func<MediaContainerDecoder> decoderFactory,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         MediaPlayerDecoderOwnership decoderOwnership,
         [NotNullWhen(true)] out MediaPlayer? player,
@@ -566,7 +552,7 @@ public sealed class MediaPlayer : IDisposable
     private static bool TryOpenCore(
         MediaContainerDecoder media,
         in MediaPlayerOpenOptions options,
-        IVideoSink? videoNegotiationLead,
+        IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         MediaPlayerDecoderOwnership decoderOwnership,
         IVideoSource? videoSourceOverride,
@@ -627,25 +613,25 @@ public sealed class MediaPlayer : IDisposable
             string primaryOutputId;
             if (videoNegotiationLead is null)
             {
-                // DiscardingVideoSink drops the frame immediately — no Submit work to offload to a pump,
+                // DiscardingVideoOutput drops the frame immediately — no Submit work to offload to a pump,
                 // so register synchronously and avoid spinning up a drainer thread for nothing.
-                var discard = new DiscardingVideoSink();
+                var discard = new DiscardingVideoOutput();
                 primaryOutputId = router.AddOutput(discard, "_discard",
-                    disposeSinkOnRouterDispose: true, synchronous: true);
+                    disposeOutputOnRouterDispose: true, synchronous: true);
             }
             else
             {
-                // End-user video sinks (Avalonia / SDL3 GL surfaces, encoders, …) get the Phase 2
+                // End-user video outputs (Avalonia / SDL3 GL surfaces, encoders, …) get the Phase 2
                 // pump-by-default treatment so a stutter on Submit can't back-pressure the clock thread.
                 primaryOutputId = router.AddOutput(
                     videoNegotiationLead,
                     "_primary",
-                    disposeSinkOnRouterDispose: disposeNegotiationLead);
+                    disposeOutputOnRouterDispose: disposeNegotiationLead);
             }
 
             var vin = router.AddInput(primaryOutputId);
             var videoForPlayer = videoSourceOverride ?? media.Video;
-            videoPlayer = new VideoPlayer(videoForPlayer, vin.Sink, playClock);
+            videoPlayer = new VideoPlayer(videoForPlayer, vin.Output, playClock);
 
             var ownDecoder = decoderOwnership == MediaPlayerDecoderOwnership.BundleDisposesDecoder;
             var bundleOwned = ComputeOwnedParts(
@@ -663,7 +649,7 @@ public sealed class MediaPlayer : IDisposable
                 freerun,
                 bundleOwned);
 
-            player = new MediaPlayer(bundle, vin.Id, vin.Sink, audioSourceId, audioPlayer is null ? freerun : null);
+            player = new MediaPlayer(bundle, vin.Id, vin.Output, audioSourceId, audioPlayer is null ? freerun : null);
             Trace.LogInformation("TryOpenCore: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
                 media.HasAudio, media.HasVideo,
                 media.HasAudio ? media.Audio.Format.SampleRate : 0,

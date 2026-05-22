@@ -4,7 +4,7 @@ using S.Media.FFmpeg.Video;
 
 namespace S.Media.Playback;
 
-/// <summary>Decoder and audio-router flags for <see cref="MediaPlayer.TryOpen"/> — no sink libraries.</summary>
+/// <summary>Decoder and audio-router flags for <see cref="MediaPlayer.TryOpen"/> — no output libraries.</summary>
 public readonly record struct MediaPlayerOpenOptions(
     bool TryHardwareAcceleration = true,
     bool RetainDmabufForGl = false,

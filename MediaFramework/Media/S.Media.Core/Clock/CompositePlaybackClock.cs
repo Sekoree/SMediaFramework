@@ -29,7 +29,7 @@ namespace S.Media.Core.Clock;
 /// </para>
 /// <para>
 /// Priority merge affects <see cref="IPlaybackClock.ElapsedSinceStart"/> / <see cref="IPlaybackClock.IsAdvancing"/> only;
-/// graph-wide coordinated master PPM and synchronized multi-sink drop/repeat remain host-owned — see
+/// graph-wide coordinated master PPM and synchronized multi-output drop/repeat remain host-owned — see
 /// <see cref="MediaClock"/> and <see cref="S.Media.Core.Audio.AudioRouter"/>.
 /// </para>
 /// </remarks>
@@ -210,6 +210,6 @@ public sealed class CompositePlaybackClock : IPlaybackClock
 }
 
 /// <summary>Entry for <see cref="CompositePlaybackClock"/>.</summary>
-/// <param name="Clock">Underlying clock implementing <see cref="IPlaybackClock"/> (e.g. hardware audio sink or <see cref="VideoPtsClock"/>).</param>
+/// <param name="Clock">Underlying clock implementing <see cref="IPlaybackClock"/> (e.g. hardware audio output or <see cref="VideoPtsClock"/>).</param>
 /// <param name="Priority">Higher wins when multiple clocks are advancing simultaneously.</param>
 public readonly record struct PlaybackClockCandidate(IPlaybackClock Clock, int Priority);

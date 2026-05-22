@@ -25,24 +25,24 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     private VideoPlaybackSmokeSession(
         S.Media.Playback.MediaPlayer core,
-        SDL3GLVideoSink glWindowSink,
+        SDL3GLVideoOutput glWindowSink,
         NDIOutput? ndi,
         string? ndiVideoOutputId,
         PortAudioPlaybackHost? audioHost,
-        NDIAudioAggregatingSink? ndiAudioAgg,
-        IAudioSink? ndiMirrorPrefill,
-        string? ndiAudioSinkId,
+        NDIAudioAggregatingOutput? ndiAudioAgg,
+        IAudioOutput? ndiMirrorPrefill,
+        string? ndiAudioOutputId,
         bool win32Nv12SharedHandleOnlyRequested)
     {
         Core = core;
-        GlWindowSink = glWindowSink;
+        GlWindowOutput = glWindowSink;
         NDI = ndi;
         NDIVideoRouterInputId = core.VideoRouterInputId;
         NDIVideoOutputId = ndiVideoOutputId;
         AudioHost = audioHost;
-        NDIAudioAggregatingSink = ndiAudioAgg;
+        NDIAudioAggregatingOutput = ndiAudioAgg;
         NDIMirrorPrefill = ndiMirrorPrefill;
-        NDIAudioSinkId = ndiAudioSinkId;
+        NDIAudioOutputId = ndiAudioOutputId;
         Win32Nv12SharedHandleOnlyRequested = win32Nv12SharedHandleOnlyRequested;
     }
 
@@ -50,11 +50,11 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     public MediaContainerDecoder Media => Core.Decoder;
 
-    public IVideoSink WindowSink => GlWindowSink;
+    public IVideoOutput WindowOutput => GlWindowOutput;
 
-    public SDL3GLVideoSink GlWindowSink { get; }
+    public SDL3GLVideoOutput GlWindowOutput { get; }
 
-    public IVideoSink? NDIProgramVideoSink => NDI?.VideoSink;
+    public IVideoOutput? NDIProgramVideoOutput => NDI?.VideoOutput;
 
     public VideoRouter VideoRouter => Core.VideoRouter;
 
@@ -76,11 +76,11 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     public MediaContainerSession Session => Core.Session;
 
-    public NDIAudioAggregatingSink? NDIAudioAggregatingSink { get; }
+    public NDIAudioAggregatingOutput? NDIAudioAggregatingOutput { get; }
 
-    public IAudioSink? NDIMirrorPrefill { get; }
+    public IAudioOutput? NDIMirrorPrefill { get; }
 
-    public string? NDIAudioSinkId { get; }
+    public string? NDIAudioOutputId { get; }
 
     public bool Win32Nv12SharedHandleOnlyRequested { get; }
 
@@ -91,7 +91,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         if (_sdlCloseForCancel is not null)
             throw new InvalidOperationException(nameof(AttachWindowCloseToCancel) + " may only be called once per session.");
         _sdlCloseForCancel = (_, _) => cts.Cancel();
-        GlWindowSink.CloseRequested += _sdlCloseForCancel;
+        GlWindowOutput.CloseRequested += _sdlCloseForCancel;
     }
 
     public static void AttachConsoleCancelKeyPress(CancellationTokenSource cts) =>
@@ -164,14 +164,14 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         }
 
         MediaContainerDecoder? media = null;
-        SDL3GLVideoSink? sdlGl = null;
+        SDL3GLVideoOutput? sdlGl = null;
         S.Media.Playback.MediaPlayer? core = null;
         NDIOutput? ndi = null;
         string? ndiVideoOutputId = null;
         PortAudioPlaybackHost? audioHost = null;
-        NDIAudioAggregatingSink? ndiAudioAgg = null;
-        IAudioSink? ndiMirrorPrefill = null;
-        string? ndiAudioSinkId = null;
+        NDIAudioAggregatingOutput? ndiAudioAgg = null;
+        IAudioOutput? ndiMirrorPrefill = null;
+        string? ndiAudioOutputId = null;
 
         void FailDispose()
         {
@@ -218,7 +218,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
             var capH = presentation.MaxSdlWindowHeight <= 0
                 ? SmokeDefaults.MaxSdlWindowHeight
                 : presentation.MaxSdlWindowHeight;
-            sdlGl = new SDL3GLVideoSink(
+            sdlGl = new SDL3GLVideoOutput(
                 title: windowTitle!,
                 initialWidth: Math.Min(videoSource.Format.Width, capW),
                 initialHeight: Math.Min(videoSource.Format.Height, capH),
@@ -259,9 +259,9 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                     minimumVideoSubmitSpacing: wallPace,
                     videoTimecodeMode: opt.NDIVideoTimecodeMode);
 
-                ndiVideoOutputId = core!.VideoRouter.AddOutput(ndi.VideoSink, "ndi", disposeSinkOnRouterDispose: true,
-                    asyncPump: new VideoSinkPumpAttachOptions(opt.NDIVideoPumpFrames, "ndi-video", null,
-                        DisposeInnerSinkWhenPumpDisposes: false));
+                ndiVideoOutputId = core!.VideoRouter.AddOutput(ndi.VideoOutput, "ndi", disposeOutputOnRouterDispose: true,
+                    asyncPump: new VideoOutputPumpAttachOptions(opt.NDIVideoPumpFrames, "ndi-video", null,
+                        DisposeInnerOutputWhenPumpDisposes: false));
                 if (!core.VideoRouter.TryAddRoute(core.VideoRouterInputId, ndiVideoOutputId, out var routeErr))
                     throw new InvalidOperationException(routeErr ?? "VideoRouter.TryAddRoute(ndi) failed");
             }
@@ -277,7 +277,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
             if (ndi is not null && audioHost is not null)
             {
-                IAudioSink ndAudio = ndi.EnableAudio(audioHost.AudioFormat);
+                IAudioOutput ndAudio = ndi.EnableAudio(audioHost.AudioFormat);
                 var agg = opt.NDIAudioAggregateSamples;
                 if (agg < 0)
                 {
@@ -289,14 +289,14 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
                 if (agg > 0)
                 {
-                    ndiAudioAgg = new NDIAudioAggregatingSink(ndAudio, agg);
+                    ndiAudioAgg = new NDIAudioAggregatingOutput(ndAudio, agg);
                     ndAudio = ndiAudioAgg;
                 }
 
-                ndiAudioSinkId = audioHost.Player.AddOutput(ndAudio,
-                    sinkPumpCapacityChunks: opt.NDIAudioPumpCapacityChunks);
+                ndiAudioOutputId = audioHost.Player.AddOutput(ndAudio,
+                    outputPumpCapacityChunks: opt.NDIAudioPumpCapacityChunks);
 
-                audioHost.Player.Connect(audioHost.SourceId, ndiAudioSinkId,
+                audioHost.Player.Connect(audioHost.SourceId, ndiAudioOutputId,
                     ChannelMap.Identity(Math.Min(2, audioHost.AudioFormat.Channels)));
 
                 ndiMirrorPrefill = ndAudio;
@@ -304,7 +304,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
             session = new VideoPlaybackSmokeSession(
                 core, sdlGl, ndi, ndiVideoOutputId, audioHost,
-                ndiAudioAgg, ndiMirrorPrefill, ndiAudioSinkId, win32Nv12HandleOnlyRequested);
+                ndiAudioAgg, ndiMirrorPrefill, ndiAudioOutputId, win32Nv12HandleOnlyRequested);
 
             core = null;
             sdlGl = null;
@@ -328,11 +328,11 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
         if (_sdlCloseForCancel is not null)
         {
-            GlWindowSink.CloseRequested -= _sdlCloseForCancel;
+            GlWindowOutput.CloseRequested -= _sdlCloseForCancel;
             _sdlCloseForCancel = null;
         }
 
-        NDIAudioAggregatingSink?.Dispose();
+        NDIAudioAggregatingOutput?.Dispose();
         Core.Dispose();
         AudioHost?.Dispose();
         NDI?.Dispose();

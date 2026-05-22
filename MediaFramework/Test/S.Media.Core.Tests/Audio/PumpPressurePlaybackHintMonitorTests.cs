@@ -16,7 +16,7 @@ public sealed class PumpPressurePlaybackHintMonitorTests
     public void ctor_WithSinkId_subscribes()
     {
         using var r = new AudioRouter(48_000, chunkSamples: 480);
-        using var m = new PumpPressurePlaybackHintMonitor(r, "slow-sink", maxAbsPpm: 200, ppmPerDropPerSecond: 10);
+        using var m = new PumpPressurePlaybackHintMonitor(r, "slow-output", maxAbsPpm: 200, ppmPerDropPerSecond: 10);
         Assert.Equal(0, m.HintPpmBias);
     }
 
@@ -66,7 +66,7 @@ public sealed class PumpPressurePlaybackHintMonitorTests
     public void ApplyObservation_sinkFilterConstructor_manySteps_staysClamped_and_finite()
     {
         using var r = new AudioRouter(48_000, chunkSamples: 480);
-        using var m = new PumpPressurePlaybackHintMonitor(r, "slow-sink", maxAbsPpm: 40, ppmPerDropPerSecond: 4);
+        using var m = new PumpPressurePlaybackHintMonitor(r, "slow-output", maxAbsPpm: 40, ppmPerDropPerSecond: 4);
         var t0 = new DateTimeOffset(2026, 4, 1, 12, 0, 0, TimeSpan.Zero);
         m.ApplyObservation(0, t0);
         for (var i = 1; i <= 5000; i++)

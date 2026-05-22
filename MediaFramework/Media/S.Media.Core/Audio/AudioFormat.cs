@@ -1,14 +1,14 @@
 namespace S.Media.Core.Audio;
 
 /// <summary>
-/// Canonical audio stream description shared by every source and sink:
+/// Canonical audio stream description shared by every source and output:
 /// FFmpeg-decoded files, NDI receivers, PortAudio devices, etc.
 /// </summary>
 /// <remarks>
 /// <para>
 /// All audio crossing the framework's pipelines is packed (interleaved)
 /// 32-bit float; sources convert at their boundary. This avoids carrying a
-/// sample-format tag through the mixer and matches what most sinks want
+/// sample-format tag through the mixer and matches what most outputs want
 /// natively.
 /// </para>
 /// <para>
@@ -32,7 +32,7 @@ public readonly record struct AudioFormat(int SampleRate, int Channels)
     /// <summary>
     /// Throws <see cref="ArgumentException"/> when <see cref="SampleRate"/> or <see cref="Channels"/>
     /// is non-positive. Call at every public API entry point that wires a format into a live pipeline
-    /// (AudioPlayer, AudioRouter, sinks) so invalid values fail at the boundary rather than as a later
+    /// (AudioPlayer, AudioRouter, outputs) so invalid values fail at the boundary rather than as a later
     /// zero-sized allocation or silent passthrough.
     /// </summary>
     /// <param name="paramName">Optional parameter name surfaced in the exception (for ArgumentException-style call sites).</param>

@@ -13,31 +13,31 @@ public class VideoPlayerTests
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(40, 16, 16),
             Frame(80, 16, 16), Frame(120, 16, 16));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
 
-        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 4)
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4)
         {
             EarlyTolerance = TimeSpan.FromMilliseconds(2),
             LateThreshold = TimeSpan.FromMilliseconds(200),
         };
         player.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
         WaitFor(() => src.Reads >= 4, TimeSpan.FromSeconds(1));
 
         // Playhead at 50ms — both 0ms and 40ms frames are eligible. Latest wins → 40ms.
         clock.AdvanceTo(TimeSpan.FromMilliseconds(50));
         clock.RaiseVideoTick();
-        WaitFor(() => sink.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
+        WaitFor(() => output.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
 
-        Assert.Single(sink.Submitted);
-        Assert.Equal(TimeSpan.FromMilliseconds(40), sink.Submitted[0].PresentationTime);
+        Assert.Single(output.Submitted);
+        Assert.Equal(TimeSpan.FromMilliseconds(40), output.Submitted[0].PresentationTime);
 
         // Advance to 90ms — 80ms is now displayable (40 already shown).
         clock.AdvanceTo(TimeSpan.FromMilliseconds(90));
         clock.RaiseVideoTick();
-        WaitFor(() => sink.Submitted.Count >= 2, TimeSpan.FromSeconds(1));
-        Assert.Equal(TimeSpan.FromMilliseconds(80), sink.Submitted[1].PresentationTime);
+        WaitFor(() => output.Submitted.Count >= 2, TimeSpan.FromSeconds(1));
+        Assert.Equal(TimeSpan.FromMilliseconds(80), output.Submitted[1].PresentationTime);
 
         Assert.True(player.DroppedLate >= 1, "the 0ms frame should have been dropped as 'skipped'");
     }
@@ -46,19 +46,19 @@ public class VideoPlayerTests
     public void Does_Not_Submit_Future_Frames()
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(100, 16, 16), Frame(200, 16, 16));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
 
-        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 2);
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
         player.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
         WaitFor(() => src.Reads >= 2, TimeSpan.FromSeconds(1));
 
         // Playhead at 50ms — first frame is at 100ms, in the future → no submit.
         clock.AdvanceTo(TimeSpan.FromMilliseconds(50));
         clock.RaiseVideoTick();
         Thread.Sleep(20);
-        Assert.Empty(sink.Submitted);
+        Assert.Empty(output.Submitted);
     }
 
     [Fact]
@@ -66,15 +66,15 @@ public class VideoPlayerTests
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(50, 16, 16),
             Frame(500, 16, 16));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
 
-        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 4)
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4)
         {
             LateThreshold = TimeSpan.FromMilliseconds(100),
         };
         player.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
         WaitFor(() => src.Reads >= 3, TimeSpan.FromSeconds(1));
 
         // Playhead jumped to 400ms — 0 and 50 are both >100ms late and should be discarded.
@@ -82,7 +82,7 @@ public class VideoPlayerTests
         clock.RaiseVideoTick();
         Thread.Sleep(50);
 
-        Assert.Empty(sink.Submitted); // 500ms is in the future
+        Assert.Empty(output.Submitted); // 500ms is in the future
         Assert.True(player.DroppedLate >= 2, $"expected ≥2 late drops, got {player.DroppedLate}");
     }
 
@@ -91,13 +91,13 @@ public class VideoPlayerTests
     {
         var fmt = VideoFmt(8, 8);
         var src = new FakeVideoSource(fmt, Frame(0, 8, 8), Frame(10_000, 8, 8), Frame(20_000, 8, 8));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
         clock.Start();
 
-        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 1, decodePollInterval: TimeSpan.FromMilliseconds(2));
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 1, decodePollInterval: TimeSpan.FromMilliseconds(2));
         player.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
         // Queue holds one frame; decode is blocked on SemaphoreSlim.Wait for the next slot.
         // No VideoTick is raised — regression for Ctrl+C where IsRunning is cleared before join.
         WaitFor(() => src.Reads >= 2, TimeSpan.FromSeconds(2));
@@ -111,17 +111,17 @@ public class VideoPlayerTests
     {
         var src = new FakeVideoSource(VideoFmt(16, 16),
             Frame(0, 16, 16), Frame(40, 16, 16), Frame(80, 16, 16));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
 
-        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 4)
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4)
         {
             EarlyTolerance = TimeSpan.FromMilliseconds(2),
             LateThreshold = TimeSpan.FromMilliseconds(500),
             HoldLastFrameAtEnd = true,
         };
         player.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
         WaitFor(() => src.Reads >= 3, TimeSpan.FromSeconds(1));
 
         // Tick well past every frame so the last (80ms) is the chosen submission AND
@@ -130,9 +130,9 @@ public class VideoPlayerTests
         clock.AdvanceTo(TimeSpan.FromMilliseconds(100));
         clock.RaiseVideoTick();
 
-        WaitFor(() => sink.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
+        WaitFor(() => output.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
         Assert.True(player.IsHoldingLastFrame, "captured a held frame on the last-frame submission");
-        var baselineSubmissions = sink.Submitted.Count;
+        var baselineSubmissions = output.Submitted.Count;
 
         // Additional ticks past exhaustion should keep delivering frames (the held one) —
         // not signal CompletedNaturally.
@@ -140,12 +140,12 @@ public class VideoPlayerTests
         clock.RaiseVideoTick();
         clock.AdvanceTo(TimeSpan.FromMilliseconds(1000));
         clock.RaiseVideoTick();
-        WaitFor(() => sink.Submitted.Count >= baselineSubmissions + 2, TimeSpan.FromSeconds(1));
+        WaitFor(() => output.Submitted.Count >= baselineSubmissions + 2, TimeSpan.FromSeconds(1));
 
         Assert.False(player.CompletedNaturally);
         Assert.True(player.HeldFrameSubmitCount >= 2);
         // Held frames advance PTS with the playhead.
-        var lastPts = sink.Submitted[^1].PresentationTime;
+        var lastPts = output.Submitted[^1].PresentationTime;
         Assert.True(lastPts >= TimeSpan.FromMilliseconds(500),
             $"held frame PTS should track the playhead; got {lastPts}");
     }
@@ -155,22 +155,22 @@ public class VideoPlayerTests
     {
         var src = new FakeVideoSource(VideoFmt(16, 16),
             Frame(0, 16, 16), Frame(40, 16, 16));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
 
-        using var player = new VideoPlayer(src, sink, clock, queueCapacity: 4)
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4)
         {
             LateThreshold = TimeSpan.FromMilliseconds(500),
             HoldLastFrameAtEnd = false,
         };
         player.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
         WaitFor(() => src.Reads >= 2, TimeSpan.FromSeconds(1));
         WaitFor(() => src.IsExhausted, TimeSpan.FromSeconds(1));
 
         clock.AdvanceTo(TimeSpan.FromMilliseconds(100));
         clock.RaiseVideoTick();
-        WaitFor(() => sink.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
+        WaitFor(() => output.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
 
         // A second tick after exhaustion — without HoldLastFrameAtEnd, completes naturally.
         clock.AdvanceTo(TimeSpan.FromMilliseconds(500));
@@ -186,19 +186,19 @@ public class VideoPlayerTests
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(40, 16, 16),
             Frame(80, 16, 16));
-        var sink = new FakeVideoSink([PixelFormat.Bgra32]);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
         var clock = new FakeMediaClock();
 
-        var player = new VideoPlayer(src, sink, clock, queueCapacity: 4);
+        var player = new VideoPlayer(src, output, clock, queueCapacity: 4);
         player.Play();
-        sink.WaitForConfigured();
+        output.WaitForConfigured();
         WaitFor(() => src.Reads >= 3, TimeSpan.FromSeconds(1));
 
         // Decode thread will have queued all 3 frames; they're outstanding.
         Assert.True(src.UndisposedFramesHandedOut > 0);
         player.Stop();
         // After stop, every frame the source produced should have been disposed
-        // (either submitted to sink which would dispose, or drained on stop).
+        // (either submitted to output which would dispose, or drained on stop).
         Assert.Equal(0, src.UndisposedFramesHandedOut);
         Assert.True(player.DroppedDrain >= 3);
         player.Dispose();
@@ -260,14 +260,14 @@ internal sealed class FakeVideoSource : IVideoSource
     }
 }
 
-internal sealed class FakeVideoSink : IVideoSink
+internal sealed class FakeVideoOutput : IVideoOutput
 {
     private readonly PixelFormat[] _accepted;
     private readonly ManualResetEventSlim _configured = new(false);
     public List<VideoFrame> Submitted { get; } = new();
     public VideoFormat Format { get; private set; }
 
-    public FakeVideoSink(PixelFormat[] accepted) => _accepted = accepted;
+    public FakeVideoOutput(PixelFormat[] accepted) => _accepted = accepted;
 
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _accepted;
 

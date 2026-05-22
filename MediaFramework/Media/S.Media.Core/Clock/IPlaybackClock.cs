@@ -2,8 +2,8 @@ namespace S.Media.Core.Clock;
 
 /// <summary>
 /// Read-only time source that <see cref="MediaClock"/> can slave to via
-/// <c>MediaClock.SetMaster</c>. Typically implemented by the audio sink that
-/// owns the playback hardware (PortAudio output, CoreAudio, …): the sink
+/// <c>MediaClock.SetMaster</c>. Typically implemented by the audio output that
+/// owns the playback hardware (PortAudio output, CoreAudio, …): the output
 /// reports how much audio it has actually played, and the clock derives its
 /// position from that instead of a wall-clock <see cref="System.Diagnostics.Stopwatch"/>.
 /// </summary>

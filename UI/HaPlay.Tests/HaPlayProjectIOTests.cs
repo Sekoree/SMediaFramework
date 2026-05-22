@@ -370,7 +370,7 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
-    public void AudioMatrixViewModel_Resize_StereoSource_StereoSink_IsIdentity()
+    public void AudioMatrixViewModel_Resize_StereoSource_StereoOutput_IsIdentity()
     {
         // Phase C — Resize's identity default sets the diagonal to 0 dB unmuted and the off-diagonal to
         // -60 dB muted, matching the legacy stereo MixMode.
@@ -398,7 +398,7 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
-    public void AudioMatrixViewModel_Resize_StereoSource_FourSink_DefaultsToFirstPair()
+    public void AudioMatrixViewModel_Resize_StereoSource_FourOutput_DefaultsToFirstPair()
     {
         var m = new HaPlay.ViewModels.AudioMatrixViewModel();
         m.Resize(2, 4);
@@ -410,7 +410,7 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
-    public void AudioMatrixViewModel_ApplyPreset_MonoLeft_DrivesAllSinkChannels()
+    public void AudioMatrixViewModel_ApplyPreset_MonoLeft_DrivesAllOutputChannels()
     {
         var m = new HaPlay.ViewModels.AudioMatrixViewModel();
         m.Resize(2, 4);

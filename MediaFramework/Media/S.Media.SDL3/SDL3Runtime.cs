@@ -2,14 +2,14 @@ namespace S.Media.SDL3;
 
 /// <summary>
 /// Reference-counted lifetime for the SDL3 video subsystem. Each
-/// <see cref="SDL3VideoSink"/> calls <see cref="Acquire"/> when its render
+/// <see cref="SDL3VideoOutput"/> calls <see cref="Acquire"/> when its render
 /// thread starts and <see cref="Release"/> on dispose; <c>SDL_QuitSubSystem</c>
 /// only runs when the last holder lets go.
 /// </summary>
 /// <remarks>
 /// Threading: SDL's docs recommend initializing video on the main thread on
 /// macOS (window/event handling there is pinned to it). On Linux/Windows the
-/// init thread is flexible — the SDL3VideoSink runs all of its calls on its
+/// init thread is flexible — the SDL3VideoOutput runs all of its calls on its
 /// own dedicated render thread, which is fine outside of macOS. macOS support
 /// will require an external pump-on-main-thread harness; not implemented yet.
 /// </remarks>

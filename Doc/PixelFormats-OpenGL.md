@@ -19,4 +19,4 @@ Rough matrix of **`PixelFormat`** values **`YuvVideoRenderer`** supports via **`
 | P010 / P016 | yuv_nv12 | 2 | R16 + RG16 | 10-bit scaling on P010 |
 | Uyvy / Yuyv | uyvy422 / yuyv422 | 1 | Packed RGBA8 half-width texture | Nearest filtering |
 
-HDR preview knobs live on **`VideoHdrTransfer`** / uniforms `uHdrTransfer`, `uHdrExposure` in planar / packed422 shaders (**`VideoFrame.ColorTransferHint`** steers **`SDL3GLVideoSink`** when set).
+HDR preview knobs live on **`VideoHdrTransfer`** / uniforms `uHdrTransfer`, `uHdrExposure` in planar / packed422 shaders (**`VideoFrame.ColorTransferHint`** steers **`SDL3GLVideoOutput`** when set).

@@ -7,7 +7,7 @@ namespace S.Media.Core.Audio;
 /// </summary>
 /// <remarks>
 /// <paramref name="shouldContinue"/> must become false once the destination is
-/// full (or no more progress is possible); otherwise a bounded sink can spin
+/// full (or no more progress is possible); otherwise a bounded output can spin
 /// forever while the source still returns data. Prefer the PortAudio-specific
 /// <c>PrefillFrom</c> helper on <c>S.Media.PortAudio.PortAudioOutput</c> for hardware rings,
 /// which guards against a full ring.

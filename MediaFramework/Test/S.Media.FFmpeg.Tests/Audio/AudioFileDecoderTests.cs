@@ -24,12 +24,7 @@ public sealed class AudioFileDecoderTests : IDisposable
 
     public void Dispose()
     {
-        try { File.Delete(_wavPath); }
-#if DEBUG
-        catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(AudioFileDecoderTests)}: temp wav delete"); }
-#else
-        catch { /* ignored */ }
-#endif
+        MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(_wavPath), $"{nameof(AudioFileDecoderTests)}: temp wav delete");
     }
 
     [Fact]

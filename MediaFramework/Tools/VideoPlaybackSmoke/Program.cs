@@ -40,14 +40,14 @@ if (!VideoPlaybackSmokeSession.TryCreate(opt,
 
 var media = session.Media;
 var videoSource = media.Video;
-var windowSink = session.WindowSink;
+var windowSink = session.WindowOutput;
 var videoRouter = session.VideoRouter;
 var ndi = session.NDI;
 var ndiVideoRouterInputId = session.NDIVideoRouterInputId;
 var ndiVideoOutputId = session.NDIVideoOutputId;
-var ndiAudioAgg = session.NDIAudioAggregatingSink;
+var ndiAudioAgg = session.NDIAudioAggregatingOutput;
 var ndiMirrorPrefill = session.NDIMirrorPrefill;
-var ndiAudioSinkId = session.NDIAudioSinkId;
+var ndiAudioOutputId = session.NDIAudioOutputId;
 var audioHost = session.AudioHost;
 IMediaClock playClock = session.PlayClock;
 var videoPlayer = session.VideoPlayer;
@@ -93,7 +93,7 @@ try
 
     if (audioHost is not null)
     {
-        // While PortAudio hasn't started, SinkSlavedRouterClock's WaitForCapacity() returns
+        // While PortAudio hasn't started, OutputSlavedRouterClock's WaitForCapacity() returns
         // unconditionally — the router would decode as fast as CPU allows, overfill the ring,
         // and Submit() would drop samples while mux audio Position still advanced
         // ("audio 7s ahead" in the HUD). Match PlaybackSmoke: prebuffer by reading the
@@ -131,7 +131,7 @@ try
             var tick = new SmokeHudTick(intervalSec, lastHudDisplayed, videoPlayer.DisplayedCount);
             lastHudDisplayed = videoPlayer.DisplayedCount;
             var snap = SmokeHud.Collect(tick, playClock, videoSource, videoPlayer, media, windowSink,
-                audioHost, ndiAudioSinkId, videoRouter, ndiVideoOutputId, ndi);
+                audioHost, ndiAudioOutputId, videoRouter, ndiVideoOutputId, ndi);
             Console.Write("\r " + PlaybackHud.FormatLine(snap));
             Console.Out.Flush();
 
@@ -337,7 +337,7 @@ file static class PlaybackCli
             return false;
         }
 
-        int? ndiPumpCap = !ndiPumpFromCli ? SmokeDefaults.DefaultNDIAudioSinkPumpCapacityChunks : (ndiPumpCliValue < 2 ? null : ndiPumpCliValue);
+        int? ndiPumpCap = !ndiPumpFromCli ? SmokeDefaults.DefaultNDIAudioOutputPumpCapacityChunks : (ndiPumpCliValue < 2 ? null : ndiPumpCliValue);
 
         opt = new SmokeToolOptions(positional[0], ndi, ndiName, noHw, OperatingSystem.IsLinux() && drmGl,
             OperatingSystem.IsWindows() && d3d11Gl, OperatingSystem.IsWindows() && d3d11Gl && d3d11GlZeroHost,
@@ -382,10 +382,10 @@ Smoke test for video + mastered audio clock (SDL3 GL by default).
   --chunk-samples=n   AudioRouter chunk span (default 960 ≈ 20 ms @ 48 kHz).
   --device-latency-ms=n  PortAudio suggested latency (ms) + larger TargetQueueSamples floor (JACK/ALSA-hw).
   --ndi-audio-aggregate=n  Fixed NDI audio packet size in samples/channel (0=off, default auto from video fps).
-  --ndi-audio-pump-chunks=n  NDI audio only: per-sink SinkPump depth (default 24 if omitted; 0–1 = router default).
+  --ndi-audio-pump-chunks=n  NDI audio only: per-output OutputPump depth (default 24 if omitted; 0–1 = router default).
   --ndi-clock-video       Let the NDI SDK pace video (clockVideo:true); try with --ndi-disable-wall-pace.
   --ndi-disable-wall-pace Disable host wall throttle between NDI video submits (see NDIVideoSender).
-  --ndi-video-pump-frames=n  NDI branch VideoSinkPump queue depth (default 8; was 4).
+  --ndi-video-pump-frames=n  NDI branch VideoOutputPump queue depth (default 8; was 4).
   --ndi-video-tc=pts|synth  Video timecode: pts = PresentationRelativeTicks (default); synth = SDK synthesize.
   --ndi-wait-first-receiver-ms=n  (With --ndi) Block up to n ms for the first NDI receiver (NDIlib_send_get_no_connections); 0=off (default).
 

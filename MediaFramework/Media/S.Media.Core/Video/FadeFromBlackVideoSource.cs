@@ -17,7 +17,7 @@ namespace S.Media.Core.Video;
 /// <para>
 /// Hardware-backed frames (DMA-BUF, Win32 NV12) are not supported — the wrapper needs CPU plane
 /// access to apply the ramp. For hardware paths use <see cref="LayerOpacityTween"/> on a
-/// <see cref="CompositorVideoSink.Slot"/> instead.
+/// <see cref="VideoCompositorSource.Slot"/> instead.
 /// </para>
 /// <para>
 /// The wrapped source's frames are disposed by this source after the ramped copy is created. Output
@@ -44,7 +44,7 @@ public sealed class FadeFromBlackVideoSource : IVideoSource, IDisposable
             throw new ArgumentException(
                 $"FadeFromBlackVideoSource does not support {inner.Format.PixelFormat}; " +
                 "use a CPU-format source (BGRA32, Rgba32, Rgb24, Bgr24, Gray8) or apply opacity via " +
-                "LayerOpacityTween on a CompositorVideoSink.Slot instead.",
+                "LayerOpacityTween on a VideoCompositorSource.Slot instead.",
                 nameof(inner));
 
         _inner = inner;
@@ -86,7 +86,7 @@ public sealed class FadeFromBlackVideoSource : IVideoSource, IDisposable
             throw new NotSupportedException(
                 "FadeFromBlackVideoSource cannot ramp hardware-backed frames. " +
                 "Decode in software (e.g. VideoPlaybackSmoke --no-hw) or apply opacity via " +
-                "LayerOpacityTween on a CompositorVideoSink.Slot.");
+                "LayerOpacityTween on a VideoCompositorSource.Slot.");
         }
 
         _firstPts ??= inner.PresentationTime;

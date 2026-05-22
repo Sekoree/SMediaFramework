@@ -25,7 +25,7 @@ namespace S.Media.Core.Playback;
 /// control, follow the synchronization assumptions documented on <see cref="AudioRouter.Pause"/>.
 /// </para>
 /// <para>
-/// Wiring <see cref="IMediaClock.SetMaster"/> / <see cref="MediaClockExtensions.SetMasterChain"/> here does not implement coordinated multi-sink master PPM or synchronized drop/repeat — that remains host-owned; see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/>.
+/// Wiring <see cref="IMediaClock.SetMaster"/> / <see cref="MediaClockExtensions.SetMasterChain"/> here does not implement coordinated multi-output master PPM or synchronized drop/repeat — that remains host-owned; see <see cref="MediaClock"/> and <see cref="Audio.AudioRouter"/>.
 /// </para>
 /// <para>
 /// For a seek-free view of <see cref="IAvPlaybackSession.Timeline"/>, use <see cref="PlaybackTimelineClockExtensions.AsPlayhead"/>.

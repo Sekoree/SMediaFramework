@@ -30,12 +30,7 @@ public sealed class VideoFileDecoderTests : IDisposable
     {
         if (_videoPath != null)
         {
-            try { File.Delete(_videoPath); }
-#if DEBUG
-            catch (Exception ex) { MediaDiagnostics.LogError(ex, $"{nameof(VideoFileDecoderTests)}: temp video delete"); }
-#else
-            catch { /* ignored */ }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(_videoPath), $"{nameof(VideoFileDecoderTests)}: temp video delete");
         }
     }
 

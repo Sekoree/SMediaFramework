@@ -222,7 +222,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         {
             // No decodable video stream — audio-only file (e.g. MP3 with no cover art).
             // Provide a stub VideoFormat so format negotiation between the stub IVideoSource and a
-            // permissive sink (DiscardingVideoSink, or any sink with at least one accepted format)
+            // permissive output (DiscardingVideoOutput, or any output with at least one accepted format)
             // succeeds. The decode loop never produces frames because VideoTrack.IsExhausted is true.
             VideoCodecName = "";
             _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
@@ -350,7 +350,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         // Some streams (notably attached_pic / album cover art) report odd dimensions. Pixel formats with
         // chroma subsampling (I420 / NV12 over NDI) require even W and H, and BGRA / RGBA / UYVY require
         // even W. Round up to the next even multiple here and route through the sws-to-BGRA32 path so
-        // downstream sinks always see even dimensions. The visible difference is at most one row/column
+        // downstream outputs always see even dimensions. The visible difference is at most one row/column
         // of sub-pixel rescaling — imperceptible for a static cover image.
         var outWidth = _vCtx->width + (_vCtx->width & 1);
         var outHeight = _vCtx->height + (_vCtx->height & 1);
@@ -364,10 +364,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             _vPassThrough = false;
             _vOutPixFmt = PixelFormat.Bgra32;
             // Bgra32 is what we actually emit after the forced sws conversion. Reporting it as native lets
-            // VideoFormatNegotiator find common ground when the sink declares no accepted formats (e.g.
-            // DiscardingVideoSink in HaPlay's audio-only routing path for FLAC + attached_pic cover art).
-            // Without this, an attached_pic source with odd dimensions and a permissive sink would crash
-            // with "neither source nor sink declared any pixel formats".
+            // VideoFormatNegotiator find common ground when the output declares no accepted formats (e.g.
+            // DiscardingVideoOutput in HaPlay's audio-only routing path for FLAC + attached_pic cover art).
+            // Without this, an attached_pic source with odd dimensions and a permissive output would crash
+            // with "neither source nor output declared any pixel formats".
             _vNativePixFormats = [PixelFormat.Bgra32];
         }
 
@@ -456,7 +456,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         if (attached)
             // attached_pic streams are conceptually 1 FPS (one still for the whole file), but downstream
-            // sinks with SDK-paced video clocks (NDI's clockVideo:true paces NDIlib_send_send_video_async_v2
+            // outputs with SDK-paced video clocks (NDI's clockVideo:true paces NDIlib_send_send_video_async_v2
             // at the declared rate) would then block sender threads for one second per frame — making prime
             // / hold-toggle / cover-art appearance take 10+ seconds in practice. Declare 30 FPS so the SDK
             // paces at ~33 ms per send; we still only emit a single decoded frame, receivers just hold it.
@@ -679,20 +679,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
             StopDemuxerAndDrainQueues();
 
-            try
-            {
-                _vPrimedAfterSeek?.Dispose();
-            }
-#if DEBUG
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, "MediaContainerSharedDemux.Dispose: _vPrimedAfterSeek");
-            }
-#else
-            catch
-            {
-            }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => _vPrimedAfterSeek?.Dispose(), "MediaContainerSharedDemux.Dispose: _vPrimedAfterSeek");
             _vPrimedAfterSeek = null;
 
             if (_demuxPkt != null) { var p = _demuxPkt; av_packet_free(&p); _demuxPkt = null; }
@@ -711,36 +698,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 _vCtx = null;
             }
 
-            try
-            {
-                _hwAccel?.Dispose();
-            }
-#if DEBUG
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, "MediaContainerSharedDemux.Dispose: _hwAccel");
-            }
-#else
-            catch
-            {
-            }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(() => _hwAccel?.Dispose(), "MediaContainerSharedDemux.Dispose: _hwAccel");
             _hwAccel = null;
 
-            try
-            {
-                _passThroughArena.Dispose();
-            }
-#if DEBUG
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, "MediaContainerSharedDemux.Dispose: _passThroughArena");
-            }
-#else
-            catch
-            {
-            }
-#endif
+            MediaDiagnostics.SwallowDisposeErrors(_passThroughArena.Dispose, "MediaContainerSharedDemux.Dispose: _passThroughArena");
 
             if (_fmt != null) { var f = _fmt; avformat_close_input(&f); _fmt = null; }
         }
@@ -1024,7 +985,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
 
         // SeekPresentation primes one frame with the previous output pixel format; negotiation
-        // (SelectOutputFormat) can change the sink path afterward — drop the stale prime.
+        // (SelectOutputFormat) can change the output path afterward — drop the stale prime.
         if (format != Video.Format.PixelFormat)
         {
             _vPrimedAfterSeek?.Dispose();
@@ -1506,7 +1467,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (!_o._hasVideo)
             {
                 // No real video stream — just record the negotiated output format on the stub so the
-                // sink's Configure(Format) call sees a coherent VideoFormat. The decode path is inert.
+                // output's Configure(Format) call sees a coherent VideoFormat. The decode path is inert.
                 Format = Format with { PixelFormat = format };
                 _o._vOutPixFmt = format;
                 return;

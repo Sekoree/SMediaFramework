@@ -4,8 +4,8 @@ using Xunit;
 namespace S.Media.Core.Tests.Audio;
 
 /// <summary>
-/// Seeded <see cref="AudioRouter"/> integration tests (real run loop + <see cref="SinkPump"/>).
-/// Each iteration uses distinct sources so routes do not replace each other on the same (source, sink) pair.
+/// Seeded <see cref="AudioRouter"/> integration tests (real run loop + <see cref="OutputPump"/>).
+/// Each iteration uses distinct sources so routes do not replace each other on the same (source, output) pair.
 /// </summary>
 public sealed class AudioRouterLiveGraphSeededTests
 {
@@ -74,8 +74,8 @@ public sealed class AudioRouterLiveGraphSeededTests
                 sources[i] = router.AddSource(new TestSource(Stereo, c => c == 0 ? li : ri), $"s{i}");
             }
 
-            var sink = new TestSink(Stereo);
-            router.AddSink(sink, "out");
+            var output = new TestOutput(Stereo);
+            router.AddOutput(output, "out");
             foreach (var (srcIdx, map, gain) in routes)
                 router.AddRoute(sources[srcIdx], "out", map, gain);
 
@@ -83,8 +83,8 @@ public sealed class AudioRouterLiveGraphSeededTests
             WaitForChunks(router, 2);
             router.Stop();
 
-            Assert.True(sink.Captured.Count > 0, $"iter {iter}: no chunks captured");
-            var captured = sink.Captured[0];
+            Assert.True(output.Captured.Count > 0, $"iter {iter}: no chunks captured");
+            var captured = output.Captured[0];
             for (var i = 0; i < expected.Length; i++)
                 Assert.Equal(expected[i], captured[i], precision: 4);
         }
@@ -149,7 +149,7 @@ public sealed class AudioRouterLiveGraphSeededTests
         }
     }
 
-    private sealed class TestSink(AudioFormat fmt) : IAudioSink
+    private sealed class TestOutput(AudioFormat fmt) : IAudioOutput
     {
         private readonly Lock _gate = new();
         private readonly List<float[]> _captured = [];

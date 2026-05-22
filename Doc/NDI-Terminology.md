@@ -9,6 +9,6 @@ Short glossary for types and names in `S.Media.NDI`. These follow common broadca
 | **Mux** | `MuxPlayheadClock`, shared demux context | Single timeline shared by multiple elementary streams (e.g. one file’s audio + video), or playhead derived from muxed presentation order. |
 | **Fusion** | `NDIMonitorReceiverPumpFusion`, `NDIFusionPlaybackHints` | Correlating NDI Monitor receiver feedback (connections, tally) with local `AudioRouter` / `VideoRouter` pump drop counters for HUDs and optional host policy — not automatic pacing. |
 | **Aggregating** | `NDIAggregatingSink` (and related) | Combining multiple logical inputs or branches before one NDI or router output. |
-| **Pump** | `VideoSinkPump`, `AudioRouter` sink pumps | Async queue between the clock-driven producer thread and a slower sink; pressure events when the queue drops oldest data. |
+| **Pump** | `VideoOutputPump`, `AudioRouter` output pumps | Async queue between the clock-driven producer thread and a slower output; pressure events when the queue drops oldest data. |
 
 For framework-wide playback naming (`MediaContainerSession`, `MediaContainerPlaybackBundle`, `PortAudioPlaybackHost`), see `Doc/MediaFramework-Review-2026-05.md` §1.3 and `Doc/MediaFramework-Checklist-2026-05.md` Phase 1.
