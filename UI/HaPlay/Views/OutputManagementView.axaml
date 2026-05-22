@@ -39,6 +39,7 @@
                    Foreground="#FFE6E6" />
       </Border>
       <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+        <Button Content="{x:Static res:Strings.ClearHealthButton}" Command="{Binding ClearHealthCommand}" />
         <Button Content="{x:Static res:Strings.AddPortAudioButton}" Command="{Binding AddPortAudioCommand}" />
         <Button Content="{x:Static res:Strings.AddLocalVideoButton}" Command="{Binding AddLocalVideoCommand}" />
         <Button Content="{x:Static res:Strings.AddNdiButton}" Command="{Binding AddNDICommand}" />

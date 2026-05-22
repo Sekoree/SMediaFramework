@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
@@ -22,7 +23,9 @@ namespace S.Media.NDI;
 /// </remarks>
 public sealed unsafe class NDILiveReceiver : IDisposable
 {
-    private const int DefaultVideoQueueDepth = 4;
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.NDILiveReceiver");
+
+    private const int DefaultVideoQueueDepth = 8;
     private const int MinAudioCapacityFrames = 1024;
 
     private readonly NDIRuntime _runtime;
@@ -48,8 +51,10 @@ public sealed unsafe class NDILiveReceiver : IDisposable
     private bool _hasVideoFormat;
     private bool _disposed;
     private long _audioOverflowFloats;
+    private long _audioConversionDrops;
     private long _videoOverflowFrames;
     private long _videoUnpackDrops;
+    private long _videoFramesUnpacked;
 
     public NDILiveReceiver(
         NDIDiscoveredSource source,
@@ -60,7 +65,7 @@ public sealed unsafe class NDILiveReceiver : IDisposable
         TimeSpan? audioMinBufferedDuration = null,
         int maxQueuedVideoFrames = DefaultVideoQueueDepth,
         NDIRecvBandwidth bandwidth = NDIRecvBandwidth.Highest,
-        NDIRecvColorFormat colorFormat = NDIRecvColorFormat.UyvyBgra,
+        NDIRecvColorFormat colorFormat = NDIRecvColorFormat.BgrxBgra,
         NDIIngestPlaybackClock? ingestClock = null)
     {
         if (!receiveAudio && !receiveVideo)
@@ -107,6 +112,12 @@ public sealed unsafe class NDILiveReceiver : IDisposable
                 throw new NDIException(rc, "NDIReceiver.Create");
             _receiver = recv;
             _receiver.Connect(source);
+            if (Trace.IsEnabled(LogLevel.Information))
+            {
+                Trace.LogInformation(
+                    "NDILiveReceiver: connected source='{Source}' colorFormat={ColorFormat} bandwidth={Bandwidth}",
+                    source.Name, colorFormat, bandwidth);
+            }
         }
         catch (Exception ex)
         {
@@ -152,10 +163,14 @@ public sealed unsafe class NDILiveReceiver : IDisposable
 
     public long VideoOverflowFrames => Interlocked.Read(ref _videoOverflowFrames);
 
-    public void RebaseToLatest(TimeSpan videoNextPresentationTime = default)
+    public long VideoUnpackDrops => Interlocked.Read(ref _videoUnpackDrops);
+
+    public long VideoFramesUnpacked => Interlocked.Read(ref _videoFramesUnpacked);
+
+    public void RebaseToLatest(TimeSpan videoNextPresentationTime = default, TimeSpan audioKeepBuffered = default)
     {
         if (_receiveAudio)
-            RebaseAudioToLatest();
+            RebaseAudioToLatest(audioKeepBuffered);
         if (_receiveVideo)
             RebaseVideoToLatest(videoNextPresentationTime);
     }
@@ -180,7 +195,9 @@ public sealed unsafe class NDILiveReceiver : IDisposable
         if (buffered <= keepFloats) return;
 
         Volatile.Write(ref snap.ReadIndex, read + (buffered - keepFloats));
-        Volatile.Write(ref snap.Primed, 0);
+        // Keep Primed when enough samples remain so Play/Prefill can read immediately — clearing Primed
+        // forces another 50 ms holdback and causes PortAudio underruns on the first chunk.
+        Volatile.Write(ref snap.Primed, keepFloats >= snap.MinBufferedFloats ? 1 : 0);
     }
 
     public void RebaseVideoToLatest(TimeSpan nextPresentationTime = default)
@@ -339,7 +356,12 @@ public sealed unsafe class NDILiveReceiver : IDisposable
             NoSamples = samples,
             PData = pin.AddrOfPinnedObject(),
         };
-        NDIAudioUtils.ToInterleaved32f(audio, ref interleaved);
+        if (!NDIAudioUtils.ToInterleaved32f(audio, ref interleaved))
+        {
+            LogAudioConversionDrop(in audio);
+            return;
+        }
+
         _ingestClock?.NotifyAudioFrame(in audio);
         EnqueueAudioSamples(snap, heldBuffer.AsSpan(0, totalFloats));
     }
@@ -353,15 +375,25 @@ public sealed unsafe class NDILiveReceiver : IDisposable
                 EnsureVideoFormat(vf.Format);
                 EnqueueVideoFrame(vf);
                 _nextVideoPts += _videoPtsStep;
+                var unpacked = Interlocked.Increment(ref _videoFramesUnpacked);
+                if (unpacked <= 3 && Trace.IsEnabled(LogLevel.Information))
+                {
+                    var avgLuma = NDIVideoFrameUnpack.SampleAveragePackedLuma(vf);
+                    Trace.LogInformation(
+                        "NDILiveReceiver: unpacked video frame #{N} fourCC={FourCc} native={NativeW}x{NativeH} stride={NativeStride} → {FmtW}x{FmtH} {FmtPf} avgLuma={AvgLuma:F1} range={Range} pts={Pts}",
+                        unpacked, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes,
+                        vf.Format.Width, vf.Format.Height, vf.Format.PixelFormat, avgLuma, vf.ColorRange,
+                        vf.PresentationTime);
+                }
             }
             else
             {
                 var drops = Interlocked.Increment(ref _videoUnpackDrops);
-                if (drops <= 5)
+                if (drops <= 8)
                 {
-                    MediaDiagnostics.LogWarning(
-                        "NDILiveReceiver: dropped video frame (unpack failed) fourCC={FourCc} size={W}x{H} stride={Stride}",
-                        video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes);
+                    Trace.LogWarning(
+                        "NDILiveReceiver: dropped video frame (unpack failed) #{Drop} fourCC={FourCc} xres={Xres} yres={Yres} lineStride={Stride} pData={HasData}",
+                        drops, video.FourCC, video.Xres, video.Yres, video.LineStrideInBytes, video.PData != nint.Zero);
                 }
             }
         }
@@ -417,6 +449,17 @@ public sealed unsafe class NDILiveReceiver : IDisposable
 
         if (dropped > 0)
             Interlocked.Add(ref _audioOverflowFloats, dropped);
+    }
+
+    private void LogAudioConversionDrop(in NDIAudioFrameV3 audio)
+    {
+        var drops = Interlocked.Increment(ref _audioConversionDrops);
+        if (drops <= 5)
+        {
+            MediaDiagnostics.LogWarning(
+                "NDILiveReceiver: dropped audio frame (interleaved conversion failed) fourCC={FourCc} channels={Channels} samples={Samples} sampleRate={SampleRate}",
+                audio.FourCC, audio.NoChannels, audio.NoSamples, audio.SampleRate);
+        }
     }
 
     private void EnsureVideoFormat(VideoFormat format)

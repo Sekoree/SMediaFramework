@@ -25,7 +25,8 @@ internal static class NdiAudioFrameConverter
         try
         {
             interleaved.PData = pin.AddrOfPinnedObject();
-            NDIAudioUtils.ToInterleaved32f(audio, ref interleaved);
+            if (!NDIAudioUtils.ToInterleaved32f(audio, ref interleaved))
+                return 0;
             scratch.AsSpan(0, totalFloats).CopyTo(dst);
             return totalFloats;
         }

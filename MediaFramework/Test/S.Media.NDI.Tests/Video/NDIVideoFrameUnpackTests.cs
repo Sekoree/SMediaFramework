@@ -90,6 +90,8 @@ public sealed class NDIVideoFrameUnpackTests
             using (frame!)
             {
                 Assert.Equal(PixelFormat.Uyvy, frame.Format.PixelFormat);
+                Assert.Equal(VideoColorRange.Full, frame.ColorRange);
+                Assert.Equal(VideoColorSpace.Bt709, frame.ColorSpace);
                 Assert.Equal(visibleStride, frame.Strides[0]);
                 Assert.Equal(visibleStride * height, frame.Planes[0].Length);
                 Assert.Equal(row0, frame.Planes[0].Span[..row0.Length].ToArray());
@@ -132,6 +134,55 @@ public sealed class NDIVideoFrameUnpackTests
                 Assert.Equal(pixelWidth, frame.Format.Width);
                 Assert.Equal(lineStrideBytes, frame.Strides[0]);
                 Assert.Equal(payload, frame.Planes[0].ToArray());
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(ptr);
+        }
+    }
+
+    [Fact]
+    public void TryUnpack_Uyvy_WhenLineStrideIsTotalBufferSize_UsesDefaultLineStride()
+    {
+        // Needs height >= 3 so total PData (width*height*2) is unambiguously larger than 2× per-line stride.
+        const int width = 4;
+        const int height = 3;
+        const int visibleStride = width * 2;
+        var row0 = new byte[] { 10, 20, 30, 40, 11, 21, 31, 41 };
+        var row1 = new byte[] { 50, 60, 70, 80, 51, 61, 71, 81 };
+        var row2 = new byte[] { 90, 100, 110, 120, 91, 101, 111, 121 };
+        var payload = new byte[visibleStride * height];
+        Buffer.BlockCopy(row0, 0, payload, 0, row0.Length);
+        Buffer.BlockCopy(row1, 0, payload, visibleStride, row1.Length);
+        Buffer.BlockCopy(row2, 0, payload, visibleStride * 2, row2.Length);
+        var totalBufferSize = payload.Length;
+
+        var ptr = Marshal.AllocHGlobal(payload.Length);
+        try
+        {
+            Marshal.Copy(payload, 0, ptr, payload.Length);
+            var native = new NDIVideoFrameV2
+            {
+                Xres = width,
+                Yres = height,
+                FourCC = NDIFourCCVideoType.Uyvy,
+                FrameRateN = 30,
+                FrameRateD = 1,
+                PData = ptr,
+                // Some senders put total PData bytes here instead of per-line stride.
+                LineStrideInBytes = totalBufferSize,
+            };
+
+            Assert.True(NDIVideoFrameUnpack.TryUnpack(native, TimeSpan.Zero, out var frame));
+            Assert.NotNull(frame);
+            using (frame!)
+            {
+                Assert.Equal(width, frame.Format.Width);
+                Assert.Equal(visibleStride, frame.Strides[0]);
+                Assert.Equal(row0, frame.Planes[0].Span[..row0.Length].ToArray());
+                Assert.Equal(row1, frame.Planes[0].Span.Slice(visibleStride, row1.Length).ToArray());
+                Assert.Equal(row2, frame.Planes[0].Span.Slice(visibleStride * 2, row2.Length).ToArray());
             }
         }
         finally

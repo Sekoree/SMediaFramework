@@ -3,6 +3,9 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Data.Core;
 using Avalonia.Data.Core.Plugins;
 using System.Linq;
+#if DEBUG
+using Avalonia.Diagnostics;
+#endif
 using Avalonia.Markup.Xaml;
 using HaPlay.ViewModels;
 using HaPlay.Views;

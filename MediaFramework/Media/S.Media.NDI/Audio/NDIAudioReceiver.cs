@@ -49,6 +49,7 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 
     private FormatSnapshot? _state;
     private long _overflowSamples;
+    private long _conversionDrops;
     private bool _disposed;
 
     /// <summary>True once at least one audio frame has been received and
@@ -268,9 +269,23 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                         NoSamples = samples,
                         PData = pin.AddrOfPinnedObject(),
                     };
-                    NDIAudioUtils.ToInterleaved32f(audio, ref interleaved);
-                    _ingestClock?.NotifyAudioFrame(in audio);
-                    _receiver.FreeAudio(audio);
+                    bool converted;
+                    try
+                    {
+                        converted = NDIAudioUtils.ToInterleaved32f(audio, ref interleaved);
+                        if (converted)
+                            _ingestClock?.NotifyAudioFrame(in audio);
+                    }
+                    finally
+                    {
+                        _receiver.FreeAudio(audio);
+                    }
+
+                    if (!converted)
+                    {
+                        LogConversionDrop(in audio);
+                        continue;
+                    }
 
                     EnqueueSamples(snap, heldBuffer.AsSpan(0, totalFloats));
                 }
@@ -391,6 +406,17 @@ public sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 
         if (dropped > 0)
             Interlocked.Add(ref _overflowSamples, dropped);
+    }
+
+    private void LogConversionDrop(in NDIAudioFrameV3 audio)
+    {
+        var drops = Interlocked.Increment(ref _conversionDrops);
+        if (drops <= 5)
+        {
+            MediaDiagnostics.LogWarning(
+                "NDIAudioReceiver: dropped audio frame (interleaved conversion failed) fourCC={FourCc} channels={Channels} samples={Samples} sampleRate={SampleRate}",
+                audio.FourCC, audio.NoChannels, audio.NoSamples, audio.SampleRate);
+        }
     }
 
     public void Dispose()

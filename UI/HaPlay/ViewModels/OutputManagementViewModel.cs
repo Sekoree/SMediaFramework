@@ -1005,6 +1005,33 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
     }
 
+    [RelayCommand]
+    private void ClearHealth()
+    {
+        var players = ActivePlayersProbe?.Invoke();
+        if (players is not null)
+        {
+            foreach (var player in players)
+            {
+                var session = player.PlaybackSession;
+                if (session is null)
+                    continue;
+
+                foreach (var line in Outputs)
+                    session.ResetHealthCounters(line);
+            }
+        }
+
+        foreach (var line in Outputs)
+        {
+            line.Health = OutputLineHealthState.Unknown;
+            line.HealthDetail = null;
+            line.ResetSparkline();
+        }
+
+        RefreshOutputHealth();
+    }
+
     private void RefreshOutputHealth()
     {
         var players = ActivePlayersProbe?.Invoke();
@@ -1085,8 +1112,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         if (state == OutputLineHealthState.Unknown)
             return null;
 
-        if (session.TryGetVideoOutputId(line, out var vid)
-            && session.Player.VideoRouter.TryGetVideoSinkPumpMetrics(vid, out var vm))
+        if (session.TryGetVideoHealthMetrics(line, out var vm))
         {
             return state switch
             {
@@ -1096,9 +1122,8 @@ public partial class OutputManagementViewModel : ViewModelBase
             };
         }
 
-        if (session.TryGetAudioSinkId(line, out var sid) && session.Player.Audio is not null)
+        if (session.TryGetAudioHealthMetrics(line, out var st))
         {
-            var st = session.Player.Audio.Router.GetPumpStats(sid);
             var detail = state switch
             {
                 OutputLineHealthState.Healthy => Strings.Format(nameof(Strings.OutputHealthAudioPumpOkFormat), st.Processed),

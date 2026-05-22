@@ -189,6 +189,85 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         return false;
     }
 
+    internal bool TryGetPortAudioOutput(OutputLineViewModel line, [NotNullWhen(true)] out PortAudioOutput? output)
+    {
+        output = null;
+        if (_lineWiring.TryGetValue(line, out var wiring) && wiring.PortAudioOutput is { } pa)
+        {
+            output = pa;
+            return true;
+        }
+
+        return false;
+    }
+
+    internal long GetPortAudioUnderrunDelta(OutputLineViewModel line)
+    {
+        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.PortAudioOutput is not { } pa)
+            return 0;
+
+        return Math.Max(0, pa.UnderrunSamples - wiring.PortAudioUnderrunBaseline);
+    }
+
+    internal bool TryGetVideoHealthMetrics(OutputLineViewModel line, out VideoSinkPumpMetrics metrics)
+    {
+        metrics = default;
+        if (!_lineWiring.TryGetValue(line, out var wiring)
+            || string.IsNullOrEmpty(wiring.VideoOutputId)
+            || !Player.VideoRouter.TryGetVideoSinkPumpMetrics(wiring.VideoOutputId, out var raw))
+        {
+            return false;
+        }
+
+        metrics = new VideoSinkPumpMetrics(
+            Math.Max(0, raw.DroppedFrames - wiring.VideoDroppedBaseline),
+            Math.Max(0, raw.SubmittedFrames - wiring.VideoSubmittedBaseline),
+            raw.MaxQueueDepth,
+            raw.CurrentQueuedDepth);
+        return true;
+    }
+
+    internal bool TryGetAudioHealthMetrics(OutputLineViewModel line, out AudioRouter.SinkPumpStats stats)
+    {
+        stats = default;
+        if (!_lineWiring.TryGetValue(line, out var wiring)
+            || string.IsNullOrEmpty(wiring.AudioSinkId)
+            || Player.Audio is null)
+        {
+            return false;
+        }
+
+        var raw = Player.Audio.Router.GetPumpStats(wiring.AudioSinkId);
+        stats = new AudioRouter.SinkPumpStats(
+            Math.Max(0, raw.Enqueued - wiring.AudioEnqueuedBaseline),
+            Math.Max(0, raw.Processed - wiring.AudioProcessedBaseline),
+            Math.Max(0, raw.Dropped - wiring.AudioDroppedBaseline),
+            raw.PumpCapacityChunks);
+        return true;
+    }
+
+    internal void ResetHealthCounters(OutputLineViewModel line)
+    {
+        if (!_lineWiring.TryGetValue(line, out var wiring))
+            return;
+
+        SnapshotHealthBaselines(wiring);
+    }
+
+    internal bool TryGetNdiReceiverStats(out long unpacked, out long unpackDrops, out long overflow)
+    {
+        if (_liveNdiReceiver is null)
+        {
+            unpacked = unpackDrops = overflow = 0;
+            return false;
+        }
+
+        unpacked = _liveNdiReceiver.VideoFramesUnpacked;
+        unpackDrops = _liveNdiReceiver.VideoUnpackDrops;
+        overflow = _liveNdiReceiver.VideoOverflowFrames;
+        return true;
+    }
+
     public bool TryGetEffectiveOutputChannelCount(OutputLineViewModel line, out int channels)
     {
         channels = 0;
@@ -701,10 +780,14 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             }
         }
 
-        var mpOpt = new MediaPlayerOpenOptions(IncludeAudioRouter: hasAudio);
+        var videoForPlayer = PlaybackVideoPipeline.WrapLiveVideoForLocalDisplay(sources.Video);
+
+        var mpOpt = new MediaPlayerOpenOptions(
+            IncludeAudioRouter: hasAudio,
+            LiveVideoPresentation: VideoPresentationMode.LatestOnTick);
         if (!MediaPlayer.TryOpenLive(
                 sources.Audio,
-                sources.Video,
+                videoForPlayer,
                 mpOpt,
                 videoNegotiationLead: null,
                 disposeNegotiationLead: true,
@@ -909,6 +992,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     wiring.SinkChannelCount = sinkChannels;
                     wiring.Resampler = routerSink is ResamplingAudioSink ? (ResamplingAudioSink)routerSink : wiring.Resampler;
                     wiring.AcquiredKind = AcquireKind.PortAudio;
+                    wiring.PortAudioOutput = outDev;
+                    wiring.PortAudioUnderrunBaseline = outDev.UnderrunSamples;
                     wiring.PortAudioForTargetRestore = targetQueueOwner;
                     wiring.PreviousPortAudioTargetQueue = previousTargetQueue;
                     break;
@@ -1361,6 +1446,9 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     /// <see cref="S.Media.Core.Video.VideoPlayer.Play"/> starts its decode loop on frames whose PTS
     /// is aligned to the current playback clock.
     /// </summary>
+    /// <summary>Audio kept in the NDI ring at Play so the router/PortAudio have cushion after <see cref="RebaseLiveSourcesForPlay"/>.</summary>
+    private static readonly TimeSpan LivePlayAudioKeepBuffered = TimeSpan.FromMilliseconds(300);
+
     public void RebaseLiveSourcesForPlay()
     {
         if (!IsLive) return;
@@ -1368,7 +1456,16 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         {
             if (_liveNdiReceiver is not null)
             {
-                _liveNdiReceiver.RebaseToLatest(Player.PlayClock.CurrentPosition);
+                _liveNdiReceiver.RebaseToLatest(Player.PlayClock.CurrentPosition, LivePlayAudioKeepBuffered);
+                if (Trace.IsEnabled(LogLevel.Debug))
+                {
+                    Trace.LogDebug(
+                        "RebaseLiveSourcesForPlay(NDI): playhead={Playhead} unpacked={Unpacked} unpackDrops={Drops} overflow={Overflow}",
+                        Player.PlayClock.CurrentPosition,
+                        _liveNdiReceiver.VideoFramesUnpacked,
+                        _liveNdiReceiver.VideoUnpackDrops,
+                        _liveNdiReceiver.VideoOverflowFrames);
+                }
                 return;
             }
 
@@ -1389,6 +1486,46 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         {
             Trace.LogWarning(ex, "RebaseLiveSourcesForPlay: rebase threw (continuing)");
         }
+    }
+
+    /// <summary>
+    /// Fills the primary PortAudio ring from the live source before <see cref="MediaPlaybackSession.Play"/>
+    /// so the first callback is not silent. Call after <see cref="RebaseLiveSourcesForPlay"/>.
+    /// </summary>
+    public void PrefillLiveAudioBeforePlay()
+    {
+        if (!IsLive || _liveAudioSource is null || Player.Audio is null)
+            return;
+
+        try
+        {
+            var timeout = TimeSpan.FromMilliseconds(500);
+            if (Player.Audio.TryPrefillPrimaryPortAudio(_liveAudioSource, timeout))
+            {
+                Trace.LogDebug("PrefillLiveAudioBeforePlay: PortAudio prefill completed (timeout={Timeout}ms)",
+                    timeout.TotalMilliseconds);
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "PrefillLiveAudioBeforePlay: prefill threw (continuing)");
+        }
+    }
+
+    /// <summary>Resets per-line health baselines so startup underruns/drops are not attributed to the prior pause.</summary>
+    public void ResetPlayHealthBaselines()
+    {
+        foreach (var wiring in _lineWiring.Values)
+            SnapshotHealthBaselines(wiring);
+    }
+
+    /// <summary>Live-only: rebase, PortAudio prefill, and health baseline reset immediately before <see cref="MediaPlaybackSession.Play"/>.</summary>
+    public void PrepareLiveTransportBeforePlay()
+    {
+        if (!IsLive) return;
+        RebaseLiveSourcesForPlay();
+        PrefillLiveAudioBeforePlay();
+        ResetPlayHealthBaselines();
     }
 
     private int _primedOnce;
@@ -1513,9 +1650,14 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         _acquiredPortAudioLines.Add(line);
         wiring.AcquiredKind = AcquireKind.PortAudio;
+        wiring.PortAudioOutput = outDev;
+        wiring.PortAudioUnderrunBaseline = outDev.UnderrunSamples;
 
         if (!TryGetSourceAudioFormat(out var dec))
         {
+            _acquiredPortAudioLines.Remove(line);
+            wiring.PortAudioOutput = null;
+            try { _outputs.ReleasePortAudioForPlayback(line); } catch { /* best effort */ }
             errorMessage = "Source audio format is unavailable.";
             return false;
         }
@@ -1811,6 +1953,14 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         /// <summary>Sink channel count cached at first wiring (needed for building per-cell ChannelMaps without
         /// re-querying the router each time).</summary>
         public int SinkChannelCount { get; set; }
+
+        public PortAudioOutput? PortAudioOutput { get; set; }
+        public long PortAudioUnderrunBaseline { get; set; }
+        public long VideoSubmittedBaseline { get; set; }
+        public long VideoDroppedBaseline { get; set; }
+        public long AudioEnqueuedBaseline { get; set; }
+        public long AudioProcessedBaseline { get; set; }
+        public long AudioDroppedBaseline { get; set; }
     }
 
     private enum AcquireKind { None, PortAudio, LocalVideo, NDI }
@@ -1824,6 +1974,27 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         return wiring;
+    }
+
+    private void SnapshotHealthBaselines(LineWiring wiring)
+    {
+        if (!string.IsNullOrEmpty(wiring.VideoOutputId)
+            && Player.VideoRouter.TryGetVideoSinkPumpMetrics(wiring.VideoOutputId, out var vm))
+        {
+            wiring.VideoSubmittedBaseline = vm.SubmittedFrames;
+            wiring.VideoDroppedBaseline = vm.DroppedFrames;
+        }
+
+        if (!string.IsNullOrEmpty(wiring.AudioSinkId) && Player.Audio is not null)
+        {
+            var st = Player.Audio.Router.GetPumpStats(wiring.AudioSinkId);
+            wiring.AudioEnqueuedBaseline = st.Enqueued;
+            wiring.AudioProcessedBaseline = st.Processed;
+            wiring.AudioDroppedBaseline = st.Dropped;
+        }
+
+        if (wiring.PortAudioOutput is { } pa)
+            wiring.PortAudioUnderrunBaseline = pa.UnderrunSamples;
     }
 
     /// <summary>

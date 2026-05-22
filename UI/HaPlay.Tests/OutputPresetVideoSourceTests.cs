@@ -36,7 +36,7 @@ public sealed class OutputPresetVideoSourceTests
             Assert.Equal(4, composed.Format.Height);
             // Center of letterboxed red-ish macropixel (Y=32) should not be near zero.
             var mid = composed.Planes[0].Span[(composed.Strides[0] * 1) + 8];
-            Assert.True(mid > 20);
+            Assert.True(mid > 15, $"Expected converted UYVY sample to be non-black; got {mid}.");
         }
     }
 

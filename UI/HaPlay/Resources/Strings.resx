@@ -66,6 +66,12 @@
   <data name="HoldFallbackToggleTooltip" xml:space="preserve">
     <value>When on, video outputs display the image instead of decoded frames.</value>
   </data>
+  <data name="LiveUyvyPassthroughLabel" xml:space="preserve">
+    <value>Live NDI: native UYVY (no BGRA conversion)</value>
+  </data>
+  <data name="LiveUyvyPassthroughTooltip" xml:space="preserve">
+    <value>When off (default), live NDI is converted to BGRA for local video outputs — most reliable on Linux. When on, UYVY is sent directly to SDL (lower CPU; requires full-range color metadata). Takes effect on the next play.</value>
+  </data>
   <data name="SharedHeadphonesBusesLabel" xml:space="preserve">
     <value>Shared Headphones Buses</value>
   </data>
@@ -713,6 +719,9 @@
   </data>
   <data name="AddNdiButton" xml:space="preserve">
     <value>Add NDI…</value>
+  </data>
+  <data name="ClearHealthButton" xml:space="preserve">
+    <value>Clear health</value>
   </data>
   <data name="NoPreviewActionsMenuHeader" xml:space="preserve">
     <value>No preview actions for this output type.</value>

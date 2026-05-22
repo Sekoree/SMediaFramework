@@ -32,6 +32,8 @@ public static class Strings
     public static string BrowseButton => Get(nameof(BrowseButton));
     public static string ShowWhenNoMediaPlaying => Get(nameof(ShowWhenNoMediaPlaying));
     public static string HoldFallbackToggleTooltip => Get(nameof(HoldFallbackToggleTooltip));
+    public static string LiveUyvyPassthroughLabel => Get(nameof(LiveUyvyPassthroughLabel));
+    public static string LiveUyvyPassthroughTooltip => Get(nameof(LiveUyvyPassthroughTooltip));
     public static string SharedHeadphonesBusesLabel => Get(nameof(SharedHeadphonesBusesLabel));
     public static string SharedHeadphonesBusesHint => Get(nameof(SharedHeadphonesBusesHint));
     public static string AddBusButton => Get(nameof(AddBusButton));
@@ -264,6 +266,7 @@ public static class Strings
     public static string AddPortAudioButton => Get(nameof(AddPortAudioButton));
     public static string AddLocalVideoButton => Get(nameof(AddLocalVideoButton));
     public static string AddNdiButton => Get(nameof(AddNdiButton));
+    public static string ClearHealthButton => Get(nameof(ClearHealthButton));
     public static string NoPreviewActionsMenuHeader => Get(nameof(NoPreviewActionsMenuHeader));
     public static string StartPreviewWindowMenuHeader => Get(nameof(StartPreviewWindowMenuHeader));
     public static string StopPreviewWindowMenuHeader => Get(nameof(StopPreviewWindowMenuHeader));

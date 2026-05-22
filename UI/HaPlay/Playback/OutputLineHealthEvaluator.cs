@@ -1,6 +1,5 @@
 using HaPlay.ViewModels;
 using S.Media.Core.Video;
-using S.Media.Playback;
 
 namespace HaPlay.Playback;
 
@@ -33,7 +32,6 @@ internal static class OutputLineHealthEvaluator
         if (!session.HasWiredLine(line))
             return new LineHealthMetrics(OutputLineHealthState.Unknown, 0, 0, 0, 0, 0, 0);
 
-        var player = session.Player;
         long videoDropped = 0;
         long videoSubmitted = 0;
         int videoQueueDepth = 0;
@@ -41,8 +39,7 @@ internal static class OutputLineHealthEvaluator
         long audioDropped = 0;
         long audioEnqueued = 0;
 
-        if (session.TryGetVideoOutputId(line, out var videoOutputId)
-            && player.VideoRouter.TryGetVideoSinkPumpMetrics(videoOutputId, out VideoSinkPumpMetrics vm))
+        if (session.TryGetVideoHealthMetrics(line, out VideoSinkPumpMetrics vm))
         {
             videoDropped = vm.DroppedFrames;
             videoSubmitted = vm.SubmittedFrames;
@@ -50,9 +47,8 @@ internal static class OutputLineHealthEvaluator
             videoQueueCap = vm.MaxQueueDepth;
         }
 
-        if (session.TryGetAudioSinkId(line, out var audioSinkId) && player.Audio is not null)
+        if (session.TryGetAudioHealthMetrics(line, out var st))
         {
-            var st = player.Audio.Router.GetPumpStats(audioSinkId);
             audioDropped = st.Dropped;
             audioEnqueued = st.Enqueued;
         }

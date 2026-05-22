@@ -71,6 +71,7 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
     private VideoFrame? _pendingFrame;
     private long _displayed;
     private long _droppedNew;
+    private int _firstPresentLogged;
 
     private readonly ConcurrentQueue<Action> _renderThreadActions = new();
     private volatile bool _canIdleRepaint;
@@ -735,6 +736,69 @@ public sealed unsafe class SDL3GLVideoSink : IVideoSink, IVideoSinkD3D11GlBorrow
         SDL.GLSwapWindow(_window);
         Interlocked.Increment(ref _displayed);
         _canIdleRepaint = true;
+        LogFirstPresentDiagnostics(frame);
+    }
+
+    private void LogFirstPresentDiagnostics(VideoFrame frame)
+    {
+        if (Interlocked.Exchange(ref _firstPresentLogged, 1) != 0)
+            return;
+
+        var luma = SampleAverageLuma(frame);
+        MediaDiagnostics.LogInformation(
+            "SDL3GLVideoSink '{Title}': first present {W}x{H} {Pf} stride0={Stride} avgLuma={Luma:F1} displayed={Displayed}",
+            _title, frame.Format.Width, frame.Format.Height, frame.Format.PixelFormat,
+            frame.Strides.Length > 0 ? frame.Strides[0] : 0, luma, Volatile.Read(ref _displayed));
+    }
+
+    private static double SampleAverageLuma(VideoFrame frame)
+    {
+        try
+        {
+            if (frame.PlaneCount == 0 || frame.Planes[0].Length == 0)
+                return 0;
+            var span = frame.Planes[0].Span;
+            return frame.Format.PixelFormat switch
+            {
+                PixelFormat.Bgra32 or PixelFormat.Rgba32 => SampleBgraLuma(span),
+                PixelFormat.Uyvy or PixelFormat.Yuyv => SamplePacked422Luma(span, isUyvy: frame.Format.PixelFormat == PixelFormat.Uyvy),
+                _ => 0,
+            };
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static double SampleBgraLuma(ReadOnlySpan<byte> bgra)
+    {
+        long sum = 0;
+        var samples = 0;
+        var step = Math.Max(16, (bgra.Length / 4) / 4096);
+        for (var i = 0; i < bgra.Length - 3; i += step * 4)
+        {
+            sum += bgra[i + 2]; // BGRA: G channel approximates luma for quick sanity check
+            samples++;
+        }
+
+        return samples == 0 ? 0 : (double)sum / samples;
+    }
+
+    private static double SamplePacked422Luma(ReadOnlySpan<byte> packed, bool isUyvy)
+    {
+        long sum = 0;
+        var samples = 0;
+        var step = Math.Max(8, packed.Length / 4096);
+        for (var i = 0; i < packed.Length - 3; i += step)
+        {
+            sum += isUyvy ? packed[i + 1] : packed[i];
+            if (!isUyvy)
+                i++;
+            samples++;
+        }
+
+        return samples == 0 ? 0 : (double)sum / samples;
     }
 
     private void ClearForLetterboxIfNeeded()

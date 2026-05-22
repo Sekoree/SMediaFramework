@@ -26,6 +26,7 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
     /// <summary>True when libav can build a scaler for this width/height pair.</summary>
     public static bool CanConvert(PixelFormat src, PixelFormat dst, int width, int height)
     {
+        FFmpegRuntime.EnsureInitialized();
         if (width <= 0 || height <= 0) return false;
         if (src == dst) return true;
         var avSrc = FfmpegVideoPixelMaps.ToAvPixelFormat(src);
@@ -41,6 +42,7 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
     /// <summary>Reconfigures the scaler when dimensions or formats change.</summary>
     public void Configure(PixelFormat src, PixelFormat dst, int width, int height)
     {
+        FFmpegRuntime.EnsureInitialized();
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (width <= 0 || height <= 0)
             throw new ArgumentOutOfRangeException(nameof(width));

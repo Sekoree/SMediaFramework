@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Avalonia;
+using HaPlay.Playback;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 
@@ -34,7 +35,8 @@ sealed class Program
     /// CLI overrides:
     /// <c>--media-log-level trace|debug|information|warning|error</c> sets the framework verbosity
     /// (default <c>debug</c>); <c>--media-log-dir &lt;path&gt;</c> overrides the file destination
-    /// (default <c>%TMPDIR%/HaPlay/logs</c>).
+    /// (default <c>%TMPDIR%/HaPlay/logs</c>);
+    /// <c>--media-live-uyvy-passthrough</c> skips live UYVY→BGRA conversion (native SDL UYVY path).
     /// </remarks>
     private static void ConfigureLogging(string[] args)
     {
@@ -74,6 +76,14 @@ sealed class Program
         });
 
         MediaDiagnostics.LoggerFactory = factory;
+
+        if (HasArg(args, "--media-live-uyvy-passthrough"))
+        {
+            PlaybackVideoPipeline.CliRequestedUyvyPassthrough = true;
+            PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = true;
+            MediaDiagnostics.LogInformation("HaPlay: live video using native pixel format (UYVY passthrough when source delivers UYVY)");
+        }
+
         MediaDiagnostics.LogInformation(
             $"HaPlay.Desktop logging configured: minLevel={level} fileSink={fileProvider.FilePath}");
 
@@ -81,6 +91,17 @@ sealed class Program
         {
             try { factory.Dispose(); } catch { /* shutdown best-effort */ }
         };
+    }
+
+    private static bool HasArg(string[] args, string name)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (string.Equals(args[i], name, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static string? GetArg(string[] args, string name)

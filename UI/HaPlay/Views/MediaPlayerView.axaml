@@ -464,6 +464,10 @@
               <TextBlock Grid.Column="4" Opacity="0.55" FontSize="11" VerticalAlignment="Center"
                          Text="{x:Static res:Strings.CustomOutputAppliedHint}" />
             </Grid>
+            <ToggleButton Content="{x:Static res:Strings.LiveUyvyPassthroughLabel}"
+                          IsChecked="{Binding PreferLiveUyvyPassthrough}"
+                          HorizontalAlignment="Left"
+                          ToolTip.Tip="{x:Static res:Strings.LiveUyvyPassthroughTooltip}" />
           </StackPanel>
         </Border>
 

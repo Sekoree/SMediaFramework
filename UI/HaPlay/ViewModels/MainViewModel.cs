@@ -77,6 +77,8 @@ public partial class MainViewModel : ViewModelBase
         _playersLayout = _appSettings.PlayersLayout;
         AppearanceController.ApplyTheme(_theme);
         AppearanceController.ApplyDensity(_density);
+        if (!Playback.PlaybackVideoPipeline.CliRequestedUyvyPassthrough)
+            Playback.PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = _appSettings.PreferLiveUyvyPassthrough;
         SelectedWorkspace = Workspaces.FirstOrDefault(w => w.Id == _appSettings.LastSelectedWorkspace)
                             ?? WorkspaceItem.Players;
     }

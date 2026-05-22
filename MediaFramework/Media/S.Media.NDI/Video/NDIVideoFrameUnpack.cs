@@ -1,7 +1,9 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using NDILib;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 
 namespace S.Media.NDI.Video;
@@ -9,6 +11,91 @@ namespace S.Media.NDI.Video;
 /// <summary>Copies CPU-accessible <see cref="NDIVideoFrameV2"/> payloads into owned <see cref="VideoFrame"/> buffers.</summary>
 internal static class NDIVideoFrameUnpack
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Video.NDIVideoFrameUnpack");
+    private static int _geometryHeuristicLogCount;
+
+    /// <summary>
+    /// OBS / NDI HX PGM is computer-range (full) BT.709 UYVY. Limited-range GL or swscale flags crush
+    /// it to black; full-range metadata matches what worked in the field (passthrough may look gray on
+    /// some GPUs — use default BGRA conversion).
+    /// </summary>
+    private static readonly VideoFrameMetadata NdiSdrFullRangeBt709 = new(
+        ColorTransferHint: VideoTransferHint.Sdr,
+        ColorSpace: VideoColorSpace.Bt709,
+        ColorRange: VideoColorRange.Full);
+
+    /// <summary>Quick sanity metric for logs — average luma (Y or BGRA G) after unpack.</summary>
+    internal static double SampleAveragePackedLuma(VideoFrame frame)
+    {
+        try
+        {
+            if (frame.PlaneCount == 0 || frame.Planes[0].Length == 0)
+                return 0;
+            var span = frame.Planes[0].Span;
+            return frame.Format.PixelFormat switch
+            {
+                PixelFormat.Uyvy or PixelFormat.Yuyv => SampleUyvyLuma(span, frame.Format.PixelFormat == PixelFormat.Uyvy),
+                PixelFormat.Bgra32 => SampleBgraLuma(span),
+                PixelFormat.Rgba32 => SampleRgbaLuma(span),
+                _ => 0,
+            };
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    private static double SampleBgraLuma(ReadOnlySpan<byte> bgra)
+    {
+        long sum = 0;
+        var n = 0;
+        var step = Math.Max(16, (bgra.Length / 4) / 2048);
+        for (var i = 0; i < bgra.Length - 3; i += step * 4)
+        {
+            sum += bgra[i + 2];
+            n++;
+        }
+
+        return n == 0 ? 0 : (double)sum / n;
+    }
+
+    private static double SampleRgbaLuma(ReadOnlySpan<byte> rgba)
+    {
+        long sum = 0;
+        var n = 0;
+        var step = Math.Max(16, (rgba.Length / 4) / 2048);
+        for (var i = 0; i < rgba.Length - 3; i += step * 4)
+        {
+            sum += rgba[i + 1];
+            n++;
+        }
+
+        return n == 0 ? 0 : (double)sum / n;
+    }
+
+    private static double SampleUyvyLuma(ReadOnlySpan<byte> packed, bool isUyvy)
+    {
+        long sum = 0;
+        var n = 0;
+        var step = Math.Max(1, (packed.Length / 4) / 4096);
+        for (var i = 0; i < packed.Length - 3; i += step * 4)
+        {
+            if (isUyvy)
+            {
+                sum += packed[i + 1] + packed[i + 3];
+                n += 2;
+            }
+            else
+            {
+                sum += packed[i] + packed[i + 2];
+                n += 2;
+            }
+        }
+
+        return n == 0 ? 0 : (double)sum / n;
+    }
+
     public static bool TryUnpack(in NDIVideoFrameV2 native, TimeSpan presentationTime, out VideoFrame? frame)
     {
         frame = null;
@@ -127,13 +214,30 @@ internal static class NDIVideoFrameUnpack
         }
 
         if (LooksLikeTotalBufferSize(lineStrideBytes, width, height, bpp))
+        {
+            LogGeometryHeuristic(
+                native,
+                pixelFormat,
+                "LineStrideInBytes looks like total PData size — using default line stride");
             lineStrideBytes = DefaultLineStride(pixelFormat, width);
+            return true;
+        }
 
         // When stride-in-bytes was copied into Xres (Xres == LineStrideInBytes), recover luma width.
+        // Require recovered width >= height so 2560×1440 with a bogus stride=2560 is not halved to 1280.
         if (lineStrideBytes == width && width % bpp == 0)
         {
-            width = width / bpp;
-            return width >= 16;
+            var recovered = width / bpp;
+            if (recovered != width
+                && recovered >= height
+                && DefaultLineStride(pixelFormat, recovered) == lineStrideBytes)
+            {
+                LogGeometryHeuristic(
+                    native,
+                    pixelFormat,
+                    "Xres equals LineStrideInBytes — treating Xres as bytes-per-line, recovering pixel width");
+                width = recovered;
+            }
         }
 
         if (lineStrideBytes % bpp != 0)
@@ -141,22 +245,47 @@ internal static class NDIVideoFrameUnpack
 
         var widthFromStride = lineStrideBytes / bpp;
         // Tight stride with Xres 2× the active line width (mis-labelled pixel count).
-        if (widthFromStride >= 16 && widthFromStride * 2 == width)
+        if (widthFromStride > 0 && widthFromStride * 2 == width)
+        {
+            LogGeometryHeuristic(
+                native,
+                pixelFormat,
+                "Xres is 2× line stride width — using stride-derived pixel width");
             width = widthFromStride;
+        }
 
-        return width >= 16;
+        return width > 0;
+    }
+
+    private static void LogGeometryHeuristic(in NDIVideoFrameV2 native, PixelFormat pixelFormat, string reason)
+    {
+        if (Interlocked.Increment(ref _geometryHeuristicLogCount) > 8)
+            return;
+        if (!Trace.IsEnabled(LogLevel.Debug))
+            return;
+        Trace.LogDebug(
+            "NDIVideoFrameUnpack geometry: {Reason} fourCC={FourCc} pixelFmt={PixelFmt} xres={Xres} yres={Yres} lineStride={Stride}",
+            reason, native.FourCC, pixelFormat, native.Xres, native.Yres, native.LineStrideInBytes);
     }
 
     private static bool LooksLikeTotalBufferSize(int lineStride, int width, int height, int bpp)
     {
-        if (width <= 0 || height <= 0)
+        if (width <= 0 || height <= 0 || bpp <= 0)
             return false;
+
         long tight = bpp switch
         {
             1 => (long)width * height + (long)PixelFormatInfo.ChromaWidth420(width) * PixelFormatInfo.ChromaHeight420(height) * 2,
             _ => (long)width * height * bpp,
         };
-        return lineStride >= tight - bpp && lineStride <= tight + bpp;
+        if (lineStride < tight - bpp || lineStride > tight + bpp)
+            return false;
+
+        // Tight-packed full-frame byte counts can equal a valid per-line stride on tiny rasters
+        // (e.g. 4×2 UYVY: 16 bytes is both one tight frame and a padded line stride). Only treat the
+        // field as "total PData size" when it is far larger than a plausible bytes-per-line value.
+        var minLineStride = (long)width * bpp;
+        return lineStride > minLineStride * 2;
     }
 
     private static VideoFrame UnpackPacked(in NDIVideoFrameV2 native, VideoFormat format, int stride, TimeSpan pts)
@@ -168,33 +297,8 @@ internal static class NDIVideoFrameUnpack
             throw new InvalidOperationException(
                 $"NDI packed stride too small for {format.PixelFormat} {width}x{height}: stride={stride} visible={visibleStride}.");
 
-        // Copy row-by-row when the SDK pads lines (LineStrideInBytes > visible width). A single
-        // bulk memcpy would misalign rows and show as shifting abstract colours in YUV previews.
-        if (stride == visibleStride)
-        {
-            var totalBytes = visibleStride * height;
-            var buffer = ArrayPool<byte>.Shared.Rent(totalBytes);
-            try
-            {
-                unsafe
-                {
-                    new ReadOnlySpan<byte>((void*)native.PData, totalBytes).CopyTo(buffer);
-                }
-
-                return new VideoFrame(
-                    pts,
-                    format,
-                    buffer.AsMemory(0, totalBytes),
-                    visibleStride,
-                    release: () => ArrayPool<byte>.Shared.Return(buffer));
-            }
-            catch
-            {
-                ArrayPool<byte>.Shared.Return(buffer);
-                throw;
-            }
-        }
-
+        // Always copy row-by-row using SDK line stride — PData is not guaranteed tightly packed even
+        // when LineStrideInBytes equals the visible bytes-per-line.
         var tightBytes = visibleStride * height;
         var tight = ArrayPool<byte>.Shared.Rent(tightBytes);
         try
@@ -215,7 +319,8 @@ internal static class NDIVideoFrameUnpack
                 format,
                 tight.AsMemory(0, tightBytes),
                 visibleStride,
-                release: () => ArrayPool<byte>.Shared.Return(tight));
+                release: () => ArrayPool<byte>.Shared.Return(tight),
+                metadata: NdiSdrFullRangeBt709);
         }
         catch
         {
@@ -260,7 +365,8 @@ internal static class NDIVideoFrameUnpack
                 {
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
-                });
+                },
+                metadata: NdiSdrFullRangeBt709);
         }
         catch
         {
@@ -276,6 +382,7 @@ internal static class NDIVideoFrameUnpack
         var height = format.Height;
         var chromaW = PixelFormatInfo.ChromaWidth420(width);
         var chromaH = PixelFormatInfo.ChromaHeight420(height);
+        var chromaStride = Math.Max(chromaW, yStride / 2);
         var yTight = width * height;
         var uTight = chromaW * chromaH;
         var vTight = chromaW * chromaH;
@@ -290,9 +397,9 @@ internal static class NDIVideoFrameUnpack
                 var src = (byte*)native.PData;
                 CopyPlaneRows(src, yStride, width, height, yBuf.AsSpan(0, yTight));
                 var uBase = src + (yStride * height);
-                CopyPlaneRows(uBase, yStride, chromaW, chromaH, uBuf.AsSpan(0, uTight));
-                var vBase = uBase + (yStride * chromaH);
-                CopyPlaneRows(vBase, chromaW, chromaW, chromaH, vBuf.AsSpan(0, vTight));
+                CopyPlaneRows(uBase, chromaStride, chromaW, chromaH, uBuf.AsSpan(0, uTight));
+                var vBase = uBase + (chromaStride * chromaH);
+                CopyPlaneRows(vBase, chromaStride, chromaW, chromaH, vBuf.AsSpan(0, vTight));
             }
 
             var rented = new[] { yBuf, uBuf, vBuf };
@@ -305,7 +412,8 @@ internal static class NDIVideoFrameUnpack
                 {
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
-                });
+                },
+                metadata: NdiSdrFullRangeBt709);
         }
         catch
         {
@@ -322,6 +430,7 @@ internal static class NDIVideoFrameUnpack
         var height = format.Height;
         var chromaW = PixelFormatInfo.ChromaWidth420(width);
         var chromaH = PixelFormatInfo.ChromaHeight420(height);
+        var chromaStride = Math.Max(chromaW, yStride / 2);
         var yTight = width * height;
         var uTight = chromaW * chromaH;
         var vTight = chromaW * chromaH;
@@ -337,9 +446,9 @@ internal static class NDIVideoFrameUnpack
                 CopyPlaneRows(src, yStride, width, height, yBuf.AsSpan(0, yTight));
                 // YV12 stores chroma as Y + V + U (the inverse of I420's Y + U + V).
                 var vBase = src + (yStride * height);
-                CopyPlaneRows(vBase, yStride, chromaW, chromaH, vBuf.AsSpan(0, vTight));
-                var uBase = vBase + (yStride * chromaH);
-                CopyPlaneRows(uBase, chromaW, chromaW, chromaH, uBuf.AsSpan(0, uTight));
+                CopyPlaneRows(vBase, chromaStride, chromaW, chromaH, vBuf.AsSpan(0, vTight));
+                var uBase = vBase + (chromaStride * chromaH);
+                CopyPlaneRows(uBase, chromaStride, chromaW, chromaH, uBuf.AsSpan(0, uTight));
             }
 
             var rented = new[] { yBuf, uBuf, vBuf };
@@ -352,7 +461,8 @@ internal static class NDIVideoFrameUnpack
                 {
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
-                });
+                },
+                metadata: NdiSdrFullRangeBt709);
         }
         catch
         {
@@ -429,7 +539,8 @@ internal static class NDIVideoFrameUnpack
                 uyvyFormat,
                 uyvyBuffer.AsMemory(0, uyvyBytes),
                 uyvyStride,
-                release: () => ArrayPool<byte>.Shared.Return(uyvyBuffer));
+                release: () => ArrayPool<byte>.Shared.Return(uyvyBuffer),
+                metadata: NdiSdrFullRangeBt709);
         }
         catch
         {

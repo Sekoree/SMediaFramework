@@ -39,6 +39,12 @@ public sealed class AppSettings
     /// player vertically (scrollable); <see cref="PlayersLayoutMode.Split"/> tiles them in a UniformGrid.</summary>
     public PlayersLayoutMode PlayersLayout { get; set; } = PlayersLayoutMode.Tabs;
 
+    /// <summary>
+    /// When true, live NDI (and similar) video keeps native UYVY into local SDL outputs instead of
+    /// converting to BGRA32 first. Requires correct full-range metadata on frames.
+    /// </summary>
+    public bool PreferLiveUyvyPassthrough { get; set; }
+
     private static string FilePath
     {
         get
