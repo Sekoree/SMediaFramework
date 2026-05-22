@@ -3,6 +3,17 @@ using S.Media.Core.Video;
 
 namespace S.Media.SkiaSharp;
 
+internal static class SkiaImageExtensionRegistration
+{
+    private static readonly string[] Extensions = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"];
+
+    public static void Register()
+    {
+        foreach (var ext in Extensions)
+            MediaFrameworkExtensionRegistry.RegisterImageExtension(ext, static path => ImageFileSource.OpenFromFile(path));
+    }
+}
+
 /// <summary>SkiaSharp image backend hook for <see cref="MediaFrameworkRuntime"/>.</summary>
 public static class MediaFrameworkRuntimeSkiaSharpExtensions
 {
@@ -17,6 +28,7 @@ public static class MediaFrameworkRuntimeSkiaSharpExtensions
 
         MediaFrameworkPlugins.ImageFileSourceFactory = path => ImageFileSource.OpenFromFile(path);
         MediaFrameworkPlugins.ImageStreamSourceFactory = stream => ImageFileSource.OpenFromStream(stream);
+        SkiaImageExtensionRegistration.Register();
         return builder;
     }
 }

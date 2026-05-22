@@ -25,6 +25,27 @@ public sealed class MediaPlayerTests
     }
 
     [Fact]
+    public void GetMetrics_returns_snapshot_with_video_and_audio_router()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mf_metrics_{Guid.NewGuid():N}.wav");
+        File.WriteAllBytes(path, CreateWavBytes());
+        try
+        {
+            Assert.True(MediaPlayer.OpenFile(path).TryBuild(out var p, out var err), err);
+            using var player = p!;
+            var m = player.GetMetrics();
+            Assert.NotNull(m.Video);
+            Assert.NotNull(m.AudioRouter);
+            Assert.True(m.AudioRouter.OutputCount >= 0);
+            Assert.NotNull(player.Triggers);
+        }
+        finally
+        {
+            TryDelete(path);
+        }
+    }
+
+    [Fact]
     public void OpenFileBuilder_WithOptions_mutate_works()
     {
         var path = Path.Combine(Path.GetTempPath(), $"mf_open_mut_{Guid.NewGuid():N}.wav");

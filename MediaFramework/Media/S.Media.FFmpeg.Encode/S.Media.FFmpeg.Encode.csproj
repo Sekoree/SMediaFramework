@@ -5,26 +5,22 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <RootNamespace>S.Media.FFmpeg.Encode</RootNamespace>
+        <Description>libavformat/libavcodec file encoders implementing <c>IVideoOutput</c> / <c>IAudioOutput</c>.</Description>
     </PropertyGroup>
 
     <ItemGroup>
-        <InternalsVisibleTo Include="S.Media.FFmpeg.Tests" />
-        <InternalsVisibleTo Include="S.Media.FFmpeg.Encode" />
-        <InternalsVisibleTo Include="S.Media.Core.Tests" />
-        <InternalsVisibleTo Include="S.Media.Playback" />
-        <InternalsVisibleTo Include="HaPlay" />
-        <InternalsVisibleTo Include="S.Media.PortAudio" />
+        <InternalsVisibleTo Include="S.Media.FFmpeg.Encode.Tests" />
     </ItemGroup>
 
     <ItemGroup>
         <PackageReference Include="FFmpeg.AutoGen" />
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-        <PackageReference Include="Vortice.Direct3D11" />
-        <PackageReference Include="Vortice.DXGI" />
     </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
+        <ProjectReference Include="..\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
     </ItemGroup>
 
 </Project>

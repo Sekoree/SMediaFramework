@@ -17,7 +17,7 @@ namespace S.Media.NDI;
 /// Combined NDI receive source: <see cref="Find"/> on the network, <see cref="Open"/> a source, then wire
 /// <see cref="Audio"/> / <see cref="Video"/> into <see cref="S.Media.Playback.MediaPlayer.OpenLive"/>.
 /// </summary>
-public sealed unsafe class NDISource : IDisposable
+public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.NDISource");
 

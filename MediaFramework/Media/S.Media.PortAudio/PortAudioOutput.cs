@@ -23,7 +23,7 @@ namespace S.Media.PortAudio;
 /// <see cref="Dispose"/> calls <see cref="Stop"/> then <see cref="PortAudioRuntime.Release"/>; each step is wrapped so <strong>Debug</strong> builds log via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues best-effort.
 /// </para>
 /// </remarks>
-public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IFlushableOutput, IPlaybackClock, IDisposable
+public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IFlushableOutput, IPlaybackClock, IAudioOutputPlaybackStats, IDisposable
 {
     private readonly AudioFormat _format;
     private readonly int _deviceIndex;

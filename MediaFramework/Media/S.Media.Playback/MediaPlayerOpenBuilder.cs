@@ -54,13 +54,14 @@ public abstract class MediaPlayerOpenBuilder
 
     public abstract bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error);
 
-    public Task<MediaPlayer> OpenAsync(CancellationToken cancellationToken = default)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!TryBuild(out var player, out var error))
-            throw new InvalidOperationException(error ?? "MediaPlayer open failed.");
-        return Task.FromResult(player);
-    }
+    public Task<MediaPlayer> OpenAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!TryBuild(out var player, out var error))
+                throw new InvalidOperationException(error ?? "MediaPlayer open failed.");
+            return player!;
+        }, cancellationToken);
 
     protected bool TryBuildWithCompanions(
         bool opened,
@@ -87,6 +88,7 @@ public abstract class MediaPlayerOpenBuilder
             }
         }
 
+        player!.AttachBuilderContext(this);
         result = player;
         return true;
     }

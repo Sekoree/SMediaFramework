@@ -42,6 +42,11 @@ internal static class MediaFrameworkPluginRegistration
                 options?.StreamProbeHintName, options?.SpoolToDisk == true, MapVideoOptions(options));
             return new ContainerOwnedVideoSource(container);
         };
+
+        MediaFrameworkPlugins.WrapAdaptiveRateOutput = (router, inner, outputId, maxHz) =>
+            inner is IAdaptiveRateWrappedOutput
+                ? inner
+                : new AdaptiveRateAudioOutput(inner, router, outputId, maxRateDeltaHz: maxHz);
     }
 
     private static MediaContainerDecoder OpenContainerFromStream(

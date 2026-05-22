@@ -86,6 +86,8 @@ public sealed partial class AudioRouter : IDisposable
     private IRouterClock _clock;
     /// <summary>When pacing uses <see cref="OutputSlavedRouterClock"/>, the output id passed to <see cref="SlaveTo"/> / <see cref="RetargetSlaveClock"/>.</summary>
     private string? _slaveClockOutputId;
+    private bool _wrapAdaptiveRateOnNonMasterOutputs;
+    private int _adaptiveRateMaxDeltaHz = 3;
     /// <summary>When pacing uses <see cref="PlaybackSlavedRouterClock"/> via <see cref="SlaveToIngest"/>.</summary>
     private IPlaybackClock? _ingestPaceMaster;
     private Thread? _thread;
@@ -269,6 +271,32 @@ public sealed partial class AudioRouter : IDisposable
     /// knob via its <c>outputPumpCapacityChunks</c> parameter.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// When enabled, each subsequently registered non-master output is wrapped via
+    /// <see cref="MediaFrameworkPlugins.WrapAdaptiveRateOutput"/> (requires FFmpeg init).
+    /// Call before adding secondary outputs (NDI, file record, etc.).
+    /// </summary>
+    public void EnableAdaptiveRateOnNonMasterOutputs(int maxRateDeltaHz = 3)
+    {
+        if (MediaFrameworkPlugins.WrapAdaptiveRateOutput is null)
+            throw new InvalidOperationException(
+                "EnableAdaptiveRateOnNonMasterOutputs requires MediaFrameworkPlugins.WrapAdaptiveRateOutput — call MediaFrameworkRuntime.Init().UseFFmpeg().");
+        if (maxRateDeltaHz < 0)
+            throw new ArgumentOutOfRangeException(nameof(maxRateDeltaHz));
+        lock (_gate)
+        {
+            _wrapAdaptiveRateOnNonMasterOutputs = true;
+            _adaptiveRateMaxDeltaHz = maxRateDeltaHz;
+        }
+    }
+
+    /// <summary>Snapshot of registered output ids.</summary>
+    public IReadOnlyList<string> GetRegisteredOutputIds()
+    {
+        lock (_gate)
+            return _state.Outputs.Keys.ToArray();
+    }
+
     public string AddOutput(IAudioOutput output, string? id = null, int? pumpCapacityChunks = null)
     {
         ArgumentNullException.ThrowIfNull(output);
@@ -290,6 +318,7 @@ public sealed partial class AudioRouter : IDisposable
             if (_state.Outputs.ContainsKey(id))
                 throw new ArgumentException($"output ID '{id}' is already registered", nameof(id));
 
+            output = MaybeWrapAdaptiveRateOutputLocked(output, id);
             var floatsPerChunk = _chunkSamples * output.Format.Channels;
             var pump = new OutputPump(this, output, capacity, floatsPerChunk, id);
             var entry = new OutputEntry(id, output, pump);

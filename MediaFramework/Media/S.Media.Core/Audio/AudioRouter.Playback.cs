@@ -112,6 +112,18 @@ public sealed partial class AudioRouter
             output is IPlaybackClock ? output.GetType().Name : "IClockedOutput only");
     }
 
+    private IAudioOutput MaybeWrapAdaptiveRateOutputLocked(IAudioOutput output, string outputId)
+    {
+        if (!_wrapAdaptiveRateOnNonMasterOutputs || output is IAdaptiveRateWrappedOutput)
+            return output;
+        if (_slaveClockOutputId == outputId || _primarySinkId == outputId)
+            return output;
+        if (AutoWirePrimary && _primarySinkId is null && _slaveClockOutputId is null && output is IClockedOutput)
+            return output;
+        var wrap = MediaFrameworkPlugins.WrapAdaptiveRateOutput;
+        return wrap is null ? output : wrap(this, output, outputId, _adaptiveRateMaxDeltaHz);
+    }
+
     private void PromoteNextPrimaryIfNeeded(string removedOutputId)
     {
         if (_primarySinkId != removedOutputId)

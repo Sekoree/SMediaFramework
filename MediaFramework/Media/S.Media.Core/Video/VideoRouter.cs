@@ -96,6 +96,13 @@ public sealed class VideoRouter : IDisposable
     /// the inner output only when <paramref name="disposeOutputOnRouterDispose"/> is <c>true</c>; the pump
     /// itself is always disposed with the router.
     /// </param>
+    /// <summary>Snapshot of registered output ids.</summary>
+    public IReadOnlyList<string> GetRegisteredOutputIds()
+    {
+        lock (_gate)
+            return _outputs.Keys.ToArray();
+    }
+
     public string AddOutput(IVideoOutput output, string? id = null, bool disposeOutputOnRouterDispose = false,
         VideoOutputPumpAttachOptions? asyncPump = null, bool synchronous = false)
     {

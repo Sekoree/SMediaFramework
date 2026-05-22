@@ -25,13 +25,24 @@ public static class VideoSource
         return factory(stream, options);
     }
 
-    /// <summary>Opens a still image file. Requires <c>.UseSkiaSharpImages()</c>.</summary>
+    /// <summary>
+    /// Opens a still image file by extension via <see cref="MediaFrameworkExtensionRegistry"/>,
+    /// then falls back to <see cref="MediaFrameworkPlugins.ImageFileSourceFactory"/>.
+    /// </summary>
     public static IVideoSource OpenImage(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        var ext = Path.GetExtension(path);
+        if (ext.Length > 0)
+        {
+            var reg = MediaFrameworkExtensionRegistry.TryGetImageFactory(ext);
+            if (reg is not null)
+                return reg(path);
+        }
+
         var factory = MediaFrameworkPlugins.ImageFileSourceFactory
             ?? throw new InvalidOperationException(
-                "VideoSource.OpenImage: no backend installed — call MediaFrameworkRuntime.Init().UseSkiaSharpImages() (requires S.Media.SkiaSharp).");
+                $"VideoSource.OpenImage: no factory for '{ext}' — register via MediaFrameworkExtensionRegistry or call MediaFrameworkRuntime.Init().UseSkiaSharpImages().");
         return factory(path);
     }
 

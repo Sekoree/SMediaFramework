@@ -4,6 +4,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Playback;
+using S.Media.Core.Triggers;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Video;
@@ -42,6 +43,8 @@ public sealed class MediaPlayer : IDisposable
     private readonly IVideoOutput _videoInput;
     private readonly string? _audioSourceId;
     private readonly MediaClock? _freerun;
+    private readonly TriggerBus _triggerBus = new();
+    private IAudioOutputPlaybackStats? _portAudioPlaybackStats;
     private bool _disposed;
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Playback.MediaPlayer");
@@ -131,6 +134,88 @@ public sealed class MediaPlayer : IDisposable
     public MediaContainerSession Session =>
         _bundle?.Session
         ?? throw new InvalidOperationException("This MediaPlayer was opened from live sources; use Play/Pause/Seek on MediaPlayer.");
+
+    /// <summary>Scriptable trigger surface for OSC/MIDI adapters and host bindings.</summary>
+    public TriggerBus Triggers => _triggerBus;
+
+    internal void AttachBuilderContext(MediaPlayerOpenBuilder builder) { }
+
+    internal void SetPortAudioPlaybackStats(IAudioOutputPlaybackStats stats) =>
+        _portAudioPlaybackStats = stats ?? throw new ArgumentNullException(nameof(stats));
+
+    /// <summary>One-shot operational snapshot for HUDs and logging.</summary>
+    public MediaPlayerMetrics GetMetrics()
+    {
+        var clock = PlayClock;
+        var masterName = clock is MediaClock mc
+            ? mc.Master?.GetType().Name ?? "(freerun)"
+            : "(external)";
+        var clockSnap = new MediaClockMetricsSnapshot(clock.CurrentPosition, masterName);
+
+        VideoPlayerMetricsSnapshot? videoSnap = null;
+        var vp = Video;
+        videoSnap = new VideoPlayerMetricsSnapshot(
+            vp.DecodedCount,
+            vp.DisplayedCount,
+            vp.DroppedLate,
+            vp.DroppedDrain);
+
+        AudioRouterMetricsSnapshot? audioRouterSnap = null;
+        IReadOnlyList<AudioOutputPumpMetricsEntry> audioOutputs = [];
+        var ar = AudioRouter;
+        if (ar is not null)
+        {
+            var agg = ar.GetAggregatePumpStats();
+            audioRouterSnap = new AudioRouterMetricsSnapshot(
+                ar.ChunksProduced,
+                agg.TotalEnqueued,
+                agg.TotalProcessed,
+                agg.TotalDropped,
+                agg.SinkCount);
+            var ids = ar.GetRegisteredOutputIds();
+            var list = new AudioOutputPumpMetricsEntry[ids.Count];
+            for (var i = 0; i < ids.Count; i++)
+            {
+                var id = ids[i];
+                list[i] = new AudioOutputPumpMetricsEntry(id, ar.GetPumpStats(id));
+            }
+
+            audioOutputs = list;
+        }
+
+        var videoRouter = VideoRouter;
+        var vIds = videoRouter.GetRegisteredOutputIds();
+        var vList = new VideoOutputPumpMetricsEntry[vIds.Count];
+        for (var i = 0; i < vIds.Count; i++)
+        {
+            var id = vIds[i];
+            videoRouter.TryGetVideoOutputPumpMetrics(id, out var m);
+            vList[i] = new VideoOutputPumpMetricsEntry(id, m);
+        }
+
+        PortAudioMetricsSnapshot? paSnap = null;
+        if (_portAudioPlaybackStats is { } pa)
+            paSnap = new PortAudioMetricsSnapshot(pa.PlayedSamples, pa.UnderrunSamples, pa.DroppedSamples);
+
+        NdiIngestMetricsSnapshot? ndiSnap = null;
+        foreach (var d in _ownedLiveDisposables)
+        {
+            if (d is INdiOverflowReporter ndi)
+            {
+                ndiSnap = new NdiIngestMetricsSnapshot(ndi.AudioOverflowFloats, ndi.VideoOverflowFrames);
+                break;
+            }
+        }
+
+        return new MediaPlayerMetrics(
+            clockSnap,
+            videoSnap,
+            audioRouterSnap,
+            vList,
+            audioOutputs,
+            paSnap,
+            ndiSnap);
+    }
 
     public void Play(
         Action? prefillBeforeHardware = null,

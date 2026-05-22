@@ -869,13 +869,12 @@ BGRA8 / 8-bit swapchain unchanged. Manual smoke items remain.
 
 ### 11.1 Async open
 
-- 🔲 `MediaPlayer.Open(...).OpenAsync(CancellationToken)` already added in
-  Phase 5 — confirm it actually runs the blocking native init on a worker
-  thread, doesn't block the caller's `SynchronizationContext`.
+- ✅ `OpenAsync` uses `Task.Run` for `TryBuild` (blocking decode/init off caller thread).
+  Hosts with a UI `SynchronizationContext` should `await OpenAsync().ConfigureAwait(false)`.
 
 ### 11.2 Aggregated metrics
 
-- 🔲 `MediaPlayer.GetMetrics() : MediaPlayerMetrics` — one snapshot:
+- ✅ `MediaPlayer.GetMetrics() : MediaPlayerMetrics` — one snapshot:
   - Audio router pump stats + per-output drops/processed.
   - Video router per-output pump metrics.
   - `VideoPlayer.DecodedCount / DisplayedCount / DroppedLate / DroppedDrain`.
@@ -885,16 +884,15 @@ BGRA8 / 8-bit swapchain unchanged. Manual smoke items remain.
 
 ### 11.3 Image-extension factory
 
-- 🔲 `MediaFrameworkExtensionRegistry`: `(string ext) → IVideoSource factory`.
-- 🔲 `S.Media.SkiaSharp` registers PNG/JPEG/WebP/BMP/GIF.
-- 🔲 `VideoSource.OpenImage(path)` reads ext, dispatches via the registry,
-  fails clearly when unregistered.
+- ✅ `MediaFrameworkExtensionRegistry`: per-extension `IVideoSource` factories.
+- ✅ `S.Media.SkiaSharp` registers `.png` / `.jpg` / `.jpeg` / `.webp` / `.bmp` / `.gif`.
+- ✅ `VideoSource.OpenImage(path)` tries registry first, then plugin fallback.
 
 ### 11.4 Optional auto-adapt
 
-- 🔲 `AudioRouter.EnableAdaptiveRateOnNonMasterOutputs(maxAbsPpm: …)` —
-  one-line wrapper that wraps every non-master `IAudioOutput` in
-  `AdaptiveRateAudioOutput` on add.
+- ✅ `AudioRouter.EnableAdaptiveRateOnNonMasterOutputs(maxRateDeltaHz)` —
+  wraps subsequent non-master outputs via `MediaFrameworkPlugins.WrapAdaptiveRateOutput`
+  (FFmpeg `AdaptiveRateAudioOutput`).
 
 ### 11.5 `TriggerBus` — scriptable control surface (OSC / MIDI / Mond)
 
@@ -906,32 +904,12 @@ BGRA8 / 8-bit swapchain unchanged. Manual smoke items remain.
 > `AudioRouter.SetRouteGainById`, `MediaPlayer.Seek`, `VideoCompositor`
 > layer config, etc. via reflection — slow at startup and brittle to refactor.
 
-- 🔲 New `S.Media.Core.Triggers.TriggerBus`:
-  - `void Register(string triggerId, TriggerHandler handler)`
-  - `bool Unregister(string triggerId)`
-  - `bool Fire(string triggerId, in TriggerPayload payload = default)` —
-    returns false when no handler is registered (non-throwing; scripts
-    discover what's wired up cleanly).
-  - `IReadOnlyCollection<string> RegisteredIds { get; }`.
-- 🔲 New `public delegate void TriggerHandler(in TriggerPayload payload);`
-- 🔲 New `public readonly record struct TriggerPayload(TriggerValueKind Kind, double NumericValue, ReadOnlyMemory<char> TextValue)` —
-  tagged-union sized for the 90% case (MIDI CC 7-bit, OSC float, short
-  address tail). Allocation-free at the call site; larger payloads can
-  follow if a real workload needs them.
-- 🔲 `public enum TriggerValueKind { None, Numeric, Text }`.
-- 🔲 Usability sugar: `S.Media.Core.Triggers.Audio.RegisterAudioClipPlayer(TriggerBus bus, string id, AudioClipPlayer player)`
-  binds `<id>.fire`, `<id>.stop`, `<id>.stopAll`, `<id>.loop` so a script
-  does `mf.fire("pad.kick.fire")` without four manual lambdas.
-- 🔲 OSC adapter in `MediaFramework/Extras/OSCLib/` (post Phase 0.7):
-  `OscTriggerBridge(TriggerBus, OscReceiver)` — subscribes and calls
-  `bus.Fire("<address>", payload)` per OSC message. Small (~80 LOC).
-- 🔲 MIDI adapter in `MediaFramework/Extras/PMLib/`:
-  `MidiTriggerBridge(TriggerBus, PMLib.MidiInput, MidiTriggerProfile)` —
-  configurable NoteOn / CC / PgmChg mapping to bus ids. Small (~100 LOC).
-- 🔲 Document the **id naming convention** in
-  `Doc/MediaFramework-Triggers.md` (`pad.<name>.fire`,
-  `pad.<name>.stop`, `loop.<group>.toggle`, `out.<id>.gain`, …) so
-  protocol adapters and Mond scripts converge on the same vocabulary.
+- ✅ `S.Media.Core.Triggers.TriggerBus` + `TriggerPayload` / `TriggerHandler` / `TriggerValueKind`.
+- ✅ `AudioTriggerRegistration.RegisterAudioClipPlayer` (`{id}.fire|stop|stopAll|loop`).
+- ✅ `MediaPlayer.Triggers` — per-player bus instance.
+- ✅ `OscTriggerBridge` in `Extras/OSCLib` (pattern `//`, address → `Fire`).
+- ✅ `MidiTriggerBridge` + `MidiTriggerProfile` in `Extras/PMLib`.
+- ✅ `Doc/MediaFramework-Triggers.md` — id naming convention.
 - 🔲 Mond-binding design rules (for the script layer when it lands —
   enforced by linting, not by the framework):
   - Avoid `Task<T>` / `ValueTask<T>` / `IAsyncEnumerable<T>` on the public
@@ -943,7 +921,7 @@ BGRA8 / 8-bit swapchain unchanged. Manual smoke items remain.
   future `HaPlay.Scripting` assembly), not in `S.Media.Core`. The
   framework ships only the bus + the contract.
 
-**Phase 11 exit criteria**: async open works; one-call metrics snapshot;
+**Phase 11 exit criteria**: ✅ async open works; one-call metrics snapshot;
 extension-driven image registry; trigger bus + OSC/MIDI adapters available.
 
 ---
@@ -957,25 +935,20 @@ extension-driven image registry; trigger bus + OSC/MIDI adapters available.
 
 ### 12.1 New project
 
-- 🔲 `MediaFramework/Media/S.Media.FFmpeg.Encode/` referencing FFmpeg
-  bindings + Core.
+- ✅ `MediaFramework/Media/S.Media.FFmpeg.Encode/` — references `S.Media.FFmpeg` + `S.Media.Core`.
 
 ### 12.2 Implementations
 
-- 🔲 `FFmpegVideoFileOutput : IVideoOutput, IDisposable` — wraps
-  libavformat mux + libavcodec encoder for a given codec.
-  - Accepted formats: `Yuv420P10Le`, `P010`, `Yuv444P12Le`, `Yuva444P12Le`, plus 8-bit fallbacks.
-  - Config: container (mp4/mkv/mov), codec (h264/hevc/prores), bitrate, GOP.
-- 🔲 `FFmpegAudioFileOutput : IAudioOutput, IDisposable` — same shape for
-  aac/opus/flac.
-- 🔲 `FFmpegMuxFileOutput` — combined A+V mux that holds both above and
-  multiplexes packets.
+- ✅ `FFmpegVideoFileOutput : IVideoOutput, IDisposable` — H.264/HEVC/ProRes422 via libavcodec;
+  accepts `Yuv420P10Le`, `P010`, `Yuv444P12Le`, `Yuva444P12Le`, NV12/I420, RGBA/BGRA (swscale).
+- ✅ `FFmpegAudioFileOutput : IAudioOutput, IDisposable` — AAC/Opus/FLAC packed-float ingest.
+- ✅ `FFmpegMuxFileOutput` — shared `FfmpegMuxContext`; A+V legs; finalize on `Dispose` (trailer).
 
 ### 12.3 Smoke
 
-- 🔲 `Tools/EncoderSmoke`: decode + recompose + reencode round-trip.
+- ✅ `Tools/EncoderSmoke` + `S.Media.FFmpeg.Encode.Tests` mux round-trip (lavfi source when ffmpeg on PATH).
 
-**Phase 12 exit criteria**: framework can encode A+V into a file.
+**Phase 12 exit criteria**: ✅ framework can encode A+V into a file.
 
 ---
 

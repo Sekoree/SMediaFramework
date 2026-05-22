@@ -35,7 +35,7 @@ namespace S.Media.FFmpeg.Audio;
 /// <see cref="Dispose"/> tears down the optional <see cref="PumpPressurePlaybackHintMonitor"/> and the libav <see cref="AudioResampler"/> under the resample lock; each step logs in <strong>Debug</strong> via <see cref="MediaDiagnostics.LogError"/> on failure while <strong>Release</strong> continues.
 /// </para>
 /// </remarks>
-public sealed class AdaptiveRateAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IDisposable
+public sealed class AdaptiveRateAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IClockedOutput, IAdaptiveRateWrappedOutput, IDisposable
 {
     private readonly IAudioOutput _inner;
     private readonly AudioFormat _format;

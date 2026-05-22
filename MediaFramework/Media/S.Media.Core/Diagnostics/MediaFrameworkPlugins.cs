@@ -3,6 +3,13 @@ using S.Media.Core.Video;
 
 namespace S.Media.Core.Diagnostics;
 
+/// <summary>Wraps a leaf <see cref="IAudioOutput"/> for per-output adaptive rate (FFmpeg).</summary>
+public delegate IAudioOutput AdaptiveRateOutputWrapper(
+    AudioRouter router,
+    IAudioOutput inner,
+    string outputId,
+    int maxRateDeltaHz);
+
 /// <summary>
 /// Process-wide plugin slots for optional framework backends (FFmpeg file decode, SkiaSharp images, etc.).
 /// Populated by <c>MediaFrameworkRuntime</c> module hooks — typically
@@ -62,4 +69,7 @@ public static class MediaFrameworkPlugins
         get => _videoDeinterlacerFactory;
         set => _videoDeinterlacerFactory = value;
     }
+
+    /// <summary>Registered by FFmpeg to support <see cref="AudioRouter.EnableAdaptiveRateOnNonMasterOutputs"/>.</summary>
+    public static AdaptiveRateOutputWrapper? WrapAdaptiveRateOutput { get; set; }
 }

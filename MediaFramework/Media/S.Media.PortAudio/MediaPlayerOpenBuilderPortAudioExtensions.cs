@@ -74,6 +74,7 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
             }
 
             builder.WiredPortAudioHost = host;
+            player.SetPortAudioPlaybackStats(host.MainOutput);
             return true;
         });
     }
