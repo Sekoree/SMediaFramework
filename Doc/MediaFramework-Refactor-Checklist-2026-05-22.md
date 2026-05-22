@@ -67,7 +67,13 @@
   to one line per call site.
 - 🔲 Mechanically replace the ~70 occurrences across the framework
   (`grep -rn "#if DEBUG" --include="*.cs" | grep MediaDiagnostics.LogError`).
-- 🔲 Verification: LOC reduction ~250–350 lines; tests still green.
+  Tighter sub-count: `grep -rn "#if DEBUG" --include="*.cs" MediaFramework | grep MediaDiagnostics.LogError`
+  returns ~23 exact-match lines; the broader `#if DEBUG` ceremony (Dispose,
+  Cancel, swallowed `ObjectDisposedException`) covers the remaining ~50 to
+  reach ~70 total.
+- 🔲 Verification: LOC reduction ~250–350 lines; tests still green. Pin the
+  final exact-match count in the commit message so future readers don't
+  re-debate the math.
 
 ### 0.4 Strip `LegacyAudio` / `LegacyVideo` from `MediaContainerDecoder`
 
@@ -133,6 +139,10 @@ no behavior change, no API change.
 - 🔲 `DiscardingAudioSink` → `DiscardingAudioOutput`
 - 🔲 `DiscardingVideoSink` → `DiscardingVideoOutput`
 - 🔲 `BusSink` → `AudioBus` (it's both a source and a sink — `Bus` describes the role better than `Sink`)
+- 🔲 After rename, sanity-check `AudioBus` XML doc to make the dual-role
+  obvious: `IAudioOutput` (consumer-facing) and `IAudioSource` (router-facing)
+  on the same instance. `AudioBus` is the only such type in the framework —
+  pin the doc comment so the next reader doesn't assume it's just an output.
 - 🔲 `CompositorVideoSink` → `VideoCompositorSource` (it's an `IVideoSource`; layer inputs become outputs internally)
 - 🔲 `SDL3VideoSink` → `SDL3VideoOutput`
 - 🔲 `SDL3GLVideoSink` → `SDL3GLVideoOutput`
@@ -173,8 +183,11 @@ no behavior change, no API change.
   XML test-name strings if any.
 - 🔲 Update `Tools/PlaybackSmoke`, `Tools/VideoPlaybackSmoke`, `Tools/NDIPlayer`,
   `Tools/NDIReceiver`, `Tools/CompositorSmoke`.
-- 🔲 Update `HaPlay` references (out-of-scope for the framework review, but
-  the rename PR must compile against it).
+- 🔲 **Update `HaPlay` references in the same PR**. Direct assembly references
+  mean the rename can't ship in isolation — coordinate the HaPlay-side
+  compile with the framework-side rename so the working tree never has a
+  half-renamed state. (Outside the framework review's *design* scope but
+  inside its *merge* scope.)
 
 ### 1.6 Verification
 
@@ -208,6 +221,11 @@ after a Rider symbol rename; no behavior change.
 - 🔲 Existing static slots (`AudioRouterAutoResample.SourceWrapper`,
   `VideoCpuFrameConverterRegistry.Factory`, `VideoDeinterlacerRegistry.Factory`)
   remain as backing storage — `UseFFmpeg` populates them.
+- 🔲 `MediaFrameworkRuntime.Shutdown(TimeSpan? gracePeriod = null)` — drains
+  the matched ref-count releases in reverse order (NDI → PortAudio →
+  FFmpeg). Idempotent. Lets hosted processes (long-running cue servers,
+  unit-test harnesses running hundreds of clips) tear down deterministically
+  instead of relying on process exit.
 
 ### 2.2 Source factories
 
@@ -219,6 +237,13 @@ after a Rider symbol rename; no behavior change.
   - `VideoSource.OpenStream(Stream stream, VideoSourceOpenOptions? options = null) : IVideoSource`
   - `VideoSource.OpenImage(string path) : IVideoSource` — forwards to `ImageFileSource.OpenFromFile`.
   - `VideoSource.OpenImage(Stream stream) : IVideoSource`
+- 🔲 New static `MediaContainer` facade in `S.Media.FFmpeg`:
+  - `MediaContainer.OpenFile(string path, VideoDecoderOpenOptions? options = null) : MediaContainerDecoder` — forwards to `MediaContainerDecoder.Open`.
+  - `MediaContainer.OpenStream(Stream stream, bool seekable = false, string? probeHintName = null, VideoDecoderOpenOptions? options = null) : MediaContainerDecoder` — forwards to `MediaContainerDecoder.OpenStream`.
+  - Matches the review's §10.5 A+V minimum-viable shape (which prints
+    `MediaContainer.OpenFile("clip.mkv")`); today the entry point is
+    `MediaContainerDecoder.Open` and consumers have to remember the
+    "decoder" suffix. One static, one type to discover.
 
 > Implementation note: these statics live in `S.Media.Core` but their
 > implementations forward into `S.Media.FFmpeg` / `S.Media.SkiaSharp` via
@@ -232,6 +257,12 @@ after a Rider symbol rename; no behavior change.
   full overload, same as `AddRoute` but with the rename.
 - 🔲 `AudioRouter.Play()` — alias for `Start()`.
 - 🔲 `AudioRouter.AddSource(IAudioSource source, string? id = null, bool autoResample = false)` — already exists; verify XML doc.
+- 🔲 `AudioRouter.DefaultAutoResample { get; set; } = false` (static) — flips
+  the `autoResample` default for *new* sources without forcing every call
+  site to spell it. Per-call override still wins. A new consumer who hits
+  "source rate mismatch" once turns the static on and never sees it again.
+  Mitigation: log a warning the first time a mismatch fires under the
+  default so silent resamples don't surprise.
 
 ### 2.4 Plugin registry consolidation
 
@@ -254,8 +285,69 @@ after a Rider symbol rename; no behavior change.
   (`MediaFrameworkRuntime.Init().UseFFmpeg().UsePortAudio()` → six-line wire-up).
 - 🔲 Old `MediaPlayer.TryOpen` and `AudioPlayer.AddOutput` paths still pass.
 
+### 2.6 Soundboard primitives (`AudioClip` + voice + player)
+
+> The previous review explicitly flagged this gap — *"there is no
+> 'soundboard' abstraction — i.e. a player that owns N short clips and
+> triggers any of them on demand without re-opening the file."* HaPlay
+> needs a touch-grid UI of clip buttons (one-shot, polyphonic re-trigger,
+> latched loop, choke groups). Today the only file-backed `IAudioSource`
+> is `AudioFileDecoder` (one decoder per playback, `avformat_open_input`
+> per press, no replay). This phase adds the in-memory clip primitive
+> the soundboard sits on.
+
+- 🔲 New `AudioClip` class in `S.Media.Core.Audio`:
+  - `AudioFormat Format { get; }`, `TimeSpan Duration { get; }`,
+    `int SamplesPerChannel { get; }`.
+  - `static AudioClip OpenFile(string path, int? targetSampleRate = null, ChannelMap? mixdown = null)`.
+  - `static AudioClip OpenStream(Stream stream, int? targetSampleRate = null, ChannelMap? mixdown = null)` (uses Phase 3's `StreamAvioBridge`).
+  - `static AudioClip FromSamples(AudioFormat format, ReadOnlyMemory<float> interleaved)`.
+  - `AudioClipVoice CreateVoice(AudioClipVoiceOptions? options = null)`.
+- 🔲 New `AudioClipVoice : IAudioSource, IDisposable`:
+  - One PCM buffer is shared across all voices of a clip; each voice owns
+    only a cursor + ramp state. **Zero allocation per `ReadInto`** —
+    `Buffer.BlockCopy` from the clip buffer into the router scratch.
+  - `void Stop()` — triggers a click-free release fade (`ReleaseFade` from
+    options); `IsExhausted` becomes true after the fade plays out, the
+    router naturally drops the route on next state-snapshot.
+  - `bool Loop { get; set; }` — flippable mid-play. Latched-loop UX: press
+    1 ⇒ `Loop = true`; press 2 ⇒ `Loop = false; Stop();`.
+  - `TimeSpan Position { get; }` for UI scrubbers.
+- 🔲 New `AudioClipVoiceOptions` record struct:
+  `(bool Loop, double StartOffsetSec, float StartGain, TimeSpan? AttackFade, TimeSpan? ReleaseFade)`.
+  Click-free attack/release ramps use the same gain math `AudioRouter`
+  already runs for `SetRouteGain` — keep policy in one place.
+- 🔲 New `AudioClipPlayer` (per-pad helper):
+  - Owns one `AudioClip` and mints voices via `Fire(router, outputId, map?, gain?, options?)`.
+  - `AudioClipPlayerMode { Polyphonic, MonoRetrigger, OneShot, LatchedLoop }`
+    governs what `Fire` does when a voice is already live.
+  - `MaxPolyphony { get; set; } = 8` — bounded voice count; new fires past
+    the limit reuse the oldest voice (stop-then-fresh).
+  - `ChokeGroup { get; set; }` — pads in the same group stop each other.
+  - `IReadOnlyList<AudioClipVoice> ActiveVoices { get; }` for UI.
+  - `void StopAll()` — used by choke groups and by the operator's "panic" stop.
+- 🔲 New `AudioRouter.RegisterChokeGroup(string label, IAudioSource voice)` /
+  `UnregisterChokeGroup(string label, IAudioSource voice)`. The choke
+  contract belongs in the router so any `IAudioSource` participates, not
+  just clip voices.
+- 🔲 New `Tools/SoundboardSmoke`: 32 voices of an 1-second clip firing at
+  random offsets over 5 seconds with one PortAudio output. Asserts:
+  - zero allocations on the router thread (after warm-up; measured via
+    GC alloc tracking).
+  - zero pump drops.
+  - click-free joins (RMS at voice-start/voice-stop boundaries under
+    threshold).
+- 🔲 Decide on `AudioGraphBuilder` once `AudioClipPlayer.Fire` is in. The
+  builder's `ConnectLast` is the soundboard wiring pattern; keep the
+  builder **or** lift `ConnectLast` onto `AudioRouter.RouteLast()` and
+  delete the builder. Either path keeps the soundboard ergonomic; pick
+  one and ship.
+- 🔲 Verification: HaPlay can build a 4×4 / 8×8 soundboard view-model on
+  top of `AudioClipPlayer` with no framework patches needed.
+
 **Phase 2 exit criteria**: §10.5 minimum-viable API works end-to-end on the
-existing solution; no consumer breakage; old API stays.
+existing solution; **soundboard primitives ship and a 32-voice smoke
+asserts allocation-free playback**; no consumer breakage; old API stays.
 
 ---
 
@@ -367,8 +459,65 @@ spooling; legacy spooled path still selectable.
 - 🔲 LOC reduction: ~600 lines (AudioPlayer + AudioGraphBuilder +
   MediaPlaybackSession + Coordinator partially internalised).
 
+### 4.6 Pre-resolved routes — kill 4 dictionary lookups per route per chunk
+
+> `AudioRouter.RunLoop` currently does, for every route, every chunk:
+>
+> ```csharp
+> if (!snapshot.Sources.TryGetValue(route.SourceId, out var src)) continue;
+> if (!snapshot.Sinks.TryGetValue(route.SinkId, out var sink)) continue;
+> var fromGain = _currentGains.GetValueOrDefault(route.RouteId, route.Gain);
+> var toGain   = _routeTargetGains.TryGetValue(route.RouteId, out var tg) ? tg : route.Gain;
+> ```
+>
+> That's **2 × `ImmutableDictionary<string,…>` lookup** + **2 ×
+> `ConcurrentDictionary<string, float>` lookup** per route per chunk. For
+> HaPlay's worst-case 64×64 audio-matrix (4096 active routes) at 480
+> samples / 48 kHz, that's ~1.6 million hash lookups/sec just to read
+> ids the router already knows. Phase 4 is already touching the router,
+> so absorb the hot-path fix here.
+
+- 🔲 `Route` record gains private resolved-entry fields:
+  - `SourceEntry SourceEntryRef`
+  - `SinkEntry SinkEntryRef`
+  - `RouteGainSlot GainSlot` (small mutable single-slot class with
+    `float Target` + `float Current`).
+- 🔲 Resolved refs are populated in `AddRoute` and re-bound whenever
+  `AddSource` / `RemoveSource` / `AddSink` / `RemoveSink` changes the
+  state. Mutation pass walks routes once; chunks read the fields directly.
+- 🔲 Remove `_currentGains` and `_routeTargetGains` `ConcurrentDictionary`
+  instances. `SetRouteGain` / `SetRouteGainById` now flip
+  `GainSlot.Target` — still lock-free, still click-free (run loop reads
+  the same slot field).
+- 🔲 Run loop becomes four field reads per route, no hashing.
+- 🔲 Verification: existing router tests still pass (gain ramps, hot
+  add/remove, slave-clock retarget). Soundboard smoke from Phase 2.6
+  shows the expected drop in router-thread CPU under high route counts.
+  Roughly 30% reduction in `RunLoop` CPU at 4096 routes is the rough
+  target; benchmark and pin the number.
+
+### 4.7 Stop / pause paths — replace LINQ array materialisation
+
+- 🔲 `AudioRouter.StopInternal` and `FinishRunLoopThreadLifetime`
+  currently do `activePumps = [.. _state.Sinks.Values.Select(e => e.Pump)]`
+  (and the same for sinks-for-flush). Replace with a hand-written loop
+  into a pre-sized `SinkPump[]`. Skip the allocation entirely when
+  `_state.Sinks.Count == 0`.
+- 🔲 Soundboard scenarios stop voices constantly (one press → one
+  `RemoveSource`); making the stop path allocation-free is small but
+  measurable.
+
+### 4.8 Move `AudioPrefill` next to its only consumer
+
+- 🔲 `S.Media.Core.Audio.AudioPrefill` is consumed only by
+  `S.Media.PortAudio.AudioPlayerPortAudioExtensions`. After 4.1's
+  `AudioPlayer` removal it has no Core caller. Move to
+  `S.Media.PortAudio.Internal.AudioPrefill` (or inline into the extension
+  if usage is single-site).
+
 **Phase 4 exit criteria**: only `AudioRouter` + `VideoRouter` +
-`VideoPlayer` + `MediaPlayer` remain as consumer entry points.
+`VideoPlayer` + `MediaPlayer` remain as consumer entry points; router
+hot path uses field reads, not dictionary lookups.
 
 ---
 
@@ -412,8 +561,27 @@ spooling; legacy spooled path still selectable.
   of the review has a test.
 - 🔲 Old `TryOpen*` still compiles + works for one release.
 
+### 5.4 Delete `S.Media.Quick`
+
+- 🔲 After the builder ships, delete `MediaFramework/Media/S.Media.Quick/`
+  outright (the previous plan was to rename it to `S.Media.SoundboardQuick`).
+  The builder + `AudioClipPlayer` cover the "open and play" surface
+  `QuickPlayer` exposed; the docstrings move into the quickstart page
+  (Phase 13.2.3). One fewer assembly to publish.
+- 🔲 Archive `S.Media.Quick`'s smoke under the new `MediaPlayer.Tests`
+  smoke project.
+
+### 5.5 Reduce option-record copying for downstream consumers
+
+- 🔲 `MediaPlayerOpenOptions` becomes either an `init`-only `record` with
+  `with`-friendly mutators **or** an `IMediaPlayerOpenOptions` read-only
+  interface implementations can derive from. HaPlay currently translates
+  `HaPlayFilePlaybackOptions → MediaPlayerOpenOptions` per open; after
+  this consumers can stop carrying that translation layer.
+
 **Phase 5 exit criteria**: `MediaPlayer.Open(...).WithVideoLead(...).OpenAsync()`
-is the documented path; 9 statics collapse to 4 + builder.
+is the documented path; 9 statics collapse to 4 + builder; `S.Media.Quick`
+is deleted.
 
 ---
 
@@ -628,6 +796,11 @@ names; `internal` surface stays unchanged.
 - 🔲 Drop `Action? release` + `IDisposable? disposableRelease` duality;
   ship only `IDisposable? release`. `Action.Wrap(Action a) : IDisposable`
   helper if a closure is genuinely needed.
+- 🔲 Audit `AudioFrame.Release` (`Action?` today, `AudioFrame.cs:29`):
+  same closure-captures-pool-buffer pattern as `VideoFrame`. Ship the
+  `Action → IDisposable` change for `AudioFrame` in the same PR — keeps
+  the framework's "one release strategy" rule consistent across
+  audio/video.
 
 ### 9.5 Update producers
 
@@ -638,6 +811,11 @@ names; `internal` surface stays unchanged.
 - 🔲 `S.Media.SkiaSharp`: `ImageFileSource`, `TextLayerSource`.
 - 🔲 `S.Media.Core`: held-frame ctor in `VideoPlayer.TrySubmitHeldFrame`.
 - 🔲 Hardware backings (`VideoDmabufNv12Backing`, etc.) — rename or alias to the new `DmabufNv12Backing` names.
+- 🔲 `VideoFramePool` (per `VideoRouter`) for fan-out — `VideoFrame` is
+  heap-allocated per submit today; a 60 fps fan-out to 4 outputs allocates
+  240 frames/sec. Pooled frames carry back-references so `Release`
+  returns them to the pool. Bench-validated: `Tools/VideoPlaybackSmoke
+  --4-outputs` allocates ~0 bytes/sec after warm-up.
 
 ### 9.6 Verification
 
@@ -747,8 +925,55 @@ opt-in code paths; default behaviour unchanged.
   one-line wrapper that wraps every non-master `IAudioOutput` in
   `AdaptiveRateAudioOutput` on add.
 
+### 11.5 `TriggerBus` — scriptable control surface (OSC / MIDI / Mond)
+
+> Forward-looking: the user's scripting layer is Mond (NativeAOT-friendly
+> Lua-ish), with OSC and MIDI as the wire protocols. None of those bindings
+> belong in `S.Media.Core`, but the framework needs **one stable,
+> allocation-free trigger surface** that script glue and protocol adapters
+> can target. Without it, scripts will reach into `AudioClipPlayer.Fire`,
+> `AudioRouter.SetRouteGainById`, `MediaPlayer.Seek`, `VideoCompositor`
+> layer config, etc. via reflection — slow at startup and brittle to refactor.
+
+- 🔲 New `S.Media.Core.Triggers.TriggerBus`:
+  - `void Register(string triggerId, TriggerHandler handler)`
+  - `bool Unregister(string triggerId)`
+  - `bool Fire(string triggerId, in TriggerPayload payload = default)` —
+    returns false when no handler is registered (non-throwing; scripts
+    discover what's wired up cleanly).
+  - `IReadOnlyCollection<string> RegisteredIds { get; }`.
+- 🔲 New `public delegate void TriggerHandler(in TriggerPayload payload);`
+- 🔲 New `public readonly record struct TriggerPayload(TriggerValueKind Kind, double NumericValue, ReadOnlyMemory<char> TextValue)` —
+  tagged-union sized for the 90% case (MIDI CC 7-bit, OSC float, short
+  address tail). Allocation-free at the call site; larger payloads can
+  follow if a real workload needs them.
+- 🔲 `public enum TriggerValueKind { None, Numeric, Text }`.
+- 🔲 Usability sugar: `S.Media.Core.Triggers.Audio.RegisterAudioClipPlayer(TriggerBus bus, string id, AudioClipPlayer player)`
+  binds `<id>.fire`, `<id>.stop`, `<id>.stopAll`, `<id>.loop` so a script
+  does `mf.fire("pad.kick.fire")` without four manual lambdas.
+- 🔲 OSC adapter in `MediaFramework/Extras/OSCLib/` (post Phase 0.7):
+  `OscTriggerBridge(TriggerBus, OscReceiver)` — subscribes and calls
+  `bus.Fire("<address>", payload)` per OSC message. Small (~80 LOC).
+- 🔲 MIDI adapter in `MediaFramework/Extras/PMLib/`:
+  `MidiTriggerBridge(TriggerBus, PMLib.MidiInput, MidiTriggerProfile)` —
+  configurable NoteOn / CC / PgmChg mapping to bus ids. Small (~100 LOC).
+- 🔲 Document the **id naming convention** in
+  `Doc/MediaFramework-Triggers.md` (`pad.<name>.fire`,
+  `pad.<name>.stop`, `loop.<group>.toggle`, `out.<id>.gain`, …) so
+  protocol adapters and Mond scripts converge on the same vocabulary.
+- 🔲 Mond-binding design rules (for the script layer when it lands —
+  enforced by linting, not by the framework):
+  - Avoid `Task<T>` / `ValueTask<T>` / `IAsyncEnumerable<T>` on the public
+    trigger surface. `Fire` is intentionally void-returning so a script
+    firing 50 pads stays on one stack.
+  - Avoid `params object[]` varargs. `TriggerPayload` covers the
+    payload shape; richer cases get a per-handler descriptor later.
+- 🔲 The actual Mond bindings live in the **UI/HaPlay** project (or a
+  future `HaPlay.Scripting` assembly), not in `S.Media.Core`. The
+  framework ships only the bus + the contract.
+
 **Phase 11 exit criteria**: async open works; one-call metrics snapshot;
-extension-driven image registry.
+extension-driven image registry; trigger bus + OSC/MIDI adapters available.
 
 ---
 
@@ -801,6 +1026,12 @@ extension-driven image registry.
 - 🔲 Mid-play sink swap (add a second `IAudioOutput`, route to it, remove first).
 - 🔲 Assert no temp file created (Stream-mode).
 - 🔲 Assert `MediaPlayer.GetMetrics()` advances during playback.
+- 🔲 **Allocation contract test** (BenchmarkDotNet `MemoryDiagnoser`): for
+  each shipped `IPlaybackClock` (`MediaClock`, `CompositePlaybackClock`,
+  `VideoPtsClock`, `NDIIngestPlaybackClock`), assert zero managed-bytes
+  allocation per time-read call. If a future implementation accidentally
+  allocates per read it will show up as periodic GC on the playback
+  thread — catch it at CI time, not in production.
 
 ### 13.2 Architecture doc sweep
 
@@ -810,7 +1041,30 @@ extension-driven image registry.
   formats (`Rgba16`, `Rgba16F`).
 - 🔲 New `Doc/MediaFramework-Quickstart.md` walking through the six-line
   minimum-viable API (§10.5 of the review).
+- 🔲 New `Doc/MediaFramework-PublicAPI.md` — one-page enumeration of
+  every public type in the post-refactor framework, grouped by
+  namespace, with its phase-of-introduction column and deprecation
+  status. Replaces "is X still around in v2?" greps for consumers.
+- 🔲 New `Doc/MediaFramework-Triggers.md` (paired with Phase 11.5) —
+  documents the `TriggerBus` id-naming convention so OSC / MIDI / Mond
+  bindings converge on the same vocabulary.
 - 🔲 Archive the older checklists under `Doc/Archive/2026-05/`.
+- 🔲 Fix the now-stale claims in `Doc/MediaFramework-Critical-Review-2026-05-22.md`:
+  - §10.5 prints `MediaContainer.OpenFile("clip.mkv")` — type didn't exist
+    at the time of writing; after Phase 2.2 it does. No edit needed
+    once 2.2 ships, but update the §10.5 prose to acknowledge the new
+    facade rather than imply the existing `MediaContainerDecoder.Open`.
+  - §10.5 note "no `autoResample` overload on `AudioRouter.AddSource`" is
+    stale (`AudioRouter.cs:158` already has it). Re-phrase as "no
+    rate-inference convenience" — Phase 2.3's `DefaultAutoResample`
+    static is what closes that gap.
+  - §3.4 "first-class `ITimedAudioSource`/`ITimedVideoSource` with a
+    `Position` getter" — `ISeekableSource` already has `Position` +
+    `Duration`. Re-phrase the §3.4 ask as "frame-step API on top of the
+    existing `ISeekableSource`" to make the new contract explicit.
+  - §2.4 "AudioPlayer ... forwards to router" reads as if the type is
+    already gone; today it's at `AudioPlayer.cs`. Phrase as "currently
+    three ways" until Phase 4.1 lands.
 
 ### 13.3 Cleanup
 
@@ -818,7 +1072,8 @@ extension-driven image registry.
 - 🔲 Final LOC + public-type count snapshot.
 
 **Phase 13 exit criteria**: framework ships v2.0 with a documented
-quickstart and a test set guarding the public surface.
+quickstart, public-API enumeration, trigger-id vocabulary, and a test
+set guarding the public surface (including the allocation-contract suite).
 
 ---
 
@@ -828,22 +1083,24 @@ quickstart and a test set guarding the public surface.
 |---|---|:---:|:---:|:---:|---:|
 | 0  | Dead code + macOS strip + diag helper | ✗ | None | M | −2 500…−3 000 |
 | 1  | `Sink → Output` rename | ✓ (mechanical) | Low | M | ~0 |
-| 2  | Additive `Runtime.Init()` / `AudioSource.OpenFile` etc. | ✗ | Low | M | +400 |
+| 2  | Additive `Runtime.Init()` + source/container facades + `AudioClip` soundboard primitives | ✗ | Low | M | +800 |
 | 3  | `StreamAvioBridge` | ✗ | Medium | M | +200 |
-| 4  | Player façade collapse (`AudioPlayer` etc. gone) | ✓ | Medium | M | −600 |
-| 5  | `MediaPlayer.Open(...)` builder | ✓ | Medium | M | −400 |
+| 4  | Player façade collapse + router hot-path pre-resolve | ✓ | Medium | M | −600 |
+| 5  | `MediaPlayer.Open(...)` builder + `S.Media.Quick` deletion | ✓ | Medium | M | −650 |
 | 6  | NDI surface collapse | ✓ | Medium | L | −1 500 |
 | 7  | `S.Media.Effects` extraction + `VideoCompositor` | ✓ | Medium | L | ±0 (moved) |
 | 8  | Clock surface narrowing | ✓ (small) | Low | S | ~0 |
-| 9  | `VideoFrame` redesign | ✓ (wide) | High | L | −200 |
+| 9  | `VideoFrame` + `AudioFrame` release unification + `VideoFramePool` | ✓ (wide) | High | L | −200 |
 | 10 | Bit-depth completeness | ✗ | Medium | M | +400 |
-| 11 | Async + metrics + extensibility | ✗ | Low | M | +300 |
+| 11 | Async + metrics + extensibility + `TriggerBus` (OSC/MIDI) | ✗ | Low | M | +500 |
 | 12 | Encoder project | ✗ | Medium | L | +new (~1 000) |
-| 13 | Tests + docs | ✗ | Low | M | +tests |
+| 13 | Tests + docs (incl. allocation contract + public-API page) | ✗ | Low | M | +tests |
 
-**Rough net**: −4 000 LOC in the existing media stack, +~1 500 LOC of new
-encoder + tests, and a substantially smaller *public* surface. The biggest
-gains are concentrated in Phases 0, 4, 6, and 7.
+**Rough net**: −4 000 LOC in the existing media stack, +~2 000 LOC of new
+soundboard / encoder / trigger / tests, and a substantially smaller
+*public* surface. The biggest gains are concentrated in Phases 0, 4, 6,
+and 7. The biggest *new* product wins are the soundboard primitives
+(Phase 2.6) and the trigger bus (Phase 11.5).
 
 ---
 
@@ -852,14 +1109,18 @@ gains are concentrated in Phases 0, 4, 6, and 7.
 If you can only ship some of this, the priorities I'd hold to:
 
 - **Must**: Phases 0, 1, 2. Zero-risk cleanup, naming, the new six-line
-  API. After this the framework already feels noticeably easier to use.
+  API **and the soundboard primitives** (Phase 2.6) — the latter unblocks
+  a missing product surface HaPlay needs.
 - **Should**: Phases 3, 4, 5, 6. Stream IO, surface narrowing, builder, NDI
-  collapse. This is where the "consumer onboarding" pain truly goes away.
+  collapse. Phase 4 also pays a one-time perf debt (hot-path dictionary
+  lookups, §4.6) that the soundboard will exercise heavily.
 - **Could**: Phases 7, 8, 10. Composition API, clock tidy, bit-depth
   completeness. Nice-to-have, but not blocking.
-- **Won't (until needed)**: Phases 9, 11, 12. `VideoFrame` ctor redesign,
-  async/metrics polish, encoder project. Land these when a real consumer
-  asks.
+- **Won't (until needed)**: Phases 9, 11, 12. `VideoFrame` redesign,
+  async/metrics polish + `TriggerBus`, encoder project. Land 11.5
+  (`TriggerBus`) when the Mond / OSC / MIDI script layer is ready to
+  consume it; land 9 when the heap pressure from `VideoFrame`
+  allocations or the `Action?` release closures becomes measurable.
 
 Phase 13 (tests + docs) is implicit alongside whatever subset ships.
 
