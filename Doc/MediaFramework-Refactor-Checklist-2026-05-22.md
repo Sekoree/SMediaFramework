@@ -952,7 +952,7 @@ extension-driven image registry; trigger bus + OSC/MIDI adapters available.
 
 ---
 
-## Phase 13 — Public-API tests + docs sweep
+## Phase 13 — Public-API tests + docs sweep ✅
 
 > **Risk**: Low · **Effort**: M · **Breaking**: ✗
 >
@@ -961,59 +961,34 @@ extension-driven image registry; trigger bus + OSC/MIDI adapters available.
 
 ### 13.1 `MediaPlayer.Tests` smoke project
 
-- 🔲 Open file (audio+video), play 2 s, seek to 1 s, play 2 s.
-- 🔲 Open file (audio only), play to end.
-- 🔲 Open image, hold last frame.
-- 🔲 Open URI (skip in CI if no network).
-- 🔲 Open Stream (in-memory MP3).
-- 🔲 Open live (mock `IAudioSource` + `IVideoSource`).
-- 🔲 Mid-play output swap (add a second `IAudioOutput`, route to it, remove first).
-- 🔲 Assert no temp file created (Stream-mode).
-- 🔲 Assert `MediaPlayer.GetMetrics()` advances during playback.
-- 🔲 **Allocation contract test** (BenchmarkDotNet `MemoryDiagnoser`): for
-  each shipped `IPlaybackClock` (`MediaClock`, `CompositePlaybackClock`,
-  `VideoPtsClock`, `NDIIngestPlaybackClock`), assert zero managed-bytes
-  allocation per time-read call. If a future implementation accidentally
-  allocates per read it will show up as periodic GC on the playback
-  thread — catch it at CI time, not in production.
+- ✅ Open file (audio+video), play 2 s, seek to 1 s, play 2 s — `MediaPlayerSmokeTests.OpenAvFile_play_two_seconds_seek_play_two_seconds` (skips if `ffmpeg` missing).
+- ✅ Open file (audio only), play to end — `OpenAudioOnlyFile_play_until_source_exhausted`.
+- ✅ Open image, hold last frame — `OpenImage_hold_last_frame` (`S.Media.SkiaSharp`).
+- ✅ Open URI — file-scheme `OpenUri_file_scheme_opens_player` (no network in CI).
+- ✅ Open Stream (in-memory) — WAV AVIO `OpenStream_memory_wav_no_temp_spool`.
+- ✅ Open live (mock `IAudioSource` + `IVideoSource`) — `OpenLive_mock_sources_playback_advances`.
+- ✅ Mid-play output swap — `MidPlay_audio_output_swap_routes_to_second_output` (video primary cannot be unrouted).
+- ✅ Assert no temp file created (Stream-mode) — `mf_stream_*` count unchanged.
+- ✅ Assert `MediaPlayer.GetMetrics()` advances during playback.
+- ✅ **Allocation contract** — xunit + `GC.GetAllocatedBytesForCurrentThread()` in
+  `PlaybackClockAllocationTests` (Core) and `NDIIngestPlaybackClockAllocationTests` (NDI);
+  covers `MediaClock` (via master), `CompositePlaybackClock`, `VideoPtsClock`,
+  `NDIIngestPlaybackClock`.
 
 ### 13.2 Architecture doc sweep
 
-- 🔲 Update `Doc/MediaFramework-Architecture.md` to match the post-refactor
-  type names + entry verbs.
-- 🔲 Update `Doc/MediaFramework-Format-Support.md` table for new pixel
-  formats (`Rgba16`, `Rgba16F`).
-- 🔲 New `Doc/MediaFramework-Quickstart.md` walking through the six-line
-  minimum-viable API (§10.5 of the review).
-- 🔲 New `Doc/MediaFramework-PublicAPI.md` — one-page enumeration of
-  every public type in the post-refactor framework, grouped by
-  namespace, with its phase-of-introduction column and deprecation
-  status. Replaces "is X still around in v2?" greps for consumers.
-- 🔲 New `Doc/MediaFramework-Triggers.md` (paired with Phase 11.5) —
-  documents the `TriggerBus` id-naming convention so OSC / MIDI / Mond
-  bindings converge on the same vocabulary.
-- 🔲 Archive the older checklists under `Doc/Archive/2026-05/`.
-- 🔲 Fix the now-stale claims in `Doc/MediaFramework-Critical-Review-2026-05-22.md`:
-  - §10.5 prints `MediaContainer.OpenFile("clip.mkv")` — type didn't exist
-    at the time of writing; after Phase 2.2 it does. No edit needed
-    once 2.2 ships, but update the §10.5 prose to acknowledge the new
-    facade rather than imply the existing `MediaContainerDecoder.Open`.
-  - §10.5 note "no `autoResample` overload on `AudioRouter.AddSource`" is
-    stale (`AudioRouter.cs:158` already has it). Re-phrase as "no
-    rate-inference convenience" — Phase 2.3's `DefaultAutoResample`
-    static is what closes that gap.
-  - §3.4 "first-class `ITimedAudioSource`/`ITimedVideoSource` with a
-    `Position` getter" — `ISeekableSource` already has `Position` +
-    `Duration`. Re-phrase the §3.4 ask as "frame-step API on top of the
-    existing `ISeekableSource`" to make the new contract explicit.
-  - §2.4 "AudioPlayer ... forwards to router" reads as if the type is
-    already gone; today it's at `AudioPlayer.cs`. Phrase as "currently
-    three ways" until Phase 4.1 lands.
+- ✅ `Doc/MediaFramework-Architecture.md` — builder entry + metrics/triggers.
+- ✅ `Doc/MediaFramework-Format-Support.md` — `Rgba16`, `Rgba16F`, `P216`, `Pa16`.
+- ✅ `Doc/MediaFramework-Quickstart.md`.
+- ✅ `Doc/MediaFramework-PublicAPI.md` (assembly map + regen commands).
+- ✅ `Doc/MediaFramework-Triggers.md` (Phase 11).
+- ✅ `Doc/Archive/2026-05/README.md`.
+- ✅ `Doc/MediaFramework-Critical-Review-2026-05-22.md` §10.5, §3.4, §2.2.4 updates.
 
 ### 13.3 Cleanup
 
-- 🔲 Delete `[Obsolete]` shims from Phases 4 / 5 (planned for next major).
-- 🔲 Final LOC + public-type count snapshot.
+- ⏭️ Delete `[Obsolete]` shims — **deferred** to next major (`MediaPlayer.TryOpen*` still used by builder pragmas and hosts).
+- ✅ LOC + public-type snapshot documented in `MediaFramework-PublicAPI.md` (regen commands).
 
 **Phase 13 exit criteria**: framework ships v2.0 with a documented
 quickstart, public-API enumeration, trigger-id vocabulary, and a test

@@ -14,6 +14,7 @@ Snapshot of which pixel formats and audio formats the framework supports directl
 |---|---|---|
 | Packed RGB 24-bit | `Bgr24`, `Rgb24` | No alpha; native byte order. |
 | Packed RGBA 32-bit | `Bgra32`, `Rgba32`, `Argb32`, `Abgr32` | Component order matches the name's byte order in memory. `Bgra32` is the framework's "neutral" RGBA. |
+| Packed RGBA 64-bit | `Rgba16`, `Rgba16F` | 16-bit per channel LE (`Rgba16` integer, `Rgba16F` half-float where supported). Phase 10. |
 | Planar 4:2:0 (8-bit) | `I420`, `Yv12`, `Nv12` (semi), `Nv21` (semi) | Y full size, U/V half-W half-H. Nv12 = interleaved UV; Nv21 = interleaved VU. |
 | Planar 4:2:2 (8-bit) | `Yuv422P` | Y full, U/V half-W full-H. |
 | Planar 4:4:4 (8-bit) | `Yuv444P` | Y full, U/V full-W full-H. |
@@ -22,6 +23,8 @@ Snapshot of which pixel formats and audio formats the framework supports directl
 | Planar 4:2:2 (10/12-bit LE) | `Yuv422P10Le`, `Yuv422P12Le` | E.g. ProRes 422 (10-bit), ProRes 4444 XQ-style 12-bit. |
 | Planar 4:4:4 (10/12-bit LE) | `Yuv444P10Le`, `Yuv444P12Le` | High-fidelity broadcast / HEVC 4:4:4. |
 | Semi-planar 4:2:0 (10/16-bit LE) | `P010`, `P016` | NV12 layout, 16-bit words. P010 valid bits in the MSB-aligned high 10. |
+| Semi-planar 4:2:2 (16-bit LE) | `P216` | 4:2:2 NV16-style; two 16-bit planes (Y + interleaved UV). Phase 10. |
+| Semi-planar 4:2:2 + alpha (16-bit LE) | `Pa16` | `P216` + full-res 16-bit alpha plane. Phase 10. |
 | Alpha-bearing planar (8-bit) | `Yuva420p`, `Yuva422P`, `Yuva444P` | Y/U/V at the given subsampling + full-resolution 8-bit alpha plane. |
 | Alpha-bearing planar (10-bit LE) | `Yuva420P10Le`, `Yuva422P10Le`, `Yuva444P10Le` | 4 planes; chroma and alpha at the chroma subsampling, all stored in 16-bit LE words with 10 valid bits. |
 | Alpha-bearing planar (12-bit LE) | `Yuva422P12Le`, `Yuva444P12Le` | Common in HEVC 4:4:4 12-bit + alpha pipelines (e.g. `yuva444p12le(tv, bt709, progressive)`). libav has no `YUVA420P12LE` so the 4:2:0 12-bit YUVA variant is intentionally absent. |
@@ -36,6 +39,8 @@ Legend: ✓ direct; – not handled (no conversion path inside that component �
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | `Bgra32`            | ✓ | ✓ | – | ✓ | ✓ | ✓ | ✓ |
 | `Rgba32`            | ✓ | ✓ | – | ✓ | ✓ | – | ✓ |
+| `Rgba16`            | ✓ | ✓ | – | – | ✓ | – | – |
+| `Rgba16F`           | ✓ | ✓ | – | – | ✓ | – | – |
 | `Bgr24`             | ✓ | ✓ | – | – | ✓ | – | – |
 | `Rgb24`             | ✓ | ✓ | – | – | ✓ | – | – |
 | `Argb32`            | ✓ | ✓ | – | – | ✓ | – | – |
@@ -56,6 +61,8 @@ Legend: ✓ direct; – not handled (no conversion path inside that component �
 | `Yuyv`              | ✓ | ✓ | – | – | ✓ | – | – |
 | `P010`              | ✓ | ✓ | – | – | ✓ | – | – |
 | `P016`              | ✓ | ✓ | – | – | ✓ | – | – |
+| `P216`              | ✓ | ✓ | – | – | ✓ | – | – |
+| `Pa16`              | ✓ | ✓ | – | – | ✓ | – | – |
 | `Yuva420p`          | ✓ | ✓ | – | – | ✓ | – | – |
 | `Yuva422P`          | ✓ | ✓ | – | – | ✓ | – | – |
 | `Yuva444P`          | ✓ | ✓ | – | – | ✓ | – | – |

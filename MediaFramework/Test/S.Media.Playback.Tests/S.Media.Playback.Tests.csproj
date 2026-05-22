@@ -16,6 +16,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\..\Media\S.Media.Playback\S.Media.Playback.csproj" />
+        <ProjectReference Include="..\..\Media\S.Media.SkiaSharp\S.Media.SkiaSharp.csproj" />
     </ItemGroup>
 
 </Project>

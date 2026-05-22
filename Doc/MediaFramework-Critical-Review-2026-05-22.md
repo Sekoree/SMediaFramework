@@ -172,13 +172,13 @@ All three exist, all do the same thing, none of them is clearly "the" entry
 point. `AudioGraphBuilder.ConnectLast` is the most ergonomic for the
 "one clip, one device" case but isn't surfaced anywhere.
 
-Proposed change:
-- Pick **one** front door (`AudioPlayer`), document `AudioRouter` as power-user.
-- Either delete `AudioGraphBuilder` or fold its `ConnectLast` semantics into
+Proposed change (still open until Phase 4.1 fully lands):
+- **Currently** there are three equivalent wiring paths (`AudioRouter` manual,
+  `AudioGraphBuilder`, `AudioPlayer` forwarding to the router). Pick one front
+  door (`AudioPlayer` or the six-line router shape), document `AudioRouter` as
+  power-user.
+- Either delete `AudioGraphBuilder` or fold `ConnectLast` into
   `AudioPlayer.AddOutputAndConnectLast()`.
-- Keep the `AudioRouter` low-level surface intact but mark `AudioGraphBuilder`
-  as the only fluent wrapper users see for the rare case they touch the router
-  directly.
 
 #### 2.2.5 Legacy `AddRoute(sourceId, outputId, ...)` vs. explicit `routeId`
 
@@ -586,12 +586,11 @@ implements them) is straightforward and unlocks recording, transcoding,
 
 ### 3.4 Source types beyond decoder / capture
 
-Consider first-class `ITimedAudioSource` / `ITimedVideoSource` with a
-`Position` getter usable for ProRes/animation cases (frame-step API). Right
-now everything is `IAudioSource.ReadInto` or `IVideoSource.TryReadNextFrame`;
-that's fine for streaming, but a "give me the frame at PTS T" interface would
-help frame-accurate editors, animation tools, and offline rendering on top of
-this framework.
+`ISeekableSource` already exposes `Position` and `Duration` on seekable decoders.
+The remaining ask is a **frame-step API on top of that contract** — e.g.
+`TryReadFrameAt(TimeSpan pts)` / stepped advance for ProRes and animation —
+rather than new parallel `ITimedAudioSource` / `ITimedVideoSource` types.
+Streaming paths stay on `IAudioSource.ReadInto` and `IVideoSource.TryReadNextFrame`.
 
 ### 3.5 Async-friendly graph builder
 
@@ -1072,28 +1071,21 @@ router.Route(srcId, outId);   // identity channel map, gain 1.0
 router.Play();
 ```
 
-That's six end-user statements after `Init`. The framework already supports
-this shape today, but several details get in the way:
+That's six end-user statements after `Init`. **Phase 2–13 status (May 2026):** most of
+this list is implemented — see [MediaFramework-Quickstart.md](MediaFramework-Quickstart.md).
 
-- The simplest entry verb is currently `AudioPlayer`, which auto-wires master
-  clock + primary output — fine for the soundboard case but it conceals what
-  is happening.
-- `AudioRouter.AddSource` doesn't have an `autoResample` overload that knows
-  the router's rate without poking at it (caller currently passes the rate
-  twice).
-- `AudioRouter` has no `Route(srcId, outId)` shorthand — callers must build
-  a `ChannelMap.Identity(channels)` explicitly. That's exactly what
-  `AudioGraphBuilder.ConnectLast` was meant to be, but the builder is its
-  own type.
-- There is no `AudioSource.OpenFile(path)` — the file decoder lives at
-  `S.Media.FFmpeg.AudioFileDecoder.Open(...)`. Hoisting it as
-  `AudioSource.OpenFile / OpenStream` (and the same for `VideoSource`) under
-  `S.Media.Core.Audio.AudioSource` static class collapses the discoverability
-  problem.
-- `MediaFrameworkRuntime.Init()` doesn't exist yet — see §3.1, §2.11. The
-  fluent shape proposed there is exactly this.
-- `router.Play()` doesn't exist — today it's `router.Start()`. Either rename
-  or alias. (`Play` reads better at the call site.)
+- The simplest *product* entry is still often `AudioPlayer` or `MediaPlayer` (auto-wires
+  clock + router); the six-line `AudioRouter` path is the explicit teaching shape.
+- `AudioRouter.AddSource(..., autoResample: true)` **exists**; the remaining gap is
+  *rate-inference convenience* (`DefaultAutoResample` / caller not passing sample rate twice),
+  not missing overloads.
+- `AudioRouter.Route(sourceId, outputId)` **exists** (identity map shorthand). `AudioGraphBuilder.ConnectLast`
+  remains an alternate fluent path.
+- `AudioSource.OpenFile` / `OpenStream`, `VideoSource.OpenFile` / `OpenImage`, and
+  `MediaContainer.OpenFile` **exist** on the Core/FFmpeg facades (no need to call
+  `AudioFileDecoder.Open` directly for discovery).
+- `MediaFrameworkRuntime.Init()` **exists** with `.UseFFmpeg()` / optional plugin hooks.
+- `AudioRouter.Play()` **aliases** `Start()`.
 
 **Proposed Core additions** to support the six-line shape (all R0/R1, no
 breaking changes if we alias):

@@ -81,4 +81,11 @@ The smoke tool is the canonical wiring example for "one bundle owns the whole gr
 
 For ownership flags that match the smoke tool exactly, use the `SmokeToolDefaultOwnership` static. For the equivalent wiring driven from `S.Media.Playback.MediaPlayer`, use `DefaultBundledHostOwnership`.
 
-If you only need a single-file playback path with router + optional outputs (no SDL / NDI / PortAudio), prefer `S.Media.Playback.MediaPlayer.TryOpen` — it's the library-side entry that returns a configured player with no host-platform assemblies referenced.
+If you only need a single-file playback path with router + optional outputs (no SDL / NDI / PortAudio), prefer the **`MediaPlayer` builder** — it's the library-side entry that returns a configured player with no host-platform assemblies referenced:
+
+```csharp
+using var player = await MediaPlayer.OpenFile(path).OpenAsync();
+// or: MediaPlayer.OpenFile(path).TryBuild(out var player, out var error);
+```
+
+Also: `MediaPlayer.OpenUri`, `OpenStream` (AVIO when `SpoolStreamToDisk` is false), `Open(decoder)`, and `OpenLive(audio, video)` for capture/mock graphs. Operational snapshots: `MediaPlayer.GetMetrics()`; script hooks: `MediaPlayer.Triggers` (`TriggerBus`). See [MediaFramework-Quickstart.md](MediaFramework-Quickstart.md) and [MediaFramework-Triggers.md](MediaFramework-Triggers.md).
