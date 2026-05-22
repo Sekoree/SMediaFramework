@@ -325,7 +325,7 @@ public sealed partial class AudioRouter : IDisposable
             _sinkFormats[id] = output.Format;
             Volatile.Write(ref _state, _state with { Outputs = _state.Outputs.Add(id, entry) });
             AutoWirePrimaryOutputIfNeeded(id, output);
-            Trace.LogDebug("AddOutput: id={SinkId} type={SinkType} format={Format} clocked={Clocked} flushable={Flushable} pumpCap={PumpCapacity}",
+            Trace.LogDebug("AddOutput: id={OutputId} type={OutputType} format={Format} clocked={Clocked} flushable={Flushable} pumpCap={PumpCapacity}",
                 id, output.GetType().Name, output.Format, output is IClockedOutput, output is IFlushableOutput, capacity);
             _lastOutputId = id;
             return id;
@@ -351,7 +351,7 @@ public sealed partial class AudioRouter : IDisposable
             Volatile.Write(ref _state, _state with
             {
                 Outputs = _state.Outputs.Remove(id),
-                Routes = _state.Routes.RemoveAll(r => r.Route.SinkId == id),
+                Routes = _state.Routes.RemoveAll(r => r.Route.OutputId == id),
             });
             _sinkFormats.Remove(id);
             PromoteNextPrimaryIfNeeded(id);
@@ -466,9 +466,9 @@ public sealed partial class AudioRouter : IDisposable
             if (existing >= 0)
             {
                 var prior = _state.Routes[existing].Route;
-                if (prior.SourceId != sourceId || prior.SinkId != outputId)
+                if (prior.SourceId != sourceId || prior.OutputId != outputId)
                     throw new ArgumentException(
-                        $"route id '{routeId}' is already registered for ('{prior.SourceId}' -> '{prior.SinkId}'); cannot reuse for ('{sourceId}' -> '{outputId}')",
+                        $"route id '{routeId}' is already registered for ('{prior.SourceId}' -> '{prior.OutputId}'); cannot reuse for ('{sourceId}' -> '{outputId}')",
                         nameof(routeId));
             }
 
@@ -511,7 +511,7 @@ public sealed partial class AudioRouter : IDisposable
             var any = false;
             for (var i = _state.Routes.Length - 1; i >= 0; i--)
             {
-                if (_state.Routes[i].Route.SourceId == sourceId && _state.Routes[i].Route.SinkId == outputId)
+                if (_state.Routes[i].Route.SourceId == sourceId && _state.Routes[i].Route.OutputId == outputId)
                 {
                     Volatile.Write(ref _state, _state with { Routes = _state.Routes.RemoveAt(i) });
                     any = true;
@@ -553,7 +553,7 @@ public sealed partial class AudioRouter : IDisposable
             var any = false;
             foreach (var route in _state.Routes)
             {
-                if (route.Route.SourceId == sourceId && route.Route.SinkId == outputId)
+                if (route.Route.SourceId == sourceId && route.Route.OutputId == outputId)
                 {
                     route.Route.GainSlot.Target = gain;
                     any = true;
@@ -597,7 +597,7 @@ public sealed partial class AudioRouter : IDisposable
     {
         get { lock (_gate) return _state.Sources.Keys.ToArray(); }
     }
-    public IReadOnlyCollection<string> SinkIds
+    public IReadOnlyCollection<string> OutputIds
     {
         get { lock (_gate) return _state.Outputs.Keys.ToArray(); }
     }
@@ -842,7 +842,7 @@ public sealed partial class AudioRouter : IDisposable
             _slaveClockOutputId = outputId;
             _ingestPaceMaster = null;
             _clock = new OutputSlavedRouterClock(_sampleRate, _chunkSamples, () => ResolveClockedOutput(outputId));
-            Trace.LogDebug("SlaveTo: pacing router from output {SinkId} ({SinkType})", outputId, entry.Output.GetType().Name);
+            Trace.LogDebug("SlaveTo: pacing router from output {OutputId} ({OutputType})", outputId, entry.Output.GetType().Name);
         }
     }
 
@@ -861,7 +861,7 @@ public sealed partial class AudioRouter : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_isRunning)
             {
-                Trace.LogTrace("Start: already running (sinkCount={SinkCount} sourceCount={SourceCount})",
+                Trace.LogTrace("Start: already running (outputCount={OutputCount} sourceCount={SourceCount})",
                     _state.Outputs.Count, _state.Sources.Count);
                 return;
             }
@@ -878,7 +878,7 @@ public sealed partial class AudioRouter : IDisposable
             };
             _isRunning = true;
             _thread.Start();
-            Trace.LogDebug("Start: rate={SampleRate}Hz chunk={Chunk} clock={ClockType} outputs={SinkCount} sources={SourceCount} routes={RouteCount}",
+            Trace.LogDebug("Start: rate={SampleRate}Hz chunk={Chunk} clock={ClockType} outputs={OutputCount} sources={SourceCount} routes={RouteCount}",
                 _sampleRate, _chunkSamples, _clock.GetType().Name, _state.Outputs.Count, _state.Sources.Count, _state.Routes.Length);
         }
     }
@@ -1097,18 +1097,18 @@ public sealed partial class AudioRouter : IDisposable
     {
         if (outputs.IsEmpty)
             return [];
-        var sinks = new IAudioOutput[outputs.Count];
+        var collected = new IAudioOutput[outputs.Count];
         var i = 0;
         foreach (var (_, entry) in outputs)
-            sinks[i++] = entry.Output;
-        return sinks;
+            collected[i++] = entry.Output;
+        return collected;
     }
 
     private void RaiseOutputErrored(string outputId, Exception ex)
     {
         OutputErrored?.Invoke(this, new AudioRouterOutputErrorEventArgs(outputId, ex));
         if (_log is { } l)
-            l.LogError(ex, "Output {SinkId} Submit failed", outputId);
+            l.LogError(ex, "Output {OutputId} Submit failed", outputId);
         else
             MediaDiagnostics.LogError(ex, $"AudioRouter output '{outputId}' Submit");
     }
@@ -1117,7 +1117,7 @@ public sealed partial class AudioRouter : IDisposable
     {
         PumpPressure?.Invoke(this, new AudioRouterPumpPressureEventArgs(outputId, droppedTotal));
         if (_log is { } l && l.IsEnabled(LogLevel.Trace))
-            l.LogTrace("Output {SinkId} audio pump drop (running total {Dropped})", outputId, droppedTotal);
+            l.LogTrace("Output {OutputId} audio pump drop (running total {Dropped})", outputId, droppedTotal);
     }
 
     // --- inner loop --------------------------------------------------------
@@ -1188,7 +1188,7 @@ public sealed partial class AudioRouter : IDisposable
                 Interlocked.Increment(ref _chunksProduced);
                 if (!loggedFirstChunk)
                 {
-                    Trace.LogDebug("RunLoop: first chunk committed (outputs={SinkCount} routes={RouteCount})",
+                    Trace.LogDebug("RunLoop: first chunk committed (outputs={OutputCount} routes={RouteCount})",
                         snapshot.Outputs.Count, snapshot.Routes.Length);
                     loggedFirstChunk = true;
                 }
@@ -1197,7 +1197,7 @@ public sealed partial class AudioRouter : IDisposable
                     var produced = Volatile.Read(ref _chunksProduced);
                     // Trace level: every 200 chunks (~2s @ 480/48k). Spammy but bounded.
                     if (produced % 200 == 0)
-                        Trace.LogTrace("RunLoop: chunk #{Produced} (outputs={SinkCount})", produced, snapshot.Outputs.Count);
+                        Trace.LogTrace("RunLoop: chunk #{Produced} (outputs={OutputCount})", produced, snapshot.Outputs.Count);
                 }
 
                 if (!keepRunning)
@@ -1405,14 +1405,14 @@ public sealed partial class AudioRouter : IDisposable
     /// <summary>
     /// One side of a routing connection. <see cref="RouteId"/> uniquely identifies the route within
     /// the router; the legacy <see cref="AddRoute(string, string, ChannelMap, float)"/> overload
-    /// synthesizes it from <c>(SourceId, SinkId)</c> for back-compat replace-by-pair semantics.
+    /// synthesizes it from <c>(SourceId, OutputId)</c> for back-compat replace-by-pair semantics.
     /// Explicit routeIds (via <see cref="AddRoute(string, string, string, ChannelMap, float)"/>) let
     /// callers register multiple routes per <c>(source, output)</c> pair — used by HaPlay's per-cell
     /// audio matrix to install one route per non-zero matrix cell.
     /// </summary>
     public sealed record AudioRoute(
         string SourceId,
-        string SinkId,
+        string OutputId,
         string RouteId,
         ChannelMap Map,
         float Gain,
@@ -1432,7 +1432,7 @@ public sealed partial class AudioRouter : IDisposable
         long TotalProcessed,
         long TotalDropped,
         int MaxPumpCapacityChunks,
-        int SinkCount);
+        int OutputCount);
 
     /// <param name="OwnedWrapper">
     /// When the router created an internal wrapper for this source (currently only

@@ -3,7 +3,7 @@ using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
 
-public sealed class SinkSlavedRouterClockTests
+public sealed class OutputSlavedRouterClockTests
 {
     [Fact]
     public void LazyFallback_WaitsWallClock_WhenOutputMissing()

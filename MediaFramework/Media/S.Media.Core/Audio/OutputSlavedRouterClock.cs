@@ -20,7 +20,7 @@ namespace S.Media.Core.Audio;
 /// here (so it always matches the owning router's current rate).
 /// </para>
 /// <para>
-/// <paramref name="resolveSink"/> runs on the router producer thread once per
+/// <paramref name="resolveOutput"/> runs on the router producer thread once per
 /// chunk. Avoid blocking on the same lock the router holds while mutating the
 /// graph; read a lock-free snapshot (as <see cref="AudioRouter"/> does via
 /// <c>Volatile.Read</c> of its immutable state) so <see cref="SlaveTo"/> /
@@ -30,7 +30,7 @@ namespace S.Media.Core.Audio;
 internal sealed class OutputSlavedRouterClock : IRouterClock
 {
     private readonly object _fallbackGate = new();
-    private readonly Func<IClockedOutput?> _resolveSink;
+    private readonly Func<IClockedOutput?> _resolveOutput;
     private readonly int _sampleRate;
     private readonly int _chunkSamples;
     private WallClockRouterClock? _lazyFallback;
@@ -44,17 +44,17 @@ internal sealed class OutputSlavedRouterClock : IRouterClock
     /// <see cref="AudioRouter.ReconfigureSampleRateWhileRunning"/> construct the clock while
     /// holding the router's internal <c>_gate</c> lock; calling back into the router from
     /// here would deadlock the run loop. Keep this ctor field-store-only — defer all router
-    /// interaction to <paramref name="resolveSink"/>, which runs lock-free on the producer
+    /// interaction to <paramref name="resolveOutput"/>, which runs lock-free on the producer
     /// thread.
     /// </remarks>
-    public OutputSlavedRouterClock(int sampleRate, int chunkSamples, Func<IClockedOutput?> resolveSink)
+    public OutputSlavedRouterClock(int sampleRate, int chunkSamples, Func<IClockedOutput?> resolveOutput)
     {
         if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate));
         if (chunkSamples <= 0) throw new ArgumentOutOfRangeException(nameof(chunkSamples));
-        ArgumentNullException.ThrowIfNull(resolveSink);
+        ArgumentNullException.ThrowIfNull(resolveOutput);
         _sampleRate = sampleRate;
         _chunkSamples = chunkSamples;
-        _resolveSink = resolveSink;
+        _resolveOutput = resolveOutput;
     }
 
     public void Reset()
@@ -68,7 +68,7 @@ internal sealed class OutputSlavedRouterClock : IRouterClock
 
     public bool WaitForNextChunk(CancellationToken token)
     {
-        var output = _resolveSink();
+        var output = _resolveOutput();
         if (output is not null)
         {
             if (Interlocked.Exchange(ref _consecutiveFallbacks, 0) > 0)

@@ -101,12 +101,12 @@ public static class VideoFormatNegotiator
     /// </summary>
     private static void ApplyD3D11GlBorrowFromVideoSourceIfSupported(IVideoSource source, IVideoOutput output)
     {
-        if (output is not IVideoOutputD3D11GlBorrowSetup borrowSink)
+        if (output is not IVideoOutputD3D11GlBorrowSetup borrowOutput)
             return;
         if (source is IHardwareD3D11GlInteropSource)
-            borrowSink.SetBorrowVideoSourceForWin32Nv12Gl(source);
+            borrowOutput.SetBorrowVideoSourceForWin32Nv12Gl(source);
         else
-            borrowSink.SetBorrowVideoSourceForWin32Nv12Gl(null);
+            borrowOutput.SetBorrowVideoSourceForWin32Nv12Gl(null);
     }
 
     private static bool Contains(IReadOnlyList<PixelFormat> list, PixelFormat fmt)

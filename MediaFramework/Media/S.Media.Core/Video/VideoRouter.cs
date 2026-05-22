@@ -143,7 +143,7 @@ public sealed class VideoRouter : IDisposable
             }
 
             _outputs.Add(id, new OutputRegistration(id, output, disposeOutputOnRouterDispose));
-            Trace.LogDebug("AddOutput: id={OutputId} type={SinkType} async={IsAsync} disposeOnRouterDispose={Dispose}",
+            Trace.LogDebug("AddOutput: id={OutputId} type={OutputType} async={IsAsync} disposeOnRouterDispose={Dispose}",
                 id, output.GetType().Name, output is VideoOutputPump, disposeOutputOnRouterDispose);
             return id;
         }
@@ -485,16 +485,16 @@ public sealed class VideoRouter : IDisposable
             VideoRouter.Trace.LogDebug("ApplyConfigure: input={InputId} negotiated={Format} routedOutputs=[{Outputs}]",
                 Id, negotiated, string.Join(",", RoutedOutputIds));
             NegotiatedFormat = negotiated;
-            var primarySink = _owner._outputs[PrimaryOutputId].Output;
-            VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primarySink, _borrowVideoSourceForWin32Nv12Gl);
-            primarySink.Configure(negotiated);
+            var primaryOutput = _owner._outputs[PrimaryOutputId].Output;
+            VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primaryOutput, _borrowVideoSourceForWin32Nv12Gl);
+            primaryOutput.Configure(negotiated);
             _paths.Clear();
 
             for (var i = 1; i < RoutedOutputIds.Count; i++)
             {
                 var oid = RoutedOutputIds[i];
-                var branchSink = _owner._outputs[oid].Output;
-                var branchFmt = VideoOutputFanoutFormats.PickBranchPixelFormat(negotiated, branchSink.AcceptedPixelFormats);
+                var branchOutput = _owner._outputs[oid].Output;
+                var branchFmt = VideoOutputFanoutFormats.PickBranchPixelFormat(negotiated, branchOutput.AcceptedPixelFormats);
                 var needsConversion = branchFmt != negotiated.PixelFormat;
                 IVideoCpuFrameConverter? conv = null;
                 if (needsConversion)
@@ -502,7 +502,7 @@ public sealed class VideoRouter : IDisposable
                     conv = VideoCpuFrameConverterRegistry.Create();
                     conv.Configure(negotiated.PixelFormat, branchFmt, negotiated.Width, negotiated.Height);
                 }
-                branchSink.Configure(new VideoFormat(negotiated.Width, negotiated.Height, branchFmt, negotiated.FrameRate));
+                branchOutput.Configure(new VideoFormat(negotiated.Width, negotiated.Height, branchFmt, negotiated.FrameRate));
                 _paths[oid] = new OutputPathState(Converter: conv);
             }
 
@@ -540,8 +540,8 @@ public sealed class VideoRouter : IDisposable
         internal void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource)
         {
             _borrowVideoSourceForWin32Nv12Gl = videoSource;
-            var primarySink = _owner._outputs[PrimaryOutputId].Output;
-            VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primarySink, _borrowVideoSourceForWin32Nv12Gl);
+            var primaryOutput = _owner._outputs[PrimaryOutputId].Output;
+            VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primaryOutput, _borrowVideoSourceForWin32Nv12Gl);
         }
 
         public void SubmitLocked(VideoFrame frame)

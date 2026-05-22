@@ -171,7 +171,7 @@ public sealed class MediaPlayer : IDisposable
                 agg.TotalEnqueued,
                 agg.TotalProcessed,
                 agg.TotalDropped,
-                agg.SinkCount);
+                agg.OutputCount);
             var ids = ar.GetRegisteredOutputIds();
             var list = new AudioOutputPumpMetricsEntry[ids.Count];
             for (var i = 0; i < ids.Count; i++)
@@ -321,7 +321,7 @@ public sealed class MediaPlayer : IDisposable
         MediaPlayerOpen.Decoder(decoder);
 
     /// <summary>Opens from a media file path (decoder owned by the bundle).</summary>
-    [Obsolete("Use MediaPlayer.Open(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
+    [Obsolete("Use MediaPlayer.OpenFile(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -342,7 +342,7 @@ public sealed class MediaPlayer : IDisposable
     /// Opens from a local media file path (decoder owned by the bundle). Prefer this explicit helper
     /// when user input is known to be a file path; use <see cref="TryOpenUri"/> for network/protocol URLs.
     /// </summary>
-    [Obsolete("Use MediaPlayer.Open(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
+    [Obsolete("Use MediaPlayer.OpenFile(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenFile(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -353,7 +353,7 @@ public sealed class MediaPlayer : IDisposable
         TryOpen(mediaPath, options, videoNegotiationLead, disposeNegotiationLead, out player, out errorMessage);
 
     /// <summary>Opens from a media file path with explicit decoder ownership.</summary>
-    [Obsolete("Use MediaPlayer.Open(path).WithDecoderOwnership(...).TryBuild(...) or OpenAsync().")]
+    [Obsolete("Use MediaPlayer.OpenFile(path).WithDecoderOwnership(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
@@ -411,7 +411,7 @@ public sealed class MediaPlayer : IDisposable
     /// Opens from a media URI. <c>file:</c> URIs are validated as local files; non-file absolute URIs
     /// are passed through to FFmpeg protocol I/O (for example <c>http:</c>, <c>https:</c>, or <c>rtsp:</c>).
     /// </summary>
-    [Obsolete("Use MediaPlayer.Open(uri).WithOptions(...).TryBuild(...) or OpenAsync().")]
+    [Obsolete("Use MediaPlayer.OpenUri(uri).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenUri(
         Uri mediaUri,
         in MediaPlayerOpenOptions options,
@@ -436,7 +436,7 @@ public sealed class MediaPlayer : IDisposable
     /// <see cref="MediaPlayerOpenOptions.SpoolStreamToDisk"/> to spool to a temp file).
     /// For live/network streams, prefer <see cref="TryOpenUri"/> so FFmpeg can use protocol-native I/O.
     /// </summary>
-    [Obsolete("Use MediaPlayer.Open(stream).WithInputName(...).TryBuild(...) or OpenAsync().")]
+    [Obsolete("Use MediaPlayer.OpenStream(stream).WithInputName(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenStream(
         Stream mediaStream,
         string? inputName,
@@ -467,7 +467,7 @@ public sealed class MediaPlayer : IDisposable
     /// <summary>
     /// Opens from a finite readable media stream (AVIO by default).
     /// </summary>
-    [Obsolete("Use MediaPlayer.Open(stream).WithOptions(...).TryBuild(...) or OpenAsync().")]
+    [Obsolete("Use MediaPlayer.OpenStream(stream).WithOptions(...).TryBuild(...) or OpenAsync().")]
     public static bool TryOpenStream(
         Stream mediaStream,
         in MediaPlayerOpenOptions options,

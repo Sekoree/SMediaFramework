@@ -10,9 +10,9 @@ namespace HaPlay.Playback;
 /// <see cref="IVideoOutput"/> wrapper that pins the negotiated pixel format and/or dimensions an NDI
 /// (or any) output presents to its receivers, regardless of what the source produces.
 /// </summary>
-internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
+internal sealed class LockedFormatVideoOutput : IVideoOutput, IDisposable
 {
-    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.LockedFormatVideoSink");
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.LockedFormatVideoOutput");
 
     private readonly IVideoOutput _inner;
     private readonly bool _disposeInnerOnDispose;
@@ -27,7 +27,7 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
     private bool _configured;
     private bool _disposed;
 
-    public LockedFormatVideoSink(
+    public LockedFormatVideoOutput(
         IVideoOutput inner,
         PixelFormat? pixelFormatLock,
         int? resolutionLockWidth,
@@ -103,7 +103,7 @@ internal sealed class LockedFormatVideoSink : IVideoOutput, IDisposable
         if (!_configured)
         {
             frame.Dispose();
-            throw new InvalidOperationException("LockedFormatVideoSink.Submit called before Configure");
+            throw new InvalidOperationException("LockedFormatVideoOutput.Submit called before Configure");
         }
 
         if (_scaler is null)

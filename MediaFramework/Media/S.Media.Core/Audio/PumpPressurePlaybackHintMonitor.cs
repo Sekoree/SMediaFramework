@@ -26,7 +26,7 @@ namespace S.Media.Core.Audio;
 public sealed class PumpPressurePlaybackHintMonitor : IDisposable
 {
     private readonly AudioRouter _router;
-    private readonly string? _observeSinkId;
+    private readonly string? _observeOutputId;
     private readonly object _gate = new();
     private readonly double _maxAbsPpm;
     private readonly double _ppmPerDropPerSecond;
@@ -46,7 +46,7 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
     {
         ArgumentNullException.ThrowIfNull(router);
         _router = router;
-        _observeSinkId = null;
+        _observeOutputId = null;
         _maxAbsPpm = maxAbsPpm;
         _ppmPerDropPerSecond = ppmPerDropPerSecond;
         _lastAt = DateTimeOffset.UtcNow;
@@ -56,17 +56,17 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
     /// <summary>
     /// Observes pump pressure for a single output id (per-output drops). Other outputs' drops are ignored.
     /// </summary>
-    /// <param name="observeSinkId">Non-empty output id to match against <see cref="AudioRouterPumpPressureEventArgs.SinkId"/>.</param>
+    /// <param name="observeOutputId">Non-empty output id to match against <see cref="AudioRouterPumpPressureEventArgs.OutputId"/>.</param>
     public PumpPressurePlaybackHintMonitor(
         AudioRouter router,
-        string observeSinkId,
+        string observeOutputId,
         double maxAbsPpm = 40,
         double ppmPerDropPerSecond = 4)
     {
         ArgumentNullException.ThrowIfNull(router);
-        ArgumentException.ThrowIfNullOrWhiteSpace(observeSinkId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(observeOutputId);
         _router = router;
-        _observeSinkId = observeSinkId;
+        _observeOutputId = observeOutputId;
         _maxAbsPpm = maxAbsPpm;
         _ppmPerDropPerSecond = ppmPerDropPerSecond;
         _lastAt = DateTimeOffset.UtcNow;
@@ -132,7 +132,7 @@ public sealed class PumpPressurePlaybackHintMonitor : IDisposable
 
     private void OnPumpPressure(object? sender, AudioRouterPumpPressureEventArgs e)
     {
-        if (_observeSinkId is not null && e.SinkId != _observeSinkId)
+        if (_observeOutputId is not null && e.OutputId != _observeOutputId)
             return;
         ApplyObservation(e.DroppedTotal, DateTimeOffset.UtcNow);
     }

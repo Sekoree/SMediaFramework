@@ -21,7 +21,7 @@ namespace HaPlay.Playback;
 
 internal sealed class HaPlayPlaybackSession : IDisposable
 {
-    private readonly List<LogoFallbackVideoSink> _logoSinks = new();
+    private readonly List<LogoFallbackVideoOutput> _logoSinks = new();
     private readonly List<OutputLineViewModel> _acquiredCarriers = new();
     private readonly List<OutputLineViewModel> _acquiredLocalVideoLines = new();
     private readonly List<OutputLineViewModel> _acquiredPortAudioLines = new();
@@ -93,7 +93,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
     }
 
-    public IReadOnlyList<LogoFallbackVideoSink> LogoOutputs => _logoSinks;
+    public IReadOnlyList<LogoFallbackVideoOutput> LogoOutputs => _logoSinks;
 
     internal sealed class PlaybackRouter
     {
@@ -403,7 +403,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             Trace.LogDebug("TryCreate: NDI carrier '{Name}' acquired", nd.DisplayName);
         }
 
-        var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoSink Output)>();
+        var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoOutput Output)>();
         var acquiredLocalLines = new List<OutputLineViewModel>();
         if (hasVideo)
         {
@@ -425,7 +425,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         }
                         acquiredLocalLines.Add(line);
                         var prefix = lv.Engine == VideoOutputEngine.SdlOpenGl ? "sdl" : "ava";
-                        var logo = new LogoFallbackVideoSink(output, disposeInnerOnDispose: false);
+                        var logo = new LogoFallbackVideoOutput(output, disposeInnerOnDispose: false);
                         videoChains.Add((line, $"{prefix}_{lv.Id:N}", logo));
                         Trace.LogDebug("TryCreate: local video '{Name}' ({Engine}) wired as videoChain[{Idx}]",
                             lv.DisplayName, lv.Engine, videoChains.Count - 1);
@@ -441,7 +441,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}");
                         var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}", log: null,
                             disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
-                        var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
+                        var logo = new LogoFallbackVideoOutput(pump, disposeInnerOnDispose: true);
                         videoChains.Add((line, $"ndi_{nd.Id:N}", logo));
                         Trace.LogDebug("TryCreate: NDI video '{Name}' wired as videoChain[{Idx}] (pumpCap=8)",
                             nd.DisplayName, videoChains.Count - 1);
@@ -709,7 +709,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         var ndiByDefinitionId = new Dictionary<Guid, NDIOutput>();
         var acquiredCarriers = new List<OutputLineViewModel>();
         var acquiredLocalLines = new List<OutputLineViewModel>();
-        var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoSink Output)>();
+        var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoOutput Output)>();
 
         foreach (var line in lines)
         {
@@ -737,7 +737,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-live");
                         var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-live",
                             disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
-                        var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
+                        var logo = new LogoFallbackVideoOutput(pump, disposeInnerOnDispose: true);
                         videoChains.Add((line, $"ndi_{nd.Id:N}_live", logo));
                     }
 
@@ -755,7 +755,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
                     acquiredLocalLines.Add(line);
                     var prefix = lv.Engine == VideoOutputEngine.SdlOpenGl ? "sdl" : "ava";
-                    var logo = new LogoFallbackVideoSink(output, disposeInnerOnDispose: false);
+                    var logo = new LogoFallbackVideoOutput(output, disposeInnerOnDispose: false);
                     videoChains.Add((line, $"{prefix}_{lv.Id:N}_live", logo));
                     break;
                 }
@@ -834,7 +834,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         OutputManagementViewModel outputs,
         List<OutputLineViewModel> acquiredCarriers,
         List<OutputLineViewModel> acquiredLocalLines,
-        List<(OutputLineViewModel Line, string Id, LogoFallbackVideoSink Output)> videoChains)
+        List<(OutputLineViewModel Line, string Id, LogoFallbackVideoOutput Output)> videoChains)
     {
         ReleaseAcquiredCarriers(outputs, acquiredCarriers);
         ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
@@ -844,14 +844,14 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
     }
 
-    /// <summary>§4.3.5 follow-up — wrap an NDI sender in <see cref="LockedFormatVideoSink"/> when the
+    /// <summary>§4.3.5 follow-up — wrap an NDI sender in <see cref="LockedFormatVideoOutput"/> when the
     /// <see cref="NDIOutputDefinition"/> carries a pixel-format or resolution lock. Returns the inner
     /// output unchanged when no lock is set so the existing pump → sender hot path isn't perturbed.</summary>
     private static IVideoOutput WrapWithNDILockIfNeeded(IVideoOutput ndiSender, NDIOutputDefinition nd, string name)
     {
         if (nd.PixelFormatLock is null && nd.ResolutionLockWidth is null && nd.ResolutionLockHeight is null)
             return ndiSender;
-        return new LockedFormatVideoSink(
+        return new LockedFormatVideoOutput(
             ndiSender,
             nd.PixelFormatLock,
             nd.ResolutionLockWidth,
@@ -1588,7 +1588,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             }
 
             _lineWiring[line] = wiring;
-            Trace.LogInformation("TryAddOutput: '{Name}' wired (audioSink={AS} videoOut={VO})",
+            Trace.LogInformation("TryAddOutput: '{Name}' wired (audioOut={AS} videoOut={VO})",
                 line.Definition.DisplayName, wiring.AudioOutputId ?? "(none)", wiring.VideoOutputId ?? "(none)");
             return true;
         }
@@ -1701,7 +1701,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         wiring.AcquiredKind = AcquireKind.LocalVideo;
 
         var prefix = lv.Engine == VideoOutputEngine.SdlOpenGl ? "sdl" : "ava";
-        var logo = new LogoFallbackVideoSink(output, disposeInnerOnDispose: false);
+        var logo = new LogoFallbackVideoOutput(output, disposeInnerOnDispose: false);
         var outputId = Player.VideoRouter.AddOutput(logo, $"{prefix}_{lv.Id:N}_hot", disposeOutputOnRouterDispose: true);
         if (!Player.VideoRouter.TryAddRoute(Player.VideoRouterInputId, outputId, out var routeErr))
         {
@@ -1749,7 +1749,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-hot");
             var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-hot", log: null,
                 disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
-            var logo = new LogoFallbackVideoSink(pump, disposeInnerOnDispose: true);
+            var logo = new LogoFallbackVideoOutput(pump, disposeInnerOnDispose: true);
             var outputId = Player.VideoRouter.AddOutput(logo, $"ndi_{nd.Id:N}_hot", disposeOutputOnRouterDispose: true);
             if (!Player.VideoRouter.TryAddRoute(Player.VideoRouterInputId, outputId, out var routeErr))
             {
@@ -1823,7 +1823,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         // Drop the line's logo output from the hold-image pump list so the next PumpHoldFrames doesn't
         // hit a output whose underlying output we just released. (Router.RemoveOutput already disposed
-        // the wrapping VideoOutputPump for NDI; for local video the LogoFallbackVideoSink wrapped a output
+        // the wrapping VideoOutputPump for NDI; for local video the LogoFallbackVideoOutput wrapped a output
         // we don't own.)
         if (wiring.LogoOutput is not null)
             _logoSinks.Remove(wiring.LogoOutput);
@@ -1908,7 +1908,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     {
         public string? AudioOutputId { get; set; }
         public string? VideoOutputId { get; set; }
-        public LogoFallbackVideoSink? LogoOutput { get; set; }
+        public LogoFallbackVideoOutput? LogoOutput { get; set; }
         public ResamplingAudioOutput? Resampler { get; set; }
         public AcquireKind AcquiredKind { get; set; }
 

@@ -29,7 +29,7 @@ public static class VideoOutputFanoutFormats
         var h = negotiated.Height;
         var src = negotiated.PixelFormat;
 
-        static bool SinkHas(IReadOnlyList<PixelFormat> list, PixelFormat p)
+        static bool OutputHas(IReadOnlyList<PixelFormat> list, PixelFormat p)
         {
             for (var i = 0; i < list.Count; i++)
                 if (list[i] == p) return true;
@@ -40,12 +40,12 @@ public static class VideoOutputFanoutFormats
         // BranchFormatPreference first would pick UYVY for NV12→UYVY swscale even
         // though both are 4:2:0 — that forces a per-branch converter and breaks
         // multi-output routes on GPU-backed NV12 frames.
-        if (SinkHas(branchAccepted, src))
+        if (OutputHas(branchAccepted, src))
             return src;
 
         foreach (var pref in BranchFormatPreference)
         {
-            if (!SinkHas(branchAccepted, pref)) continue;
+            if (!OutputHas(branchAccepted, pref)) continue;
             if (VideoCpuFrameConverterRegistry.CanConvert(src, pref, w, h))
                 return pref;
         }

@@ -5,7 +5,7 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests.Video;
 
-public sealed class VideoSinkFanoutFormatsTests
+public sealed class VideoOutputFanoutFormatsTests
 {
     [Fact]
     public void PickBranchPixelFormat_prefers_Uyvy_before_Bgra_for_422_10bit_when_convertible()

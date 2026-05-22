@@ -9,15 +9,17 @@ MediaFrameworkRuntime.Init().UseFFmpeg();
 
 using var media = MediaContainer.OpenFile("clip.mkv");
 using var router = new AudioRouter(media.Audio.Format.SampleRate);
-var output = new PlainOutput(media.Audio.Format); // or PortAudio / NDI output from optional packages
+var output = new DiscardingAudioOutput(media.Audio.Format); // swap in S.Media.PortAudio etc. for real playback
 var srcId = router.AddSource(media.Audio, autoResample: true);
 var outId = router.AddOutput(output);
-router.AddRoute(srcId, outId);
-router.RouteLast();
+router.Route(srcId, outId);   // identity channel map, gain 1.0
 router.Play();
 ```
 
-`PlainOutput` is a test sink in `S.Media.Core`; real apps swap in `S.Media.PortAudio` or file encoders.
+`Route(srcId, outId)` is the identity-map shorthand; pass an explicit
+`ChannelMap` (or call `AddRoute(...)`) when you need per-channel mixing.
+`router.RouteLast()` is the soundboard-style one-shot wiring that uses the
+most-recently added source and output.
 
 ## Product entry (`MediaPlayer`)
 

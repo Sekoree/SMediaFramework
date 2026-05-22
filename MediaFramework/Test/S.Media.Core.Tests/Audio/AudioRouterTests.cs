@@ -63,7 +63,7 @@ public class AudioRouterTests
     {
         using var r = new AudioRouter(SampleRate);
         var a = r.GetAggregatePumpStats();
-        Assert.Equal(0, a.SinkCount);
+        Assert.Equal(0, a.OutputCount);
         Assert.Equal(0, a.TotalEnqueued);
         Assert.Equal(0, a.TotalProcessed);
         Assert.Equal(0, a.TotalDropped);
@@ -77,7 +77,7 @@ public class AudioRouterTests
         r.AddOutput(new TestOutput(Stereo), "narrow", pumpCapacityChunks: 8);
         r.AddOutput(new TestOutput(Stereo), "wide", pumpCapacityChunks: 40);
         var agg = r.GetAggregatePumpStats();
-        Assert.Equal(2, agg.SinkCount);
+        Assert.Equal(2, agg.OutputCount);
         Assert.Equal(40, agg.MaxPumpCapacityChunks);
         var n = r.GetPumpStats("narrow");
         var w = r.GetPumpStats("wide");
@@ -252,7 +252,7 @@ public class AudioRouterTests
 
         Assert.True(r.RemoveOutput("x"));
         Assert.Single(r.Routes);
-        Assert.Equal("y", r.Routes[0].SinkId);
+        Assert.Equal("y", r.Routes[0].OutputId);
     }
 
     // --- runtime semantics -------------------------------------------------

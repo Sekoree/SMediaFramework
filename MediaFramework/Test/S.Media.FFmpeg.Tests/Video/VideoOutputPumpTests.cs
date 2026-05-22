@@ -4,9 +4,9 @@ using Xunit;
 
 namespace S.Media.FFmpeg.Tests.Video;
 
-public class VideoSinkPumpTests
+public class VideoOutputPumpTests
 {
-    public VideoSinkPumpTests() => FFmpegRuntime.EnsureInitialized();
+    public VideoOutputPumpTests() => FFmpegRuntime.EnsureInitialized();
 
     [Fact]
     public void Submit_EnqueuesAndDrainsToInner()

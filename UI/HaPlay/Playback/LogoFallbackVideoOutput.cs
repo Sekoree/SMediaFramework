@@ -14,7 +14,7 @@ namespace HaPlay.Playback;
 /// can restore the source after the user toggles hold off — important for single-frame sources
 /// (audio with cover art) where the decoder doesn't produce more frames on its own.
 /// </summary>
-internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
+internal sealed class LogoFallbackVideoOutput : IVideoOutput, IDisposable
 {
     private readonly IVideoOutput _inner;
     private readonly bool _disposeInner;
@@ -34,7 +34,7 @@ internal sealed class LogoFallbackVideoSink : IVideoOutput, IDisposable
     /// <summary>Linear opacity applied to decoded CPU frames (fade toward black / neutral chroma). 1 = pass-through.</summary>
     public void SetOutputOpacity(float opacity) => _outputOpacity = Math.Clamp(opacity, 0f, 1f);
 
-    public LogoFallbackVideoSink(IVideoOutput inner, bool disposeInnerOnDispose = true)
+    public LogoFallbackVideoOutput(IVideoOutput inner, bool disposeInnerOnDispose = true)
     {
         _inner = inner;
         _disposeInner = disposeInnerOnDispose;

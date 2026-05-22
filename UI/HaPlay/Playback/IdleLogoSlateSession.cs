@@ -17,7 +17,7 @@ namespace HaPlay.Playback;
 /// </summary>
 internal sealed class IdleLogoSlateSession : IDisposable
 {
-    private readonly List<LogoFallbackVideoSink> _sdlLogos = new();
+    private readonly List<LogoFallbackVideoOutput> _sdlLogos = new();
     private readonly List<OutputLineViewModel> _ndiLines = new();
     private readonly OutputManagementViewModel _outputs;
     private readonly DispatcherTimer _timer;
@@ -25,7 +25,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
     private long _frameIndex;
     private bool _disposed;
 
-    private IdleLogoSlateSession(IReadOnlyList<LogoFallbackVideoSink> sdlLogos, IReadOnlyList<OutputLineViewModel> ndiLines,
+    private IdleLogoSlateSession(IReadOnlyList<LogoFallbackVideoOutput> sdlLogos, IReadOnlyList<OutputLineViewModel> ndiLines,
         OutputManagementViewModel outputs, TimeSpan frameDuration)
     {
         _sdlLogos.AddRange(sdlLogos);
@@ -95,7 +95,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
             }
         }
 
-        var sdlLogos = new List<LogoFallbackVideoSink>();
+        var sdlLogos = new List<LogoFallbackVideoOutput>();
         var ndiInstalled = new List<OutputLineViewModel>();
         try
         {
@@ -108,7 +108,7 @@ internal sealed class IdleLogoSlateSession : IDisposable
                         var (sw, sh) = InitialSdlSize(lv);
                         var sdlFmt = new VideoFormat(sw, sh, PixelFormat.Bgra32, new Rational(60, 1));
                         var sdl = new SDL3GLVideoOutput(lv.DisplayName, sw, sh);
-                        var logo = new LogoFallbackVideoSink(sdl, disposeInnerOnDispose: true);
+                        var logo = new LogoFallbackVideoOutput(sdl, disposeInnerOnDispose: true);
                         logo.Configure(sdlFmt);
                         var sdlProto = FallbackImageLoader.TryBuildHoldCpuFrame(sdlFmt, imagePath);
                         if (sdlProto is null)

@@ -6,14 +6,14 @@ namespace S.Media.Core.Tests.Audio;
 public sealed class PumpPressurePlaybackHintMonitorTests
 {
     [Fact]
-    public void ctor_WithSinkId_rejects_blank()
+    public void ctor_WithOutputId_rejects_blank()
     {
         using var r = new AudioRouter(48_000, chunkSamples: 480);
         Assert.Throws<ArgumentException>(() => new PumpPressurePlaybackHintMonitor(r, "  "));
     }
 
     [Fact]
-    public void ctor_WithSinkId_subscribes()
+    public void ctor_WithOutputId_subscribes()
     {
         using var r = new AudioRouter(48_000, chunkSamples: 480);
         using var m = new PumpPressurePlaybackHintMonitor(r, "slow-output", maxAbsPpm: 200, ppmPerDropPerSecond: 10);

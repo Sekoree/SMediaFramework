@@ -252,8 +252,8 @@ static void DebugHudLoop(NDIOutput ndi, MediaContainerDecoder dec, NDIDebugState
 /// </summary>
 static void PumpMuxOrdered(
     MediaContainerDecoder dec,
-    IVideoOutput videoSink,
-    IAudioOutput audioSink,
+    IVideoOutput videoOutput,
+    IAudioOutput audioOutput,
     NDIDebugState? dbg,
     CountdownEvent? pumpsFinished,
     ref long wallAnchorTicks,
@@ -304,7 +304,7 @@ static void PumpMuxOrdered(
                 {
                     dbg?.OnVideoFrame(f);
                     PaceToPresentationTime(f.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
-                    videoSink.Submit(f);
+                    videoOutput.Submit(f);
                 }
                 catch
                 {
@@ -322,7 +322,7 @@ static void PumpMuxOrdered(
                 {
                     dbg?.OnAudioFrame(in aFrame);
                     PaceToPresentationTime(aFrame.PresentationTime, ref wallAnchorTicks, wallPace, wallDriftCorrect, ct);
-                    audioSink.Submit(aFrame.Samples.Span);
+                    audioOutput.Submit(aFrame.Samples.Span);
                 }
                 finally
                 {

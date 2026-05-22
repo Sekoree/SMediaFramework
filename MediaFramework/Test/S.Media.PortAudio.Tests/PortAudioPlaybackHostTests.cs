@@ -27,7 +27,7 @@ public sealed class PortAudioPlaybackHostTests
             Assert.False(string.IsNullOrEmpty(host.SourceId));
             Assert.False(string.IsNullOrEmpty(host.PrimaryOutputId));
             Assert.Contains(host.SourceId, host.Router.SourceIds);
-            Assert.Contains(host.PrimaryOutputId, host.Router.SinkIds);
+            Assert.Contains(host.PrimaryOutputId, host.Router.OutputIds);
         }
         finally
         {

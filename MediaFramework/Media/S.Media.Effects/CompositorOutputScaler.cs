@@ -4,7 +4,7 @@ namespace S.Media.Effects;
 
 /// <summary>
 /// One-shot CPU compositor for scaling/letterboxing a single frame into a fixed output raster.
-/// Used by output-side sinks (NDI format lock, logo template render) that receive frames via
+/// Used by output-side wrappers (NDI format lock, logo template render) that receive frames via
 /// <see cref="IVideoOutput.Submit"/> rather than pulling from <see cref="IVideoSource"/>.
 /// </summary>
 public sealed class CompositorOutputScaler : IDisposable

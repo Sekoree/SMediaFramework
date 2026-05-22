@@ -25,7 +25,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
 
     private VideoPlaybackSmokeSession(
         S.Media.Playback.MediaPlayer core,
-        SDL3GLVideoOutput glWindowSink,
+        SDL3GLVideoOutput glWindowOutput,
         NDIOutput? ndi,
         string? ndiVideoOutputId,
         PortAudioPlaybackHost? audioHost,
@@ -35,7 +35,7 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
         bool win32Nv12SharedHandleOnlyRequested)
     {
         Core = core;
-        GlWindowOutput = glWindowSink;
+        GlWindowOutput = glWindowOutput;
         NDI = ndi;
         NDIVideoRouterInputId = core.VideoRouterInputId;
         NDIVideoOutputId = ndiVideoOutputId;

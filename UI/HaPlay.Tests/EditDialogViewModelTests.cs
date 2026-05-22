@@ -115,7 +115,7 @@ public sealed class EditDialogViewModelTests
 
     /// <summary>Phase C polish (§4.3.5) — the dialog now exposes editable pixel-format and resolution
     /// locks. Selecting an entry on a fresh "Add NDI" flow must round-trip onto the produced
-    /// <see cref="NDIOutputDefinition"/>, otherwise the runtime <see cref="LockedFormatVideoSink"/>
+    /// <see cref="NDIOutputDefinition"/>, otherwise the runtime <see cref="LockedFormatVideoOutput"/>
     /// wrapper has nothing to act on.</summary>
     [Fact]
     public void NDI_TryCommit_PersistsSelectedPixelFormatAndResolutionLocks()

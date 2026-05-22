@@ -1,12 +1,22 @@
 namespace S.Media.Core.Audio;
 
 /// <summary>Per-pad helper that owns one <see cref="AudioClip"/> and triggers voices into an <see cref="AudioRouter"/>.</summary>
+/// <remarks>
+/// <para>
+/// <see cref="Fire"/> registers each voice as a router source and routes it to the supplied output;
+/// when the voice exhausts (natural end of clip or after <see cref="AudioClipVoice.Stop"/>'s release
+/// fade), the next <see cref="Fire"/> or <see cref="StopAll"/> call removes it from the router so
+/// dead sources / routes do not accumulate. Operators who fire pads frequently and never call
+/// <see cref="Fire"/> again should call <see cref="ReapExhausted"/> from their UI tick (or set up an
+/// <see cref="AudioRouter.PumpPressure"/> handler that calls it).
+/// </para>
+/// </remarks>
 public sealed class AudioClipPlayer
 {
     private readonly AudioClip _clip;
-    private readonly List<AudioClipVoice> _activeVoices = [];
+    private readonly List<VoiceRegistration> _activeVoices = [];
     private readonly Lock _gate = new();
-    private AudioClipVoice? _latchedVoice;
+    private VoiceRegistration? _latched;
 
     public AudioClipPlayer(AudioClip clip) => _clip = clip ?? throw new ArgumentNullException(nameof(clip));
 
@@ -24,7 +34,13 @@ public sealed class AudioClipPlayer
         get
         {
             lock (_gate)
-                return _activeVoices.Where(v => !v.IsExhausted).ToArray();
+            {
+                ReapExhaustedLocked();
+                var snapshot = new AudioClipVoice[_activeVoices.Count];
+                for (var i = 0; i < _activeVoices.Count; i++)
+                    snapshot[i] = _activeVoices[i].Voice;
+                return snapshot;
+            }
         }
     }
 
@@ -45,25 +61,25 @@ public sealed class AudioClipPlayer
 
         lock (_gate)
         {
-            PruneExhausted();
+            ReapExhaustedLocked();
 
             if (Mode == AudioClipPlayerMode.LatchedLoop
-                && _latchedVoice is { } latched
-                && !latched.IsExhausted)
+                && _latched is { } latched
+                && !latched.Voice.IsExhausted)
             {
-                latched.Loop = false;
-                latched.Stop();
-                _latchedVoice = null;
+                latched.Voice.Loop = false;
+                latched.Voice.Stop();
+                _latched = null;
                 return string.Empty;
             }
 
-            if (Mode == AudioClipPlayerMode.OneShot && _activeVoices.Any(v => !v.IsExhausted))
+            if (Mode == AudioClipPlayerMode.OneShot && _activeVoices.Any(v => !v.Voice.IsExhausted))
                 return string.Empty;
 
             if (Mode == AudioClipPlayerMode.MonoRetrigger)
             {
                 foreach (var v in _activeVoices)
-                    v.Stop();
+                    v.Voice.Stop();
             }
 
             var voiceOptions = options ?? default;
@@ -71,9 +87,6 @@ public sealed class AudioClipPlayer
                 voiceOptions = voiceOptions with { Loop = true };
 
             var voice = _clip.CreateVoice(voiceOptions);
-            if (Mode == AudioClipPlayerMode.LatchedLoop)
-                _latchedVoice = voice;
-
             var sourceId = router.AddSource(voice, autoResample: true);
             var routeMap = map ?? (router.TryGetOutput(outputId, out var output) && output is not null
                 ? ChannelMap.Identity(output.Format.Channels)
@@ -83,31 +96,71 @@ public sealed class AudioClipPlayer
             if (ChokeGroup is { } group)
                 router.RegisterChokeGroup(group, voice);
 
-            _activeVoices.Add(voice);
-            EnforcePolyphony();
+            var registration = new VoiceRegistration(voice, sourceId, router, ChokeGroup);
+            if (Mode == AudioClipPlayerMode.LatchedLoop)
+                _latched = registration;
+
+            _activeVoices.Add(registration);
+            EnforcePolyphonyLocked();
             return sourceId;
         }
     }
 
-    /// <summary>Stops every active voice (release fade).</summary>
+    /// <summary>Stops every active voice (release fade); call again or <see cref="ReapExhausted"/> to actually purge them.</summary>
     public void StopAll()
     {
         lock (_gate)
         {
-            foreach (var voice in _activeVoices)
-                voice.Stop();
-            _latchedVoice = null;
+            foreach (var v in _activeVoices)
+                v.Voice.Stop();
+            _latched = null;
         }
     }
 
-    private void EnforcePolyphony()
+    /// <summary>
+    /// Removes any exhausted voices from the router (source + choke-group registration).
+    /// Called automatically on every <see cref="Fire"/>; expose it for hosts that need to reclaim
+    /// router slots without triggering a new fire.
+    /// </summary>
+    public int ReapExhausted()
     {
-        while (_activeVoices.Count(v => !v.IsExhausted) > MaxPolyphony)
+        lock (_gate) return ReapExhaustedLocked();
+    }
+
+    private int ReapExhaustedLocked()
+    {
+        var reaped = 0;
+        for (var i = _activeVoices.Count - 1; i >= 0; i--)
         {
-            var oldest = _activeVoices.First(v => !v.IsExhausted);
-            oldest.Stop();
+            var reg = _activeVoices[i];
+            if (!reg.Voice.IsExhausted) continue;
+            DisposeRegistration(reg);
+            _activeVoices.RemoveAt(i);
+            if (ReferenceEquals(_latched, reg))
+                _latched = null;
+            reaped++;
+        }
+        return reaped;
+    }
+
+    private void EnforcePolyphonyLocked()
+    {
+        if (_activeVoices.Count <= MaxPolyphony) return;
+        for (var i = 0; i < _activeVoices.Count && _activeVoices.Count > MaxPolyphony; i++)
+        {
+            var reg = _activeVoices[i];
+            if (reg.Voice.IsExhausted) continue;
+            reg.Voice.Stop();
         }
     }
 
-    private void PruneExhausted() => _activeVoices.RemoveAll(v => v.IsExhausted);
+    private static void DisposeRegistration(VoiceRegistration reg)
+    {
+        reg.Router.RemoveSource(reg.SourceId);
+        if (reg.ChokeGroup is { } group)
+            reg.Router.UnregisterChokeGroup(group, reg.Voice);
+        reg.Voice.Dispose();
+    }
+
+    private sealed record VoiceRegistration(AudioClipVoice Voice, string SourceId, AudioRouter Router, string? ChokeGroup);
 }

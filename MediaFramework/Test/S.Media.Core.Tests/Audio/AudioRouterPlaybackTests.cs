@@ -73,7 +73,9 @@ public sealed class AudioRouterPlaybackTests
         public bool IsRunning { get; private set; }
         public bool IsAdvancing => IsRunning;
         public double PlaybackRate => 1.0;
+#pragma warning disable CS0067 // interface event never raised by this test stub
         public event EventHandler<TimeSpan>? PositionChanged;
+#pragma warning restore CS0067
         public void Submit(ReadOnlySpan<float> samples) { }
         public bool WaitForNextChunk(CancellationToken cancellationToken) => !cancellationToken.IsCancellationRequested;
         public bool WaitForCapacity(int chunkSamples, CancellationToken token) => !token.IsCancellationRequested;

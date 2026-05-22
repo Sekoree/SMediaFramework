@@ -10,7 +10,7 @@ public sealed partial class AudioRouter
     private readonly List<IDisposable> _ownedDisposables = [];
     private readonly Dictionary<string, AudioFormat> _sinkFormats = new(StringComparer.Ordinal);
     private MediaClock? _attachedMasterClock;
-    private string? _primarySinkId;
+    private string? _primaryOutputId;
 
     /// <summary>
     /// When <c>true</c> (default), the first <see cref="IClockedOutput"/> becomes the pacing primary and,
@@ -21,7 +21,7 @@ public sealed partial class AudioRouter
     /// <summary>The current primary output id (router slave clock), or <c>null</c>.</summary>
     public string? PrimaryOutputId
     {
-        get { lock (_gate) return _primarySinkId; }
+        get { lock (_gate) return _primaryOutputId; }
     }
 
     /// <summary>Alias for <see cref="IsRunning"/>.</summary>
@@ -99,13 +99,13 @@ public sealed partial class AudioRouter
 
     private void AutoWirePrimaryOutputIfNeeded(string outputId, IAudioOutput output)
     {
-        if (!AutoWirePrimary || _primarySinkId is not null || output is not IClockedOutput)
+        if (!AutoWirePrimary || _primaryOutputId is not null || output is not IClockedOutput)
             return;
 
         SlaveTo(outputId);
         if (output is IPlaybackClock pc)
             _attachedMasterClock?.SetMaster(pc);
-        _primarySinkId = outputId;
+        _primaryOutputId = outputId;
         MediaDiagnostics.LogDebug(
             "AddOutput: promoted output {0} to primary ({1})",
             outputId,
@@ -116,9 +116,9 @@ public sealed partial class AudioRouter
     {
         if (!_wrapAdaptiveRateOnNonMasterOutputs || output is IAdaptiveRateWrappedOutput)
             return output;
-        if (_slaveClockOutputId == outputId || _primarySinkId == outputId)
+        if (_slaveClockOutputId == outputId || _primaryOutputId == outputId)
             return output;
-        if (AutoWirePrimary && _primarySinkId is null && _slaveClockOutputId is null && output is IClockedOutput)
+        if (AutoWirePrimary && _primaryOutputId is null && _slaveClockOutputId is null && output is IClockedOutput)
             return output;
         var wrap = MediaFrameworkPlugins.WrapAdaptiveRateOutput;
         return wrap is null ? output : wrap(this, output, outputId, _adaptiveRateMaxDeltaHz);
@@ -126,22 +126,22 @@ public sealed partial class AudioRouter
 
     private void PromoteNextPrimaryIfNeeded(string removedOutputId)
     {
-        if (_primarySinkId != removedOutputId)
+        if (_primaryOutputId != removedOutputId)
             return;
 
-        _primarySinkId = null;
+        _primaryOutputId = null;
         _attachedMasterClock?.SetMaster(null);
         if (!AutoWirePrimary)
             return;
 
-        foreach (var id in SinkIds.Order(StringComparer.Ordinal))
+        foreach (var id in OutputIds.Order(StringComparer.Ordinal))
         {
             if (id == removedOutputId) continue;
             if (!TryGetOutput(id, out var s) || s is not IClockedOutput) continue;
             RetargetSlaveClock(id);
             if (s is IPlaybackClock pc)
                 _attachedMasterClock?.SetMaster(pc);
-            _primarySinkId = id;
+            _primaryOutputId = id;
             return;
         }
     }
