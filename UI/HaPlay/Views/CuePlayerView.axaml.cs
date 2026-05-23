@@ -102,57 +102,84 @@ public partial class CuePlayerView : UserControl
 
         if (_source.RowSelection is not null)
         {
+            // Multi-select so operators can select N media cues + add the same route / placement
+            // to them all at once via the drawer commands.
+            _source.RowSelection.SingleSelect = false;
             _source.RowSelection.SelectionChanged += (_, _) =>
             {
-                if (DataContext is CuePlayerViewModel activeVm)
-                    activeVm.SelectedCueNode = _source.RowSelection.SelectedItem as CueNodeViewModel;
+                if (DataContext is not CuePlayerViewModel activeVm) return;
+                var selected = _source.RowSelection.SelectedItems
+                    .OfType<CueNodeViewModel>()
+                    .ToList();
+                activeVm.UpdateSelection(selected);
             };
         }
 
         CueTreeGrid.Source = _source;
     }
 
-    private static Control BuildStatusBadge(CueNodeViewModel row)
+    /// <summary>Status indicator dot. Re-subscribes to the row's <c>RowStatus</c> notifications
+    /// when the cell is recycled to a different row (which happens routinely under
+    /// <c>supportsRecycling: true</c>) — the previous design captured the row reference at
+    /// construction and stayed bound to the old row forever.</summary>
+    private static Control BuildStatusBadge(CueNodeViewModel _)
     {
         var dot = new Avalonia.Controls.Shapes.Ellipse
         {
-            DataContext = row,
             Width = 10,
             Height = 10,
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
         };
 
-        void Sync()
-        {
-            dot.Fill = row.RowStatus switch
-            {
-                CueRowStatus.Current => Avalonia.Media.Brushes.OrangeRed,
-                CueRowStatus.Standby => Avalonia.Media.Brushes.Goldenrod,
-                _ => Avalonia.Media.Brushes.Transparent,
-            };
-            dot.Stroke = row.RowStatus == CueRowStatus.Idle
-                ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(96, 255, 255, 255))
-                : null;
-            dot.StrokeThickness = row.RowStatus == CueRowStatus.Idle ? 1 : 0;
-        }
-
-        Sync();
+        CueNodeViewModel? current = null;
         PropertyChangedEventHandler handler = (_, args) =>
         {
             if (args.PropertyName == nameof(CueNodeViewModel.RowStatus))
                 Sync();
         };
-        row.PropertyChanged += handler;
-        dot.DetachedFromVisualTree += (_, _) => row.PropertyChanged -= handler;
+
+        void Sync()
+        {
+            var status = current?.RowStatus ?? CueRowStatus.Idle;
+            dot.Fill = status switch
+            {
+                CueRowStatus.Current => Avalonia.Media.Brushes.OrangeRed,
+                CueRowStatus.Standby => Avalonia.Media.Brushes.Goldenrod,
+                _ => Avalonia.Media.Brushes.Transparent,
+            };
+            dot.Stroke = status == CueRowStatus.Idle
+                ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(96, 255, 255, 255))
+                : null;
+            dot.StrokeThickness = status == CueRowStatus.Idle ? 1 : 0;
+        }
+
+        void Rebind(CueNodeViewModel? next)
+        {
+            if (ReferenceEquals(current, next)) return;
+            if (current is not null) current.PropertyChanged -= handler;
+            current = next;
+            if (current is not null) current.PropertyChanged += handler;
+            Sync();
+        }
+
+        dot.DataContextChanged += (_, _) => Rebind(dot.DataContext as CueNodeViewModel);
+        dot.DetachedFromVisualTree += (_, _) => Rebind(null);
+        // The grid sets DataContext after attachment; initial sync runs against whatever the
+        // current DataContext is right now (may be null until the cell is bound).
+        Rebind(dot.DataContext as CueNodeViewModel);
         return dot;
     }
 
+    // NOTE: do NOT set DataContext on these controls. TreeDataGrid recycles cell controls when
+    // supportsRecycling=true, and an explicit DataContext sticks past the recycle — the visual
+    // ends up bound to the OLD row's properties. Letting DataContext inherit from the grid lets
+    // the binding re-resolve against the new row each time the control is reused.
     private static Control BuildReadOnlyText(CueNodeViewModel row, string propertyName)
     {
+        _ = row;
         var tb = new TextBlock
         {
-            DataContext = row,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
         };
@@ -162,9 +189,9 @@ public partial class CuePlayerView : UserControl
 
     private static Control BuildTextEditor(CueNodeViewModel row, string propertyName)
     {
+        _ = row;
         var box = new TextBox
         {
-            DataContext = row,
             MinWidth = 80,
             Padding = new Avalonia.Thickness(4, 2),
         };
@@ -176,9 +203,9 @@ public partial class CuePlayerView : UserControl
     /// shrinks with its column instead of bleeding into the status badge on its left.</summary>
     private static Control BuildCompactTextEditor(CueNodeViewModel row, string propertyName)
     {
+        _ = row;
         var box = new TextBox
         {
-            DataContext = row,
             Padding = new Avalonia.Thickness(4, 2),
             Margin = new Avalonia.Thickness(2, 0, 0, 0),
         };

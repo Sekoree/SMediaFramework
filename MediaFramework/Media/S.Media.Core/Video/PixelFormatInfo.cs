@@ -69,9 +69,9 @@ public static class PixelFormatInfo
         PixelFormat.P010 or PixelFormat.P016 when planeIndex == 0 => frameWidth * 2,
         PixelFormat.P010 or PixelFormat.P016 when planeIndex == 1 => ChromaWidth420(frameWidth) * 4,
         PixelFormat.P216 when planeIndex == 0 => frameWidth * 2,
-        PixelFormat.P216 when planeIndex == 1 => frameWidth * 2,
+        PixelFormat.P216 when planeIndex == 1 => ChromaWidth422(frameWidth) * 4,
         PixelFormat.Pa16 when planeIndex == 0 => frameWidth * 2,
-        PixelFormat.Pa16 when planeIndex == 1 => frameWidth * 2,
+        PixelFormat.Pa16 when planeIndex == 1 => ChromaWidth422(frameWidth) * 4,
         PixelFormat.Pa16 when planeIndex == 2 => frameWidth * 2,
         // 8-bit planar 4:2:2 (3 planes: full-W Y, half-W U, half-W V)
         PixelFormat.Yuv422P when planeIndex == 0 => frameWidth,

@@ -442,7 +442,7 @@ the up/down buttons left too little room for the value).
 - Compositor layering with multiple cues sharing a composition isn't
   wired — each cue's video goes to the output lines the placements
   reference, but they don't yet stack via `VideoCompositor`. Single-cue
-  video works.
+  video works. Multi-cue layering is Phase 4.10.
 - `MediaPlayerViewModel.ApplyCueRouteOverrides` stays as a no-op stub
   (kept the signature; the cue-side path no longer calls it).
 
@@ -500,3 +500,215 @@ the up/down buttons left too little room for the value).
   added `RemovingComposition_PrunesPlacementsAndVideoOutputBindings`;
   renamed round-trip test to `V3RoundTrip_PreservesCompositionsVideoBindingsRoutesAndPlacements`.
 - ✅ Build clean. `dotnet test UI/HaPlay.Tests` — 80/80 pass.
+
+---
+
+## Phase 4.10 — Multi-cue concurrency & layered composition
+
+> Operator scenario this phase exists to support: two video cues
+> (background + alpha-channel foreground) plus one audio cue, fired
+> simultaneously as a `FireAllSimultaneously` group. The two videos
+> need to composite into one Local/NDI output as stacked layers.
+
+### 4.10a Multi-cue concurrency — ✅
+
+- ✅ `CuePlaybackEngine` no longer holds a single `_session` — it now
+  manages a `Dictionary<Guid, ActiveCue>` keyed by cue id. Multiple cues
+  fired by a group all play together.
+- ✅ Each active cue has its own `HaPlayPlaybackSession`, its own
+  natural-end watchdog, and its own `CancellationTokenSource`.
+- ✅ `StopAsync()` (called by Stop / Panic) disposes all active cues.
+  New `StopCueAsync(Guid)` handles per-cue stop (used internally when
+  the operator re-Gos a still-playing cue, or by natural end).
+- ✅ Natural-end fires once per cue completion; the engine removes the
+  cue from the active map before raising the event so a parallel cue's
+  watchdog doesn't double-fire.
+
+**Limitation kept honest**: cues that target overlapping output lines
+still fail on acquire (the first cue holds the line; the second
+`TryAcquireLocalVideoOutputForPlayback` / `TryAcquirePortAudioForPlayback`
+returns null and the session creation fails). Splitting one output
+across multiple cues is what 4.10b–c need to address.
+
+### 4.10e Pixel-format conversion + row recycling + multi-select — ✅
+
+Operator hit three more issues after 4.10d:
+
+- **No video / no audio** on the new engine path. Root cause:
+  `CpuVideoCompositor.Composite` only accepts BGRA32 layer frames, but
+  the cue's `MediaPlayer.VideoRouter` was Submitting in the decoder's
+  native format (NV12 / YUV420P). The framework's
+  `VideoCompositor.AddLayer` path includes a BGRA helper that the
+  push-based slot pattern bypasses.
+
+  Fix v2: `Playback/BgraConvertingVideoOutput.cs` — `IVideoOutput`
+  shim that declares **`[Bgra32]`** as its accepted format.
+  `VideoRouter`'s fan-out negotiator
+  (`VideoOutputFanoutFormats.PickBranchPixelFormat`) reads this and
+  inserts a swscale converter upstream; the wrapper just receives
+  BGRA32 frames and forwards them. (First attempt declared `[]` for
+  "accept anything" — fan-out reads that as "accept nothing" and
+  throws `InvalidOperationException` on any non-BGRA32 source, e.g.
+  Yuv422P10Le for HDR content or Yuva444P12 for alpha-carrying
+  foreground PiP layers.) Swscale handles alpha-carrying formats
+  correctly so the foreground's transparency reaches the compositor's
+  `SourceOver` blend.
+
+- **Stale label after clearing + re-adding cues** (e.g. tree shows the
+  previous cue's name at the same row position). Root cause: the
+  `BuildTextEditor` / `BuildReadOnlyText` / `BuildStatusBadge`
+  templates set `DataContext = row` explicitly at construction.
+  `TreeDataGrid` with `supportsRecycling: true` reuses control
+  instances when rows are removed and a new row gets added — the
+  explicit DataContext stays bound to the original (now-disposed) row
+  forever, so the binding never re-resolves.
+
+  Fix: removed all explicit DataContext assignments — bindings now
+  inherit from the grid. The status badge's `PropertyChanged`
+  subscription rebinds on `DataContextChanged` so the dot tracks the
+  current row's status, not the row that happened to be in that cell
+  when the control was first constructed.
+
+- **One-at-a-time file picker**: `AddMediaCueAsync` opened the picker
+  with `AllowMultiple = false`. Multi-select would have required
+  N round trips through the dialog.
+
+  Fix: new `PickMediaFilePathsAsync(allowMultiple)` helper; the +
+  Media button shows a multi-select picker. First file fills the
+  freshly-created seed row (preserves the cancel-leaves-empty-row
+  contract the tests rely on); additional files spawn additional
+  rows.
+
+### 4.10d Audio mixing + stutter fix — ✅
+
+Operator feedback after 4.10c: 1 video + 11 audio cues in a
+`FireAllSimultaneously` group → only the first audio cue played, video
+was stuttery. Root causes:
+
+- `HaPlayPlaybackSession.TryCreate` calls
+  `TryAcquirePortAudioForPlayback` which is **exclusive**. Audio cue
+  2..11 all hit the same PortAudio line, got a null acquire, session
+  creation failed.
+- The compositor pump used `Task.Delay` (10–15 ms OS granularity); at
+  60 fps that's 25–60% of the frame budget gone to scheduler slop.
+
+Fixes:
+
+- **`Playback/CueAudioOutputRuntime.cs`** — one per active PortAudio
+  output line. Owns a shared `AudioRouter` initialised at the device's
+  sample rate, with the `PortAudioOutput` added once. Exposes
+  `AddSource(IAudioSource, IReadOnlyList<CueAudioRoute>) → string` so N
+  cues' audio sources all mix into the single physical device. Each
+  `CueAudioRoute` becomes its own router route with a single-entry
+  `ChannelMap` (so `SourceChannel`→`OutputChannel` and `GainDb` are
+  finally honored end-to-end) and the router accumulator does the mix.
+  Ref-counted by the engine — disposes + releases the PortAudio acquire
+  when the last source is removed.
+- **`CuePlaybackEngine`** — no longer goes through
+  `HaPlayPlaybackSession.TryCreate`. Now opens `MediaPlayer.OpenFile(path)`
+  directly with `IncludeAudioRouter: false` so the player has no
+  internal audio router. Audio is routed through `CueAudioOutputRuntime`;
+  video stays in `CueCompositionRuntime`. The engine tracks two pools
+  (`_compositions`, `_audioOutputs`), each ref-counted, each disposed
+  when its last user goes away.
+- **`CueCompositionRuntime` pump** — replaced
+  `await Task.Delay(period, ct)` with `PeriodicTimer.WaitForNextTickAsync`,
+  which keeps cadence stable even when `Submit` is slow.
+  `output.Configure(...)` runs once on the first frame (BGRA32 canvas
+  doesn't change) instead of every frame.
+
+**Limitations kept honest**:
+
+- A single cue's audio routes can only target **one** PortAudio output
+  line (the first one referenced). Cross-output fan-out of a single
+  decoder needs a "tee" `IAudioSource`. Logged at runtime when
+  encountered.
+- Live input cues (NDI/PortAudio capture as a cue source) aren't
+  routed through this engine path yet — they fall through to a
+  "not yet wired" message. File cues are the working path.
+- A/V sync within a single cue: video pump runs from the player's
+  freerun clock (no audio router inside the player); audio runs from
+  the shared router's clock. For files whose audio + video should stay
+  locked, drift is possible. The user's reported scenario (1 video +
+  N independent audio cues) doesn't hit this since each cue is its own
+  source.
+
+### 4.10c Layered composition — ✅ (Option B landed)
+
+Approach: kept the per-cue `MediaPlayer` (preserves its
+clock-paced video pump, pause/resume, seek) and added a per-composition
+runtime that owns the `VideoCompositor` + acquired physical outputs.
+Each cue's `MediaPlayer.VideoRouter` adds the composition's slot
+`IVideoOutput` as its downstream target instead of acquiring the
+physical line directly. The composition's pump pulls composed frames
+from its `VideoCompositorSource` and Submits them to the bound
+Local/NDI outputs.
+
+**New types:**
+
+- `Playback/CueCompositionRuntime.cs` — one per active composition.
+  Owns: `VideoCompositorSource` (with `CpuVideoCompositor` backend),
+  acquired physical `IVideoOutput`s (Local windows / NDI senders),
+  pump `Task` that runs at the composition's framerate. Exposes
+  `AddLayer(sourceFormat, placement)` → `LayerSlot` whose `Output`
+  property is the `IVideoOutput` the cue routes into.
+- `Playback/CuePlaybackEngine.cs` — extended with a
+  `Dictionary<Guid, CueCompositionRuntime> _compositions` keyed by
+  composition id. Cues with video placements call
+  `GetOrCreateComposition(...)` which acquires outputs the first time
+  a composition is touched. When the last cue using a composition
+  stops, `ReleaseEmptyCompositions()` disposes the runtime (releasing
+  the acquired outputs).
+
+**Behaviour now**:
+
+- Two video cues placing into the same composition with different
+  layer indices stack via the compositor (layer 0 background, layer 1
+  foreground, alpha respected from the foreground file).
+- An audio-only cue firing alongside them routes to its own PortAudio
+  output line via the standard `HaPlayPlaybackSession` audio wiring —
+  no contention with the video cues.
+- `FireAllSimultaneously` groups now do what the operator expects.
+
+**Scope notes / what's still v2**:
+
+- `LayerConfig` is computed at slot-creation time from
+  `CueVideoPlacement.Position` (Cover ↔ `LayerPosition.Cover`,
+  everything else ↔ `LayerPosition.Center`) and the placement's
+  `Opacity`. The full enum mapping (`FillWidth`, `FillHeight`,
+  `Letterbox`) collapses to `Center` for now — the operator's intent
+  is preserved on disk; only the runtime resolution is simplified.
+- `LayerIndex` is honored implicitly by add-order (last added draws
+  on top). Sorting placements by `LayerIndex` before adding is a
+  small follow-up.
+- Per-channel audio routing (`CueAudioRoute.SourceChannel` →
+  `OutputChannel` with `GainDb`) still uses the default
+  `HaPlayPlaybackSession` channel mapping (not the cue's per-cell
+  routes). The framework supports it via
+  `AudioRouter.AddRoute(..., routeId, ChannelMap, gain)`; wiring the
+  cue routes through is a separate piece.
+- The compositor backend is `CpuVideoCompositor` (default in
+  `VideoCompositor.Create`). For 1080p60 PiP this is fine on modern
+  hardware; the GL backend is available via
+  `VideoCompositorBackend.Gl` for higher-load scenarios — switching
+  is a one-line change in `CueCompositionRuntime`.
+
+**Operator setup for the PiP scenario** (from the user's earlier
+question — this now works end-to-end):
+
+1. OutputManagement: at least one PortAudio output, at least one
+   Local or NDI video output.
+2. Cue Player → Compositions: add `Program 1920×1080 @ 60`.
+3. Cue Player → Video outputs: one binding — your video output ↔ `Program`.
+4. Add three media cues: background video, alpha-foreground video,
+   audio file.
+5. Background cue → Video tab → `+ Placement` → composition `Program`,
+   layer `0`, position `Cover`, opacity `1.0`.
+6. Foreground cue → Video tab → `+ Placement` → composition `Program`,
+   layer `1`, position `Cover` (or whatever), opacity `1.0`. The
+   file's alpha gives transparency on top of the background.
+7. Audio cue → Audio tab → `+ Route` → source channel 0/1 →
+   PortAudio output.
+8. Group the three cues under a Group cue with fire mode
+   `FireAllSimultaneously`.
+9. Standby the group → Go.

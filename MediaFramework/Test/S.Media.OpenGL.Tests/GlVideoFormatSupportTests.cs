@@ -68,6 +68,10 @@ public sealed class GlVideoFormatSupportTests
     [InlineData(PixelFormat.Yuva444P16Le)]
     [InlineData(PixelFormat.Yuv422P12Le)]
     [InlineData(PixelFormat.Yuv444P12Le)]
+    [InlineData(PixelFormat.Rgba16)]
+    [InlineData(PixelFormat.Rgba16F)]
+    [InlineData(PixelFormat.P216)]
+    [InlineData(PixelFormat.Pa16)]
     public void NewFormats_HaveGlRecipe_AndAppearInSupportedList(PixelFormat fmt)
     {
         Assert.True(GlVideoFormatSupport.TryGetRecipe(fmt, out var recipe),
@@ -96,9 +100,28 @@ public sealed class GlVideoFormatSupportTests
     [InlineData(PixelFormat.Yuva444P16Le, 1f)]
     [InlineData(PixelFormat.Yuv422P12Le, 65535f / 4095f)]
     [InlineData(PixelFormat.Yuv444P12Le, 65535f / 4095f)]
+    [InlineData(PixelFormat.Rgba16, 1f)]
+    [InlineData(PixelFormat.Rgba16F, 1f)]
+    [InlineData(PixelFormat.P216, 1f)]
+    [InlineData(PixelFormat.Pa16, 1f)]
     public void NewFormats_BitScale_MatchesStorage(PixelFormat fmt, float expected)
     {
         Assert.True(GlVideoFormatSupport.TryGetRecipe(fmt, out var recipe));
         Assert.Equal(expected, recipe.DefaultBitScale, precision: 3);
+    }
+
+    [Fact]
+    public void AllConcreteFrameworkPixelFormats_HaveGlRecipe()
+    {
+        foreach (var format in Enum.GetValues<PixelFormat>())
+        {
+            if (format == PixelFormat.Unknown)
+                continue;
+
+            Assert.True(
+                GlVideoFormatSupport.TryGetRecipe(format, out _),
+                $"{format} is in the framework PixelFormat enum but has no GL recipe.");
+            Assert.Contains(format, YuvVideoRenderer.SupportedPixelFormats);
+        }
     }
 }

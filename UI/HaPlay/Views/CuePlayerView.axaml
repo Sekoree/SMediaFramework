@@ -263,7 +263,7 @@
                                   ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
                                   MinWidth="220" />
                         <TextBlock Text="{x:Static res:Strings.LayerIndexLabel}" VerticalAlignment="Center" />
-                        <NumericUpDown Value="{Binding LayerIndex, Mode=TwoWay}" Minimum="-100" Maximum="100" />
+                        <NumericUpDown Value="{Binding LayerIndex, Mode=TwoWay}" VerticalAlignment="Center" Minimum="-100" Maximum="100" />
                         <TextBlock Text="{x:Static res:Strings.LayerPositionLabel}" VerticalAlignment="Center" />
                         <ComboBox SelectedItem="{Binding Position, Mode=TwoWay}"
                                   ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).LayerPositions}"

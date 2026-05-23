@@ -510,6 +510,8 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         {
             CorePixelFormat.Bgra32 => UploadBgraFromFrame,
             CorePixelFormat.Rgba32 or CorePixelFormat.Argb32 or CorePixelFormat.Abgr32 => UploadRgbaFromFrame,
+            CorePixelFormat.Rgba16 => UploadRgba16FromFrame,
+            CorePixelFormat.Rgba16F => UploadRgba16FFromFrame,
             CorePixelFormat.Rgb24 => UploadRgb24FromFrame,
             CorePixelFormat.Bgr24 => UploadBgr24FromFrame,
             CorePixelFormat.I420 => UploadI420FromFrame,
@@ -520,6 +522,8 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             CorePixelFormat.Nv12 => UploadNv12Adaptive,
             CorePixelFormat.Nv21 => UploadNv21FromFrame,
             CorePixelFormat.P010 or CorePixelFormat.P016 => UploadSemiPlanar16FromFrame,
+            CorePixelFormat.P216 => UploadP216FromFrame,
+            CorePixelFormat.Pa16 => UploadPa16FromFrame,
             CorePixelFormat.Uyvy => UploadUyvyFromFrame,
             CorePixelFormat.Yuyv => UploadYuyvFromFrame,
             CorePixelFormat.Gray8 => UploadGray8FromFrame,
@@ -546,6 +550,12 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             case CorePixelFormat.Argb32:
             case CorePixelFormat.Abgr32:
                 UploadRgbaPtr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.Rgba16:
+                UploadRgba16Ptr((byte*)planes[0], strides[0]);
+                break;
+            case CorePixelFormat.Rgba16F:
+                UploadRgba16FPtr((byte*)planes[0], strides[0]);
                 break;
             case CorePixelFormat.Rgb24:
                 UploadRgb24Ptr((byte*)planes[0], strides[0]);
@@ -578,6 +588,13 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             case CorePixelFormat.P010:
             case CorePixelFormat.P016:
                 UploadSemiPlanar16Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1]);
+                break;
+            case CorePixelFormat.P216:
+                UploadSemiPlanar42216Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1]);
+                break;
+            case CorePixelFormat.Pa16:
+                UploadPa16Ptr((byte*)planes[0], strides[0], (byte*)planes[1], strides[1],
+                    (byte*)planes[2], strides[2]);
                 break;
             case CorePixelFormat.Uyvy:
                 UploadUyvyPtr((byte*)planes[0], strides[0]);
@@ -966,6 +983,18 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         UploadRgbaPtr((byte*)pin.Pointer, f.Strides[0]);
     }
 
+    private void UploadRgba16FromFrame(VideoFrame f)
+    {
+        using var pin = f.Planes[0].Pin();
+        UploadRgba16Ptr((byte*)pin.Pointer, f.Strides[0]);
+    }
+
+    private void UploadRgba16FFromFrame(VideoFrame f)
+    {
+        using var pin = f.Planes[0].Pin();
+        UploadRgba16FPtr((byte*)pin.Pointer, f.Strides[0]);
+    }
+
     private void UploadRgb24FromFrame(VideoFrame f)
     {
         using var pin = f.Planes[0].Pin();
@@ -1040,6 +1069,22 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         using var p0 = f.Planes[0].Pin();
         using var p1 = f.Planes[1].Pin();
         UploadSemiPlanar16Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1]);
+    }
+
+    private void UploadP216FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        UploadSemiPlanar42216Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1]);
+    }
+
+    private void UploadPa16FromFrame(VideoFrame f)
+    {
+        using var p0 = f.Planes[0].Pin();
+        using var p1 = f.Planes[1].Pin();
+        using var p2 = f.Planes[2].Pin();
+        UploadPa16Ptr((byte*)p0.Pointer, f.Strides[0], (byte*)p1.Pointer, f.Strides[1],
+            (byte*)p2.Pointer, f.Strides[2]);
     }
 
     private void UploadUyvyFromFrame(VideoFrame f)
@@ -1162,6 +1207,27 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         SetUnpackRowLength(stride / 4, _format.Width);
         _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)_format.Width, (uint)_format.Height,
             GlPixelFormat.Rgba, GlPixelType.UnsignedByte, basePtr);
+    }
+
+    private void UploadRgba16Ptr(byte* basePtr, int stride)
+    {
+        UploadRgba16LikePtr(basePtr, stride, GlPixelType.UnsignedShort);
+    }
+
+    private void UploadRgba16FPtr(byte* basePtr, int stride)
+    {
+        UploadRgba16LikePtr(basePtr, stride, GlPixelType.HalfFloat);
+    }
+
+    private void UploadRgba16LikePtr(byte* basePtr, int stride, GlPixelType pixelType)
+    {
+        if (stride % 8 != 0)
+            throw new ArgumentOutOfRangeException(nameof(stride), "stride must be a multiple of 8 bytes for RGBA16/RGBA16F uploads.");
+        BindUnit(0);
+        SetUnpackAlignment(stride, _format.Width * 8);
+        SetUnpackRowLength(stride / 8, _format.Width);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)_format.Width, (uint)_format.Height,
+            GlPixelFormat.Rgba, pixelType, basePtr);
     }
 
     private void UploadRgb24Ptr(byte* basePtr, int stride)
@@ -1336,6 +1402,31 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         SetUnpackRowLength(uvStride / 4, cw);
         _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)cw, (uint)ch,
             GlPixelFormat.RG, GlPixelType.UnsignedShort, uvPtr);
+    }
+
+    private void UploadSemiPlanar42216Ptr(byte* yPtr, int yStride, byte* uvPtr, int uvStride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth422(_format.Width);
+        var h = _format.Height;
+        UploadPlanarR16Ptr(0, yPtr, yStride, _format.Width, h);
+        BindUnit(1);
+        SetUnpackAlignment(uvStride, cw * 4);
+        SetUnpackRowLength(uvStride / 4, cw);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)cw, (uint)h,
+            GlPixelFormat.RG, GlPixelType.UnsignedShort, uvPtr);
+    }
+
+    private void UploadPa16Ptr(byte* yPtr, int yStride, byte* uvPtr, int uvStride, byte* aPtr, int aStride)
+    {
+        var cw = PixelFormatInfo.ChromaWidth422(_format.Width);
+        var h = _format.Height;
+        UploadPlanarR16Ptr(0, yPtr, yStride, _format.Width, h);
+        BindUnit(1);
+        SetUnpackAlignment(uvStride, cw * 4);
+        SetUnpackRowLength(uvStride / 4, cw);
+        _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)cw, (uint)h,
+            GlPixelFormat.RG, GlPixelType.UnsignedShort, uvPtr);
+        UploadPlanarR16Ptr(2, aPtr, aStride, _format.Width, h);
     }
 
     private void UploadUyvyPtr(byte* basePtr, int stride)

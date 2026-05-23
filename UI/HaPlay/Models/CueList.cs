@@ -135,7 +135,7 @@ public sealed record CueAudioRoute
 {
     public int SourceChannel { get; init; }
 
-    /// <summary>Id of a PortAudio output line in the shared <c>OutputManagementView</c> registry
+    /// <summary>Id of an audio-capable output line in the shared <c>OutputManagementView</c> registry
     /// (matches <c>OutputDefinition.Id</c>). Empty when no output picked yet.</summary>
     public Guid OutputLineId { get; init; }
 

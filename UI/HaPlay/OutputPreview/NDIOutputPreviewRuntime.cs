@@ -26,7 +26,6 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     private const int CarrierVideoHeight = 1080;
     private const int CarrierVideoFpsNumerator = 30;
     private const int CarrierVideoFpsDenominator = 1;
-    private const int CarrierAudioChannels = 2;
     private const int CarrierAudioChunkHz = 50;
 
     private NDIOutputDefinition _definition;
@@ -182,27 +181,32 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     }
 
     /// <summary>
-    /// Resumes whichever carrier timers were paused by <see cref="AcquireForPlayback"/>. For video, also
-    /// reconfigures the sender back to the carrier format so the next frame matches the timer's rate.
+    /// Resumes the carrier timers for the sides being released. For video, also reconfigures the
+    /// sender back to the carrier format so the next frame matches the timer's rate.
     /// </summary>
-    public void ReleaseFromPlayback()
+    public void ReleaseFromPlayback(bool releaseVideo = true, bool releaseAudio = true)
     {
         bool dispose;
         lock (_gate)
         {
-            var wasVideo = _videoAcquired;
-            var wasAudio = _audioAcquired;
+            var wasVideo = releaseVideo && _videoAcquired;
+            var wasAudio = releaseAudio && _audioAcquired;
             if (!wasVideo && !wasAudio)
                 return;
-            Trace.LogDebug("ReleaseFromPlayback: '{Name}' wasVideo={V} wasAudio={A}",
+            Trace.LogDebug("ReleaseFromPlayback: '{Name}' releaseVideo={V} releaseAudio={A}",
                 _definition.SourceName, wasVideo, wasAudio);
 
-            _videoAcquired = false;
-            _audioAcquired = false;
-            dispose = _disposeOnRelease;
-            _disposeOnRelease = false;
+            if (wasVideo)
+                _videoAcquired = false;
+            if (wasAudio)
+                _audioAcquired = false;
 
-            if (!dispose && !_disposed && _output is not null)
+            var pendingDispose = _disposeOnRelease;
+            dispose = pendingDispose && !_videoAcquired && !_audioAcquired;
+            if (dispose)
+                _disposeOnRelease = false;
+
+            if (!pendingDispose && !_disposed && _output is not null)
             {
                 var mode = _definition.StreamMode;
                 if (wasVideo && HasVideoStream(mode))
@@ -350,7 +354,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         if (_audio is null)
             return;
 
-        var channels = CarrierAudioChannels;
+        var channels = Math.Max(1, _definition.AudioChannelCount);
         var rate = _definition.AudioSampleRate;
         var need = samplesPerChannel * channels;
         if (need <= 0)
@@ -368,7 +372,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         CarrierVideoWidth, CarrierVideoHeight, PixelFormat.Bgra32,
         new Rational(CarrierVideoFpsNumerator, CarrierVideoFpsDenominator));
 
-    private AudioFormat CarrierAudioFormat => new(_definition.AudioSampleRate, CarrierAudioChannels);
+    private AudioFormat CarrierAudioFormat => new(_definition.AudioSampleRate, Math.Max(1, _definition.AudioChannelCount));
 
     /// <summary>
     /// Phase A (§9.6) — swaps the underlying carrier for one started from <paramref name="newDefinition"/>.

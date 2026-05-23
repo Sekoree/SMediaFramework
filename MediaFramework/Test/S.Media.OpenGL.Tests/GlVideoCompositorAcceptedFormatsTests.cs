@@ -34,6 +34,10 @@ public sealed class GlVideoCompositorAcceptedFormatsTests
     [InlineData(PixelFormat.Yuva444P16Le)]
     [InlineData(PixelFormat.Nv12)]
     [InlineData(PixelFormat.I420)]
+    [InlineData(PixelFormat.Rgba16)]
+    [InlineData(PixelFormat.Rgba16F)]
+    [InlineData(PixelFormat.P216)]
+    [InlineData(PixelFormat.Pa16)]
     public void GlCompositorAccepted_Includes_KeyProfessionalFormats(PixelFormat fmt)
     {
         // We construct a stub compositor type purely to read its static AcceptedLayerPixelFormats

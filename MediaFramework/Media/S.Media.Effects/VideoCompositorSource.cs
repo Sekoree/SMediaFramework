@@ -8,16 +8,17 @@ namespace S.Media.Effects;
 /// <remarks>
 /// <para>
 /// Same source/output-duality pattern as <see cref="Audio.AudioBus"/>, but **per slot**: each slot
-/// holds only the most-recent submitted frame (replace-on-submit). When the downstream consumer
-/// calls <see cref="TryReadNextFrame"/>, the output snapshots every slot's current frame, builds a
-/// <see cref="CompositorLayer"/> list (slot-insertion order = back-to-front), calls
+/// holds the most-recent frame that has been promoted into the composition and keeps reusing it
+/// until a newer submitted frame replaces it. When the downstream consumer calls
+/// <see cref="TryReadNextFrame"/>, the output snapshots every slot's current frame, builds a
+/// <see cref="CompositorLayer"/> list (slot order = back-to-front), calls
 /// <see cref="IVideoCompositor.Composite"/>, and returns the composed frame.
 /// </para>
 /// <para>
-/// <strong>Latest-wins</strong> semantics: if a slot receives a new frame before the previous one
-/// has been composited, the old frame is disposed and <see cref="Slot.OverflowFrames"/> increments.
-/// This matches <see cref="VideoOutputPump"/>'s drop-oldest behavior under pressure but at the slot
-/// level rather than a queue.
+/// <strong>Latest-wins</strong> semantics: if a slot receives multiple new frames before the next
+/// composite, only the newest pending frame is promoted; superseded pending frames are disposed and
+/// <see cref="Slot.OverflowFrames"/> increments. This matches <see cref="VideoOutputPump"/>'s
+/// drop-oldest behavior under pressure but at the slot level rather than a queue.
 /// </para>
 /// <para>
 /// <strong>Per-slot mutable state</strong>: <see cref="Slot.Opacity"/>, <see cref="Slot.Transform"/>,
@@ -102,6 +103,17 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         }
     }
 
+    /// <summary>
+    /// Reorders slots in-place. The list order is the compositor's back-to-front draw order.
+    /// </summary>
+    public void SortSlots(Comparison<Slot> comparison)
+    {
+        ArgumentNullException.ThrowIfNull(comparison);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_slotsGate)
+            _slots.Sort(comparison);
+    }
+
     /// <summary>Removes a slot and disposes any frame it was holding.</summary>
     public bool RemoveSlot(string id)
     {
@@ -139,22 +151,22 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             return false;
         }
 
-        // Snapshot slots + take ownership of each slot's current frame.
+        // Snapshot slots and lease each held frame for the duration of this composite.
         Slot[] snapshot;
         lock (_slotsGate)
             snapshot = _slots.ToArray();
 
         List<CompositorLayer>? layers = null;
-        // Frames we took ownership of from slots; must be disposed after Composite returns.
-        List<VideoFrame>? consumedFrames = null;
+        List<Slot.SlotFrameLease>? leases = null;
         try
         {
             foreach (var slot in snapshot)
             {
-                var f = slot.TakeLatest();
-                if (f is null) continue;
-                consumedFrames ??= [];
-                consumedFrames.Add(f);
+                var lease = slot.AcquireLatest();
+                if (lease is null) continue;
+                leases ??= [];
+                leases.Add(lease);
+                var f = lease.Frame;
                 layers ??= [];
                 layers.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode));
             }
@@ -167,10 +179,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         }
         finally
         {
-            if (consumedFrames is not null)
+            if (leases is not null)
             {
-                foreach (var f in consumedFrames)
-                    f.Dispose();
+                foreach (var lease in leases)
+                    lease.Dispose();
             }
         }
     }
@@ -203,8 +215,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     {
         private readonly Lock _gate = new();
         private readonly SlotOutput _sink;
-        private VideoFrame? _latest;
+        private VideoFrame? _current;
+        private VideoFrame? _pending;
         private long _overflowFrames;
+        private int _activeReaders;
         private float _opacity = 1f;
         private LayerTransform2D _transform = LayerTransform2D.Identity;
         private BlendMode _blendMode = BlendMode.SourceOver;
@@ -249,44 +263,109 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         internal void SubmitFromOutput(VideoFrame frame)
         {
             VideoFrame? toDispose;
+            var closed = false;
             lock (_gate)
             {
                 if (_closed)
                 {
-                    frame.Dispose();
-                    throw new ObjectDisposedException(nameof(Slot));
+                    closed = true;
+                    toDispose = frame;
                 }
-                toDispose = _latest;
-                _latest = frame;
+                else
+                {
+                    toDispose = _pending;
+                    _pending = frame;
+                }
             }
             if (toDispose is not null)
             {
-                Interlocked.Increment(ref _overflowFrames);
+                if (!closed)
+                    Interlocked.Increment(ref _overflowFrames);
                 toDispose.Dispose();
             }
+            if (closed)
+                throw new ObjectDisposedException(nameof(Slot));
         }
 
-        internal VideoFrame? TakeLatest()
+        internal SlotFrameLease? AcquireLatest()
         {
+            VideoFrame? toDispose = null;
+            VideoFrame? frame;
             lock (_gate)
             {
-                var f = _latest;
-                _latest = null;
-                return f;
+                if (_closed)
+                    return null;
+
+                if (_pending is not null && _activeReaders == 0)
+                {
+                    toDispose = _current;
+                    _current = _pending;
+                    _pending = null;
+                }
+
+                frame = _current;
+                if (frame is null)
+                    return null;
+                _activeReaders++;
             }
+
+            toDispose?.Dispose();
+            return new SlotFrameLease(this, frame);
         }
 
         internal void Close()
         {
-            VideoFrame? toDispose;
+            VideoFrame? currentToDispose = null;
+            VideoFrame? pendingToDispose;
             lock (_gate)
             {
                 if (_closed) return;
                 _closed = true;
-                toDispose = _latest;
-                _latest = null;
+                pendingToDispose = _pending;
+                _pending = null;
+                if (_activeReaders == 0)
+                {
+                    currentToDispose = _current;
+                    _current = null;
+                }
+            }
+            pendingToDispose?.Dispose();
+            currentToDispose?.Dispose();
+        }
+
+        private void ReleaseLease()
+        {
+            VideoFrame? toDispose = null;
+            lock (_gate)
+            {
+                if (_activeReaders > 0)
+                    _activeReaders--;
+                if (_closed && _activeReaders == 0)
+                {
+                    toDispose = _current;
+                    _current = null;
+                }
             }
             toDispose?.Dispose();
+        }
+
+        internal sealed class SlotFrameLease : IDisposable
+        {
+            private Slot? _owner;
+
+            public SlotFrameLease(Slot owner, VideoFrame frame)
+            {
+                _owner = owner;
+                Frame = frame;
+            }
+
+            public VideoFrame Frame { get; }
+
+            public void Dispose()
+            {
+                var owner = Interlocked.Exchange(ref _owner, null);
+                owner?.ReleaseLease();
+            }
         }
 
         private sealed class SlotOutput(Slot owner, IReadOnlyList<PixelFormat> accepted) : IVideoOutput

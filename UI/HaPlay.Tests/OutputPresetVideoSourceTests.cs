@@ -81,7 +81,9 @@ public sealed class OutputPresetVideoSourceTests
             composed.Dispose();
         }
 
-        Assert.Equal(1, disposed); // disposed once after composition consumed it.
+        Assert.Equal(0, disposed); // held by the compositor slot for future output ticks.
+        wrapped.Dispose();
+        Assert.Equal(1, disposed); // disposed once when the slot is torn down.
     }
 
     private sealed class OneShotSource(VideoFormat format, VideoFrame frame) : IVideoSource, IDisposable

@@ -751,8 +751,11 @@ public partial class OutputManagementViewModel : ViewModelBase
         return rt.AcquireForPlayback(needsVideo, needsAudio);
     }
 
-    /// <summary>Resumes the carrier paused by <see cref="TryAcquireNDICarrierForPlayback"/>.</summary>
-    internal void ReleaseNDICarrierForPlayback(OutputLineViewModel line)
+    /// <summary>Resumes the carrier sides paused by <see cref="TryAcquireNDICarrierForPlayback"/>.</summary>
+    internal void ReleaseNDICarrierForPlayback(
+        OutputLineViewModel line,
+        bool releaseVideo = true,
+        bool releaseAudio = true)
     {
         NDIOutputPreviewRuntime? rt;
         lock (_ndiOutputsGate)
@@ -761,7 +764,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 return;
         }
 
-        rt.ReleaseFromPlayback();
+        rt.ReleaseFromPlayback(releaseVideo, releaseAudio);
     }
 
     /// <summary>Installs a logo template on every NDI carrier (idle-slate path). Pass <c>null</c> to revert to black.</summary>

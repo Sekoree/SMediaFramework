@@ -45,6 +45,20 @@ internal static class GlVideoFormatSupport
                 static _ => (GlInternalFormat.Rgba8, GlPixelFormat.Rgba, GlPixelType.UnsignedByte),
                 1f, false, false),
 
+            [CorePixelFormat.Rgba16] = new(
+                "fullscreen.vert.glsl", "rgba.frag.glsl",
+                ["image"], 1,
+                static (vf, p) => p == 0 ? (vf.Width, vf.Height) : (0, 0),
+                static _ => (GlInternalFormat.Rgba16, GlPixelFormat.Rgba, GlPixelType.UnsignedShort),
+                1f, false, false),
+
+            [CorePixelFormat.Rgba16F] = new(
+                "fullscreen.vert.glsl", "rgba.frag.glsl",
+                ["image"], 1,
+                static (vf, p) => p == 0 ? (vf.Width, vf.Height) : (0, 0),
+                static _ => (GlInternalFormat.Rgba16f, GlPixelFormat.Rgba, GlPixelType.HalfFloat),
+                1f, false, false),
+
             [CorePixelFormat.Rgb24] = new(
                 "fullscreen.vert.glsl", "rgb8.frag.glsl",
                 ["image"], 1,
@@ -121,6 +135,20 @@ internal static class GlVideoFormatSupport
                 ["yPlane", "uvPlane"], 2,
                 SemiPlanar420Size,
                 SemiPlanar420Gl16,
+                1f, true, false),
+
+            [CorePixelFormat.P216] = new(
+                "fullscreen.vert.glsl", "yuv_nv12.frag.glsl",
+                ["yPlane", "uvPlane"], 2,
+                SemiPlanar422Size,
+                SemiPlanar420Gl16,
+                1f, true, false),
+
+            [CorePixelFormat.Pa16] = new(
+                "fullscreen.vert.glsl", "yuva_nv16.frag.glsl",
+                ["yPlane", "uvPlane", "aPlane"], 3,
+                SemiPlanar422AlphaSize,
+                SemiPlanar422AlphaGl16,
                 1f, true, false),
 
             [CorePixelFormat.Argb32] = new(
@@ -301,6 +329,7 @@ internal static class GlVideoFormatSupport
         CorePixelFormat.Yuva444P,
         CorePixelFormat.Yuva422P,
         CorePixelFormat.Yuva420p,
+        CorePixelFormat.Pa16,
         // High bit-depth non-alpha YUV.
         CorePixelFormat.Yuv444P12Le,
         CorePixelFormat.Yuv422P12Le,
@@ -310,6 +339,7 @@ internal static class GlVideoFormatSupport
         CorePixelFormat.Yuv420P12Le,
         CorePixelFormat.P010,
         CorePixelFormat.P016,
+        CorePixelFormat.P216,
         // 8-bit non-alpha YUV.
         CorePixelFormat.Yuv444P,
         CorePixelFormat.Yuv422P,
@@ -322,6 +352,8 @@ internal static class GlVideoFormatSupport
         // RGB(A) / luminance fall-backs.
         CorePixelFormat.Bgra32,
         CorePixelFormat.Rgba32,
+        CorePixelFormat.Rgba16F,
+        CorePixelFormat.Rgba16,
         CorePixelFormat.Bgr24,
         CorePixelFormat.Rgb24,
         CorePixelFormat.Argb32,
@@ -392,6 +424,21 @@ internal static class GlVideoFormatSupport
         _ => (0, 0),
     };
 
+    private static (int w, int h) SemiPlanar422Size(VideoFormat vf, int p) => p switch
+    {
+        0 => (vf.Width, vf.Height),
+        1 => (PixelFormatInfo.ChromaWidth422(vf.Width), vf.Height),
+        _ => (0, 0),
+    };
+
+    private static (int w, int h) SemiPlanar422AlphaSize(VideoFormat vf, int p) => p switch
+    {
+        0 => (vf.Width, vf.Height),
+        1 => (PixelFormatInfo.ChromaWidth422(vf.Width), vf.Height),
+        2 => (vf.Width, vf.Height),
+        _ => (0, 0),
+    };
+
     private static (GlInternalFormat ifmt, GlPixelFormat pfmt, GlPixelType ptype) SemiPlanar420Gl(int p) => p switch
     {
         0 => (GlInternalFormat.R8, GlPixelFormat.Red, GlPixelType.UnsignedByte),
@@ -402,6 +449,12 @@ internal static class GlVideoFormatSupport
     {
         0 => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
         _ => (GlInternalFormat.RG16, GlPixelFormat.RG, GlPixelType.UnsignedShort),
+    };
+
+    private static (GlInternalFormat ifmt, GlPixelFormat pfmt, GlPixelType ptype) SemiPlanar422AlphaGl16(int p) => p switch
+    {
+        1 => (GlInternalFormat.RG16, GlPixelFormat.RG, GlPixelType.UnsignedShort),
+        _ => (GlInternalFormat.R16, GlPixelFormat.Red, GlPixelType.UnsignedShort),
     };
 
     private static (int w, int h) Packed422RgbaHalfWidth(VideoFormat vf, int p) =>

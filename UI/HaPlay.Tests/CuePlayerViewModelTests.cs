@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using HaPlay.Models;
 using HaPlay.ViewModels;
 using Xunit;
@@ -6,6 +7,51 @@ namespace HaPlay.Tests;
 
 public sealed class CuePlayerViewModelTests
 {
+    [Fact]
+    public void AvailableOutputBuckets_ClassifyNdiByStreamMode()
+    {
+        var vm = new CuePlayerViewModel();
+        var videoAndAudio = Line(new NDIOutputDefinition(
+            Guid.NewGuid(), "NDI VA", "src-va", null, NDIOutputStreamMode.VideoAndAudio, 4, 48000));
+        var audioOnly = Line(new NDIOutputDefinition(
+            Guid.NewGuid(), "NDI A", "src-a", null, NDIOutputStreamMode.AudioOnly, 6, 48000));
+        var videoOnly = Line(new NDIOutputDefinition(
+            Guid.NewGuid(), "NDI V", "src-v", null, NDIOutputStreamMode.VideoOnly, 2, 48000));
+
+        vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel>
+        {
+            videoAndAudio,
+            audioOnly,
+            videoOnly,
+        });
+
+        Assert.Contains(videoAndAudio, vm.AvailableAudioOutputs);
+        Assert.Contains(audioOnly, vm.AvailableAudioOutputs);
+        Assert.DoesNotContain(videoOnly, vm.AvailableAudioOutputs);
+
+        Assert.Contains(videoAndAudio, vm.AvailableVideoOutputs);
+        Assert.Contains(videoOnly, vm.AvailableVideoOutputs);
+        Assert.DoesNotContain(audioOnly, vm.AvailableVideoOutputs);
+    }
+
+    [Fact]
+    public void AddAudioRoute_UsesNdiChannelCount()
+    {
+        var vm = new CuePlayerViewModel();
+        var ndi = Line(new NDIOutputDefinition(
+            Guid.NewGuid(), "NDI 4ch", "src", null, NDIOutputStreamMode.AudioOnly, 4, 48000));
+        vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { ndi });
+
+        vm.AddMediaCueCommand.Execute(null);
+        var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        for (var i = 0; i < 5; i++)
+            vm.AddAudioRouteCommand.Execute(null);
+
+        Assert.Equal(5, media.AudioRoutes.Count);
+        Assert.All(media.AudioRoutes, r => Assert.Equal(ndi.Definition.Id, r.OutputLineId));
+        Assert.Equal(new[] { 1, 2, 3, 4, 1 }, media.AudioRoutes.Select(r => r.OutputChannel).ToArray());
+    }
+
     [Fact]
     public void AddGroupThenMedia_AddsMediaAsGroupChild()
     {
@@ -29,6 +75,8 @@ public sealed class CuePlayerViewModelTests
         Assert.Single(group.Children);
         Assert.IsType<MediaCueNode>(group.Children[0]);
     }
+
+    private static OutputLineViewModel Line(OutputDefinition definition) => new(definition, _ => { });
 
     [Fact]
     public void ApplyCueLists_Empty_RestoresDefaultCueList()
@@ -251,6 +299,29 @@ public sealed class CuePlayerViewModelTests
 
         lock (hits)
             Assert.Equal(new[] { "First", "Second" }, hits);
+    }
+
+    [Fact]
+    public void PauseAndGoResume_InvokePlaybackPauseCallback()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        cue.SourceOrAction = "/tmp/test.mp4";
+        var states = new List<bool>();
+        vm.SetPlaybackPausedCallback = paused =>
+        {
+            states.Add(paused);
+            return Task.CompletedTask;
+        };
+
+        vm.StandbySelectedCommand.Execute(null);
+        vm.GoCommand.Execute(null);
+        vm.PauseCommand.Execute(null);
+        vm.GoCommand.Execute(null);
+
+        Assert.Equal(new[] { true, false }, states);
+        Assert.False(vm.IsTransportPaused);
     }
 
     [Fact]

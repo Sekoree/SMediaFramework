@@ -547,6 +547,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// engine can tear down its session. Optional; null in tests.</summary>
     public Func<Task>? StopPlaybackCallback { get; set; }
 
+    /// <summary>Host-provided pause callback — Pause/Resume forwards to this so the playback
+    /// engine freezes active media instead of only deferring pending cue delays.</summary>
+    public Func<bool, Task>? SetPlaybackPausedCallback { get; set; }
+
     public CuePlayerViewModel()
     {
         var initial = new CueListEditorViewModel(Strings.DefaultCueListName);
@@ -570,9 +574,20 @@ public partial class CuePlayerViewModel : ViewModelBase
         foreach (var line in AvailableOutputs)
         {
             if (line.Definition is Models.PortAudioOutputDefinition)
+            {
                 AvailableAudioOutputs.Add(line);
-            else if (line.Definition is Models.LocalVideoOutputDefinition or Models.NDIOutputDefinition)
+            }
+            else if (line.Definition is Models.LocalVideoOutputDefinition)
+            {
                 AvailableVideoOutputs.Add(line);
+            }
+            else if (line.Definition is Models.NDIOutputDefinition ndi)
+            {
+                if (ndi.StreamMode != NDIOutputStreamMode.VideoOnly)
+                    AvailableAudioOutputs.Add(line);
+                if (ndi.StreamMode != NDIOutputStreamMode.AudioOnly)
+                    AvailableVideoOutputs.Add(line);
+            }
         }
     }
 
@@ -588,6 +603,24 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private CueNodeViewModel? _selectedCueNode;
+
+    /// <summary>All cue nodes the operator currently has highlighted in the tree (multi-select).
+    /// The drawer still shows fields from the singular <see cref="SelectedCueNode"/>, but
+    /// "+ Route" / "+ Placement" fan their action out across every media cue in this list — so
+    /// the operator can stage a route on 11 audio cues in one click.</summary>
+    private readonly List<CueNodeViewModel> _selectedCueNodes = new();
+
+    public IReadOnlyList<CueNodeViewModel> SelectedCueNodes => _selectedCueNodes;
+
+    /// <summary>Called by <c>CuePlayerView</c>'s row-selection changed handler with the live set
+    /// of selected nodes. Keeps the singular <see cref="SelectedCueNode"/> as the primary
+    /// (first in the list) so all the existing drawer bindings keep working.</summary>
+    public void UpdateSelection(IReadOnlyList<CueNodeViewModel> selected)
+    {
+        _selectedCueNodes.Clear();
+        _selectedCueNodes.AddRange(selected);
+        SelectedCueNode = _selectedCueNodes.FirstOrDefault();
+    }
 
     [ObservableProperty]
     private CueCompositionViewModel? _selectedComposition;
@@ -867,11 +900,32 @@ public partial class CuePlayerViewModel : ViewModelBase
         PauseCommand.NotifyCanExecuteChanged();
     }
 
+    /// <summary>Set of cue ids the playback engine reports as currently active. Maintained via
+    /// <see cref="OnCueStarted"/> / <see cref="OnCueEnded"/> from the host (MainViewModel wires
+    /// these to the engine's events). Used by <see cref="RefreshRowStatuses"/> so every active
+    /// cue lights up — the singular <see cref="CurrentCueNode"/> only tracks the last-started
+    /// one for AutoFollow / transport-state purposes.</summary>
+    private readonly HashSet<Guid> _activeCueIds = new();
+
+    /// <summary>Engine callback — cue began playing. Marks its row Current.</summary>
+    public void OnCueStarted(Guid cueId)
+    {
+        _activeCueIds.Add(cueId);
+        RefreshRowStatuses();
+    }
+
+    /// <summary>Engine callback — cue stopped (natural end, Stop, or Panic). Clears Current.</summary>
+    public void OnCueEnded(Guid cueId)
+    {
+        _activeCueIds.Remove(cueId);
+        RefreshRowStatuses();
+    }
+
     private void RefreshRowStatuses()
     {
         foreach (var node in EnumerateAllCueNodes())
         {
-            var status = ReferenceEquals(node, CurrentCueNode)
+            var status = _activeCueIds.Contains(node.Id)
                 ? CueRowStatus.Current
                 : ReferenceEquals(node, StandbyCueNode)
                     ? CueRowStatus.Standby
@@ -1013,19 +1067,37 @@ public partial class CuePlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanAddAudioRoute))]
     private void AddAudioRoute()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media) return;
+        var targets = MediaCuesInSelection();
+        if (targets.Count == 0) return;
         var firstOutput = AvailableAudioOutputs.FirstOrDefault();
-        var channelCount = firstOutput?.Definition is Models.PortAudioOutputDefinition pa ? pa.ChannelCount : 2;
-        var route = new CueAudioRouteViewModel
+        var channelCount = GetAudioOutputChannelCount(firstOutput);
+
+        CueAudioRouteViewModel? lastOnPrimary = null;
+        foreach (var media in targets)
         {
-            SourceChannel = media.AudioRoutes.Count,
-            OutputLineId = firstOutput?.Definition.Id ?? Guid.Empty,
-            OutputChannel = 1 + (media.AudioRoutes.Count % Math.Max(1, channelCount)),
-        };
-        media.AudioRoutes.Add(route);
-        SelectedAudioRoute = route;
+            var route = new CueAudioRouteViewModel
+            {
+                SourceChannel = media.AudioRoutes.Count,
+                OutputLineId = firstOutput?.Definition.Id ?? Guid.Empty,
+                OutputChannel = 1 + (media.AudioRoutes.Count % Math.Max(1, channelCount)),
+            };
+            media.AudioRoutes.Add(route);
+            if (ReferenceEquals(media, SelectedCueNode))
+                lastOnPrimary = route;
+        }
+        if (lastOnPrimary is not null)
+            SelectedAudioRoute = lastOnPrimary;
         OnPropertyChanged(nameof(VisibleAudioRoutes));
     }
+
+    private static int GetAudioOutputChannelCount(OutputLineViewModel? line) =>
+        line?.Definition switch
+        {
+            Models.PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
+            Models.NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly =>
+                Math.Max(1, nd.AudioChannelCount),
+            _ => 2,
+        };
 
     private bool CanAddAudioRoute() => SelectedCueNode is { Kind: CueNodeKind.Media };
 
@@ -1046,19 +1118,40 @@ public partial class CuePlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanAddVideoPlacement))]
     private void AddVideoPlacement()
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media || SelectedCueList is null) return;
+        if (SelectedCueList is null) return;
+        var targets = MediaCuesInSelection();
+        if (targets.Count == 0) return;
         var firstComp = SelectedCueList.Compositions.FirstOrDefault();
-        var placement = new CueVideoPlacementViewModel
+
+        CueVideoPlacementViewModel? lastOnPrimary = null;
+        foreach (var media in targets)
         {
-            CompositionId = firstComp?.Id ?? Guid.Empty,
-            LayerIndex = media.VideoPlacements.Count,
-        };
-        media.VideoPlacements.Add(placement);
-        SelectedVideoPlacement = placement;
+            var placement = new CueVideoPlacementViewModel
+            {
+                CompositionId = firstComp?.Id ?? Guid.Empty,
+                LayerIndex = media.VideoPlacements.Count,
+            };
+            media.VideoPlacements.Add(placement);
+            if (ReferenceEquals(media, SelectedCueNode))
+                lastOnPrimary = placement;
+        }
+        if (lastOnPrimary is not null)
+            SelectedVideoPlacement = lastOnPrimary;
         OnPropertyChanged(nameof(VisibleVideoPlacements));
     }
 
     private bool CanAddVideoPlacement() => SelectedCueNode is { Kind: CueNodeKind.Media };
+
+    /// <summary>Media cues in the current multi-selection. Falls back to the singular
+    /// <see cref="SelectedCueNode"/> when only one row is selected (the common case).</summary>
+    private List<CueNodeViewModel> MediaCuesInSelection()
+    {
+        if (_selectedCueNodes.Count > 1)
+            return _selectedCueNodes.Where(n => n.Kind == CueNodeKind.Media).ToList();
+        return SelectedCueNode is { Kind: CueNodeKind.Media } single
+            ? new List<CueNodeViewModel> { single }
+            : new List<CueNodeViewModel>();
+    }
 
     [RelayCommand(CanExecute = nameof(CanRemoveVideoPlacement))]
     private void RemoveVideoPlacement()
@@ -1097,24 +1190,56 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         var parent = SelectedParentCollection();
         if (parent is null) return;
-        var row = new CueNodeViewModel(CueNodeKind.Media)
+
+        // Always seed at least one empty cue (matches the prior "+ Media → row, then pick" UX
+        // and the test contract). Multi-select fills it with the first file plus N-1 follow-ups.
+        var firstRow = new CueNodeViewModel(CueNodeKind.Media)
         {
             Number = NextNumber(parent),
             Label = Strings.CueNodeDefaultMediaLabel,
         };
-        parent.Add(row);
-        SelectedCueNode = row;
-        var picked = await PickMediaFilePathAsync();
-        if (!string.IsNullOrWhiteSpace(picked))
+        parent.Add(firstRow);
+        SelectedCueNode = firstRow;
+
+        var picked = await PickMediaFilePathsAsync(allowMultiple: true);
+        if (picked.Count == 0)
         {
-            row.MediaSourceItem = new FilePlaylistItem(picked);
-            row.SourceOrAction = picked;
-            row.Label = Path.GetFileNameWithoutExtension(picked);
-            await ProbeAndAssignDurationAsync(row, picked);
+            // Picker cancelled — leave the empty cue so the operator can still drag a file onto
+            // it (and so the existing tests' assumptions hold).
+            GoCommand.NotifyCanExecuteChanged();
+            BackCommand.NotifyCanExecuteChanged();
+            StatusMessage = null;
+            return;
         }
+
+        var firstPath = picked[0];
+        firstRow.MediaSourceItem = new FilePlaylistItem(firstPath);
+        firstRow.SourceOrAction = firstPath;
+        firstRow.Label = Path.GetFileNameWithoutExtension(firstPath);
+        await ProbeAndAssignDurationAsync(firstRow, firstPath);
+
+        CueNodeViewModel lastAdded = firstRow;
+        for (var i = 1; i < picked.Count; i++)
+        {
+            var path = picked[i];
+            var row = new CueNodeViewModel(CueNodeKind.Media)
+            {
+                Number = NextNumber(parent),
+                Label = Path.GetFileNameWithoutExtension(path),
+                MediaSourceItem = new FilePlaylistItem(path),
+                SourceOrAction = path,
+            };
+            parent.Add(row);
+            lastAdded = row;
+            await ProbeAndAssignDurationAsync(row, path);
+        }
+
+        SelectedCueNode = lastAdded;
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
-        StatusMessage = null;
+        StatusMessage = picked.Count > 1
+            ? Strings.Format(nameof(Strings.CueAddedFromDropStatusFormat), picked.Count)
+            : null;
     }
 
     [RelayCommand]
@@ -1196,20 +1321,29 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private static async Task<string?> PickMediaFilePathAsync()
     {
+        var paths = await PickMediaFilePathsAsync(allowMultiple: false);
+        return paths.FirstOrDefault();
+    }
+
+    private static async Task<IReadOnlyList<string>> PickMediaFilePathsAsync(bool allowMultiple)
+    {
         var owner = TryGetMainWindow();
-        if (owner is null) return null;
+        if (owner is null) return [];
         var opts = new FilePickerOpenOptions
         {
             Title = Strings.PickMediaFileDialogTitle,
-            AllowMultiple = false,
+            AllowMultiple = allowMultiple,
             FileTypeFilter =
             [
                 new FilePickerFileType(Strings.MediaFileTypeLabel) { Patterns = ["*.mp4", "*.mov", "*.mkv", "*.avi", "*.mp3", "*.wav", "*.flac", "*.m4a"] },
                 new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
             ],
         };
-        var picked = (await owner.StorageProvider.OpenFilePickerAsync(opts)).FirstOrDefault();
-        return picked?.TryGetLocalPath();
+        var picked = await owner.StorageProvider.OpenFilePickerAsync(opts);
+        return picked
+            .Select(f => f.TryGetLocalPath())
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList()!;
     }
 
     [RelayCommand]
@@ -1353,11 +1487,19 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (CurrentCueNode is not null && IsTransportPaused)
         {
             IsTransportPaused = false;
+            _ = SetPlaybackPausedCallback?.Invoke(false);
             StatusMessage = Strings.Format(nameof(Strings.CueResumedStatusFormat), CueDisplay(CurrentCueNode));
             return;
         }
 
-        var fire = StandbyCueNode ?? ordered.FirstOrDefault();
+        // Resolution order: explicit Standby (operator pressed the Standby button) → currently
+        // selected cue (the operator's cursor — natural intent when they pressed Go directly) →
+        // first cue in the list. Without the SelectedCueNode tier, pressing Go after clicking
+        // anywhere in the tree fires cue 1, which is surprising.
+        var fire = StandbyCueNode
+                   ?? (SelectedCueNode is not null && ordered.Contains(ResolveFireableCue(SelectedCueNode)!)
+                       ? SelectedCueNode
+                       : ordered.FirstOrDefault());
         if (fire is null)
             return;
 
@@ -1396,6 +1538,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (CurrentCueNode is null)
             return;
         IsTransportPaused = !IsTransportPaused;
+        _ = SetPlaybackPausedCallback?.Invoke(IsTransportPaused);
         StatusMessage = IsTransportPaused
             ? Strings.Format(nameof(Strings.CuePausedStatusFormat), CueDisplay(CurrentCueNode))
             : Strings.Format(nameof(Strings.CueResumedStatusFormat), CueDisplay(CurrentCueNode));
@@ -1809,11 +1952,33 @@ public partial class CuePlayerViewModel : ViewModelBase
             ct.ThrowIfCancellationRequested();
             CurrentCueNode = step.Cue;
             SelectedCueNode = step.Cue;
-            var exec = await ExecuteCueAsync(step.Cue, ct);
-            StatusMessage = string.IsNullOrWhiteSpace(exec)
-                ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplay(step.Cue))
-                : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(step.Cue), exec);
+
+            // Dispatch without awaiting — for FireAllSimultaneously the per-cue executor takes
+            // hundreds of ms (decoder open + MediaPlayer build + router wiring) and awaiting
+            // sequentially turns "simultaneously" into "one after another". Each cue's status
+            // message lands as its executor completes.
+            DispatchCueExecution(step.Cue, ct);
         }
+    }
+
+    private void DispatchCueExecution(CueNodeViewModel cue, CancellationToken ct)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
+                StatusMessage = string.IsNullOrWhiteSpace(exec)
+                    ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplay(cue))
+                    : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec);
+            }
+            catch (OperationCanceledException) { /* Stop / Panic cancelled the dispatched cue. */ }
+            catch (Exception ex)
+            {
+                StatusMessage = Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat),
+                    CueDisplay(cue), ex.Message);
+            }
+        }, ct);
     }
 
     private async Task<string?> ExecuteCueAsync(CueNodeViewModel cue, CancellationToken ct)

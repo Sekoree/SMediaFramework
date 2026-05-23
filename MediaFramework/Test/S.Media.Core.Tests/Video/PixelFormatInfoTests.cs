@@ -13,6 +13,8 @@ public class PixelFormatInfoTests
     [InlineData(PixelFormat.Nv12, 1281, 721, 1, 1282, 361)]
     [InlineData(PixelFormat.Yuv422P, 1921, 1080, 1, 961, 1080)]
     [InlineData(PixelFormat.P010, 1279, 719, 1, 2560, 360)]
+    [InlineData(PixelFormat.P216, 1921, 1080, 1, 3844, 1080)]
+    [InlineData(PixelFormat.Pa16, 1921, 1080, 1, 3844, 1080)]
     public void Plane_dimensions_round_up_for_subsampled_formats(
         PixelFormat format, int width, int height, int plane, int expectByteWidth, int expectHeight)
     {

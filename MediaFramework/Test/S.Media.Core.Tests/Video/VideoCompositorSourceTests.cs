@@ -65,6 +65,55 @@ public sealed class VideoCompositorSourceTests
     }
 
     [Fact]
+    public void Slot_HoldsLastFrameAcrossCompositeReads()
+    {
+        using var compositor = new CpuVideoCompositor(Bgra32_4x4);
+        using var output = new VideoCompositorSource(Bgra32_4x4, compositor, disposeCompositorOnDispose: false);
+        var slot = output.AddSlot();
+        slot.Output.Configure(Bgra32_4x4);
+        slot.Output.Submit(MakeFrame(0, 0, 255, 255)); // red
+
+        Assert.True(output.TryReadNextFrame(out var first));
+        first.Dispose();
+
+        Assert.True(output.TryReadNextFrame(out var second));
+        try
+        {
+            var span = second.Planes[0].Span;
+            Assert.Equal(0, span[0]);
+            Assert.Equal(0, span[1]);
+            Assert.Equal(255, span[2]);
+            Assert.Equal(255, span[3]);
+        }
+        finally { second.Dispose(); }
+    }
+
+    [Fact]
+    public void SortSlots_ReordersBackToFrontComposition()
+    {
+        using var compositor = new CpuVideoCompositor(Bgra32_4x4);
+        using var output = new VideoCompositorSource(Bgra32_4x4, compositor, disposeCompositorOnDispose: false);
+        var slotA = output.AddSlot("A");
+        var slotB = output.AddSlot("B");
+        slotA.Output.Configure(Bgra32_4x4);
+        slotB.Output.Configure(Bgra32_4x4);
+        slotA.Output.Submit(MakeFrame(0, 0, 255, 255)); // red
+        slotB.Output.Submit(MakeFrame(255, 0, 0, 255)); // blue
+
+        output.SortSlots(static (a, b) => string.CompareOrdinal(b.Id, a.Id));
+
+        Assert.True(output.TryReadNextFrame(out var composite));
+        try
+        {
+            var span = composite.Planes[0].Span;
+            Assert.Equal(0, span[0]);
+            Assert.Equal(0, span[1]);
+            Assert.Equal(255, span[2]);
+        }
+        finally { composite.Dispose(); }
+    }
+
+    [Fact]
     public void EmptySlot_ContributesTransparency()
     {
         using var compositor = new CpuVideoCompositor(Bgra32_4x4);
@@ -125,6 +174,26 @@ public sealed class VideoCompositorSourceTests
         Assert.True(compositor.IsDisposed);
     }
 
+    [Fact]
+    public void VideoCompositorAuto_UsesRegisteredBackend()
+    {
+        TrackingCompositor? used = null;
+        using var registration = VideoCompositor.RegisterAutoBackend((VideoFormat output, out IVideoCompositor? compositor, out string? error) =>
+        {
+            used = new TrackingCompositor(output);
+            compositor = used;
+            error = null;
+            return true;
+        });
+
+        using var videoCompositor = VideoCompositor.Create(Bgra32_4x4, VideoCompositorBackend.Auto);
+
+        Assert.NotNull(used);
+        Assert.True(videoCompositor.TryReadNextFrame(out var frame));
+        frame.Dispose();
+        Assert.Equal(1, used.CompositeCalls);
+    }
+
     private static VideoFrame MakeFrame(byte b, byte g, byte r, byte a)
     {
         var buf = new byte[4 * 4 * 4];
@@ -140,12 +209,27 @@ public sealed class VideoCompositorSourceTests
 
     private sealed class TrackingCompositor : IVideoCompositor
     {
+        public TrackingCompositor()
+            : this(new VideoFormat(4, 4, PixelFormat.Bgra32, new Rational(30, 1)))
+        {
+        }
+
+        public TrackingCompositor(VideoFormat outputFormat)
+        {
+            OutputFormat = outputFormat;
+        }
+
         public bool IsDisposed { get; private set; }
-        public VideoFormat OutputFormat { get; } = new(4, 4, PixelFormat.Bgra32, new Rational(30, 1));
+        public int CompositeCalls { get; private set; }
+        public VideoFormat OutputFormat { get; }
         public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats { get; } = new[] { PixelFormat.Bgra32 };
         public void Configure(VideoFormat output) { }
-        public VideoFrame Composite(IReadOnlyList<CompositorLayer> layers, TimeSpan pts) =>
-            new(pts, OutputFormat, new byte[4 * 4 * 4], 4 * 4, release: null);
+        public VideoFrame Composite(IReadOnlyList<CompositorLayer> layers, TimeSpan pts)
+        {
+            CompositeCalls++;
+            return new VideoFrame(pts, OutputFormat, new byte[OutputFormat.Width * OutputFormat.Height * 4],
+                OutputFormat.Width * 4, release: null);
+        }
         public void Dispose() => IsDisposed = true;
     }
 }

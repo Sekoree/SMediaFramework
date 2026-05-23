@@ -3,12 +3,14 @@ namespace S.Media.Effects;
 /// <summary>Which <see cref="IVideoCompositor"/> implementation <see cref="VideoCompositor.Create"/> selects.</summary>
 public enum VideoCompositorBackend
 {
-    /// <summary>CPU when no GL context is available; otherwise GL.</summary>
+    /// <summary>Use the first registered host GPU backend when available; otherwise fall back to CPU.</summary>
     Auto = 0,
 
     /// <summary><see cref="CpuVideoCompositor"/> — BGRA32 software reference.</summary>
     Cpu = 1,
 
-    /// <summary><see cref="OpenGL.GlVideoCompositor"/> — requires a current GL context on the consumer thread.</summary>
+    /// <summary>
+    /// Use <see cref="OpenGL.GlVideoCompositor"/> with a supplied GL instance, or a registered host GL backend.
+    /// </summary>
     Gl = 2,
 }

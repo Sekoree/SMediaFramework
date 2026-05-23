@@ -24,7 +24,9 @@ void main()
     }
     else
     {
-        // Source / SourceOver: pass through (premul) * opacity. glBlendFunc handles the dst combine.
-        fragColor = src * uOpacity;
+        // Source / SourceOver: convert straight-alpha renderer output to premultiplied alpha
+        // before glBlendFunc(ONE, ONE_MINUS_SRC_ALPHA) combines it with the destination.
+        float a = src.a * uOpacity;
+        fragColor = vec4(src.rgb * a, a);
     }
 }
