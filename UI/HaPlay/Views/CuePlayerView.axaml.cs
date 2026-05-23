@@ -79,18 +79,18 @@ public partial class CuePlayerView : UserControl
             Strings.CueTreeStatusColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildStatusBadge(row), supportsRecycling: true),
             width: new GridLength(28)));
+        _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
+            Strings.CueTreeNumberColumnHeader,
+            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildCompactTextEditor(row, nameof(CueNodeViewModel.Number)), supportsRecycling: true),
+            width: new GridLength(80)));
         _source.Columns.Add(new HierarchicalExpanderColumn<CueNodeViewModel>(
             new TemplateColumn<CueNodeViewModel>(
-                Strings.CueTreeNumberColumnHeader,
-                new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.Number)), supportsRecycling: true),
-                width: new GridLength(80)),
+                Strings.CueTreeNameColumnHeader,
+                new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.Label)), supportsRecycling: true),
+                width: new GridLength(1, GridUnitType.Star)),
             x => x.Children,
             x => x.HasChildren,
             x => x.IsExpanded));
-        _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
-            Strings.CueTreeNameColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.Label)), supportsRecycling: true),
-            width: new GridLength(1, GridUnitType.Star)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
             Strings.CueTreeDurationColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.DurationDisplay)), supportsRecycling: true),
@@ -167,6 +167,20 @@ public partial class CuePlayerView : UserControl
             DataContext = row,
             MinWidth = 80,
             Padding = new Avalonia.Thickness(4, 2),
+        };
+        box.Bind(TextBox.TextProperty, new Binding(propertyName) { Mode = BindingMode.TwoWay });
+        return box;
+    }
+
+    /// <summary>Fixed-width text editor for the narrow Number column — no MinWidth, so the cell
+    /// shrinks with its column instead of bleeding into the status badge on its left.</summary>
+    private static Control BuildCompactTextEditor(CueNodeViewModel row, string propertyName)
+    {
+        var box = new TextBox
+        {
+            DataContext = row,
+            Padding = new Avalonia.Thickness(4, 2),
+            Margin = new Avalonia.Thickness(2, 0, 0, 0),
         };
         box.Bind(TextBox.TextProperty, new Binding(propertyName) { Mode = BindingMode.TwoWay });
         return box;

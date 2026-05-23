@@ -408,19 +408,43 @@ the up/down buttons left too little room for the value).
   like `Program (1920×1080 @ 60fps)`), so the operator sees the spec
   inline.
 
-### 4.6 Playback engine (separate work item)
+### 4.6 Playback engine — ✅ (v1)
 
-- 🔲 New `CuePlaybackEngine` class living under `Playback/`.
-- 🔲 Owns its own PortAudio output streams (one per `CueAudioOutput`),
-  its own video compositors (one per `CueComposition`), and its own
-  video outputs (Local windows / NDI senders) referencing the right
-  composition.
-- 🔲 `CuePlayerViewModel.MediaCueExecutor` rewired to call the engine
-  instead of the selected MediaPlayer tab.
-- 🔲 `MainViewModel.ExecuteCueMediaAsync` deletion path; the
-  `SelectedPlayer`-based wiring goes away.
-- ⚠ Substantial work; landed in a follow-up session after the model +
-  UI of Phase 4 are confirmed visually correct.
+- ✅ `Playback/CuePlaybackEngine.cs` — owns one active
+  `HaPlayPlaybackSession` at a time. Drives playback against the output
+  lines the cue itself references (resolved from its `AudioRoutes` and,
+  via the cue list's `VideoOutputs`, its `VideoPlacements`).
+- ✅ `CuePlayerViewModel.MediaCueExecutor` rewired to
+  `_cuePlaybackEngine.ExecuteAsync` in `MainViewModel`'s constructor.
+- ✅ `CuePlayerViewModel.StopPlaybackCallback` added; `Stop` and `Panic`
+  forward to `_cuePlaybackEngine.StopAsync`, tearing down the session.
+- ✅ `MainViewModel.ExecuteCueMediaAsync` deleted — no more
+  `SelectedPlayer`-based wiring. The Cue Player and MediaPlayer tabs are
+  fully independent at the execution layer.
+- ✅ Natural-end watcher: a background loop polls `PlayClock.CurrentPosition`
+  against `Duration`; raises `NaturalEnd` on the UI thread when the file
+  finishes. `MainViewModel` forwards that to
+  `CuePlayer.OnMediaCueNaturallyEndedAsync` so AutoFollow keeps working.
+
+**Scope notes (v1 — operator-visible)**
+
+- File sources (anything via `MediaContainerDecoder`) play end-to-end.
+  Audio + video both route to whichever output lines the cue's routes /
+  placements reference.
+- NDI input and PortAudio input cues use the same code path (the
+  underlying `HaPlayPlaybackSession.TryCreate` supports them) but
+  haven't been smoke-tested through the cue pipeline yet.
+- Per-source-channel routing in `CueAudioRoute` is **not yet honored**
+  by the audio router — `HaPlayPlaybackSession` currently sends source
+  audio to the output line as a whole. Output-channel + gain selection
+  per route is a v2 follow-up that will hand a real `ChannelMap` to
+  `AudioRouter.AddRoute`.
+- Compositor layering with multiple cues sharing a composition isn't
+  wired — each cue's video goes to the output lines the placements
+  reference, but they don't yet stack via `VideoCompositor`. Single-cue
+  video works.
+- `MediaPlayerViewModel.ApplyCueRouteOverrides` stays as a no-op stub
+  (kept the signature; the cue-side path no longer calls it).
 
 ### 4.7 Tests — ✅
 

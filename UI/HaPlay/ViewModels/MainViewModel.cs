@@ -26,6 +26,7 @@ public partial class MainViewModel : ViewModelBase
 {
     private int _nextPlayerNumber = 1;
     private readonly object _midiInitSync = new();
+    private readonly Playback.CuePlaybackEngine _cuePlaybackEngine;
     private bool _midiInitialized;
     private CancellationTokenSource? _endpointHealthCts;
     private DispatcherTimer? _endpointHealthTimer;
@@ -40,7 +41,11 @@ public partial class MainViewModel : ViewModelBase
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
-        CuePlayer.MediaCueExecutor = ExecuteCueMediaAsync;
+        _cuePlaybackEngine = new Playback.CuePlaybackEngine(OutputManagement, CuePlayer);
+        _cuePlaybackEngine.NaturalEnd += async (_, _) =>
+            await CuePlayer.OnMediaCueNaturallyEndedAsync().ConfigureAwait(false);
+        CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
+        CuePlayer.StopPlaybackCallback = _cuePlaybackEngine.StopAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
         foreach (var player in Players)
@@ -645,23 +650,6 @@ public partial class MainViewModel : ViewModelBase
             Host = "127.0.0.1",
             Port = 9000,
         });
-    }
-
-    private async Task<string?> ExecuteCueMediaAsync(MediaCueNode cue, CancellationToken ct)
-    {
-        var player = SelectedPlayer;
-        if (player is null)
-            return Strings.CueExecuteNoSelectedPlayer;
-        if (cue.Source is null)
-            return Strings.CueExecuteNoMediaSource;
-
-        player.ConfigureCueTransport(cue);
-        player.ApplyCueRouteOverrides(cue);
-        var preRolled = await player.TryPlayCueMediaAsync(cue, ct).ConfigureAwait(false);
-        _ = RefreshCuePreRollAsync();
-        return preRolled
-            ? Strings.Format(nameof(Strings.CuePreRollResultFormat), cue.Source.DisplayName)
-            : cue.Source.DisplayName;
     }
 
     private async Task RefreshCuePreRollAsync()

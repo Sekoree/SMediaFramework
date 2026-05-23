@@ -543,6 +543,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// </summary>
     public Func<ActionCueNode, CancellationToken, Task<string?>>? ActionCueExecutor { get; set; }
 
+    /// <summary>Host-provided stop callback — Stop / Panic forwards to this so the playback
+    /// engine can tear down its session. Optional; null in tests.</summary>
+    public Func<Task>? StopPlaybackCallback { get; set; }
+
     public CuePlayerViewModel()
     {
         var initial = new CueListEditorViewModel(Strings.DefaultCueListName);
@@ -1105,6 +1109,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             row.MediaSourceItem = new FilePlaylistItem(picked);
             row.SourceOrAction = picked;
+            row.Label = Path.GetFileNameWithoutExtension(picked);
             await ProbeAndAssignDurationAsync(row, picked);
         }
         GoCommand.NotifyCanExecuteChanged();
@@ -1176,6 +1181,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             mediaCue.MediaSourceItem = new FilePlaylistItem(path);
             mediaCue.SourceOrAction = path;
+            mediaCue.Label = Path.GetFileNameWithoutExtension(path);
             await ProbeAndAssignDurationAsync(mediaCue, path);
         }
     }
@@ -1401,6 +1407,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     private void Stop()
     {
         CancelTransportRun();
+        _ = StopPlaybackCallback?.Invoke();
         if (CurrentCueNode is null && StandbyCueNode is null && !IsTransportPaused)
             return;
         CurrentCueNode = null;
@@ -1412,6 +1419,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     private void Panic()
     {
         CancelTransportRun();
+        _ = StopPlaybackCallback?.Invoke();
         CurrentCueNode = null;
         StandbyCueNode = null;
         IsTransportPaused = false;
@@ -1761,7 +1769,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             var row = new CueNodeViewModel(CueNodeKind.Media)
             {
                 Number = NextNumber(parent),
-                Label = Path.GetFileName(path),
+                Label = Path.GetFileNameWithoutExtension(path),
                 MediaSourceItem = new FilePlaylistItem(path),
                 SourceOrAction = path,
             };
