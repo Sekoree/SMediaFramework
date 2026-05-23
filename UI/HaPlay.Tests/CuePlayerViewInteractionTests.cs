@@ -37,7 +37,7 @@ public sealed class CuePlayerViewInteractionTests
     }
 
     [Fact]
-    public void AddRouteButton_Click_AddsRouteToSelectedMediaCue()
+    public void AddAudioRouteButton_Click_AddsRouteToSelectedMediaCue()
     {
         DispatchUi(() =>
         {
@@ -60,17 +60,17 @@ public sealed class CuePlayerViewInteractionTests
             ]);
             vm.SelectedCueNode = vm.VisibleNodes[0];
             var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-            Assert.Empty(media.RouteConnections);
+            Assert.Empty(media.AudioRoutes);
 
             var view = new CuePlayerView { DataContext = vm };
             var window = HostInWindow(view);
             try
             {
-                var addRoute = FindButtonByContent(window, Strings.AddRouteButton);
+                var addRoute = FindButtonByContent(window, Strings.AddAudioRouteButton);
                 ClickButton(window, addRoute);
 
-                Assert.Single(media.RouteConnections);
-                Assert.Single(vm.VisibleRouteConnections);
+                Assert.Single(media.AudioRoutes);
+                Assert.Single(vm.VisibleAudioRoutes);
             }
             finally
             {

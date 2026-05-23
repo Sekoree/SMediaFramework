@@ -95,54 +95,60 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void AddAndRemoveVirtualOutput_UpdatesCueMediaRoutes()
+    public void RemovingComposition_PrunesPlacementsAndVideoOutputBindings()
     {
         var vm = new CuePlayerViewModel();
+        vm.AddCompositionCommand.Execute(null);
+        var comp = Assert.Single(vm.VisibleCompositions);
+        vm.AddVideoOutputCommand.Execute(null);
+        var binding = Assert.Single(vm.VisibleVideoOutputs);
+        Assert.Equal(comp.Id, binding.CompositionId);
+
         vm.AddMediaCueCommand.Execute(null);
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.AddRouteConnectionCommand.Execute(null);
-        Assert.Single(media.RouteConnections);
+        vm.AddVideoPlacementCommand.Execute(null);
+        Assert.Single(media.VideoPlacements);
 
-        vm.SelectedVirtualOutput = vm.VisibleVirtualOutputs[0];
-        vm.RemoveVirtualOutputCommand.Execute(null);
+        vm.SelectedComposition = comp;
+        vm.RemoveCompositionCommand.Execute(null);
 
-        Assert.Single(vm.VisibleVirtualOutputs);
-        Assert.Empty(media.RouteConnections);
-        Assert.DoesNotContain(1, media.VirtualOutputChannels);
+        Assert.Empty(vm.VisibleCompositions);
+        Assert.Empty(media.VideoPlacements);
+        Assert.Empty(vm.VisibleVideoOutputs);
     }
 
     [Fact]
-    public void EditingVirtualOutputChannel_Duplicate_AutoResolvesToNextFree()
+    public void V3RoundTrip_PreservesCompositionsVideoBindingsRoutesAndPlacements()
     {
+        var compId = Guid.NewGuid();
+        var outputLineId = Guid.NewGuid();
+        var original = new CueList
+        {
+            Name = "v3",
+            Compositions = [new CueComposition { Id = compId, Name = "Program", Width = 1280, Height = 720, FrameRateNum = 30 }],
+            VideoOutputs = [new CueVideoOutputBinding { OutputLineId = outputLineId, CompositionId = compId }],
+            Nodes =
+            [
+                new MediaCueNode
+                {
+                    Label = "clip",
+                    AudioRoutes = [new CueAudioRoute { SourceChannel = 0, OutputLineId = outputLineId, OutputChannel = 1, GainDb = -3 }],
+                    VideoPlacements = [new CueVideoPlacement { CompositionId = compId, LayerIndex = 2, Position = CueLayerPosition.Letterbox, Opacity = 0.8 }],
+                },
+            ],
+        };
+
         var vm = new CuePlayerViewModel();
-        vm.AddVirtualOutputCommand.Execute(null); // default channels are 1,2 -> add 3
-        var third = vm.VisibleVirtualOutputs[2];
+        vm.ApplyCueLists([original]);
+        var roundtrip = vm.BuildCueListsSnapshot()[0];
 
-        third.Channel = 1; // duplicate with existing VOut 1
-
-        Assert.Equal(3, third.Channel);
-        Assert.Equal(new[] { 1, 2, 3 }, vm.VisibleVirtualOutputs.Select(v => v.Channel).OrderBy(v => v));
-    }
-
-    [Fact]
-    public void ApplyCueLists_DuplicateVirtualOutputs_NormalizesToUniqueChannels()
-    {
-        var vm = new CuePlayerViewModel();
-        vm.ApplyCueLists(
-        [
-            new CueList
-            {
-                Name = "Dupes",
-                VirtualOutputs =
-                [
-                    new CueVirtualOutputChannel { Channel = 1, Label = "A" },
-                    new CueVirtualOutputChannel { Channel = 1, Label = "B" },
-                    new CueVirtualOutputChannel { Channel = 1, Label = "C" },
-                ],
-            },
-        ]);
-
-        Assert.Equal(new[] { 1, 2, 3 }, vm.VisibleVirtualOutputs.Select(v => v.Channel).OrderBy(v => v));
+        Assert.Equal(compId, roundtrip.Compositions[0].Id);
+        Assert.Equal(outputLineId, roundtrip.VideoOutputs[0].OutputLineId);
+        Assert.Equal(compId, roundtrip.VideoOutputs[0].CompositionId);
+        var media = Assert.IsType<MediaCueNode>(roundtrip.Nodes[0]);
+        Assert.Equal(outputLineId, media.AudioRoutes[0].OutputLineId);
+        Assert.Equal(2, media.VideoPlacements[0].LayerIndex);
+        Assert.Equal(CueLayerPosition.Letterbox, media.VideoPlacements[0].Position);
     }
 
     [Fact]

@@ -35,6 +35,7 @@ public partial class MainViewModel : ViewModelBase
     {
         OutputManagement = new OutputManagementViewModel();
         CuePlayer = new CuePlayerViewModel();
+        CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));

@@ -2229,59 +2229,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         ApplyAllOutputGainsToSession();
     }
 
+    /// <summary>Phase 4 retired the cue-as-MediaPlayer-overlay path — cue audio routing now lives on
+    /// <c>MediaCueNode.AudioRoutes</c> and is honored by the future <c>CuePlaybackEngine</c> (Phase 4.6).
+    /// This stub stays so the existing executor wiring compiles until 4.6 lands and removes the call site.</summary>
     public void ApplyCueRouteOverrides(MediaCueNode cue)
     {
-        if (cue.RouteConnections.Count == 0 && cue.VirtualOutputChannels.Count == 0)
-            return;
-
-        var map = BuildVirtualOutputMap().ToList();
-        if (map.Count == 0)
-            return;
-
-        if (cue.VirtualOutputChannels.Count > 0)
-        {
-            var allowedVOuts = cue.VirtualOutputChannels.ToHashSet();
-            var wantedBindings = map
-                .Where(x => allowedVOuts.Contains(x.VirtualOutputChannel))
-                .Select(x => x.Binding)
-                .Distinct()
-                .ToHashSet();
-            foreach (var b in Outputs)
-                b.IsSelected = wantedBindings.Contains(b);
-            map = BuildVirtualOutputMap().ToList();
-            if (map.Count == 0)
-                return;
-        }
-
-        if (cue.RouteConnections.Count > 0)
-        {
-            var srcCh = Math.Max(AudioMatrixInputChannelCount, 1);
-            foreach (var binding in Outputs.Where(b => b.IsSelected))
-            {
-                var outCh = OutputChannelCountOrZero(binding.Line);
-                if (outCh <= 0) continue;
-                binding.Matrix.Resize(srcCh, outCh);
-                foreach (var cell in binding.Matrix.Cells)
-                {
-                    cell.GainDb = AudioMatrixDefaults.MutedFloorDb;
-                    cell.Muted = true;
-                }
-            }
-
-            foreach (var route in cue.RouteConnections)
-            {
-                var slot = map.FirstOrDefault(x => x.VirtualOutputChannel == route.VirtualOutputChannel);
-                if (slot.Binding is null) continue;
-                var cell = slot.Binding.Matrix.Cell(route.InputChannel, slot.OutputChannel);
-                if (cell is null) continue;
-                cell.GainDb = route.GainDb;
-                cell.Muted = route.Muted;
-            }
-        }
-
-        RebuildAudioMatrixRows();
-        ApplyAllOutputMatricesToSession();
-        ApplyAllOutputGainsToSession();
+        _ = cue;
     }
 
     /// <summary>Phase A — public snapshot for project save (§7). Internally still calls the same builder

@@ -159,14 +159,12 @@ public sealed class HaPlayProjectIOTests
     [Fact]
     public void RoundTrip_ProjectCueList_PreservesCueNodeTypes()
     {
+        var compId = Guid.NewGuid();
+        var outputLineId = Guid.NewGuid();
         var cues = new CueList
         {
             Name = "Show A",
-            VirtualOutputs =
-            {
-                new CueVirtualOutputChannel { Channel = 1, Label = "Main L" },
-                new CueVirtualOutputChannel { Channel = 2, Label = "Main R" },
-            },
+            Compositions = [new CueComposition { Id = compId, Name = "Program", Width = 1920, Height = 1080 }],
             Nodes =
             {
                 new CueGroupNode
@@ -181,15 +179,25 @@ public sealed class HaPlayProjectIOTests
                             Number = "1.1",
                             Label = "Walk-in",
                             Source = new FilePlaylistItem("/show/walkin.mp3"),
-                            VirtualOutputChannels = { 1, 2 },
-                            RouteConnections =
+                            AudioRoutes =
                             {
-                                new CueRouteConnectionOverride
+                                new CueAudioRoute
                                 {
-                                    InputChannel = 0,
-                                    VirtualOutputChannel = 1,
+                                    SourceChannel = 0,
+                                    OutputLineId = outputLineId,
+                                    OutputChannel = 1,
                                     GainDb = -3,
                                     Muted = false,
+                                },
+                            },
+                            VideoPlacements =
+                            {
+                                new CueVideoPlacement
+                                {
+                                    CompositionId = compId,
+                                    LayerIndex = 1,
+                                    Position = CueLayerPosition.Cover,
+                                    Opacity = 1.0,
                                 },
                             },
                         },
@@ -217,14 +225,14 @@ public sealed class HaPlayProjectIOTests
 
         var loadedCueList = Assert.Single(roundTripped.CueLists);
         Assert.Equal("Show A", loadedCueList.Name);
-        Assert.Equal(2, loadedCueList.VirtualOutputs.Count);
-        Assert.Equal(1, loadedCueList.VirtualOutputs[0].Channel);
-        Assert.Equal("Main L", loadedCueList.VirtualOutputs[0].Label);
+        Assert.Equal(compId, loadedCueList.Compositions[0].Id);
         var group = Assert.IsType<CueGroupNode>(loadedCueList.Nodes[0]);
         var media = Assert.IsType<MediaCueNode>(group.Children[0]);
         Assert.IsType<FilePlaylistItem>(media.Source);
-        Assert.Equal(2, media.VirtualOutputChannels.Count);
-        Assert.Single(media.RouteConnections);
+        Assert.Single(media.AudioRoutes);
+        Assert.Equal(outputLineId, media.AudioRoutes[0].OutputLineId);
+        Assert.Single(media.VideoPlacements);
+        Assert.Equal(compId, media.VideoPlacements[0].CompositionId);
         Assert.IsType<CommentCueNode>(group.Children[1]);
         Assert.IsType<ActionCueNode>(loadedCueList.Nodes[1]);
     }

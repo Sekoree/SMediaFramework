@@ -23,6 +23,13 @@ public enum CueNodeKind
     Comment,
 }
 
+public enum CueRowStatus
+{
+    Idle,
+    Standby,
+    Current,
+}
+
 public enum CueMidiCommandType
 {
     NoteOn,
@@ -31,50 +38,124 @@ public enum CueMidiCommandType
     ProgramChange,
 }
 
-public sealed partial class CueVirtualOutputChannelViewModel : ObservableObject
+public sealed partial class CueCompositionViewModel : ObservableObject
 {
     [ObservableProperty]
-    private int _channel;
+    private Guid _id = Guid.NewGuid();
 
     [ObservableProperty]
-    private string _label = string.Empty;
+    private string _name = string.Empty;
 
-    public string DisplayName => string.IsNullOrWhiteSpace(Label)
-        ? Strings.Format(nameof(Strings.VirtualOutputLabelFormat), Channel)
-        : Strings.Format(nameof(Strings.VirtualOutputLabelWithNameFormat), Channel, Label);
+    [ObservableProperty]
+    private int _width = 1920;
 
-    partial void OnChannelChanged(int value)
+    [ObservableProperty]
+    private int _height = 1080;
+
+    [ObservableProperty]
+    private int _frameRateNum = 60;
+
+    [ObservableProperty]
+    private int _frameRateDen = 1;
+
+    public string Summary =>
+        $"{Width}×{Height} @ {(FrameRateDen > 0 ? FrameRateNum / (double)FrameRateDen : 0):0.##}fps";
+
+    public string DisplayName => string.IsNullOrWhiteSpace(Name)
+        ? Summary
+        : $"{Name} ({Summary})";
+
+    partial void OnNameChanged(string value)
     {
         _ = value;
         OnPropertyChanged(nameof(DisplayName));
     }
 
-    partial void OnLabelChanged(string value)
+    partial void OnWidthChanged(int value)
     {
         _ = value;
+        OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(DisplayName));
     }
 
-    public CueVirtualOutputChannel ToModel() => new()
+    partial void OnHeightChanged(int value)
     {
-        Channel = Channel,
-        Label = Label,
+        _ = value;
+        OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(DisplayName));
+    }
+
+    partial void OnFrameRateNumChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(DisplayName));
+    }
+
+    partial void OnFrameRateDenChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(Summary));
+        OnPropertyChanged(nameof(DisplayName));
+    }
+
+    public CueComposition ToModel() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Width = Width,
+        Height = Height,
+        FrameRateNum = FrameRateNum,
+        FrameRateDen = FrameRateDen,
     };
 
-    public static CueVirtualOutputChannelViewModel FromModel(CueVirtualOutputChannel model) => new()
+    public static CueCompositionViewModel FromModel(CueComposition model) => new()
     {
-        Channel = model.Channel,
-        Label = model.Label,
+        Id = model.Id,
+        Name = model.Name,
+        Width = model.Width,
+        Height = model.Height,
+        FrameRateNum = model.FrameRateNum,
+        FrameRateDen = model.FrameRateDen,
     };
 }
 
-public sealed partial class CueRouteConnectionViewModel : ObservableObject
+public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
 {
     [ObservableProperty]
-    private int _inputChannel;
+    private Guid _id = Guid.NewGuid();
 
     [ObservableProperty]
-    private int _virtualOutputChannel = 1;
+    private Guid _outputLineId;
+
+    [ObservableProperty]
+    private Guid _compositionId;
+
+    public CueVideoOutputBinding ToModel() => new()
+    {
+        Id = Id,
+        OutputLineId = OutputLineId,
+        CompositionId = CompositionId,
+    };
+
+    public static CueVideoOutputBindingViewModel FromModel(CueVideoOutputBinding model) => new()
+    {
+        Id = model.Id,
+        OutputLineId = model.OutputLineId,
+        CompositionId = model.CompositionId,
+    };
+}
+
+public sealed partial class CueAudioRouteViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private int _sourceChannel;
+
+    [ObservableProperty]
+    private Guid _outputLineId;
+
+    [ObservableProperty]
+    private int _outputChannel = 1;
 
     [ObservableProperty]
     private double _gainDb;
@@ -82,20 +163,53 @@ public sealed partial class CueRouteConnectionViewModel : ObservableObject
     [ObservableProperty]
     private bool _muted;
 
-    public CueRouteConnectionOverride ToModel() => new()
+    public CueAudioRoute ToModel() => new()
     {
-        InputChannel = InputChannel,
-        VirtualOutputChannel = VirtualOutputChannel,
+        SourceChannel = SourceChannel,
+        OutputLineId = OutputLineId,
+        OutputChannel = OutputChannel,
         GainDb = GainDb,
         Muted = Muted,
     };
 
-    public static CueRouteConnectionViewModel FromModel(CueRouteConnectionOverride model) => new()
+    public static CueAudioRouteViewModel FromModel(CueAudioRoute model) => new()
     {
-        InputChannel = model.InputChannel,
-        VirtualOutputChannel = model.VirtualOutputChannel,
+        SourceChannel = model.SourceChannel,
+        OutputLineId = model.OutputLineId,
+        OutputChannel = model.OutputChannel,
         GainDb = model.GainDb,
         Muted = model.Muted,
+    };
+}
+
+public sealed partial class CueVideoPlacementViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private Guid _compositionId;
+
+    [ObservableProperty]
+    private int _layerIndex;
+
+    [ObservableProperty]
+    private CueLayerPosition _position = CueLayerPosition.Cover;
+
+    [ObservableProperty]
+    private double _opacity = 1.0;
+
+    public CueVideoPlacement ToModel() => new()
+    {
+        CompositionId = CompositionId,
+        LayerIndex = LayerIndex,
+        Position = Position,
+        Opacity = Math.Clamp(Opacity, 0.0, 1.0),
+    };
+
+    public static CueVideoPlacementViewModel FromModel(CueVideoPlacement model) => new()
+    {
+        CompositionId = model.CompositionId,
+        LayerIndex = model.LayerIndex,
+        Position = model.Position,
+        Opacity = model.Opacity,
     };
 }
 
@@ -105,8 +219,6 @@ public sealed partial class CueNodeViewModel : ObservableObject
     {
         Kind = kind;
         Children.CollectionChanged += OnChildrenCollectionChanged;
-        RouteConnections.CollectionChanged += OnRouteConnectionsCollectionChanged;
-        VirtualOutputChannels.CollectionChanged += OnVirtualOutputsCollectionChanged;
     }
 
     public CueNodeKind Kind { get; }
@@ -148,6 +260,16 @@ public sealed partial class CueNodeViewModel : ObservableObject
     private int _fadeOutMs;
 
     [ObservableProperty]
+    private int _durationMs;
+
+    [ObservableProperty]
+    private CueRowStatus _rowStatus = CueRowStatus.Idle;
+
+    public ObservableCollection<CueAudioRouteViewModel> AudioRoutes { get; } = new();
+
+    public ObservableCollection<CueVideoPlacementViewModel> VideoPlacements { get; } = new();
+
+    [ObservableProperty]
     private int _startOffsetMs;
 
     [ObservableProperty]
@@ -177,12 +299,6 @@ public sealed partial class CueNodeViewModel : ObservableObject
         set => Extra = value.ToString();
     }
 
-    public ObservableCollection<int> VirtualOutputChannels { get; } = new();
-
-    public ObservableCollection<CueRouteConnectionViewModel> RouteConnections { get; } = new();
-
-    public bool SupportsRouteConnections => Kind == CueNodeKind.Media;
-
     public bool IsGroup => Kind == CueNodeKind.Group;
 
     public bool HasChildren => Children.Count > 0;
@@ -196,6 +312,25 @@ public sealed partial class CueNodeViewModel : ObservableObject
         _ => Strings.CueKindDefaultLabel,
     };
 
+    public string DurationDisplay
+    {
+        get
+        {
+            if (Kind != CueNodeKind.Media || DurationMs <= 0)
+                return Strings.EmDash;
+            var ts = TimeSpan.FromMilliseconds(DurationMs);
+            return ts.TotalHours >= 1
+                ? $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+                : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+        }
+    }
+
+    partial void OnDurationMsChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(DurationDisplay));
+    }
+
     partial void OnExtraChanged(string value)
     {
         _ = value;
@@ -208,35 +343,6 @@ public sealed partial class CueNodeViewModel : ObservableObject
         _ = sender;
         _ = e;
         OnPropertyChanged(nameof(HasChildren));
-    }
-
-    private void OnVirtualOutputsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        UpdateMediaExtraSummary();
-    }
-
-    private void OnRouteConnectionsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        UpdateMediaExtraSummary();
-        RouteConnectionsChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    /// <summary>Raised when <see cref="RouteConnections"/> mutates so hosts can refresh route grids.</summary>
-    public event EventHandler? RouteConnectionsChanged;
-
-    private void UpdateMediaExtraSummary()
-    {
-        if (Kind != CueNodeKind.Media)
-            return;
-        Extra = RouteConnections.Count > 0
-            ? Strings.Format(nameof(Strings.CueRouteCountFormat), RouteConnections.Count)
-            : (VirtualOutputChannels.Count > 0
-                ? Strings.Format(nameof(Strings.CueVirtualOutputListFormat), string.Join(",", VirtualOutputChannels))
-                : string.Empty);
     }
 
     public static CueNodeViewModel FromModel(CueNode node)
@@ -273,15 +379,15 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceOrAction = m.Source?.DisplayName ?? string.Empty,
                     FadeInMs = m.FadeInMs,
                     FadeOutMs = m.FadeOutMs,
+                    DurationMs = m.DurationMs,
                     StartOffsetMs = m.StartOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
                 };
-                foreach (var v in m.VirtualOutputChannels.Distinct().OrderBy(x => x))
-                    vm.VirtualOutputChannels.Add(v);
-                foreach (var route in m.RouteConnections)
-                    vm.RouteConnections.Add(CueRouteConnectionViewModel.FromModel(route));
-                vm.UpdateMediaExtraSummary();
+                foreach (var route in m.AudioRoutes)
+                    vm.AudioRoutes.Add(CueAudioRouteViewModel.FromModel(route));
+                foreach (var placement in m.VideoPlacements)
+                    vm.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(placement));
                 return vm;
             }
             case ActionCueNode a:
@@ -342,11 +448,12 @@ public sealed partial class CueNodeViewModel : ObservableObject
                                : new FilePlaylistItem(SourceOrAction)),
                 FadeInMs = Math.Max(0, FadeInMs),
                 FadeOutMs = Math.Max(0, FadeOutMs),
+                DurationMs = Math.Max(0, DurationMs),
                 StartOffsetMs = Math.Max(0, StartOffsetMs),
                 Loop = Loop,
                 EndBehavior = EndBehavior,
-                VirtualOutputChannels = VirtualOutputChannels.Distinct().OrderBy(x => x).ToList(),
-                RouteConnections = RouteConnections.Select(x => x.ToModel()).ToList(),
+                AudioRoutes = AudioRoutes.Select(r => r.ToModel()).ToList(),
+                VideoPlacements = VideoPlacements.Select(p => p.ToModel()).ToList(),
             },
             CueNodeKind.Action => new ActionCueNode
             {
@@ -387,7 +494,9 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     [ObservableProperty]
     private string? _path;
 
-    public ObservableCollection<CueVirtualOutputChannelViewModel> VirtualOutputs { get; } = new();
+    public ObservableCollection<CueCompositionViewModel> Compositions { get; } = new();
+
+    public ObservableCollection<CueVideoOutputBindingViewModel> VideoOutputs { get; } = new();
 
     public ObservableCollection<CueNodeViewModel> Nodes { get; } = new();
 
@@ -395,7 +504,8 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     {
         Name = Name,
         PreRollCount = PreRollCount,
-        VirtualOutputs = VirtualOutputs.Select(v => v.ToModel()).ToList(),
+        Compositions = Compositions.Select(c => c.ToModel()).ToList(),
+        VideoOutputs = VideoOutputs.Select(o => o.ToModel()).ToList(),
         Nodes = Nodes.Select(n => n.ToModel()).ToList(),
     };
 
@@ -409,16 +519,10 @@ public sealed partial class CueListEditorViewModel : ObservableObject
             Path = path,
             PreRollCount = list.PreRollCount > 0 ? list.PreRollCount : 4,
         };
-        if (list.VirtualOutputs.Count == 0)
-        {
-            vm.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
-            vm.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
-        }
-        else
-        {
-            foreach (var output in list.VirtualOutputs.OrderBy(x => x.Channel))
-                vm.VirtualOutputs.Add(CueVirtualOutputChannelViewModel.FromModel(output));
-        }
+        foreach (var c in list.Compositions)
+            vm.Compositions.Add(CueCompositionViewModel.FromModel(c));
+        foreach (var o in list.VideoOutputs)
+            vm.VideoOutputs.Add(CueVideoOutputBindingViewModel.FromModel(o));
         foreach (var node in list.Nodes)
             vm.Nodes.Add(CueNodeViewModel.FromModel(node));
         return vm;
@@ -428,10 +532,6 @@ public sealed partial class CueListEditorViewModel : ObservableObject
 public partial class CuePlayerViewModel : ViewModelBase
 {
     private CancellationTokenSource? _transportRunCts;
-    private CueNodeViewModel? _watchedRouteMediaCue;
-    private CueListEditorViewModel? _watchedCueList;
-    private bool _resolvingVirtualOutputCollisions;
-    private readonly Dictionary<CueVirtualOutputChannelViewModel, PropertyChangedEventHandler> _virtualOutputChannelHandlers = [];
 
     /// <summary>
     /// Host-provided media execution callback. When null, media cues only update transport state.
@@ -446,15 +546,38 @@ public partial class CuePlayerViewModel : ViewModelBase
     public CuePlayerViewModel()
     {
         var initial = new CueListEditorViewModel(Strings.DefaultCueListName);
-        initial.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
-        initial.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
         CueLists.Add(initial);
         SelectedCueList = initial;
+    }
+
+    /// <summary>Wire the cue player to the shared output registry. Audio routes and video output
+    /// bindings pick lines from this list directly — no per-cue-list device config.</summary>
+    public void SetAvailableOutputs(ObservableCollection<OutputLineViewModel> outputs)
+    {
+        AvailableOutputs = outputs;
+        outputs.CollectionChanged += (_, _) => RefreshAvailableOutputBuckets();
+        RefreshAvailableOutputBuckets();
+    }
+
+    private void RefreshAvailableOutputBuckets()
+    {
+        AvailableAudioOutputs.Clear();
+        AvailableVideoOutputs.Clear();
+        foreach (var line in AvailableOutputs)
+        {
+            if (line.Definition is Models.PortAudioOutputDefinition)
+                AvailableAudioOutputs.Add(line);
+            else if (line.Definition is Models.LocalVideoOutputDefinition or Models.NDIOutputDefinition)
+                AvailableVideoOutputs.Add(line);
+        }
     }
 
     public ObservableCollection<CueListEditorViewModel> CueLists { get; } = new();
 
     public IReadOnlyList<CueEndBehavior> CueEndBehaviors { get; } = Enum.GetValues<CueEndBehavior>();
+    public IReadOnlyList<CueTriggerMode> CueTriggerModes { get; } = Enum.GetValues<CueTriggerMode>();
+    public IReadOnlyList<CueGroupFireMode> GroupFireModes { get; } = Enum.GetValues<CueGroupFireMode>();
+    public IReadOnlyList<CueLayerPosition> LayerPositions { get; } = Enum.GetValues<CueLayerPosition>();
 
     [ObservableProperty]
     private CueListEditorViewModel? _selectedCueList;
@@ -463,10 +586,16 @@ public partial class CuePlayerViewModel : ViewModelBase
     private CueNodeViewModel? _selectedCueNode;
 
     [ObservableProperty]
-    private CueRouteConnectionViewModel? _selectedRouteConnection;
+    private CueCompositionViewModel? _selectedComposition;
 
     [ObservableProperty]
-    private CueVirtualOutputChannelViewModel? _selectedVirtualOutput;
+    private CueVideoOutputBindingViewModel? _selectedVideoOutput;
+
+    [ObservableProperty]
+    private CueAudioRouteViewModel? _selectedAudioRoute;
+
+    [ObservableProperty]
+    private CueVideoPlacementViewModel? _selectedVideoPlacement;
 
     [ObservableProperty]
     private ActionEndpoint? _selectedActionEndpoint;
@@ -515,17 +644,44 @@ public partial class CuePlayerViewModel : ViewModelBase
         SelectedCueList?.Nodes ?? _emptyNodes;
 
     private readonly ObservableCollection<CueNodeViewModel> _emptyNodes = new();
-    private readonly ObservableCollection<CueRouteConnectionViewModel> _emptyRoutes = new();
-    private readonly ObservableCollection<CueVirtualOutputChannelViewModel> _emptyVirtualOutputs = new();
+    private readonly ObservableCollection<CueCompositionViewModel> _emptyCompositions = new();
+    private readonly ObservableCollection<CueVideoOutputBindingViewModel> _emptyVideoOutputs = new();
+    private readonly ObservableCollection<CueAudioRouteViewModel> _emptyAudioRoutes = new();
+    private readonly ObservableCollection<CueVideoPlacementViewModel> _emptyVideoPlacements = new();
     public ObservableCollection<ActionEndpoint> ActionEndpoints { get; } = new();
 
-    public ObservableCollection<CueRouteConnectionViewModel> VisibleRouteConnections =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } node ? node.RouteConnections : _emptyRoutes;
+    /// <summary>Bag of output lines the operator has created in the shared
+    /// <c>OutputManagementView</c>. <see cref="MainViewModel"/> populates this via
+    /// <see cref="SetAvailableOutputs"/>. Updates are live — adding/removing in OutputManagement
+    /// flows through to the cue player's dropdowns immediately.</summary>
+    public ObservableCollection<OutputLineViewModel> AvailableOutputs { get; private set; } = new();
 
-    public ObservableCollection<CueVirtualOutputChannelViewModel> VisibleVirtualOutputs =>
-        SelectedCueList?.VirtualOutputs ?? _emptyVirtualOutputs;
+    public ObservableCollection<OutputLineViewModel> AvailableAudioOutputs { get; } = new();
+    public ObservableCollection<OutputLineViewModel> AvailableVideoOutputs { get; } = new();
+
+    public ObservableCollection<CueCompositionViewModel> VisibleCompositions =>
+        SelectedCueList?.Compositions ?? _emptyCompositions;
+
+    public ObservableCollection<CueVideoOutputBindingViewModel> VisibleVideoOutputs =>
+        SelectedCueList?.VideoOutputs ?? _emptyVideoOutputs;
+
+    public ObservableCollection<CueAudioRouteViewModel> VisibleAudioRoutes =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } node ? node.AudioRoutes : _emptyAudioRoutes;
+
+    public ObservableCollection<CueVideoPlacementViewModel> VisibleVideoPlacements =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } node ? node.VideoPlacements : _emptyVideoPlacements;
 
     public bool HasSelectedMediaCue => SelectedCueNode?.Kind == CueNodeKind.Media;
+    public bool HasSelectedActionCue => SelectedCueNode?.Kind == CueNodeKind.Action;
+    public bool HasSelectedCommentCue => SelectedCueNode?.Kind == CueNodeKind.Comment;
+    public bool HasSelectedGroupCue => SelectedCueNode?.Kind == CueNodeKind.Group;
+    public bool HasSelectedCue => SelectedCueNode is not null;
+
+    public string SelectedCueDrawerTitle => SelectedCueNode is null
+        ? Strings.SelectACueDrawerHint
+        : string.IsNullOrWhiteSpace(SelectedCueNode.Number)
+            ? $"{SelectedCueNode.Label} — {SelectedCueNode.KindLabel}"
+            : $"{SelectedCueNode.Number} {SelectedCueNode.Label} — {SelectedCueNode.KindLabel}";
     public IReadOnlyList<CueActionKind> BuilderActionKinds { get; } = Enum.GetValues<CueActionKind>();
     public IReadOnlyList<CueMidiCommandType> MidiBuilderCommandTypes { get; } = Enum.GetValues<CueMidiCommandType>();
 
@@ -544,28 +700,19 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     partial void OnSelectedCueListChanged(CueListEditorViewModel? value)
     {
-        UnwatchCueListVirtualOutputs();
-        _watchedCueList = value;
-        if (_watchedCueList is not null)
-        {
-            _watchedCueList.VirtualOutputs.CollectionChanged += OnWatchedVirtualOutputsCollectionChanged;
-            foreach (var output in _watchedCueList.VirtualOutputs)
-                WatchVirtualOutput(output);
-            NormalizeCueListVirtualOutputs(_watchedCueList);
-        }
-
         CancelTransportRun();
         OnPropertyChanged(nameof(VisibleNodes));
-        NotifyVisibleVirtualOutputsChanged();
-        SelectedVirtualOutput = value?.VirtualOutputs.FirstOrDefault();
+        OnPropertyChanged(nameof(VisibleCompositions));
+        OnPropertyChanged(nameof(VisibleVideoOutputs));
+        SelectedComposition = value?.Compositions.FirstOrDefault();
+        SelectedVideoOutput = value?.VideoOutputs.FirstOrDefault();
         SelectedCueNode = null;
-        SelectedRouteConnection = null;
+        SelectedAudioRoute = null;
+        SelectedVideoPlacement = null;
         CurrentCueNode = null;
         StandbyCueNode = null;
         IsTransportPaused = false;
         RemoveCueListCommand.NotifyCanExecuteChanged();
-        RemoveVirtualOutputCommand.NotifyCanExecuteChanged();
-        AddRouteConnectionCommand.NotifyCanExecuteChanged();
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StandbySelectedCommand.NotifyCanExecuteChanged();
@@ -573,21 +720,25 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     partial void OnSelectedCueNodeChanged(CueNodeViewModel? value)
     {
-        UnwatchRouteConnections();
-        if (value is { Kind: CueNodeKind.Media } media)
-        {
-            _watchedRouteMediaCue = media;
-            media.RouteConnectionsChanged += OnWatchedRouteConnectionsChanged;
-        }
-
-        SelectedRouteConnection = value is { Kind: CueNodeKind.Media } selectedMedia
-            ? selectedMedia.RouteConnections.FirstOrDefault()
+        SelectedAudioRoute = value is { Kind: CueNodeKind.Media } media
+            ? media.AudioRoutes.FirstOrDefault()
+            : null;
+        SelectedVideoPlacement = value is { Kind: CueNodeKind.Media } media2
+            ? media2.VideoPlacements.FirstOrDefault()
             : null;
         RemoveNodeCommand.NotifyCanExecuteChanged();
-        NotifyVisibleRouteConnectionsChanged();
+        OnPropertyChanged(nameof(VisibleAudioRoutes));
+        OnPropertyChanged(nameof(VisibleVideoPlacements));
         OnPropertyChanged(nameof(HasSelectedMediaCue));
-        AddRouteConnectionCommand.NotifyCanExecuteChanged();
-        RemoveRouteConnectionCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(HasSelectedActionCue));
+        OnPropertyChanged(nameof(HasSelectedCommentCue));
+        OnPropertyChanged(nameof(HasSelectedGroupCue));
+        OnPropertyChanged(nameof(HasSelectedCue));
+        OnPropertyChanged(nameof(SelectedCueDrawerTitle));
+        AddAudioRouteCommand.NotifyCanExecuteChanged();
+        RemoveAudioRouteCommand.NotifyCanExecuteChanged();
+        AddVideoPlacementCommand.NotifyCanExecuteChanged();
+        RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
         StandbySelectedCommand.NotifyCanExecuteChanged();
         BrowseMediaSourceCommand.NotifyCanExecuteChanged();
         AssignSelectedActionEndpointCommand.NotifyCanExecuteChanged();
@@ -602,16 +753,16 @@ public partial class CuePlayerViewModel : ViewModelBase
         SyncActionBuilderFromCue(value);
     }
 
-    partial void OnSelectedRouteConnectionChanged(CueRouteConnectionViewModel? value)
+    partial void OnSelectedAudioRouteChanged(CueAudioRouteViewModel? value)
     {
         _ = value;
-        RemoveRouteConnectionCommand.NotifyCanExecuteChanged();
+        RemoveAudioRouteCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnSelectedVirtualOutputChanged(CueVirtualOutputChannelViewModel? value)
+    partial void OnSelectedVideoPlacementChanged(CueVideoPlacementViewModel? value)
     {
         _ = value;
-        RemoveVirtualOutputCommand.NotifyCanExecuteChanged();
+        RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnSelectedActionEndpointChanged(ActionEndpoint? value)
@@ -630,6 +781,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     partial void OnStandbyCueNodeChanged(CueNodeViewModel? value)
     {
         _ = value;
+        RefreshRowStatuses();
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
@@ -707,7 +859,22 @@ public partial class CuePlayerViewModel : ViewModelBase
     partial void OnCurrentCueNodeChanged(CueNodeViewModel? value)
     {
         _ = value;
+        RefreshRowStatuses();
         PauseCommand.NotifyCanExecuteChanged();
+    }
+
+    private void RefreshRowStatuses()
+    {
+        foreach (var node in EnumerateAllCueNodes())
+        {
+            var status = ReferenceEquals(node, CurrentCueNode)
+                ? CueRowStatus.Current
+                : ReferenceEquals(node, StandbyCueNode)
+                    ? CueRowStatus.Standby
+                    : CueRowStatus.Idle;
+            if (node.RowStatus != status)
+                node.RowStatus = status;
+        }
     }
 
     partial void OnIsTransportPausedChanged(bool value)
@@ -755,8 +922,6 @@ public partial class CuePlayerViewModel : ViewModelBase
     private void AddCueList()
     {
         var list = new CueListEditorViewModel(Strings.Format(nameof(Strings.CueListNameFormat), CueLists.Count + 1));
-        list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
-        list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
         CueLists.Add(list);
         SelectedCueList = list;
         StatusMessage = null;
@@ -776,43 +941,134 @@ public partial class CuePlayerViewModel : ViewModelBase
     private bool CanRemoveCueList() => SelectedCueList is not null && CueLists.Count > 1;
 
     [RelayCommand]
-    private void AddVirtualOutput()
+    private void AddComposition()
     {
-        if (SelectedCueList is null)
-            return;
-        var next = SelectedCueList.VirtualOutputs.Count == 0
-            ? 1
-            : SelectedCueList.VirtualOutputs.Max(x => x.Channel) + 1;
-        var vm = new CueVirtualOutputChannelViewModel
+        if (SelectedCueList is null) return;
+        var comp = new CueCompositionViewModel
         {
-            Channel = next,
-            Label = next == 1 ? Strings.DefaultCueOutputMainLeft : next == 2 ? Strings.DefaultCueOutputMainRight : string.Empty,
+            Name = Strings.Format(nameof(Strings.CueOutputDefaultVideoNameFormat),
+                SelectedCueList.Compositions.Count + 1),
         };
-        SelectedCueList.VirtualOutputs.Add(vm);
-        SelectedVirtualOutput = vm;
+        SelectedCueList.Compositions.Add(comp);
+        SelectedComposition = comp;
     }
 
-    [RelayCommand(CanExecute = nameof(CanRemoveVirtualOutput))]
-    private void RemoveVirtualOutput()
+    [RelayCommand(CanExecute = nameof(CanRemoveComposition))]
+    private void RemoveComposition()
     {
-        if (SelectedCueList is null || SelectedVirtualOutput is null)
-            return;
-        var removedChannel = SelectedVirtualOutput.Channel;
-        if (!SelectedCueList.VirtualOutputs.Remove(SelectedVirtualOutput))
-            return;
+        if (SelectedCueList is null || SelectedComposition is null) return;
+        var removedId = SelectedComposition.Id;
+        if (!SelectedCueList.Compositions.Remove(SelectedComposition)) return;
         foreach (var media in EnumerateMediaNodes(SelectedCueList.Nodes))
-        {
-            while (media.VirtualOutputChannels.Remove(removedChannel))
-            {
-            }
-            for (var i = media.RouteConnections.Count - 1; i >= 0; i--)
-                if (media.RouteConnections[i].VirtualOutputChannel == removedChannel)
-                    media.RouteConnections.RemoveAt(i);
-        }
-        SelectedVirtualOutput = SelectedCueList.VirtualOutputs.FirstOrDefault();
+            for (var i = media.VideoPlacements.Count - 1; i >= 0; i--)
+                if (media.VideoPlacements[i].CompositionId == removedId)
+                    media.VideoPlacements.RemoveAt(i);
+        for (var i = SelectedCueList.VideoOutputs.Count - 1; i >= 0; i--)
+            if (SelectedCueList.VideoOutputs[i].CompositionId == removedId)
+                SelectedCueList.VideoOutputs.RemoveAt(i);
+        SelectedComposition = SelectedCueList.Compositions.FirstOrDefault();
     }
 
-    private bool CanRemoveVirtualOutput() => SelectedCueList is not null && SelectedVirtualOutput is not null;
+    private bool CanRemoveComposition() => SelectedComposition is not null;
+
+    [RelayCommand]
+    private void AddVideoOutput()
+    {
+        if (SelectedCueList is null) return;
+        var binding = new CueVideoOutputBindingViewModel
+        {
+            OutputLineId = AvailableVideoOutputs.FirstOrDefault()?.Definition.Id ?? Guid.Empty,
+            CompositionId = SelectedCueList.Compositions.FirstOrDefault()?.Id ?? Guid.Empty,
+        };
+        SelectedCueList.VideoOutputs.Add(binding);
+        SelectedVideoOutput = binding;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveVideoOutput))]
+    private void RemoveVideoOutput()
+    {
+        if (SelectedCueList is null || SelectedVideoOutput is null) return;
+        if (!SelectedCueList.VideoOutputs.Remove(SelectedVideoOutput)) return;
+        SelectedVideoOutput = SelectedCueList.VideoOutputs.FirstOrDefault();
+    }
+
+    private bool CanRemoveVideoOutput() => SelectedVideoOutput is not null;
+
+    partial void OnSelectedCompositionChanged(CueCompositionViewModel? value)
+    {
+        _ = value;
+        RemoveCompositionCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnSelectedVideoOutputChanged(CueVideoOutputBindingViewModel? value)
+    {
+        _ = value;
+        RemoveVideoOutputCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanAddAudioRoute))]
+    private void AddAudioRoute()
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media) return;
+        var firstOutput = AvailableAudioOutputs.FirstOrDefault();
+        var channelCount = firstOutput?.Definition is Models.PortAudioOutputDefinition pa ? pa.ChannelCount : 2;
+        var route = new CueAudioRouteViewModel
+        {
+            SourceChannel = media.AudioRoutes.Count,
+            OutputLineId = firstOutput?.Definition.Id ?? Guid.Empty,
+            OutputChannel = 1 + (media.AudioRoutes.Count % Math.Max(1, channelCount)),
+        };
+        media.AudioRoutes.Add(route);
+        SelectedAudioRoute = route;
+        OnPropertyChanged(nameof(VisibleAudioRoutes));
+    }
+
+    private bool CanAddAudioRoute() => SelectedCueNode is { Kind: CueNodeKind.Media };
+
+    [RelayCommand(CanExecute = nameof(CanRemoveAudioRoute))]
+    private void RemoveAudioRoute()
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media || SelectedAudioRoute is null) return;
+        if (media.AudioRoutes.Remove(SelectedAudioRoute))
+        {
+            SelectedAudioRoute = media.AudioRoutes.FirstOrDefault();
+            OnPropertyChanged(nameof(VisibleAudioRoutes));
+        }
+    }
+
+    private bool CanRemoveAudioRoute() =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedAudioRoute is not null;
+
+    [RelayCommand(CanExecute = nameof(CanAddVideoPlacement))]
+    private void AddVideoPlacement()
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media || SelectedCueList is null) return;
+        var firstComp = SelectedCueList.Compositions.FirstOrDefault();
+        var placement = new CueVideoPlacementViewModel
+        {
+            CompositionId = firstComp?.Id ?? Guid.Empty,
+            LayerIndex = media.VideoPlacements.Count,
+        };
+        media.VideoPlacements.Add(placement);
+        SelectedVideoPlacement = placement;
+        OnPropertyChanged(nameof(VisibleVideoPlacements));
+    }
+
+    private bool CanAddVideoPlacement() => SelectedCueNode is { Kind: CueNodeKind.Media };
+
+    [RelayCommand(CanExecute = nameof(CanRemoveVideoPlacement))]
+    private void RemoveVideoPlacement()
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media || SelectedVideoPlacement is null) return;
+        if (media.VideoPlacements.Remove(SelectedVideoPlacement))
+        {
+            SelectedVideoPlacement = media.VideoPlacements.FirstOrDefault();
+            OnPropertyChanged(nameof(VisibleVideoPlacements));
+        }
+    }
+
+    private bool CanRemoveVideoPlacement() =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedVideoPlacement is not null;
 
     [RelayCommand]
     private void AddGroup()
@@ -849,7 +1105,62 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             row.MediaSourceItem = new FilePlaylistItem(picked);
             row.SourceOrAction = picked;
+            await ProbeAndAssignDurationAsync(row, picked);
         }
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
+    [RelayCommand]
+    private async Task AddNdiInputCueAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.AddNDIInputDialogViewModel();
+        await dialogVm.StartDiscoveryAsync();
+        var dialog = new Views.Dialogs.AddNDIInputDialog { DataContext = dialogVm };
+        try
+        {
+            var result = await dialog.ShowDialog<NDIInputPlaylistItem?>(owner);
+            if (result is null) return;
+            AddLiveInputCue(result, result.DisplayName);
+        }
+        finally
+        {
+            dialogVm.StopDiscovery();
+        }
+    }
+
+    [RelayCommand]
+    private async Task AddPortAudioInputCueAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.AddPortAudioInputDialogViewModel();
+        dialogVm.ReloadHostApis();
+        var dialog = new Views.Dialogs.AddPortAudioInputDialog { DataContext = dialogVm };
+
+        var result = await dialog.ShowDialog<PortAudioInputPlaylistItem?>(owner);
+        if (result is null) return;
+        AddLiveInputCue(result, result.DeviceName);
+    }
+
+    private void AddLiveInputCue(PlaylistItem source, string label)
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = string.IsNullOrWhiteSpace(label) ? source.DisplayName : label,
+            MediaSourceItem = source,
+            SourceOrAction = source.DisplayName,
+        };
+        parent.Add(row);
+        SelectedCueNode = row;
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
@@ -865,7 +1176,14 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             mediaCue.MediaSourceItem = new FilePlaylistItem(path);
             mediaCue.SourceOrAction = path;
+            await ProbeAndAssignDurationAsync(mediaCue, path);
         }
+    }
+
+    private static async Task ProbeAndAssignDurationAsync(CueNodeViewModel row, string path)
+    {
+        var ms = await CueMediaProbe.TryProbeDurationMsAsync(path);
+        row.DurationMs = ms ?? 0;
     }
 
     private bool CanBrowseMediaSource() => SelectedCueNode?.Kind == CueNodeKind.Media;
@@ -939,175 +1257,6 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     private bool CanRemoveNode() => SelectedCueList is not null && SelectedCueNode is not null;
-
-    [RelayCommand(CanExecute = nameof(CanAddRouteConnection))]
-    private void AddRouteConnection()
-    {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media)
-            return;
-        EnsureDefaultVirtualOutputs();
-        var targetVOut = SelectedVirtualOutput?.Channel
-                         ?? SelectedCueList?.VirtualOutputs.OrderBy(x => x.Channel).FirstOrDefault()?.Channel
-                         ?? media.VirtualOutputChannels.OrderBy(x => x).Select(x => (int?)x).FirstOrDefault()
-                         ?? 1;
-        if (!media.VirtualOutputChannels.Contains(targetVOut))
-            media.VirtualOutputChannels.Add(targetVOut);
-        var route = new CueRouteConnectionViewModel
-        {
-            InputChannel = media.RouteConnections.Count,
-            VirtualOutputChannel = targetVOut,
-            GainDb = 0,
-            Muted = false,
-        };
-        media.RouteConnections.Add(route);
-        SelectedRouteConnection = route;
-        NotifyVisibleRouteConnectionsChanged();
-    }
-
-    [RelayCommand(CanExecute = nameof(CanRemoveRouteConnection))]
-    private void RemoveRouteConnection()
-    {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media || SelectedRouteConnection is null)
-            return;
-        if (media.RouteConnections.Remove(SelectedRouteConnection))
-        {
-            SelectedRouteConnection = media.RouteConnections.FirstOrDefault();
-            NotifyVisibleRouteConnectionsChanged();
-        }
-    }
-
-    private bool CanAddRouteConnection() => SelectedCueNode is { Kind: CueNodeKind.Media };
-
-    private void EnsureDefaultVirtualOutputs()
-    {
-        if (SelectedCueList is null || SelectedCueList.VirtualOutputs.Count > 0)
-            return;
-        SelectedCueList.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
-        SelectedCueList.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
-        NotifyVisibleVirtualOutputsChanged();
-    }
-
-    private void NotifyVisibleRouteConnectionsChanged() =>
-        OnPropertyChanged(nameof(VisibleRouteConnections));
-
-    private void NotifyVisibleVirtualOutputsChanged() =>
-        OnPropertyChanged(nameof(VisibleVirtualOutputs));
-
-    private void OnWatchedRouteConnectionsChanged(object? sender, EventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        NotifyVisibleRouteConnectionsChanged();
-    }
-
-    private void OnWatchedVirtualOutputsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        _ = sender;
-        if (e.OldItems is not null)
-        {
-            foreach (var item in e.OldItems.OfType<CueVirtualOutputChannelViewModel>())
-                UnwatchVirtualOutput(item);
-        }
-
-        if (e.NewItems is not null)
-        {
-            foreach (var item in e.NewItems.OfType<CueVirtualOutputChannelViewModel>())
-                WatchVirtualOutput(item);
-        }
-
-        if (_watchedCueList is not null)
-            NormalizeCueListVirtualOutputs(_watchedCueList);
-
-        NotifyVisibleVirtualOutputsChanged();
-        AddRouteConnectionCommand.NotifyCanExecuteChanged();
-    }
-
-    private void UnwatchRouteConnections()
-    {
-        if (_watchedRouteMediaCue is null)
-            return;
-        _watchedRouteMediaCue.RouteConnectionsChanged -= OnWatchedRouteConnectionsChanged;
-        _watchedRouteMediaCue = null;
-    }
-
-    private void UnwatchCueListVirtualOutputs()
-    {
-        if (_watchedCueList is null)
-            return;
-        _watchedCueList.VirtualOutputs.CollectionChanged -= OnWatchedVirtualOutputsCollectionChanged;
-        foreach (var output in _watchedCueList.VirtualOutputs)
-            UnwatchVirtualOutput(output);
-        _watchedCueList = null;
-    }
-
-    private void WatchVirtualOutput(CueVirtualOutputChannelViewModel output)
-    {
-        if (_virtualOutputChannelHandlers.ContainsKey(output))
-            return;
-        PropertyChangedEventHandler handler = (_, args) => OnVirtualOutputPropertyChanged(output, args);
-        output.PropertyChanged += handler;
-        _virtualOutputChannelHandlers[output] = handler;
-    }
-
-    private void UnwatchVirtualOutput(CueVirtualOutputChannelViewModel output)
-    {
-        if (!_virtualOutputChannelHandlers.TryGetValue(output, out var handler))
-            return;
-        output.PropertyChanged -= handler;
-        _virtualOutputChannelHandlers.Remove(output);
-    }
-
-    private void OnVirtualOutputPropertyChanged(CueVirtualOutputChannelViewModel output, PropertyChangedEventArgs args)
-    {
-        if (args.PropertyName is not nameof(CueVirtualOutputChannelViewModel.Channel)
-            || _watchedCueList is null)
-            return;
-        EnsureUniqueVirtualOutputChannel(_watchedCueList, output);
-        NotifyVisibleVirtualOutputsChanged();
-    }
-
-    private void NormalizeCueListVirtualOutputs(CueListEditorViewModel list)
-    {
-        foreach (var output in list.VirtualOutputs)
-            EnsureUniqueVirtualOutputChannel(list, output);
-    }
-
-    private void EnsureUniqueVirtualOutputChannel(CueListEditorViewModel list, CueVirtualOutputChannelViewModel edited)
-    {
-        if (_resolvingVirtualOutputCollisions)
-            return;
-
-        var desired = Math.Max(1, edited.Channel);
-        _resolvingVirtualOutputCollisions = true;
-        try
-        {
-            if (edited.Channel != desired)
-            {
-                edited.Channel = desired;
-                return;
-            }
-
-            var hasDuplicate = list.VirtualOutputs.Any(v => !ReferenceEquals(v, edited) && v.Channel == desired);
-            if (!hasDuplicate)
-                return;
-
-            var used = list.VirtualOutputs
-                .Where(v => !ReferenceEquals(v, edited))
-                .Select(v => Math.Max(1, v.Channel))
-                .ToHashSet();
-            var nextFree = 1;
-            while (used.Contains(nextFree))
-                nextFree++;
-            edited.Channel = nextFree;
-        }
-        finally
-        {
-            _resolvingVirtualOutputCollisions = false;
-        }
-    }
-
-    private bool CanRemoveRouteConnection() =>
-        SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedRouteConnection is not null;
 
     [RelayCommand(CanExecute = nameof(CanAssignSelectedActionEndpoint))]
     private void AssignSelectedActionEndpoint()
@@ -1617,6 +1766,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 SourceOrAction = path,
             };
             parent.Add(row);
+            _ = ProbeAndAssignDurationAsync(row, path);
             added++;
         }
 
@@ -1743,15 +1893,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         foreach (var list in lists)
             CueLists.Add(CueListEditorViewModel.FromModel(list));
         if (CueLists.Count == 0)
-        {
-            var list = new CueListEditorViewModel(Strings.DefaultCueListName);
-            list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 1, Label = Strings.DefaultCueOutputMainLeft });
-            list.VirtualOutputs.Add(new CueVirtualOutputChannelViewModel { Channel = 2, Label = Strings.DefaultCueOutputMainRight });
-            CueLists.Add(list);
-        }
+            CueLists.Add(new CueListEditorViewModel(Strings.DefaultCueListName));
         SelectedCueList = CueLists[0];
         SelectedCueNode = null;
-        SelectedRouteConnection = null;
+        SelectedAudioRoute = null;
+        SelectedVideoPlacement = null;
         CurrentCueNode = null;
         StandbyCueNode = null;
         IsTransportPaused = false;

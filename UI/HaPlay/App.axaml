@@ -15,5 +15,15 @@
   <Application.Styles>
     <FluentTheme DensityStyle="Compact"/>
     <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml"/>
+    <Style Selector="NumericUpDown">
+      <Setter Property="MinWidth" Value="120"/>
+    </Style>
+    <Style Selector="Expander.dense /template/ ToggleButton#ExpanderHeader">
+      <Setter Property="MinHeight" Value="24"/>
+      <Setter Property="Padding" Value="6,2"/>
+    </Style>
+    <Style Selector="Expander.dense">
+      <Setter Property="Padding" Value="0"/>
+    </Style>
   </Application.Styles>
 </Application>

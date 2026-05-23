@@ -246,23 +246,14 @@
   <data name="CueTreeKindColumnHeader" xml:space="preserve">
     <value>Kind</value>
   </data>
-  <data name="CueTreeTriggerColumnHeader" xml:space="preserve">
-    <value>Trigger</value>
+  <data name="CueTreeStatusColumnHeader" xml:space="preserve">
+    <value></value>
   </data>
-  <data name="CueTreePreMsColumnHeader" xml:space="preserve">
-    <value>Pre(ms)</value>
+  <data name="CueTreeNameColumnHeader" xml:space="preserve">
+    <value>Name</value>
   </data>
-  <data name="CueTreeSourceActionColumnHeader" xml:space="preserve">
-    <value>Source/Action</value>
-  </data>
-  <data name="CueTreeEndpointIdColumnHeader" xml:space="preserve">
-    <value>Endpoint Id</value>
-  </data>
-  <data name="CueTreeExtraColumnHeader" xml:space="preserve">
-    <value>Extra</value>
-  </data>
-  <data name="CueTreeNotesColumnHeader" xml:space="preserve">
-    <value>Notes</value>
+  <data name="CueTreeDurationColumnHeader" xml:space="preserve">
+    <value>Duration</value>
   </data>
   <data name="CueVirtualOutputColumnHeader" xml:space="preserve">
     <value>VOut</value>
@@ -312,6 +303,12 @@
   <data name="AddCommentButton" xml:space="preserve">
     <value>+ Comment</value>
   </data>
+  <data name="AddNdiInputCueButton" xml:space="preserve">
+    <value>+ NDI</value>
+  </data>
+  <data name="AddPortAudioInputCueButton" xml:space="preserve">
+    <value>+ Audio In</value>
+  </data>
   <data name="BrowseMediaButton" xml:space="preserve">
     <value>Browse media…</value>
   </data>
@@ -357,6 +354,171 @@
   <data name="VirtualOutputsHeader" xml:space="preserve">
     <value>Virtual Outputs (VOut)</value>
   </data>
+  <data name="GeneralTabLabel" xml:space="preserve">
+    <value>General</value>
+  </data>
+  <data name="AudioTabLabel" xml:space="preserve">
+    <value>Audio</value>
+  </data>
+  <data name="VideoTabLabel" xml:space="preserve">
+    <value>Video</value>
+  </data>
+  <data name="ActionTabLabel" xml:space="preserve">
+    <value>Action</value>
+  </data>
+  <data name="CommentTabLabel" xml:space="preserve">
+    <value>Comment</value>
+  </data>
+  <data name="GroupTabLabel" xml:space="preserve">
+    <value>Group</value>
+  </data>
+  <data name="SelectACueDrawerHint" xml:space="preserve">
+    <value>Select a cue to configure it.</value>
+  </data>
+  <data name="TriggerLabel" xml:space="preserve">
+    <value>Trigger</value>
+  </data>
+  <data name="PreWaitLabel" xml:space="preserve">
+    <value>Pre-wait (ms)</value>
+  </data>
+  <data name="NotesLabel" xml:space="preserve">
+    <value>Notes</value>
+  </data>
+  <data name="GroupFireModeLabel" xml:space="preserve">
+    <value>Fire mode</value>
+  </data>
+  <data name="CommentTextLabel" xml:space="preserve">
+    <value>Comment text</value>
+  </data>
+  <data name="ActionEndpointLabel" xml:space="preserve">
+    <value>Endpoint</value>
+  </data>
+  <data name="ActionKindLabel" xml:space="preserve">
+    <value>Kind</value>
+  </data>
+  <data name="ActionCommandLabel" xml:space="preserve">
+    <value>Command</value>
+  </data>
+  <data name="CueOutputAudioKindLabel" xml:space="preserve">
+    <value>Audio</value>
+  </data>
+  <data name="CueOutputVideoKindLabel" xml:space="preserve">
+    <value>Video</value>
+  </data>
+  <data name="CueOutputAudioCompositionFormat" xml:space="preserve">
+    <value>{0} ch</value>
+  </data>
+  <data name="CueOutputDefaultAudioNameFormat" xml:space="preserve">
+    <value>Audio {0}</value>
+  </data>
+  <data name="CueOutputDefaultVideoNameFormat" xml:space="preserve">
+    <value>Video {0}</value>
+  </data>
+  <data name="OutputBindingsHeader" xml:space="preserve">
+    <value>Output bindings</value>
+  </data>
+  <data name="CompositionsHeader" xml:space="preserve">
+    <value>Compositions</value>
+  </data>
+  <data name="AudioOutputsHeader" xml:space="preserve">
+    <value>Audio outputs</value>
+  </data>
+  <data name="VideoOutputsHeader" xml:space="preserve">
+    <value>Video outputs</value>
+  </data>
+  <data name="AddCompositionButton" xml:space="preserve">
+    <value>+ Composition</value>
+  </data>
+  <data name="AddAudioRouteButton" xml:space="preserve">
+    <value>+ Route</value>
+  </data>
+  <data name="AddVideoPlacementButton" xml:space="preserve">
+    <value>+ Placement</value>
+  </data>
+  <data name="AudioOutputNameWatermark" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="VideoOutputNameWatermark" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="HostApiWatermark" xml:space="preserve">
+    <value>Host API</value>
+  </data>
+  <data name="DeviceNameWatermark" xml:space="preserve">
+    <value>Device</value>
+  </data>
+  <data name="VideoOutputTargetWatermark" xml:space="preserve">
+    <value>Window title or NDI name</value>
+  </data>
+  <data name="UnnamedAudioOutputLabel" xml:space="preserve">
+    <value>(unnamed audio output)</value>
+  </data>
+  <data name="UnnamedVideoOutputLabel" xml:space="preserve">
+    <value>(unnamed video output)</value>
+  </data>
+  <data name="SrcChLabel" xml:space="preserve">
+    <value>Src ch</value>
+  </data>
+  <data name="OutChLabel" xml:space="preserve">
+    <value>Out ch</value>
+  </data>
+  <data name="GainDbLabel" xml:space="preserve">
+    <value>Gain dB</value>
+  </data>
+  <data name="RouteOutputLabel" xml:space="preserve">
+    <value>Output</value>
+  </data>
+  <data name="CompositionLabel" xml:space="preserve">
+    <value>Composition</value>
+  </data>
+  <data name="NoAudioRoutesHint" xml:space="preserve">
+    <value>No audio routes on this cue yet. Add one to route a source channel to an audio output.</value>
+  </data>
+  <data name="NoVideoPlacementsHint" xml:space="preserve">
+    <value>No video placements on this cue yet. Add one to put the cue into a composition.</value>
+  </data>
+  <data name="NoVideoOutputLinesHint" xml:space="preserve">
+    <value>No video output lines configured yet. Add a Local or NDI output in the Output Management view first.</value>
+  </data>
+  <data name="AddAudioOutputButton" xml:space="preserve">
+    <value>+ Audio</value>
+  </data>
+  <data name="AddVideoOutputButton" xml:space="preserve">
+    <value>+ Video</value>
+  </data>
+  <data name="LayerIndexLabel" xml:space="preserve">
+    <value>Layer</value>
+  </data>
+  <data name="LayerPositionLabel" xml:space="preserve">
+    <value>Position</value>
+  </data>
+  <data name="OpacityLabel" xml:space="preserve">
+    <value>Opacity</value>
+  </data>
+  <data name="ActiveVideoOutputsLabel" xml:space="preserve">
+    <value>Active video outputs</value>
+  </data>
+  <data name="ActiveAudioOutputsLabel" xml:space="preserve">
+    <value>Active audio outputs</value>
+  </data>
+  <data name="WidthLabel" xml:space="preserve">
+    <value>W</value>
+  </data>
+  <data name="HeightLabel" xml:space="preserve">
+    <value>H</value>
+  </data>
+  <data name="FrameRateLabel" xml:space="preserve">
+    <value>fps</value>
+  </data>
+  <data name="ChannelsLabel" xml:space="preserve">
+    <value>Ch</value>
+  </data>
+  <data name="NoVideoOutputsHint" xml:space="preserve">
+    <value>No video output bindings on this cue list. Add one above.</value>
+  </data>
+  <data name="NoAudioOutputsHint" xml:space="preserve">
+    <value>No audio output bindings on this cue list. Add one above.</value>
+  </data>
   <data name="AddVoutButton" xml:space="preserve">
     <value>+ VOut</value>
   </data>
@@ -365,9 +527,6 @@
   </data>
   <data name="AddRouteButton" xml:space="preserve">
     <value>+ Route</value>
-  </data>
-  <data name="SelectMediaCueHint" xml:space="preserve">
-    <value>Select a media cue to edit per-cue route overrides.</value>
   </data>
   <data name="AddButton" xml:space="preserve">
     <value>Add</value>
