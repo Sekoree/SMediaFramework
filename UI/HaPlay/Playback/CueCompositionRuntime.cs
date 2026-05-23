@@ -81,11 +81,30 @@ internal sealed class CueCompositionRuntime : IDisposable
                     if (output is not null)
                         _acquired.Add(new AcquiredOutput(line, output, AcquiredKind.Local));
                 }
-                else if (line.Definition is Models.NDIOutputDefinition { StreamMode: not Models.NDIOutputStreamMode.AudioOnly })
+                else if (line.Definition is Models.NDIOutputDefinition nd
+                         && nd.StreamMode != Models.NDIOutputStreamMode.AudioOnly)
                 {
                     var ndi = outputs.TryAcquireNDICarrierForPlayback(line, needsVideo: true, needsAudio: false);
                     if (ndi is not null)
-                        _acquired.Add(new AcquiredOutput(line, ndi.Video, AcquiredKind.Ndi));
+                    {
+                        // NDIVideoSender.Submit is blocking (network send + format pack +
+                        // per-frame minimum-submit-spacing pacing). Letting my pump call it
+                        // inline would stall composition for every other output in the same
+                        // tick AND back-pressure NDI's pace until frames pile up unsubmitted —
+                        // the "NDI monitor doesn't even update" symptom. The framework's NDI
+                        // path always wraps the sender in a VideoOutputPump (background queue,
+                        // drop-oldest) for exactly this reason.
+                        IVideoOutput sink = ndi.Video;
+                        var name = $"cuecomp-ndi-{nd.Id:N}";
+                        sink = WrapWithNDILockIfNeeded(sink, nd, name);
+                        var pump = new S.Media.Core.Video.VideoOutputPump(
+                            sink,
+                            maxQueuedFrames: 8,
+                            name: name,
+                            log: null,
+                            disposeInnerOnDispose: false);
+                        _acquired.Add(new AcquiredOutput(line, pump, AcquiredKind.Ndi));
+                    }
                 }
             }
             catch (Exception ex)
@@ -387,6 +406,16 @@ internal sealed class CueCompositionRuntime : IDisposable
             _slots.Clear();
             foreach (var acquired in _acquired)
             {
+                // For NDI we wrapped the carrier in VideoOutputPump (and possibly
+                // LockedFormatVideoOutput) — dispose the wrapper to stop its background thread
+                // *before* releasing the carrier back to OutputManagement (else the pump may try
+                // to Submit into a sender we've just handed back).
+                if (acquired.Kind == AcquiredKind.Ndi && acquired.Output is IDisposable disposable)
+                {
+                    try { disposable.Dispose(); }
+                    catch (Exception ex) { Trace.LogWarning(ex, "CueCompositionRuntime.Dispose: NDI wrapper dispose"); }
+                }
+
                 try
                 {
                     if (acquired.Kind == AcquiredKind.Local)
@@ -412,6 +441,22 @@ internal sealed class CueCompositionRuntime : IDisposable
     private enum AcquiredKind { Local, Ndi }
 
     private sealed record AcquiredOutput(OutputLineViewModel Line, IVideoOutput Output, AcquiredKind Kind);
+
+    /// <summary>Mirrors <c>HaPlayPlaybackSession.WrapWithNDILockIfNeeded</c>. When the carrier
+    /// definition pins a pixel format or resolution, wrap the sender so frames get letterboxed /
+    /// re-packed to those constraints before send.</summary>
+    private static IVideoOutput WrapWithNDILockIfNeeded(IVideoOutput ndiSender, Models.NDIOutputDefinition nd, string name)
+    {
+        if (nd.PixelFormatLock is null && nd.ResolutionLockWidth is null && nd.ResolutionLockHeight is null)
+            return ndiSender;
+        return new LockedFormatVideoOutput(
+            ndiSender,
+            nd.PixelFormatLock,
+            nd.ResolutionLockWidth,
+            nd.ResolutionLockHeight,
+            name,
+            disposeInnerOnDispose: false);
+    }
 
     public readonly record struct CueCompositionRuntimeStats(
         Guid CompositionId,
