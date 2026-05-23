@@ -97,6 +97,22 @@ public sealed record MediaCueNode : CueNode
 
     public int DurationMs { get; init; }
 
+    /// <summary>Cached probe result — whether the source has a decodable video stream. Defaults
+    /// false; older saved cues (pre-Phase 5.1) load with this unset and the Video tab still shows
+    /// until the operator re-probes by re-browsing the source.</summary>
+    public bool HasVideo { get; init; }
+
+    /// <summary>Cached probe result — whether the source has a decodable audio stream.</summary>
+    public bool HasAudio { get; init; }
+
+    /// <summary>Source channel count probed once on add. 0 when unknown / no audio.</summary>
+    public int AudioChannels { get; init; }
+
+    /// <summary>True when the source's only video is an attached picture (e.g. MP3 with cover art).
+    /// The Video tab still shows so the cover art can be placed into a composition, but with a
+    /// hint that it's a still image.</summary>
+    public bool VideoIsAttachedPicture { get; init; }
+
     public bool Loop { get; init; }
 
     public int StartOffsetMs { get; init; }

@@ -49,6 +49,11 @@ public sealed class CuePlaybackEngine : IDisposable
     /// <summary>Raised on the UI thread when a cue stops (natural end, Stop, or Panic).</summary>
     public event EventHandler<Guid>? CueEnded;
 
+    /// <summary>Raised on the UI thread roughly every 150 ms while a cue is active. Carries the
+    /// cue id + current position + duration so the Now Playing panel can advance its progress
+    /// bars without per-row polling.</summary>
+    public event EventHandler<CuePlaybackProgress>? CueProgress;
+
     public async Task<string?> ExecuteAsync(MediaCueNode cue, CancellationToken ct)
     {
         if (cue.Source is null)
@@ -468,8 +473,16 @@ public sealed class CuePlaybackEngine : IDisposable
                 await Task.Delay(150, ct).ConfigureAwait(false);
 
                 var duration = entry.Player.Duration;
+                TimeSpan pos;
+                try { pos = entry.Player.PlayClock.CurrentPosition; }
+                catch { continue; }
+
+                // Emit progress for the Now Playing panel even when duration isn't known yet
+                // (live sources advertise Duration.Zero but still have a real position).
+                var progress = new CuePlaybackProgress(entry.Cue.Id, pos, duration);
+                await Dispatcher.UIThread.InvokeAsync(() => CueProgress?.Invoke(this, progress));
+
                 if (duration <= TimeSpan.Zero) continue;
-                var pos = entry.Player.PlayClock.CurrentPosition;
                 if (pos >= duration - TimeSpan.FromMilliseconds(50))
                 {
                     lock (_gate) _active.Remove(entry.Cue.Id);
@@ -524,3 +537,6 @@ public sealed class CuePlaybackEngine : IDisposable
         public List<IDisposable> AudioDisposables { get; } = new();
     }
 }
+
+/// <summary>Periodic progress sample for the Now Playing panel.</summary>
+public readonly record struct CuePlaybackProgress(Guid CueId, TimeSpan Position, TimeSpan Duration);

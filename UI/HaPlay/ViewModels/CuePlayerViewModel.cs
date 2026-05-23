@@ -263,6 +263,18 @@ public sealed partial class CueNodeViewModel : ObservableObject
     private int _durationMs;
 
     [ObservableProperty]
+    private bool _sourceHasVideo;
+
+    [ObservableProperty]
+    private bool _sourceHasAudio;
+
+    [ObservableProperty]
+    private int _sourceAudioChannels;
+
+    [ObservableProperty]
+    private bool _sourceVideoIsAttachedPicture;
+
+    [ObservableProperty]
     private CueRowStatus _rowStatus = CueRowStatus.Idle;
 
     public ObservableCollection<CueAudioRouteViewModel> AudioRoutes { get; } = new();
@@ -316,19 +328,95 @@ public sealed partial class CueNodeViewModel : ObservableObject
     {
         get
         {
+            if (Kind == CueNodeKind.Group)
+                return BuildGroupDurationDisplay();
             if (Kind != CueNodeKind.Media || DurationMs <= 0)
                 return Strings.EmDash;
-            var ts = TimeSpan.FromMilliseconds(DurationMs);
-            return ts.TotalHours >= 1
-                ? $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}"
-                : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+            return FormatDurationMs(DurationMs);
         }
+    }
+
+    private string BuildGroupDurationDisplay()
+    {
+        long rollupMs;
+        int itemCount;
+        switch (GroupFireMode)
+        {
+            case CueGroupFireMode.FireAllSimultaneously:
+                (rollupMs, itemCount) = AggregateChildrenDurations(static (sumMs, childMs) => Math.Max(sumMs, childMs));
+                break;
+            case CueGroupFireMode.FirstCueOnly:
+                rollupMs = Children.FirstOrDefault(c => c.Kind != CueNodeKind.Comment)?.RolledDurationMs ?? 0;
+                itemCount = Children.Count;
+                break;
+            case CueGroupFireMode.ArmedList:
+            default:
+                (rollupMs, itemCount) = AggregateChildrenDurations(static (sumMs, childMs) => sumMs + childMs);
+                break;
+        }
+
+        if (rollupMs <= 0 && itemCount == 0)
+            return Strings.EmDash;
+
+        var time = rollupMs <= 0 ? Strings.EmDash : FormatDurationMs((int)Math.Min(int.MaxValue, rollupMs));
+        return $"{time} · {itemCount}";
+    }
+
+    /// <summary>Walk children, accumulate via <paramref name="combine"/>, count items recursively.
+    /// Children that are groups roll up first via <see cref="RolledDurationMs"/>.</summary>
+    private (long Ms, int Count) AggregateChildrenDurations(Func<long, long, long> combine)
+    {
+        long ms = 0;
+        var count = 0;
+        foreach (var child in Children)
+        {
+            if (child.Kind == CueNodeKind.Comment) continue;
+            ms = combine(ms, child.RolledDurationMs);
+            count++;
+        }
+        return (ms, count);
+    }
+
+    /// <summary>Effective duration for roll-ups: groups recursively roll up via their own
+    /// <see cref="BuildGroupDurationDisplay"/> rules; media cues return their probed
+    /// <see cref="DurationMs"/>; other kinds (Action / Comment) return 0.</summary>
+    public long RolledDurationMs
+    {
+        get
+        {
+            switch (Kind)
+            {
+                case CueNodeKind.Media: return DurationMs;
+                case CueNodeKind.Group:
+                {
+                    switch (GroupFireMode)
+                    {
+                        case CueGroupFireMode.FireAllSimultaneously:
+                            return AggregateChildrenDurations(static (sumMs, childMs) => Math.Max(sumMs, childMs)).Ms;
+                        case CueGroupFireMode.FirstCueOnly:
+                            return Children.FirstOrDefault(c => c.Kind != CueNodeKind.Comment)?.RolledDurationMs ?? 0;
+                        default:
+                            return AggregateChildrenDurations(static (sumMs, childMs) => sumMs + childMs).Ms;
+                    }
+                }
+                default: return 0;
+            }
+        }
+    }
+
+    private static string FormatDurationMs(int ms)
+    {
+        var ts = TimeSpan.FromMilliseconds(ms);
+        return ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 
     partial void OnDurationMsChanged(int value)
     {
         _ = value;
         OnPropertyChanged(nameof(DurationDisplay));
+        OnPropertyChanged(nameof(RolledDurationMs));
     }
 
     partial void OnExtraChanged(string value)
@@ -336,13 +424,45 @@ public sealed partial class CueNodeViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(GroupFireMode));
         OnPropertyChanged(nameof(ActionKind));
+        // GroupFireMode determines the roll-up formula — refresh derived displays.
+        if (Kind == CueNodeKind.Group)
+        {
+            OnPropertyChanged(nameof(DurationDisplay));
+            OnPropertyChanged(nameof(RolledDurationMs));
+        }
     }
 
     private void OnChildrenCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         _ = sender;
-        _ = e;
+        if (e.OldItems is not null)
+        {
+            foreach (var item in e.OldItems.OfType<CueNodeViewModel>())
+                item.PropertyChanged -= OnChildPropertyChangedForRollup;
+        }
+        if (e.NewItems is not null)
+        {
+            foreach (var item in e.NewItems.OfType<CueNodeViewModel>())
+                item.PropertyChanged += OnChildPropertyChangedForRollup;
+        }
         OnPropertyChanged(nameof(HasChildren));
+        if (Kind == CueNodeKind.Group)
+        {
+            OnPropertyChanged(nameof(DurationDisplay));
+            OnPropertyChanged(nameof(RolledDurationMs));
+        }
+    }
+
+    private void OnChildPropertyChangedForRollup(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (Kind != CueNodeKind.Group) return;
+        if (e.PropertyName is nameof(RolledDurationMs)
+            or nameof(DurationMs)
+            or nameof(GroupFireMode))
+        {
+            OnPropertyChanged(nameof(DurationDisplay));
+            OnPropertyChanged(nameof(RolledDurationMs));
+        }
     }
 
     public static CueNodeViewModel FromModel(CueNode node)
@@ -380,6 +500,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     FadeInMs = m.FadeInMs,
                     FadeOutMs = m.FadeOutMs,
                     DurationMs = m.DurationMs,
+                    SourceHasVideo = m.HasVideo,
+                    SourceHasAudio = m.HasAudio,
+                    SourceAudioChannels = m.AudioChannels,
+                    SourceVideoIsAttachedPicture = m.VideoIsAttachedPicture,
                     StartOffsetMs = m.StartOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
@@ -449,6 +573,10 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 FadeInMs = Math.Max(0, FadeInMs),
                 FadeOutMs = Math.Max(0, FadeOutMs),
                 DurationMs = Math.Max(0, DurationMs),
+                HasVideo = SourceHasVideo,
+                HasAudio = SourceHasAudio,
+                AudioChannels = Math.Max(0, SourceAudioChannels),
+                VideoIsAttachedPicture = SourceVideoIsAttachedPicture,
                 StartOffsetMs = Math.Max(0, StartOffsetMs),
                 Loop = Loop,
                 EndBehavior = EndBehavior,
@@ -620,6 +748,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         _selectedCueNodes.Clear();
         _selectedCueNodes.AddRange(selected);
         SelectedCueNode = _selectedCueNodes.FirstOrDefault();
+        OnPropertyChanged(nameof(SelectedCueCount));
+        OnPropertyChanged(nameof(IsMultiSelected));
     }
 
     [ObservableProperty]
@@ -714,6 +844,27 @@ public partial class CuePlayerViewModel : ViewModelBase
     public bool HasSelectedGroupCue => SelectedCueNode?.Kind == CueNodeKind.Group;
     public bool HasSelectedCue => SelectedCueNode is not null;
 
+    /// <summary>Video tab visibility: media cue AND the source actually has a video stream
+    /// (decodable — covers regular video files and audio files with attached picture cover art).</summary>
+    public bool HasSelectedMediaCueWithVideo =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } media && media.SourceHasVideo;
+
+    /// <summary>Operator hint banner — true when the only "video" the source offers is an
+    /// attached picture (e.g. MP3 album art). The Video tab still works (the still frame can be
+    /// placed into a composition for a now-playing slate) but it's worth flagging.</summary>
+    public bool HasSelectedMediaCueWithAttachedPictureOnly =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } media && media.SourceVideoIsAttachedPicture;
+
+    /// <summary>How many cues the operator currently has highlighted in the tree. The drawer
+    /// shows a banner above the routes/placements lists when this is > 1 so the operator knows
+    /// that "+ Route" / "+ Placement" applies to all of them, not just the primary.</summary>
+    public int SelectedCueCount => _selectedCueNodes.Count;
+
+    /// <summary>True iff <see cref="SelectedCueCount"/> > 1. Bound as the banner visibility flag —
+    /// Avalonia's <c>ObjectConverters</c> doesn't ship a <c>GreaterThan</c>, so we expose a
+    /// dedicated boolean rather than wire a per-view converter.</summary>
+    public bool IsMultiSelected => _selectedCueNodes.Count > 1;
+
     public string SelectedCueDrawerTitle => SelectedCueNode is null
         ? Strings.SelectACueDrawerHint
         : string.IsNullOrWhiteSpace(SelectedCueNode.Number)
@@ -755,8 +906,31 @@ public partial class CuePlayerViewModel : ViewModelBase
         StandbySelectedCommand.NotifyCanExecuteChanged();
     }
 
+    private CueNodeViewModel? _watchedSelectedCueForProbe;
+
+    private void OnSelectedCueProbeChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(CueNodeViewModel.SourceHasVideo)
+            or nameof(CueNodeViewModel.SourceHasAudio)
+            or nameof(CueNodeViewModel.SourceAudioChannels)
+            or nameof(CueNodeViewModel.SourceVideoIsAttachedPicture))
+        {
+            OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
+            OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
+        }
+    }
+
     partial void OnSelectedCueNodeChanged(CueNodeViewModel? value)
     {
+        // The selected cue's probe fields can land AFTER selection (when the operator picks a
+        // file via "Browse media…"; the probe is async). Re-subscribe so the Video tab visibility
+        // re-evaluates when the probe finishes.
+        if (_watchedSelectedCueForProbe is not null)
+            _watchedSelectedCueForProbe.PropertyChanged -= OnSelectedCueProbeChanged;
+        _watchedSelectedCueForProbe = value;
+        if (_watchedSelectedCueForProbe is not null)
+            _watchedSelectedCueForProbe.PropertyChanged += OnSelectedCueProbeChanged;
+
         SelectedAudioRoute = value is { Kind: CueNodeKind.Media } media
             ? media.AudioRoutes.FirstOrDefault()
             : null;
@@ -767,6 +941,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(VisibleAudioRoutes));
         OnPropertyChanged(nameof(VisibleVideoPlacements));
         OnPropertyChanged(nameof(HasSelectedMediaCue));
+        OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
+        OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
         OnPropertyChanged(nameof(HasSelectedActionCue));
         OnPropertyChanged(nameof(HasSelectedCommentCue));
         OnPropertyChanged(nameof(HasSelectedGroupCue));
@@ -819,6 +995,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         _ = value;
         RefreshRowStatuses();
+        RebuildUpcomingCues();
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
@@ -907,18 +1084,93 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// one for AutoFollow / transport-state purposes.</summary>
     private readonly HashSet<Guid> _activeCueIds = new();
 
-    /// <summary>Engine callback — cue began playing. Marks its row Current.</summary>
+    /// <summary>Rows visible in the right-side Now Playing panel. Maintained by
+    /// <see cref="OnCueStarted"/> / <see cref="OnCueEnded"/>; their progress fields update via
+    /// <see cref="OnCueProgress"/>.</summary>
+    public ObservableCollection<ActiveCueViewModel> ActiveCues { get; } = new();
+
+    /// <summary>Cues that *will* fire once the operator presses Go from the current Standby
+    /// position — used by the Now Playing panel's Upcoming section.</summary>
+    public ObservableCollection<CueNodeViewModel> UpcomingCues { get; } = new();
+
+    /// <summary>Host-provided per-cue stop callback (engine.StopCueAsync). The Now Playing
+    /// panel's per-row ✕ button forwards through this; null in tests.</summary>
+    public Func<Guid, Task>? CancelCueCallback { get; set; }
+
+    /// <summary>Engine callback — cue began playing. Marks its row Current and pushes a new
+    /// <see cref="ActiveCueViewModel"/> into <see cref="ActiveCues"/>.</summary>
     public void OnCueStarted(Guid cueId)
     {
         _activeCueIds.Add(cueId);
         RefreshRowStatuses();
+
+        var node = FindNodeById(cueId);
+        if (node is not null && !ActiveCues.Any(a => a.CueId == cueId))
+        {
+            var entry = new ActiveCueViewModel(node, cueId, id => _ = (CancelCueCallback?.Invoke(id) ?? Task.CompletedTask))
+            {
+                DurationMs = Math.Max(0, node.DurationMs),
+            };
+            ActiveCues.Add(entry);
+        }
+        RebuildUpcomingCues();
     }
 
-    /// <summary>Engine callback — cue stopped (natural end, Stop, or Panic). Clears Current.</summary>
+    /// <summary>Engine callback — cue stopped (natural end, Stop, or Panic). Clears Current
+    /// status and removes the matching <see cref="ActiveCueViewModel"/>.</summary>
     public void OnCueEnded(Guid cueId)
     {
         _activeCueIds.Remove(cueId);
         RefreshRowStatuses();
+
+        for (var i = ActiveCues.Count - 1; i >= 0; i--)
+            if (ActiveCues[i].CueId == cueId)
+                ActiveCues.RemoveAt(i);
+        RebuildUpcomingCues();
+    }
+
+    /// <summary>Engine callback — progress sample for one active cue. Updates the row's
+    /// position so the progress bar and "mm:ss / mm:ss" display advance.</summary>
+    public void OnCueProgress(CuePlaybackProgress p)
+    {
+        foreach (var a in ActiveCues)
+        {
+            if (a.CueId != p.CueId) continue;
+            a.PositionMs = (long)p.Position.TotalMilliseconds;
+            if (p.Duration > TimeSpan.Zero)
+                a.DurationMs = (long)p.Duration.TotalMilliseconds;
+            break;
+        }
+    }
+
+    private CueNodeViewModel? FindNodeById(Guid id)
+    {
+        foreach (var node in EnumerateAllCueNodes())
+            if (node.Id == id)
+                return node;
+        return null;
+    }
+
+    private void RebuildUpcomingCues()
+    {
+        UpcomingCues.Clear();
+        if (SelectedCueList is null) return;
+        var ordered = EnumerateFireableCueOrder().ToList();
+        if (ordered.Count == 0) return;
+
+        var anchor = StandbyCueNode ?? ordered.FirstOrDefault();
+        if (anchor is null) return;
+        var startIdx = ordered.FindIndex(c => ReferenceEquals(c, ResolveFireableCue(anchor) ?? anchor));
+        if (startIdx < 0) return;
+
+        // Show up to 8 cues ahead — enough context for a chain without crowding the panel.
+        for (var i = startIdx; i < ordered.Count && UpcomingCues.Count < 8; i++)
+        {
+            var c = ordered[i];
+            // Don't list already-active cues as upcoming — they're in the Active section.
+            if (_activeCueIds.Contains(c.Id)) continue;
+            UpcomingCues.Add(c);
+        }
     }
 
     private void RefreshRowStatuses()
@@ -1311,10 +1563,31 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Open the file once, probe duration + audio/video stream info + audio channel
+    /// count, and write the lot onto the cue VM. The drawer's Audio + Video tab visibility and
+    /// hints depend on these — landing them right away (before <c>StatusMessage</c> resets)
+    /// keeps the UI accurate even for the cancel-leaves-empty-cue case.</summary>
     private static async Task ProbeAndAssignDurationAsync(CueNodeViewModel row, string path)
     {
-        var ms = await CueMediaProbe.TryProbeDurationMsAsync(path);
-        row.DurationMs = ms ?? 0;
+        var probe = await CueMediaProbe.TryProbeAsync(path).ConfigureAwait(false);
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (probe is null)
+            {
+                row.DurationMs = 0;
+                row.SourceHasVideo = false;
+                row.SourceHasAudio = false;
+                row.SourceAudioChannels = 0;
+                row.SourceVideoIsAttachedPicture = false;
+                return;
+            }
+
+            row.DurationMs = probe.Value.DurationMs ?? 0;
+            row.SourceHasVideo = probe.Value.HasVideo;
+            row.SourceHasAudio = probe.Value.HasAudio;
+            row.SourceAudioChannels = probe.Value.AudioChannels;
+            row.SourceVideoIsAttachedPicture = probe.Value.VideoIsAttachedPicture;
+        });
     }
 
     private bool CanBrowseMediaSource() => SelectedCueNode?.Kind == CueNodeKind.Media;
@@ -1397,6 +1670,119 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     private bool CanRemoveNode() => SelectedCueList is not null && SelectedCueNode is not null;
+
+    /// <summary>Opens the rename popup for the currently selected cue. F2 triggers this from the
+    /// tree's key bindings (Phase 5.6 wires F2); the right-click menu / drawer's "Rename…"
+    /// affordance can also invoke it. Cancel discards changes; OK / Enter commits Number + Label.</summary>
+    [RelayCommand(CanExecute = nameof(CanRenameSelectedCue))]
+    private async Task RenameSelectedCueAsync()
+    {
+        if (SelectedCueNode is null) return;
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = Dialogs.RenameCueDialogViewModel.For(SelectedCueNode);
+        var dialog = new Views.Dialogs.RenameCueDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<Dialogs.RenameCueDialogResult?>(owner);
+        if (result is null) return;
+
+        var oldDisplay = CueDisplay(SelectedCueNode);
+        SelectedCueNode.Number = result.Number;
+        SelectedCueNode.Label = result.Label;
+        StatusMessage = Strings.Format(nameof(Strings.RenamedCueStatusFormat), oldDisplay, CueDisplay(SelectedCueNode));
+    }
+
+    private bool CanRenameSelectedCue() => SelectedCueNode is not null;
+
+    /// <summary>Bulk renumber. Walks the chosen scope (all / root only / current selection) in
+    /// tree order, assigning <c>start</c>, <c>start+step</c>, … Nested groups recurse with a
+    /// sub-numbering scheme — `1`, `1.1`, `1.2`, `2`, … — preserving the visible cue hierarchy.</summary>
+    [RelayCommand(CanExecute = nameof(CanRenumber))]
+    private async Task RenumberAsync()
+    {
+        if (SelectedCueList is null) return;
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.RenumberSelectionDialogViewModel();
+        if (_selectedCueNodes.Count <= 1)
+            dialogVm.Scope = Dialogs.RenumberScope.All;
+        var dialog = new Views.Dialogs.RenumberSelectionDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<Dialogs.RenumberSelectionDialogResult?>(owner);
+        if (result is null) return;
+
+        var renumbered = 0;
+        switch (result.Scope)
+        {
+            case Dialogs.RenumberScope.All:
+                renumbered = RenumberSubtree(SelectedCueList.Nodes, result.Start, result.Step, recurseIntoGroups: true);
+                break;
+            case Dialogs.RenumberScope.RootLevelOnly:
+                renumbered = RenumberSubtree(SelectedCueList.Nodes, result.Start, result.Step, recurseIntoGroups: false);
+                break;
+            case Dialogs.RenumberScope.SelectionOnly:
+                renumbered = RenumberFlat(_selectedCueNodes, result.Start, result.Step);
+                break;
+        }
+
+        StatusMessage = Strings.Format(nameof(Strings.RenumberedStatusFormat), renumbered);
+    }
+
+    private bool CanRenumber() => SelectedCueList is not null && SelectedCueList.Nodes.Count > 0;
+
+    /// <summary>Renumbers the rows in <paramref name="nodes"/> in tree order. When
+    /// <paramref name="recurseIntoGroups"/> is true, group children get sub-numbers
+    /// (parent="1" → children "1.1", "1.2", ...).</summary>
+    private static int RenumberSubtree(IReadOnlyList<CueNodeViewModel> nodes, double start, double step, bool recurseIntoGroups)
+    {
+        var count = 0;
+        var n = start;
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+            node.Number = FormatCueNumber(n);
+            count++;
+            if (recurseIntoGroups && node.Kind == CueNodeKind.Group && node.Children.Count > 0)
+                count += RenumberSubtreePrefixed(node.Children, node.Number, 1.0, 1.0);
+            n += step;
+        }
+        return count;
+    }
+
+    private static int RenumberSubtreePrefixed(IReadOnlyList<CueNodeViewModel> children, string prefix, double start, double step)
+    {
+        var count = 0;
+        var n = start;
+        for (var i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            child.Number = $"{prefix}.{FormatCueNumber(n)}";
+            count++;
+            if (child.Kind == CueNodeKind.Group && child.Children.Count > 0)
+                count += RenumberSubtreePrefixed(child.Children, child.Number, 1.0, 1.0);
+            n += step;
+        }
+        return count;
+    }
+
+    private static int RenumberFlat(IReadOnlyList<CueNodeViewModel> nodes, double start, double step)
+    {
+        var count = 0;
+        var n = start;
+        foreach (var node in nodes)
+        {
+            node.Number = FormatCueNumber(n);
+            count++;
+            n += step;
+        }
+        return count;
+    }
+
+    private static string FormatCueNumber(double n) =>
+        // Drop trailing zero for whole numbers (`1` not `1.0`); keep up to 2 decimals otherwise.
+        n == Math.Truncate(n)
+            ? ((long)n).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : n.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     [RelayCommand(CanExecute = nameof(CanAssignSelectedActionEndpoint))]
     private void AssignSelectedActionEndpoint()

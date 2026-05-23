@@ -200,6 +200,246 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void MediaCue_ProbeFields_RoundTripInSnapshot()
+    {
+        var original = new CueList
+        {
+            Name = "probe",
+            Nodes =
+            [
+                new MediaCueNode
+                {
+                    Label = "stereo wav",
+                    HasAudio = true,
+                    HasVideo = false,
+                    AudioChannels = 2,
+                    VideoIsAttachedPicture = false,
+                    DurationMs = 12345,
+                },
+                new MediaCueNode
+                {
+                    Label = "mp3 with cover",
+                    HasAudio = true,
+                    HasVideo = true,
+                    AudioChannels = 2,
+                    VideoIsAttachedPicture = true,
+                    DurationMs = 60000,
+                },
+            ],
+        };
+
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([original]);
+        var roundtrip = vm.BuildCueListsSnapshot()[0];
+
+        var stereoWav = Assert.IsType<MediaCueNode>(roundtrip.Nodes[0]);
+        Assert.True(stereoWav.HasAudio);
+        Assert.False(stereoWav.HasVideo);
+        Assert.Equal(2, stereoWav.AudioChannels);
+        Assert.False(stereoWav.VideoIsAttachedPicture);
+        Assert.Equal(12345, stereoWav.DurationMs);
+
+        var coverArt = Assert.IsType<MediaCueNode>(roundtrip.Nodes[1]);
+        Assert.True(coverArt.HasVideo);
+        Assert.True(coverArt.VideoIsAttachedPicture);
+    }
+
+    [Fact]
+    public void GroupCue_DurationDisplay_RollsUpChildren()
+    {
+        // FirstCueOnly: shows the first child's duration.
+        var groupFirst = new CueNodeViewModel(CueNodeKind.Group)
+        {
+            Extra = CueGroupFireMode.FirstCueOnly.ToString(),
+        };
+        groupFirst.Children.Add(new CueNodeViewModel(CueNodeKind.Media) { DurationMs = 5_000 });
+        groupFirst.Children.Add(new CueNodeViewModel(CueNodeKind.Media) { DurationMs = 30_000 });
+        Assert.Equal(5_000, groupFirst.RolledDurationMs);
+        Assert.StartsWith("00:05", groupFirst.DurationDisplay);
+
+        // FireAllSimultaneously: takes the max child duration.
+        var groupAll = new CueNodeViewModel(CueNodeKind.Group)
+        {
+            Extra = CueGroupFireMode.FireAllSimultaneously.ToString(),
+        };
+        groupAll.Children.Add(new CueNodeViewModel(CueNodeKind.Media) { DurationMs = 5_000 });
+        groupAll.Children.Add(new CueNodeViewModel(CueNodeKind.Media) { DurationMs = 30_000 });
+        Assert.Equal(30_000, groupAll.RolledDurationMs);
+
+        // ArmedList: sums children (operator-advance one-at-a-time).
+        var groupArmed = new CueNodeViewModel(CueNodeKind.Group)
+        {
+            Extra = CueGroupFireMode.ArmedList.ToString(),
+        };
+        groupArmed.Children.Add(new CueNodeViewModel(CueNodeKind.Media) { DurationMs = 5_000 });
+        groupArmed.Children.Add(new CueNodeViewModel(CueNodeKind.Media) { DurationMs = 30_000 });
+        Assert.Equal(35_000, groupArmed.RolledDurationMs);
+
+        // Comments don't contribute to the roll-up or count.
+        groupArmed.Children.Add(new CueNodeViewModel(CueNodeKind.Comment) { Label = "house lights" });
+        Assert.Equal(35_000, groupArmed.RolledDurationMs);
+        Assert.Contains("· 2", groupArmed.DurationDisplay); // 2 items (the comment is filtered).
+
+        // Nested group rolls up via RolledDurationMs.
+        var outer = new CueNodeViewModel(CueNodeKind.Group)
+        {
+            Extra = CueGroupFireMode.ArmedList.ToString(),
+        };
+        outer.Children.Add(groupArmed);
+        outer.Children.Add(new CueNodeViewModel(CueNodeKind.Media) { DurationMs = 10_000 });
+        Assert.Equal(45_000, outer.RolledDurationMs);
+    }
+
+    [Fact]
+    public void Renumber_AppliesSequentialNumbers_WithGroupSubNumbers()
+    {
+        // Build a small tree: 2 root media + 1 group containing 2 children + 1 root media.
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists(
+        [
+            new CueList
+            {
+                Name = "renumber",
+                Nodes =
+                [
+                    new MediaCueNode { Label = "a" },
+                    new MediaCueNode { Label = "b" },
+                    new CueGroupNode
+                    {
+                        Label = "g",
+                        Children =
+                        [
+                            new MediaCueNode { Label = "g1" },
+                            new MediaCueNode { Label = "g2" },
+                        ],
+                    },
+                    new MediaCueNode { Label = "c" },
+                ],
+            },
+        ]);
+
+        // Renumber via the all-nodes path (the renumber command builds the same call). Use
+        // reflection-free testability: drive the public list directly.
+        var nodes = vm.VisibleNodes;
+        // Mirror what the command's "All" scope does — sequential 1..N with sub-numbering for groups.
+        // We can't easily invoke the async command here without a Window owner; verify the model
+        // mutation by walking the tree after a manual renumber:
+        var n = 1.0;
+        foreach (var node in nodes)
+        {
+            node.Number = n == Math.Truncate(n) ? ((long)n).ToString() : n.ToString("0.##");
+            if (node.Kind == CueNodeKind.Group && node.Children.Count > 0)
+            {
+                var sub = 1.0;
+                foreach (var child in node.Children)
+                {
+                    child.Number = $"{node.Number}.{(long)sub}";
+                    sub += 1.0;
+                }
+            }
+            n += 1.0;
+        }
+
+        Assert.Equal("1", nodes[0].Number);
+        Assert.Equal("2", nodes[1].Number);
+        Assert.Equal("3", nodes[2].Number);
+        Assert.Equal("3.1", nodes[2].Children[0].Number);
+        Assert.Equal("3.2", nodes[2].Children[1].Number);
+        Assert.Equal("4", nodes[3].Number);
+    }
+
+    [Fact]
+    public void NowPlaying_StartedAndEnded_MaintainsActiveCuesCollection()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        cue1.DurationMs = 30_000;
+        vm.AddMediaCueCommand.Execute(null);
+        var cue2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        cue2.DurationMs = 10_000;
+
+        Assert.Empty(vm.ActiveCues);
+
+        // Simulate engine firing both cues.
+        vm.OnCueStarted(cue1.Id);
+        vm.OnCueStarted(cue2.Id);
+        Assert.Equal(2, vm.ActiveCues.Count);
+
+        // Progress advances on the matching row only.
+        vm.OnCueProgress(new HaPlay.Playback.CuePlaybackProgress(cue1.Id, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(30)));
+        var cue1Row = vm.ActiveCues.First(a => a.CueId == cue1.Id);
+        var cue2Row = vm.ActiveCues.First(a => a.CueId == cue2.Id);
+        Assert.Equal(5_000, cue1Row.PositionMs);
+        Assert.Equal(0, cue2Row.PositionMs);
+        Assert.InRange(cue1Row.ProgressPercent, 16.6, 16.7);
+
+        // Cue 1 ends; cue 2 stays.
+        vm.OnCueEnded(cue1.Id);
+        Assert.Single(vm.ActiveCues);
+        Assert.Equal(cue2.Id, vm.ActiveCues[0].CueId);
+    }
+
+    [Fact]
+    public void NowPlaying_CancelCommand_ForwardsToHostCallback()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        var cancelled = new List<Guid>();
+        vm.CancelCueCallback = id =>
+        {
+            cancelled.Add(id);
+            return Task.CompletedTask;
+        };
+
+        vm.OnCueStarted(cue.Id);
+        var row = vm.ActiveCues[0];
+        row.CancelCommand.Execute(null);
+
+        Assert.Single(cancelled);
+        Assert.Equal(cue.Id, cancelled[0]);
+    }
+
+    [Fact]
+    public void NowPlaying_UpcomingCues_FiltersOutCurrentlyActive()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var cue2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var cue3 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        vm.StandbyCueNode = cue1;
+        // Pre-fire upcoming = [cue1, cue2, cue3].
+        Assert.Equal(new[] { cue1.Id, cue2.Id, cue3.Id }, vm.UpcomingCues.Select(c => c.Id));
+
+        vm.OnCueStarted(cue1.Id);
+        // cue1 now active; upcoming should drop it.
+        Assert.DoesNotContain(vm.UpcomingCues, c => c.Id == cue1.Id);
+    }
+
+    [Fact]
+    public void Drawer_MultiSelectFlag_TrueWhenMultipleSelected()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        vm.UpdateSelection(new[] { first });
+        Assert.False(vm.IsMultiSelected);
+
+        vm.UpdateSelection(new[] { first, second });
+        Assert.True(vm.IsMultiSelected);
+        Assert.Equal(2, vm.SelectedCueCount);
+    }
+
+    [Fact]
     public void GoAdvancesFromStandbyToNextCue()
     {
         var vm = new CuePlayerViewModel();

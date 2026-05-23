@@ -46,6 +46,8 @@ public partial class MainViewModel : ViewModelBase
             await CuePlayer.OnMediaCueNaturallyEndedAsync().ConfigureAwait(false);
         _cuePlaybackEngine.CueStarted += (_, id) => CuePlayer.OnCueStarted(id);
         _cuePlaybackEngine.CueEnded += (_, id) => CuePlayer.OnCueEnded(id);
+        _cuePlaybackEngine.CueProgress += (_, p) => CuePlayer.OnCueProgress(p);
+        CuePlayer.CancelCueCallback = _cuePlaybackEngine.StopCueAsync;
         CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
         CuePlayer.StopPlaybackCallback = _cuePlaybackEngine.StopAsync;
         CuePlayer.SetPlaybackPausedCallback = _cuePlaybackEngine.SetPausedAsync;

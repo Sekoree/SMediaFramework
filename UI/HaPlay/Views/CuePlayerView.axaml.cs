@@ -22,6 +22,18 @@ public partial class CuePlayerView : UserControl
         DragDrop.SetAllowDrop(CueTreeGrid, true);
         CueTreeGrid.AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Bubble);
         CueTreeGrid.AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Bubble);
+        // Phase 5.2 — F2 on the tree opens the rename popup. Full keyboard map lands in 5.6.
+        CueTreeGrid.KeyDown += OnCueTreeKeyDown;
+    }
+
+    private void OnCueTreeKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        _ = sender;
+        if (e.Key != Avalonia.Input.Key.F2) return;
+        if (DataContext is not CuePlayerViewModel vm) return;
+        if (vm.RenameSelectedCueCommand.CanExecute(null))
+            vm.RenameSelectedCueCommand.Execute(null);
+        e.Handled = true;
     }
 
     private void OnCueTreeDragOver(object? sender, DragEventArgs e)
@@ -81,12 +93,12 @@ public partial class CuePlayerView : UserControl
             width: new GridLength(28)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
             Strings.CueTreeNumberColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildCompactTextEditor(row, nameof(CueNodeViewModel.Number)), supportsRecycling: true),
+            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.Number)), supportsRecycling: true),
             width: new GridLength(80)));
         _source.Columns.Add(new HierarchicalExpanderColumn<CueNodeViewModel>(
             new TemplateColumn<CueNodeViewModel>(
                 Strings.CueTreeNameColumnHeader,
-                new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildTextEditor(row, nameof(CueNodeViewModel.Label)), supportsRecycling: true),
+                new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.Label)), supportsRecycling: true),
                 width: new GridLength(1, GridUnitType.Star)),
             x => x.Children,
             x => x.HasChildren,
@@ -187,29 +199,4 @@ public partial class CuePlayerView : UserControl
         return tb;
     }
 
-    private static Control BuildTextEditor(CueNodeViewModel row, string propertyName)
-    {
-        _ = row;
-        var box = new TextBox
-        {
-            MinWidth = 80,
-            Padding = new Avalonia.Thickness(4, 2),
-        };
-        box.Bind(TextBox.TextProperty, new Binding(propertyName) { Mode = BindingMode.TwoWay });
-        return box;
-    }
-
-    /// <summary>Fixed-width text editor for the narrow Number column — no MinWidth, so the cell
-    /// shrinks with its column instead of bleeding into the status badge on its left.</summary>
-    private static Control BuildCompactTextEditor(CueNodeViewModel row, string propertyName)
-    {
-        _ = row;
-        var box = new TextBox
-        {
-            Padding = new Avalonia.Thickness(4, 2),
-            Margin = new Avalonia.Thickness(2, 0, 0, 0),
-        };
-        box.Bind(TextBox.TextProperty, new Binding(propertyName) { Mode = BindingMode.TwoWay });
-        return box;
-    }
 }

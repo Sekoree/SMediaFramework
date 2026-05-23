@@ -36,16 +36,27 @@
 
 ---
 
-## Phase 5.1 — UX clarity wins
+## Phase 5.1 — UX clarity wins — ✅ shipped
 
 > **Risk**: Low · **Effort**: M · **Breaking**: ✗
 >
 > Goal: tighten the drawer so it only shows what's applicable, and make
 > bulk-selection state visible. No engine changes.
+>
+> **Outcome (2026-05-23)**: 92 tests → 95 (3 new), build clean.
+> `CueMediaProbe` now returns the full result record; `MediaCueNode` +
+> `CueNodeViewModel` carry `HasVideo` / `HasAudio` / `AudioChannels` /
+> `VideoIsAttachedPicture`; Video tab is hidden when the source has no
+> video stream (with a cover-art hint for attached-picture cases); the
+> Audio tab shows "Source: N ch"; group cues roll up child durations
+> per fire mode (`max` for `FireAllSimultaneously`, `sum` for
+> `ArmedList`, `first` for `FirstCueOnly`); the drawer surfaces a
+> banner when more than one cue is selected ("N cues selected — '+
+> Route' adds a route to each").
 
 ### 5.1.1 Probe `HasVideo` / `HasAudio` / source channel count on add
 
-- 🔲 Extend `Playback/CueMediaProbe.cs` from a `(int? DurationMs)` return
+- ✅ Extend `Playback/CueMediaProbe.cs` from a `(int? DurationMs)` return
   to a record: `CueMediaProbeResult(int? DurationMs, bool HasVideo, bool
   HasAudio, int AudioChannels, bool VideoIsAttachedPicture)`.
 - 🔲 Update all three call sites in
@@ -132,13 +143,23 @@ fields (inspectable via debug or new drawer hint in 5.1.4).
 
 ---
 
-## Phase 5.2 — Read-only tree + rename popup
+## Phase 5.2 — Read-only tree + rename popup — ✅ shipped (5.2.4 deferred)
 
 > **Risk**: Medium · **Effort**: M · **Breaking**: ✗
 >
 > Goal: remove the entire class of "binding stays on old row" bugs by
 > making the tree purely display. Move all editing into the drawer
 > (already there) and a single F2 rename popup.
+>
+> **Outcome (2026-05-23)**: 96 tests pass (+1). Number + Name columns
+> are now read-only `TextBlock` cells (deleted `BuildTextEditor` /
+> `BuildCompactTextEditor` helpers). F2 on the tree opens the new
+> `RenameCueDialog` (Number + Label fields, Enter commits, Esc
+> cancels). A new "Renumber…" button on the toolbar opens
+> `RenumberSelectionDialog` with start / step / scope (All / Root only
+> / Selection only); the command walks the tree assigning sequential
+> numbers with sub-numbering (`1`, `1.1`, `1.2`, `2`, ...) for nested
+> groups. Drag-and-drop reorder (5.2.4) deferred — see note below.
 
 ### 5.2.1 Make tree cells read-only
 
@@ -171,18 +192,30 @@ fields (inspectable via debug or new drawer hint in 5.1.4).
   `start+2*step`, ... Nested groups recurse with sub-numbers
   (`1.1`, `1.2`, ... under `1`).
 
-### 5.2.4 Drag-and-drop reorder
+### 5.2.4 Drag-and-drop reorder — ⏸ deferred
 
-- 🔲 Wire `TreeDataGrid` row-reorder. Avalonia.Controls.TreeDataGrid
-  supports `RowDragStarted` / `RowDrop` events — handle them in
-  `CuePlayerView.axaml.cs`.
-- 🔲 Drop policy:
-  - Within the same parent collection: reorder via index swap.
-  - Across parents (dragging from root into a group, or out of it):
-    move + re-parent.
-  - Dropping a group into one of its descendants: refuse (silent).
-- 🔲 If auto-renumber is on (5.2.3's "default order is sequential"),
-  renumber after reorder.
+Deferred to a follow-up phase. Reasoning:
+
+- TreeDataGrid exposes `RowDragStarted` / `RowDragOver` / `RowDrop`
+  events + an `ITreeDataGridSource.DragDropRows(...)` source method.
+  The mechanism is there, but getting the policy right is its own
+  session:
+  - **Refuse drops into a descendant of a dragged group** —
+    `IndexPath` walks needed to detect.
+  - **Cross-parent moves** (root → group, group → root, sibling group)
+    have to update both the source collection and re-parent the
+    `CueNodeViewModel` tree.
+  - **Multi-selection drag** — dragging 5 cues at once needs to
+    preserve their *relative* order at the destination.
+  - **Auto-renumber after reorder** (if 5.8's "auto-renumber on
+    insert" lands) needs to be triggered post-move.
+- **Operator workaround for now**: remove + re-add via the existing
+  toolbar, and run the new Renumber dialog afterwards to fix
+  numbering.
+
+Picking this up later: implement in
+`Views/CuePlayerView.axaml.cs`, gate via a new
+`AppSettings.CueTreeDragReorderEnabled` flag while the policy stabilises.
 
 ### 5.2 verification
 
@@ -194,12 +227,21 @@ fields (inspectable via debug or new drawer hint in 5.1.4).
 
 ---
 
-## Phase 5.3 — "Now Playing" panel
+## Phase 5.3 — "Now Playing" panel — ✅ shipped
 
 > **Risk**: Low · **Effort**: M · **Breaking**: ✗
 >
 > Operator's #1 ask: see at a glance what's playing right now with
 > per-cue progress + cancel. Plus upcoming cues from AutoFollow chains.
+>
+> **Outcome (2026-05-23)**: 99 tests pass (+3). Right-side panel
+> docked at 260 px (resizable via `GridSplitter`) shows every active
+> cue with its number, label, progress bar, "mm:ss / mm:ss" display,
+> and per-row ✕ cancel button → `engine.StopCueAsync`. "Stop all"
+> button at the top mirrors the transport Stop. Upcoming section
+> lists up to 8 future cues from Standby; auto-filters cues that are
+> already active. Engine raises `CueProgress` every ~150 ms; VM's
+> `OnCueProgress` updates the matching row's `PositionMs`/`DurationMs`.
 
 ### 5.3.1 `ActiveCueViewModel`
 

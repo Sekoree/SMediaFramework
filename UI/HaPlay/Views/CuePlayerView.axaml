@@ -50,6 +50,7 @@
       <Button Content="{x:Static res:Strings.AddCommentButton}" Command="{Binding AddCommentCueCommand}" />
       <Button Content="{x:Static res:Strings.BrowseMediaButton}" Command="{Binding BrowseMediaSourceCommand}" />
       <Button Content="{x:Static res:Strings.EditActionButton}" Command="{Binding EditActionCueCommand}" />
+      <Button Content="{x:Static res:Strings.RenumberButton}" Command="{Binding RenumberCommand}" />
       <Button Content="{x:Static res:Strings.RemoveNodeButton}" Command="{Binding RemoveNodeCommand}" />
     </WrapPanel>
 
@@ -205,6 +206,20 @@
                    IsVisible="{Binding HasSelectedMediaCue}">
             <ScrollViewer>
               <StackPanel Margin="6" Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock Text="{x:Static res:Strings.AudioTabSourceLabel}" FontWeight="SemiBold" />
+                  <TextBlock Text="{Binding SelectedCueNode.SourceAudioChannels, StringFormat={x:Static res:Strings.AudioChannelCountFormat}}"
+                             IsVisible="{Binding SelectedCueNode.SourceHasAudio}" />
+                  <TextBlock Text="{x:Static res:Strings.AudioSourceHasNoneLabel}"
+                             Opacity="0.65"
+                             IsVisible="{Binding !SelectedCueNode.SourceHasAudio}" />
+                </StackPanel>
+                <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
+                        CornerRadius="3" Padding="6,3"
+                        IsVisible="{Binding IsMultiSelected}">
+                  <TextBlock TextWrapping="Wrap"
+                             Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectAudioBannerFormat}}" />
+                </Border>
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddAudioRouteButton}" Command="{Binding AddAudioRouteCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveAudioRouteCommand}" />
@@ -240,9 +255,21 @@
           </TabItem>
 
           <TabItem Header="{x:Static res:Strings.VideoTabLabel}"
-                   IsVisible="{Binding HasSelectedMediaCue}">
+                   IsVisible="{Binding HasSelectedMediaCueWithVideo}">
             <ScrollViewer>
               <StackPanel Spacing="8" Margin="6">
+                <Border Background="#22FFA500" BorderBrush="#44FFA500" BorderThickness="1"
+                        CornerRadius="3" Padding="6,3"
+                        IsVisible="{Binding HasSelectedMediaCueWithAttachedPictureOnly}">
+                  <TextBlock TextWrapping="Wrap"
+                             Text="{x:Static res:Strings.VideoTabAttachedPictureHint}" />
+                </Border>
+                <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
+                        CornerRadius="3" Padding="6,3"
+                        IsVisible="{Binding IsMultiSelected}">
+                  <TextBlock TextWrapping="Wrap"
+                             Text="{Binding SelectedCueCount, StringFormat={x:Static res:Strings.MultiSelectVideoBannerFormat}}" />
+                </Border>
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddVideoPlacementButton}" Command="{Binding AddVideoPlacementCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveVideoPlacementCommand}" />
@@ -323,7 +350,80 @@
         </TabControl>
       </Expander>
 
-      <TreeDataGrid Name="CueTreeGrid" />
+      <Grid ColumnDefinitions="*,Auto,260">
+        <TreeDataGrid Grid.Column="0" Name="CueTreeGrid" />
+        <GridSplitter Grid.Column="1" Width="3" Background="#22000000" ResizeDirection="Columns" />
+
+        <!-- Phase 5.3 — Now Playing panel: active cues (with progress + per-cue ✕) and the
+             upcoming-queue preview. Width set generously so the operator can shrink via the
+             splitter; multi-cue groups need room. -->
+        <Border Grid.Column="2" BorderBrush="#33808080" BorderThickness="1,0,0,0" Padding="6,4">
+          <DockPanel LastChildFill="True">
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+              <TextBlock Grid.Column="0"
+                         Text="{x:Static res:Strings.NowPlayingHeader}"
+                         FontWeight="SemiBold"
+                         VerticalAlignment="Center" />
+              <Button Grid.Column="1"
+                      Content="{x:Static res:Strings.StopAllNowPlayingButton}"
+                      Command="{Binding StopCommand}"
+                      IsEnabled="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
+            </Grid>
+
+            <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding ActiveCues}" Margin="0,0,0,8">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:ActiveCueViewModel">
+                  <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="3"
+                          Padding="6,4" Margin="0,0,0,4">
+                    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto,Auto">
+                      <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="6">
+                        <TextBlock Text="{Binding CueNumberDisplay}" FontWeight="SemiBold" Opacity="0.7" />
+                        <TextBlock Text="{Binding CueLabel}" TextTrimming="CharacterEllipsis" />
+                      </StackPanel>
+                      <Button Grid.Row="0" Grid.Column="1"
+                              Content="✕" Padding="6,0" MinWidth="22"
+                              Command="{Binding CancelCommand}"
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}" />
+                      <ProgressBar Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
+                                   Margin="0,4,0,2" Height="6"
+                                   Minimum="0" Maximum="100"
+                                   Value="{Binding ProgressPercent}" />
+                      <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                                 Text="{Binding PositionDisplay}"
+                                 FontSize="11" Opacity="0.7" />
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock DockPanel.Dock="Top"
+                       Text="{x:Static res:Strings.NowPlayingNoneHint}"
+                       Opacity="0.55"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8"
+                       IsVisible="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+
+            <TextBlock DockPanel.Dock="Top"
+                       Text="{x:Static res:Strings.UpcomingCuesHeader}"
+                       FontWeight="SemiBold"
+                       Margin="0,8,0,4"
+                       IsVisible="{Binding UpcomingCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
+
+            <ItemsControl ItemsSource="{Binding UpcomingCues}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:CueNodeViewModel">
+                  <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,2,0,2">
+                    <TextBlock Text="{Binding Number}" Opacity="0.6" MinWidth="32" />
+                    <TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding DurationDisplay}" Opacity="0.5" />
+                  </StackPanel>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </DockPanel>
+        </Border>
+      </Grid>
     </DockPanel>
   </DockPanel>
 </UserControl>
