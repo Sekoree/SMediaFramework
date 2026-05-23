@@ -320,13 +320,27 @@ Picking this up later: implement in
 
 ---
 
-## Phase 5.4 — A/V sync P0: master the composition pump
+## Phase 5.4 — A/V sync P0: master the composition pump — ✅ shipped
 
 > **Risk**: Medium · **Effort**: M · **Breaking**: ✗
 >
 > Eliminates drift mode 3a from the review doc (composition pump's
 > Stopwatch vs. cue's audio-clock master). Frame stability over long
 > shows.
+>
+> **Outcome (2026-05-23)**: `CueCompositionRuntime.SetClockMaster`
+> takes an `IPlaybackClock` (typically the cue's audio runtime clock)
+> and swaps the Stopwatch pump for a `MediaClock`-driven path —
+> internally creates a slaved `MediaClock` with `videoTickInterval` =
+> canvas period, subscribes to `VideoTick`, drains the mixer per tick.
+> Stopwatch path remains as the fallback for audio-less compositions.
+> `CuePlaybackEngine.WireVideoPlacements` calls `SetClockMaster` after
+> resolving `entry.VideoClockMaster` from the first audio runtime.
+> Drift counter (`FramesBehindMaster`) compares wall-elapsed with
+> master-elapsed every tick; sustained drift fires `DriftWarning` (max
+> once per ~30 frames) → engine surfaces a status message: *"Composition
+> 'Program' drift: N frames behind master (M ms)"*. Stats record now
+> carries `FramesBehindMaster` + `ClockMastered` for future health UI.
 
 ### 5.4.1 `CueCompositionRuntime.SetClockMaster`
 
@@ -451,11 +465,21 @@ Picking this up later: implement in
 
 ---
 
-## Phase 5.6 — Keyboard shortcuts
+## Phase 5.6 — Keyboard shortcuts — ✅ shipped
 
 > **Risk**: None · **Effort**: S · **Breaking**: ✗
 >
 > Standard cue-player muscle memory.
+>
+> **Outcome (2026-05-23)**: 101 tests pass (+2). New VM commands
+> `MoveSelectedCueUp` / `Down` (work within parent collection) and
+> `DuplicateSelectedCue` (deep-copy via model round-trip with fresh
+> ids cascading through nested groups). The cue tree's `KeyDown`
+> handler covers `F2 / Del / Ctrl+D / Ctrl+↑↓`. A new
+> UserControl-level `KeyDown` handles transport (`Space` = Go,
+> `Esc` = Panic, `Enter` = Standby, `Backspace` = Back) — skips when
+> a `TextBox` / `NumericUpDown` / `ComboBox` has focus so the
+> operator can type freely in drawer fields.
 
 ### 5.6.1 Transport bindings
 

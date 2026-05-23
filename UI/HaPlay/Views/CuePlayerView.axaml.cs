@@ -22,18 +22,81 @@ public partial class CuePlayerView : UserControl
         DragDrop.SetAllowDrop(CueTreeGrid, true);
         CueTreeGrid.AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Bubble);
         CueTreeGrid.AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Bubble);
-        // Phase 5.2 — F2 on the tree opens the rename popup. Full keyboard map lands in 5.6.
+        // Phase 5.2 — F2 on the tree opens the rename popup. Phase 5.6 added Del / Ctrl+D /
+        // Ctrl+↑↓ on this same handler. Transport keys live on the UserControl below so they
+        // fire whether the tree or anything else inside the cue tab has focus.
         CueTreeGrid.KeyDown += OnCueTreeKeyDown;
+        KeyDown += OnUserControlKeyDown;
+    }
+
+    /// <summary>Transport bindings (Space/Esc/Enter/Backspace) at UserControl level. Skip when
+    /// focus is in a text-input control so the operator can type punctuation in route fields,
+    /// notes, etc. without accidentally firing Go.</summary>
+    private void OnUserControlKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        _ = sender;
+        if (DataContext is not CuePlayerViewModel vm) return;
+
+        var focused = Avalonia.Controls.TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+        if (focused is TextBox or NumericUpDown or ComboBox) return;
+
+        switch (e.Key)
+        {
+            case Avalonia.Input.Key.Space:
+                if (vm.GoCommand.CanExecute(null)) vm.GoCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.Escape:
+                if (vm.PanicCommand.CanExecute(null)) vm.PanicCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.Enter:
+                if (vm.StandbySelectedCommand.CanExecute(null)) vm.StandbySelectedCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.Back:
+                if (vm.BackCommand.CanExecute(null)) vm.BackCommand.Execute(null);
+                e.Handled = true;
+                break;
+        }
     }
 
     private void OnCueTreeKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
     {
         _ = sender;
-        if (e.Key != Avalonia.Input.Key.F2) return;
         if (DataContext is not CuePlayerViewModel vm) return;
-        if (vm.RenameSelectedCueCommand.CanExecute(null))
-            vm.RenameSelectedCueCommand.Execute(null);
-        e.Handled = true;
+
+        // Tree-scoped editing keys — these fire when the tree (or a tree row) has focus.
+        // Transport keys (Space/Esc/Enter/Backspace) are bound at the UserControl level via
+        // KeyBindings in XAML so they fire from anywhere except text-edit focus.
+        switch (e.Key)
+        {
+            case Avalonia.Input.Key.F2:
+                if (vm.RenameSelectedCueCommand.CanExecute(null))
+                    vm.RenameSelectedCueCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.Delete:
+                if (vm.RemoveNodeCommand.CanExecute(null))
+                    vm.RemoveNodeCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.D when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
+                if (vm.DuplicateSelectedCueCommand.CanExecute(null))
+                    vm.DuplicateSelectedCueCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.Up when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
+                if (vm.MoveSelectedCueUpCommand.CanExecute(null))
+                    vm.MoveSelectedCueUpCommand.Execute(null);
+                e.Handled = true;
+                break;
+            case Avalonia.Input.Key.Down when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
+                if (vm.MoveSelectedCueDownCommand.CanExecute(null))
+                    vm.MoveSelectedCueDownCommand.Execute(null);
+                e.Handled = true;
+                break;
+        }
     }
 
     private void OnCueTreeDragOver(object? sender, DragEventArgs e)

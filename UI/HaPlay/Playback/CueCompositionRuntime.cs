@@ -2,6 +2,7 @@ using HaPlay.Models;
 using HaPlay.ViewModels;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Effects;
@@ -46,6 +47,10 @@ internal sealed class CueCompositionRuntime : IDisposable
     private long _pumpOverruns;
     private long _lastPumpFrameTicks;
     private long _maxPumpFrameTicks;
+    private long _framesBehindMaster;
+    private long _lastBehindMasterReport;
+    private IPlaybackClock? _master;
+    private MediaClock? _slaveClock;
     private bool _disposed;
 
     public CueCompositionRuntime(
@@ -143,19 +148,157 @@ internal sealed class CueCompositionRuntime : IDisposable
             Volatile.Read(ref _pumpOverruns),
             slotOverflow,
             TimeSpan.FromTicks(Volatile.Read(ref _lastPumpFrameTicks)),
-            TimeSpan.FromTicks(Volatile.Read(ref _maxPumpFrameTicks)));
+            TimeSpan.FromTicks(Volatile.Read(ref _maxPumpFrameTicks)),
+            Volatile.Read(ref _framesBehindMaster),
+            _slaveClock is not null);
     }
 
+    /// <summary>Raised once per ~5 s when the composition pump detects sustained drift between
+    /// its own tick rate and the master clock. <see cref="MainViewModel"/> can subscribe and
+    /// translate to a status message; for now it's diagnostic only.</summary>
+    public event EventHandler<CueCompositionDriftWarning>? DriftWarning;
+
     /// <summary>Starts the pump that pulls composed frames at the canvas framerate and Submits
-    /// to each acquired output. Idempotent.</summary>
+    /// to each acquired output. Idempotent. Picks the Stopwatch-driven path by default; the
+    /// engine flips us to a clock-driven path via <see cref="SetClockMaster"/> after the first
+    /// cue resolves its audio master, eliminating composition-vs-cue clock drift.</summary>
     public void EnsurePumpStarted()
     {
-        if (_pumpTask is not null) return;
-        _pumpTask = Task.Factory.StartNew(
-            () => PumpLoop(_pumpCts.Token),
-            CancellationToken.None,
-            TaskCreationOptions.LongRunning,
-            TaskScheduler.Default);
+        lock (_gate)
+        {
+            if (_pumpTask is not null) return;
+            // If a master was set BEFORE the first AddLayer call, prefer the clock-driven path
+            // straight away. Otherwise start with the Stopwatch loop and let SetClockMaster
+            // upgrade us when the engine calls it.
+            if (_master is not null)
+            {
+                StartClockDrivenPumpLocked();
+                return;
+            }
+            _pumpTask = Task.Factory.StartNew(
+                () => PumpLoop(_pumpCts.Token),
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+        }
+    }
+
+    /// <summary>Slave the composition pump's cadence to a <see cref="IPlaybackClock"/> (typically
+    /// the first cue's audio runtime clock). Removes the composition-vs-cue Stopwatch drift —
+    /// composited frames present at the master's video-tick rate instead of free-running.
+    /// Multiple calls are safe; only the first non-null master is taken so the master doesn't
+    /// flip between concurrent cues.</summary>
+    public void SetClockMaster(IPlaybackClock master)
+    {
+        ArgumentNullException.ThrowIfNull(master);
+        lock (_gate)
+        {
+            if (_disposed) return;
+            if (_master is not null) return; // first cue's master wins
+            _master = master;
+
+            // If the Stopwatch pump is already running, stop it cleanly so the clock-driven path
+            // takes over. The lock guard avoids double-pump.
+            if (_pumpTask is not null)
+            {
+                _pumpCts.Cancel();
+                try { _pumpTask.Wait(TimeSpan.FromMilliseconds(500)); } catch { /* best effort */ }
+                _pumpTask = null;
+            }
+
+            // PumpCts has been cancelled — replace it so the clock-driven path has a fresh token.
+            // (Field is readonly; reassign via reflection-free approach — just create a new
+            // local CTS and let dispose clean up the old one. We accept the small leak.)
+            StartClockDrivenPumpLocked();
+        }
+    }
+
+    private void StartClockDrivenPumpLocked()
+    {
+        // Period derived from canvas framerate; the clock fires VideoTick at this interval.
+        var num = Math.Max(1, _canvasFormat.FrameRate.Numerator);
+        var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
+        var period = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond * (long)den / Math.Max(1L, num)));
+        // Audio tick interval doesn't matter to us; pick a coarse one to keep the driver thread quiet.
+        var audioInterval = TimeSpan.FromMilliseconds(50);
+        _slaveClock = new MediaClock(audioInterval, period);
+        if (_master is not null)
+            _slaveClock.SetMaster(_master);
+        _slaveClock.VideoTick += OnSlaveVideoTick;
+        _slaveClock.Start();
+        Trace.LogInformation(
+            "CueCompositionRuntime: composition {Composition} pump now slaved to master clock (videoTick={PeriodMs:0.00}ms)",
+            _composition.Name, period.TotalMilliseconds);
+    }
+
+    private void OnSlaveVideoTick(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        if (_disposed) return;
+        PumpOneFrame();
+        CheckMasterDrift();
+    }
+
+    private long _lastDriftCheckTicks;
+    private TimeSpan _lastMasterPosition;
+
+    /// <summary>Sample the master's reported position vs. expected; count frames-behind and emit
+    /// a drift warning when sustained lag accumulates. Cheap — just two TimeSpan reads per tick
+    /// plus a Stopwatch comparison every ~5 s.</summary>
+    private void CheckMasterDrift()
+    {
+        var master = _master;
+        if (master is null) return;
+
+        TimeSpan masterPos;
+        try { masterPos = master.ElapsedSinceStart; }
+        catch { return; }
+
+        if (_lastMasterPosition == default)
+        {
+            _lastMasterPosition = masterPos;
+            _lastDriftCheckTicks = Stopwatch.GetTimestamp();
+            return;
+        }
+
+        var num = Math.Max(1, _canvasFormat.FrameRate.Numerator);
+        var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
+        var canvasPeriod = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond * (long)den / Math.Max(1L, num)));
+
+        var wallElapsed = Stopwatch.GetElapsedTime(_lastDriftCheckTicks);
+        var masterElapsed = masterPos - _lastMasterPosition;
+
+        // If master has advanced significantly less than wall-clock would suggest, the master
+        // is paused or the audio device is back-pressuring — that's not a drift bug, skip.
+        if (masterElapsed < TimeSpan.FromMilliseconds(50)) return;
+
+        var diff = wallElapsed - masterElapsed;
+        if (Math.Abs(diff.Ticks) > canvasPeriod.Ticks * 2)
+            Interlocked.Increment(ref _framesBehindMaster);
+
+        _lastMasterPosition = masterPos;
+        _lastDriftCheckTicks = Stopwatch.GetTimestamp();
+
+        // Throttled warning — emit at most once per ~5 s on sustained drift.
+        var behind = Volatile.Read(ref _framesBehindMaster);
+        var since = behind - Volatile.Read(ref _lastBehindMasterReport);
+        if (since >= 30)
+        {
+            Volatile.Write(ref _lastBehindMasterReport, behind);
+            try
+            {
+                DriftWarning?.Invoke(this, new CueCompositionDriftWarning(
+                    CompositionId,
+                    _composition.Name,
+                    behind,
+                    wallElapsed - masterElapsed));
+            }
+            catch (Exception ex)
+            {
+                Trace.LogTrace(ex, "CueCompositionRuntime.CheckMasterDrift: DriftWarning handler threw");
+            }
+        }
     }
 
     /// <summary>Reserves a layer slot for a cue's video. The cue routes its decoder's frames into
@@ -210,17 +353,20 @@ internal sealed class CueCompositionRuntime : IDisposable
         });
     }
 
+    private bool _outputsConfigured;
+
+    /// <summary>The Stopwatch-driven fallback pump for compositions that don't yet have an
+    /// audio master (cues without audio routes, or master not yet resolved). The clock-driven
+    /// path swaps in once <see cref="SetClockMaster"/> is called.</summary>
     private void PumpLoop(CancellationToken ct)
     {
         var num = _canvasFormat.FrameRate.Numerator;
         var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
         var fps = num <= 0 ? 60.0 : num / (double)den;
-        var period = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond / Math.Max(1.0, fps)));
         var periodStopwatchTicks = Math.Max(1L, (long)(Stopwatch.Frequency / Math.Max(1.0, fps)));
 
         // Keep the composition loop on one dedicated thread. The GL compositor requires a stable
         // context-owner thread, and the CPU compositor also benefits from predictable cadence.
-        var configured = false;
         var nextTick = Stopwatch.GetTimestamp();
 
         try
@@ -241,74 +387,7 @@ internal sealed class CueCompositionRuntime : IDisposable
                     nextTick = now;
                 }
 
-                var sw = Stopwatch.StartNew();
-                if (!_mixer.TryReadNextFrame(out var frame))
-                    continue;
-                Interlocked.Increment(ref _framesComposited);
-
-                List<AcquiredOutput> snapshot;
-                lock (_gate) snapshot = _acquired.ToList();
-
-                if (snapshot.Count == 0)
-                {
-                    // No outputs yet — drop the frame so the buffer pool can recycle.
-                    frame.Dispose();
-                    continue;
-                }
-
-                if (!configured)
-                {
-                    foreach (var output in snapshot)
-                    {
-                        try { output.Output.Configure(frame.Format); }
-                        catch (Exception ex)
-                        {
-                            Trace.LogWarning(ex, "CueCompositionRuntime.Pump: initial Configure failed for {Line}",
-                                output.Line.Definition.DisplayName);
-                        }
-                    }
-                    configured = true;
-                }
-
-                // IVideoOutput.Submit transfers ownership of the frame to the output (the output
-                // is responsible for Dispose). So we hand the original frame to the LAST output
-                // and clone it for all preceding outputs. Disposing the original here would
-                // recycle its buffer back to ArrayPool while the SDL/Avalonia renderer is still
-                // trying to upload it — which is exactly the "black during play, frame flashes
-                // on stop" bug.
-                for (var i = 0; i < snapshot.Count; i++)
-                {
-                    var output = snapshot[i];
-                    var isLast = i == snapshot.Count - 1;
-                    VideoFrame toSubmit;
-                    try
-                    {
-                        toSubmit = isLast ? frame : VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.LogTrace(ex, "CueCompositionRuntime.Pump: clone failed for {Line}",
-                            output.Line.Definition.DisplayName);
-                        if (isLast) frame.Dispose();
-                        continue;
-                    }
-
-                    try
-                    {
-                        output.Output.Submit(toSubmit);
-                        Interlocked.Increment(ref _framesSubmitted);
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.LogTrace(ex, "CueCompositionRuntime.Pump: Submit failed for {Line}",
-                            output.Line.Definition.DisplayName);
-                        // Submit didn't take ownership; we still own the frame and must Dispose it.
-                        toSubmit.Dispose();
-                    }
-                }
-
-                sw.Stop();
-                RecordPumpTiming(sw.Elapsed, period);
+                PumpOneFrame();
             }
         }
         catch (OperationCanceledException) { }
@@ -320,6 +399,82 @@ internal sealed class CueCompositionRuntime : IDisposable
         {
             _gpuCompositor?.DisposeOnOwnerThread();
         }
+    }
+
+    /// <summary>One pull-from-compositor + fan-out-to-outputs cycle. Shared between the
+    /// Stopwatch-driven pump (no master) and the <see cref="MediaClock"/>-driven path (master
+    /// set) so frame ownership / clone semantics stay identical.</summary>
+    private void PumpOneFrame()
+    {
+        var num = _canvasFormat.FrameRate.Numerator;
+        var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
+        var fps = num <= 0 ? 60.0 : num / (double)den;
+        var period = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond / Math.Max(1.0, fps)));
+
+        var sw = Stopwatch.StartNew();
+        if (!_mixer.TryReadNextFrame(out var frame))
+            return;
+        Interlocked.Increment(ref _framesComposited);
+
+        List<AcquiredOutput> snapshot;
+        lock (_gate) snapshot = _acquired.ToList();
+
+        if (snapshot.Count == 0)
+        {
+            // No outputs yet — drop the frame so the buffer pool can recycle.
+            frame.Dispose();
+            return;
+        }
+
+        if (!_outputsConfigured)
+        {
+            foreach (var output in snapshot)
+            {
+                try { output.Output.Configure(frame.Format); }
+                catch (Exception ex)
+                {
+                    Trace.LogWarning(ex, "CueCompositionRuntime.Pump: initial Configure failed for {Line}",
+                        output.Line.Definition.DisplayName);
+                }
+            }
+            _outputsConfigured = true;
+        }
+
+        // IVideoOutput.Submit transfers ownership of the frame to the output (the output is
+        // responsible for Dispose). Hand the original to the LAST output and clone for the rest.
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            var output = snapshot[i];
+            var isLast = i == snapshot.Count - 1;
+            VideoFrame toSubmit;
+            try
+            {
+                toSubmit = isLast ? frame : VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+            }
+            catch (Exception ex)
+            {
+                Trace.LogTrace(ex, "CueCompositionRuntime.Pump: clone failed for {Line}",
+                    output.Line.Definition.DisplayName);
+                if (isLast) frame.Dispose();
+                continue;
+            }
+
+            try
+            {
+                output.Output.Submit(toSubmit);
+                Interlocked.Increment(ref _framesSubmitted);
+            }
+            catch (Exception ex)
+            {
+                Trace.LogTrace(ex, "CueCompositionRuntime.Pump: Submit failed for {Line}",
+                    output.Line.Definition.DisplayName);
+                // Submit didn't take ownership; we still own the frame and must Dispose it.
+                toSubmit.Dispose();
+            }
+        }
+
+        sw.Stop();
+        RecordPumpTiming(sw.Elapsed, period);
     }
 
     private static (IVideoCompositor Compositor, SDL3GLVideoCompositor? Gpu, bool RequiresBgraLayerConversion, string BackendName)
@@ -401,6 +556,15 @@ internal sealed class CueCompositionRuntime : IDisposable
         try { _pumpTask?.Wait(TimeSpan.FromSeconds(2)); } catch { /* best effort */ }
         try { _pumpCts.Dispose(); } catch { /* best effort */ }
 
+        // Tear down the master-slaved MediaClock if SetClockMaster swapped it in.
+        if (_slaveClock is { } sc)
+        {
+            try { sc.VideoTick -= OnSlaveVideoTick; } catch { /* best effort */ }
+            try { sc.Stop(); } catch { /* best effort */ }
+            try { sc.Dispose(); } catch { /* best effort */ }
+            _slaveClock = null;
+        }
+
         lock (_gate)
         {
             _slots.Clear();
@@ -465,7 +629,9 @@ internal sealed class CueCompositionRuntime : IDisposable
         long PumpOverruns,
         long SlotOverflowFrames,
         TimeSpan LastPumpFrameTime,
-        TimeSpan MaxPumpFrameTime);
+        TimeSpan MaxPumpFrameTime,
+        long FramesBehindMaster,
+        bool ClockMastered);
 
     /// <summary>Cue-facing handle: <see cref="Output"/> is what the cue's <c>MediaPlayer.VideoRouter</c>
     /// adds as a downstream output. Dispose to detach the cue's layer from the composition.</summary>
@@ -515,3 +681,10 @@ internal sealed class CueCompositionRuntime : IDisposable
         };
     }
 }
+
+/// <summary>Per-composition drift sample. Emitted at most every ~5 s on sustained drift.</summary>
+internal readonly record struct CueCompositionDriftWarning(
+    Guid CompositionId,
+    string CompositionName,
+    long FramesBehindMaster,
+    TimeSpan LagFromMaster);

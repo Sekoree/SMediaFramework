@@ -370,6 +370,13 @@ public sealed class CuePlaybackEngine : IDisposable
             var runtime = GetOrCreateComposition(list, compId);
             if (runtime is null) continue;
 
+            // Phase 5.4 — slave the composition pump to this cue's audio master so the
+            // composited frames present at the master's video-tick rate instead of free-running
+            // on Stopwatch. Composition keeps only the FIRST master it sees (idempotent), so
+            // back-to-back cues with different masters don't fight for the slave clock.
+            if (entry.VideoClockMaster is { } master)
+                runtime.SetClockMaster(master);
+
             var slot = runtime.AddLayer(sourceFormat, placement);
             entry.LayerSlots.Add(slot);
 
@@ -411,6 +418,14 @@ public sealed class CuePlaybackEngine : IDisposable
         var targetLines = _outputs.Outputs.Where(l => targetLineIds.Contains(l.Definition.Id)).ToList();
 
         var runtime = new CueCompositionRuntime(composition, targetLines, _outputs);
+        // Surface drift warnings to the operator via the cue VM's status message — keeps the
+        // "your composition is behind by 12 frames" signal close to the transport UI rather
+        // than buried in logs only.
+        runtime.DriftWarning += async (_, warning) =>
+        {
+            var msg = $"Composition '{warning.CompositionName}' drift: {warning.FramesBehindMaster} frames behind master ({warning.LagFromMaster.TotalMilliseconds:0} ms)";
+            await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.StatusMessage = msg);
+        };
         lock (_gate)
         {
             if (_compositions.TryGetValue(compositionId, out var existing))

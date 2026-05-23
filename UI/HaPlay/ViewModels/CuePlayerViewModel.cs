@@ -1694,6 +1694,66 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool CanRenameSelectedCue() => SelectedCueNode is not null;
 
+    /// <summary>Move the selected cue up one slot within its parent collection. Ctrl+↑ binds
+    /// here. No-op at the top of the parent (operator's expected behaviour — they get to feel
+    /// the boundary).</summary>
+    [RelayCommand(CanExecute = nameof(CanMoveSelectedCue))]
+    private void MoveSelectedCueUp() => MoveSelectedCue(-1);
+
+    [RelayCommand(CanExecute = nameof(CanMoveSelectedCue))]
+    private void MoveSelectedCueDown() => MoveSelectedCue(+1);
+
+    private bool CanMoveSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;
+
+    private void MoveSelectedCue(int delta)
+    {
+        if (SelectedCueNode is null || SelectedCueList is null) return;
+        if (FindParentCollection(SelectedCueList.Nodes, SelectedCueNode) is not IList<CueNodeViewModel> parent)
+            return;
+        var idx = parent.IndexOf(SelectedCueNode);
+        var next = idx + delta;
+        if (next < 0 || next >= parent.Count) return;
+        var node = SelectedCueNode;
+        parent.RemoveAt(idx);
+        parent.Insert(next, node);
+        SelectedCueNode = node;
+    }
+
+    /// <summary>Deep-copy the selected cue with a fresh id and insert immediately after the
+    /// original. Routes, placements, and group-children all clone. Bound to Ctrl+D.</summary>
+    [RelayCommand(CanExecute = nameof(CanDuplicateSelectedCue))]
+    private void DuplicateSelectedCue()
+    {
+        if (SelectedCueNode is null || SelectedCueList is null) return;
+        if (FindParentCollection(SelectedCueList.Nodes, SelectedCueNode) is not IList<CueNodeViewModel> parent)
+            return;
+
+        // Round-trip through the model layer to deep-copy reliably (the model records are
+        // immutable so cloning is just a fresh `with { Id = NewGuid() }` cascade).
+        var snapshot = SelectedCueNode.ToModel();
+        var copy = CloneCueNodeWithNewIds(snapshot);
+        var copyVm = CueNodeViewModel.FromModel(copy);
+
+        var idx = parent.IndexOf(SelectedCueNode);
+        parent.Insert(idx + 1, copyVm);
+        SelectedCueNode = copyVm;
+    }
+
+    private bool CanDuplicateSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;
+
+    private static CueNode CloneCueNodeWithNewIds(CueNode src) => src switch
+    {
+        CueGroupNode g => g with
+        {
+            Id = Guid.NewGuid(),
+            Children = g.Children.Select(CloneCueNodeWithNewIds).ToList(),
+        },
+        MediaCueNode m => m with { Id = Guid.NewGuid() },
+        ActionCueNode a => a with { Id = Guid.NewGuid() },
+        CommentCueNode c => c with { Id = Guid.NewGuid() },
+        _ => src,
+    };
+
     /// <summary>Bulk renumber. Walks the chosen scope (all / root only / current selection) in
     /// tree order, assigning <c>start</c>, <c>start+step</c>, … Nested groups recurse with a
     /// sub-numbering scheme — `1`, `1.1`, `1.2`, `2`, … — preserving the visible cue hierarchy.</summary>

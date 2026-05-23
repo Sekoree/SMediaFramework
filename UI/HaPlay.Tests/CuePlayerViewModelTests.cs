@@ -349,6 +349,57 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void MoveSelectedCue_ShiftsWithinParentCollection()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var third = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        // Move third up — expect order [first, third, second].
+        vm.SelectedCueNode = third;
+        vm.MoveSelectedCueUpCommand.Execute(null);
+        Assert.Equal(new[] { first, third, second }, vm.VisibleNodes.ToArray());
+
+        // Move third (now at index 1) up again — expect [third, first, second].
+        vm.MoveSelectedCueUpCommand.Execute(null);
+        Assert.Equal(new[] { third, first, second }, vm.VisibleNodes.ToArray());
+
+        // Already at top — no-op.
+        vm.MoveSelectedCueUpCommand.Execute(null);
+        Assert.Equal(new[] { third, first, second }, vm.VisibleNodes.ToArray());
+
+        // Move first down (now at index 1) — expect [third, second, first].
+        vm.SelectedCueNode = first;
+        vm.MoveSelectedCueDownCommand.Execute(null);
+        Assert.Equal(new[] { third, second, first }, vm.VisibleNodes.ToArray());
+    }
+
+    [Fact]
+    public void DuplicateSelectedCue_InsertsCopyAfterOriginalWithFreshId()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var original = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        original.Label = "to-clone";
+        original.AudioRoutes.Add(new CueAudioRouteViewModel { OutputChannel = 3, GainDb = -6 });
+
+        vm.DuplicateSelectedCueCommand.Execute(null);
+        Assert.Equal(2, vm.VisibleNodes.Count);
+
+        var copy = vm.VisibleNodes[1];
+        Assert.NotSame(original, copy);
+        Assert.NotEqual(original.Id, copy.Id);
+        Assert.Equal(original.Label, copy.Label);
+        Assert.Single(copy.AudioRoutes);
+        Assert.Equal(3, copy.AudioRoutes[0].OutputChannel);
+        Assert.Same(copy, vm.SelectedCueNode);
+    }
+
+    [Fact]
     public void NowPlaying_StartedAndEnded_MaintainsActiveCuesCollection()
     {
         var vm = new CuePlayerViewModel();
