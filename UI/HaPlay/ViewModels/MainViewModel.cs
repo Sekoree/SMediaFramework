@@ -47,10 +47,14 @@ public partial class MainViewModel : ViewModelBase
         _cuePlaybackEngine.CueStarted += (_, id) => CuePlayer.OnCueStarted(id);
         _cuePlaybackEngine.CueEnded += (_, id) => CuePlayer.OnCueEnded(id);
         _cuePlaybackEngine.CueProgress += (_, p) => CuePlayer.OnCueProgress(p);
+        _cuePlaybackEngine.PreviewEnded += (_, id) => CuePlayer.OnPreviewEnded(id);
         CuePlayer.CancelCueCallback = _cuePlaybackEngine.StopCueAsync;
         CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
         CuePlayer.StopPlaybackCallback = _cuePlaybackEngine.StopAsync;
         CuePlayer.SetPlaybackPausedCallback = _cuePlaybackEngine.SetPausedAsync;
+        CuePlayer.PreviewCueCallback = _cuePlaybackEngine.PreviewCueAsync;
+        CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
+        CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
         foreach (var player in Players)

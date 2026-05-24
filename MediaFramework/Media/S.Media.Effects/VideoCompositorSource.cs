@@ -1,3 +1,5 @@
+using S.Media.Core.Video;
+
 namespace S.Media.Effects;
 
 /// <summary>
@@ -143,7 +145,13 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 $"VideoCompositorSource only delivers {_output.PixelFormat}; consumer requested {format}.");
     }
 
-    public bool TryReadNextFrame(out VideoFrame frame)
+    public bool TryReadNextFrame(out VideoFrame frame) =>
+        TryReadNextFrame(masterAlignmentTime: null, out frame);
+
+    /// <param name="masterAlignmentTime">When set, slots with
+    /// <see cref="Slot.KeepPolicy"/> = <see cref="SlotKeepPolicy.MasterAligned"/> pick the
+    /// frame whose PTS is closest to this position.</param>
+    public bool TryReadNextFrame(TimeSpan? masterAlignmentTime, out VideoFrame frame)
     {
         if (_disposed)
         {
@@ -162,7 +170,9 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             foreach (var slot in snapshot)
             {
-                var lease = slot.AcquireLatest();
+                var lease = slot.KeepPolicy == SlotKeepPolicy.MasterAligned && masterAlignmentTime is { } masterPts
+                    ? slot.AcquireMasterAligned(masterPts, _ptsStep)
+                    : slot.AcquireLatest();
                 if (lease is null) continue;
                 leases ??= [];
                 leases.Add(lease);
@@ -257,6 +267,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             set { lock (_gate) _blendMode = value; }
         }
 
+        /// <summary>Which submitted frame is exposed at composite time. Default
+        /// <see cref="SlotKeepPolicy.Latest"/>.</summary>
+        public SlotKeepPolicy KeepPolicy { get; set; } = SlotKeepPolicy.Latest;
+
         /// <summary>Frames replaced before the compositor could read them.</summary>
         public long OverflowFrames => Volatile.Read(ref _overflowFrames);
 
@@ -311,6 +325,62 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
             toDispose?.Dispose();
             return new SlotFrameLease(this, frame);
+        }
+
+        /// <summary>Picks the held frame whose PTS is closest to <paramref name="masterPts"/> without
+        /// selecting a frame that is more than one canvas period in the future.</summary>
+        internal SlotFrameLease? AcquireMasterAligned(TimeSpan masterPts, TimeSpan canvasPeriod)
+        {
+            VideoFrame? toDispose = null;
+            VideoFrame? frame;
+            lock (_gate)
+            {
+                if (_closed)
+                    return null;
+
+                frame = ChooseMasterAlignedFrame(masterPts, canvasPeriod, ref toDispose);
+                if (frame is null)
+                    return null;
+                _activeReaders++;
+            }
+
+            toDispose?.Dispose();
+            return new SlotFrameLease(this, frame);
+        }
+
+        private VideoFrame? ChooseMasterAlignedFrame(TimeSpan masterPts, TimeSpan canvasPeriod, ref VideoFrame? toDispose)
+        {
+            var maxFuture = masterPts + canvasPeriod;
+            VideoFrame? best = null;
+            var bestDistance = long.MaxValue;
+
+            void Consider(VideoFrame? candidate)
+            {
+                if (candidate is null) return;
+                if (candidate.PresentationTime > maxFuture) return;
+                var distance = Math.Abs((candidate.PresentationTime - masterPts).Ticks);
+                if (distance >= bestDistance) return;
+                bestDistance = distance;
+                best = candidate;
+            }
+
+            Consider(_current);
+            Consider(_pending);
+
+            if (best is null)
+                best = _current;
+
+            if (best is null)
+                return null;
+
+            if (!ReferenceEquals(best, _current) && ReferenceEquals(best, _pending) && _activeReaders == 0)
+            {
+                toDispose = _current;
+                _current = _pending;
+                _pending = null;
+            }
+
+            return best;
         }
 
         internal void Close()

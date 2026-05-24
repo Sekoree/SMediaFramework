@@ -61,39 +61,29 @@ cue's *audio master clock*.
 
 Three drift modes:
 
-#### 3a. Two-clock mismatch (composition pump vs. cue's master)
+#### 3a. Two-clock mismatch (composition pump vs. cue's master) — ✅ resolved (Phase 5.4)
 
-- The composition pump and the cue's audio master are both real-time
-  clocks but they're sourced differently.
-  - Audio master = derived from the audio device's actual sample
-    consumption rate (ppm-stable).
-  - Composition pump = `Stopwatch.GetTimestamp()` + a fixed `period`,
-    plus the kernel's timer slop.
-- In practice they're aligned to within a few hundred microseconds
-  per frame; over an hour that's tens of frames of drift relative
-  to the audio.
-- The slot's `TakeLatest` always returns the latest submitted frame,
-  so the visible effect isn't a stall — it's that the composition
-  occasionally repeats a frame (when audio runs ahead) or drops one
-  (when audio runs behind) without warning.
+- **Was**: The composition pump and the cue's audio master were sourced
+  differently (Stopwatch vs. PortAudio sample clock).
+- **Now (5.4)**: `CueCompositionRuntime` masters the composition pump to
+  the first cue's `PlaybackClock` when a clock master is set. Drift mode
+  3a is eliminated for normal single-master compositions.
+- **Residual**: Long-run drift counters surface remaining slop for operator
+  visibility (5.4.2).
 
-**Severity**: low for typical show lengths (< 1 hour), undetectable
-visually. Higher for unattended 4+ hour installs.
+**Severity (historical)**: low for typical show lengths (< 1 hour). No
+longer the primary sync risk after 5.4.
 
-#### 3b. Source-rate vs. canvas-rate mismatch
+#### 3b. Source-rate vs. canvas-rate mismatch — partially addressed (Phase 5.9)
 
-- The slot is a "latest wins" buffer. A source at 60 fps into a canvas
-  at 30 fps drops every other frame *with no PTS check* — the slot
-  silently overwrites.
-- A source at 30 fps into a 60 fps canvas holds each frame for two
-  ticks — fine, no judder.
-- A source at 23.976 fps (film) into a 60 fps canvas is the classic
-  3:2 pulldown case — neither matches; you'll see periodic double-frames
-  with no smoothing.
-
-**Severity**: visible on cinematic content. The fix is operator-side
-("pick a canvas fps that's a multiple of your sources") but the engine
-should at least *report* the mismatch.
+- **Was**: The slot is a "latest wins" buffer with no PTS check.
+- **Now (5.9.1)**: Slots opt into `SlotKeepPolicy.MasterAligned` when the
+  composition runtime has a clock master — frames are chosen by PTS relative
+  to the master instead of blind overwrite.
+- **Now (5.9.2)**: Source fps is probed at add time; the Video tab warns when
+  source rate doesn't divide evenly into the canvas rate.
+- Operator still picks canvas fps; the engine reports mismatches rather than
+  silently smoothing 3:2 pulldown.
 
 #### 3c. Multiple cues, multiple masters, one composition
 
@@ -479,12 +469,12 @@ move into dialogs to reclaim screen space:
 | **5.1** | UX: hide Video tab for audio-only sources; show source channel count in Audio tab; group duration roll-up; drawer "(N selected)" hint | M | Pure operator clarity; no engine changes. |
 | **5.2** | Read-only tree cells + F2 rename popup + drag-reorder | M | Removes the recycling-binding bug class entirely. |
 | **5.3** | Right-side "Now Playing" panel | M | Operator's #1 ask; closes the multi-cue feedback gap. |
-| **5.4** | A/V sync P0: master the composition pump to a cue's clock + drift counter | M | Eliminates 3a entirely; visible drift only matters for long shows but is the core sync issue. |
-| **5.5** | Preview / scrubber on General tab | M | Lets operators audition without going through transport. |
-| **5.6** | Keyboard shortcuts + duplicate / move-up-down commands | S | Quick win; standard cue-player muscle memory. |
-| **5.7** | Output health dots; pre-roll warming badges; `VideoOutputPump.PumpPressure` surfaced | M | Visibility into what's working under load. |
-| **5.8** | Color tags; renumber dialog; cue list settings dialog | M | Polish; some of these will arrive piecemeal. |
-| **5.9** | A/V sync P1: PTS-aware slot policy; source-fps vs. canvas-fps warning | L | Long-show-quality work; less urgent than 5.4. |
+| **5.4** | A/V sync P0: master the composition pump to a cue's clock + drift counter | M | ✅ Shipped — eliminates 3a. |
+| **5.5** | Preview / scrubber on General tab | M | ✅ Shipped — audition without transport. |
+| **5.6** | Keyboard shortcuts + duplicate / move-up-down commands | S | ✅ Shipped. |
+| **5.7** | Output health dots; pre-roll warming badges; `VideoOutputPump.PumpPressure` surfaced | M | ✅ Shipped. |
+| **5.8** | Color tags; renumber dialog; cue list settings dialog | M | ✅ Mostly shipped (string cleanup deferred). |
+| **5.9** | A/V sync P1: PTS-aware slot policy; source-fps vs. canvas-fps warning | L | ✅ Shipped — 3b mitigated; 3c documented. |
 
 ## Part D — What I'm not recommending
 
@@ -523,10 +513,11 @@ CuePlaybackEngine.Play
                             └── Cue's video pump now ticks from the audio clock
 
 CueCompositionRuntime.PumpLoop
-    └── Stopwatch.GetTimestamp() in tight loop, fixed period
-            └── _mixer.TryReadNextFrame → composes from slots' latest frames
+    └── Master clock when SetClockMaster is called (Phase 5.4)
+            └── _master.ElapsedSinceStart drives pump period
+            └── _mixer.TryReadNextFrame(masterPts) with MasterAligned slots (5.9)
                     └── Fans composed frame to acquired outputs
 ```
 
-**Connection that's missing today**: an arrow from the audio clock
-back to the composition pump's tick. Phase 5.4 adds it.
+Phase 5.4 added the arrow from the audio clock back to the composition
+pump's tick. Phase 5.9 passes master PTS into slot acquisition.

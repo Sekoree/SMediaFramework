@@ -1311,6 +1311,21 @@
   <data name="FilesMenuLabel" xml:space="preserve">
     <value>Files…</value>
   </data>
+  <data name="PreviewCueButton" xml:space="preserve">
+    <value>▶ Preview</value>
+  </data>
+  <data name="StopPreviewCueButton" xml:space="preserve">
+    <value>■ Stop Preview</value>
+  </data>
+  <data name="PreviewingCueStatusFormat" xml:space="preserve">
+    <value>Previewing '{0}'. Click again to stop.</value>
+  </data>
+  <data name="PreviewStoppedStatus" xml:space="preserve">
+    <value>Preview stopped.</value>
+  </data>
+  <data name="VideoFrameRateMismatchWarningFormat" xml:space="preserve">
+    <value>Source {0} fps → {1} fps canvas '{2}' — visible pulldown judder likely. Consider matching the composition frame rate to the source.</value>
+  </data>
   <data name="OscLocalhostEndpointName" xml:space="preserve">
     <value>OSC Localhost</value>
   </data>

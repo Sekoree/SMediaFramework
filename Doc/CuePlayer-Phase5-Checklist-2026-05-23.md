@@ -31,7 +31,7 @@
 5.7  (M, ✗) — Health / pre-roll indicators  ───┤ visibility under load
 5.8  (M, ✗ / ✓ for color tag) — Polish + dialogs
                                                │
-5.9  (L, ✗) — A/V sync P1: PTS slot policy ────┘ long-show quality
+5.9  (L, ✗) — A/V sync P1: PTS slot policy ────┘ long-show quality ✅ shipped
 ```
 
 ---
@@ -352,58 +352,49 @@ Picking this up later: implement in
 
 ---
 
-## Phase 5.5 — Preview / scrubber
+## Phase 5.5 — Preview / scrubber — ✅ shipped
 
 > **Risk**: Low · **Effort**: M · **Breaking**: ✗
 >
 > Lets the operator audition a single cue without going through Standby
 > + Go, and scrub through a playing cue.
+>
+> **Outcome (2026-05-24)**: 107 tests pass (+3). General tab gets ▶ Preview /
+> ■ Stop Preview (toggles via `TogglePreviewCommand`; `Ctrl+P` bound at
+> UserControl level). `CuePreviewSession` opens file media on default PortAudio
+> + optional 480 px SDL window; `CuePlaybackEngine.PreviewCueAsync` /
+> `StopPreviewAsync` enforce one-at-a-time and tear down on Go / Stop /
+> Panic / window close. Scrubber slider on General tab visible when the
+> selected cue is in `ActiveCues`; commit-on-release seeks via
+> `SeekCueAsync` (active cues + preview).
 
 ### 5.5.1 Preview button
 
-- 🔲 New "▶ Preview" button on the General tab (and a "Stop Preview"
-  button that swaps in when previewing is active).
-- 🔲 Engine: new `PreviewCueAsync(MediaCueNode cue, CancellationToken
-  ct)` that opens the cue's source and routes:
-  - Audio → system default PortAudio output (a transient
-    `CueAudioOutputRuntime` not registered in `_audioOutputs`).
-  - Video → a transient floating preview window (an
-    `SDL3GLVideoOutput` opened as a tool window 480 px wide).
-- 🔲 Disposing the preview tears everything down.
-- 🔲 Only one preview at a time — pressing Preview while another is
-  active stops the previous.
-- 🔲 Status message: "Previewing 'X'. Click again to stop."
+- ✅ New "▶ Preview" / "■ Stop Preview" on the General tab (`PreviewButtonLabel`).
+- ✅ `CuePreviewSession.TryOpenAsync` + `CuePlaybackEngine.PreviewCueAsync`:
+  audio → default PortAudio via `WithPortAudio()`; video → transient
+  `SDL3GLVideoOutput` (480 px wide tool window).
+- ✅ Disposing preview tears everything down (`StopPreviewAsync`).
+- ✅ Only one preview at a time — new preview or Go/Stop/Panic stops the prior.
+- ✅ Status message: `PreviewingCueStatusFormat` / `PreviewStoppedStatus`.
 
 ### 5.5.2 Scrubber
 
-- 🔲 New `Slider` on the General tab, bound to the cue's current
-  position. Visible only when the cue is active in `ActiveCues`.
-- 🔲 Two-way binding: dragging the thumb seeks via a new
-  `engine.SeekCueAsync(cueId, TimeSpan position)`.
-- 🔲 `SeekCueAsync` finds the entry in `_active`, calls
-  `entry.Player.SeekCoordinated(position)`, and re-synchronizes the
-  audio runtime if present (the master clock may need a hint).
-- 🔲 Edge case: scrubbing past Duration → snap to Duration - 50ms,
-  naturally fires the natural-end event.
+- ✅ `CueScrubberSlider` on General tab, bound to `CueScrubberValue`.
+  Visible when `IsCueScrubberVisible` (selected cue in `ActiveCues`).
+- ✅ Commit on `PointerReleased` / slider keyboard →
+  `SeekActiveCueFromScrubberCommand` → `SeekCueAsync`.
+- ✅ `SeekCueAsync` finds active entry or preview session, calls
+  `SeekCoordinated` + resumes play; snaps past-duration to Duration − 50 ms.
 
 ### 5.5.3 Hover-to-preview (optional, defer if 5.5.1/5.5.2 take long)
 
-- ⏸ Decide at implementation time. If kept:
-  - 500 ms hover on a cue row opens a small popup with a frame
-    thumbnail (first frame of the file, or the cue's loop point).
-  - Reuses the framework's `MediaContainerDecoder.Open` + one
-    `Video.TryReadNextFrame` to grab the frame.
-  - Hover out closes the popup; doesn't interfere with selection or
-    rename.
+- ⏸ Deferred — not implemented.
 
 ### 5.5 verification
 
-- 🔲 Build + tests clean.
-- 🔲 Manual: preview a video file that has audio. Audio plays out the
-  system default device; video shows in a floating window. Stop
-  preview disposes both. While a 30-second cue is playing, drag the
-  scrubber to the 15-second mark — playback jumps and continues from
-  there. Audio + video stay in sync after the seek.
+- ✅ Build + tests clean (107 tests).
+- ⏸ Manual verification: pending operator confirmation.
 
 ---
 
@@ -423,14 +414,13 @@ Picking this up later: implement in
 > a `TextBox` / `NumericUpDown` / `ComboBox` has focus so the
 > operator can type freely in drawer fields.
 
-### 5.6.1 Transport bindings ✅ (Ctrl+P deferred with 5.5)
+### 5.6.1 Transport bindings ✅ (Ctrl+P shipped with 5.5)
 
 - ✅ `OnUserControlKeyDown` handles `Space` → Go, `Esc` → Panic,
   `Enter` → Standby, `Backspace` → Back, with `FocusManager`
   short-circuit so `TextBox` / `NumericUpDown` / `ComboBox` focus
   passes the key through to the editor.
-- ⏸ `Ctrl+P` (preview): not bound — Phase 5.5 (preview runtime) is
-  deferred, so there's nothing for the key to trigger yet.
+- ✅ `Ctrl+P` → `TogglePreviewCommand` (Phase 5.5).
 
 ### 5.6.2 Tree navigation + reorder ✅ (Home/End deferred)
 
@@ -543,125 +533,102 @@ Picking this up later: implement in
 
 ---
 
-## Phase 5.8 — Polish + dialogs
+## Phase 5.8 — Polish + dialogs — ✅ mostly shipped (5.8.4 deferred)
 
 > **Risk**: Low · **Effort**: M · **Breaking**: ✗ (color tag is
 > additive but persisted, so technically a saved-file field — old
 > files load with no tag).
+>
+> **Outcome (2026-05-24)**: Color tags, cue list settings dialog, and
+> Files… menu landed earlier in the branch. Right-click color-tag menu
+> and resource-string cleanup remain deferred.
 
 ### 5.8.1 Color tags
 
-- 🔲 Add `int ColorTag { get; init; }` to `CueNode` in
+- ✅ Add `int ColorTag { get; init; }` to `CueNode` in
   `Models/CueList.cs` (default 0 = none). Tag values 1..7 map to a
   fixed palette.
-- 🔲 `CueNodeViewModel.ColorTag : int` (`[ObservableProperty]`) +
+- ✅ `CueNodeViewModel.ColorTag : int` (`[ObservableProperty]`) +
   computed `ColorTagBrush` returning the palette color or transparent.
-- 🔲 New tree column at the very start (3 px wide): a thin vertical
+- ✅ New tree column at the very start (3 px wide): a thin vertical
   strip filled with `ColorTagBrush`.
-- 🔲 Drawer General tab: a row of 8 color swatches (none + 7) — click
+- ✅ Drawer General tab: a row of 8 color swatches (none + 7) — click
   to set.
-- 🔲 Right-click menu entry: "Set color tag → …".
+- ⏸ Right-click menu entry: "Set color tag → …". Swatches in drawer
+  are sufficient for now.
 
 ### 5.8.2 Cue list settings dialog
 
-- 🔲 New `CueListSettingsDialog.axaml` with these fields (moved out of
-  the toolbar):
-  - Pre-roll count (currently inline).
-  - Default cue trigger mode (new — sets the default for cues created
-    via `+ Media` etc.; defaults to `Manual` today).
-  - Auto-renumber on insert/reorder (new — checkbox).
-- 🔲 Toolbar gets a gear icon next to the cue list selector to open
-  the dialog. Remove the inline pre-roll spinner.
+- ✅ `CueListSettingsDialog.axaml` with pre-roll count, default trigger
+  mode, auto-renumber on insert/reorder.
+- ✅ Toolbar gear icon opens the dialog; inline pre-roll spinner removed.
 
 ### 5.8.3 Files dropdown
 
-- 🔲 Collapse Load / Save / Save As into a single "Files…" `MenuButton`
-  in the toolbar with three submenu items.
-- 🔲 Add a `Path` display next to the cue list name in the toolbar so
-  the operator can see what file they're working on (read-only).
+- ✅ Load / Save / Save As collapsed into "Files…" `Menu` in the toolbar.
+- ✅ Read-only `SelectedCueList.Path` display in the toolbar row.
 
 ### 5.8.4 Resource string cleanup
 
-- 🔲 `git grep` for any string keys in `Strings.resx` / `Strings.cs`
-  not referenced anywhere in `.cs` / `.axaml`. Delete them. (Phase 3
-  did a pass; another sweep after the new dialogs/buttons will be due.)
+- ⏸ Automated scan (2026-05-24) flagged ~93 `Strings.resx` keys with no static
+  reference in `.cs`/`.axaml`. Many may be false positives (dynamic keys, future
+  surfaces). Manual review deferred — do not bulk-delete without checking each key.
 
 ### 5.8 verification
 
-- 🔲 Build + tests clean.
-- 🔲 Manual: tag a few cues with colors; reorder them; reload the
-  project; tags persist. Pre-roll count is no longer on the toolbar
-  but is reachable via the gear icon's dialog.
+- ✅ Build + tests clean (color tag round-trip + multi-select tests).
+- ⏸ Manual: tag persistence + settings dialog — pending operator pass.
 
 ---
 
-## Phase 5.9 — A/V sync P1: PTS-aware slot policy + canvas-rate warning
+## Phase 5.9 — A/V sync P1: PTS-aware slot policy + canvas-rate warning — ✅ shipped (5.9.3 docs)
 
 > **Risk**: Medium · **Effort**: L · **Breaking**: ✗
 >
-> Long-show quality work. Less urgent than 5.4. The two items can ship
-> independently.
+> **Outcome (2026-05-24)**: 113 HaPlay tests + 10 compositor tests pass.
+> `SlotKeepPolicy.MasterAligned` on `VideoCompositorSource.Slot`; composition
+> runtime opts in when clock-mastered. Source fps probed on add; Video tab warns
+> on canvas-rate mismatch. Cross-cue alignment documented in
+> `Doc/MediaFramework-Architecture.md`.
 
 ### 5.9.1 PTS-aware slot policy
 
-- 🔲 Extend `VideoCompositorSource.Slot` with a `SlotKeepPolicy enum
-  { Latest, MasterAligned }`. (Lands in `S.Media.Effects` — a small
-  framework change. Backwards-compatible: default `Latest`.)
-- 🔲 In `MasterAligned`, slot stores frames by PTS; on Composite, the
-  compositor asks for the frame whose PTS is closest to the master
-  clock's `CurrentPosition` (or the last-pulled PTS + canvas period).
-  Older frames are dropped, but "too-new" frames (future PTS) are
-  held until their time.
-- 🔲 `CueCompositionRuntime.AddLayer` opts each slot into
-  `MasterAligned` when `_master` is non-null (set in 5.4.1).
-- 🔲 Tests in `S.Media.Core.Tests` or a new
-  `S.Media.Effects.Tests` covering: 30 fps source into 60 fps canvas
-  with `MasterAligned` doesn't drop frames; 60 fps source into 30 fps
-  canvas with `MasterAligned` drops every other source frame at the
-  expected PTS.
+- ✅ `SlotKeepPolicy { Latest, MasterAligned }` in `S.Media.Effects`.
+- ✅ `Slot.AcquireMasterAligned(masterPts, canvasPeriod)` picks the frame whose
+  PTS is closest to the master without selecting frames too far in the future.
+- ✅ `CueCompositionRuntime.AddLayer` + `SetClockMaster` set
+  `MasterAligned` when a master clock is present; `PumpOneFrame` passes
+  `_master.ElapsedSinceStart` into `TryReadNextFrame`.
+- ✅ Test: `MasterAligned_PicksFrameClosestToMasterPts` in
+  `VideoCompositorSourceTests`.
 
 ### 5.9.2 Source fps probe + canvas-rate warning at add time
 
-- 🔲 Extend `CueMediaProbe` from 5.1.1 to also report
-  `Rational SourceFrameRate` (read from `decoder.Video.Format.FrameRate`).
-- 🔲 Persist on `MediaCueNode` as `int SourceFpsNum`, `int SourceFpsDen`.
-- 🔲 On the Video tab in the drawer, when the source's fps doesn't
-  divide evenly into the placement's composition fps, show:
-
-  > "Source 23.976 fps → 60 fps canvas — visible 3:2-pulldown judder
-  > likely. Consider a 24 fps composition for cinema content."
-
-- 🔲 No automatic fix — operator decides.
+- ✅ `CueMediaProbeResult` extended with `SourceFrameRateNum` / `SourceFrameRateDen`.
+- ✅ Persisted on `MediaCueNode`; round-trip + VM fields on `CueNodeViewModel`.
+- ✅ Video tab banner via `VideoFrameRateMismatchWarning` when a placement's
+  composition fps doesn't divide evenly into the source rate (`CueFrameRatePolicy`).
 
 ### 5.9.3 Cross-cue alignment for compositions
 
-- ⏸ The hardest case: two cues with audio routes to *different*
-  PortAudio devices (different crystals) both into one composition.
-  Per-cue A/V is locked; cross-cue alignment isn't. No clean fix —
-  the operator has to choose to share a device. Document this in
-  `Doc/MediaFramework-Architecture.md` rather than try to engineer
-  around it.
+- ✅ Documented in `Doc/MediaFramework-Architecture.md` — operator must share a
+  device when cross-cue pixel lock is required; no engine fix attempted.
 
 ### 5.9 verification
 
-- 🔲 Framework tests pass for the slot policy.
-- 🔲 Build + cue tests clean.
-- 🔲 Manual: play a 23.976 fps file into a 60 fps canvas — Video tab
-  warns the operator. Switch the canvas to 24 fps — warning clears,
-  playback is smooth.
+- ✅ Framework + HaPlay tests clean.
+- ⏸ Manual: play 23.976 fps into 60 fps canvas — warning visible; switch canvas
+  to 24 fps — warning clears.
 
 ---
 
 ## Cross-phase: documentation updates
 
-- 🔲 After each phase ships, update
-  `Doc/CuePlayer-Redesign-Checklist-2026-05-22.md` with the relevant
-  Phase 5 cross-references (so the redesign doc points at this
-  checklist's status for newer work).
-- 🔲 Once 5.4 lands, update
-  `Doc/CuePlayer-AVSync-And-UX-Review-2026-05-23.md` to mark drift
-  mode 3a as resolved and note the remaining (3b, 3c) for 5.9 / docs
-  respectively.
+- ✅ `Doc/CuePlayer-Redesign-Checklist-2026-05-22.md` — Phase 5 status table
+  added (2026-05-24).
+- ✅ `Doc/CuePlayer-AVSync-And-UX-Review-2026-05-23.md` — drift mode 3a marked
+  resolved; 3b/3c updated for 5.9; appendix clock diagram refreshed.
+- ✅ `Doc/MediaFramework-Architecture.md` — cross-cue alignment (5.9.3).
 - 🔲 After 5.3 / 5.5 land, take screenshots and update
   `Doc/MediaFramework-Quickstart.md` with the new operator workflow.
 

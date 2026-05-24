@@ -89,3 +89,15 @@ using var player = await MediaPlayer.OpenFile(path).OpenAsync();
 ```
 
 Also: `MediaPlayer.OpenUri`, `OpenStream` (AVIO when `SpoolStreamToDisk` is false), `Open(decoder)`, and `OpenLive(audio, video)` for capture/mock graphs. Operational snapshots: `MediaPlayer.GetMetrics()`; script hooks: `MediaPlayer.Triggers` (`TriggerBus`). See [MediaFramework-Quickstart.md](MediaFramework-Quickstart.md) and [MediaFramework-Triggers.md](MediaFramework-Triggers.md).
+
+---
+
+## Cue Player — composition cross-cue alignment (Phase 5.9)
+
+When multiple media cues share one composition, each cue's video pump is slaved to **its own** audio master (typically the PortAudio device wired on that cue's first audio route). Per-cue A/V stays locked; **cross-cue** alignment inside the same composition is only guaranteed when those cues share the same physical audio master.
+
+Typical safe case: background + alpha foreground routed to the **same** PortAudio output — both pumps share one crystal.
+
+Known limitation: a `FireAllSimultaneously` group with two cues routed to **different** PortAudio devices places two independent sample clocks into one compositor. The composition pump (Phase 5.4) is clock-mastered to the first cue's master, but the second cue's decoder can drift relative to the first. There is no framework-side fix — operators should route both cues to the same device when pixel-accurate alignment matters.
+
+Phase 5.9.1 adds `SlotKeepPolicy.MasterAligned` on `VideoCompositorSource.Slot` so source/canvas frame-rate mismatches degrade gracefully when a master clock is present; it does not merge two independent audio clocks.

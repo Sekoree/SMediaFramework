@@ -6,6 +6,7 @@ using S.Media.Core.Clock;
 using S.Media.Core.Playback;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Playback;
 using S.Media.FFmpeg;
 using S.Media.Playback;
 
@@ -30,6 +31,8 @@ public sealed class CuePlaybackEngine : IDisposable
     private readonly Dictionary<Guid, ActiveCue> _active = new();
     private readonly Dictionary<Guid, CueCompositionRuntime> _compositions = new();
     private readonly Dictionary<Guid, CueAudioOutputRuntime> _audioOutputs = new();
+    private readonly object _previewGate = new();
+    private CuePreviewSession? _preview;
 
     public CuePlaybackEngine(OutputManagementViewModel outputs, CuePlayerViewModel cuePlayer)
     {
@@ -55,6 +58,89 @@ public sealed class CuePlaybackEngine : IDisposable
     /// bars without per-row polling.</summary>
     public event EventHandler<CuePlaybackProgress>? CueProgress;
 
+    /// <summary>Raised on the UI thread when preview playback ends (natural end, operator stop,
+    /// or preview window closed).</summary>
+    public event EventHandler<Guid>? PreviewEnded;
+
+    /// <summary>Id of the cue currently held in the transient preview path, if any.</summary>
+    public Guid? PreviewingCueId
+    {
+        get { lock (_previewGate) return _preview?.CueId; }
+    }
+
+    /// <summary>Audition a single file media cue on the default PortAudio device and an optional
+    /// floating SDL preview window. Only one preview runs at a time (Phase 5.5).</summary>
+    public async Task<string?> PreviewCueAsync(MediaCueNode cue, CancellationToken ct)
+    {
+        await StopPreviewAsync().ConfigureAwait(false);
+
+        var (session, err) = await CuePreviewSession.TryOpenAsync(cue, ct).ConfigureAwait(false);
+        if (session is null)
+            return err ?? "Preview failed.";
+
+        session.CloseRequested += (_, _) => _ = StopPreviewAsync();
+
+        lock (_previewGate)
+            _preview = session;
+
+        try
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => session.Play());
+            _ = WatchPreviewEndAsync(session);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "CuePlaybackEngine.PreviewCueAsync: Play threw");
+            await StopPreviewAsync().ConfigureAwait(false);
+            return ex.Message;
+        }
+    }
+
+    /// <summary>Tears down the transient preview session, if any.</summary>
+    public async Task StopPreviewAsync()
+    {
+        CuePreviewSession? session;
+        lock (_previewGate)
+        {
+            session = _preview;
+            _preview = null;
+        }
+
+        if (session is null) return;
+
+        var cueId = session.CueId;
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            try { session.Dispose(); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.StopPreviewAsync"); }
+            try { PreviewEnded?.Invoke(this, cueId); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreviewEnded handler"); }
+        });
+    }
+
+    /// <summary>Seek an active cue or the current preview to <paramref name="position"/>.</summary>
+    public async Task SeekCueAsync(Guid cueId, TimeSpan position)
+    {
+        CuePreviewSession? preview;
+        lock (_previewGate)
+            preview = _preview?.CueId == cueId ? _preview : null;
+
+        if (preview is not null)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => SeekPreview(preview, position));
+            return;
+        }
+
+        ActiveCue? entry;
+        lock (_gate)
+            _active.TryGetValue(cueId, out entry);
+
+        if (entry is null) return;
+
+        await Dispatcher.UIThread.InvokeAsync(() => SeekActiveCue(entry, position));
+    }
+
     public async Task<string?> ExecuteAsync(MediaCueNode cue, CancellationToken ct)
     {
         if (cue.Source is null)
@@ -64,6 +150,8 @@ public sealed class CuePlaybackEngine : IDisposable
         // to "not yet wired through the new engine".
         if (cue.Source is not FilePlaylistItem fileItem)
             return $"Live input cues aren't routed through the compositor/mixer yet (source: {cue.Source.GetType().Name}).";
+
+        await StopPreviewAsync().ConfigureAwait(false);
 
         var list = await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.SelectedCueList?.ToModel());
         if (list is null)
@@ -173,6 +261,8 @@ public sealed class CuePlaybackEngine : IDisposable
     /// <summary>Stop all active cues — used by the Cue VM's Stop / Panic commands.</summary>
     public async Task StopAsync()
     {
+        await StopPreviewAsync().ConfigureAwait(false);
+
         List<ActiveCue> toDispose;
         lock (_gate)
         {
@@ -485,6 +575,62 @@ public sealed class CuePlaybackEngine : IDisposable
         definition is PortAudioOutputDefinition
         || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
 
+    private static void SeekPreview(CuePreviewSession preview, TimeSpan position)
+    {
+        position = ClampSeekPosition(preview.Player.Duration, position);
+        preview.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush);
+        preview.Play();
+    }
+
+    private static void SeekActiveCue(ActiveCue entry, TimeSpan position)
+    {
+        position = ClampSeekPosition(entry.Player.Duration, position);
+        entry.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush);
+        if (!entry.IsPaused)
+            entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster);
+    }
+
+    private static TimeSpan ClampSeekPosition(TimeSpan duration, TimeSpan position)
+    {
+        if (position < TimeSpan.Zero)
+            return TimeSpan.Zero;
+        if (duration > TimeSpan.Zero && position >= duration)
+            return duration - TimeSpan.FromMilliseconds(50);
+        return position;
+    }
+
+    private async Task WatchPreviewEndAsync(CuePreviewSession session)
+    {
+        var ct = session.Cts.Token;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(150, ct).ConfigureAwait(false);
+
+                var duration = session.Player.Duration;
+                TimeSpan pos;
+                try { pos = session.Player.PlayClock.CurrentPosition; }
+                catch { continue; }
+
+                var progress = new CuePlaybackProgress(session.CueId, pos, duration);
+                await Dispatcher.UIThread.InvokeAsync(() => CueProgress?.Invoke(this, progress));
+
+                if (duration <= TimeSpan.Zero) continue;
+                if (pos >= duration - TimeSpan.FromMilliseconds(50))
+                {
+                    await StopPreviewAsync().ConfigureAwait(false);
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "CuePlaybackEngine.WatchPreviewEndAsync");
+        }
+    }
+
     private async Task WatchNaturalEndAsync(ActiveCue entry)
     {
         var ct = entry.Cts.Token;
@@ -523,6 +669,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
     public void Dispose()
     {
+        try { StopPreviewAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { StopAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
 
         List<CueCompositionRuntime> compsLeft;

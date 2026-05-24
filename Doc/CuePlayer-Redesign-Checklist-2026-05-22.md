@@ -712,3 +712,27 @@ question — this now works end-to-end):
 8. Group the three cues under a Group cue with fire mode
    `FireAllSimultaneously`.
 9. Standby the group → Go.
+
+---
+
+## Phase 5 follow-on (2026‑05‑23 review → 2026‑05‑24 shipped)
+
+Operator UX, A/V sync, preview, and polish work from the post-redesign
+review lives in **`Doc/CuePlayer-Phase5-Checklist-2026-05-23.md`**
+(companion: `Doc/CuePlayer-AVSync-And-UX-Review-2026-05-23.md`).
+
+| Phase | Status |
+|---|---|
+| 5.1 UX clarity | ✅ |
+| 5.2 Read-only tree + rename | ✅ (5.2.4 drag-reorder deferred) |
+| 5.3 Now Playing panel | ✅ |
+| 5.4 A/V sync P0 (master pump) | ✅ |
+| 5.5 Preview / scrubber | ✅ |
+| 5.6 Keyboard shortcuts | ✅ |
+| 5.7 Health / pre-roll indicators | ✅ |
+| 5.8 Polish + dialogs | ✅ mostly (5.8.4 string cleanup deferred) |
+| 5.9 A/V sync P1 (PTS slot + fps warning) | ✅ |
+
+Cross-cue composition alignment (drift mode 3c) is documented in
+`Doc/MediaFramework-Architecture.md` — operators share a device when
+pixel lock across cues matters.

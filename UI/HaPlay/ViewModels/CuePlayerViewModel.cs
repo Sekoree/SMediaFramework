@@ -90,6 +90,7 @@ public sealed partial class CueCompositionViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(DisplayName));
+        CompositionFrameRateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     partial void OnFrameRateDenChanged(int value)
@@ -97,7 +98,11 @@ public sealed partial class CueCompositionViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(DisplayName));
+        CompositionFrameRateChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    /// <summary>Raised when canvas frame rate edits should re-evaluate source/canvas warnings.</summary>
+    internal event EventHandler? CompositionFrameRateChanged;
 
     public CueComposition ToModel() => new()
     {
@@ -330,6 +335,12 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _sourceVideoIsAttachedPicture;
+
+    [ObservableProperty]
+    private int _sourceFrameRateNum;
+
+    [ObservableProperty]
+    private int _sourceFrameRateDen;
 
     [ObservableProperty]
     private CueRowStatus _rowStatus = CueRowStatus.Idle;
@@ -582,6 +593,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceHasAudio = m.HasAudio,
                     SourceAudioChannels = m.AudioChannels,
                     SourceVideoIsAttachedPicture = m.VideoIsAttachedPicture,
+                    SourceFrameRateNum = m.SourceFrameRateNum,
+                    SourceFrameRateDen = m.SourceFrameRateDen,
                     StartOffsetMs = m.StartOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
@@ -659,6 +672,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 HasAudio = SourceHasAudio,
                 AudioChannels = Math.Max(0, SourceAudioChannels),
                 VideoIsAttachedPicture = SourceVideoIsAttachedPicture,
+                SourceFrameRateNum = Math.Max(0, SourceFrameRateNum),
+                SourceFrameRateDen = Math.Max(0, SourceFrameRateDen),
                 StartOffsetMs = Math.Max(0, StartOffsetMs),
                 Loop = Loop,
                 EndBehavior = EndBehavior,
@@ -772,6 +787,32 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host-provided pause callback — Pause/Resume forwards to this so the playback
     /// engine freezes active media instead of only deferring pending cue delays.</summary>
     public Func<bool, Task>? SetPlaybackPausedCallback { get; set; }
+
+    /// <summary>Host-provided preview callbacks (Phase 5.5). Null in tests.</summary>
+    public Func<MediaCueNode, CancellationToken, Task<string?>>? PreviewCueCallback { get; set; }
+    public Func<Task>? StopPreviewCallback { get; set; }
+    public Func<Guid, TimeSpan, Task>? SeekCueCallback { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsPreviewingSelectedCue))]
+    [NotifyPropertyChangedFor(nameof(PreviewButtonLabel))]
+    [NotifyCanExecuteChangedFor(nameof(TogglePreviewCommand))]
+    private Guid? _previewingCueId;
+
+    public bool IsPreviewing => PreviewingCueId is not null;
+
+    public bool IsPreviewingSelectedCue =>
+        PreviewingCueId is { } id && SelectedCueNode?.Id == id;
+
+    public string PreviewButtonLabel =>
+        IsPreviewingSelectedCue ? Strings.StopPreviewCueButton : Strings.PreviewCueButton;
+
+    /// <summary>Visible when the selected cue is active in the Now Playing panel (Phase 5.5.2).</summary>
+    public bool IsCueScrubberVisible =>
+        SelectedCueNode is not null && ActiveCues.Any(a => a.CueId == SelectedCueNode.Id);
+
+    [ObservableProperty]
+    private double _cueScrubberValue;
 
     public CuePlayerViewModel()
     {
@@ -974,6 +1015,13 @@ public partial class CuePlayerViewModel : ViewModelBase
     public bool HasSelectedMediaCueWithAttachedPictureOnly =>
         SelectedCueNode is { Kind: CueNodeKind.Media } media && media.SourceVideoIsAttachedPicture;
 
+    /// <summary>Non-null when the selected media cue's probed frame rate doesn't divide evenly
+    /// into at least one wired composition's canvas rate (Phase 5.9.2).</summary>
+    public string? VideoFrameRateMismatchWarning => BuildVideoFrameRateMismatchWarning();
+
+    public bool HasVideoFrameRateMismatchWarning =>
+        !string.IsNullOrWhiteSpace(VideoFrameRateMismatchWarning);
+
     /// <summary>How many cues the operator currently has highlighted in the tree. The drawer
     /// shows a banner above the routes/placements lists when this is > 1 so the operator knows
     /// that "+ Route" / "+ Placement" applies to all of them, not just the primary.</summary>
@@ -1023,6 +1071,33 @@ public partial class CuePlayerViewModel : ViewModelBase
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StandbySelectedCommand.NotifyCanExecuteChanged();
+        ResubscribeCompositionFpsWatch(value);
+    }
+
+    private CueListEditorViewModel? _watchedCueListForFps;
+
+    private void ResubscribeCompositionFpsWatch(CueListEditorViewModel? value)
+    {
+        if (_watchedCueListForFps is not null)
+        {
+            foreach (var comp in _watchedCueListForFps.Compositions)
+                comp.CompositionFrameRateChanged -= OnCompositionFrameRateChanged;
+        }
+
+        _watchedCueListForFps = value;
+        if (value is null)
+            return;
+
+        foreach (var comp in value.Compositions)
+            comp.CompositionFrameRateChanged += OnCompositionFrameRateChanged;
+        RefreshVideoFrameRateMismatchWarning();
+    }
+
+    private void OnCompositionFrameRateChanged(object? sender, EventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        RefreshVideoFrameRateMismatchWarning();
     }
 
     private CueNodeViewModel? _watchedSelectedCueForProbe;
@@ -1032,11 +1107,65 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (e.PropertyName is nameof(CueNodeViewModel.SourceHasVideo)
             or nameof(CueNodeViewModel.SourceHasAudio)
             or nameof(CueNodeViewModel.SourceAudioChannels)
-            or nameof(CueNodeViewModel.SourceVideoIsAttachedPicture))
+            or nameof(CueNodeViewModel.SourceVideoIsAttachedPicture)
+            or nameof(CueNodeViewModel.SourceFrameRateNum)
+            or nameof(CueNodeViewModel.SourceFrameRateDen))
         {
             OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
             OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
+            OnPropertyChanged(nameof(IsPreviewingSelectedCue));
+            OnPropertyChanged(nameof(PreviewButtonLabel));
+            OnPropertyChanged(nameof(IsCueScrubberVisible));
+            RefreshVideoFrameRateMismatchWarning();
+            SyncCueScrubberFromActiveSelection();
+            TogglePreviewCommand.NotifyCanExecuteChanged();
+            SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    private void RefreshVideoFrameRateMismatchWarning()
+    {
+        OnPropertyChanged(nameof(VideoFrameRateMismatchWarning));
+        OnPropertyChanged(nameof(HasVideoFrameRateMismatchWarning));
+    }
+
+    private string? BuildVideoFrameRateMismatchWarning()
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media } node || !node.SourceHasVideo)
+            return null;
+        if (!CueFrameRatePolicy.IsKnown(node.SourceFrameRateNum, node.SourceFrameRateDen))
+            return null;
+        if (SelectedCueList is null)
+            return null;
+
+        foreach (var placement in node.VideoPlacements)
+        {
+            var comp = SelectedCueList.Compositions.FirstOrDefault(c => c.Id == placement.CompositionId);
+            if (comp is null)
+                continue;
+            if (!CueFrameRatePolicy.RatesMismatch(
+                    node.SourceFrameRateNum, node.SourceFrameRateDen,
+                    comp.FrameRateNum, comp.FrameRateDen))
+                continue;
+
+            var srcFps = FormatProbeFps(node.SourceFrameRateNum, node.SourceFrameRateDen);
+            var canvasFps = FormatProbeFps(comp.FrameRateNum, comp.FrameRateDen);
+            return Strings.Format(
+                nameof(Strings.VideoFrameRateMismatchWarningFormat),
+                srcFps,
+                canvasFps,
+                comp.DisplayName);
+        }
+
+        return null;
+    }
+
+    private static string FormatProbeFps(int num, int den)
+    {
+        if (den <= 0)
+            return "?";
+        var fps = num / (double)den;
+        return fps >= 100 ? fps.ToString("0.#") : fps.ToString("0.###");
     }
 
     partial void OnSelectedCueNodeChanged(CueNodeViewModel? value)
@@ -1076,6 +1205,13 @@ public partial class CuePlayerViewModel : ViewModelBase
         AssignSelectedActionEndpointCommand.NotifyCanExecuteChanged();
         ApplyActionBuilderCommand.NotifyCanExecuteChanged();
         EditActionCueCommand.NotifyCanExecuteChanged();
+        TogglePreviewCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(IsPreviewingSelectedCue));
+        OnPropertyChanged(nameof(PreviewButtonLabel));
+        OnPropertyChanged(nameof(IsCueScrubberVisible));
+        SyncCueScrubberFromActiveSelection();
+        SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
+        RefreshVideoFrameRateMismatchWarning();
 
         if (value?.Kind == CueNodeKind.Action && Guid.TryParse(value.EndpointIdText, out var endpointId))
             SelectedActionEndpoint = ActionEndpoints.FirstOrDefault(e => e.Id == endpointId);
@@ -1095,6 +1231,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         _ = value;
         RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
+        RefreshVideoFrameRateMismatchWarning();
     }
 
     partial void OnSelectedActionEndpointChanged(ActionEndpoint? value)
@@ -1233,6 +1370,18 @@ public partial class CuePlayerViewModel : ViewModelBase
             ActiveCues.Add(entry);
         }
         RebuildUpcomingCues();
+        OnPropertyChanged(nameof(IsCueScrubberVisible));
+        SyncCueScrubberFromActiveSelection();
+        SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>Engine callback — preview stopped. Clears preview state on the VM.</summary>
+    public void OnPreviewEnded(Guid cueId)
+    {
+        _ = cueId;
+        if (PreviewingCueId is null) return;
+        PreviewingCueId = null;
+        StatusMessage = Strings.PreviewStoppedStatus;
     }
 
     /// <summary>Engine callback — cue stopped (natural end, Stop, or Panic). Clears Current
@@ -1246,6 +1395,9 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (ActiveCues[i].CueId == cueId)
                 ActiveCues.RemoveAt(i);
         RebuildUpcomingCues();
+        OnPropertyChanged(nameof(IsCueScrubberVisible));
+        SyncCueScrubberFromActiveSelection();
+        SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>Engine callback — progress sample for one active cue. Updates the row's
@@ -1260,7 +1412,78 @@ public partial class CuePlayerViewModel : ViewModelBase
                 a.DurationMs = (long)p.Duration.TotalMilliseconds;
             break;
         }
+
+        if (SelectedCueNode?.Id == p.CueId && p.Duration > TimeSpan.Zero)
+            CueScrubberValue = p.Position.TotalMilliseconds * 1000.0 / p.Duration.TotalMilliseconds;
     }
+
+    private void SyncCueScrubberFromActiveSelection()
+    {
+        if (SelectedCueNode is null)
+            return;
+        var active = ActiveCues.FirstOrDefault(a => a.CueId == SelectedCueNode.Id);
+        if (active is null || active.DurationMs <= 0)
+            return;
+        CueScrubberValue = active.PositionMs * 1000.0 / active.DurationMs;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanTogglePreview))]
+    private async Task TogglePreviewAsync()
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media } node)
+            return;
+
+        if (IsPreviewingSelectedCue)
+        {
+            if (StopPreviewCallback is not null)
+                await StopPreviewCallback();
+            PreviewingCueId = null;
+            StatusMessage = Strings.PreviewStoppedStatus;
+            return;
+        }
+
+        if (PreviewCueCallback is null)
+        {
+            StatusMessage = Strings.CueMediaExecutionNotConfigured;
+            return;
+        }
+
+        if (node.ToModel() is not MediaCueNode media)
+        {
+            StatusMessage = Strings.CueInvalidMediaCue;
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        var err = await PreviewCueCallback(media, cts.Token);
+        if (!string.IsNullOrWhiteSpace(err))
+        {
+            StatusMessage = err;
+            return;
+        }
+
+        PreviewingCueId = node.Id;
+        StatusMessage = Strings.Format(nameof(Strings.PreviewingCueStatusFormat), CueDisplay(node));
+    }
+
+    private bool CanTogglePreview() =>
+        SelectedCueNode is { Kind: CueNodeKind.Media };
+
+    [RelayCommand(CanExecute = nameof(CanSeekActiveCueFromScrubber))]
+    private async Task SeekActiveCueFromScrubberAsync()
+    {
+        if (SelectedCueNode is null || SeekCueCallback is null)
+            return;
+
+        var active = ActiveCues.FirstOrDefault(a => a.CueId == SelectedCueNode.Id);
+        if (active is null || active.DurationMs <= 0)
+            return;
+
+        var position = TimeSpan.FromMilliseconds(CueScrubberValue * active.DurationMs / 1000.0);
+        await SeekCueCallback(SelectedCueNode.Id, position);
+    }
+
+    private bool CanSeekActiveCueFromScrubber() => IsCueScrubberVisible;
 
     private CueNodeViewModel? FindNodeById(Guid id)
     {
@@ -1393,7 +1616,9 @@ public partial class CuePlayerViewModel : ViewModelBase
                 SelectedCueList.Compositions.Count + 1),
         };
         SelectedCueList.Compositions.Add(comp);
+        comp.CompositionFrameRateChanged += OnCompositionFrameRateChanged;
         SelectedComposition = comp;
+        RefreshVideoFrameRateMismatchWarning();
     }
 
     [RelayCommand(CanExecute = nameof(CanRemoveComposition))]
@@ -1523,6 +1748,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (lastOnPrimary is not null)
             SelectedVideoPlacement = lastOnPrimary;
         OnPropertyChanged(nameof(VisibleVideoPlacements));
+        RefreshVideoFrameRateMismatchWarning();
     }
 
     private bool CanAddVideoPlacement() => SelectedCueNode is { Kind: CueNodeKind.Media };
@@ -1727,6 +1953,8 @@ public partial class CuePlayerViewModel : ViewModelBase
                 row.SourceHasAudio = false;
                 row.SourceAudioChannels = 0;
                 row.SourceVideoIsAttachedPicture = false;
+                row.SourceFrameRateNum = 0;
+                row.SourceFrameRateDen = 0;
                 return;
             }
 
@@ -1735,6 +1963,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             row.SourceHasAudio = probe.Value.HasAudio;
             row.SourceAudioChannels = probe.Value.AudioChannels;
             row.SourceVideoIsAttachedPicture = probe.Value.VideoIsAttachedPicture;
+            row.SourceFrameRateNum = probe.Value.SourceFrameRateNum;
+            row.SourceFrameRateDen = probe.Value.SourceFrameRateDen;
         });
     }
 

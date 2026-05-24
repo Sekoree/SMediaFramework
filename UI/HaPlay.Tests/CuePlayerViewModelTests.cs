@@ -245,6 +245,58 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void MediaCue_SourceFrameRateFields_RoundTripInSnapshot()
+    {
+        var original = new CueList
+        {
+            Name = "fps",
+            Nodes =
+            [
+                new MediaCueNode
+                {
+                    Label = "cinema",
+                    HasVideo = true,
+                    SourceFrameRateNum = 24000,
+                    SourceFrameRateDen = 1001,
+                },
+            ],
+        };
+
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([original]);
+        var node = Assert.IsType<CueNodeViewModel>(vm.SelectedCueList!.Nodes[0]);
+        Assert.Equal(24000, node.SourceFrameRateNum);
+        Assert.Equal(1001, node.SourceFrameRateDen);
+
+        var roundtrip = Assert.IsType<MediaCueNode>(vm.BuildCueListsSnapshot()[0].Nodes[0]);
+        Assert.Equal(24000, roundtrip.SourceFrameRateNum);
+        Assert.Equal(1001, roundtrip.SourceFrameRateDen);
+    }
+
+    [Fact]
+    public void VideoFrameRateMismatchWarning_Flags23_976Into60FpsCanvas()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddCompositionCommand.Execute(null);
+        var comp = vm.SelectedCueList!.Compositions.First();
+        comp.FrameRateNum = 60;
+        comp.FrameRateDen = 1;
+
+        var media = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            SourceHasVideo = true,
+            SourceFrameRateNum = 24000,
+            SourceFrameRateDen = 1001,
+        };
+        media.VideoPlacements.Add(new CueVideoPlacementViewModel { CompositionId = comp.Id });
+        vm.SelectedCueList.Nodes.Add(media);
+        vm.SelectedCueNode = media;
+
+        Assert.NotNull(vm.VideoFrameRateMismatchWarning);
+        Assert.Contains("23.976", vm.VideoFrameRateMismatchWarning!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GroupCue_DurationDisplay_RollsUpChildren()
     {
         // FirstCueOnly: shows the first child's duration.
@@ -946,6 +998,53 @@ public sealed class CuePlayerViewModelTests
 
         Assert.Equal(3, first.ColorTag);
         Assert.Equal(3, second.ColorTag);
+    }
+
+    [Fact]
+    public void IsCueScrubberVisible_WhenSelectedCueIsActive()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        Assert.False(vm.IsCueScrubberVisible);
+
+        vm.OnCueStarted(cue.Id);
+        Assert.True(vm.IsCueScrubberVisible);
+
+        vm.OnCueEnded(cue.Id);
+        Assert.False(vm.IsCueScrubberVisible);
+    }
+
+    [Fact]
+    public void OnPreviewEnded_ClearsPreviewingCueId()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.PreviewingCueId = cue.Id;
+        vm.OnPreviewEnded(cue.Id);
+        Assert.Null(vm.PreviewingCueId);
+    }
+
+    [Fact]
+    public void SeekActiveCueFromScrubber_ForwardsToCallback()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        cue.DurationMs = 60_000;
+        vm.OnCueStarted(cue.Id);
+        vm.CueScrubberValue = 500;
+
+        TimeSpan? seekTarget = null;
+        vm.SeekCueCallback = (_, pos) =>
+        {
+            seekTarget = pos;
+            return Task.CompletedTask;
+        };
+
+        vm.SeekActiveCueFromScrubberCommand.Execute(null);
+        Assert.Equal(TimeSpan.FromSeconds(30), seekTarget);
     }
 
     [Fact]

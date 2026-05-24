@@ -450,6 +450,11 @@ public static class Strings
     public static string DefaultTriggerModeLabel => Get(nameof(DefaultTriggerModeLabel));
     public static string AutoRenumberOnInsertLabel => Get(nameof(AutoRenumberOnInsertLabel));
     public static string FilesMenuLabel => Get(nameof(FilesMenuLabel));
+    public static string PreviewCueButton => Get(nameof(PreviewCueButton));
+    public static string StopPreviewCueButton => Get(nameof(StopPreviewCueButton));
+    public static string PreviewingCueStatusFormat => Get(nameof(PreviewingCueStatusFormat));
+    public static string PreviewStoppedStatus => Get(nameof(PreviewStoppedStatus));
+    public static string VideoFrameRateMismatchWarningFormat => Get(nameof(VideoFrameRateMismatchWarningFormat));
     public static string OscLocalhostEndpointName => Get(nameof(OscLocalhostEndpointName));
     public static string CueExecuteNoSelectedPlayer => Get(nameof(CueExecuteNoSelectedPlayer));
     public static string CueExecuteNoMediaSource => Get(nameof(CueExecuteNoMediaSource));

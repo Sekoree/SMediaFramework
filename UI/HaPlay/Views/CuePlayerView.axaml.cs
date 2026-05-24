@@ -27,6 +27,8 @@ public partial class CuePlayerView : UserControl
         // fire whether the tree or anything else inside the cue tab has focus.
         CueTreeGrid.KeyDown += OnCueTreeKeyDown;
         KeyDown += OnUserControlKeyDown;
+        CueScrubberSlider.AddHandler(PointerReleasedEvent, OnCueScrubberPointerReleased, RoutingStrategies.Bubble);
+        CueScrubberSlider.AddHandler(KeyUpEvent, OnCueScrubberKeyUp, RoutingStrategies.Bubble);
     }
 
     /// <summary>Transport bindings (Space/Esc/Enter/Backspace) at UserControl level. Skip when
@@ -58,6 +60,28 @@ public partial class CuePlayerView : UserControl
                 if (vm.BackCommand.CanExecute(null)) vm.BackCommand.Execute(null);
                 e.Handled = true;
                 break;
+            case Avalonia.Input.Key.P when e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control):
+                if (vm.TogglePreviewCommand.CanExecute(null))
+                    vm.TogglePreviewCommand.Execute(null);
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void OnCueScrubberPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (DataContext is not CuePlayerViewModel vm) return;
+        if (vm.SeekActiveCueFromScrubberCommand.CanExecute(null))
+            vm.SeekActiveCueFromScrubberCommand.Execute(null);
+    }
+
+    private void OnCueScrubberKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is not CuePlayerViewModel vm) return;
+        if (e.Key is Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown)
+        {
+            if (vm.SeekActiveCueFromScrubberCommand.CanExecute(null))
+                vm.SeekActiveCueFromScrubberCommand.Execute(null);
         }
     }
 

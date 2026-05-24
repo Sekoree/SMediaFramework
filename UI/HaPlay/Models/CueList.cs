@@ -126,6 +126,11 @@ public sealed record MediaCueNode : CueNode
     /// hint that it's a still image.</summary>
     public bool VideoIsAttachedPicture { get; init; }
 
+    /// <summary>Probed source frame rate (numerator / denominator). 0/0 when unknown or no video.</summary>
+    public int SourceFrameRateNum { get; init; }
+
+    public int SourceFrameRateDen { get; init; }
+
     public bool Loop { get; init; }
 
     public int StartOffsetMs { get; init; }

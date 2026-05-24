@@ -242,6 +242,8 @@ internal sealed class CueCompositionRuntime : IDisposable
             // PumpCts has been cancelled — replace it so the clock-driven path has a fresh token.
             // (Field is readonly; reassign via reflection-free approach — just create a new
             // local CTS and let dispose clean up the old one. We accept the small leak.)
+            foreach (var layer in _slots)
+                layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
             StartClockDrivenPumpLocked();
         }
     }
@@ -340,6 +342,8 @@ internal sealed class CueCompositionRuntime : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var rawSlot = _mixer.AddSlot();
+        if (_master is not null)
+            rawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
         var layer = new LayerSlot(this, rawSlot, sourceFormat, placement, Interlocked.Increment(ref _nextLayerSequence));
         layer.ApplyPlacement();
         lock (_gate)
@@ -445,7 +449,14 @@ internal sealed class CueCompositionRuntime : IDisposable
         var period = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond / Math.Max(1.0, fps)));
 
         var sw = Stopwatch.StartNew();
-        if (!_mixer.TryReadNextFrame(out var frame))
+        TimeSpan? masterPts = null;
+        if (_master is not null)
+        {
+            try { masterPts = _master.ElapsedSinceStart; }
+            catch (Exception ex) { Trace.LogTrace(ex, "CueCompositionRuntime.PumpOneFrame: master read"); }
+        }
+
+        if (!_mixer.TryReadNextFrame(masterPts, out var frame))
             return;
         Interlocked.Increment(ref _framesComposited);
 

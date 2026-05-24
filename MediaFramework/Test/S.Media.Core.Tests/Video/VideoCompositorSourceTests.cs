@@ -175,6 +175,34 @@ public sealed class VideoCompositorSourceTests
     }
 
     [Fact]
+    public void MasterAligned_PicksFrameClosestToMasterPts()
+    {
+        using var compositor = new CpuVideoCompositor(Bgra32_4x4);
+        using var output = new VideoCompositorSource(Bgra32_4x4, compositor, disposeCompositorOnDispose: false);
+        var slot = output.AddSlot();
+        slot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+        slot.Output.Configure(Bgra32_4x4);
+
+        slot.Output.Submit(MakeFrame(0, 0, 255, 255, TimeSpan.Zero)); // red @ 0
+
+        Assert.True(output.TryReadNextFrame(TimeSpan.FromMilliseconds(5), out var atZero));
+        try
+        {
+            Assert.Equal(255, atZero.Planes[0].Span[2]);
+        }
+        finally { atZero.Dispose(); }
+
+        slot.Output.Submit(MakeFrame(255, 0, 0, 255, TimeSpan.FromMilliseconds(33))); // blue @ 33ms
+
+        Assert.True(output.TryReadNextFrame(TimeSpan.FromMilliseconds(34), out var atMid));
+        try
+        {
+            Assert.Equal(255, atMid.Planes[0].Span[0]);
+        }
+        finally { atMid.Dispose(); }
+    }
+
+    [Fact]
     public void VideoCompositorAuto_UsesRegisteredBackend()
     {
         TrackingCompositor? used = null;
@@ -194,7 +222,7 @@ public sealed class VideoCompositorSourceTests
         Assert.Equal(1, used.CompositeCalls);
     }
 
-    private static VideoFrame MakeFrame(byte b, byte g, byte r, byte a)
+    private static VideoFrame MakeFrame(byte b, byte g, byte r, byte a, TimeSpan pts = default)
     {
         var buf = new byte[4 * 4 * 4];
         for (var i = 0; i < 4 * 4; i++)
@@ -204,7 +232,7 @@ public sealed class VideoCompositorSourceTests
             buf[i * 4 + 2] = r;
             buf[i * 4 + 3] = a;
         }
-        return new VideoFrame(TimeSpan.Zero, Bgra32_4x4, buf, 4 * 4, release: null);
+        return new VideoFrame(pts, Bgra32_4x4, buf, 4 * 4, release: null);
     }
 
     private sealed class TrackingCompositor : IVideoCompositor

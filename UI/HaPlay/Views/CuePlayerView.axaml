@@ -184,6 +184,16 @@
                                  Maximum="120000"
                                  Value="{Binding SelectedCueNode.PreWaitMs, Mode=TwoWay}" />
                 </Grid>
+                <StackPanel Orientation="Horizontal" Spacing="8"
+                            IsVisible="{Binding HasSelectedMediaCue}">
+                  <Button Content="{Binding PreviewButtonLabel}"
+                          Command="{Binding TogglePreviewCommand}" />
+                </StackPanel>
+                <Slider Name="CueScrubberSlider"
+                        Minimum="0" Maximum="1000"
+                        Value="{Binding CueScrubberValue, Mode=TwoWay}"
+                        IsVisible="{Binding IsCueScrubberVisible}"
+                        ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}" />
                 <Grid ColumnDefinitions="Auto,*,Auto,*"
                       ColumnSpacing="8"
                       IsVisible="{Binding HasSelectedMediaCue}">
@@ -316,6 +326,12 @@
                         IsVisible="{Binding HasSelectedMediaCueWithAttachedPictureOnly}">
                   <TextBlock TextWrapping="Wrap"
                              Text="{x:Static res:Strings.VideoTabAttachedPictureHint}" />
+                </Border>
+                <Border Background="#22FF8080" BorderBrush="#44FF8080" BorderThickness="1"
+                        CornerRadius="3" Padding="6,3"
+                        IsVisible="{Binding HasVideoFrameRateMismatchWarning}">
+                  <TextBlock TextWrapping="Wrap"
+                             Text="{Binding VideoFrameRateMismatchWarning}" />
                 </Border>
                 <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="3" Padding="6,3"

@@ -10,7 +10,9 @@ internal readonly record struct CueMediaProbeResult(
     bool HasVideo,
     bool HasAudio,
     int AudioChannels,
-    bool VideoIsAttachedPicture);
+    bool VideoIsAttachedPicture,
+    int SourceFrameRateNum,
+    int SourceFrameRateDen);
 
 internal static class CueMediaProbe
 {
@@ -37,12 +39,26 @@ internal static class CueMediaProbe
                 var ms = (int)Math.Min(int.MaxValue, decoder.Duration.TotalMilliseconds);
                 int? durationMs = ms > 0 ? ms : null;
                 var channels = decoder.HasAudio ? Math.Max(0, decoder.Audio.Format.Channels) : 0;
+                var fpsNum = 0;
+                var fpsDen = 0;
+                if (decoder.HasVideo)
+                {
+                    var rate = decoder.Video.Format.FrameRate;
+                    if (rate.Numerator > 0 && rate.Denominator > 0)
+                    {
+                        fpsNum = rate.Numerator;
+                        fpsDen = rate.Denominator;
+                    }
+                }
+
                 return new CueMediaProbeResult(
                     DurationMs: durationMs,
                     HasVideo: decoder.HasVideo,
                     HasAudio: decoder.HasAudio,
                     AudioChannels: channels,
-                    VideoIsAttachedPicture: decoder.HasVideo && decoder.VideoIsAttachedPicture);
+                    VideoIsAttachedPicture: decoder.HasVideo && decoder.VideoIsAttachedPicture,
+                    SourceFrameRateNum: fpsNum,
+                    SourceFrameRateDen: fpsDen);
             }
             finally
             {
