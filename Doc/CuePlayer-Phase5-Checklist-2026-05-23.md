@@ -54,92 +54,76 @@
 > banner when more than one cue is selected ("N cues selected — '+
 > Route' adds a route to each").
 
-### 5.1.1 Probe `HasVideo` / `HasAudio` / source channel count on add
+### 5.1.1 Probe `HasVideo` / `HasAudio` / source channel count on add ✅
 
 - ✅ Extend `Playback/CueMediaProbe.cs` from a `(int? DurationMs)` return
   to a record: `CueMediaProbeResult(int? DurationMs, bool HasVideo, bool
   HasAudio, int AudioChannels, bool VideoIsAttachedPicture)`.
-- 🔲 Update all three call sites in
-  `ViewModels/CuePlayerViewModel.cs` — `AddMediaCueAsync` (single +
-  multi paths), `BrowseMediaSourceAsync`, `AddMediaFilesFromDrop` — to
-  use the new return shape and assign onto the cue VM (see 5.1.2).
-- 🔲 The probe must still catch + return null on any failure — same as
-  today.
+- ✅ All three call sites consolidated into
+  `CuePlayerViewModel.ProbeAndAssignDurationAsync`, called from
+  `AddMediaCueAsync`, `BrowseMediaSourceAsync`, and `AddMediaFilesFromDrop`.
+- ✅ `CueMediaProbe.TryProbeAsync` still catches all exceptions and
+  returns `null` — caller writes default (false / 0) values into the VM.
 
-**Verification**: drag in a stereo `.mp3` with embedded cover-art and a
-`.mp4` with 5.1 audio. Confirm probed values land on the cue's VM
-fields (inspectable via debug or new drawer hint in 5.1.4).
+### 5.1.2 Extend `CueNodeViewModel` + persist to model ✅
 
-### 5.1.2 Extend `CueNodeViewModel` + persist to model
-
-- 🔲 Add `[ObservableProperty]` fields on `CueNodeViewModel`:
+- ✅ `[ObservableProperty]` fields on `CueNodeViewModel`:
   `SourceHasVideo`, `SourceHasAudio`, `SourceAudioChannels`,
-  `SourceVideoIsAttachedPicture`.
-- 🔲 Add matching `init` fields on `MediaCueNode` in
-  `Models/CueList.cs`: `bool HasVideo`, `bool HasAudio`, `int
-  AudioChannels`, `bool VideoIsAttachedPicture`. Default values keep
-  pre-Phase-5.1 files loading cleanly (false / 0).
-- 🔲 Wire `FromModel` / `ToModel` for these fields.
-- 🔲 Tests: add to `HaPlayProjectIOTests` — round-trip an `MediaCueNode`
-  with the probed fields populated.
+  `SourceVideoIsAttachedPicture` (see CuePlayerViewModel.cs ~L266).
+- ✅ `MediaCueNode` in `Models/CueList.cs` exposes `HasVideo`,
+  `HasAudio`, `AudioChannels`, `VideoIsAttachedPicture` (~L103–L114),
+  all `init`-only with `false`/`0` defaults so pre-5.1 files load.
+- ✅ `FromModel`/`ToModel` round-trip the fields (CuePlayerViewModel
+  ~L546–L548 reading, ~L619–L621 writing).
+- ✅ Test coverage: `CuePlayerViewModelTests.MediaCue_ProbeFields_RoundTripInSnapshot`
+  asserts the round-trip end-to-end through `BuildCueListsSnapshot`.
 
-### 5.1.3 Hide the Video tab on audio-only sources
+### 5.1.3 Hide the Video tab on audio-only sources ✅
 
-- 🔲 In `Views/CuePlayerView.axaml`, change the Video tab's `IsVisible`
-  binding from `{Binding HasSelectedMediaCue}` to compute on both
-  `HasSelectedMediaCue` and `SelectedCueNode.SourceHasVideo`.
-  - Use a small multi-binding (or a new `HasSelectedMediaCueWithVideo`
-    computed property on the VM; the latter is cleaner).
-- 🔲 Add the computed property to `CuePlayerViewModel` that recomputes
-  on `SelectedCueNodeChanged` and on the selected cue's
-  `SourceHasVideo` change.
-- 🔲 Cover-art case: if `VideoIsAttachedPicture` is true, **show** the
-  Video tab but with a hint at the top: "Source is a still image
-  (album art) — placement uses the attached picture as a static
-  layer." (Cover art is a real PiP use case for "now playing" slates.)
+- ✅ XAML Video tab now binds `IsVisible="{Binding HasSelectedMediaCueWithVideo}"`.
+- ✅ `HasSelectedMediaCueWithVideo` computed on the VM, re-notifies on
+  `SelectedCueNodeChanged` + the selected cue's `SourceHasVideo` change.
+- ✅ Cover-art case: `HasSelectedMediaCueWithAttachedPictureOnly` flips
+  the Video tab banner to `VideoTabAttachedPictureHint`.
 
-### 5.1.4 Audio tab header — source channel count
+### 5.1.4 Audio tab header — source channel count ✅ (per-route ⚠ deferred)
 
-- 🔲 Add a `TextBlock` above the routes ListBox: `"Source: {Binding
-  SelectedCueNode.SourceAudioChannels} ch"`. Hide when channels = 0
-  (audio not probed / source has no audio).
-- 🔲 Per-route warning row: when a route's `SourceChannel >=
-  SourceAudioChannels`, render an inline ⚠ icon + tooltip "source has
-  N ch but this route reads ch X".
+- ✅ Audio tab now shows `"Source: {N} ch"` via `AudioTabSourceLabel`
+  / `AudioChannelCountFormat` / `AudioSourceHasNoneLabel`. Hidden when
+  the source has no audio.
+- ⏸ Per-route ⚠ when `SourceChannel >= SourceAudioChannels`: not yet
+  implemented. Deferred to Phase 5.8 (low-effort polish item — drop in
+  an inline `TextBlock` + tooltip in the audio route DataTemplate
+  driven by a converter or computed bool on `CueAudioRouteViewModel`).
 
-### 5.1.5 Group cue duration roll-up
+### 5.1.5 Group cue duration roll-up ✅
 
-- 🔲 In `CueNodeViewModel.DurationDisplay`, when `Kind == Group`:
-  - For `FireMode == FirstCueOnly`: return the first fireable child's
-    duration.
-  - For `FireMode == FireAllSimultaneously`: return `max(children
-    durations)` (treat the longest as the group's natural duration).
-  - For `FireMode == ArmedList`: return the sum of all fireable
-    children's durations (operator advances one-at-a-time, so total
-    show length is the sum).
-- 🔲 Recursive: a group inside a group rolls up correctly.
-- 🔲 Subscribe to `Children.CollectionChanged` + each child's
-  `DurationMs` `PropertyChanged` so the group's display updates live.
-- 🔲 Format: `hh:mm:ss · N items` (or `mm:ss · N items` when < 1 h)
-  so it's obviously a roll-up. Keep media cue display unchanged.
+- ✅ `BuildGroupDurationDisplay` handles all three fire modes:
+  `FireAllSimultaneously` → `max`, `FirstCueOnly` → first non-comment
+  child, `ArmedList` → sum (CuePlayerViewModel ~L382–L406).
+- ✅ Recursive via `RolledDurationMs` getter — groups roll up children's
+  rolled durations (~L426).
+- ✅ Live updates: parent subscribes to `Children.CollectionChanged`
+  and each child's `PropertyChanged` for `DurationMs`/`GroupFireMode`/
+  child collection changes.
+- ✅ Format `mm:ss · N items` (no hours bucket since `FormatDurationMs`
+  collapses to `mm:ss` for runs < 1 h and naturally extends to `hh:mm:ss`).
 
-### 5.1.6 Drawer "(N selected)" hint
+### 5.1.6 Drawer "(N selected)" hint ✅
 
-- 🔲 In `Views/CuePlayerView.axaml`, add a small banner at the top of
-  the Audio tab and the Video tab: `"(N cues selected — '+ Route' /
-  '+ Placement' will apply to all of them)"`.
-- 🔲 Bind visibility to `SelectedCueNodes.Count > 1`. Hide when single.
-- 🔲 Add a `int SelectedCueCount` computed property on the VM that
-  notifies on `UpdateSelection`.
+- ✅ Multi-select banners on Audio (`MultiSelectAudioBannerFormat`)
+  and Video (`MultiSelectVideoBannerFormat`) tabs, bound to
+  `SelectedCueCount`.
+- ✅ `IsMultiSelected` and `SelectedCueCount` computed properties; the
+  XAML uses the `StringFormat` shortcut to compose the banner text and
+  the `IsVisible` predicate flips on multi-select.
+- ✅ Re-notification on `UpdateSelection`.
 
-### 5.1 verification
+### 5.1 verification ✅
 
-- 🔲 `dotnet build` clean.
-- 🔲 `dotnet test UI/HaPlay.Tests` green.
-- 🔲 Manual: add an MP3 (no video, no cover) → no Video tab. Add MP3
-  with cover art → Video tab shows the hint. Add a video file → Video
-  tab as today. Audio tab on a 5.1 file shows "Source: 6 ch". Group
-  with 3 media cues totaling 2 min shows the rolled-up duration.
+- ✅ `dotnet build` clean.
+- ✅ `dotnet test UI/HaPlay.Tests` green (104 tests).
+- ✅ Manual: operator verified per the 2026-05-23 session log.
 
 ---
 
@@ -161,36 +145,35 @@ fields (inspectable via debug or new drawer hint in 5.1.4).
 > numbers with sub-numbering (`1`, `1.1`, `1.2`, `2`, ...) for nested
 > groups. Drag-and-drop reorder (5.2.4) deferred — see note below.
 
-### 5.2.1 Make tree cells read-only
+### 5.2.1 Make tree cells read-only ✅
 
-- 🔲 In `Views/CuePlayerView.axaml.cs.RebuildCueSource`, replace
-  `BuildCompactTextEditor` (used for Number) and `BuildTextEditor`
-  (used for Name) with `BuildReadOnlyText`.
-- 🔲 Drop the no-longer-used `BuildTextEditor` and
-  `BuildCompactTextEditor` methods from the file.
-- 🔲 The Status / Duration / Kind columns are already read-only — no
-  change.
+- ✅ `RebuildCueSource` now uses `BuildReadOnlyText` for all data
+  columns (Number, Name, Duration, Kind).
+- ✅ `BuildTextEditor` and `BuildCompactTextEditor` helpers deleted
+  from `CuePlayerView.axaml.cs` — only `BuildStatusBadge` +
+  `BuildReadOnlyText` remain.
+- ✅ Status / Duration / Kind already read-only — confirmed.
 
-### 5.2.2 F2 rename popup
+### 5.2.2 F2 rename popup ✅
 
-- 🔲 Add `KeyBindings` on the `TreeDataGrid` in the XAML: F2 →
+- ✅ `CueTreeGrid.KeyDown` (CuePlayerView.axaml.cs) routes `F2` to
   `RenameSelectedCueCommand`.
-- 🔲 New `RenameSelectedCueAsync` `RelayCommand` on `CuePlayerViewModel`:
-  - Opens a small `RenameCueDialog.axaml` (new) with two fields:
-    Number (`TextBox`) and Label (`TextBox` with `IsDefault = true` so
-    Enter commits).
-  - Esc cancels (no change). Enter / "OK" writes back to the cue VM.
-- 🔲 Status message after rename: "Renamed cue N: {old} → {new}".
+- ✅ `RenameCueDialog` + `RenameCueDialogViewModel` implement Number
+  + Label fields; Enter commits via `IsDefault`, Esc cancels.
+- ✅ Status message after rename: `RenamedCueStatusFormat` ("Renamed
+  cue N: {old} → {new}").
 
-### 5.2.3 Renumber selection dialog
+### 5.2.3 Renumber selection dialog ✅
 
-- 🔲 New `RenumberSelectionDialog.axaml` accessible from the cue list
-  toolbar (a `Renumber…` button) and from the tree's right-click menu.
-- 🔲 Inputs: "Start number" (default `1`), "Step" (default `1.0`),
-  "Apply to" (radio: All / Root level only / Selected only).
-- 🔲 Walks the tree, assigns sequential numbers `start`, `start+step`,
-  `start+2*step`, ... Nested groups recurse with sub-numbers
-  (`1.1`, `1.2`, ... under `1`).
+- ✅ `RenumberSelectionDialog` + `RenumberSelectionDialogViewModel`
+  exist; "Renumber…" toolbar button opens it.
+- ✅ Inputs: Start, Step, Scope radio (All / RootLevelOnly /
+  SelectionOnly).
+- ✅ `RenumberSubtree` / `RenumberSubtreePrefixed` / `RenumberFlat`
+  walk the tree with sub-numbering (`1`, `1.1`, `2`, …) via
+  `FormatCueNumber`.
+- ⏸ Right-click context-menu entry not wired (toolbar button only).
+  Low priority — operator can always reach it from the toolbar.
 
 ### 5.2.4 Drag-and-drop reorder — ⏸ deferred
 
@@ -217,13 +200,13 @@ Picking this up later: implement in
 `Views/CuePlayerView.axaml.cs`, gate via a new
 `AppSettings.CueTreeDragReorderEnabled` flag while the policy stabilises.
 
-### 5.2 verification
+### 5.2 verification ✅
 
-- 🔲 Build + tests clean.
-- 🔲 Manual: with two cues in the tree, swap them via drag-drop. F2 on
-  a cue opens the rename popup; Enter commits. Type non-default Number
-  + Label, press Esc — no change. Tree never shows a stale label after
-  remove+add (the recycling-binding bug).
+- ✅ Build + tests clean.
+- ✅ Manual: F2 / rename / Esc behavior + renumber verified by operator
+  in the 2026-05-23 session. Drag-and-drop reorder still deferred —
+  see 5.2.4. Recycling-binding bug is structurally prevented (every
+  cell is now read-only `BuildReadOnlyText`).
 
 ---
 
@@ -243,80 +226,64 @@ Picking this up later: implement in
 > already active. Engine raises `CueProgress` every ~150 ms; VM's
 > `OnCueProgress` updates the matching row's `PositionMs`/`DurationMs`.
 
-### 5.3.1 `ActiveCueViewModel`
+### 5.3.1 `ActiveCueViewModel` ✅
 
-- 🔲 New `ViewModels/ActiveCueViewModel.cs`:
-  - Holds a reference to the `CueNodeViewModel` and the engine's cue id.
-  - `[ObservableProperty]` for `PositionMs`, `DurationMs`, `ProgressPercent`.
-  - `Display` computed: `"01:23 / 03:45"`.
-  - `ProgressBrush` computed: green normal, amber when behind, red when
-    error.
-  - `CancelCommand` → calls back into the engine (via a host callback
-    similar to `StopPlaybackCallback`).
-- 🔲 No model changes — this is a UI VM.
+- ✅ `ViewModels/ActiveCueViewModel.cs` — holds `(CueNodeViewModel,
+  Guid CueId)` + `[ObservableProperty]` for `PositionMs`, `DurationMs`,
+  with `ProgressPercent` and `PositionDisplay` ("mm:ss / mm:ss")
+  computed.
+- ✅ `CancelCommand` forwards to the host's `CancelCueCallback`.
+- ⏸ `ProgressBrush` color states (amber/red on lag): not implemented.
+  The bar is a flat default brush — the drift surface already lives in
+  `CuePlayer.StatusMessage` via `DriftWarning`. Could be revisited in
+  5.7.4 if a stats panel lands.
 
-### 5.3.2 ActiveCues collection on `CuePlayerViewModel`
+### 5.3.2 ActiveCues collection on `CuePlayerViewModel` ✅
 
-- 🔲 New `ObservableCollection<ActiveCueViewModel> ActiveCues` on the
-  cue VM.
-- 🔲 Update the existing `OnCueStarted(Guid)` (already exists) to also
-  push an `ActiveCueViewModel` into the collection.
-- 🔲 Update `OnCueEnded(Guid)` to remove the matching entry.
-- 🔲 New `CancelActiveCue(Guid)` method on `CuePlayerViewModel` that
-  forwards to a new `Func<Guid, Task>? CancelCueCallback` host
-  callback. `MainViewModel` wires this to `engine.StopCueAsync`.
+- ✅ `ObservableCollection<ActiveCueViewModel> ActiveCues` exists.
+- ✅ `OnCueStarted` pushes; `OnCueEnded` removes.
+- ✅ `CancelCueCallback` (`Func<Guid, Task>?`) wired in `MainViewModel`
+  to `_cuePlaybackEngine.StopCueAsync`.
 
-### 5.3.3 Progress polling
+### 5.3.3 Progress polling ✅
 
-- 🔲 The engine already has a `WatchNaturalEndAsync` task per cue that
-  polls `PlayClock.CurrentPosition` every 150 ms. Extend it to also
-  raise `CueProgress(Guid, TimeSpan Position, TimeSpan Duration)`
-  through a new event.
-- 🔲 Cue VM subscribes via a new `OnCueProgress` host callback; updates
-  the matching `ActiveCueViewModel`'s position fields.
-- 🔲 Verify the 150 ms cadence is fine for a progress bar; bump to 100
-  ms if it visibly stutters.
+- ✅ Engine raises `CueProgress(CuePlaybackProgress)` from
+  `WatchNaturalEndAsync` (CuePlaybackEngine ~L498).
+- ✅ VM subscribes via `OnCueProgress`; updates matching
+  `ActiveCueViewModel`'s position fields.
+- ✅ 150 ms cadence kept — appears smooth in operator session.
 
-### 5.3.4 Upcoming cues view
+### 5.3.4 Upcoming cues view ✅
 
-- 🔲 Add a `BuildUpcomingPlan(int lookaheadSeconds)` method to
-  `CuePlayerViewModel` that returns the next N cues from
-  `EnumerateFireableCueOrder()` starting at `StandbyCueNode`, plus
-  any cues queued via the active trigger plan (currently lives in
-  `RunTriggerPlanAsync`).
-- 🔲 New `ObservableCollection<UpcomingCueViewModel> UpcomingCues` on
-  the cue VM, rebuilt whenever `StandbyCueNode` or active plan changes.
-- 🔲 Each `UpcomingCueViewModel`: cue label + trigger mode label +
-  estimated fire time (cue's own pre-wait offset + chain delay).
+- ✅ `ObservableCollection<CueNodeViewModel> UpcomingCues` rebuilt on
+  Standby / active set changes via `RebuildUpcomingCues` — uses
+  `EnumerateFireableCueOrder()` anchored to `StandbyCueNode`, skips
+  cues already in `ActiveCues`, capped at 8 lookahead.
+- ⏸ Estimated fire-time / trigger-mode label per upcoming cue: not
+  shown (rows just display number + label). Adding the trigger badge
+  is a small follow-up if operators ask.
 
-### 5.3.5 Panel XAML
+### 5.3.5 Panel XAML ✅
 
-- 🔲 New `Views/Controls/ActiveCuesPanel.axaml` — a docked control
-  with two `ItemsControl`s (Active above, Upcoming below) bound to
-  the collections.
-- 🔲 In `Views/CuePlayerView.axaml`, dock the panel to the right of
-  the cue tree with width = 280 px. Wrap the existing cue tree +
-  drawer DockPanel + panel in a `Grid` with two star columns (3 *
-  cuetree / drawer + 1 * panel? — operator-tunable; start with
-  `*,280`).
-- 🔲 Add a header toggle (▶/◀ chevron) that collapses the panel to a
-  thin strip when the operator doesn't need it. Persist the collapsed
-  state in `AppSettings`.
+- ✅ Inlined into `CuePlayerView.axaml` as a right-side `Grid` column
+  with `GridSplitter` (resizable). Two stacked `ItemsControl`s for
+  Active / Upcoming.
+- ⏸ Collapse-to-strip chevron + `AppSettings` persistence: not done.
+  Operator can drag the splitter to nearly-zero width as a workaround.
+  Folding into 5.8 polish.
 
-### 5.3.6 Panel-level actions
+### 5.3.6 Panel-level actions ✅
 
-- 🔲 "Stop all" button at the top of the Active section — calls
-  `CuePlayer.StopCommand` (same as the toolbar's Stop).
-- 🔲 Per-row `✕` button — `CancelActiveCue(cueId)`.
+- ✅ "Stop all" button at the panel header → existing Stop transport.
+- ✅ Per-row `✕` → `ActiveCueViewModel.CancelCommand` →
+  `CancelCueCallback` → engine `StopCueAsync`.
 
-### 5.3 verification
+### 5.3 verification ✅
 
-- 🔲 Build + tests clean.
-- 🔲 Manual: fire a group of 3 cues with `FireAllSimultaneously`.
-  Active panel shows 3 rows with live progress bars. Click `✕` on one
-  → that one stops, the other two keep playing. Set up an
-  `AutoFollow` chain of 3 cues → Upcoming section shows the next two
-  with estimated delays.
+- ✅ Build + tests clean (104 tests).
+- ✅ Manual: operator verified per the 2026-05-23 session log
+  (simultaneous group of cues showed live progress; cancel-one-only
+  worked).
 
 ---
 
@@ -342,71 +309,46 @@ Picking this up later: implement in
 > 'Program' drift: N frames behind master (M ms)"*. Stats record now
 > carries `FramesBehindMaster` + `ClockMastered` for future health UI.
 
-### 5.4.1 `CueCompositionRuntime.SetClockMaster`
+### 5.4.1 `CueCompositionRuntime.SetClockMaster` ✅
 
-- 🔲 Add public method `void SetClockMaster(IPlaybackClock master)` on
-  `CueCompositionRuntime`. Stores the master; safe to call multiple
-  times (only takes the *first* non-null — multiple cues into the
-  same composition shouldn't fight for the master).
-- 🔲 Field: `IPlaybackClock? _master` initially null.
+- ✅ Public `SetClockMaster(IPlaybackClock master)` (~L224). First
+  non-null wins; subsequent calls are no-ops.
+- ✅ `_master` / `_slaveClock` fields.
 
-### 5.4.2 Pump loop respects the master
+### 5.4.2 Pump loop respects the master ✅
 
-- 🔲 In `PumpLoop`, replace the Stopwatch-period loop with a hybrid:
-  - If `_master is not null`, await `_master.WaitForVideoTickAsync(ct,
-    canvasPeriod)`. (If the framework's existing tick API has a
-    different name, find it in `S.Media.Core.Clock` — there are
-    helpers like `MediaClock.AcquireRenderHandle` for this pattern.)
-  - Else fall back to the existing Stopwatch path (audio-less
-    composition).
-- 🔲 The first call to `_master` should not block forever if the master
-  isn't started yet — guard with a 100 ms timeout and emit one log
-  per second while waiting.
+- ✅ Adopted a slaved `MediaClock` (period = canvas period). On
+  `SetClockMaster`, subscribes to `VideoTick` and drains the mixer per
+  tick instead of Stopwatch-driven `PumpOneFrame`. Stopwatch path
+  remains as the fallback for audio-less compositions.
+- ✅ Pre-master start is handled — the Stopwatch loop runs until
+  `SetClockMaster` flips the path; no infinite-wait risk.
 
-### 5.4.3 Engine wires the master
+### 5.4.3 Engine wires the master ✅
 
-- 🔲 In `CuePlaybackEngine.WireVideoPlacements`, right after
-  `GetOrCreateComposition`:
+- ✅ `CuePlaybackEngine.WireVideoPlacements` calls
+  `runtime.SetClockMaster(entry.VideoClockMaster)` after
+  `GetOrCreateComposition` (~L378).
 
-  ```csharp
-  if (entry.VideoClockMaster is { } master)
-      runtime.SetClockMaster(master);
-  ```
+### 5.4.4 Drift counter + warning ✅
 
-- 🔲 `WireAudioRoutes` already resolves `entry.VideoClockMaster`; the
-  composition runtime now picks it up the moment the cue's wire-up
-  completes.
+- ✅ `_framesBehindMaster` tracked alongside `_pumpOverruns`.
+- ✅ `CheckMasterDrift` compares wall-elapsed vs `master.ElapsedSinceStart`
+  and increments the counter when behind by ≥2 canvas periods.
+- ✅ Sustained drift fires `DriftWarning` (max once per ~30 frames).
+- ✅ `CuePlaybackEngine.GetOrCreateComposition` subscribes and writes
+  a status message: *"Composition 'X' drift: N frames behind master
+  (M ms)"*.
 
-### 5.4.4 Drift counter + warning
+### 5.4.5 Pump-pressure surfacing groundwork ✅
 
-- 🔲 Add `_framesBehindMaster` field on `CueCompositionRuntime`
-  alongside the existing `_pumpOverruns` counter.
-- 🔲 Inside `PumpLoop`, after `TryReadNextFrame`, compare each slot's
-  last-Submit `PresentationTime` against `_master.CurrentPosition`.
-  Increment `_framesBehindMaster` when any slot is more than two
-  canvas periods behind.
-- 🔲 When the counter rises by >30 over 5 seconds, raise a new event
-  `event EventHandler<CueCompositionRuntimeWarning>? Warning` carrying
-  the composition id, the laggy cue's id (slot's owner), and the lag
-  magnitude.
-- 🔲 `CuePlaybackEngine` subscribes and translates into a status message
-  surfaced on the cue VM ("Composition 'Program' is 280 ms behind cue
-  'Background' — check pump pressure").
+- ✅ `CueCompositionRuntimeStats` carries `FramesBehindMaster` and
+  `ClockMastered` (~L658). Available for future stats panels (5.7.4).
 
-### 5.4.5 Pump-pressure surfacing groundwork
+### 5.4 verification ✅
 
-- 🔲 No UI yet (that lands in 5.7), but expose
-  `CueCompositionRuntimeStats.FramesBehindMaster` on the stats struct
-  so future telemetry / health badges can read it.
-
-### 5.4 verification
-
-- 🔲 Build + tests clean.
-- 🔲 Manual: fire a 5-minute video cue with audio routed externally.
-  Confirm video timestamps stay aligned to audio (no PTS-vs-wall drift)
-  by stopping at the end — the natural-end event should fire within
-  ±30 ms of the audio actually ending. Compare with a Stopwatch-pump
-  baseline build to verify the improvement.
+- ✅ Build + tests clean.
+- ✅ Manual: operator verified per the 2026-05-23 session log.
 
 ---
 
@@ -481,47 +423,40 @@ Picking this up later: implement in
 > a `TextBox` / `NumericUpDown` / `ComboBox` has focus so the
 > operator can type freely in drawer fields.
 
-### 5.6.1 Transport bindings
+### 5.6.1 Transport bindings ✅ (Ctrl+P deferred with 5.5)
 
-- 🔲 In `Views/CuePlayerView.axaml`, attach `KeyBindings` at the
-  `UserControl` level:
+- ✅ `OnUserControlKeyDown` handles `Space` → Go, `Esc` → Panic,
+  `Enter` → Standby, `Backspace` → Back, with `FocusManager`
+  short-circuit so `TextBox` / `NumericUpDown` / `ComboBox` focus
+  passes the key through to the editor.
+- ⏸ `Ctrl+P` (preview): not bound — Phase 5.5 (preview runtime) is
+  deferred, so there's nothing for the key to trigger yet.
 
-  | Key | Command |
-  |---|---|
-  | `Space` | `GoCommand` |
-  | `Esc` | `PanicCommand` |
-  | `Enter` | `StandbySelectedCommand` |
-  | `Backspace` | `BackCommand` |
-  | `Ctrl+P` | (5.5.1) Toggle preview on selected |
+### 5.6.2 Tree navigation + reorder ✅ (Home/End deferred)
 
-- 🔲 Ensure no key conflicts with text input — when a `TextBox` has
-  focus (e.g. inside the drawer), keys should NOT trigger transport.
-  Use `KeyDown` handlers that check `FocusManager.GetFocusedElement()`.
+- ✅ `↑` / `↓` navigation — TreeDataGrid built-in still works after
+  the read-only conversion.
+- ✅ `Ctrl+↑` / `Ctrl+↓` → `MoveSelectedCueUp` / `MoveSelectedCueDown`
+  (delta swap within parent).
+- ⏸ `Home` / `End` → first / last cue: not bound. Operator can
+  scroll. Low priority polish.
 
-### 5.6.2 Tree navigation + reorder
+### 5.6.3 Edit commands ✅ (Del-confirm deferred)
 
-- 🔲 `↑` / `↓` → move selection (built-in to TreeDataGrid; verify it
-  works after Phase 5.2's read-only conversion).
-- 🔲 `Ctrl+↑` / `Ctrl+↓` → move the selected cue up / down within its
-  parent. New `MoveSelectedCueUpCommand` / `…DownCommand`.
-- 🔲 `Home` / `End` → first / last cue.
+- ✅ `F2` → rename popup.
+- ✅ `Del` → `RemoveNodeCommand` direct.
+- ⏸ Confirm-if-wired prompt on Del: not implemented — current behavior
+  deletes without confirmation. Would land naturally with the dialog
+  work in 5.8.
+- ✅ `Ctrl+D` → `DuplicateSelectedCueCommand` deep-clones via
+  `CloneCueNodeWithNewIds` (fresh Guids cascading through nested
+  groups; routes / placements preserved).
 
-### 5.6.3 Edit commands
+### 5.6 verification ✅
 
-- 🔲 `F2` → rename popup (5.2.2 hook).
-- 🔲 `Del` → `RemoveNodeCommand`. Confirm if the cue has wired routes
-  or placements: "Cue X has 3 audio routes and 1 video placement.
-  Delete anyway?"
-- 🔲 `Ctrl+D` → `DuplicateSelectedCueCommand`. Deep-copies the
-  `CueNodeViewModel` (new GUID, same fields, same routes/placements),
-  inserts immediately after the original.
-
-### 5.6 verification
-
-- 🔲 Build + tests clean.
-- 🔲 Manual: navigate the tree with arrow keys, press Space → Go fires.
-  Click into a drawer TextBox, type space → text contains a space, Go
-  does NOT fire. Ctrl+D duplicates; Del with routes shows the confirm.
+- ✅ Build + tests clean.
+- ✅ Manual: operator verified per the 2026-05-23 session log
+  (transport keys ignore TextBox focus; Ctrl+D / Ctrl+↑↓ behave).
 
 ---
 
@@ -531,37 +466,58 @@ Picking this up later: implement in
 >
 > Visibility into what's wired and what's struggling.
 
-### 5.7.1 Output health dots
+### 5.7.1 Output health dots ✅
 
-- 🔲 In the "Audio outputs" + "Video outputs" expanders, render a
+- ✅ In the "Audio outputs" + "Video outputs" expanders, render a
   small status dot at the start of each row.
-- 🔲 Source the dot color from the underlying `OutputLineViewModel`
+- ✅ Source the dot color from the underlying `OutputLineViewModel`
   state — green (running), amber (configured but not started), red
   (error), gray (definition missing or removed).
-- 🔲 The same dot appears next to each option in the route's "Output"
+  - Implemented via `OutputLineRegistry.Resolve(OutputLineId)` setting
+    `LineRef` on each `CueVideoOutputBindingViewModel` /
+    `CueAudioRouteViewModel`. The XAML row binds
+    `Fill="{Binding LineRef.HealthColor, FallbackValue=#666666}"` with
+    the existing `HealthColor` mapping from `OutputLineViewModel`.
+    `CuePlayerViewModel.RefreshAvailableOutputBuckets` republishes the
+    registry and walks all loaded cue lists to re-resolve refs whenever
+    the available outputs change.
+- ✅ The same dot appears next to each option in the route's "Output"
   ComboBox so the operator can see at-a-glance which devices are live
-  when picking a route.
+  when picking a route. (Replaced `DisplayMemberBinding` with an
+  `ItemTemplate` rendering an `Ellipse` + name on both audio + video
+  pickers.)
 
-### 5.7.2 Pre-roll warming badge on cue rows
+### 5.7.2 Pre-roll warming badge on cue rows ✅
 
-- 🔲 New `bool IsPreRollWarm` flag on `CueNodeViewModel`, updated by
-  `CuePlayerViewModel` reading from the engine's pre-roll cache
-  (`CuePreRollCache`).
-- 🔲 In `BuildStatusBadge` (the existing badge column), draw a small
-  outline + dot when the cue is pre-rolled but idle (e.g. light blue
-  outline). Keep current/standby coloring.
-- 🔲 Wire the engine to notify the VM on pre-roll cache changes — add
-  a new `event EventHandler? PreRollCacheChanged` on the engine, fire
-  it from `CuePreRollCache` hooks.
+- ✅ New `bool IsPreRollWarm` flag on `CueNodeViewModel`, updated by
+  `CuePlayerViewModel.OnPreRollCacheChanged(IReadOnlyCollection<Guid>)`
+  which walks every node and flips the flag to match the warm set.
+- ✅ In `BuildStatusBadge` (the existing badge column), draw a small
+  light-blue outline (`Color.FromArgb(220, 80, 170, 255)`,
+  `StrokeThickness = 2`) when the cue is pre-rolled but idle. Current /
+  Standby keep their solid color and skip the warming hint.
+- ✅ Wire the cache to notify the host on membership changes —
+  `CuePreRollCache.EntriesChanged` fires after Store / TryTake /
+  InvalidateAll / EvictExcept. `MediaPlayerViewModel.CuePreRollChanged`
+  re-exposes the event; `MainViewModel.CreatePlayer` forwards each
+  player's snapshot into `CuePlayer.OnPreRollCacheChanged`.
 
-### 5.7.3 Pump-pressure surfacing
+### 5.7.3 Pump-pressure surfacing ✅ (status message only)
 
-- 🔲 In `CueCompositionRuntime`, subscribe to
+- ✅ In `CueCompositionRuntime`, subscribe to
   `VideoOutputPump.PumpPressure` for each NDI-wrapped pump.
-- 🔲 Track per-output `LastPressureTicks` + `DroppedFrames`.
-- 🔲 Surface to the operator via a small badge on the affected Video
-  Outputs expander row + a status message: "NDI output 'Camera 1'
-  dropped 12 frames in the last 5 seconds — receiver may be slow."
+- ✅ Track per-pump `lastReportedDrops` + `nextReportTicks` inside the
+  subscriber closure to throttle to one report per ~5 s per output.
+- ✅ Surface to the operator via a status message on the Cue Player
+  ("NDI output 'Camera 1' dropped 12 frames in the last 5 s (total 47)
+  — receiver may be slow."). The badge on the Video Outputs expander
+  row is deferred — the row dot already shows Error/Warning health from
+  the underlying `OutputLineViewModel` when the line itself is in
+  trouble; the pump-pressure event is independent of line health and
+  for now manifests only as the status message.
+  - Plumbing: `CueCompositionRuntime.PumpPressureWarning` →
+    `CuePlaybackEngine.GetOrCreateComposition` subscribes and pushes
+    `Strings.NdiPumpPressureStatusFormat` into `CuePlayer.StatusMessage`.
 
 ### 5.7.4 Composition stats panel (optional)
 
@@ -570,14 +526,20 @@ Picking this up later: implement in
   (frames composited, submitted, overruns, slot overflow, last/max pump
   frame time, frames behind master). Useful for debugging.
 
-### 5.7 verification
+### 5.7 verification ✅
 
-- 🔲 Build + tests clean.
-- 🔲 Manual: stop the local video preview in OutputManagement → its
-  dot in the Cue Player's "Video outputs" expander turns gray, and
-  any route picker dropdown shows it grayed. Fire a video cue at a
-  composition that has a slow NDI receiver → pressure badge lights up
-  amber within 5 seconds.
+- ✅ Build + tests clean — 104 tests passing (was 101; added 3:
+  `SetAvailableOutputs_ResolvesLineRefOnAudioRoutes`,
+  `OnOutputLineIdChanged_RefreshesLineRefFromRegistry`,
+  `OnPreRollCacheChanged_FlipsIsPreRollWarmFlag`).
+- ⏸ Manual verification: pending operator confirmation. Expected:
+  - stop a local video preview in OutputManagement → its dot in the
+    "Video outputs" expander row + all route picker dropdowns turn
+    gray/red,
+  - bump a cue into the warm pre-roll window → its status badge gets
+    a light-blue outline while idle,
+  - fire a video cue at a slow NDI receiver → status message reads
+    "NDI output 'X' dropped N frames in the last 5 s …".
 
 ---
 

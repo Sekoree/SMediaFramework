@@ -151,6 +151,10 @@ public partial class CuePlayerView : UserControl
 
         _source = new HierarchicalTreeDataGridSource<CueNodeViewModel>(vm.VisibleNodes);
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
+            string.Empty,
+            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildColorStrip(row), supportsRecycling: true),
+            width: new GridLength(6)));
+        _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
             Strings.CueTreeStatusColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildStatusBadge(row), supportsRecycling: true),
             width: new GridLength(28)));
@@ -210,23 +214,35 @@ public partial class CuePlayerView : UserControl
         CueNodeViewModel? current = null;
         PropertyChangedEventHandler handler = (_, args) =>
         {
-            if (args.PropertyName == nameof(CueNodeViewModel.RowStatus))
+            if (args.PropertyName is nameof(CueNodeViewModel.RowStatus) or nameof(CueNodeViewModel.IsPreRollWarm))
                 Sync();
         };
 
         void Sync()
         {
             var status = current?.RowStatus ?? CueRowStatus.Idle;
+            var warm = current?.IsPreRollWarm ?? false;
             dot.Fill = status switch
             {
                 CueRowStatus.Current => Avalonia.Media.Brushes.OrangeRed,
                 CueRowStatus.Standby => Avalonia.Media.Brushes.Goldenrod,
                 _ => Avalonia.Media.Brushes.Transparent,
             };
-            dot.Stroke = status == CueRowStatus.Idle
-                ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(96, 255, 255, 255))
-                : null;
-            dot.StrokeThickness = status == CueRowStatus.Idle ? 1 : 0;
+            // Idle + warm: light-blue outline so the operator sees which upcoming cues are
+            // ready-to-fire. Current/Standby keep their solid color; the warming hint would be
+            // redundant while the row is already lit.
+            if (status == CueRowStatus.Idle)
+            {
+                dot.Stroke = warm
+                    ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(220, 80, 170, 255))
+                    : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(96, 255, 255, 255));
+                dot.StrokeThickness = warm ? 2 : 1;
+            }
+            else
+            {
+                dot.Stroke = null;
+                dot.StrokeThickness = 0;
+            }
         }
 
         void Rebind(CueNodeViewModel? next)
@@ -244,6 +260,53 @@ public partial class CuePlayerView : UserControl
         // current DataContext is right now (may be null until the cell is bound).
         Rebind(dot.DataContext as CueNodeViewModel);
         return dot;
+    }
+
+    /// <summary>Thin vertical strip showing the cue's color tag (Phase 5.8.1). Rebinds to the
+    /// row's <c>ColorTagBrush</c> when the cell is recycled. Hidden (transparent) when no tag
+    /// is set.</summary>
+    private static Control BuildColorStrip(CueNodeViewModel _)
+    {
+        var rect = new Avalonia.Controls.Shapes.Rectangle
+        {
+            Width = 4,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Stretch,
+        };
+
+        CueNodeViewModel? current = null;
+        PropertyChangedEventHandler handler = (_, args) =>
+        {
+            if (args.PropertyName is nameof(CueNodeViewModel.ColorTagBrush) or nameof(CueNodeViewModel.ColorTag))
+                Sync();
+        };
+
+        void Sync()
+        {
+            var hex = current?.ColorTagBrush ?? "Transparent";
+            try
+            {
+                rect.Fill = Avalonia.Media.Brush.Parse(hex);
+            }
+            catch
+            {
+                rect.Fill = Avalonia.Media.Brushes.Transparent;
+            }
+        }
+
+        void Rebind(CueNodeViewModel? next)
+        {
+            if (ReferenceEquals(current, next)) return;
+            if (current is not null) current.PropertyChanged -= handler;
+            current = next;
+            if (current is not null) current.PropertyChanged += handler;
+            Sync();
+        }
+
+        rect.DataContextChanged += (_, _) => Rebind(rect.DataContext as CueNodeViewModel);
+        rect.DetachedFromVisualTree += (_, _) => Rebind(null);
+        Rebind(rect.DataContext as CueNodeViewModel);
+        return rect;
     }
 
     // NOTE: do NOT set DataContext on these controls. TreeDataGrid recycles cell controls when

@@ -538,6 +538,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>Serializes load/unload/stop/pause/play/seek and loop-timer Router use so Dispose cannot overlap transport.</summary>
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
     private readonly CuePreRollCache _cuePreRoll = new();
+
+    /// <summary>Forwarded from the pre-roll cache so the Cue Player can light warming badges
+    /// on the affected rows (Phase 5.7.2). Snapshot of currently-warm cue ids.</summary>
+    public event Action<IReadOnlyCollection<Guid>>? CuePreRollChanged
+    {
+        add => _cuePreRoll.EntriesChanged += value;
+        remove => _cuePreRoll.EntriesChanged -= value;
+    }
+
+    /// <summary>Snapshot of currently-warm cue ids — used for initial UI sync.</summary>
+    public IReadOnlyCollection<Guid> CuePreRollSnapshot() => _cuePreRoll.SnapshotWarmCueIds();
     private readonly NdiInputPreConnectCache _ndiPreConnect = new();
     private readonly PortAudioInputPreConnectCache _paPreConnect = new();
     private float _cueEnvelope = 1f;

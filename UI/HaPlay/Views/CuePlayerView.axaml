@@ -15,7 +15,7 @@
       <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
     </Border>
 
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,220,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,220,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
       <TextBlock Grid.Column="0" Text="{x:Static res:Strings.CueListLabel}" VerticalAlignment="Center" />
       <ComboBox Grid.Column="1"
                 ItemsSource="{Binding CueLists}"
@@ -29,16 +29,24 @@
       </ComboBox>
       <Button Grid.Column="2" Content="{x:Static res:Strings.AddListButton}" Command="{Binding AddCueListCommand}" />
       <Button Grid.Column="3" Content="{x:Static res:Strings.RemoveListButton}" Command="{Binding RemoveCueListCommand}" />
-      <Button Grid.Column="4" Content="{x:Static res:Strings.LoadButton}" Command="{Binding LoadCueListCommand}" />
-      <Button Grid.Column="5" Content="{x:Static res:Strings.SaveButton}" Command="{Binding SaveCueListCommand}" />
-      <Button Grid.Column="6" Content="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveCueListAsCommand}" />
-      <TextBlock Grid.Column="7" Text="{x:Static res:Strings.PreRollNLabel}" VerticalAlignment="Center" ToolTip.Tip="{x:Static res:Strings.PreRollTooltip}" />
-      <NumericUpDown Grid.Column="8"
-                       Minimum="0"
-                       Maximum="16"
-                       Width="72"
-                       IsEnabled="{Binding SelectedCueList, Converter={x:Static ObjectConverters.IsNotNull}}"
-                       Value="{Binding SelectedCueList.PreRollCount, Mode=TwoWay}" />
+      <Menu Grid.Column="4" VerticalAlignment="Center" Padding="0">
+        <MenuItem Header="{x:Static res:Strings.FilesMenuLabel}">
+          <MenuItem Header="{x:Static res:Strings.LoadButton}" Command="{Binding LoadCueListCommand}" />
+          <MenuItem Header="{x:Static res:Strings.SaveButton}" Command="{Binding SaveCueListCommand}" />
+          <MenuItem Header="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveCueListAsCommand}" />
+        </MenuItem>
+      </Menu>
+      <Button Grid.Column="5"
+              Content="{x:Static res:Strings.CueListSettingsButton}"
+              ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
+              Command="{Binding OpenCueListSettingsCommand}" />
+      <TextBlock Grid.Column="6"
+                 Text="{Binding SelectedCueList.Path}"
+                 VerticalAlignment="Center"
+                 Foreground="#888888"
+                 TextTrimming="CharacterEllipsis"
+                 ToolTip.Tip="{Binding SelectedCueList.Path}"
+                 IsVisible="{Binding SelectedCueList.Path, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
     </Grid>
 
     <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8" ItemSpacing="6" LineSpacing="6">
@@ -119,12 +127,25 @@
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:CueVideoOutputBindingViewModel">
                 <StackPanel Orientation="Horizontal" Spacing="8">
+                  <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                           Fill="{Binding LineRef.HealthColor, FallbackValue=#666666}"
+                           ToolTip.Tip="{Binding LineRef.HealthToolTip}" />
                   <TextBlock Text="{x:Static res:Strings.RouteOutputLabel}" VerticalAlignment="Center" />
                   <ComboBox SelectedValue="{Binding OutputLineId, Mode=TwoWay}"
                             SelectedValueBinding="{Binding Definition.Id}"
-                            DisplayMemberBinding="{Binding Definition.DisplayName}"
                             ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).AvailableVideoOutputs}"
-                            MinWidth="220" />
+                            MinWidth="220">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate DataType="vm:OutputLineViewModel">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                          <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                   Fill="{Binding HealthColor}"
+                                   ToolTip.Tip="{Binding HealthToolTip}" />
+                          <TextBlock Text="{Binding Definition.DisplayName}" VerticalAlignment="Center" />
+                        </StackPanel>
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
                   <TextBlock Text="{x:Static res:Strings.CompositionLabel}" VerticalAlignment="Center" />
                   <ComboBox SelectedValue="{Binding CompositionId, Mode=TwoWay}"
                             SelectedValueBinding="{Binding Id}"
@@ -198,6 +219,25 @@
                          MinHeight="60"
                          TextWrapping="Wrap"
                          Text="{Binding SelectedCueNode.Notes, Mode=TwoWay}" />
+                <TextBlock Text="{x:Static res:Strings.ColorTagLabel}" Margin="0,6,0,0" />
+                <ItemsControl ItemsSource="{Binding ColorTagSwatches}">
+                  <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                      <StackPanel Orientation="Horizontal" Spacing="4" />
+                    </ItemsPanelTemplate>
+                  </ItemsControl.ItemsPanel>
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="vm:CueColorSwatchViewModel">
+                      <Button Command="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).SetSelectedCueColorTagCommand}"
+                              CommandParameter="{Binding Index}"
+                              Width="22" Height="22" Padding="0" BorderThickness="1"
+                              BorderBrush="{Binding BorderBrush}"
+                              ToolTip.Tip="{Binding Name}">
+                        <Rectangle Width="14" Height="14" Fill="{Binding FillBrush}" />
+                      </Button>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
               </StackPanel>
             </ScrollViewer>
           </TabItem>
@@ -233,14 +273,27 @@
                   <ListBox.ItemTemplate>
                     <DataTemplate DataType="vm:CueAudioRouteViewModel">
                       <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                 Fill="{Binding LineRef.HealthColor, FallbackValue=#666666}"
+                                 ToolTip.Tip="{Binding LineRef.HealthToolTip}" />
                         <TextBlock Text="{x:Static res:Strings.SrcChLabel}" VerticalAlignment="Center" />
                         <NumericUpDown Value="{Binding SourceChannel, Mode=TwoWay}" Minimum="0" Maximum="63" />
                         <TextBlock Text="{x:Static res:Strings.RouteOutputLabel}" VerticalAlignment="Center" />
                         <ComboBox SelectedValue="{Binding OutputLineId, Mode=TwoWay}"
                                   SelectedValueBinding="{Binding Definition.Id}"
-                                  DisplayMemberBinding="{Binding Definition.DisplayName}"
                                   ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).AvailableAudioOutputs}"
-                                  MinWidth="200" />
+                                  MinWidth="200">
+                          <ComboBox.ItemTemplate>
+                            <DataTemplate DataType="vm:OutputLineViewModel">
+                              <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Ellipse Width="9" Height="9" VerticalAlignment="Center"
+                                         Fill="{Binding HealthColor}"
+                                         ToolTip.Tip="{Binding HealthToolTip}" />
+                                <TextBlock Text="{Binding Definition.DisplayName}" VerticalAlignment="Center" />
+                              </StackPanel>
+                            </DataTemplate>
+                          </ComboBox.ItemTemplate>
+                        </ComboBox>
                         <TextBlock Text="{x:Static res:Strings.OutChLabel}" VerticalAlignment="Center" />
                         <NumericUpDown Value="{Binding OutputChannel, Mode=TwoWay}" Minimum="1" Maximum="64" />
                         <TextBlock Text="{x:Static res:Strings.GainDbLabel}" VerticalAlignment="Center" />

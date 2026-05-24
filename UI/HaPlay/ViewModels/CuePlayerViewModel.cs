@@ -120,6 +120,49 @@ public sealed partial class CueCompositionViewModel : ObservableObject
     };
 }
 
+/// <summary>Process-wide registry used by route/binding VMs to resolve their <c>OutputLineId</c>
+/// into a live <see cref="OutputLineViewModel"/> for health-dot binding. <see cref="CuePlayerViewModel"/>
+/// keeps it populated whenever the shared output collection changes — this avoids threading a
+/// resolver delegate through every CueAudioRouteViewModel / CueVideoOutputBindingViewModel
+/// instance loaded from disk. Single-process MVVM only; not thread-safe.</summary>
+internal static class OutputLineRegistry
+{
+    private static IReadOnlyDictionary<Guid, OutputLineViewModel> _byId =
+        new Dictionary<Guid, OutputLineViewModel>();
+
+    public static event EventHandler? Changed;
+
+    public static OutputLineViewModel? Resolve(Guid lineId) =>
+        _byId.TryGetValue(lineId, out var line) ? line : null;
+
+    public static void Replace(IEnumerable<OutputLineViewModel> lines)
+    {
+        _byId = lines
+            .GroupBy(l => l.Definition.Id)
+            .ToDictionary(g => g.Key, g => g.First());
+        Changed?.Invoke(null, EventArgs.Empty);
+    }
+}
+
+/// <summary>One swatch in the drawer's color-tag picker (Phase 5.8.1). Plain DTO — the
+/// button command lives on <see cref="CuePlayerViewModel"/>; this VM just supplies the
+/// fill/border colors and the tag index.</summary>
+public sealed class CueColorSwatchViewModel
+{
+    public CueColorSwatchViewModel(int index)
+    {
+        Index = index;
+        FillBrush = CueColorTagPalette.BrushHex(index);
+        Name = CueColorTagPalette.Name(index);
+        BorderBrush = index == 0 ? "#888888" : "#22000000";
+    }
+
+    public int Index { get; }
+    public string FillBrush { get; }
+    public string Name { get; }
+    public string BorderBrush { get; }
+}
+
 public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
 {
     [ObservableProperty]
@@ -130,6 +173,13 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
 
     [ObservableProperty]
     private Guid _compositionId;
+
+    /// <summary>Resolved reference to the line so the row can show its health dot/tooltip.
+    /// Kept in sync by <see cref="CuePlayerViewModel"/>.</summary>
+    [ObservableProperty]
+    private OutputLineViewModel? _lineRef;
+
+    partial void OnOutputLineIdChanged(Guid value) => LineRef = OutputLineRegistry.Resolve(value);
 
     public CueVideoOutputBinding ToModel() => new()
     {
@@ -162,6 +212,13 @@ public sealed partial class CueAudioRouteViewModel : ObservableObject
 
     [ObservableProperty]
     private bool _muted;
+
+    /// <summary>Resolved reference to the line so the row can show its health dot/tooltip.
+    /// Kept in sync by <see cref="CuePlayerViewModel"/>.</summary>
+    [ObservableProperty]
+    private OutputLineViewModel? _lineRef;
+
+    partial void OnOutputLineIdChanged(Guid value) => LineRef = OutputLineRegistry.Resolve(value);
 
     public CueAudioRoute ToModel() => new()
     {
@@ -276,6 +333,25 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     [ObservableProperty]
     private CueRowStatus _rowStatus = CueRowStatus.Idle;
+
+    /// <summary>True while this cue's media is held warm in the pre-roll cache (Phase 5.7.2).
+    /// The status badge column draws a light outline when this is set and the row is idle.</summary>
+    [ObservableProperty]
+    private bool _isPreRollWarm;
+
+    /// <summary>Color tag index 0..7 (Phase 5.8.1). 0 = no tag. The tree's first column shows
+    /// a thin vertical strip filled with the palette color; the drawer's General tab lets the
+    /// operator pick a swatch.</summary>
+    [ObservableProperty]
+    private int _colorTag;
+
+    public string ColorTagBrush => CueColorTagPalette.BrushHex(ColorTag);
+
+    partial void OnColorTagChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(ColorTagBrush));
+    }
 
     public ObservableCollection<CueAudioRouteViewModel> AudioRoutes { get; } = new();
 
@@ -479,6 +555,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     TriggerMode = g.TriggerMode,
                     PreWaitMs = g.PreWaitMs,
                     Notes = g.Notes,
+                    ColorTag = g.ColorTag,
                     Extra = g.FireMode.ToString(),
                 };
                 foreach (var c in g.Children)
@@ -495,6 +572,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     TriggerMode = m.TriggerMode,
                     PreWaitMs = m.PreWaitMs,
                     Notes = m.Notes,
+                    ColorTag = m.ColorTag,
                     MediaSourceItem = m.Source,
                     SourceOrAction = m.Source?.DisplayName ?? string.Empty,
                     FadeInMs = m.FadeInMs,
@@ -523,6 +601,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     TriggerMode = a.TriggerMode,
                     PreWaitMs = a.PreWaitMs,
                     Notes = a.Notes,
+                    ColorTag = a.ColorTag,
                     SourceOrAction = a.AddressOrMessage,
                     EndpointIdText = a.EndpointId?.ToString() ?? string.Empty,
                     Extra = a.ActionKind.ToString(),
@@ -536,6 +615,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     TriggerMode = c.TriggerMode,
                     PreWaitMs = c.PreWaitMs,
                     Notes = c.Notes,
+                    ColorTag = c.ColorTag,
                     SourceOrAction = c.Text,
                 };
             default:
@@ -555,6 +635,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
                 Notes = Notes,
+                ColorTag = ColorTag,
                 FireMode = Enum.TryParse<CueGroupFireMode>(Extra, out var fm) ? fm : CueGroupFireMode.FirstCueOnly,
                 Children = Children.Select(c => c.ToModel()).ToList(),
             },
@@ -566,6 +647,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
                 Notes = Notes,
+                ColorTag = ColorTag,
                 Source = MediaSourceItem
                            ?? (string.IsNullOrWhiteSpace(SourceOrAction)
                                ? null
@@ -591,6 +673,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
                 Notes = Notes,
+                ColorTag = ColorTag,
                 AddressOrMessage = SourceOrAction,
                 EndpointId = Guid.TryParse(EndpointIdText, out var endpointId) ? endpointId : null,
                 ActionKind = Enum.TryParse<CueActionKind>(Extra, out var ak) ? ak : CueActionKind.OscOut,
@@ -603,6 +686,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 TriggerMode = TriggerMode,
                 PreWaitMs = PreWaitMs,
                 Notes = Notes,
+                ColorTag = ColorTag,
                 Text = SourceOrAction,
             },
         };
@@ -632,6 +716,8 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     {
         Name = Name,
         PreRollCount = PreRollCount,
+        DefaultTriggerMode = DefaultTriggerMode,
+        AutoRenumberOnInsert = AutoRenumberOnInsert,
         Compositions = Compositions.Select(c => c.ToModel()).ToList(),
         VideoOutputs = VideoOutputs.Select(o => o.ToModel()).ToList(),
         Nodes = Nodes.Select(n => n.ToModel()).ToList(),
@@ -640,12 +726,20 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     [ObservableProperty]
     private int _preRollCount = 4;
 
+    [ObservableProperty]
+    private CueTriggerMode _defaultTriggerMode = CueTriggerMode.Manual;
+
+    [ObservableProperty]
+    private bool _autoRenumberOnInsert;
+
     public static CueListEditorViewModel FromModel(CueList list, string? path = null)
     {
         var vm = new CueListEditorViewModel(list.Name)
         {
             Path = path,
             PreRollCount = list.PreRollCount > 0 ? list.PreRollCount : 4,
+            DefaultTriggerMode = list.DefaultTriggerMode,
+            AutoRenumberOnInsert = list.AutoRenumberOnInsert,
         };
         foreach (var c in list.Compositions)
             vm.Compositions.Add(CueCompositionViewModel.FromModel(c));
@@ -716,6 +810,31 @@ public partial class CuePlayerViewModel : ViewModelBase
                 if (ndi.StreamMode != NDIOutputStreamMode.AudioOnly)
                     AvailableVideoOutputs.Add(line);
             }
+        }
+        OutputLineRegistry.Replace(AvailableOutputs);
+        ResolveAllBindingLineRefs();
+    }
+
+    /// <summary>Walks every loaded cue list and refreshes the resolved <c>LineRef</c> on each
+    /// audio route + video output binding. Called when the available output set changes (lines
+    /// added/removed/swapped) so the row dots and tooltips stay accurate.</summary>
+    private void ResolveAllBindingLineRefs()
+    {
+        foreach (var list in CueLists)
+        {
+            foreach (var binding in list.VideoOutputs)
+                binding.LineRef = OutputLineRegistry.Resolve(binding.OutputLineId);
+            ResolveLineRefsInNodes(list.Nodes);
+        }
+    }
+
+    private static void ResolveLineRefsInNodes(IEnumerable<CueNodeViewModel> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            foreach (var route in node.AudioRoutes)
+                route.LineRef = OutputLineRegistry.Resolve(route.OutputLineId);
+            ResolveLineRefsInNodes(node.Children);
         }
     }
 
@@ -1151,6 +1270,20 @@ public partial class CuePlayerViewModel : ViewModelBase
         return null;
     }
 
+    /// <summary>Host callback — pre-roll cache membership changed. Snapshot lists the cue ids
+    /// that are currently warmed. Walks every loaded cue node and sets <c>IsPreRollWarm</c>
+    /// accordingly so the status badge column can render the warming indicator (Phase 5.7.2).</summary>
+    public void OnPreRollCacheChanged(IReadOnlyCollection<Guid> warmCueIds)
+    {
+        var warm = warmCueIds as HashSet<Guid> ?? new HashSet<Guid>(warmCueIds);
+        foreach (var node in EnumerateAllCueNodes())
+        {
+            var shouldBeWarm = warm.Contains(node.Id);
+            if (node.IsPreRollWarm != shouldBeWarm)
+                node.IsPreRollWarm = shouldBeWarm;
+        }
+    }
+
     private void RebuildUpcomingCues()
     {
         UpcomingCues.Clear();
@@ -1431,10 +1564,22 @@ public partial class CuePlayerViewModel : ViewModelBase
             Extra = CueGroupFireMode.FirstCueOnly.ToString(),
         };
         parent.Add(row);
+        FinalizeAddedCue(row);
         SelectedCueNode = row;
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StatusMessage = null;
+    }
+
+    /// <summary>Phase 5.8.2 — central hook for "just-added" cues. Stamps the cue list's
+    /// configured default trigger mode and (if the per-list flag is set) re-runs the renumber
+    /// pass so numbering stays sequential.</summary>
+    private void FinalizeAddedCue(CueNodeViewModel node)
+    {
+        if (SelectedCueList is null) return;
+        node.TriggerMode = SelectedCueList.DefaultTriggerMode;
+        if (SelectedCueList.AutoRenumberOnInsert)
+            RenumberFlat(SelectedCueList.Nodes, start: 1, step: 1);
     }
 
     [RelayCommand]
@@ -1451,6 +1596,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             Label = Strings.CueNodeDefaultMediaLabel,
         };
         parent.Add(firstRow);
+        FinalizeAddedCue(firstRow);
         SelectedCueNode = firstRow;
 
         var picked = await PickMediaFilePathsAsync(allowMultiple: true);
@@ -1482,6 +1628,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 SourceOrAction = path,
             };
             parent.Add(row);
+            FinalizeAddedCue(row);
             lastAdded = row;
             await ProbeAndAssignDurationAsync(row, path);
         }
@@ -1542,6 +1689,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             SourceOrAction = source.DisplayName,
         };
         parent.Add(row);
+        FinalizeAddedCue(row);
         SelectedCueNode = row;
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
@@ -1633,6 +1781,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (SelectedActionEndpoint is not null)
             row.EndpointIdText = SelectedActionEndpoint.Id.ToString();
         parent.Add(row);
+        FinalizeAddedCue(row);
         SelectedCueNode = row;
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
@@ -1694,6 +1843,32 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool CanRenameSelectedCue() => SelectedCueNode is not null;
 
+    /// <summary>Phase 5.8.2 — open the cue list settings dialog (pre-roll, default trigger
+    /// mode, auto-renumber). Replaces the inline pre-roll spinner that used to live on the
+    /// toolbar; gear icon on the toolbar opens this.</summary>
+    [RelayCommand(CanExecute = nameof(CanOpenCueListSettings))]
+    private async Task OpenCueListSettingsAsync()
+    {
+        if (SelectedCueList is null) return;
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialogVm = new Dialogs.CueListSettingsDialogViewModel(
+            SelectedCueList.PreRollCount,
+            SelectedCueList.DefaultTriggerMode,
+            SelectedCueList.AutoRenumberOnInsert);
+        var dialog = new Views.Dialogs.CueListSettingsDialog { DataContext = dialogVm };
+        var result = await dialog.ShowDialog<Dialogs.CueListSettingsDialogResult?>(owner);
+        if (result is null) return;
+
+        SelectedCueList.PreRollCount = Math.Max(0, result.PreRollCount);
+        SelectedCueList.DefaultTriggerMode = result.DefaultTriggerMode;
+        SelectedCueList.AutoRenumberOnInsert = result.AutoRenumberOnInsert;
+        StatusMessage = Strings.CueListSettingsAppliedStatus;
+    }
+
+    private bool CanOpenCueListSettings() => SelectedCueList is not null;
+
     /// <summary>Move the selected cue up one slot within its parent collection. Ctrl+↑ binds
     /// here. No-op at the top of the parent (operator's expected behaviour — they get to feel
     /// the boundary).</summary>
@@ -1740,6 +1915,29 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     private bool CanDuplicateSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;
+
+    /// <summary>Phase 5.8.1 — clicking a color swatch sets the tag on every selected cue
+    /// (so multi-select tagging works out of the box). Tag 0 clears.</summary>
+    [RelayCommand(CanExecute = nameof(CanSetSelectedCueColorTag))]
+    private void SetSelectedCueColorTag(int tag)
+    {
+        var clamped = Math.Clamp(tag, 0, CueColorTagPalette.MaxIndex);
+        var targets = SelectedCueNodes.Count > 0
+            ? SelectedCueNodes
+            : (SelectedCueNode is null ? Array.Empty<CueNodeViewModel>() : new[] { SelectedCueNode });
+        foreach (var node in targets)
+            node.ColorTag = clamped;
+    }
+
+    private bool CanSetSelectedCueColorTag() => SelectedCueNode is not null;
+
+    /// <summary>Swatch row bound by the drawer's General tab. Index 0 is "no tag" (transparent
+    /// fill, slightly thicker border so it's clickable). Indexes 1..7 match
+    /// <see cref="CueColorTagPalette"/>.</summary>
+    public IReadOnlyList<CueColorSwatchViewModel> ColorTagSwatches { get; } =
+        Enumerable.Range(0, CueColorTagPalette.MaxIndex + 1)
+            .Select(i => new CueColorSwatchViewModel(i))
+            .ToList();
 
     private static CueNode CloneCueNodeWithNewIds(CueNode src) => src switch
     {

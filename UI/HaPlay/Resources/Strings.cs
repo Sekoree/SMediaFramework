@@ -441,6 +441,15 @@ public static class Strings
     public static string MidiDeviceCatalogStatusFormat => Get(nameof(MidiDeviceCatalogStatusFormat));
     public static string PlayerNameFormat => Get(nameof(PlayerNameFormat));
     public static string CueAutoFollowFailedFormat => Get(nameof(CueAutoFollowFailedFormat));
+    public static string NdiPumpPressureStatusFormat => Get(nameof(NdiPumpPressureStatusFormat));
+    public static string ColorTagLabel => Get(nameof(ColorTagLabel));
+    public static string CueListSettingsButton => Get(nameof(CueListSettingsButton));
+    public static string CueListSettingsTooltip => Get(nameof(CueListSettingsTooltip));
+    public static string CueListSettingsDialogTitle => Get(nameof(CueListSettingsDialogTitle));
+    public static string CueListSettingsAppliedStatus => Get(nameof(CueListSettingsAppliedStatus));
+    public static string DefaultTriggerModeLabel => Get(nameof(DefaultTriggerModeLabel));
+    public static string AutoRenumberOnInsertLabel => Get(nameof(AutoRenumberOnInsertLabel));
+    public static string FilesMenuLabel => Get(nameof(FilesMenuLabel));
     public static string OscLocalhostEndpointName => Get(nameof(OscLocalhostEndpointName));
     public static string CueExecuteNoSelectedPlayer => Get(nameof(CueExecuteNoSelectedPlayer));
     public static string CueExecuteNoMediaSource => Get(nameof(CueExecuteNoMediaSource));

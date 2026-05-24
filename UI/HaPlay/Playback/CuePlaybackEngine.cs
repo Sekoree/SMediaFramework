@@ -1,5 +1,6 @@
 using Avalonia.Threading;
 using HaPlay.Models;
+using HaPlay.Resources;
 using HaPlay.ViewModels;
 using S.Media.Core.Clock;
 using S.Media.Core.Playback;
@@ -424,6 +425,12 @@ public sealed class CuePlaybackEngine : IDisposable
         runtime.DriftWarning += async (_, warning) =>
         {
             var msg = $"Composition '{warning.CompositionName}' drift: {warning.FramesBehindMaster} frames behind master ({warning.LagFromMaster.TotalMilliseconds:0} ms)";
+            await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.StatusMessage = msg);
+        };
+        runtime.PumpPressureWarning += async (_, w) =>
+        {
+            var msg = Strings.Format(nameof(Strings.NdiPumpPressureStatusFormat),
+                w.OutputLineName, w.DroppedSinceLastReport, w.DroppedTotal);
             await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.StatusMessage = msg);
         };
         lock (_gate)

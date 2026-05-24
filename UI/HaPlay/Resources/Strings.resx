@@ -1284,6 +1284,33 @@
   <data name="CueAutoFollowFailedFormat" xml:space="preserve">
     <value>Auto-follow failed: {0}</value>
   </data>
+  <data name="NdiPumpPressureStatusFormat" xml:space="preserve">
+    <value>NDI output '{0}' dropped {1} frames in the last 5 s (total {2}) — receiver may be slow.</value>
+  </data>
+  <data name="ColorTagLabel" xml:space="preserve">
+    <value>Color tag</value>
+  </data>
+  <data name="CueListSettingsButton" xml:space="preserve">
+    <value>⚙</value>
+  </data>
+  <data name="CueListSettingsTooltip" xml:space="preserve">
+    <value>Cue list settings…</value>
+  </data>
+  <data name="CueListSettingsDialogTitle" xml:space="preserve">
+    <value>Cue list settings</value>
+  </data>
+  <data name="CueListSettingsAppliedStatus" xml:space="preserve">
+    <value>Cue list settings applied.</value>
+  </data>
+  <data name="DefaultTriggerModeLabel" xml:space="preserve">
+    <value>Default trigger</value>
+  </data>
+  <data name="AutoRenumberOnInsertLabel" xml:space="preserve">
+    <value>Auto-renumber on insert/reorder</value>
+  </data>
+  <data name="FilesMenuLabel" xml:space="preserve">
+    <value>Files…</value>
+  </data>
   <data name="OscLocalhostEndpointName" xml:space="preserve">
     <value>OSC Localhost</value>
   </data>

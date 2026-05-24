@@ -864,6 +864,91 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void SetAvailableOutputs_ResolvesLineRefOnAudioRoutes()
+    {
+        // Phase 5.7.1 — audio route VMs should have their LineRef populated so the row dot
+        // and tooltip can bind to the live OutputLineViewModel.HealthColor / HealthToolTip.
+        var vm = new CuePlayerViewModel();
+        var pa = Line(new PortAudioOutputDefinition(Guid.NewGuid(), "PA", 0, "HostApi", 0, "Dev", 2, 48000));
+        vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { pa });
+        vm.AddMediaCueCommand.Execute(null);
+        vm.AddAudioRouteCommand.Execute(null);
+
+        var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        var route = Assert.Single(media.AudioRoutes);
+        Assert.Same(pa, route.LineRef);
+    }
+
+    [Fact]
+    public void OnOutputLineIdChanged_RefreshesLineRefFromRegistry()
+    {
+        // Reassigning OutputLineId should re-resolve LineRef via the static registry that
+        // CuePlayerViewModel keeps populated.
+        var vm = new CuePlayerViewModel();
+        var first = Line(new PortAudioOutputDefinition(Guid.NewGuid(), "PA-1", 0, "HostApi", 0, "Dev1", 2, 48000));
+        var second = Line(new PortAudioOutputDefinition(Guid.NewGuid(), "PA-2", 0, "HostApi", 1, "Dev2", 2, 48000));
+        vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { first, second });
+        vm.AddMediaCueCommand.Execute(null);
+        vm.AddAudioRouteCommand.Execute(null);
+
+        var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        var route = media.AudioRoutes[0];
+        route.OutputLineId = second.Definition.Id;
+        Assert.Same(second, route.LineRef);
+    }
+
+    [Fact]
+    public void OnPreRollCacheChanged_FlipsIsPreRollWarmFlag()
+    {
+        // Phase 5.7.2 — warming snapshot from the cache pushes IsPreRollWarm onto matching nodes.
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        Assert.False(cue.IsPreRollWarm);
+
+        vm.OnPreRollCacheChanged(new[] { cue.Id });
+        Assert.True(cue.IsPreRollWarm);
+
+        vm.OnPreRollCacheChanged(Array.Empty<Guid>());
+        Assert.False(cue.IsPreRollWarm);
+    }
+
+    [Fact]
+    public void ColorTag_RoundTripsInSnapshot()
+    {
+        // Phase 5.8.1 — ColorTag persists through ToModel/FromModel for every cue kind.
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        media.ColorTag = 4;
+        vm.AddActionCueCommand.Execute(null);
+        var action = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        action.ColorTag = 1;
+
+        var lists = vm.BuildCueListsSnapshot();
+        Assert.Equal(2, lists[0].Nodes.Count);
+        Assert.Equal(4, lists[0].Nodes[0].ColorTag);
+        Assert.Equal(1, lists[0].Nodes[1].ColorTag);
+    }
+
+    [Fact]
+    public void SetSelectedCueColorTag_AppliesToAllSelectedCues()
+    {
+        // Multi-select tagging: command sets the tag on every node in SelectedCueNodes.
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        vm.UpdateSelection(new[] { first, second });
+        vm.SetSelectedCueColorTagCommand.Execute(3);
+
+        Assert.Equal(3, first.ColorTag);
+        Assert.Equal(3, second.ColorTag);
+    }
+
+    [Fact]
     public void ApplyActionBuilder_Midi_ComposesCommand()
     {
         var vm = new CuePlayerViewModel();

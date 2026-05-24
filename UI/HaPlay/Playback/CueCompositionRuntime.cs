@@ -108,6 +108,34 @@ internal sealed class CueCompositionRuntime : IDisposable
                             name: name,
                             log: null,
                             disposeInnerOnDispose: false);
+                        // Phase 5.7.3 — surface receiver-can't-keep-up to the operator. The
+                        // pump fires per-drop; we throttle and forward to the host.
+                        var capturedLine = line;
+                        long lastReportedDrops = 0;
+                        var nextReportTicks = 0L;
+                        pump.PumpPressure += (_, args) =>
+                        {
+                            var nowTicks = Environment.TickCount64;
+                            if (nowTicks < nextReportTicks) return;
+                            var newDrops = args.DroppedFramesTotal - lastReportedDrops;
+                            if (newDrops <= 0) return;
+                            lastReportedDrops = args.DroppedFramesTotal;
+                            nextReportTicks = nowTicks + 5000;
+                            try
+                            {
+                                PumpPressureWarning?.Invoke(this, new CueCompositionPumpPressureWarning(
+                                    _composition.Id,
+                                    _composition.Name,
+                                    capturedLine.Definition.Id,
+                                    capturedLine.Definition.DisplayName,
+                                    newDrops,
+                                    args.DroppedFramesTotal));
+                            }
+                            catch (Exception ex)
+                            {
+                                Trace.LogTrace(ex, "CueCompositionRuntime: PumpPressureWarning handler threw");
+                            }
+                        };
                         _acquired.Add(new AcquiredOutput(line, pump, AcquiredKind.Ndi));
                     }
                 }
@@ -157,6 +185,11 @@ internal sealed class CueCompositionRuntime : IDisposable
     /// its own tick rate and the master clock. <see cref="MainViewModel"/> can subscribe and
     /// translate to a status message; for now it's diagnostic only.</summary>
     public event EventHandler<CueCompositionDriftWarning>? DriftWarning;
+
+    /// <summary>Raised when an NDI output pump drops frames because the receiver/network can't
+    /// keep up (Phase 5.7.3). Throttled per-output to once every ~5 s — the underlying pump
+    /// fires on every drop, which would flood the UI in a real overload.</summary>
+    public event EventHandler<CueCompositionPumpPressureWarning>? PumpPressureWarning;
 
     /// <summary>Starts the pump that pulls composed frames at the canvas framerate and Submits
     /// to each acquired output. Idempotent. Picks the Stopwatch-driven path by default; the
@@ -688,3 +721,14 @@ internal readonly record struct CueCompositionDriftWarning(
     string CompositionName,
     long FramesBehindMaster,
     TimeSpan LagFromMaster);
+
+/// <summary>NDI output pump dropped frames — receiver/network can't keep up. Throttled to one
+/// report per ~5 s per output, with <see cref="DroppedSinceLastReport"/> being the count over
+/// the throttle window. (Phase 5.7.3.)</summary>
+internal readonly record struct CueCompositionPumpPressureWarning(
+    Guid CompositionId,
+    string CompositionName,
+    Guid OutputLineId,
+    string OutputLineName,
+    long DroppedSinceLastReport,
+    long DroppedTotal);

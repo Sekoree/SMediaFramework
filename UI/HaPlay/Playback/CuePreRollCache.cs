@@ -12,6 +12,25 @@ internal sealed class CuePreRollCache : IDisposable
     private readonly Dictionary<Guid, Entry> _entries = new();
     private bool _disposed;
 
+    /// <summary>Raised on any membership change so the UI can refresh warming badges (Phase 5.7.2).
+    /// Snapshot of the currently-warm cue ids is supplied — callers must not mutate it.</summary>
+    public event Action<IReadOnlyCollection<Guid>>? EntriesChanged;
+
+    public IReadOnlyCollection<Guid> SnapshotWarmCueIds()
+    {
+        lock (_gate)
+        {
+            return _entries.Keys.ToArray();
+        }
+    }
+
+    private void RaiseEntriesChanged()
+    {
+        Guid[] snapshot;
+        lock (_gate) snapshot = _entries.Keys.ToArray();
+        EntriesChanged?.Invoke(snapshot);
+    }
+
     public bool HasMatchingEntry(Guid cueId, string cacheKey)
     {
         lock (_gate)
@@ -26,6 +45,7 @@ internal sealed class CuePreRollCache : IDisposable
     {
         session = null;
         item = null;
+        bool taken;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -37,8 +57,10 @@ internal sealed class CuePreRollCache : IDisposable
             _entries.Remove(cueId);
             session = entry.Session;
             item = entry.Item;
-            return true;
+            taken = true;
         }
+        if (taken) RaiseEntriesChanged();
+        return taken;
     }
 
     public void Store(Guid cueId, string cacheKey, HaPlayPlaybackSession session, PlaylistItem item)
@@ -59,12 +81,15 @@ internal sealed class CuePreRollCache : IDisposable
 
             _entries[cueId] = new Entry(cacheKey, session, item);
         }
+        RaiseEntriesChanged();
     }
 
     public void InvalidateAll()
     {
+        bool hadEntries;
         lock (_gate)
         {
+            hadEntries = _entries.Count > 0;
             foreach (var entry in _entries.Values)
             {
                 try { entry.Session.Dispose(); }
@@ -72,13 +97,16 @@ internal sealed class CuePreRollCache : IDisposable
             }
             _entries.Clear();
         }
+        if (hadEntries) RaiseEntriesChanged();
     }
 
     public void EvictExcept(IReadOnlyCollection<Guid> keepCueIds, int maxEntries)
     {
+        int countBefore, countAfter;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            countBefore = _entries.Count;
             var keep = keepCueIds is HashSet<Guid> hs ? hs : keepCueIds.ToHashSet();
             foreach (var id in _entries.Keys.Where(id => !keep.Contains(id)).ToList())
                 RemoveEntryLocked(id);
@@ -88,7 +116,9 @@ internal sealed class CuePreRollCache : IDisposable
                 var oldest = _entries.OrderBy(kv => kv.Value.CreatedUtc).First().Key;
                 RemoveEntryLocked(oldest);
             }
+            countAfter = _entries.Count;
         }
+        if (countAfter != countBefore) RaiseEntriesChanged();
     }
 
     private void RemoveEntryLocked(Guid cueId)

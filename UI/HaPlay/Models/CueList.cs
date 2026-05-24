@@ -15,6 +15,15 @@ public sealed record CueList
 
     public int PreRollCount { get; init; } = 4;
 
+    /// <summary>Trigger mode applied to cues created via the toolbar (Phase 5.8.2). Default
+    /// <see cref="CueTriggerMode.Manual"/> so older lists load unchanged.</summary>
+    public CueTriggerMode DefaultTriggerMode { get; init; } = CueTriggerMode.Manual;
+
+    /// <summary>When true, the cue player re-runs the renumber pass after every insert/reorder
+    /// so the operator's numbering stays sequential (Phase 5.8.2). Default off — preserves the
+    /// pre-5.8 behavior where operators set numbers themselves.</summary>
+    public bool AutoRenumberOnInsert { get; init; }
+
     /// <summary>Virtual canvases used by the cue player. Multiple video outputs may reference the
     /// same composition (fan-out: composition is rendered once, fed to every referencing output).</summary>
     public List<CueComposition> Compositions { get; init; } = new();
@@ -82,6 +91,10 @@ public abstract record CueNode
     public int PreWaitMs { get; init; }
 
     public string? Notes { get; init; }
+
+    /// <summary>Color tag index 0..7 — 0 = none, 1..7 map to a fixed palette in
+    /// <c>CueColorTagPalette</c>. Default-safe for pre-5.8 files (loads as 0 / no tag).</summary>
+    public int ColorTag { get; init; }
 }
 
 public sealed record CueGroupNode : CueNode
