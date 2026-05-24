@@ -6,7 +6,6 @@ using S.Media.Core.Clock;
 using S.Media.Core.Playback;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
-using S.Media.Core.Playback;
 using S.Media.FFmpeg;
 using S.Media.Playback;
 

@@ -1009,6 +1009,13 @@ public partial class CuePlayerViewModel : ViewModelBase
     public bool HasSelectedMediaCueWithVideo =>
         SelectedCueNode is { Kind: CueNodeKind.Media } media && media.SourceHasVideo;
 
+    /// <summary>Audio tab visibility: media cue AND (the probe found audio OR the cue already
+    /// has routes wired). The "has routes" branch keeps the tab editable for pre-Phase-5.1 cues
+    /// that never went through the audio-stream probe but already have routes saved on disk.</summary>
+    public bool HasSelectedMediaCueWithAudio =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } media
+        && (media.SourceHasAudio || media.AudioRoutes.Count > 0);
+
     /// <summary>Operator hint banner — true when the only "video" the source offers is an
     /// attached picture (e.g. MP3 album art). The Video tab still works (the still frame can be
     /// placed into a composition for a now-playing slate) but it's worth flagging.</summary>
@@ -1112,6 +1119,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.SourceFrameRateDen))
         {
             OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
+            OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
             OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
             OnPropertyChanged(nameof(IsPreviewingSelectedCue));
             OnPropertyChanged(nameof(PreviewButtonLabel));
@@ -1190,6 +1198,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(VisibleVideoPlacements));
         OnPropertyChanged(nameof(HasSelectedMediaCue));
         OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
+        OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
         OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
         OnPropertyChanged(nameof(HasSelectedActionCue));
         OnPropertyChanged(nameof(HasSelectedCommentCue));
@@ -1495,7 +1504,11 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>Host callback — pre-roll cache membership changed. Snapshot lists the cue ids
     /// that are currently warmed. Walks every loaded cue node and sets <c>IsPreRollWarm</c>
-    /// accordingly so the status badge column can render the warming indicator (Phase 5.7.2).</summary>
+    /// accordingly so the status badge column can render the warming indicator (Phase 5.7.2).
+    /// <para>This method does not marshal threads on its own; the host wiring (MainViewModel)
+    /// hops onto the UI dispatcher before invoking, because the underlying
+    /// <see cref="CuePreRollCache.EntriesChanged"/> can fire from any thread.</para>
+    /// </summary>
     public void OnPreRollCacheChanged(IReadOnlyCollection<Guid> warmCueIds)
     {
         var warm = warmCueIds as HashSet<Guid> ?? new HashSet<Guid>(warmCueIds);
@@ -1698,6 +1711,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (lastOnPrimary is not null)
             SelectedAudioRoute = lastOnPrimary;
         OnPropertyChanged(nameof(VisibleAudioRoutes));
+        OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
     }
 
     private static int GetAudioOutputChannelCount(OutputLineViewModel? line) =>
@@ -1719,6 +1733,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             SelectedAudioRoute = media.AudioRoutes.FirstOrDefault();
             OnPropertyChanged(nameof(VisibleAudioRoutes));
+            OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
         }
     }
 
@@ -2133,8 +2148,12 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (FindParentCollection(SelectedCueList.Nodes, SelectedCueNode) is not IList<CueNodeViewModel> parent)
             return;
 
-        // Round-trip through the model layer to deep-copy reliably (the model records are
-        // immutable so cloning is just a fresh `with { Id = NewGuid() }` cascade).
+        // Deep-copy via the model layer. `ToModel()` projects through fresh `.Select(...).ToList()`
+        // collections for routes / placements / children, so the snapshot doesn't share list
+        // references with the original VM. `CloneCueNodeWithNewIds` then rotates ids (a `with` on
+        // a record only does a shallow copy — we'd otherwise share AudioRoutes / VideoPlacements
+        // lists between original and copy). `FromModel` rebuilds fresh VM collections from the
+        // cloned snapshot, so no list reference is shared with the original cue.
         var snapshot = SelectedCueNode.ToModel();
         var copy = CloneCueNodeWithNewIds(snapshot);
         var copyVm = CueNodeViewModel.FromModel(copy);

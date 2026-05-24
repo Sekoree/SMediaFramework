@@ -373,11 +373,26 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             if (best is null)
                 return null;
 
-            if (!ReferenceEquals(best, _current) && ReferenceEquals(best, _pending) && _activeReaders == 0)
+            if (!ReferenceEquals(best, _current) && ReferenceEquals(best, _pending))
             {
-                toDispose = _current;
-                _current = _pending;
-                _pending = null;
+                if (_activeReaders == 0)
+                {
+                    // Safe to promote: no other lease holds _current, so we can dispose it and
+                    // hand the lease a reference that is no longer reachable from SubmitFromOutput.
+                    toDispose = _current;
+                    _current = _pending;
+                    _pending = null;
+                }
+                else
+                {
+                    // A concurrent reader still holds _current. Returning _pending would be
+                    // unsafe — a subsequent SubmitFromOutput would dispose _pending while the
+                    // new lease is still using it. Fall back to _current (PTS-wise <= _pending,
+                    // so older but never too-future). If _current is null we skip this tick.
+                    best = _current;
+                    if (best is null)
+                        return null;
+                }
             }
 
             return best;

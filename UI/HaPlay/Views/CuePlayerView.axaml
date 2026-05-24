@@ -253,7 +253,7 @@
           </TabItem>
 
           <TabItem Header="{x:Static res:Strings.AudioTabLabel}"
-                   IsVisible="{Binding HasSelectedMediaCue}">
+                   IsVisible="{Binding HasSelectedMediaCueWithAudio}">
             <ScrollViewer>
               <StackPanel Margin="6" Spacing="8">
                 <StackPanel Orientation="Horizontal" Spacing="6">

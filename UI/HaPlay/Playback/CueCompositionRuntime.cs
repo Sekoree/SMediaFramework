@@ -39,8 +39,7 @@ internal sealed class CueCompositionRuntime : IDisposable
     private readonly object _gate = new();
     private readonly List<AcquiredOutput> _acquired = new();
     private readonly List<LayerSlot> _slots = new();
-    private readonly CancellationTokenSource _pumpCts = new();
-    private Task? _pumpTask;
+    private readonly TimeSpan _canvasPeriod;
     private long _nextLayerSequence;
     private long _framesComposited;
     private long _framesSubmitted;
@@ -49,8 +48,12 @@ internal sealed class CueCompositionRuntime : IDisposable
     private long _maxPumpFrameTicks;
     private long _framesBehindMaster;
     private long _lastBehindMasterReport;
+    private long _pumpStartCount;
     private IPlaybackClock? _master;
     private MediaClock? _slaveClock;
+    // 0 = no request, 1 = dispose requested (Dispose() is waiting), 2 = driver thread ran GL dispose.
+    // Used to hop the GL compositor's teardown back onto its owner thread before we stop the clock.
+    private int _driverDisposeState;
     private bool _disposed;
 
     public CueCompositionRuntime(
@@ -69,6 +72,7 @@ internal sealed class CueCompositionRuntime : IDisposable
             Math.Max(16, composition.Height),
             PixelFormat.Bgra32,
             rate);
+        _canvasPeriod = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond * (long)den / Math.Max(1L, (long)num)));
 
         (_compositor, _gpuCompositor, _requiresBgraLayerConversion, _compositorBackendName) =
             CreateCompositor(_canvasFormat, composition);
@@ -178,8 +182,12 @@ internal sealed class CueCompositionRuntime : IDisposable
             TimeSpan.FromTicks(Volatile.Read(ref _lastPumpFrameTicks)),
             TimeSpan.FromTicks(Volatile.Read(ref _maxPumpFrameTicks)),
             Volatile.Read(ref _framesBehindMaster),
-            _slaveClock is not null);
+            _master is not null);
     }
+
+    /// <summary>Number of times the pump has been started. Used by tests to detect double-start
+    /// regressions on the master-clock path; never &gt; 1 in correct operation.</summary>
+    internal long PumpStartCount => Volatile.Read(ref _pumpStartCount);
 
     /// <summary>Raised once per ~5 s when the composition pump detects sustained drift between
     /// its own tick rate and the master clock. <see cref="MainViewModel"/> can subscribe and
@@ -192,84 +200,78 @@ internal sealed class CueCompositionRuntime : IDisposable
     public event EventHandler<CueCompositionPumpPressureWarning>? PumpPressureWarning;
 
     /// <summary>Starts the pump that pulls composed frames at the canvas framerate and Submits
-    /// to each acquired output. Idempotent. Picks the Stopwatch-driven path by default; the
-    /// engine flips us to a clock-driven path via <see cref="SetClockMaster"/> after the first
-    /// cue resolves its audio master, eliminating composition-vs-cue clock drift.</summary>
+    /// to each acquired output. Idempotent — the runtime uses exactly one <see cref="MediaClock"/>
+    /// driver thread for its lifetime so the GL compositor's context owner thread never changes
+    /// (Phase 5.4 fix). When a master is later supplied via <see cref="SetClockMaster"/> the same
+    /// clock's master is swapped in place; we never spawn a second driver.</summary>
     public void EnsurePumpStarted()
     {
         lock (_gate)
         {
-            if (_pumpTask is not null) return;
-            // If a master was set BEFORE the first AddLayer call, prefer the clock-driven path
-            // straight away. Otherwise start with the Stopwatch loop and let SetClockMaster
-            // upgrade us when the engine calls it.
-            if (_master is not null)
-            {
-                StartClockDrivenPumpLocked();
-                return;
-            }
-            _pumpTask = Task.Factory.StartNew(
-                () => PumpLoop(_pumpCts.Token),
-                CancellationToken.None,
-                TaskCreationOptions.LongRunning,
-                TaskScheduler.Default);
+            if (_disposed) return;
+            if (_slaveClock is not null) return;
+            StartPumpLocked();
         }
     }
 
     /// <summary>Slave the composition pump's cadence to a <see cref="IPlaybackClock"/> (typically
-    /// the first cue's audio runtime clock). Removes the composition-vs-cue Stopwatch drift —
-    /// composited frames present at the master's video-tick rate instead of free-running.
-    /// Multiple calls are safe; only the first non-null master is taken so the master doesn't
-    /// flip between concurrent cues.</summary>
+    /// the first cue's audio runtime clock). The pump's underlying <see cref="MediaClock"/> is
+    /// created on first <see cref="EnsurePumpStarted"/> with no master (canvas-period free-run);
+    /// this call swaps its master in place. The driver thread is preserved, so the GL compositor's
+    /// context owner thread doesn't change. Multiple calls are safe; only the first non-null master
+    /// is taken so the master doesn't flip between concurrent cues.</summary>
     public void SetClockMaster(IPlaybackClock master)
     {
         ArgumentNullException.ThrowIfNull(master);
+        MediaClock? clockToRetarget = null;
         lock (_gate)
         {
             if (_disposed) return;
             if (_master is not null) return; // first cue's master wins
             _master = master;
-
-            // If the Stopwatch pump is already running, stop it cleanly so the clock-driven path
-            // takes over. The lock guard avoids double-pump.
-            if (_pumpTask is not null)
-            {
-                _pumpCts.Cancel();
-                try { _pumpTask.Wait(TimeSpan.FromMilliseconds(500)); } catch { /* best effort */ }
-                _pumpTask = null;
-            }
-
-            // PumpCts has been cancelled — replace it so the clock-driven path has a fresh token.
-            // (Field is readonly; reassign via reflection-free approach — just create a new
-            // local CTS and let dispose clean up the old one. We accept the small leak.)
             foreach (var layer in _slots)
                 layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
-            StartClockDrivenPumpLocked();
+            clockToRetarget = _slaveClock;
         }
+
+        // Done outside the lock — MediaClock.SetMaster is safe to call concurrently with VideoTick
+        // (it locks internally) and keeping the runtime lock here would risk an inversion with the
+        // driver thread when it raises OnSlaveVideoTick.
+        clockToRetarget?.SetMaster(master);
+        Trace.LogInformation(
+            "CueCompositionRuntime: composition {Composition} pump now slaved to master clock",
+            _composition.Name);
     }
 
-    private void StartClockDrivenPumpLocked()
+    private void StartPumpLocked()
     {
-        // Period derived from canvas framerate; the clock fires VideoTick at this interval.
-        var num = Math.Max(1, _canvasFormat.FrameRate.Numerator);
-        var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
-        var period = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond * (long)den / Math.Max(1L, num)));
+        if (_slaveClock is not null) return;
+
         // Audio tick interval doesn't matter to us; pick a coarse one to keep the driver thread quiet.
         var audioInterval = TimeSpan.FromMilliseconds(50);
-        _slaveClock = new MediaClock(audioInterval, period);
+        _slaveClock = new MediaClock(audioInterval, _canvasPeriod);
         if (_master is not null)
             _slaveClock.SetMaster(_master);
         _slaveClock.VideoTick += OnSlaveVideoTick;
         _slaveClock.Start();
+        Interlocked.Increment(ref _pumpStartCount);
         Trace.LogInformation(
-            "CueCompositionRuntime: composition {Composition} pump now slaved to master clock (videoTick={PeriodMs:0.00}ms)",
-            _composition.Name, period.TotalMilliseconds);
+            "CueCompositionRuntime: composition {Composition} pump started (videoTick={PeriodMs:0.00}ms, mastered={Mastered})",
+            _composition.Name, _canvasPeriod.TotalMilliseconds, _master is not null);
     }
 
     private void OnSlaveVideoTick(object? sender, EventArgs e)
     {
         _ = sender;
         _ = e;
+        // Dispose() asks the driver thread to free GL resources on its own thread before we stop
+        // the clock — SDL3GLVideoCompositor.DisposeOnOwnerThread is a no-op off-thread.
+        if (Interlocked.CompareExchange(ref _driverDisposeState, 2, 1) == 1)
+        {
+            try { _gpuCompositor?.DisposeOnOwnerThread(); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CueCompositionRuntime.OnSlaveVideoTick: driver GL dispose"); }
+            return;
+        }
         if (_disposed) return;
         PumpOneFrame();
         CheckMasterDrift();
@@ -297,10 +299,6 @@ internal sealed class CueCompositionRuntime : IDisposable
             return;
         }
 
-        var num = Math.Max(1, _canvasFormat.FrameRate.Numerator);
-        var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
-        var canvasPeriod = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond * (long)den / Math.Max(1L, num)));
-
         var wallElapsed = Stopwatch.GetElapsedTime(_lastDriftCheckTicks);
         var masterElapsed = masterPos - _lastMasterPosition;
 
@@ -309,7 +307,7 @@ internal sealed class CueCompositionRuntime : IDisposable
         if (masterElapsed < TimeSpan.FromMilliseconds(50)) return;
 
         var diff = wallElapsed - masterElapsed;
-        if (Math.Abs(diff.Ticks) > canvasPeriod.Ticks * 2)
+        if (Math.Abs(diff.Ticks) > _canvasPeriod.Ticks * 2)
             Interlocked.Increment(ref _framesBehindMaster);
 
         _lastMasterPosition = masterPos;
@@ -392,62 +390,10 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     private bool _outputsConfigured;
 
-    /// <summary>The Stopwatch-driven fallback pump for compositions that don't yet have an
-    /// audio master (cues without audio routes, or master not yet resolved). The clock-driven
-    /// path swaps in once <see cref="SetClockMaster"/> is called.</summary>
-    private void PumpLoop(CancellationToken ct)
-    {
-        var num = _canvasFormat.FrameRate.Numerator;
-        var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
-        var fps = num <= 0 ? 60.0 : num / (double)den;
-        var periodStopwatchTicks = Math.Max(1L, (long)(Stopwatch.Frequency / Math.Max(1.0, fps)));
-
-        // Keep the composition loop on one dedicated thread. The GL compositor requires a stable
-        // context-owner thread, and the CPU compositor also benefits from predictable cadence.
-        var nextTick = Stopwatch.GetTimestamp();
-
-        try
-        {
-            while (!ct.IsCancellationRequested)
-            {
-                nextTick += periodStopwatchTicks;
-                var now = Stopwatch.GetTimestamp();
-                var delayTicks = nextTick - now;
-                if (delayTicks > 0)
-                {
-                    var delay = TimeSpan.FromSeconds(delayTicks / (double)Stopwatch.Frequency);
-                    if (ct.WaitHandle.WaitOne(delay))
-                        break;
-                }
-                else if (-delayTicks > periodStopwatchTicks * 4)
-                {
-                    nextTick = now;
-                }
-
-                PumpOneFrame();
-            }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Trace.LogWarning(ex, "CueCompositionRuntime.Pump: loop crashed");
-        }
-        finally
-        {
-            _gpuCompositor?.DisposeOnOwnerThread();
-        }
-    }
-
-    /// <summary>One pull-from-compositor + fan-out-to-outputs cycle. Shared between the
-    /// Stopwatch-driven pump (no master) and the <see cref="MediaClock"/>-driven path (master
-    /// set) so frame ownership / clone semantics stay identical.</summary>
+    /// <summary>One pull-from-compositor + fan-out-to-outputs cycle. Always called from the
+    /// single <see cref="MediaClock"/> driver thread that owns this runtime's GL context.</summary>
     private void PumpOneFrame()
     {
-        var num = _canvasFormat.FrameRate.Numerator;
-        var den = Math.Max(1, _canvasFormat.FrameRate.Denominator);
-        var fps = num <= 0 ? 60.0 : num / (double)den;
-        var period = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond / Math.Max(1.0, fps)));
-
         var sw = Stopwatch.StartNew();
         TimeSpan? masterPts = null;
         if (_master is not null)
@@ -518,7 +464,7 @@ internal sealed class CueCompositionRuntime : IDisposable
         }
 
         sw.Stop();
-        RecordPumpTiming(sw.Elapsed, period);
+        RecordPumpTiming(sw.Elapsed, _canvasPeriod);
     }
 
     private static (IVideoCompositor Compositor, SDL3GLVideoCompositor? Gpu, bool RequiresBgraLayerConversion, string BackendName)
@@ -594,13 +540,23 @@ internal sealed class CueCompositionRuntime : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
+
+        // If the pump ever started, the GL compositor's owner thread is the MediaClock driver.
+        // Ask that thread to dispose GL resources on its own thread before we stop the clock —
+        // SDL3GLVideoCompositor.Dispose() called from any other thread is a no-op for the GL
+        // teardown path. Skip when no GPU compositor exists or the pump never ran (uninitialized).
+        if (_slaveClock is not null && _gpuCompositor is not null)
+        {
+            Interlocked.Exchange(ref _driverDisposeState, 1);
+            var deadline = Environment.TickCount64 + 250;
+            while (Volatile.Read(ref _driverDisposeState) != 2 && Environment.TickCount64 < deadline)
+                Thread.Sleep(1);
+        }
+
         _disposed = true;
 
-        try { _pumpCts.Cancel(); } catch { /* best effort */ }
-        try { _pumpTask?.Wait(TimeSpan.FromSeconds(2)); } catch { /* best effort */ }
-        try { _pumpCts.Dispose(); } catch { /* best effort */ }
-
-        // Tear down the master-slaved MediaClock if SetClockMaster swapped it in.
+        // Tear down the driver clock. MediaClock.Stop joins the driver thread, so once it returns
+        // no more VideoTick callbacks are in flight.
         if (_slaveClock is { } sc)
         {
             try { sc.VideoTick -= OnSlaveVideoTick; } catch { /* best effort */ }

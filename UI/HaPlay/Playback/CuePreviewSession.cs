@@ -87,14 +87,14 @@ internal sealed class CuePreviewSession : IDisposable
         CancellationToken ct)
     {
         if (cue.Source is not FilePlaylistItem fileItem)
-            return (null, "Preview requires a file media source.");
+            return ((CuePreviewSession?)null, "Preview requires a file media source.");
 
         var hasVideo = cue.HasVideo;
         var hasAudio = cue.HasAudio;
         if (!hasVideo && !hasAudio)
-            return (null, "Cue has no audio or video to preview.");
+            return ((CuePreviewSession?)null, "Cue has no audio or video to preview.");
 
-        return await Task.Run(() =>
+        return await Task.Run<(CuePreviewSession? Session, string? Error)>(() =>
         {
             ct.ThrowIfCancellationRequested();
             SDL3GLVideoOutput? sdl = null;
@@ -138,7 +138,7 @@ internal sealed class CuePreviewSession : IDisposable
                 {
                     paHost = builder.GetWiredPortAudioHost();
                     if (paHost is null)
-                        return (null, "PortAudio preview wiring failed.");
+                        return ((CuePreviewSession?)null, "PortAudio preview wiring failed.");
                 }
 
                 if (cue.StartOffsetMs > 0)
@@ -149,11 +149,11 @@ internal sealed class CuePreviewSession : IDisposable
                 player = null;
                 sdl = null;
                 paHost = null;
-                return (session, null);
+                return ((CuePreviewSession?)session, (string?)null);
             }
             catch (Exception ex)
             {
-                return (null, ex.Message);
+                return ((CuePreviewSession?)null, ex.Message);
             }
             finally
             {

@@ -624,9 +624,16 @@ public partial class MainViewModel : ViewModelBase
         var player = new MediaPlayerViewModel(OutputManagement, name, removable ? RemovePlayer : null);
         player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         // Phase 5.7.2 — forward pre-roll cache changes from each player to the Cue Player so it
-        // can paint warming badges on the matching rows. Multiple players each maintain their
-        // own cache; the cue player merges them by re-snapshotting on every change.
-        player.CuePreRollChanged += ids => CuePlayer.OnPreRollCacheChanged(ids);
+        // can paint warming badges on the matching rows. The cache event can fire from any thread
+        // (often a thread-pool continuation after a Task.Run pre-roll open), so hop to the UI
+        // dispatcher before touching Avalonia-bound properties.
+        player.CuePreRollChanged += ids =>
+        {
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+                CuePlayer.OnPreRollCacheChanged(ids);
+            else
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreRollCacheChanged(ids));
+        };
         return player;
     }
 

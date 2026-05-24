@@ -32,15 +32,16 @@ public partial class CuePlayerView : UserControl
     }
 
     /// <summary>Transport bindings (Space/Esc/Enter/Backspace) at UserControl level. Skip when
-    /// focus is in a text-input control so the operator can type punctuation in route fields,
-    /// notes, etc. without accidentally firing Go.</summary>
+    /// focus is on a widget whose own keyboard handling we'd be fighting with: text input,
+    /// the scrubber slider (Space scrolls), check boxes (Space toggles), and the like. Tree-row
+    /// focus and unfocused button focus are left untouched so the transport keys still work.</summary>
     private void OnUserControlKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
     {
         _ = sender;
         if (DataContext is not CuePlayerViewModel vm) return;
 
         var focused = Avalonia.Controls.TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
-        if (focused is TextBox or NumericUpDown or ComboBox) return;
+        if (focused is TextBox or NumericUpDown or ComboBox or Slider or CheckBox or ToggleSwitch) return;
 
         switch (e.Key)
         {
