@@ -23,6 +23,7 @@
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.0.0.1" />
     <PackageVersion Include="SDL3-CS" Version="3.4.2" />
     <PackageVersion Include="SDL3-CS.Native" Version="3.4.2" />
+    <PackageVersion Include="org.k2fsa.portaudio.runtime.win-x64" Version="1.0.6" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.22.0" />
     <PackageVersion Include="Silk.NET.Core" Version="2.22.0" />
     <PackageVersion Include="TreeDataGrid.Avalonia" Version="12.0.0" />
