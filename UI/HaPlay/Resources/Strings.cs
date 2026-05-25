@@ -630,4 +630,26 @@ public static class Strings
     public static string SavedCueListStatusFormat => Get(nameof(SavedCueListStatusFormat));
     public static string CueListSaveFailedStatusFormat => Get(nameof(CueListSaveFailedStatusFormat));
     public static string CueListFileNameFallback => Get(nameof(CueListFileNameFallback));
+    public static string PlayerSettingsDialogTitle => Get(nameof(PlayerSettingsDialogTitle));
+    public static string PlayerSettingsButton => Get(nameof(PlayerSettingsButton));
+    public static string PlayerSettingsTooltip => Get(nameof(PlayerSettingsTooltip));
+    public static string OutputAndTransitionsTab => Get(nameof(OutputAndTransitionsTab));
+    public static string IdleImageTab => Get(nameof(IdleImageTab));
+    public static string HeadphonesCueBusTab => Get(nameof(HeadphonesCueBusTab));
+    public static string AudioMatrixDialogTitle => Get(nameof(AudioMatrixDialogTitle));
+    public static string AudioMatrixButton => Get(nameof(AudioMatrixButton));
+    public static string AudioMatrixButtonTooltip => Get(nameof(AudioMatrixButtonTooltip));
+    public static string PlaylistFilesMenu => Get(nameof(PlaylistFilesMenu));
+    public static string PlaybackStatePlayingIndicator => Get(nameof(PlaybackStatePlayingIndicator));
+    public static string PlaybackStatePausedIndicator => Get(nameof(PlaybackStatePausedIndicator));
+    public static string PlaybackStateStoppedIndicator => Get(nameof(PlaybackStateStoppedIndicator));
+    public static string PlaylistContextRemove => Get(nameof(PlaylistContextRemove));
+    public static string PlaylistContextMoveUp => Get(nameof(PlaylistContextMoveUp));
+    public static string PlaylistContextMoveDown => Get(nameof(PlaylistContextMoveDown));
+    public static string RoutingEditButton => Get(nameof(RoutingEditButton));
+    public static string RoutingEditTooltip => Get(nameof(RoutingEditTooltip));
+    public static string TransportKeyboardHints => Get(nameof(TransportKeyboardHints));
+    public static string ResetVolumeTooltip => Get(nameof(ResetVolumeTooltip));
+    public static string ToggleTimeDisplayTooltip => Get(nameof(ToggleTimeDisplayTooltip));
+    public static string ElapsedTimeLabel => Get(nameof(ElapsedTimeLabel));
 }

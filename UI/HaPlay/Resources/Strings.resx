@@ -1836,4 +1836,70 @@
   <data name="CueListFileNameFallback" xml:space="preserve">
     <value>cue-list</value>
   </data>
+  <data name="PlayerSettingsDialogTitle" xml:space="preserve">
+    <value>Player settings</value>
+  </data>
+  <data name="PlayerSettingsButton" xml:space="preserve">
+    <value>Settings...</value>
+  </data>
+  <data name="PlayerSettingsTooltip" xml:space="preserve">
+    <value>Open player settings (output format, transitions, idle image, headphones cue bus)</value>
+  </data>
+  <data name="OutputAndTransitionsTab" xml:space="preserve">
+    <value>Output &amp; Transitions</value>
+  </data>
+  <data name="IdleImageTab" xml:space="preserve">
+    <value>Idle Image</value>
+  </data>
+  <data name="HeadphonesCueBusTab" xml:space="preserve">
+    <value>Headphones Cue Bus</value>
+  </data>
+  <data name="AudioMatrixDialogTitle" xml:space="preserve">
+    <value>Audio matrix</value>
+  </data>
+  <data name="AudioMatrixButton" xml:space="preserve">
+    <value>Audio Matrix...</value>
+  </data>
+  <data name="AudioMatrixButtonTooltip" xml:space="preserve">
+    <value>Open the audio matrix editor (per-output mix mode, gain, input trims, per-cell routing)</value>
+  </data>
+  <data name="PlaylistFilesMenu" xml:space="preserve">
+    <value>Files</value>
+  </data>
+  <data name="PlaybackStatePlayingIndicator" xml:space="preserve">
+    <value>Playing</value>
+  </data>
+  <data name="PlaybackStatePausedIndicator" xml:space="preserve">
+    <value>Paused</value>
+  </data>
+  <data name="PlaybackStateStoppedIndicator" xml:space="preserve">
+    <value>Stopped</value>
+  </data>
+  <data name="PlaylistContextRemove" xml:space="preserve">
+    <value>Remove</value>
+  </data>
+  <data name="PlaylistContextMoveUp" xml:space="preserve">
+    <value>Move up</value>
+  </data>
+  <data name="PlaylistContextMoveDown" xml:space="preserve">
+    <value>Move down</value>
+  </data>
+  <data name="RoutingEditButton" xml:space="preserve">
+    <value>Edit Routing...</value>
+  </data>
+  <data name="RoutingEditTooltip" xml:space="preserve">
+    <value>Open routing configuration (add/remove outputs, headphones cue bus)</value>
+  </data>
+  <data name="TransportKeyboardHints" xml:space="preserve">
+    <value>Space play/pause · [ ] prev/next · , . jog ±5 s</value>
+  </data>
+  <data name="ResetVolumeTooltip" xml:space="preserve">
+    <value>Double-click to reset to 0 dB</value>
+  </data>
+  <data name="ToggleTimeDisplayTooltip" xml:space="preserve">
+    <value>Click to toggle elapsed / remaining</value>
+  </data>
+  <data name="ElapsedTimeLabel" xml:space="preserve">
+    <value>Elapsed</value>
+  </data>
 </root>

@@ -773,6 +773,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>Visual label for the Play/Pause toggle.</summary>
     public string PlayPauseLabel => IsPlaying ? "⏸ Pause" : "▶ Play";
 
+    public string PlaybackStateLabel =>
+        IsPlaying ? Resources.Strings.PlaybackStatePlayingIndicator
+        : IsMediaLoaded ? Resources.Strings.PlaybackStatePausedIndicator
+        : Resources.Strings.PlaybackStateStoppedIndicator;
+
+    public Avalonia.Media.ISolidColorBrush PlaybackStateColor =>
+        IsPlaying ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#2E7D32"))
+        : IsMediaLoaded ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#F9A825"))
+        : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.Parse("#44808080"));
+
     /// <summary>One-word kind label for the source-state chip ("Video", "Audio", "Idle").</summary>
     public string SourceKindLabel
     {
@@ -1012,6 +1022,25 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public string RemainingTimeText => "-" + FormatClock(RemainingTime);
     public string DurationText => FormatClock(Duration);
 
+    private bool _showElapsedTime;
+
+    public string MiddleTimeText => _showElapsedTime
+        ? FormatClock(CurrentPosition)
+        : "-" + FormatClock(RemainingTime);
+
+    public string MiddleTimeLabel => _showElapsedTime
+        ? Resources.Strings.ElapsedTimeLabel
+        : Resources.Strings.RemainingTimeLabel;
+
+    public void ToggleMiddleTimeDisplay()
+    {
+        _showElapsedTime = !_showElapsedTime;
+        OnPropertyChanged(nameof(MiddleTimeText));
+        OnPropertyChanged(nameof(MiddleTimeLabel));
+    }
+
+    public void ResetVolume() => MasterVolumeDb = 0;
+
     private static string FormatClock(TimeSpan t) =>
         t.TotalHours >= 1 ? t.ToString(@"hh\:mm\:ss") : t.ToString(@"mm\:ss");
 
@@ -1022,6 +1051,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         NotifyTransportCanExecuteChanged();
         OnPropertyChanged(nameof(SourceKindLabel));
         OnPropertyChanged(nameof(IsTransportSeekable));
+        OnPropertyChanged(nameof(PlaybackStateLabel));
+        OnPropertyChanged(nameof(PlaybackStateColor));
         if (value)
             StopIdleSlate();
     }
@@ -1030,6 +1061,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         _ = value;
         OnPropertyChanged(nameof(PlayPauseLabel));
+        OnPropertyChanged(nameof(PlaybackStateLabel));
+        OnPropertyChanged(nameof(PlaybackStateColor));
         TogglePlayPauseCommand.NotifyCanExecuteChanged();
     }
 
@@ -1074,6 +1107,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(RemainingTime));
         OnPropertyChanged(nameof(RemainingTimeText));
         OnPropertyChanged(nameof(CurrentPositionText));
+        OnPropertyChanged(nameof(MiddleTimeText));
     }
 
     partial void OnSelectedPlaylistItemChanged(PlaylistItem? value)
@@ -2087,6 +2121,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
         return idx >= 0 && idx < PlaylistItems.Count - 1;
     }
 
+    public void MovePlaylistItem(PlaylistItem item, int targetIndex)
+    {
+        var sourceIndex = PlaylistItems.IndexOf(item);
+        if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= PlaylistItems.Count || sourceIndex == targetIndex)
+            return;
+        PlaylistItems.Move(sourceIndex, targetIndex);
+        SelectedPlaylistItem = item;
+    }
+
     /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing.
     /// Routes both file items and live items through the open path; live playback wiring lands in Phase C.5
     /// (currently surfaces "live items not yet supported" on play).</summary>
@@ -2131,6 +2174,33 @@ public partial class MediaPlayerViewModel : ViewModelBase
         var path = f.TryGetLocalPath();
         if (!string.IsNullOrEmpty(path))
             FallbackImagePath = path;
+    }
+
+    [RelayCommand]
+    private async Task OpenPlayerSettingsAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+        var dialog = new Views.Dialogs.PlayerSettingsDialog { DataContext = this };
+        await dialog.ShowDialog<object?>(owner);
+    }
+
+    [RelayCommand]
+    private async Task OpenAudioMatrixAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+        var dialog = new Views.Dialogs.AudioMatrixDialog { DataContext = this };
+        await dialog.ShowDialog<object?>(owner);
+    }
+
+    [RelayCommand]
+    private async Task OpenRoutingAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+        var dialog = new Views.Dialogs.RoutingDialog { DataContext = this };
+        await dialog.ShowDialog<object?>(owner);
     }
 
     [RelayCommand]
