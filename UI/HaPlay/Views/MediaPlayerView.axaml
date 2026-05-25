@@ -7,6 +7,7 @@
              xmlns:models="using:HaPlay.Models"
              xmlns:res="using:HaPlay.Resources"
              xmlns:tdg="using:Avalonia.Controls"
+             xmlns:controls="using:HaPlay.Views.Controls"
              mc:Ignorable="d" d:DesignWidth="780" d:DesignHeight="900"
              x:Class="HaPlay.Views.MediaPlayerView"
              x:DataType="vm:MediaPlayerViewModel">
@@ -120,6 +121,10 @@
                     <MenuItem Header="{x:Static res:Strings.RemoveThisPlayerMenuHeader}"
                               Command="{Binding RemovePlayerCommand}"
                               IsVisible="{Binding CanRemove}" />
+                    <Separator />
+                    <MenuItem Header="{x:Static res:Strings.DetachPlayerButton}"
+                              Command="{Binding DetachPlayerCommand}"
+                              ToolTip.Tip="{x:Static res:Strings.DetachPlayerTooltip}" />
                   </MenuFlyout>
                 </Button.Flyout>
               </Button>
@@ -146,13 +151,19 @@
                          Text="{Binding WaitingForSourceMessage}" />
             </Border>
 
-            <!-- Scrubber -->
-            <Slider Name="SeekSlider"
-                    Minimum="0" Maximum="1000"
-                    Value="{Binding SeekSliderValue, Mode=TwoWay}"
-                    IsEnabled="{Binding IsMediaLoaded}"
-                    IsVisible="{Binding IsTransportSeekable}"
-                    ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}" />
+            <!-- Scrubber with waveform overlay -->
+            <Grid IsVisible="{Binding IsTransportSeekable}">
+              <controls:WaveformControl Height="24" Margin="8,0"
+                  Peaks="{Binding WaveformPeaks}"
+                  Revision="{Binding WaveformRevision}"
+                  IsHitTestVisible="False" />
+              <Slider Name="SeekSlider"
+                      Minimum="0" Maximum="1000"
+                      Value="{Binding SeekSliderValue, Mode=TwoWay}"
+                      IsEnabled="{Binding IsMediaLoaded}"
+                      ToolTip.ShowDelay="200"
+                      ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}" />
+            </Grid>
 
             <!-- Three times: position / middle (toggle elapsed/remaining) / total -->
             <Grid ColumnDefinitions="*,*,*" IsVisible="{Binding IsTransportSeekable}">
@@ -204,6 +215,9 @@
                         ToolTip.Tip="{x:Static res:Strings.ResetVolumeTooltip}" />
                 <TextBlock Classes="time" Width="56" VerticalAlignment="Center"
                            Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
+                <controls:LevelMeterControl Width="48" Height="10"
+                    VerticalAlignment="Center"
+                    Level="{Binding PeakLevelNormalized}" />
                 <ToggleButton Content="{x:Static res:Strings.LoopToggleLabel}" IsChecked="{Binding IsLooping}" Padding="10,6"
                               ToolTip.Tip="{x:Static res:Strings.LoopToggleTooltip}" />
                 <ToggleButton Content="{x:Static res:Strings.AutoAdvanceToggleLabel}"

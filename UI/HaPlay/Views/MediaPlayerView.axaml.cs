@@ -30,6 +30,7 @@ public partial class MediaPlayerView : UserControl
         PlaylistListBox.AddHandler(DragDrop.DragOverEvent, OnPlaylistDragOver, RoutingStrategies.Bubble);
         PlaylistListBox.AddHandler(DragDrop.DropEvent, OnPlaylistDrop, RoutingStrategies.Bubble);
         PlaylistListBox.AddHandler(PointerPressedEvent, OnPlaylistPointerPressed, RoutingStrategies.Tunnel);
+        SeekSlider.AddHandler(PointerMovedEvent, OnSeekSliderPointerMoved, RoutingStrategies.Tunnel);
         SizeChanged += OnSizeChanged;
     }
 
@@ -162,6 +163,23 @@ public partial class MediaPlayerView : UserControl
             tb.IsReadOnly = true;
             e.Handled = true;
         }
+    }
+
+    private void OnSeekSliderPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm || vm.Duration <= TimeSpan.Zero)
+            return;
+
+        var pos = e.GetPosition(SeekSlider);
+        var width = SeekSlider.Bounds.Width;
+        if (width <= 0) return;
+
+        var ratio = Math.Clamp(pos.X / width, 0, 1);
+        var hoverTime = TimeSpan.FromTicks((long)(vm.Duration.Ticks * ratio));
+        var formatted = hoverTime.TotalHours >= 1
+            ? hoverTime.ToString(@"hh\:mm\:ss")
+            : hoverTime.ToString(@"mm\:ss");
+        ToolTip.SetTip(SeekSlider, formatted);
     }
 
     private void OnVolumeSliderDoubleTapped(object? sender, TappedEventArgs e)

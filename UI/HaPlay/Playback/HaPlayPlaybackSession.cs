@@ -30,6 +30,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     private readonly List<ResamplingAudioOutput> _portAudioResamplers = new();
     private readonly List<ResamplingAudioOutput> _ndiAudioResamplers = new();
     private readonly List<IAudioOutput> _ndiAudioOutputs = new();
+    private readonly List<MeteringAudioOutput> _meters = new();
     /// <summary>Phase A (§4.3.3, §9.6) — per-line wiring metadata so <see cref="TryAddOutput"/> /
     /// <see cref="TryRemoveOutput"/> can unwind exactly what they wired without disturbing the
     /// original-output path. Populated for both originally-routed lines (so removal of an original
@@ -94,6 +95,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     }
 
     public IReadOnlyList<LogoFallbackVideoOutput> LogoOutputs => _logoSinks;
+    public IReadOnlyList<MeteringAudioOutput> AudioMeters => _meters;
 
     internal sealed class PlaybackRouter
     {
@@ -962,7 +964,9 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                             pa.DisplayName, outDev.Format);
                     }
 
-                    var outputId = player.AudioRouter!.AddOutput(routerSink);
+                    var meter = new MeteringAudioOutput(routerSink);
+                    playback._meters.Add(meter);
+                    var outputId = player.AudioRouter!.AddOutput(meter);
                     player.AudioRouter!.Connect(player.AudioSourceId!, outputId, map);
                     var wiring = playback.GetOrCreateLineWiring(line);
                     wiring.AudioOutputId = outputId;
@@ -1005,7 +1009,9 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         Trace.LogDebug("WireAudio: NDI '{Name}' wired direct ({Fmt})", nd.DisplayName, ndiAudioFmt);
                     }
 
-                    var outputId = player.AudioRouter!.AddOutput(routerSink);
+                    var ndiMeter = new MeteringAudioOutput(routerSink);
+                    playback._meters.Add(ndiMeter);
+                    var outputId = player.AudioRouter!.AddOutput(ndiMeter);
                     player.AudioRouter!.Connect(player.AudioSourceId!, outputId, map);
                     var wiring = playback.GetOrCreateLineWiring(line);
                     wiring.AudioOutputId = outputId;

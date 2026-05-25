@@ -652,4 +652,7 @@ public static class Strings
     public static string ResetVolumeTooltip => Get(nameof(ResetVolumeTooltip));
     public static string ToggleTimeDisplayTooltip => Get(nameof(ToggleTimeDisplayTooltip));
     public static string ElapsedTimeLabel => Get(nameof(ElapsedTimeLabel));
+    public static string DetachPlayerButton => Get(nameof(DetachPlayerButton));
+    public static string DetachPlayerTooltip => Get(nameof(DetachPlayerTooltip));
+    public static string DetachedPlayerTitleFormat => Get(nameof(DetachedPlayerTitleFormat));
 }

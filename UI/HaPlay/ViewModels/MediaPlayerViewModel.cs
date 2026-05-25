@@ -773,6 +773,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>Visual label for the Play/Pause toggle.</summary>
     public string PlayPauseLabel => IsPlaying ? "⏸ Pause" : "▶ Play";
 
+    public string DetachedWindowTitle => Resources.Strings.Format(
+        nameof(Resources.Strings.DetachedPlayerTitleFormat), Name);
+
+    public event Action<MediaPlayerViewModel>? DetachRequested;
+
     public string PlaybackStateLabel =>
         IsPlaying ? Resources.Strings.PlaybackStatePlayingIndicator
         : IsMediaLoaded ? Resources.Strings.PlaybackStatePausedIndicator
@@ -1041,6 +1046,85 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     public void ResetVolume() => MasterVolumeDb = 0;
 
+    private float[]? _waveformPeaks;
+    private int _waveformRevision;
+    private CancellationTokenSource? _waveformCts;
+
+    public float[]? WaveformPeaks
+    {
+        get => _waveformPeaks;
+        private set { _waveformPeaks = value; OnPropertyChanged(); }
+    }
+
+    public int WaveformRevision
+    {
+        get => _waveformRevision;
+        private set { _waveformRevision = value; OnPropertyChanged(); }
+    }
+
+    private void StartWaveformExtraction(string? path)
+    {
+        _waveformCts?.Cancel();
+        _waveformCts?.Dispose();
+        _waveformCts = null;
+
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            WaveformPeaks = null;
+            WaveformRevision++;
+            return;
+        }
+
+        _waveformCts = new CancellationTokenSource();
+        var ct = _waveformCts.Token;
+        _ = Task.Run(async () =>
+        {
+            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct);
+            if (!ct.IsCancellationRequested)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    WaveformPeaks = peaks;
+                    WaveformRevision++;
+                });
+            }
+        }, ct);
+    }
+
+    private double _peakLevelDb = double.NegativeInfinity;
+
+    public double PeakLevelDb
+    {
+        get => _peakLevelDb;
+        private set
+        {
+            if (Math.Abs(_peakLevelDb - value) > 0.5 || double.IsNegativeInfinity(value) != double.IsNegativeInfinity(_peakLevelDb))
+            {
+                _peakLevelDb = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(PeakLevelNormalized));
+            }
+        }
+    }
+
+    public double PeakLevelNormalized =>
+        double.IsNegativeInfinity(PeakLevelDb) ? 0
+        : Math.Clamp((PeakLevelDb + 60) / 72.0, 0, 1);
+
+    private void PollAudioMeters()
+    {
+        var session = _session;
+        if (session is null) { PeakLevelDb = double.NegativeInfinity; return; }
+
+        var maxDb = double.NegativeInfinity;
+        foreach (var meter in session.AudioMeters)
+        {
+            var db = meter.ReadAndResetPeakDb();
+            if (db > maxDb) maxDb = db;
+        }
+        PeakLevelDb = maxDb;
+    }
+
     private static string FormatClock(TimeSpan t) =>
         t.TotalHours >= 1 ? t.ToString(@"hh\:mm\:ss") : t.ToString(@"mm\:ss");
 
@@ -1065,6 +1149,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(PlaybackStateColor));
         TogglePlayPauseCommand.NotifyCanExecuteChanged();
     }
+
+    partial void OnMediaFilePathChanged(string? value) => StartWaveformExtraction(value);
 
     partial void OnHoldFallbackVideoChanging(bool value) => _ = value;
 
@@ -2195,6 +2281,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     [RelayCommand]
+    private void DetachPlayer() => DetachRequested?.Invoke(this);
+
+    [RelayCommand]
     private async Task OpenRoutingAsync()
     {
         var owner = TryGetMainWindow();
@@ -2782,6 +2871,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             CurrentPosition = e;
             if (Duration > TimeSpan.Zero)
                 SeekSliderValue = e.Ticks * 1000.0 / Duration.Ticks;
+            PollAudioMeters();
         }, DispatcherPriority.Normal);
 
     private void OnLoopTimerTick(object? sender, EventArgs e) =>

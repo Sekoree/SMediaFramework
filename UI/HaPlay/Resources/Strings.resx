@@ -1902,4 +1902,13 @@
   <data name="ElapsedTimeLabel" xml:space="preserve">
     <value>Elapsed</value>
   </data>
+  <data name="DetachPlayerButton" xml:space="preserve">
+    <value>Detach</value>
+  </data>
+  <data name="DetachPlayerTooltip" xml:space="preserve">
+    <value>Pop this player out into its own window</value>
+  </data>
+  <data name="DetachedPlayerTitleFormat" xml:space="preserve">
+    <value>{0} — HaPlay</value>
+  </data>
 </root>

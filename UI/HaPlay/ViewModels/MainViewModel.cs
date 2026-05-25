@@ -623,10 +623,7 @@ public partial class MainViewModel : ViewModelBase
         var name = Strings.Format(nameof(Strings.PlayerNameFormat), _nextPlayerNumber++);
         var player = new MediaPlayerViewModel(OutputManagement, name, removable ? RemovePlayer : null);
         player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
-        // Phase 5.7.2 — forward pre-roll cache changes from each player to the Cue Player so it
-        // can paint warming badges on the matching rows. The cache event can fire from any thread
-        // (often a thread-pool continuation after a Task.Run pre-roll open), so hop to the UI
-        // dispatcher before touching Avalonia-bound properties.
+        player.DetachRequested += OnPlayerDetachRequested;
         player.CuePreRollChanged += ids =>
         {
             if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
@@ -658,6 +655,29 @@ public partial class MainViewModel : ViewModelBase
         Players.RemoveAt(idx);
         if (SelectedPlayer == player)
             SelectedPlayer = Players.Count > 0 ? Players[Math.Min(idx, Players.Count - 1)] : null;
+    }
+
+    private async void OnPlayerDetachRequested(MediaPlayerViewModel player)
+    {
+        var idx = Players.IndexOf(player);
+        if (idx < 0) return;
+
+        Players.RemoveAt(idx);
+        if (SelectedPlayer == player)
+            SelectedPlayer = Players.Count > 0 ? Players[Math.Min(idx, Players.Count - 1)] : null;
+
+        var owner = TryGetOwnerWindow();
+        var window = new Views.Dialogs.DetachedPlayerWindow { DataContext = player };
+        if (owner is not null)
+            await window.ShowDialog<object?>(owner);
+        else
+            window.Show();
+
+        if (!Players.Contains(player))
+        {
+            Players.Insert(Math.Min(idx, Players.Count), player);
+            SelectedPlayer = player;
+        }
     }
 
     private void SeedDefaultActionEndpointsIfEmpty()
