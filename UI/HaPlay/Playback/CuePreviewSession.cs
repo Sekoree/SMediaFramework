@@ -84,7 +84,8 @@ internal sealed class CuePreviewSession : IDisposable
 
     public static async Task<(CuePreviewSession? Session, string? Error)> TryOpenAsync(
         MediaCueNode cue,
-        CancellationToken ct)
+        CancellationToken ct,
+        int? previewAudioDeviceIndex = null)
     {
         if (cue.Source is not FilePlaylistItem fileItem)
             return ((CuePreviewSession?)null, "Preview requires a file media source.");
@@ -126,7 +127,7 @@ internal sealed class CuePreviewSession : IDisposable
                     builder = builder.WithVideoLead(sdl, disposeOnPlayerDispose: false);
 
                 if (hasAudio)
-                    builder = builder.WithPortAudio();
+                    builder = builder.WithPortAudio(deviceIndex: previewAudioDeviceIndex);
 
                 if (!builder.TryBuild(out player, out var err))
                 {

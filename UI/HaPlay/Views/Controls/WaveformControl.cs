@@ -33,7 +33,7 @@ public sealed class WaveformControl : Control
         set => SetValue(RevisionProperty, value);
     }
 
-    private static readonly IBrush BarBrush = new SolidColorBrush(Color.Parse("#224CAF50"));
+    private static readonly IBrush BarBrush = new SolidColorBrush(Color.Parse("#FFF"));
 
     public override void Render(DrawingContext ctx)
     {

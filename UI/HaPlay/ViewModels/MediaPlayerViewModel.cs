@@ -512,7 +512,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
             string? err = null;
             await Task.Run(() =>
             {
-                if (!HaPlayPlaybackSession.TryCreate(item, lines, _outputs, out created, out err, fileOpts))
+                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path) : null;
+                if (!HaPlayPlaybackSession.TryCreate(item, lines, _outputs, out created, out err, fileOpts, preOpened))
                     created = null;
             }, ct).ConfigureAwait(false);
 
@@ -537,6 +538,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     /// <summary>Serializes load/unload/stop/pause/play/seek and loop-timer Router use so Dispose cannot overlap transport.</summary>
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
+    private volatile bool _isTransportBusy;
+    private readonly Playback.PlaylistDecoderCache _decoderCache = new();
+    private CancellationTokenSource? _preOpenCts;
     private readonly CuePreRollCache _cuePreRoll = new();
 
     /// <summary>Forwarded from the pre-roll cache so the Cue Player can light warming badges
@@ -653,13 +657,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private async Task WithPlaybackArcAsync(Func<Task> action)
     {
         await _playbackArc.WaitAsync().ConfigureAwait(false);
+        _isTransportBusy = true;
+        Dispatcher.UIThread.Post(NotifyTransportCanExecuteChanged);
         try
         {
             await action().ConfigureAwait(false);
         }
         finally
         {
+            _isTransportBusy = false;
             _playbackArc.Release();
+            Dispatcher.UIThread.Post(NotifyTransportCanExecuteChanged);
         }
     }
 
@@ -1046,6 +1054,29 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     public void ResetVolume() => MasterVolumeDb = 0;
 
+    private void PreOpenAdjacentPlaylistItems()
+    {
+        _preOpenCts?.Cancel();
+        _preOpenCts?.Dispose();
+        _preOpenCts = new CancellationTokenSource();
+
+        var items = PlaylistItems;
+        var current = _currentPlaylistItem;
+        if (current is null || items.Count == 0) return;
+
+        var idx = items.IndexOf(current);
+        if (idx < 0) return;
+
+        var paths = new List<string>(2);
+        if (idx + 1 < items.Count && items[idx + 1] is FilePlaylistItem next)
+            paths.Add(next.Path);
+        if (idx - 1 >= 0 && items[idx - 1] is FilePlaylistItem prev)
+            paths.Add(prev.Path);
+
+        if (paths.Count > 0)
+            _decoderCache.PreOpenAsync(paths, _preOpenCts.Token);
+    }
+
     private float[]? _waveformPeaks;
     private int _waveformRevision;
     private CancellationTokenSource? _waveformCts;
@@ -1143,11 +1174,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     partial void OnIsPlayingChanged(bool value)
     {
-        _ = value;
         OnPropertyChanged(nameof(PlayPauseLabel));
         OnPropertyChanged(nameof(PlaybackStateLabel));
         OnPropertyChanged(nameof(PlaybackStateColor));
-        TogglePlayPauseCommand.NotifyCanExecuteChanged();
+        NotifyTransportCanExecuteChanged();
+        if (value)
+            PreOpenAdjacentPlaylistItems();
     }
 
     partial void OnMediaFilePathChanged(string? value) => StartWaveformExtraction(value);
@@ -2731,7 +2763,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
             _cuePreRoll.InvalidateAll();
             await Task.Run(() =>
             {
-                if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr, fileOpts))
+                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path) : null;
+                if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr, fileOpts, preOpened))
                     created = null;
             }).ConfigureAwait(false);
 
@@ -3056,8 +3089,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
         IsPlaying && _session is not null ? PauseAsync() : PlayAsync();
 
     private bool CanTogglePlayPause() =>
-        (_session is not null && IsMediaLoaded) ||
-        (_session is null && SelectedPlaylistItem is not null);
+        !_isTransportBusy &&
+        ((_session is not null && IsMediaLoaded) ||
+         (_session is null && SelectedPlaylistItem is not null));
 
     [RelayCommand(CanExecute = nameof(CanGoNext))]
     private async Task NextTrackAsync()
@@ -3192,11 +3226,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 // Play from a non-playing state — NDI receivers may have drained their buffers since the last
                 // Pause/Stop, so push silence ahead of the first real samples.
                 s.PrepareOutputsBeforePlay(holdFb);
-                // Live sessions only: discard any audio/video the receivers buffered between connect and
-                // Play so we don't start the router on stale FIFO samples (audio) or stale PTS-counter
-                // frames (video). No-op for file sessions. Must run before Router.Play so VideoPlayer.Play
-                // doesn't kick off DecodeLoop on stale-PTS frames.
                 s.PrepareLiveTransportBeforePlay();
+                s.ResetAllUnderrunBaselines();
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
             }, TimeSpan.FromSeconds(6));
 
@@ -3211,8 +3242,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     private bool CanPlay() =>
-        (_session is not null && IsMediaLoaded) ||
-        (_session is null && SelectedPlaylistItem is not null);
+        !_isTransportBusy &&
+        ((_session is not null && IsMediaLoaded) ||
+         (_session is null && SelectedPlaylistItem is not null));
 
     [RelayCommand(CanExecute = nameof(CanTransport))]
     private async Task PauseAsync()
@@ -3350,12 +3382,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
     }
 
-    private bool CanTransport() => _session is not null && IsMediaLoaded;
+    private bool CanTransport() => !_isTransportBusy && _session is not null && IsMediaLoaded;
 
     /// <summary>Phase C.5 — Stop is enabled while a session is loaded OR while a live item is in the
     /// waiting-for-source state. Without the second clause, Stop can't cancel the retry loop on a
     /// manual-name NDI item whose source never came online.</summary>
-    private bool CanStop() => (_session is not null && IsMediaLoaded) || IsWaitingForSource;
+    private bool CanStop() => !_isTransportBusy && ((_session is not null && IsMediaLoaded) || IsWaitingForSource);
 
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private async Task SeekToSliderAsync()

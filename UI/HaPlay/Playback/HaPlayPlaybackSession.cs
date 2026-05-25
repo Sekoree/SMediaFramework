@@ -312,19 +312,23 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         OutputManagementViewModel outputs,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
         out string? errorMessage,
-        HaPlayFilePlaybackOptions? filePlayback = null)
+        HaPlayFilePlaybackOptions? filePlayback = null,
+        MediaContainerDecoder? preOpenedDecoder = null)
     {
         session = null;
         errorMessage = null;
         switch (item)
         {
             case FilePlaylistItem f:
-                return TryCreate(f.Path, selectedOutputs, outputs, out session, out errorMessage, filePlayback);
+                return TryCreate(f.Path, selectedOutputs, outputs, out session, out errorMessage, filePlayback, preOpenedDecoder);
             case PortAudioInputPlaylistItem pa:
+                preOpenedDecoder?.Dispose();
                 return TryCreateLive(pa, selectedOutputs, outputs, preconnectedInput: null, out session, out errorMessage);
             case NDIInputPlaylistItem nd:
+                preOpenedDecoder?.Dispose();
                 return TryCreateLive(nd, selectedOutputs, outputs, preconnectedReceiver: null, out session, out errorMessage);
             default:
+                preOpenedDecoder?.Dispose();
                 errorMessage = $"Unsupported playlist item kind: {item?.GetType().Name ?? "(null)"}";
                 return false;
         }
@@ -336,35 +340,35 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         OutputManagementViewModel outputs,
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
         out string? errorMessage,
-        HaPlayFilePlaybackOptions? filePlayback = null)
+        HaPlayFilePlaybackOptions? filePlayback = null,
+        MediaContainerDecoder? preOpenedDecoder = null)
     {
         session = null;
         errorMessage = null;
-        // Caller must stop output previews on the UI thread before TryCreate (previews touch bound controls / SDL).
 
         var lines = selectedOutputs.ToList();
         var anyNDI = lines.Exists(static l => l.Definition is NDIOutputDefinition);
-        Trace.LogInformation("TryCreate: path={Path} selectedOutputs={Count} ([{Kinds}]) anyNDI={AnyNDI}",
+        Trace.LogInformation("TryCreate: path={Path} selectedOutputs={Count} ([{Kinds}]) anyNDI={AnyNDI} preOpened={PreOpened}",
             mediaPath, lines.Count,
             string.Join(",", lines.Select(l => l.Definition.GetType().Name)),
-            anyNDI);
+            anyNDI, preOpenedDecoder is not null);
         var mpOpt = new MediaPlayerOpenOptions(
             TryHardwareAcceleration: !anyNDI,
             IncludeAudioRouter: true);
 
-        // Pre-probe the container so we know HasVideo / HasAudio before we decide which carrier sides to
-        // acquire. Without this we'd have to acquire both sides always, which would pause carrier video
-        // during audio-only-source playback and flash NDI receivers to a stub format with no frames.
-        MediaContainerDecoder? decoder;
-        try
+        MediaContainerDecoder? decoder = preOpenedDecoder;
+        if (decoder is null)
         {
-            decoder = MediaContainerDecoder.Open(mediaPath, mpOpt.ToVideoDecoderOpenOptions());
-        }
-        catch (Exception ex)
-        {
-            Trace.LogError(ex, $"TryCreate: decoder open failed for {mediaPath}");
-            errorMessage = ex.Message;
-            return false;
+            try
+            {
+                decoder = MediaContainerDecoder.Open(mediaPath, mpOpt.ToVideoDecoderOpenOptions());
+            }
+            catch (Exception ex)
+            {
+                Trace.LogError(ex, $"TryCreate: decoder open failed for {mediaPath}");
+                errorMessage = ex.Message;
+                return false;
+            }
         }
 
         var hasVideo = decoder.HasVideo;
@@ -1958,6 +1962,15 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
 
         return wiring;
+    }
+
+    public void ResetAllUnderrunBaselines()
+    {
+        foreach (var wiring in _lineWiring.Values)
+        {
+            if (wiring.PortAudioOutput is { } pa)
+                wiring.PortAudioUnderrunBaseline = pa.UnderrunSamples;
+        }
     }
 
     private void SnapshotHealthBaselines(LineWiring wiring)

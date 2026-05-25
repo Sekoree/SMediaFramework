@@ -51,19 +51,40 @@ public partial class MediaPlayerView : UserControl
     {
         if (e.GetCurrentPoint(PlaylistListBox).Properties.IsLeftButtonPressed)
         {
+            if (e.ClickCount >= 2)
+            {
+                CancelDragCandidate();
+                return;
+            }
             _dragStartPoint = e.GetPosition(PlaylistListBox);
             _dragCandidate = GetPlaylistItemAtPoint(_dragStartPoint);
             _dragPressedArgs = _dragCandidate is not null ? e : null;
             if (_dragCandidate is not null)
+            {
                 PlaylistListBox.AddHandler(PointerMovedEvent, OnPlaylistPointerMoved, RoutingStrategies.Tunnel);
+                PlaylistListBox.AddHandler(PointerReleasedEvent, OnPlaylistPointerReleased, RoutingStrategies.Tunnel);
+            }
         }
+    }
+
+    private void OnPlaylistPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        CancelDragCandidate();
+    }
+
+    private void CancelDragCandidate()
+    {
+        _dragCandidate = null;
+        _dragPressedArgs = null;
+        PlaylistListBox.RemoveHandler(PointerMovedEvent, OnPlaylistPointerMoved);
+        PlaylistListBox.RemoveHandler(PointerReleasedEvent, OnPlaylistPointerReleased);
     }
 
     private async void OnPlaylistPointerMoved(object? sender, PointerEventArgs e)
     {
         if (_dragCandidate is null || _dragPressedArgs is null)
         {
-            PlaylistListBox.RemoveHandler(PointerMovedEvent, OnPlaylistPointerMoved);
+            CancelDragCandidate();
             return;
         }
 
@@ -72,12 +93,9 @@ public partial class MediaPlayerView : UserControl
         if (Math.Abs(delta.Y) < 8)
             return;
 
-        PlaylistListBox.RemoveHandler(PointerMovedEvent, OnPlaylistPointerMoved);
-
         var item = _dragCandidate;
         var pressedArgs = _dragPressedArgs;
-        _dragCandidate = null;
-        _dragPressedArgs = null;
+        CancelDragCandidate();
 
         var data = new DataTransfer();
         data.Add(DataTransferItem.Create(PlaylistItemFormat, item));

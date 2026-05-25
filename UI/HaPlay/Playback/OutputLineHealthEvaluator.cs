@@ -68,11 +68,17 @@ internal static class OutputLineHealthEvaluator
             var totalSubmitted = Math.Max(1, videoSubmitted + audioEnqueued);
             var totalDropped = videoDropped + audioDropped;
             var dropRatio = (double)totalDropped / totalSubmitted;
-            var underrunHeavy = portAudioUnderruns > 2400;
+
+            // Underrun scoring: use rate-based threshold instead of absolute count.
+            // 48000 frames/sec = full stream; allow up to ~500ms cumulative underrun
+            // before Error (covers startup transients and OS scheduler jitter).
+            // Warning only above 960 frames (~20ms) to ignore single-callback blips.
+            var underrunHeavy = portAudioUnderruns > 24000;
+            var underrunSignificant = portAudioUnderruns > 960;
 
             if (totalDropped > 120 || dropRatio > 0.05 || underrunHeavy)
                 state = OutputLineHealthState.Error;
-            else if (totalDropped > 0 || portAudioUnderruns > 0
+            else if (totalDropped > 0 || underrunSignificant
                      || (videoQueueCap > 0 && videoQueueDepth >= Math.Max(1, videoQueueCap / 2)))
                 state = OutputLineHealthState.Warning;
             else

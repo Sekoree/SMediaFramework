@@ -67,13 +67,13 @@ public sealed class CuePlaybackEngine : IDisposable
         get { lock (_previewGate) return _preview?.CueId; }
     }
 
-    /// <summary>Audition a single file media cue on the default PortAudio device and an optional
-    /// floating SDL preview window. Only one preview runs at a time (Phase 5.5).</summary>
+    public int? PreviewAudioDeviceIndex { get; set; }
+
     public async Task<string?> PreviewCueAsync(MediaCueNode cue, CancellationToken ct)
     {
         await StopPreviewAsync().ConfigureAwait(false);
 
-        var (session, err) = await CuePreviewSession.TryOpenAsync(cue, ct).ConfigureAwait(false);
+        var (session, err) = await CuePreviewSession.TryOpenAsync(cue, ct, PreviewAudioDeviceIndex).ConfigureAwait(false);
         if (session is null)
             return err ?? "Preview failed.";
 

@@ -1920,4 +1920,10 @@
   <data name="CuePreviewNoAudioHint" xml:space="preserve">
     <value>No audio waveform available for this cue.</value>
   </data>
+  <data name="DefaultDeviceLabel" xml:space="preserve">
+    <value>(Default device)</value>
+  </data>
+  <data name="PreviewOutputLabel" xml:space="preserve">
+    <value>Preview output:</value>
+  </data>
 </root>

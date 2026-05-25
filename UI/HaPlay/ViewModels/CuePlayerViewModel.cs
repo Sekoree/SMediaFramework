@@ -766,6 +766,11 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     }
 }
 
+public sealed record PreviewAudioDeviceOption(int? DeviceIndex, string DisplayName)
+{
+    public override string ToString() => DisplayName;
+}
+
 public partial class CuePlayerViewModel : ViewModelBase
 {
     private CancellationTokenSource? _transportRunCts;
@@ -806,6 +811,25 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public string PreviewButtonLabel =>
         IsPreviewingSelectedCue ? Strings.StopPreviewCueButton : Strings.PreviewCueButton;
+
+    public ObservableCollection<PreviewAudioDeviceOption> PreviewAudioDevices { get; } = new();
+
+    [ObservableProperty]
+    private PreviewAudioDeviceOption? _selectedPreviewAudioDevice;
+
+    partial void OnSelectedPreviewAudioDeviceChanged(PreviewAudioDeviceOption? value) =>
+        OnPropertyChanged(nameof(PreviewAudioDeviceIndex));
+
+    public int? PreviewAudioDeviceIndex => SelectedPreviewAudioDevice?.DeviceIndex;
+
+    public void RefreshPreviewAudioDevices()
+    {
+        PreviewAudioDevices.Clear();
+        PreviewAudioDevices.Add(new PreviewAudioDeviceOption(null, Strings.Format(nameof(Strings.DefaultDeviceLabel))));
+        foreach (var dev in S.Media.PortAudio.PortAudioDeviceCatalog.EnumerateOutputDevices())
+            PreviewAudioDevices.Add(new PreviewAudioDeviceOption(dev.GlobalDeviceIndex, dev.Name));
+        SelectedPreviewAudioDevice ??= PreviewAudioDevices.FirstOrDefault();
+    }
 
     private float[]? _selectedCueWaveform;
     private int _selectedCueWaveformRevision;

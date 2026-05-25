@@ -13,10 +13,11 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
         this MediaPlayerOpenFileBuilder builder,
         int? deviceLatencyMs = null,
         int? chunkSamples = null,
-        PortAudioPlaybackHostPlayerOwnership ownership = PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer)
+        PortAudioPlaybackHostPlayerOwnership ownership = PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer,
+        int? deviceIndex = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, ownership);
+        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, ownership, deviceIndex);
         return builder;
     }
 
@@ -24,10 +25,11 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
         this MediaPlayerOpenDecoderBuilder builder,
         int? deviceLatencyMs = null,
         int? chunkSamples = null,
-        PortAudioPlaybackHostPlayerOwnership ownership = PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer)
+        PortAudioPlaybackHostPlayerOwnership ownership = PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer,
+        int? deviceIndex = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, ownership);
+        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, ownership, deviceIndex);
         return builder;
     }
 
@@ -39,7 +41,8 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
         MediaPlayerOpenBuilder builder,
         int? deviceLatencyMs,
         int? chunkSamples,
-        PortAudioPlaybackHostPlayerOwnership ownership)
+        PortAudioPlaybackHostPlayerOwnership ownership,
+        int? deviceIndex = null)
     {
         builder.CompanionSteps.Add(player =>
         {
@@ -65,7 +68,8 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
                 samples,
                 deviceLatencyMs,
                 msg => builder.CompanionFailureMessage = msg,
-                ownership);
+                ownership,
+                deviceIndex);
 
             if (host is null)
             {

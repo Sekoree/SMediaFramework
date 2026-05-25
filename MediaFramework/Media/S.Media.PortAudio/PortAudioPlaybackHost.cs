@@ -102,7 +102,8 @@ public sealed class PortAudioPlaybackHost : IDisposable
         int chunkSamples = 480,
         int? deviceLatencyMs = null,
         Action<string>? onWireFailedMessage = null,
-        PortAudioPlaybackHostPlayerOwnership playerOwnership = PortAudioPlaybackHostPlayerOwnership.HostDisposesPlayer)
+        PortAudioPlaybackHostPlayerOwnership playerOwnership = PortAudioPlaybackHostPlayerOwnership.HostDisposesPlayer,
+        int? deviceIndex = null)
     {
         ArgumentNullException.ThrowIfNull(container);
         ArgumentNullException.ThrowIfNull(router);
@@ -120,7 +121,7 @@ public sealed class PortAudioPlaybackHost : IDisposable
             double? latencySec = deviceLatencyMs is > 0 ? deviceLatencyMs.Value / 1000.0 : null;
             var output = new PortAudioOutput(
                 audioSource.Format,
-                deviceIndex: null,
+                deviceIndex: deviceIndex,
                 suggestedLatency: latencySec,
                 framesPerBuffer: chunkSamples,
                 ringCapacityFrames: audioSource.Format.SampleRate);

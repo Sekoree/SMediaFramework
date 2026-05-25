@@ -658,4 +658,6 @@ public static class Strings
     public static string CuePreviewTabLabel => Get(nameof(CuePreviewTabLabel));
     public static string CuePreviewWaveformHint => Get(nameof(CuePreviewWaveformHint));
     public static string CuePreviewNoAudioHint => Get(nameof(CuePreviewNoAudioHint));
+    public static string DefaultDeviceLabel => Get(nameof(DefaultDeviceLabel));
+    public static string PreviewOutputLabel => Get(nameof(PreviewOutputLabel));
 }

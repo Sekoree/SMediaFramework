@@ -52,11 +52,16 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
         CuePlayer.StopPlaybackCallback = _cuePlaybackEngine.StopAsync;
         CuePlayer.SetPlaybackPausedCallback = _cuePlaybackEngine.SetPausedAsync;
-        CuePlayer.PreviewCueCallback = _cuePlaybackEngine.PreviewCueAsync;
+        CuePlayer.PreviewCueCallback = async (cue, ct) =>
+        {
+            _cuePlaybackEngine.PreviewAudioDeviceIndex = CuePlayer.PreviewAudioDeviceIndex;
+            return await _cuePlaybackEngine.PreviewCueAsync(cue, ct);
+        };
         CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
         CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
+        CuePlayer.RefreshPreviewAudioDevices();
         foreach (var player in Players)
             player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         SeedDefaultActionEndpointsIfEmpty();
