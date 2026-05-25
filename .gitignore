@@ -452,3 +452,8 @@ $RECYCLE.BIN/
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# Published framework binaries (MediaFramework/Scripts/build-framework.sh); README stays tracked
+/MediaFramework/FrameworkBuilds/*
+/MediaFramework/Reference/*
+!/MediaFramework/FrameworkBuilds/README.md

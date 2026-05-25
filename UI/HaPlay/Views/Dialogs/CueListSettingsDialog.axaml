@@ -1,0 +1,35 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.CueListSettingsDialog"
+        x:DataType="vm:CueListSettingsDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="420"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        SizeToContent="Height"
+        MinWidth="360">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{x:Static res:Strings.OkButton}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <StackPanel Spacing="10">
+      <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="8">
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.PreRollNLabel}" VerticalAlignment="Center"
+                   ToolTip.Tip="{x:Static res:Strings.PreRollTooltip}" />
+        <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding PreRollCount, Mode=TwoWay}" Minimum="0" Maximum="16" />
+
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.DefaultTriggerModeLabel}" VerticalAlignment="Center" />
+        <ComboBox Grid.Row="1" Grid.Column="1" ItemsSource="{Binding TriggerModes}"
+                  SelectedItem="{Binding DefaultTriggerMode, Mode=TwoWay}" HorizontalAlignment="Stretch" />
+
+        <CheckBox Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
+                  Content="{x:Static res:Strings.AutoRenumberOnInsertLabel}"
+                  IsChecked="{Binding AutoRenumberOnInsert, Mode=TwoWay}" />
+      </Grid>
+    </StackPanel>
+  </DockPanel>
+</Window>

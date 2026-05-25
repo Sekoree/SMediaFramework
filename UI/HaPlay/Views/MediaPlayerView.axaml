@@ -1,0 +1,340 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:views="using:HaPlay.Views"
+             xmlns:models="using:HaPlay.Models"
+             xmlns:res="using:HaPlay.Resources"
+             xmlns:tdg="using:Avalonia.Controls"
+             xmlns:controls="using:HaPlay.Views.Controls"
+             mc:Ignorable="d" d:DesignWidth="780" d:DesignHeight="900"
+             x:Class="HaPlay.Views.MediaPlayerView"
+             x:DataType="vm:MediaPlayerViewModel">
+
+  <UserControl.Resources>
+    <views:FilenameConverter x:Key="FilenameConverter" />
+  </UserControl.Resources>
+
+  <UserControl.Styles>
+    <Style Selector="TextBlock.section-title">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Margin" Value="0,0,0,4" />
+    </Style>
+    <Style Selector="TextBlock.time">
+      <Setter Property="FontFamily" Value="Consolas,monospace" />
+      <Setter Property="FontSize" Value="13" />
+    </Style>
+    <Style Selector="TextBlock.time-label">
+      <Setter Property="FontSize" Value="11" />
+      <Setter Property="Opacity" Value="0.6" />
+      <Setter Property="TextAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Border.card">
+      <Setter Property="BorderBrush" Value="#22808080" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="14" />
+      <Setter Property="Background" Value="#08808080" />
+    </Style>
+    <Style Selector="Button.transport">
+      <Setter Property="MinWidth" Value="56" />
+      <Setter Property="Padding" Value="12,8" />
+    </Style>
+    <Style Selector="Button.play-pause">
+      <Setter Property="MinWidth" Value="96" />
+      <Setter Property="Padding" Value="14,8" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <!-- Compact mode: hide secondary controls when the player is narrow -->
+    <Style Selector="UserControl.compact TextBlock.hide-compact">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="UserControl.compact StackPanel.hide-compact">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+    <Style Selector="UserControl.compact Button.transport">
+      <Setter Property="MinWidth" Value="36" />
+      <Setter Property="Padding" Value="6,6" />
+    </Style>
+    <Style Selector="UserControl.compact Button.play-pause">
+      <Setter Property="MinWidth" Value="64" />
+      <Setter Property="Padding" Value="8,6" />
+    </Style>
+    <Style Selector="UserControl.compact Border.card">
+      <Setter Property="Padding" Value="8" />
+    </Style>
+  </UserControl.Styles>
+    <DockPanel LastChildFill="True">
+
+      <!-- Status banner -->
+      <Border DockPanel.Dock="Top"
+              IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+              Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
+              CornerRadius="4" Padding="10,6" Margin="0,0,0,12">
+        <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
+      </Border>
+
+      <ScrollViewer>
+      <StackPanel Spacing="12">
+
+        <!-- Now-playing / transport card -->
+        <Border Classes="card">
+          <StackPanel Spacing="12">
+
+            <!-- Header: player name + playback state + settings -->
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto">
+              <!-- Playback state indicator -->
+              <Border Grid.Column="0" CornerRadius="4" Padding="6,2" Margin="0,0,8,0"
+                      VerticalAlignment="Center"
+                      Background="{Binding PlaybackStateColor}">
+                <TextBlock FontSize="10" FontWeight="SemiBold"
+                           Text="{Binding PlaybackStateLabel}" />
+              </Border>
+              <TextBox Grid.Column="1" FontWeight="SemiBold" FontSize="16"
+                       VerticalAlignment="Center" Text="{Binding Name, Mode=TwoWay}"
+                       BorderThickness="0" Background="Transparent"
+                       MinWidth="80" Padding="2,0"
+                       IsReadOnly="True"
+                       DoubleTapped="OnPlayerNameDoubleTapped"
+                       LostFocus="OnPlayerNameLostFocus"
+                       KeyDown="OnPlayerNameKeyDown" />
+              <Button Grid.Column="3" Padding="6,4"
+                      Content="{x:Static res:Strings.PlayerSettingsButton}"
+                      Command="{Binding OpenPlayerSettingsCommand}"
+                      ToolTip.Tip="{x:Static res:Strings.PlayerSettingsTooltip}" />
+              <Button Grid.Column="4" Padding="6,4" Margin="4,0,0,0"
+                      Content="{x:Static res:Strings.AudioMatrixButton}"
+                      Command="{Binding OpenAudioMatrixCommand}"
+                      ToolTip.Tip="{x:Static res:Strings.AudioMatrixButtonTooltip}" />
+              <Button Grid.Column="5" Padding="8,4" Margin="4,0,0,0"
+                      Content="{x:Static res:Strings.MediaPlayerSettingsButtonLabel}"
+                      ToolTip.Tip="{x:Static res:Strings.MediaPlayerSettingsTooltip}">
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="{x:Static res:Strings.SavePlayerConfigMenuHeader}" Command="{Binding SavePlayerConfigCommand}" />
+                    <MenuItem Header="{x:Static res:Strings.LoadPlayerConfigMenuHeader}" Command="{Binding LoadPlayerConfigCommand}" />
+                    <Separator />
+                    <MenuItem Header="{x:Static res:Strings.UnloadCurrentSessionMenuHeader}"
+                              Command="{Binding CloseSessionCommand}" />
+                    <MenuItem Header="{x:Static res:Strings.RemoveThisPlayerMenuHeader}"
+                              Command="{Binding RemovePlayerCommand}"
+                              IsVisible="{Binding CanRemove}" />
+                    <Separator />
+                    <MenuItem Header="{x:Static res:Strings.DetachPlayerButton}"
+                              Command="{Binding DetachPlayerCommand}"
+                              ToolTip.Tip="{x:Static res:Strings.DetachPlayerTooltip}" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+            </Grid>
+
+            <!-- Current source -->
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Border Background="#22808080" CornerRadius="3" Padding="6,2"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="{x:Static res:Strings.SourceKindTooltip}">
+                <TextBlock FontSize="11" FontWeight="SemiBold"
+                           Text="{Binding SourceKindLabel}" />
+              </Border>
+              <TextBlock Opacity="0.75" FontSize="12" TextTrimming="CharacterEllipsis"
+                         VerticalAlignment="Center"
+                         Text="{Binding CurrentMediaDisplay, FallbackValue={x:Static res:Strings.NoMediaLoadedHint}, TargetNullValue={x:Static res:Strings.NoMediaLoadedHint}}"
+                         ToolTip.Tip="{Binding CurrentMediaDisplay}" />
+            </StackPanel>
+
+            <!-- "waiting for source" banner for live inputs -->
+            <Border IsVisible="{Binding IsWaitingForSource}"
+                    Background="#332E7DAA" CornerRadius="3" Padding="8,4">
+              <TextBlock FontSize="12" FontWeight="SemiBold" TextWrapping="Wrap"
+                         Text="{Binding WaitingForSourceMessage}" />
+            </Border>
+
+            <!-- Scrubber with waveform overlay -->
+            <Grid IsVisible="{Binding IsTransportSeekable}">
+              <controls:WaveformControl Height="24" Margin="8,0"
+                  Peaks="{Binding WaveformPeaks}"
+                  Revision="{Binding WaveformRevision}"
+                  IsHitTestVisible="False" />
+              <Slider Name="SeekSlider"
+                      Minimum="0" Maximum="1000"
+                      Value="{Binding SeekSliderValue, Mode=TwoWay}"
+                      IsEnabled="{Binding IsMediaLoaded}"
+                      ToolTip.ShowDelay="200"
+                      ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}" />
+            </Grid>
+
+            <!-- Three times: position / middle (toggle elapsed/remaining) / total -->
+            <Grid ColumnDefinitions="*,*,*" IsVisible="{Binding IsTransportSeekable}">
+              <StackPanel Grid.Column="0">
+                <TextBlock Classes="time" HorizontalAlignment="Center"
+                           Text="{Binding CurrentPositionText}" />
+                <TextBlock Classes="time-label hide-compact" Text="{x:Static res:Strings.PositionTimeLabel}" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Tapped="OnMiddleTimeTapped" Cursor="Hand"
+                          ToolTip.Tip="{x:Static res:Strings.ToggleTimeDisplayTooltip}">
+                <TextBlock Classes="time" HorizontalAlignment="Center"
+                           Text="{Binding MiddleTimeText}" />
+                <TextBlock Classes="time-label hide-compact" Text="{Binding MiddleTimeLabel}" />
+              </StackPanel>
+              <StackPanel Grid.Column="2">
+                <TextBlock Classes="time" HorizontalAlignment="Center" Opacity="0.75"
+                           Text="{Binding DurationText}" />
+                <TextBlock Classes="time-label hide-compact" Text="{x:Static res:Strings.DurationTimeLabel}" />
+              </StackPanel>
+            </Grid>
+
+            <!-- Transport row: prev / play-pause / next / stop + loop + display-mode -->
+            <Grid ColumnDefinitions="*,Auto,*">
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6"
+                          HorizontalAlignment="Center">
+                <Button Classes="transport" Content="{x:Static res:Strings.PreviousTrackGlyph}"
+                        Command="{Binding PreviousTrackCommand}"
+                        ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}" />
+                <Button Classes="play-pause"
+                        Content="{Binding PlayPauseLabel}"
+                        Command="{Binding TogglePlayPauseCommand}"
+                        ToolTip.Tip="{x:Static res:Strings.PlayPauseTooltip}" />
+                <Button Classes="transport" Content="{x:Static res:Strings.NextTrackGlyph}"
+                        Command="{Binding NextTrackCommand}"
+                        ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}" />
+                <Button Classes="transport" Content="{x:Static res:Strings.StopTrackGlyph}"
+                        Command="{Binding StopCommand}"
+                        ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}" />
+              </StackPanel>
+              <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6"
+                          HorizontalAlignment="Right">
+                <ToggleButton Content="{x:Static res:Strings.MuteToggleLabel}"
+                              IsChecked="{Binding MasterMuted}"
+                              Padding="10,6"
+                              ToolTip.Tip="{x:Static res:Strings.MuteToggleTooltip}" />
+                <Slider Name="VolumeSlider" Width="120" Minimum="-60" Maximum="12"
+                        Value="{Binding MasterVolumeDb, Mode=TwoWay}"
+                        VerticalAlignment="Center"
+                        ToolTip.Tip="{x:Static res:Strings.ResetVolumeTooltip}" />
+                <TextBlock Classes="time" Width="56" VerticalAlignment="Center"
+                           Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
+                <controls:LevelMeterControl Width="48" Height="10"
+                    VerticalAlignment="Center"
+                    Level="{Binding PeakLevelNormalized}" />
+                <ToggleButton Content="{x:Static res:Strings.LoopToggleLabel}" IsChecked="{Binding IsLooping}" Padding="10,6"
+                              ToolTip.Tip="{x:Static res:Strings.LoopToggleTooltip}" />
+                <ToggleButton Content="{x:Static res:Strings.AutoAdvanceToggleLabel}"
+                              IsChecked="{Binding AutoAdvancePlaylist}" Padding="10,6"
+                              ToolTip.Tip="{x:Static res:Strings.AutoAdvanceToggleTooltip}" />
+              </StackPanel>
+            </Grid>
+            <TextBlock Classes="hide-compact" Opacity="0.35" FontSize="10" HorizontalAlignment="Center"
+                       Text="{x:Static res:Strings.TransportKeyboardHints}" />
+          </StackPanel>
+        </Border>
+
+        <!-- Playlist card -->
+        <Border Classes="card"
+                ToolTip.Tip="{x:Static res:Strings.PlaylistCardTooltip}">
+          <DockPanel LastChildFill="True">
+            <DockPanel DockPanel.Dock="Top" LastChildFill="False" Margin="0,0,0,8">
+              <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="4" Margin="0,0,0,8">
+                <TabStrip ItemsSource="{Binding PlaylistTabs}"
+                          SelectedItem="{Binding SelectedPlaylistTab}"
+                          MinWidth="260">
+                  <TabStrip.ItemTemplate>
+                    <DataTemplate x:DataType="vm:PlaylistTabViewModel">
+                      <TextBox Text="{Binding Name, Mode=TwoWay}"
+                               MinWidth="72"
+                               BorderThickness="0"
+                               Background="Transparent" />
+                    </DataTemplate>
+                  </TabStrip.ItemTemplate>
+                </TabStrip>
+                <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="34"
+                        Command="{Binding AddPlaylistTabCommand}"
+                        ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
+                <Button Content="{x:Static res:Strings.RemoveTabButton}"
+                        Command="{Binding RemovePlaylistTabCommand}" />
+              </StackPanel>
+            </DockPanel>
+
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto" Margin="0,0,0,8" ColumnSpacing="4">
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.PlaylistSectionTitle}" Classes="section-title" VerticalAlignment="Center" />
+              <Button Grid.Column="1" Content="{x:Static res:Strings.AddFilesButton}"
+                      Command="{Binding AddFilesToPlaylistCommand}" />
+              <Button Grid.Column="2" Content="{x:Static res:Strings.AddLiveInputButton}"
+                      ToolTip.Tip="{x:Static res:Strings.AddLiveInputTooltip}">
+                <Button.Flyout>
+                  <MenuFlyout>
+                    <MenuItem Header="{x:Static res:Strings.PortAudioInputMenuHeader}"
+                              Command="{Binding AddPortAudioInputCommand}" />
+                    <MenuItem Header="{x:Static res:Strings.NdiInputMenuHeader}"
+                              Command="{Binding AddNDIInputCommand}" />
+                  </MenuFlyout>
+                </Button.Flyout>
+              </Button>
+              <Button Grid.Column="3" Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveFromPlaylistCommand}"
+                      ToolTip.Tip="{x:Static res:Strings.RemovePlaylistItemTooltip}" />
+              <Button Grid.Column="4" Content="{x:Static res:Strings.MoveUpButton}" Command="{Binding MovePlaylistItemUpCommand}"
+                      MinWidth="34" ToolTip.Tip="{x:Static res:Strings.MoveUpTooltip}" />
+              <Button Grid.Column="5" Content="{x:Static res:Strings.MoveDownButton}" Command="{Binding MovePlaylistItemDownCommand}"
+                      MinWidth="34" ToolTip.Tip="{x:Static res:Strings.MoveDownTooltip}" />
+            </Grid>
+
+            <ListBox Name="PlaylistListBox" MinHeight="220" MaxHeight="380"
+                     ItemsSource="{Binding PlaylistItems}"
+                     SelectedItem="{Binding SelectedPlaylistItem, Mode=TwoWay}"
+                     DoubleTapped="OnPlaylistItemDoubleTapped">
+              <ListBox.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="{x:Static res:Strings.PlaylistContextMoveUp}"
+                            Command="{Binding MovePlaylistItemUpCommand}" />
+                  <MenuItem Header="{x:Static res:Strings.PlaylistContextMoveDown}"
+                            Command="{Binding MovePlaylistItemDownCommand}" />
+                  <Separator />
+                  <MenuItem Header="{x:Static res:Strings.PlaylistContextRemove}"
+                            Command="{Binding RemoveFromPlaylistCommand}" />
+                </ContextMenu>
+              </ListBox.ContextMenu>
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="models:PlaylistItem">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="{Binding KindGlyph}" Opacity="0.85" />
+                    <TextBlock Text="{Binding DisplayName}"
+                               ToolTip.Tip="{Binding ToolTip}"
+                               TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <!-- Playlist file operations -->
+        <StackPanel Classes="hide-compact" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right" Margin="0,-8,0,0">
+          <Menu VerticalAlignment="Center" Padding="0">
+            <MenuItem Header="{x:Static res:Strings.PlaylistFilesMenu}" Padding="8,4">
+              <MenuItem Header="{x:Static res:Strings.SaveTabButton}"
+                        Command="{Binding SavePlaylistTabCommand}" />
+              <MenuItem Header="{x:Static res:Strings.LoadTabButton}"
+                        Command="{Binding LoadPlaylistTabCommand}" />
+            </MenuItem>
+          </Menu>
+        </StackPanel>
+
+        <!-- Routing quick-view (compact summary + edit button) -->
+        <Border Classes="card" Padding="10">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+            <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RoutingSectionTitle}"
+                       FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Opacity="0.7" VerticalAlignment="Center"
+                       Text="{Binding RoutingSummary}" />
+            <Button Grid.Column="2"
+                    Content="{x:Static res:Strings.RoutingEditButton}"
+                    Command="{Binding OpenRoutingCommand}"
+                    ToolTip.Tip="{x:Static res:Strings.RoutingEditTooltip}" />
+          </Grid>
+        </Border>
+
+      </StackPanel>
+      </ScrollViewer>
+    </DockPanel>
+</UserControl>

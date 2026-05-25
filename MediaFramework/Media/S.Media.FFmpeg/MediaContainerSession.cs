@@ -1,0 +1,73 @@
+using S.Media.Core.Audio;
+using S.Media.Core.Clock;
+using S.Media.Core.Playback;
+using S.Media.Core.Video;
+
+namespace S.Media.FFmpeg;
+
+/// <summary>
+/// Pairs one <see cref="MediaContainerDecoder"/> with playback controls and shared-mux flush coordination.
+/// </summary>
+public sealed class MediaContainerSession
+{
+    internal MediaContainerSession(MediaContainerDecoder container, IAvPlaybackSession session)
+    {
+        Container = container ?? throw new ArgumentNullException(nameof(container));
+        Session = session ?? throw new ArgumentNullException(nameof(session));
+    }
+
+    public static MediaContainerSession Create(
+        MediaContainerDecoder decoder,
+        VideoPlayer video,
+        IMediaClock clock,
+        AudioRouter? audioRouter = null,
+        MediaClock? audioClock = null,
+        string? audioSourceId = null)
+    {
+        ArgumentNullException.ThrowIfNull(decoder);
+        ArgumentNullException.ThrowIfNull(video);
+        ArgumentNullException.ThrowIfNull(clock);
+        return new MediaContainerSession(decoder,
+            new MediaPlaybackSession(video, clock, audioRouter, audioClock, audioSourceId));
+    }
+
+    public MediaContainerDecoder Container { get; }
+    internal IAvPlaybackSession Session { get; }
+
+    public void Play(
+        Action? prefillBeforeHardware = null,
+        Action? startHardware = null,
+        IPlaybackClock? videoOnlyMaster = null,
+        Func<bool>? verifyPrebufferAfterPrefill = null) =>
+        Session.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+
+    public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
+        Session.Pause(cancellationToken, flushSharedMuxAfterPause);
+
+    public void Pause(CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
+        Session.Pause(cancellationToken, ResolveFlush(flushPolicy));
+
+    public void PauseSkippingSharedMuxFlush(CancellationToken cancellationToken = default) =>
+        Session.Pause(cancellationToken, flushSharedMuxAfterPause: null);
+
+    public void SeekCoordinatedSkippingSharedMuxFlush(TimeSpan position, CancellationToken cancellationToken = default) =>
+        AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
+            position, cancellationToken, flushSharedMuxAfterPause: null);
+
+    public void Seek(TimeSpan position) =>
+        AvPlaybackCoordinator.Seek(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId, position);
+
+    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
+        Action? flushSharedMuxAfterPause = null) =>
+        AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
+            position, cancellationToken, flushSharedMuxAfterPause);
+
+    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
+        AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
+            position, cancellationToken, ResolveFlush(flushPolicy));
+
+    public void SeekPresentation(TimeSpan position) => Container.SeekPresentation(position);
+
+    private Action? ResolveFlush(PauseFlushPolicy policy) =>
+        policy == PauseFlushPolicy.FlushCodecPipelines ? Container.FlushCodecPipelines : null;
+}

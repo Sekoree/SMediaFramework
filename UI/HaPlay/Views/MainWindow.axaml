@@ -1,0 +1,14 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:views="using:HaPlay.Views"
+        mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="640"
+        x:Class="HaPlay.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Width="960" Height="640" MinWidth="720" MinHeight="480"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="{Binding ProjectTitle, FallbackValue=HaPlay}">
+  <views:MainView />
+</Window>
