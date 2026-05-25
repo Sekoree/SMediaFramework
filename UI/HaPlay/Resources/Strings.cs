@@ -655,4 +655,7 @@ public static class Strings
     public static string DetachPlayerButton => Get(nameof(DetachPlayerButton));
     public static string DetachPlayerTooltip => Get(nameof(DetachPlayerTooltip));
     public static string DetachedPlayerTitleFormat => Get(nameof(DetachedPlayerTitleFormat));
+    public static string CuePreviewTabLabel => Get(nameof(CuePreviewTabLabel));
+    public static string CuePreviewWaveformHint => Get(nameof(CuePreviewWaveformHint));
+    public static string CuePreviewNoAudioHint => Get(nameof(CuePreviewNoAudioHint));
 }

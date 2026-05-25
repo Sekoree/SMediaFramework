@@ -807,6 +807,66 @@ public partial class CuePlayerViewModel : ViewModelBase
     public string PreviewButtonLabel =>
         IsPreviewingSelectedCue ? Strings.StopPreviewCueButton : Strings.PreviewCueButton;
 
+    private float[]? _selectedCueWaveform;
+    private int _selectedCueWaveformRevision;
+    private CancellationTokenSource? _waveformCts;
+
+    public float[]? SelectedCueWaveform
+    {
+        get => _selectedCueWaveform;
+        private set { _selectedCueWaveform = value; OnPropertyChanged(); }
+    }
+
+    public int SelectedCueWaveformRevision
+    {
+        get => _selectedCueWaveformRevision;
+        private set { _selectedCueWaveformRevision = value; OnPropertyChanged(); }
+    }
+
+    public bool HasSelectedCueWaveform =>
+        HasSelectedMediaCueWithAudio && SelectedCueWaveform is { Length: > 0 };
+
+    private void ExtractCueWaveform(CueNodeViewModel? cue)
+    {
+        _waveformCts?.Cancel();
+        _waveformCts?.Dispose();
+        _waveformCts = null;
+
+        if (cue is not { Kind: CueNodeKind.Media } || !cue.SourceHasAudio)
+        {
+            SelectedCueWaveform = null;
+            SelectedCueWaveformRevision++;
+            OnPropertyChanged(nameof(HasSelectedCueWaveform));
+            return;
+        }
+
+        var source = cue.MediaSourceItem;
+        var path = source is FilePlaylistItem f ? f.Path : null;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            SelectedCueWaveform = null;
+            SelectedCueWaveformRevision++;
+            OnPropertyChanged(nameof(HasSelectedCueWaveform));
+            return;
+        }
+
+        _waveformCts = new CancellationTokenSource();
+        var ct = _waveformCts.Token;
+        _ = Task.Run(async () =>
+        {
+            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct);
+            if (!ct.IsCancellationRequested)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    SelectedCueWaveform = peaks;
+                    SelectedCueWaveformRevision++;
+                    OnPropertyChanged(nameof(HasSelectedCueWaveform));
+                });
+            }
+        }, ct);
+    }
+
     /// <summary>Visible when the selected cue is active in the Now Playing panel (Phase 5.5.2).</summary>
     public bool IsCueScrubberVisible =>
         SelectedCueNode is not null && ActiveCues.Any(a => a.CueId == SelectedCueNode.Id);
@@ -1128,6 +1188,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             SyncCueScrubberFromActiveSelection();
             TogglePreviewCommand.NotifyCanExecuteChanged();
             SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
+            if (e.PropertyName is nameof(CueNodeViewModel.SourceHasAudio))
+                ExtractCueWaveform(_watchedSelectedCueForProbe);
         }
     }
 
@@ -1221,6 +1283,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         SyncCueScrubberFromActiveSelection();
         SeekActiveCueFromScrubberCommand.NotifyCanExecuteChanged();
         RefreshVideoFrameRateMismatchWarning();
+        ExtractCueWaveform(value);
 
         if (value?.Kind == CueNodeKind.Action && Guid.TryParse(value.EndpointIdText, out var endpointId))
             SelectedActionEndpoint = ActionEndpoints.FirstOrDefault(e => e.Id == endpointId);

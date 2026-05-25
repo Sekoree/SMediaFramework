@@ -1911,4 +1911,13 @@
   <data name="DetachedPlayerTitleFormat" xml:space="preserve">
     <value>{0} — HaPlay</value>
   </data>
+  <data name="CuePreviewTabLabel" xml:space="preserve">
+    <value>Preview</value>
+  </data>
+  <data name="CuePreviewWaveformHint" xml:space="preserve">
+    <value>Waveform overview of the selected cue's audio</value>
+  </data>
+  <data name="CuePreviewNoAudioHint" xml:space="preserve">
+    <value>No audio waveform available for this cue.</value>
+  </data>
 </root>
