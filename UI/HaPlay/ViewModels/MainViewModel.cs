@@ -50,6 +50,7 @@ public partial class MainViewModel : ViewModelBase
         _cuePlaybackEngine.PreviewEnded += (_, id) => CuePlayer.OnPreviewEnded(id);
         CuePlayer.CancelCueCallback = _cuePlaybackEngine.StopCueAsync;
         CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
+        CuePlayer.MediaCueGroupExecutor = _cuePlaybackEngine.ExecuteGroupAsync;
         CuePlayer.StopPlaybackCallback = _cuePlaybackEngine.StopAsync;
         CuePlayer.SetPlaybackPausedCallback = _cuePlaybackEngine.SetPausedAsync;
         CuePlayer.PreviewCueCallback = async (cue, ct) =>

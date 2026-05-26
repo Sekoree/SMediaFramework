@@ -473,7 +473,8 @@
                       IsEnabled="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
             </Grid>
 
-            <ItemsControl DockPanel.Dock="Top" ItemsSource="{Binding ActiveCues}" Margin="0,0,0,8">
+            <ScrollViewer DockPanel.Dock="Top" MaxHeight="320" Margin="0,0,0,8">
+            <ItemsControl ItemsSource="{Binding ActiveCues}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
                   <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="3"
@@ -499,6 +500,7 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+            </ScrollViewer>
 
             <TextBlock DockPanel.Dock="Top"
                        Text="{x:Static res:Strings.NowPlayingNoneHint}"
@@ -513,6 +515,7 @@
                        Margin="0,8,0,4"
                        IsVisible="{Binding UpcomingCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
 
+            <ScrollViewer>
             <ItemsControl ItemsSource="{Binding UpcomingCues}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:CueNodeViewModel">
@@ -524,6 +527,7 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+            </ScrollViewer>
           </DockPanel>
         </Border>
       </Grid>

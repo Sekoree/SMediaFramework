@@ -957,7 +957,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 }
                 else
                 {
-                    while (_videoPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
+                    while (_videoPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest
+                           && Volatile.Read(ref _videoDecodeYieldRequested) == 0)
                         Monitor.Wait(_queueGate, 50);
 
                     if (_videoPacketQ.Count > 0)

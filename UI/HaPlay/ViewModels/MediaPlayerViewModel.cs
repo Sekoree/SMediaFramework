@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Threading;
@@ -12,6 +13,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Playback;
+using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.NDI;
 using S.Media.PortAudio;
@@ -656,7 +658,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task WithPlaybackArcAsync(Func<Task> action)
     {
+        var arcWaitStart = Stopwatch.GetTimestamp();
         await _playbackArc.WaitAsync().ConfigureAwait(false);
+        if (SDebug.ChangeTrace.IsActive)
+        {
+            var waitedMs = SDebug.ChangeTrace.TicksToMs(Stopwatch.GetTimestamp() - arcWaitStart);
+            SDebug.ChangeTrace.Step($"_playbackArc acquired (waited {waitedMs:F1}ms)");
+        }
+
         _isTransportBusy = true;
         Dispatcher.UIThread.Post(NotifyTransportCanExecuteChanged);
         try
@@ -668,6 +677,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             _isTransportBusy = false;
             _playbackArc.Release();
             Dispatcher.UIThread.Post(NotifyTransportCanExecuteChanged);
+            SDebug.ChangeTrace.Step("_playbackArc released");
         }
     }
 
@@ -2251,17 +2261,36 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>Invoked from the view when the user double-clicks a playlist item — load it and start playing.
     /// Routes both file items and live items through the open path; live playback wiring lands in Phase C.5
     /// (currently surfaces "live items not yet supported" on play).</summary>
-    public async Task PlayPlaylistItemAsync(PlaylistItem item)
+    public async Task PlayPlaylistItemAsync(PlaylistItem? item)
     {
-        if (item is null) return;
+        if (!SDebug.ChangeTrace.IsActive)
+            SDebug.ChangeTrace.Begin("PlayPlaylistItem");
+        SDebug.ChangeTrace.Step("PlayPlaylistItemAsync entered");
+        if (item is null)
+        {
+            SDebug.ChangeTrace.End("cancelled (null item)");
+            return;
+        }
+
         if (_pendingCueFilePlayback is null)
+        {
             CancelCueEnvelope();
+            SDebug.ChangeTrace.Step("CancelCueEnvelope");
+        }
+
         _activePlaybackTab = SelectedPlaylistTab;
         SelectedPlaylistItem = item;
         await PrepareCurrentItemAsync(item).ConfigureAwait(false);
+        SDebug.ChangeTrace.Step("PrepareCurrentItemAsync");
         await OpenOrReloadAsync().ConfigureAwait(false);
+        SDebug.ChangeTrace.Step("OpenOrReloadAsync");
         if (_session is not null && !IsPlaying)
+        {
             await StartPlaybackAsync().ConfigureAwait(false);
+            SDebug.ChangeTrace.Step("StartPlaybackAsync");
+        }
+
+        SDebug.ChangeTrace.End("PlayPlaylistItemAsync");
     }
 
     /// <summary>Phase C.5 — sets <see cref="_currentPlaylistItem"/> and the file-item path projection that
@@ -2610,6 +2639,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task CloseSessionCoreInnerAsync(bool deferIdleSync, bool resetPlayingUi = true)
     {
+        SDebug.ChangeTrace.Step("CloseSession: UI detach begin");
         var snapshot = await Dispatcher.UIThread.InvokeAsync(() =>
         {
             CancelCueEnvelope();
@@ -2626,6 +2656,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             }
             return snap;
         });
+        SDebug.ChangeTrace.Step(snapshot is null ? "CloseSession: no session" : "CloseSession: UI detach done");
 
         if (snapshot is not null)
         {
@@ -2635,14 +2666,21 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 try
                 {
+                    SDebug.ChangeTrace.Step("CloseSession: Router.Pause begin");
                     using var pauseCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
                     try { snapshot.Router.PauseSkippingSharedMuxFlush(pauseCts.Token); }
                     catch (OperationCanceledException) { /* bounded */ }
                     catch (ObjectDisposedException) { /* already torn down */ }
+                    SDebug.ChangeTrace.Step("CloseSession: Router.Pause done");
                 }
                 catch { /* best effort */ }
 
-                try { snapshot.Dispose(); }
+                try
+                {
+                    SDebug.ChangeTrace.Step("CloseSession: Dispose begin");
+                    snapshot.Dispose();
+                    SDebug.ChangeTrace.Step("CloseSession: Dispose done");
+                }
                 catch { /* best effort */ }
             }, TimeSpan.FromSeconds(8));
         }
@@ -2660,6 +2698,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             SeekToSliderCommand.NotifyCanExecuteChanged();
             if (!deferIdleSync) SyncIdleSlate();
         });
+        SDebug.ChangeTrace.Step("CloseSession: UI cleanup done");
     }
 
     private bool CanLoadMedia()
@@ -2733,10 +2772,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task OpenOrReloadAsync()
     {
+        SDebug.ChangeTrace.Step("OpenOrReloadAsync entered");
         if (!CanLoadMedia())
+        {
+            SDebug.ChangeTrace.Step("OpenOrReload: CanLoadMedia=false");
             return;
+        }
 
+        SDebug.ChangeTrace.Step("OpenOrReload: CanLoadMedia=true");
         var resumeAfterOpen = await Dispatcher.UIThread.InvokeAsync(() => IsPlaying);
+        SDebug.ChangeTrace.Step($"OpenOrReload: IsPlaying={resumeAfterOpen} (UI thread)");
 
         await WithPlaybackArcAsync(async () =>
         {
@@ -2747,13 +2792,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 StopIdleSlate();
                 var lines = SelectedOutputLines();
                 _outputs.StopPreviewsForPlayback(lines);
-                // Synthesize a FilePlaylistItem if MediaFilePath is set but _currentPlaylistItem isn't
-                // (legacy: ApplyPlayerConfig sets MediaFilePath alone).
                 PlaylistItem? effective = _currentPlaylistItem;
                 if (effective is null && !string.IsNullOrWhiteSpace(MediaFilePath))
                     effective = new FilePlaylistItem(MediaFilePath!);
                 return (effective, lines);
             });
+            SDebug.ChangeTrace.Step($"OpenOrReload: outputs selected (count={selected.Count})");
 
             if (item is null) return;
 
@@ -2761,37 +2805,38 @@ public partial class MediaPlayerViewModel : ViewModelBase
             string? createErr = null;
             var fileOpts = _pendingCueFilePlayback ?? CurrentFilePlaybackOptions();
             _cuePreRoll.InvalidateAll();
+            SDebug.ChangeTrace.Step("OpenOrReload: cue pre-roll invalidated");
+
+            var decoderCacheHit = false;
             await Task.Run(() =>
             {
+                SDebug.ChangeTrace.Step("OpenOrReload: TryCreate begin (thread pool)");
                 var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path) : null;
+                decoderCacheHit = preOpened is not null;
                 if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr, fileOpts, preOpened))
                     created = null;
+                SDebug.ChangeTrace.Step(
+                    $"OpenOrReload: TryCreate end (cache={(decoderCacheHit ? "hit" : "miss")}, ok={created is not null})");
             }).ConfigureAwait(false);
 
-            // Never use InvokeAsync(async () => await Task.Run(...)): the UI dispatcher can deadlock with the
-            // threadpool continuation that is waiting for InvokeAsync to complete.
             var holdFbAfterOpen = await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                SDebug.ChangeTrace.Step("OpenOrReload: UI bind session begin");
                 if (created is null)
                 {
-                    // Phase C.5 (§6.9) — for a live item with retries enabled, enter the waiting state so the
-                    // loop timer re-attempts to open. Manual-name NDI items and recently-unplugged USB capture
-                    // devices both end up here. Files / disabled-retry items just surface the error.
                     if (item.IsLive && GetRetrySeconds(item) > 0)
                         EnterWaitingForSource(item, createErr ?? "source unavailable");
                     else
                         StatusMessage = createErr ?? "Failed to open media.";
                     SyncIdleSlate();
+                    SDebug.ChangeTrace.Step($"OpenOrReload: create failed ({createErr ?? "unknown"})");
                     return false;
                 }
 
                 ExitWaitingForSource();
-
                 _session = created;
                 IsMediaLoaded = true;
                 StatusMessage = null;
-                // Live items have no finite duration (§6.5) — the transport hides the seek bar via DurationText.
-                // File items pull Duration from the decoder's seekable audio (or video) source as before.
                 Duration = item.IsLive
                     ? TimeSpan.Zero
                     : (created.Player.HasContainerDecoder
@@ -2803,20 +2848,20 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 if (!string.IsNullOrWhiteSpace(FallbackImagePath))
                     created.ApplyFallbackImage(FallbackImagePath);
                 created.SetHoldFallback(HoldFallbackVideo);
-                // Size every binding's matrix to the source channel count and the configured output-channel
-                // count of that output line, then push matrices into the session so cell
-                // routes are installed before the first chunk runs. Live items (§6.5) use the negotiated
-                // live-source channel count surfaced via SourceAudioFormat.
+
                 var srcCh = SourceChannelCountOrFallback(created);
                 foreach (var binding in Outputs)
-                {
                     binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
-                    // First open after a config-load installs the saved mix mode preset; on a freshly-created
-                    // binding the matrix already sits at the identity defaults from Resize.
-                }
+                SDebug.ChangeTrace.Step($"OpenOrReload: matrix resized (srcCh={srcCh})");
+
                 RebuildAudioMatrixRows();
+                SDebug.ChangeTrace.Step("OpenOrReload: RebuildAudioMatrixRows");
+
                 ApplyAllOutputMatricesToSession();
+                SDebug.ChangeTrace.Step("OpenOrReload: ApplyAllOutputMatricesToSession");
+
                 ApplyAllOutputGainsToSession();
+                SDebug.ChangeTrace.Step("OpenOrReload: ApplyAllOutputGainsToSession");
 
                 if (HoldFallbackVideo)
                 {
@@ -2825,6 +2870,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 }
 
                 EnsureLoopTimerStarted();
+                SDebug.ChangeTrace.Step("OpenOrReload: UI bind session done");
                 return HoldFallbackVideo;
             });
 
@@ -2836,21 +2882,31 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 var hf = holdFbAfterOpen;
                 var ok = await RunBoundedAsync(() =>
                 {
+                    SDebug.ChangeTrace.Step("OpenOrReload: resume Play begin");
                     s.PrepareOutputsBeforePlay(hf);
+                    SDebug.ChangeTrace.Step("OpenOrReload: PrepareOutputsBeforePlay");
                     s.PrepareLiveTransportBeforePlay();
+                    SDebug.ChangeTrace.Step("OpenOrReload: PrepareLiveTransportBeforePlay");
                     s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
+                    SDebug.ChangeTrace.Step("OpenOrReload: Router.Play (resume)");
                 }, TimeSpan.FromSeconds(8));
 
                 if (!ok)
+                {
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
                         IsPlaying = false;
                         StatusMessage = "Playback failed to resume after loading.";
                     });
+                    SDebug.ChangeTrace.Step("OpenOrReload: resume Play TIMED OUT");
+                }
             }
 
             if (holdFbAfterOpen)
+            {
                 await Dispatcher.UIThread.InvokeAsync(StartHoldPumpTimer);
+                SDebug.ChangeTrace.Step("OpenOrReload: StartHoldPumpTimer");
+            }
         }).ConfigureAwait(false);
     }
 
@@ -3097,6 +3153,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private async Task NextTrackAsync()
     {
         if (!TryGetNextPlaylistItem(out var next)) return;
+        if (!SDebug.ChangeTrace.IsActive)
+            SDebug.ChangeTrace.Begin("next track");
         await PlayPlaylistItemAsync(next).ConfigureAwait(false);
     }
 
@@ -3106,6 +3164,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private async Task PreviousTrackAsync()
     {
         if (!TryGetPreviousPlaylistItem(out var prev)) return;
+        if (!SDebug.ChangeTrace.IsActive)
+            SDebug.ChangeTrace.Begin("previous track");
         await PlayPlaylistItemAsync(prev).ConfigureAwait(false);
     }
 
@@ -3216,29 +3276,51 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task StartPlaybackAsync()
     {
+        var ownedTrace = !SDebug.ChangeTrace.IsActive;
+        if (ownedTrace)
+            SDebug.ChangeTrace.Begin("StartPlayback");
+        SDebug.ChangeTrace.Step("StartPlaybackAsync entered");
+
         await WithPlaybackArcAsync(async () =>
         {
             var (s, holdFb) = await Dispatcher.UIThread.InvokeAsync(() => (_session, HoldFallbackVideo));
-            if (s is null) return;
+            if (s is null)
+            {
+                SDebug.ChangeTrace.Step("StartPlayback: no session");
+                return;
+            }
 
+            SDebug.ChangeTrace.Step("StartPlayback: session snapshot (UI)");
             var ok = await RunBoundedAsync(() =>
             {
-                // Play from a non-playing state — NDI receivers may have drained their buffers since the last
-                // Pause/Stop, so push silence ahead of the first real samples.
+                SDebug.ChangeTrace.Step("StartPlayback: Play begin (thread pool)");
                 s.PrepareOutputsBeforePlay(holdFb);
+                SDebug.ChangeTrace.Step("StartPlayback: PrepareOutputsBeforePlay");
                 s.PrepareLiveTransportBeforePlay();
+                SDebug.ChangeTrace.Step("StartPlayback: PrepareLiveTransportBeforePlay");
                 s.ResetAllUnderrunBaselines();
+                SDebug.ChangeTrace.Step("StartPlayback: ResetAllUnderrunBaselines");
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
+                SDebug.ChangeTrace.Step("StartPlayback: Router.Play");
             }, TimeSpan.FromSeconds(6));
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (!ok) return;
+                if (!ok)
+                {
+                    SDebug.ChangeTrace.Step("StartPlayback: Play TIMED OUT");
+                    return;
+                }
+
                 IsPlaying = true;
                 if (HoldFallbackVideo) StartHoldPumpTimer();
                 EnsureLoopTimerStarted();
+                SDebug.ChangeTrace.Step("StartPlayback: UI flags updated");
             });
         }).ConfigureAwait(false);
+
+        if (ownedTrace)
+            SDebug.ChangeTrace.End("StartPlaybackAsync");
     }
 
     private bool CanPlay() =>
@@ -3249,6 +3331,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanTransport))]
     private async Task PauseAsync()
     {
+        SDebug.ChangeTrace.Begin("Pause");
         await WithPlaybackArcAsync(async () =>
         {
             var s = await Dispatcher.UIThread.InvokeAsync(() =>
@@ -3256,19 +3339,27 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 if (!HoldFallbackVideo) StopHoldPumpTimer();
                 return _session;
             });
-            if (s is null) return;
+            if (s is null)
+            {
+                SDebug.ChangeTrace.End("Pause (no session)");
+                return;
+            }
 
+            SDebug.ChangeTrace.Step("Pause: Router.Pause begin");
             await RunBoundedCancelableAsync(s.Router.PauseSkippingSharedMuxFlush,
                 innerTimeout: TimeSpan.FromSeconds(1.5),
                 outerTimeout: TimeSpan.FromSeconds(2.5));
+            SDebug.ChangeTrace.Step("Pause: Router.Pause done");
 
             await Dispatcher.UIThread.InvokeAsync(() => IsPlaying = false);
+            SDebug.ChangeTrace.End("Pause");
         }).ConfigureAwait(false);
     }
 
     [RelayCommand(CanExecute = nameof(CanStop))]
     private async Task StopAsync()
     {
+        SDebug.ChangeTrace.Begin("Stop");
         await WithPlaybackArcAsync(async () =>
         {
             var (snap, doPump) = await Dispatcher.UIThread.InvokeAsync(() =>
@@ -3283,10 +3374,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 StatusMessage = null;
                 return (_session, HoldFallbackVideo);
             });
-            if (snap is null) return;
+            if (snap is null)
+            {
+                SDebug.ChangeTrace.End("Stop (no session)");
+                return;
+            }
 
-            // One coordinated pause+seek so the freeze never exceeds the outer cap. Three nested
-            // Task.Run/.WaitAsync blocks (the previous shape) could stack to ~11s on slow codecs.
+            SDebug.ChangeTrace.Step($"Stop: transport begin (live={snap.IsLive})");
             await RunBoundedCancelableAsync(ct =>
                 {
                     if (snap.IsLive)
@@ -3301,6 +3395,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 },
                 innerTimeout: TimeSpan.FromSeconds(2),
                 outerTimeout: TimeSpan.FromSeconds(3));
+            SDebug.ChangeTrace.Step("Stop: transport done");
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -3313,6 +3408,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     NaturalPlaybackEnded?.Invoke(this, EventArgs.Empty);
                 }
             });
+            SDebug.ChangeTrace.End("Stop");
         }).ConfigureAwait(false);
     }
 

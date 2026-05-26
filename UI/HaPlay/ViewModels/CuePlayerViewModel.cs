@@ -781,6 +781,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     public Func<MediaCueNode, CancellationToken, Task<string?>>? MediaCueExecutor { get; set; }
 
     /// <summary>
+    /// Host-provided coordinated group execution callback. Opens all cues in parallel, then starts
+    /// them in sync. When null, falls back to dispatching each cue independently.
+    /// </summary>
+    public Func<IReadOnlyList<MediaCueNode>, CancellationToken, Task<string?>>? MediaCueGroupExecutor { get; set; }
+
+    /// <summary>
     /// Host-provided action execution callback. When null, action cues only update transport state.
     /// </summary>
     public Func<ActionCueNode, CancellationToken, Task<string?>>? ActionCueExecutor { get; set; }
@@ -2226,6 +2232,21 @@ public partial class CuePlayerViewModel : ViewModelBase
         SelectedCueNode = node;
     }
 
+    /// <summary>Move <paramref name="node"/> to <paramref name="targetIndex"/> within the same
+    /// parent collection. Used by drag-reorder in the view.</summary>
+    public void ReorderCueNode(CueNodeViewModel node, int targetIndex)
+    {
+        if (SelectedCueList is null) return;
+        if (FindParentCollection(SelectedCueList.Nodes, node) is not IList<CueNodeViewModel> parent)
+            return;
+        var idx = parent.IndexOf(node);
+        if (idx < 0 || targetIndex < 0 || targetIndex >= parent.Count || idx == targetIndex) return;
+        parent.RemoveAt(idx);
+        if (targetIndex > idx) targetIndex--;
+        parent.Insert(Math.Min(targetIndex, parent.Count), node);
+        SelectedCueNode = node;
+    }
+
     /// <summary>Deep-copy the selected cue with a fresh id and insert immediately after the
     /// original. Routes, placements, and group-children all clone. Bound to Ctrl+D.</summary>
     [RelayCommand(CanExecute = nameof(CanDuplicateSelectedCue))]
@@ -2926,18 +2947,31 @@ public partial class CuePlayerViewModel : ViewModelBase
     private async Task RunTriggerPlanAsync(IReadOnlyList<(CueNodeViewModel Cue, int DelayMs)> plan, CancellationToken ct)
     {
         var startedAt = DateTime.UtcNow;
-        foreach (var step in plan)
-        {
-            await WaitUntilDelayAsync(startedAt, step.DelayMs, ct);
-            ct.ThrowIfCancellationRequested();
-            CurrentCueNode = step.Cue;
-            SelectedCueNode = step.Cue;
 
-            // Dispatch without awaiting — for FireAllSimultaneously the per-cue executor takes
-            // hundreds of ms (decoder open + MediaPlayer build + router wiring) and awaiting
-            // sequentially turns "simultaneously" into "one after another". Each cue's status
-            // message lands as its executor completes.
-            DispatchCueExecution(step.Cue, ct);
+        // Group steps that share the same delay for coordinated start.
+        var groups = plan.GroupBy(s => s.DelayMs).OrderBy(g => g.Key).ToList();
+        foreach (var group in groups)
+        {
+            await WaitUntilDelayAsync(startedAt, group.Key, ct);
+            ct.ThrowIfCancellationRequested();
+
+            var steps = group.ToList();
+            foreach (var step in steps)
+            {
+                CurrentCueNode = step.Cue;
+                SelectedCueNode = step.Cue;
+            }
+
+            if (steps.Count > 1 && MediaCueGroupExecutor is not null)
+            {
+                // Coordinated group: open all decoders in parallel, start in sync.
+                DispatchCueGroupExecution(steps.Select(s => s.Cue).ToList(), ct);
+            }
+            else
+            {
+                foreach (var step in steps)
+                    DispatchCueExecution(step.Cue, ct);
+            }
         }
     }
 
@@ -2957,6 +2991,49 @@ public partial class CuePlayerViewModel : ViewModelBase
             {
                 StatusMessage = Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat),
                     CueDisplay(cue), ex.Message);
+            }
+        }, ct);
+    }
+
+    private void DispatchCueGroupExecution(IReadOnlyList<CueNodeViewModel> cues, CancellationToken ct)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var mediaCues = cues
+                    .Where(c => c.Kind == CueNodeKind.Media)
+                    .Select(c => c.ToModel())
+                    .OfType<MediaCueNode>()
+                    .ToList();
+
+                if (mediaCues.Count > 0 && MediaCueGroupExecutor is not null)
+                {
+                    var result = await MediaCueGroupExecutor(mediaCues, ct).ConfigureAwait(false);
+                    StatusMessage = string.IsNullOrWhiteSpace(result)
+                        ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), $"{mediaCues.Count} cues")
+                        : result;
+                }
+
+                // Non-media cues in the group still dispatch individually.
+                foreach (var cue in cues.Where(c => c.Kind != CueNodeKind.Media))
+                {
+                    try
+                    {
+                        var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
+                        if (!string.IsNullOrWhiteSpace(exec))
+                            StatusMessage = Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        StatusMessage = Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), ex.Message);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                StatusMessage = ex.Message;
             }
         }, ct);
     }

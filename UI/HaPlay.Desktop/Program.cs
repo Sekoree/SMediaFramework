@@ -40,6 +40,7 @@ sealed class Program
     /// </remarks>
     private static void ConfigureLogging(string[] args)
     {
+        return;
         // --media-log off disables logging entirely (skips factory creation, file open, console
         // provider). Useful when triaging whether logging is implicated in a misbehavior.
         var raw = GetArg(args, "--media-log");

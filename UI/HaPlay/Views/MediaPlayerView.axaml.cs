@@ -6,6 +6,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.VisualTree;
 using HaPlay.Models;
 using HaPlay.ViewModels;
+using S.Media.Core;
 
 namespace HaPlay.Views;
 
@@ -214,9 +215,20 @@ public partial class MediaPlayerView : UserControl
 
     private void OnPlaylistItemDoubleTapped(object? sender, TappedEventArgs e)
     {
-        if (DataContext is not MediaPlayerViewModel vm) return;
-        if (sender is not ListBox lb) return;
-        if (lb.SelectedItem is not PlaylistItem item) return;
+        SDebug.ChangeTrace.Begin("playlist double-tap");
+        if (DataContext is not MediaPlayerViewModel vm)
+        {
+            SDebug.ChangeTrace.End("cancelled (no VM)");
+            return;
+        }
+
+        if (sender is not ListBox lb || lb.SelectedItem is not PlaylistItem item)
+        {
+            SDebug.ChangeTrace.End("cancelled (no item)");
+            return;
+        }
+
+        SDebug.ChangeTrace.Step("view prechecks done");
         _ = vm.PlayPlaylistItemAsync(item);
     }
 

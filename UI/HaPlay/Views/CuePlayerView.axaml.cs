@@ -1,10 +1,12 @@
 using System.ComponentModel;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
+using Avalonia.VisualTree;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 
@@ -12,16 +14,24 @@ namespace HaPlay.Views;
 
 public partial class CuePlayerView : UserControl
 {
+    private static readonly DataFormat<CueNodeViewModel> CueNodeDragFormat =
+        DataFormat.CreateInProcessFormat<CueNodeViewModel>("haplay-cuenode-reorder");
+
     private CuePlayerViewModel? _subscribedVm;
     private HierarchicalTreeDataGridSource<CueNodeViewModel>? _source;
+    private Point _dragStartPoint;
+    private PointerPressedEventArgs? _dragPressedArgs;
+    private bool _dragStarted;
 
     public CuePlayerView()
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
-        DragDrop.SetAllowDrop(CueTreeGrid, true);
-        CueTreeGrid.AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Bubble);
-        CueTreeGrid.AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Bubble);
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Tunnel, handledEventsToo: true);
+        AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Tunnel, handledEventsToo: true);
+        CueTreeGrid.AddHandler(PointerPressedEvent, OnCueTreePointerPressed, RoutingStrategies.Tunnel);
+        CueTreeGrid.AddHandler(PointerMovedEvent, OnCueTreePointerMoved, RoutingStrategies.Tunnel);
         // Phase 5.2 — F2 on the tree opens the rename popup. Phase 5.6 added Del / Ctrl+D /
         // Ctrl+↑↓ on this same handler. Transport keys live on the UserControl below so they
         // fire whether the tree or anything else inside the cue tab has focus.
@@ -124,20 +134,79 @@ public partial class CuePlayerView : UserControl
         }
     }
 
+    private void OnCueTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(CueTreeGrid).Properties.IsLeftButtonPressed) return;
+        _dragStartPoint = e.GetPosition(CueTreeGrid);
+        _dragPressedArgs = e;
+        _dragStarted = false;
+    }
+
+    private async void OnCueTreePointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (_dragStarted || _dragPressedArgs is null) return;
+        if (!e.GetCurrentPoint(CueTreeGrid).Properties.IsLeftButtonPressed) return;
+        if (DataContext is not CuePlayerViewModel vm) return;
+        if (vm.SelectedCueNode is null) return;
+
+        var pos = e.GetPosition(CueTreeGrid);
+        var delta = pos - _dragStartPoint;
+        if (Math.Abs(delta.X) < 8 && Math.Abs(delta.Y) < 8) return;
+
+        _dragStarted = true;
+        var pressedArgs = _dragPressedArgs;
+        _dragPressedArgs = null;
+        var data = new DataTransfer();
+        data.Add(DataTransferItem.Create(CueNodeDragFormat, vm.SelectedCueNode!));
+        await DragDrop.DoDragDropAsync(pressedArgs, data, DragDropEffects.Move);
+    }
+
+    private bool IsOverCueTree(DragEventArgs e)
+    {
+        var pos = e.GetPosition(CueTreeGrid);
+        return pos.X >= 0 && pos.Y >= 0
+            && pos.X <= CueTreeGrid.Bounds.Width
+            && pos.Y <= CueTreeGrid.Bounds.Height;
+    }
+
     private void OnCueTreeDragOver(object? sender, DragEventArgs e)
     {
         _ = sender;
-        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
-            ? DragDropEffects.Copy
-            : DragDropEffects.None;
+        if (!IsOverCueTree(e)) return;
+        if (e.DataTransfer.Contains(CueNodeDragFormat))
+            e.DragEffects = DragDropEffects.Move;
+        else if (e.DataTransfer.Contains(DataFormat.File))
+            e.DragEffects = DragDropEffects.Copy;
+        else
+            e.DragEffects = DragDropEffects.None;
+        e.Handled = true;
     }
 
     private void OnCueTreeDrop(object? sender, DragEventArgs e)
     {
         _ = sender;
+        if (!IsOverCueTree(e)) return;
         if (DataContext is not CuePlayerViewModel vm)
             return;
+        e.Handled = true;
 
+        // Internal reorder.
+        var draggedNode = e.DataTransfer.TryGetValue(CueNodeDragFormat);
+        if (draggedNode is not null)
+        {
+            var targetRow = FindCueNodeAtPosition(e);
+            if (targetRow is not null && !ReferenceEquals(draggedNode, targetRow))
+            {
+                var targetIndex = vm.SelectedCueList?.Nodes is { } nodes
+                    ? IndexOfNodeInParent(nodes, targetRow)
+                    : -1;
+                if (targetIndex >= 0)
+                    vm.ReorderCueNode(draggedNode, targetIndex);
+            }
+            return;
+        }
+
+        // External file drop.
         var files = e.DataTransfer.TryGetFiles();
         if (files is null || !files.Any())
             return;
@@ -148,6 +217,37 @@ public partial class CuePlayerView : UserControl
             .ToList();
         if (paths.Count > 0)
             vm.AddMediaFilesFromDrop(paths);
+    }
+
+    private CueNodeViewModel? FindCueNodeAtPosition(DragEventArgs e)
+    {
+        if (e.Source is not Visual visual) return null;
+        var current = visual;
+        while (current is not null)
+        {
+            if (current.DataContext is CueNodeViewModel node)
+                return node;
+            current = current.GetVisualParent();
+        }
+        return null;
+    }
+
+    private static int IndexOfNodeInParent(ICollection<CueNodeViewModel> roots, CueNodeViewModel target)
+    {
+        if (roots is IList<CueNodeViewModel> list)
+        {
+            var idx = list.IndexOf(target);
+            if (idx >= 0) return idx;
+        }
+        foreach (var n in roots)
+        {
+            if (n.Children is IList<CueNodeViewModel> children)
+            {
+                var idx = children.IndexOf(target);
+                if (idx >= 0) return idx;
+            }
+        }
+        return -1;
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)

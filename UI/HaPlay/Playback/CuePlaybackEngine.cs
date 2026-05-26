@@ -22,6 +22,8 @@ namespace HaPlay.Playback;
 public sealed class CuePlaybackEngine : IDisposable
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.CuePlaybackEngine");
+    private static readonly TimeSpan BoundedPauseTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan BoundedDisposeTimeout = TimeSpan.FromSeconds(5);
 
     private readonly OutputManagementViewModel _outputs;
     private readonly CuePlayerViewModel _cuePlayer;
@@ -109,10 +111,13 @@ public sealed class CuePlaybackEngine : IDisposable
         if (session is null) return;
 
         var cueId = session.CueId;
+        try
+        {
+            await Task.Run(() => session.Dispose()).WaitAsync(BoundedDisposeTimeout);
+        }
+        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.StopPreviewAsync"); }
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            try { session.Dispose(); }
-            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.StopPreviewAsync"); }
             try { PreviewEnded?.Invoke(this, cueId); }
             catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreviewEnded handler"); }
         });
@@ -127,7 +132,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
         if (preview is not null)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => SeekPreview(preview, position));
+            await SeekPreviewAsync(preview, position);
             return;
         }
 
@@ -137,10 +142,56 @@ public sealed class CuePlaybackEngine : IDisposable
 
         if (entry is null) return;
 
-        await Dispatcher.UIThread.InvokeAsync(() => SeekActiveCue(entry, position));
+        await SeekActiveCueAsync(entry, position);
     }
 
-    public async Task<string?> ExecuteAsync(MediaCueNode cue, CancellationToken ct)
+    public Task<string?> ExecuteAsync(MediaCueNode cue, CancellationToken ct) =>
+        ExecuteCoreAsync(cue, ct, deferPlay: false);
+
+    /// <summary>
+    /// Fires a group of cues with coordinated start: all decoders are opened in parallel, routes are
+    /// wired with audio initially paused, and then all audio sources are unpaused at once so playback
+    /// starts in sync regardless of how long each decoder took to open.
+    /// </summary>
+    public async Task<string?> ExecuteGroupAsync(IReadOnlyList<MediaCueNode> cues, CancellationToken ct)
+    {
+        if (cues.Count == 0) return null;
+        if (cues.Count == 1) return await ExecuteAsync(cues[0], ct).ConfigureAwait(false);
+
+        var tasks = cues.Select(c => ExecuteCoreAsync(c, ct, deferPlay: true)).ToList();
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        var errors = results.Where(r => r is not null).ToList();
+
+        // Coordinated start: unpause all audio sources, then Play all players at once.
+        List<ActiveCue> group;
+        lock (_gate)
+            group = cues.Select(c => _active.GetValueOrDefault(c.Id)).Where(e => e is not null).ToList()!;
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            foreach (var entry in group)
+            {
+                try { entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster); }
+                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.ExecuteGroupAsync: Play failed for {Cue}", entry.Cue.Id); }
+            }
+
+            foreach (var entry in group)
+            {
+                entry.IsPaused = false;
+                foreach (var src in entry.PausableAudioSources)
+                    src.IsPaused = false;
+                CueStarted?.Invoke(this, entry.Cue.Id);
+            }
+        });
+
+        foreach (var entry in group)
+            _ = WatchNaturalEndAsync(entry);
+
+        return errors.Count > 0 ? string.Join("; ", errors) : null;
+    }
+
+    private async Task<string?> ExecuteCoreAsync(MediaCueNode cue, CancellationToken ct, bool deferPlay)
     {
         if (cue.Source is null)
             return "Cue has no source.";
@@ -211,11 +262,13 @@ public sealed class CuePlaybackEngine : IDisposable
         var entry = new ActiveCue(cue, player, new CancellationTokenSource());
 
         // Wire audio (shared mixer per output line) and video (shared compositor per composition).
+        // When deferPlay is set, audio sources start paused so all cues in a group begin together.
         // Failure of any one wiring tears the cue down and surfaces the error.
         try
         {
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                if (deferPlay) entry.IsPaused = true;
                 WireAudioRoutes(entry, audioByOutput);
                 WireVideoPlacements(entry, list, placementsByComp);
             });
@@ -230,22 +283,25 @@ public sealed class CuePlaybackEngine : IDisposable
         lock (_gate)
             _active[cue.Id] = entry;
 
-        try
+        if (!deferPlay)
         {
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            try
             {
-                player.Play(videoOnlyMaster: entry.VideoClockMaster);
-                CueStarted?.Invoke(this, cue.Id);
-            });
-        }
-        catch (Exception ex)
-        {
-            Trace.LogError(ex, "CuePlaybackEngine: Play threw");
-            await StopCueAsync(cue.Id).ConfigureAwait(false);
-            return ex.Message;
-        }
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    player.Play(videoOnlyMaster: entry.VideoClockMaster);
+                    CueStarted?.Invoke(this, cue.Id);
+                });
+            }
+            catch (Exception ex)
+            {
+                Trace.LogError(ex, "CuePlaybackEngine: Play threw");
+                await StopCueAsync(cue.Id).ConfigureAwait(false);
+                return ex.Message;
+            }
 
-        _ = WatchNaturalEndAsync(entry);
+            _ = WatchNaturalEndAsync(entry);
+        }
 
         var targets = new List<string>();
         targets.AddRange(audioByOutput.Keys
@@ -291,33 +347,38 @@ public sealed class CuePlaybackEngine : IDisposable
         lock (_gate)
             entries = _active.Values.ToList();
 
+        // Update model state on UI thread first so audio sources silence immediately.
+        // Always set unconditionally — IsPaused can be stale after group execution.
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             foreach (var entry in entries)
             {
-                try { SetEntryPaused(entry, paused); }
-                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
+                entry.IsPaused = paused;
+                foreach (var source in entry.PausableAudioSources)
+                    source.IsPaused = paused;
             }
         });
-    }
 
-    private static void SetEntryPaused(ActiveCue entry, bool paused)
-    {
-        if (entry.IsPaused == paused)
-            return;
-
-        entry.IsPaused = paused;
-        foreach (var source in entry.PausableAudioSources)
-            source.IsPaused = paused;
-
-        if (paused)
+        // Heavy transport (thread joins, PortAudio flush) off UI thread with bounded timeout.
+        foreach (var entry in entries)
         {
-            entry.Player.Pause(CancellationToken.None, PauseFlushPolicy.SkipFlush);
-            entry.Player.PlayClock.SetMaster(null);
-        }
-        else
-        {
-            entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster);
+            try
+            {
+                if (paused)
+                {
+                    await Task.Run(() =>
+                    {
+                        entry.Player.Pause(CancellationToken.None, PauseFlushPolicy.SkipFlush);
+                    }).WaitAsync(BoundedPauseTimeout);
+                    await Dispatcher.UIThread.InvokeAsync(() => entry.Player.PlayClock.SetMaster(null));
+                }
+                else
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                        entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster));
+                }
+            }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
         }
     }
 
@@ -326,16 +387,15 @@ public sealed class CuePlaybackEngine : IDisposable
         try { entry.Cts.Cancel(); } catch { /* best effort */ }
         try { entry.Cts.Dispose(); } catch { /* best effort */ }
 
+        // Detach from shared runtimes on UI thread (lightweight ops).
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            // Detach our video layer slots from compositions.
             foreach (var slot in entry.LayerSlots)
             {
                 try { slot.Dispose(); }
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: slot dispose"); }
             }
 
-            // Remove our audio sources from shared runtimes.
             foreach (var (runtime, sourceId) in entry.AudioSources)
             {
                 try { runtime.RemoveSource(sourceId); }
@@ -347,16 +407,31 @@ public sealed class CuePlaybackEngine : IDisposable
                 try { disposable.Dispose(); }
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: audio adapter dispose"); }
             }
+        });
 
-            try { entry.Player.Dispose(); }
-            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: player dispose"); }
-
-            foreach (var conv in entry.ConvertingOutputs)
+        // Heavy player teardown off UI thread with bounded timeout.
+        try
+        {
+            await Task.Run(() =>
             {
-                try { conv.Dispose(); }
-                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: converter dispose"); }
-            }
+                try { entry.Player.Dispose(); }
+                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: player dispose"); }
 
+                foreach (var conv in entry.ConvertingOutputs)
+                {
+                    try { conv.Dispose(); }
+                    catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: converter dispose"); }
+                }
+            }).WaitAsync(BoundedDisposeTimeout);
+        }
+        catch (TimeoutException)
+        {
+            Trace.LogWarning("CuePlaybackEngine.DisposeEntryAsync: player dispose timed out after {Timeout}", BoundedDisposeTimeout);
+        }
+
+        // UI cleanup: release empty shared runtimes and notify.
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
             ReleaseEmptyRuntimes();
 
             try { CueEnded?.Invoke(this, entry.Cue.Id); }
@@ -574,19 +649,32 @@ public sealed class CuePlaybackEngine : IDisposable
         definition is PortAudioOutputDefinition
         || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
 
-    private static void SeekPreview(CuePreviewSession preview, TimeSpan position)
+    private async Task SeekPreviewAsync(CuePreviewSession preview, TimeSpan position)
     {
         position = ClampSeekPosition(preview.Player.Duration, position);
-        preview.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush);
-        preview.Play();
+        try
+        {
+            await Task.Run(() =>
+                preview.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
+            ).WaitAsync(BoundedPauseTimeout);
+        }
+        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekPreviewAsync: seek timed out or failed"); }
+        await Dispatcher.UIThread.InvokeAsync(() => preview.Play());
     }
 
-    private static void SeekActiveCue(ActiveCue entry, TimeSpan position)
+    private async Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position)
     {
         position = ClampSeekPosition(entry.Player.Duration, position);
-        entry.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush);
+        try
+        {
+            await Task.Run(() =>
+                entry.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
+            ).WaitAsync(BoundedPauseTimeout);
+        }
+        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCueAsync: seek timed out or failed"); }
         if (!entry.IsPaused)
-            entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+                entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster));
     }
 
     private static TimeSpan ClampSeekPosition(TimeSpan duration, TimeSpan position)
