@@ -14,6 +14,7 @@
 
     <ItemGroup>
         <PackageReference Include="Avalonia.Desktop"/>
+        <PackageReference Include="org.k2fsa.portaudio.runtime.win-x64" Condition="'$(OS)' == 'Windows_NT'" />
         <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == ''" />
         <PackageReference Include="Microsoft.Extensions.Logging" />
         <PackageReference Include="Microsoft.Extensions.Logging.Console" />
@@ -22,4 +23,29 @@
     <ItemGroup>
         <ProjectReference Include="..\HaPlay\HaPlay.csproj" />
     </ItemGroup>
+
+    <Target Name="CopyWindowsNatives" BeforeTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+        <PropertyGroup>
+            <_NativesOutDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\$(OutputPath)').TrimEnd('\').TrimEnd('/'))</_NativesOutDir>
+        </PropertyGroup>
+        <!-- FFmpeg: download on first build, skip if already present -->
+        <Exec
+            Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\download-ffmpeg.ps1&quot; -OutputDir &quot;$(_NativesOutDir)&quot;"
+            ConsoleToMSBuild="true" />
+        <!-- PortAudio: NuGet puts it in runtimes/win-x64/native; copy to root so NativeLibrary.TryLoad finds it -->
+        <Copy
+            SourceFiles="$(_NativesOutDir)\runtimes\win-x64\native\portaudio.dll"
+            DestinationFolder="$(_NativesOutDir)"
+            SkipUnchangedFiles="true"
+            Condition="Exists('$(_NativesOutDir)\runtimes\win-x64\native\portaudio.dll')" />
+        <!-- PortMidi: download from conda-forge on first build -->
+        <Exec
+            Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\download-portmidi.ps1&quot; -OutputDir &quot;$(_NativesOutDir)&quot;"
+            ConsoleToMSBuild="true" />
+        <!-- NDI: copy from SDK install dir; silently skips if SDK not installed -->
+        <Exec
+            Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)..\..\scripts\copy-ndi.ps1&quot; -OutputDir &quot;$(_NativesOutDir)&quot;"
+            ConsoleToMSBuild="true" />
+    </Target>
+
 </Project>
