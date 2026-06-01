@@ -96,8 +96,8 @@ try
 
     // 3. Composite via VideoCompositor API: background (Source) then foreground (SourceOver), cover-fit.
     var output = new VideoFormat(w, h, PixelFormat.Bgra32, bgFrame.Format.FrameRate);
-    using var bgSrc = StaticFrameSource.FromFrame(bgFrame, copyBacking: true);
-    using var fgSrc = StaticFrameSource.FromFrame(fgFrame, copyBacking: true);
+    using var bgSrc = StaticFrameSource.FromFrame(bgFrame);
+    using var fgSrc = StaticFrameSource.FromFrame(fgFrame);
     using var program = VideoCompositor.Create(
         output,
         VideoCompositorBackend.Gl,

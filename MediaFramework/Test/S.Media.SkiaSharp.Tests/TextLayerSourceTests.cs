@@ -55,6 +55,47 @@ public sealed class TextLayerSourceTests
     }
 
     [Fact]
+    public void HeldFrame_NotMutated_ByLaterTextChange()
+    {
+        // Regression: emitted frames must reference an immutable generation buffer. Changing the text
+        // rasterises a NEW generation; a previously emitted frame still held by a consumer must not
+        // change underneath it (the old code re-rasterised into the one shared buffer in place).
+        using var src = new TextLayerSource(64, 32, new Rational(30, 1),
+            text: "A", fontFamily: "sans-serif", fontSize: 16f, argbColor: 0xFFFFFFFF);
+
+        Assert.True(src.TryReadNextFrame(out var held));
+        try
+        {
+            var before = held.Planes[0].ToArray();
+
+            src.Text = "WWWW"; // wider text → different rasterisation
+            Assert.True(src.TryReadNextFrame(out var f2));
+            f2.Dispose();
+
+            var after = held.Planes[0].ToArray();
+            Assert.Equal(before, after); // the held frame's pixels are stable across the re-rasterise
+        }
+        finally { held.Dispose(); }
+    }
+
+    [Fact]
+    public void HeldFrame_RemainsReadable_AfterSourceDispose()
+    {
+        // Disposing the source must drop only the source's reference; a frame still in flight keeps the
+        // generation buffer alive (the old code returned the shared buffer to the pool on Dispose).
+        var src = new TextLayerSource(48, 24, new Rational(30, 1),
+            text: "Z", fontFamily: "sans-serif", fontSize: 12f, argbColor: 0xFFFFFFFF);
+        Assert.True(src.TryReadNextFrame(out var held));
+        var before = held.Planes[0].ToArray();
+
+        src.Dispose();
+
+        var after = held.Planes[0].ToArray();
+        Assert.Equal(before, after);
+        held.Dispose(); // returns the buffer to the pool now that the last reference is gone
+    }
+
+    [Fact]
     public void PtsAdvancesAtFrameRate()
     {
         using var src = new TextLayerSource(32, 32, new Rational(30, 1),

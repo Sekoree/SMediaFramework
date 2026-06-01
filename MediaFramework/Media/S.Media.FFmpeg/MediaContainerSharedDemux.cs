@@ -702,38 +702,46 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 }
             }
 
-            if (_hasAudio)
-                avcodec_flush_buffers(_aCtx);
-            if (_hasVideo)
-                avcodec_flush_buffers(_vCtx);
-
-            av_packet_unref(_demuxPkt);
-            if (_hasAudio)
+            // Hold _audioDecodeLock while flushing/resetting audio decode state (_aCtx, _swr, counters):
+            // AudioTrack.ReadInto runs on the router thread and takes the same lock, so without this a
+            // concurrent read could decode against a half-flushed codec/resampler. (The demux thread was
+            // already stopped above; this guards the consumer side.) The video consume below takes
+            // _videoDecodeLock sequentially, so there is no nested lock-ordering hazard.
+            lock (_audioDecodeLock)
             {
-                av_frame_unref(_aFrame);
-                swr_close(_swr);
-                ret = swr_init(_swr);
-                FFmpegException.ThrowIfError(ret, nameof(swr_init));
+                if (_hasAudio)
+                    avcodec_flush_buffers(_aCtx);
+                if (_hasVideo)
+                    avcodec_flush_buffers(_vCtx);
+
+                av_packet_unref(_demuxPkt);
+                if (_hasAudio)
+                {
+                    av_frame_unref(_aFrame);
+                    swr_close(_swr);
+                    ret = swr_init(_swr);
+                    FFmpegException.ThrowIfError(ret, nameof(swr_init));
+                }
+                if (_hasVideo)
+                    av_frame_unref(_vFrame);
+
+                _aEof = false;
+                _aDrainSent = false;
+                _aDrainedTail = false;
+                _aSamplesEmitted = _hasAudio ? (long)(position.TotalSeconds * Audio.Format.SampleRate) : 0;
+                Audio.Position = position;
+
+                _vEof = false;
+                _vDrainSent = false;
+                _vPrimedAfterSeek?.Dispose();
+                _vPrimedAfterSeek = null;
+                // Re-anchor the no-PTS fallback video counter to the seek target so streams
+                // without container timestamps resume at ~position (matches ResolveVideoPts)
+                // instead of continuing from a stale pre-seek frame index.
+                var vFallbackFps = Video.Format.FrameRate.ToDouble();
+                _vFramesEmitted = vFallbackFps > 0 ? (long)Math.Round(position.TotalSeconds * vFallbackFps) : 0;
+                Video.Position = position;
             }
-            if (_hasVideo)
-                av_frame_unref(_vFrame);
-
-            _aEof = false;
-            _aDrainSent = false;
-            _aDrainedTail = false;
-            _aSamplesEmitted = _hasAudio ? (long)(position.TotalSeconds * Audio.Format.SampleRate) : 0;
-            Audio.Position = position;
-
-            _vEof = false;
-            _vDrainSent = false;
-            _vPrimedAfterSeek?.Dispose();
-            _vPrimedAfterSeek = null;
-            // Re-anchor the no-PTS fallback video counter to the seek target so streams
-            // without container timestamps resume at ~position (matches ResolveVideoPts)
-            // instead of continuing from a stale pre-seek frame index.
-            var vFallbackFps = Video.Format.FrameRate.ToDouble();
-            _vFramesEmitted = vFallbackFps > 0 ? (long)Math.Round(position.TotalSeconds * vFallbackFps) : 0;
-            Video.Position = position;
 
             _fileReadCompleted = false;
             StartDemuxerThread();

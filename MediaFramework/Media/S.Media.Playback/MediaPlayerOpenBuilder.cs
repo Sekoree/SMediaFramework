@@ -357,7 +357,19 @@ public static class MediaPlayerOpen
 
     public static MediaPlayerOpenUriBuilder Uri(Uri mediaUri) => new(mediaUri);
 
-    public static MediaPlayerOpenUriBuilder Uri(string uri) => new(new Uri(uri, UriKind.RelativeOrAbsolute));
+    /// <summary>Opens an <strong>absolute</strong> URI (FFmpeg requires one). For filesystem paths use
+    /// <see cref="File(string)"/> instead — a relative string is rejected here rather than failing later
+    /// inside FFmpeg open.</summary>
+    public static MediaPlayerOpenUriBuilder Uri(string uri)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(uri);
+        if (!System.Uri.TryCreate(uri, UriKind.Absolute, out var absolute))
+            throw new ArgumentException(
+                $"'{uri}' is not an absolute URI. Use MediaPlayerOpen.File(path) for filesystem paths, " +
+                "or pass an absolute URI (e.g. file:///…, http://…, rtsp://…).",
+                nameof(uri));
+        return new MediaPlayerOpenUriBuilder(absolute);
+    }
 
     public static MediaPlayerOpenStreamBuilder Stream(Stream mediaStream) => new(mediaStream);
 

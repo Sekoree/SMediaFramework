@@ -15,8 +15,8 @@ public sealed class VideoCompositorCrossFadeTests
         var red = MakeSolid(200, 0, 0, 255);
         var blue = MakeSolid(0, 0, 200, 255);
 
-        using var clipA = StaticFrameSource.FromFrame(red, copyBacking: true);
-        using var clipB = StaticFrameSource.FromFrame(blue, copyBacking: true);
+        using var clipA = StaticFrameSource.FromFrame(red);
+        using var clipB = StaticFrameSource.FromFrame(blue);
         using var program = VideoCompositor.Create(Bgra32_8x8, VideoCompositorBackend.Cpu);
 
         var layerA = program.AddLayer(clipA, LayerConfig.Background);
@@ -60,8 +60,8 @@ public sealed class VideoCompositorCrossFadeTests
         var a = MakeSolid(10, 20, 30, 255);
         var b = MakeSolid(40, 50, 60, 255);
 
-        using var srcA = StaticFrameSource.FromFrame(a, copyBacking: true);
-        using var srcB = StaticFrameSource.FromFrame(b, copyBacking: true);
+        using var srcA = StaticFrameSource.FromFrame(a);
+        using var srcB = StaticFrameSource.FromFrame(b);
         using var program = VideoCompositor.Create(Bgra32_8x8, VideoCompositorBackend.Cpu);
 
         var handle = program.AddLayer(srcA, LayerConfig.Background);

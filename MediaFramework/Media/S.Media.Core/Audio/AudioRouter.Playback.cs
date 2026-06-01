@@ -99,7 +99,12 @@ public sealed partial class AudioRouter
 
     private void AutoWirePrimaryOutputIfNeeded(string outputId, IAudioOutput output)
     {
-        if (!AutoWirePrimary || _primaryOutputId is not null || output is not IClockedOutput)
+        // An AdaptiveRateAudioOutput implements IClockedOutput unconditionally but only forwards real
+        // capacity waits when its inner is clocked (otherwise WaitForCapacity returns "always ready").
+        // Promoting such a wrapper to primary would slave the router to a fake clock — and adaptive
+        // wrappers are only applied to NON-master outputs anyway — so never promote one.
+        if (!AutoWirePrimary || _primaryOutputId is not null
+            || output is not IClockedOutput || output is IAdaptiveRateWrappedOutput)
             return;
 
         SlaveTo(outputId);

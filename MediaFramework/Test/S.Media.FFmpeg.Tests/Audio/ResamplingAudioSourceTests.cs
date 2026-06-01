@@ -77,6 +77,77 @@ public sealed class ResamplingAudioSourceTests
         Assert.Contains("doesn't match router", ex.Message);
     }
 
+    [Fact]
+    public void Create_SeekableInner_PreservesSeekability_AndForwards()
+    {
+        var inner = new SeekableToneSource(44100, 2, totalFrames: 44100);
+        using var wrapper = ResamplingAudioSource.Create(inner, 48000, disposeInnerWhenDisposed: false);
+
+        var seekable = Assert.IsAssignableFrom<ISeekableSource>(wrapper);
+        Assert.Equal(inner.Duration, seekable.Duration);
+
+        seekable.Seek(TimeSpan.FromMilliseconds(500));
+        Assert.Equal(TimeSpan.FromMilliseconds(500), inner.LastSeek);
+        Assert.Equal(inner.Position, seekable.Position);
+    }
+
+    [Fact]
+    public void Create_NonSeekableInner_IsNotSeekable()
+    {
+        var inner = new ConstantToneSource(44100, 2, totalFrames: 1024);
+        using var wrapper = ResamplingAudioSource.Create(inner, 48000, disposeInnerWhenDisposed: false);
+        Assert.False(wrapper is ISeekableSource, "a non-seekable inner must not produce a seekable wrapper");
+    }
+
+    [Fact]
+    public void Router_AutoResample_PreservesSeekThroughWrapper()
+    {
+        // The finding: AddSource(autoResample: true) over a seekable source used to yield a
+        // non-seekable wrapper, so SeekSource threw. Create() now preserves seekability.
+        using var router = new AudioRouter(sampleRate: 48000);
+        var inner = new SeekableToneSource(44100, 2, totalFrames: 44100);
+        var id = router.AddSource(inner, "seekable44k", autoResample: true);
+
+        router.SeekSource(id, TimeSpan.FromMilliseconds(250));
+        Assert.Equal(TimeSpan.FromMilliseconds(250), inner.LastSeek);
+    }
+
+    private sealed class SeekableToneSource : IAudioSource, ISeekableSource
+    {
+        private readonly AudioFormat _fmt;
+        private readonly int _totalFrames;
+        private int _framesEmitted;
+
+        public SeekableToneSource(int sampleRate, int channels, int totalFrames)
+        {
+            _fmt = new AudioFormat(sampleRate, channels);
+            _totalFrames = totalFrames;
+        }
+
+        public AudioFormat Format => _fmt;
+        public bool IsExhausted => _framesEmitted >= _totalFrames;
+        public TimeSpan Duration => TimeSpan.FromSeconds((double)_totalFrames / _fmt.SampleRate);
+        public TimeSpan Position => TimeSpan.FromSeconds((double)_framesEmitted / _fmt.SampleRate);
+        public TimeSpan LastSeek { get; private set; } = TimeSpan.MinValue;
+
+        public int ReadInto(Span<float> destination)
+        {
+            var remaining = _totalFrames - _framesEmitted;
+            if (remaining <= 0) return 0;
+            var dstFrames = destination.Length / _fmt.Channels;
+            var toEmit = Math.Min(dstFrames, remaining);
+            destination[..(toEmit * _fmt.Channels)].Clear();
+            _framesEmitted += toEmit;
+            return toEmit * _fmt.Channels;
+        }
+
+        public void Seek(TimeSpan position)
+        {
+            LastSeek = position;
+            _framesEmitted = (int)(position.TotalSeconds * _fmt.SampleRate);
+        }
+    }
+
     private sealed class ConstantToneSource : IAudioSource, IDisposable
     {
         private readonly AudioFormat _fmt;

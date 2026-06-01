@@ -105,13 +105,16 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
         catch { /* best effort — buffer release is the consumer's hook */ }
     }
 
-    /// <summary>Builds a static source from one frame. When <paramref name="copyBacking"/> is true, CPU planes are duplicated.</summary>
-    public static StaticFrameSource FromFrame(VideoFrame frame, bool copyBacking = true, TimeSpan? ptsCadence = null)
+    /// <summary>
+    /// Builds a static source from one frame. The frame's CPU planes are <strong>copied</strong> into
+    /// source-owned backing, so the caller may dispose <paramref name="frame"/> immediately afterwards.
+    /// (The previous non-copying mode aliased the caller's planes with no ownership — a use-after-free
+    /// footgun if the caller disposed the original — and is removed.)
+    /// </summary>
+    public static StaticFrameSource FromFrame(VideoFrame frame, TimeSpan? ptsCadence = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        VideoFrame owned = copyBacking
-            ? VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint)
-            : frame;
+        var owned = VideoCpuFrameConverter.DuplicateCpuBacking(frame, frame.ColorTransferHint);
 
         var planes = new ReadOnlyMemory<byte>[owned.Planes.Length];
         var strides = new int[owned.Strides.Length];
@@ -127,7 +130,7 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
             strides,
             ptsCadence,
             owned.ColorTransferHint,
-            copyBacking ? owned.Dispose : null);
+            owned.Dispose);
     }
 
     private static TimeSpan DerivePeriod(Rational frameRate)

@@ -11,7 +11,9 @@ internal sealed unsafe class FfmpegAudioEncoder : IAudioOutput, IDisposable
     private readonly FfmpegMuxContext _mux;
     private readonly FFmpegAudioFileOutputOptions _options;
     private readonly Lock _gate = new();
-    private readonly List<float> _pending = [];
+    private float[] _pending = [];
+    private int _pendingStart;
+    private int _pendingEnd;
     private AVCodecContext* _codec;
     private AVStream* _stream;
     private AVFrame* _frame;
@@ -55,17 +57,45 @@ internal sealed unsafe class FfmpegAudioEncoder : IAudioOutput, IDisposable
 
         lock (_gate)
         {
-            for (var i = 0; i < packedSamples.Length; i++)
-                _pending.Add(packedSamples[i]);
+            AppendPending(packedSamples);
 
             var floatsPerFrame = checked(_frameSamples * _codec->ch_layout.nb_channels);
-            while (_pending.Count >= floatsPerFrame)
+            while (_pendingEnd - _pendingStart >= floatsPerFrame)
             {
-                var chunk = CollectionsMarshal.AsSpan(_pending)[..floatsPerFrame];
-                WriteFrameLocked(chunk);
-                _pending.RemoveRange(0, floatsPerFrame);
+                WriteFrameLocked(_pending.AsSpan(_pendingStart, floatsPerFrame));
+                _pendingStart += floatsPerFrame;
             }
+
+            // Fully drained — reset offsets to the front. Draining a frame is O(1) (advance the read
+            // offset), replacing the old List.RemoveRange(0, …) which shifted every frame (O(n)).
+            if (_pendingStart == _pendingEnd)
+                _pendingStart = _pendingEnd = 0;
         }
+    }
+
+    /// <summary>Appends interleaved float samples to the pending buffer, compacting the live range to the
+    /// front (or growing) only when the tail runs out of room.</summary>
+    private void AppendPending(ReadOnlySpan<float> samples)
+    {
+        if (_pendingEnd + samples.Length > _pending.Length)
+        {
+            var count = _pendingEnd - _pendingStart;
+            if (count + samples.Length <= _pending.Length)
+            {
+                Array.Copy(_pending, _pendingStart, _pending, 0, count); // compact
+            }
+            else
+            {
+                var grown = new float[Math.Max(_pending.Length * 2, count + samples.Length)];
+                Array.Copy(_pending, _pendingStart, grown, 0, count);
+                _pending = grown;
+            }
+            _pendingStart = 0;
+            _pendingEnd = count;
+        }
+
+        samples.CopyTo(_pending.AsSpan(_pendingEnd));
+        _pendingEnd += samples.Length;
     }
 
     private void WriteFrameLocked(ReadOnlySpan<float> interleaved)
@@ -206,13 +236,15 @@ internal sealed unsafe class FfmpegAudioEncoder : IAudioOutput, IDisposable
         {
             if (_codec is not null)
             {
-                if (_pending.Count > 0)
+                var remaining = _pendingEnd - _pendingStart;
+                if (remaining > 0)
                 {
+                    // Pad the final partial frame with silence (one-time alloc on dispose).
                     var pad = checked(_frameSamples * _codec->ch_layout.nb_channels);
-                    while (_pending.Count < pad)
-                        _pending.Add(0);
-                    WriteFrameLocked(CollectionsMarshal.AsSpan(_pending)[..pad]);
-                    _pending.Clear();
+                    var finalFrame = new float[pad];
+                    _pending.AsSpan(_pendingStart, remaining).CopyTo(finalFrame);
+                    WriteFrameLocked(finalFrame);
+                    _pendingStart = _pendingEnd = 0;
                 }
 
                 MediaDiagnostics.SwallowDisposeErrors(() => DrainPacketsLocked(sendFlush: true),

@@ -368,17 +368,24 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         var targetQueued = targetQueuedSamplesOverride ?? Math.Max(_format.SampleRate / 10, chunkSamples * 4);
         var ch = _format.Channels;
         var bufFloats = Math.Min(65536, Math.Max(chunkSamples * ch * 8, 8192 * ch));
-        var buf = new float[bufFloats];
-        var deadline = DateTime.UtcNow + timeout;
-        while (QueuedSamples < targetQueued && DateTime.UtcNow < deadline)
+        var buf = System.Buffers.ArrayPool<float>.Shared.Rent(bufFloats);
+        try
         {
-            var read = source.ReadInto(buf);
-            if (read == 0) break;
-            var span = buf.AsSpan(0, read);
-            var q0 = QueuedSamples;
-            Submit(span);
-            mirrorPackedFloats?.Submit(span);
-            if (QueuedSamples == q0 && read > 0) break;
+            var deadline = DateTime.UtcNow + timeout;
+            while (QueuedSamples < targetQueued && DateTime.UtcNow < deadline)
+            {
+                var read = source.ReadInto(buf.AsSpan(0, bufFloats));
+                if (read == 0) break;
+                var span = buf.AsSpan(0, read);
+                var q0 = QueuedSamples;
+                Submit(span);
+                mirrorPackedFloats?.Submit(span);
+                if (QueuedSamples == q0 && read > 0) break;
+            }
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<float>.Shared.Return(buf);
         }
     }
 

@@ -67,7 +67,7 @@ public static class FFmpegRuntime
             // the caller's source. Last write wins on the static slot; other resampler packages
             // (if any) can replace it after FFmpegRuntime.EnsureInitialized() returns.
             MediaFrameworkPlugins.AudioResampleSourceWrapper ??=
-                (inner, targetRate) => new ResamplingAudioSource(inner, targetRate, disposeInnerWhenDisposed: false);
+                (inner, targetRate) => ResamplingAudioSource.Create(inner, targetRate, disposeInnerWhenDisposed: false);
 
             // Install the swscale-backed CPU video converter so the Core VideoRouter can do branch
             // pixel conversion without referencing FFmpeg. Last write wins on the static slots —

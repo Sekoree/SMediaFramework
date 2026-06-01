@@ -12,6 +12,10 @@ public sealed class RouteGainSlot
         Current = initial;
     }
 
-    public float Target;
-    public float Current;
+    /// <summary>Desired gain. Read-only to external callers — mutate through
+    /// <see cref="AudioRouter.SetRouteGain"/> so the click-free ramp invariant is preserved.</summary>
+    public float Target { get; internal set; }
+
+    /// <summary>Gain the run loop last applied (ramps toward <see cref="Target"/> each chunk). Read-only externally.</summary>
+    public float Current { get; internal set; }
 }

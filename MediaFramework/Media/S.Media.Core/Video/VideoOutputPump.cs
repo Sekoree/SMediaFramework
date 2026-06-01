@@ -109,11 +109,19 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         {
             if (_configured)
             {
-                // VideoRouter.ApplyConfigureLocked re-Configures the primary every time a branch route
-                // is added (even though the negotiated format hasn't changed). Forward to the inner output
-                // without restarting the drainer thread — same semantics other IVideoOutputs already have.
-                // Frames already queued at the prior format would race a true format change, so callers
-                // doing an actual resize/pixel-format swap should pause + drain first.
+                // VideoRouter.ApplyConfigureLocked re-Configures the primary every time a branch route is
+                // added even though the format is unchanged — a cheap pass-through. But a REAL format
+                // change must not leave old-format frames queued for the reconfigured inner output, so
+                // drop them first. (A frame already in-flight on the drainer thread can still race; full
+                // format-versioned queues would close that residual window.)
+                if (format != _inner.Format)
+                {
+                    while (_queue.Count > 0)
+                    {
+                        _queue.Dequeue().Dispose();
+                        Interlocked.Increment(ref _dropped);
+                    }
+                }
                 Trace.LogTrace("Configure: name={Name} re-configure (already running) format={Format}", _name, format);
                 _inner.Configure(format);
                 return;
@@ -254,17 +262,33 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         if (_disposed) return;
         _disposed = true;
         _pumpPressure = null;
+
+        var threadExited = true;
         MediaDiagnostics.SwallowDisposeErrors(() =>
         {
             _cts?.Cancel();
             _pending.Set();
             if (_thread is { } t)
+            {
                 // Drainer is parked at most one SDK-paced Submit (typically ≤33 ms at the negotiated frame
                 // rate). A 2 s cap covers slow outputs while keeping Pause / Stop / unload responsive — the
                 // previous 30 s cap could stack into multi-second freezes when the drainer was held up
                 // inside a paced send (most visible with attached_pic streams that declared 1 FPS).
                 CooperativePlaybackJoin.JoinThread(t, TimeSpan.FromSeconds(2), CancellationToken.None);
+                threadExited = !t.IsAlive;
+            }
         }, $"VideoOutputPump.Dispose: cooperative shutdown ({_name})");
+
+        if (!threadExited)
+        {
+            // The drainer is still blocked inside a slow inner Submit after the join cap. Disposing
+            // _pending / _cts / the inner output now would pull state out from under it — an
+            // ObjectDisposedException on the drainer's _pending.Wait, or use-after-dispose inside the
+            // inner output. Leak those deliberately rather than crash: it's a background thread that
+            // will exit on its own once the inner Submit finally returns (it re-checks cancellation).
+            Trace.LogError("VideoOutputPump '{Name}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.", _name);
+            return;
+        }
 
         _cts?.Dispose();
         _pending.Dispose();

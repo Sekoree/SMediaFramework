@@ -22,8 +22,20 @@ namespace S.Media.FFmpeg.Audio;
 /// first read after a discontinuity (e.g. seek), expect a one-call delay before output catches up.
 /// </para>
 /// </remarks>
-public sealed class ResamplingAudioSource : IAudioSource, IDisposable
+public class ResamplingAudioSource : IAudioSource, IDisposable
 {
+    /// <summary>
+    /// Creates a resampling wrapper that <strong>preserves seekability</strong>: when
+    /// <paramref name="inner"/> implements <see cref="ISeekableSource"/> the returned wrapper does too
+    /// (forwarding <see cref="ISeekableSource.Seek"/>/<see cref="ISeekableSource.Position"/>/
+    /// <see cref="ISeekableSource.Duration"/> and flushing the resampler on seek). Use this instead of
+    /// the constructor so a sample-rate mismatch doesn't silently strip seek support from a file source.
+    /// </summary>
+    public static ResamplingAudioSource Create(IAudioSource inner, int outputSampleRate, bool disposeInnerWhenDisposed = true)
+        => inner is ISeekableSource
+            ? new SeekableResamplingAudioSource(inner, outputSampleRate, disposeInnerWhenDisposed)
+            : new ResamplingAudioSource(inner, outputSampleRate, disposeInnerWhenDisposed);
+
     private readonly IAudioSource _inner;
     private readonly AudioFormat _outputFormat;
     private readonly bool _disposeInner;
@@ -113,10 +125,40 @@ public sealed class ResamplingAudioSource : IAudioSource, IDisposable
         }
     }
 
+    /// <summary>Flushes resampler + drain state after the inner source jumped (seek), so the next read
+    /// starts cleanly at the new location. Used by <see cref="SeekableResamplingAudioSource"/>.</summary>
+    private protected void ResetAfterInnerSeek()
+    {
+        MediaDiagnostics.SwallowDisposeErrors(() => _swr?.Dispose(), "ResamplingAudioSource.ResetAfterInnerSeek: swr");
+        _swr = null; // recreated lazily on the next ReadInto
+        _drained = false;
+    }
+
     private void EnsureSrcScratch(int minFloats)
     {
         if (_srcScratch.Length >= minFloats)
             return;
         _srcScratch = new float[Math.Max(minFloats, checked(_srcScratch.Length * 2))];
+    }
+}
+
+/// <summary>Seekable variant of <see cref="ResamplingAudioSource"/> — forwards the inner source's
+/// <see cref="ISeekableSource"/> surface and flushes the resampler on seek. Created by
+/// <see cref="ResamplingAudioSource.Create"/> when the inner source is seekable.</summary>
+internal sealed class SeekableResamplingAudioSource : ResamplingAudioSource, ISeekableSource
+{
+    private readonly ISeekableSource _seekableInner;
+
+    public SeekableResamplingAudioSource(IAudioSource inner, int outputSampleRate, bool disposeInnerWhenDisposed)
+        : base(inner, outputSampleRate, disposeInnerWhenDisposed)
+        => _seekableInner = (ISeekableSource)inner;
+
+    public TimeSpan Duration => _seekableInner.Duration;
+    public TimeSpan Position => _seekableInner.Position;
+
+    public void Seek(TimeSpan position)
+    {
+        _seekableInner.Seek(position);
+        ResetAfterInnerSeek();
     }
 }

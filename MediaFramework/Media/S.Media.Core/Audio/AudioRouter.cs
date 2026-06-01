@@ -96,6 +96,9 @@ public sealed partial class AudioRouter : IDisposable
     private bool _disposed;
     private volatile Exception? _fault;
     private long _chunksProduced;
+    /// <summary>Router-thread-only scratch: source ids already read this chunk (a source feeding many
+    /// routes is read once). Reused across chunks to avoid per-chunk allocation.</summary>
+    private readonly HashSet<string> _chunkReadSources = new(StringComparer.Ordinal);
     private int _idCounter;
     private string? _lastSourceId;
     private string? _lastOutputId;
@@ -352,11 +355,13 @@ public sealed partial class AudioRouter : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
         OutputPump? pump;
+        IAudioOutput? removedOutput;
         bool wasRunning;
         lock (_gate)
         {
             if (!_state.Outputs.TryGetValue(id, out var entry)) return false;
             pump = entry.Pump;
+            removedOutput = entry.Output;
             Volatile.Write(ref _state, _state with
             {
                 Outputs = _state.Outputs.Remove(id),
@@ -375,6 +380,12 @@ public sealed partial class AudioRouter : IDisposable
         pump.WaitForIdle(TimeSpan.FromMilliseconds(100), cancellationToken);
         if (wasRunning) _pumpsAwaitingDispose.Enqueue(pump);
         else pump.Dispose();
+
+        // Dispose the router-created adaptive-rate wrapper (if any) so its monitor subscription /
+        // resampler don't leak. We only dispose wrappers WE created (IAdaptiveRateWrappedOutput) — the
+        // pump doesn't own its inner and we must never dispose the caller's own output.
+        if (removedOutput is IAdaptiveRateWrappedOutput and IDisposable wrapper)
+            MediaDiagnostics.SwallowDisposeErrors(wrapper.Dispose, "AudioRouter.RemoveOutput: adaptive wrapper");
         return true;
     }
 
@@ -1078,6 +1089,10 @@ public sealed partial class AudioRouter : IDisposable
             foreach (var (_, entry) in _state.Outputs)
             {
                 MediaDiagnostics.SwallowDisposeErrors(entry.Pump.Dispose, "AudioRouter.Dispose: OutputPump.Dispose");
+                // Dispose router-created adaptive-rate wrappers (monitor subscription / resampler); never
+                // the caller's own output (the pump doesn't own its inner).
+                if (entry.Output is IAdaptiveRateWrappedOutput and IDisposable wrapper)
+                    MediaDiagnostics.SwallowDisposeErrors(wrapper.Dispose, "AudioRouter.Dispose: adaptive wrapper");
             }
 
             foreach (var (_, entry) in _state.Sources)
@@ -1162,12 +1177,23 @@ public sealed partial class AudioRouter : IDisposable
                 // consistent view per chunk.
                 var snapshot = Volatile.Read(ref _state);
 
-                // "Empty source set" means the router never auto-stops — it just
-                // keeps producing silence. With sources present, we stop when every
-                // last one is exhausted.
-                var keepRunning = snapshot.Sources.IsEmpty;
-                foreach (var (_, src) in snapshot.Sources)
+                // Only consume sources that have at least one route this chunk. Registering a source must
+                // NOT drain it — a cue/soundboard can load a clip before routing/firing it (otherwise the
+                // clip is silently consumed and plays back empty when finally routed). A source feeding
+                // several routes is still read exactly once; muted-but-routed sources keep advancing
+                // (standard mixer "mute" — the timeline keeps running, only the gain is zero).
+                //
+                // Auto-stop (CompletedNaturally) fires only when routes exist AND every routed source is
+                // exhausted. With no sources we run forever (silence); with sources but no routes yet we
+                // also keep running so dynamic "route-last" graphs aren't killed before the route lands.
+                _chunkReadSources.Clear();
+                var keepRunning = snapshot.Sources.IsEmpty || snapshot.Routes.IsEmpty;
+                foreach (var resolved in snapshot.Routes)
                 {
+                    var src = resolved.Source;
+                    if (!_chunkReadSources.Add(src.Id))
+                        continue; // already read this chunk for another route
+
                     var read = src.Source.ReadInto(src.Scratch);
                     if ((uint)read > (uint)src.Scratch.Length)
                     {

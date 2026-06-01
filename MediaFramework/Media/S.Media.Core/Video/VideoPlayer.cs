@@ -60,6 +60,10 @@ public sealed class VideoPlayer : IDisposable
     private EventHandler? _tickHandler;
     private bool _isRunning;
     private bool _disposed;
+    /// <summary>Set when a decode thread failed to exit within the join cap (blocked in a native read).
+    /// A restart would create a second decode thread sharing this source/queue, so <see cref="Play"/>
+    /// is refused once this is set — the player is terminally stuck and must be disposed.</summary>
+    private volatile bool _decodeThreadStuck;
 
     private long _decoded;
     private long _displayed;
@@ -170,6 +174,7 @@ public sealed class VideoPlayer : IDisposable
         // Negotiate format up front so the output is configured before any
         // frame arrives. Either side throws here if no compatible format.
         VideoFormatNegotiator.Connect(_source, _sink, negotiatePixelFormats);
+        _sink.Format.Validate(nameof(output));
     }
 
     /// <summary>Start decoding and scheduling. Idempotent.</summary>
@@ -178,6 +183,10 @@ public sealed class VideoPlayer : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            if (_decodeThreadStuck)
+                throw new InvalidOperationException(
+                    "VideoPlayer cannot restart: a previous decode thread is still blocked in a native read and never exited. " +
+                    "Dispose this player and create a new one.");
             if (_isRunning)
             {
                 Trace.LogTrace("Play: already running");
@@ -285,6 +294,15 @@ public sealed class VideoPlayer : IDisposable
         finally
         {
             toDispose?.Dispose();
+        }
+
+        if (toJoin is { IsAlive: true } && !cancellationToken.IsCancellationRequested)
+        {
+            // The decode thread is still blocked in native code after the full join cap (not an early
+            // cooperative cancel). A subsequent Play() must NOT start a second decode thread sharing
+            // this source/queue/semaphore — concurrent non-thread-safe decoder access. Mark terminal.
+            _decodeThreadStuck = true;
+            Trace.LogError("StopInternal: decode thread did not exit within the join cap; player is now non-restartable (dispose it).");
         }
 
         if (_source is ICooperativeVideoReadInterrupt clearYield)

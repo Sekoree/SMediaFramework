@@ -566,6 +566,12 @@ public sealed class MediaPlayer : IDisposable
                 audioSourceId = disposeSourcesOnDispose
                     ? audioRouter.AddOwnedSource(audioSource)
                     : audioRouter.AddSource(audioSource);
+                // Route the audio source to a discard sink so it is actually consumed — advancing the
+                // master clock and reaching EOF for "play to completion". Sources are only pulled when
+                // routed; a real clocked output (e.g. PortAudio) attached later still becomes the pacing
+                // primary and plays the audio — this sink just drops its copy.
+                var audioDiscardId = audioRouter.AddOutput(new DiscardingAudioOutput(audioSource.Format), "_audio_discard");
+                audioRouter.Connect(audioSourceId, audioDiscardId);
                 playClock = audioClock;
             }
             else
@@ -779,6 +785,10 @@ public sealed class MediaPlayer : IDisposable
                 audioRouter = new AudioRouter(media.Audio.Format.SampleRate, options.AudioChunkSamples);
                 audioRouter.AttachMasterClock(audioClock);
                 audioSourceId = audioRouter.AddOwnedSource(media.Audio);
+                // See the other audio-wiring path: route to a discard sink so the source is consumed
+                // (advances the master clock / reaches EOF) even before a real output is attached.
+                var audioDiscardId = audioRouter.AddOutput(new DiscardingAudioOutput(media.Audio.Format), "_audio_discard");
+                audioRouter.Connect(audioSourceId, audioDiscardId);
                 playClock = audioClock;
             }
             else

@@ -27,9 +27,12 @@ public enum TextAlignment
 /// <c>SKAlphaType.Premul</c> — premultiplied — same as <see cref="ImageFileSource"/>.
 /// </para>
 /// <para>
-/// Pixel buffer is rented from <see cref="ArrayPool{T}.Shared"/>. The buffer is held by the source
-/// for its lifetime and returned on <see cref="Dispose"/>; emitted frames carry <c>release: null</c>
-/// because they alias the live buffer.
+/// Each rasterisation produces an immutable, refcounted pooled buffer ("generation"). Emitted frames
+/// share the current generation (no per-frame copy while the text is unchanged) and hold a reference;
+/// a property change rasterises a <em>new</em> generation, and an old generation returns to
+/// <see cref="ArrayPool{T}.Shared"/> only once the source and every emitted frame referencing it are
+/// disposed. So mutating the text or disposing the source can never change pixels or free the buffer
+/// underneath frames still queued in a player/compositor/output.
 /// </para>
 /// <para>
 /// Phase-4 first-cut: CPU rasterisation only. GPU-side SDF font rendering is a future enhancement
@@ -43,7 +46,7 @@ public sealed class TextLayerSource : IVideoSource, IDisposable
     private readonly VideoFormat _format;
     private readonly TimeSpan _ptsStep;
     private readonly object _gate = new();
-    private byte[] _pixelBuffer;
+    private FrameBuffer? _current;
     private readonly int _pixelByteCount;
     private readonly int _stride;
     private TimeSpan _nextPts;
@@ -86,7 +89,6 @@ public sealed class TextLayerSource : IVideoSource, IDisposable
         _format = new VideoFormat(width, height, PixelFormat.Bgra32, frameRate);
         _stride = width * 4;
         _pixelByteCount = _stride * height;
-        _pixelBuffer = ArrayPool<byte>.Shared.Rent(_pixelByteCount);
         _ptsStep = frameRate.Numerator > 0 && frameRate.Denominator > 0
             ? TimeSpan.FromSeconds((double)frameRate.Denominator / frameRate.Numerator)
             : TimeSpan.FromMilliseconds(33);
@@ -164,31 +166,43 @@ public sealed class TextLayerSource : IVideoSource, IDisposable
             return false;
         }
 
+        FrameBuffer gen;
         lock (_gate)
         {
-            if (_dirty)
+            if (_disposed)
             {
-                Rasterise();
+                frame = null!;
+                return false;
+            }
+            if (_dirty || _current is null)
+            {
+                var next = Rasterise();
+                _current?.Release(); // drop the source's hold on the previous generation
+                _current = next;
                 _dirty = false;
             }
+            gen = _current;
+            gen.AddRef(); // this frame's reference; released when the frame is disposed
         }
 
         frame = new VideoFrame(
             _nextPts,
             _format,
-            new ReadOnlyMemory<byte>(_pixelBuffer, 0, _pixelByteCount),
+            new ReadOnlyMemory<byte>(gen.Buffer, 0, _pixelByteCount),
             _stride,
-            release: null);
+            release: gen);
         _nextPts += _ptsStep;
         return true;
     }
 
-    private void Rasterise()
+    /// <summary>Rasterises the current text into a fresh refcounted generation buffer (source holds 1 ref).</summary>
+    private FrameBuffer Rasterise()
     {
+        var buffer = ArrayPool<byte>.Shared.Rent(_pixelByteCount);
         var info = new SKImageInfo(_format.Width, _format.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         unsafe
         {
-            fixed (byte* p = _pixelBuffer)
+            fixed (byte* p = buffer)
             {
                 using var surface = SKSurface.Create(info, (IntPtr)p, _stride);
                 var canvas = surface.Canvas;
@@ -218,14 +232,56 @@ public sealed class TextLayerSource : IVideoSource, IDisposable
                 canvas.Flush();
             }
         }
+
+        return new FrameBuffer(buffer, initialRefs: 1);
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        var buf = _pixelBuffer;
-        _pixelBuffer = null!;
-        ArrayPool<byte>.Shared.Return(buf, clearArray: false);
+        FrameBuffer? gen;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            gen = _current;
+            _current = null;
+        }
+        // Drop only the source's reference; frames still in flight keep theirs and return the buffer
+        // to the pool when they are disposed.
+        gen?.Release();
+    }
+
+    /// <summary>
+    /// Refcounted pooled BGRA buffer shared by all frames emitted from one rasterisation generation.
+    /// The source holds one reference; each emitted frame adds another. The backing array returns to
+    /// <see cref="ArrayPool{T}.Shared"/> only when the last reference is released, so re-rasterising a
+    /// new generation or disposing the source can't pull the buffer out from under in-flight frames.
+    /// </summary>
+    private sealed class FrameBuffer : IDisposable
+    {
+        private byte[]? _buffer;
+        private int _refs;
+
+        public FrameBuffer(byte[] buffer, int initialRefs)
+        {
+            _buffer = buffer;
+            _refs = initialRefs;
+        }
+
+        public byte[] Buffer => _buffer ?? throw new ObjectDisposedException(nameof(FrameBuffer));
+
+        public void AddRef() => Interlocked.Increment(ref _refs);
+
+        /// <summary>One emitted frame's release path: <see cref="VideoFrame.Dispose"/> calls this exactly
+        /// once per frame (idempotent), balancing the <see cref="AddRef"/> taken when the frame was built.</summary>
+        public void Dispose() => Release();
+
+        public void Release()
+        {
+            if (Interlocked.Decrement(ref _refs) != 0) return;
+            var buf = Interlocked.Exchange(ref _buffer, null);
+            if (buf is not null)
+                ArrayPool<byte>.Shared.Return(buf, clearArray: false);
+        }
     }
 }

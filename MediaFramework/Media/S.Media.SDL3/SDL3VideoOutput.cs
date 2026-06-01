@@ -123,7 +123,15 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_configured)
+        {
+            // Same-format re-Configure is a no-op — matches SDL3GLVideoOutput and the VideoRouter
+            // primary re-Configure on branch-route changes (which would otherwise throw here but not
+            // for the GL output). A real format change still requires a new output (single-format
+            // lifetime for the non-GL SDL path).
+            if (_format == format)
+                return;
             throw new InvalidOperationException("SDL3VideoOutput already configured; create a new output to switch format");
+        }
         if (Array.IndexOf(AcceptedFormats, format.PixelFormat) < 0)
             throw new NotSupportedException(
                 $"SDL3VideoOutput does not accept pixel format {format.PixelFormat}; supported: {string.Join(", ", AcceptedFormats)}");
