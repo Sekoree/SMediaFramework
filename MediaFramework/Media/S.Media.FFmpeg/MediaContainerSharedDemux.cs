@@ -44,6 +44,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private volatile bool _demuxerStopRequest;
     private int _videoDecodeYieldRequested;
     private volatile bool _fileReadCompleted;
+    private volatile Exception? _demuxFault;
     private Thread? _demuxerThread;
     private AVFormatContext* _fmt;
     private StreamAvioBridge? _streamIo;
@@ -522,10 +523,16 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         return r;
     }
 
+    /// <summary>Non-null after the background demux thread faulted (I/O / parse error). Consumers then
+    /// observe EOF and exhaust gracefully instead of the process crashing; check this to distinguish a
+    /// demux fault from a clean end of file.</summary>
+    public Exception? DemuxFault => _demuxFault;
+
     private void StartDemuxerThread()
     {
         _demuxerStopRequest = false;
         _fileReadCompleted = false;
+        _demuxFault = null;
         _demuxerThread = new Thread(DemuxerThreadProc)
         {
             IsBackground = true,
@@ -586,32 +593,48 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private void DemuxerThreadProc()
     {
-        while (true)
+        try
         {
-            if (_demuxerStopRequest)
-                return;
-
-            av_packet_unref(_demuxPkt);
-            var ret = av_read_frame(_fmt, _demuxPkt);
-            if (ret == AVERROR_EOF)
+            while (true)
             {
-                lock (_queueGate)
+                if (_demuxerStopRequest)
+                    return;
+
+                av_packet_unref(_demuxPkt);
+                var ret = av_read_frame(_fmt, _demuxPkt);
+                if (ret == AVERROR_EOF)
                 {
-                    _fileReadCompleted = true;
-                    Monitor.PulseAll(_queueGate);
+                    lock (_queueGate)
+                    {
+                        _fileReadCompleted = true;
+                        Monitor.PulseAll(_queueGate);
+                    }
+                    return;
                 }
-                return;
-            }
-            if (ret < 0)
-            {
-                FFmpegException.ThrowIfError(ret, nameof(av_read_frame));
-                return;
-            }
+                if (ret < 0)
+                {
+                    FFmpegException.ThrowIfError(ret, nameof(av_read_frame));
+                    return;
+                }
 
-            if (_demuxPkt->stream_index == _aStream)
-                EnqueuePacketCopy(_audioPacketQ, _maxAudioPacketsQueued);
-            else if (_demuxPkt->stream_index == _vStream)
-                EnqueuePacketCopy(_videoPacketQ, _maxVideoPacketsQueued);
+                if (_demuxPkt->stream_index == _aStream)
+                    EnqueuePacketCopy(_audioPacketQ, _maxAudioPacketsQueued);
+                else if (_demuxPkt->stream_index == _vStream)
+                    EnqueuePacketCopy(_videoPacketQ, _maxVideoPacketsQueued);
+            }
+        }
+        catch (Exception ex)
+        {
+            // The demux thread must never crash the host. Record a terminal fault and signal EOF so
+            // blocked consumers (audio/video tracks waiting on _queueGate) wake, drain, and exhaust
+            // gracefully. Hosts can distinguish a fault from clean EOF via DemuxFault.
+            _demuxFault = ex;
+            MediaDiagnostics.LogError(ex, "MediaContainerSharedDemux.DemuxerThreadProc faulted");
+            lock (_queueGate)
+            {
+                _fileReadCompleted = true;
+                Monitor.PulseAll(_queueGate);
+            }
         }
     }
 
@@ -705,6 +728,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             _vDrainSent = false;
             _vPrimedAfterSeek?.Dispose();
             _vPrimedAfterSeek = null;
+            // Re-anchor the no-PTS fallback video counter to the seek target so streams
+            // without container timestamps resume at ~position (matches ResolveVideoPts)
+            // instead of continuing from a stale pre-seek frame index.
+            var vFallbackFps = Video.Format.FrameRate.ToDouble();
+            _vFramesEmitted = vFallbackFps > 0 ? (long)Math.Round(position.TotalSeconds * vFallbackFps) : 0;
             Video.Position = position;
 
             _fileReadCompleted = false;

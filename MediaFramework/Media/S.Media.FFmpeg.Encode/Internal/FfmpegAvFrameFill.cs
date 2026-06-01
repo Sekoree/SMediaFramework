@@ -7,32 +7,27 @@ namespace S.Media.FFmpeg.Encode.Internal;
 
 internal static unsafe class FfmpegAvFrameFill
 {
+    /// <summary>
+    /// Copies <paramref name="frame"/>'s plane data into <paramref name="dst"/>, which must be a
+    /// pre-allocated, already-made-writable <see cref="AVFrame"/> for the fixed encode
+    /// format/dimensions (allocated once in <c>FfmpegVideoEncoder.OpenCodecLocked</c>). This does
+    /// <strong>not</strong> allocate: calling <c>av_frame_get_buffer</c> per frame would reallocate
+    /// and leak the previous plane buffers every submit.
+    /// </summary>
     internal static void CopyVideoFrame(VideoFrame frame, AVFrame* dst, PixelFormat dstPixel)
     {
         if (frame.DmabufNv12 is not null || frame.DmabufP010 is not null || frame.DmabufP016 is not null || frame.Win32Nv12 is not null)
             throw new NotSupportedException("Hardware-backed frames must be converted to CPU memory before encoding.");
 
-        var avDst = FfmpegVideoPixelMaps.ToAvPixelFormat(dstPixel)
-            ?? throw new NotSupportedException($"no FFmpeg mapping for encode pixel {dstPixel}");
+        if (frame.Format.PixelFormat != dstPixel)
+            throw new InvalidOperationException(
+                $"encoder expected pre-converted frames ({dstPixel}); got {frame.Format.PixelFormat}");
 
-        dst->format = (int)avDst;
-        dst->width = frame.Format.Width;
-        dst->height = frame.Format.Height;
+        if (frame.Format.Width != dst->width || frame.Format.Height != dst->height)
+            throw new InvalidOperationException(
+                $"encoder frame size {frame.Format.Width}x{frame.Format.Height} does not match configured {dst->width}x{dst->height}.");
 
-        var ret = av_frame_get_buffer(dst, 32);
-        FFmpegException.ThrowIfError(ret, nameof(av_frame_get_buffer));
-
-        var w = frame.Format.Width;
-        var h = frame.Format.Height;
-
-        if (frame.Format.PixelFormat == dstPixel)
-        {
-            CopyMatchingLayout(frame, dst, dstPixel, w, h);
-            return;
-        }
-
-        throw new InvalidOperationException(
-            $"encoder expected pre-converted frames ({dstPixel}); got {frame.Format.PixelFormat}");
+        CopyMatchingLayout(frame, dst, dstPixel, frame.Format.Width, frame.Format.Height);
     }
 
     private static void CopyMatchingLayout(VideoFrame frame, AVFrame* dst, PixelFormat fmt, int w, int h)

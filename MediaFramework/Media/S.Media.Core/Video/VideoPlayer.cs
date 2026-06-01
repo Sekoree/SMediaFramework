@@ -426,21 +426,24 @@ public sealed class VideoPlayer : IDisposable
                 CaptureHeldFrame(toShow);
             }
 
+            // Capture PTS before Submit: after a successful Submit the output owns
+            // the frame and we must not touch or dispose it again. Counters and the
+            // presentation event run outside the Submit try so a throwing subscriber
+            // can never trigger a double-release of a frame the output already owns.
+            var presentedPts = toShow.PresentationTime;
+            var submitted = false;
             try
             {
                 _sink.Submit(toShow);
-                Interlocked.Increment(ref _displayed);
-                if (Interlocked.Exchange(ref _firstSubmittedLogged, 1) == 0)
-                    Trace.LogDebug("OnVideoTick: first frame submitted (pts={Pts})", toShow.PresentationTime);
-                FramePresentationTimePresented?.Invoke(toShow.PresentationTime);
+                submitted = true;
             }
             catch (Exception ex)
             {
 #if DEBUG
                 MediaDiagnostics.LogError(ex, "VideoPlayer.OnVideoTick output Submit");
 #endif
-                // Output threw — make sure the frame is released to avoid a
-                // native buffer leak; rethrow would kill MediaClock's driver.
+                // Output threw — ownership did not move; release the frame to avoid a
+                // native buffer leak. Rethrow would kill MediaClock's driver.
                 try { toShow.Dispose(); }
 #if DEBUG
                 catch (Exception dex) { MediaDiagnostics.LogError(dex, "VideoPlayer.OnVideoTick frame Dispose after Submit failure"); }
@@ -448,6 +451,14 @@ public sealed class VideoPlayer : IDisposable
                 catch { /* best effort */ }
 #endif
                 _ = ex;
+            }
+
+            if (submitted)
+            {
+                Interlocked.Increment(ref _displayed);
+                if (Interlocked.Exchange(ref _firstSubmittedLogged, 1) == 0)
+                    Trace.LogDebug("OnVideoTick: first frame submitted (pts={Pts})", presentedPts);
+                RaisePresented(presentedPts);
             }
         }
         else if (_source.IsExhausted && _queue.IsEmpty)
@@ -482,11 +493,12 @@ public sealed class VideoPlayer : IDisposable
         if (latest is null)
             return;
 
+        var presentedPts = latest.PresentationTime;
+        var submitted = false;
         try
         {
             _sink.Submit(latest);
-            Interlocked.Increment(ref _displayed);
-            FramePresentationTimePresented?.Invoke(latest.PresentationTime);
+            submitted = true;
         }
         catch (Exception ex)
         {
@@ -495,6 +507,12 @@ public sealed class VideoPlayer : IDisposable
 #endif
             try { latest.Dispose(); } catch { /* best effort */ }
             _ = ex;
+        }
+
+        if (submitted)
+        {
+            Interlocked.Increment(ref _displayed);
+            FramePresentationTimePresented?.Invoke(presentedPts);
         }
     }
 
@@ -542,12 +560,11 @@ public sealed class VideoPlayer : IDisposable
             return;
         }
 
+        var submitted = false;
         try
         {
             _sink.Submit(frame);
-            Interlocked.Increment(ref _displayed);
-            Interlocked.Increment(ref _holdSubmitCount);
-            FramePresentationTimePresented?.Invoke(resubmitPts);
+            submitted = true;
         }
         catch (Exception ex)
         {
@@ -558,6 +575,31 @@ public sealed class VideoPlayer : IDisposable
 #endif
             try { frame.Dispose(); }
             catch { /* best effort */ }
+        }
+
+        if (submitted)
+        {
+            Interlocked.Increment(ref _displayed);
+            Interlocked.Increment(ref _holdSubmitCount);
+            RaisePresented(resubmitPts);
+        }
+    }
+
+    /// <summary>
+    /// Notify <see cref="FramePresentationTimePresented"/> subscribers after a frame was
+    /// successfully submitted. The output owns the frame by now, so this must never touch or
+    /// dispose it, and a throwing subscriber must not reach the clock-driver thread.
+    /// </summary>
+    private void RaisePresented(TimeSpan pts)
+    {
+        try { FramePresentationTimePresented?.Invoke(pts); }
+        catch (Exception ex)
+        {
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "VideoPlayer.FramePresentationTimePresented subscriber threw");
+#else
+            _ = ex;
+#endif
         }
     }
 

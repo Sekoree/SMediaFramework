@@ -13,6 +13,14 @@ public sealed class AudioRouterOutputErrorEventArgs : EventArgs
     }
 }
 
+/// <summary>Argument for <see cref="AudioRouter.Faulted"/> — the router loop hit an unhandled error and stopped.</summary>
+public sealed class AudioRouterFaultedEventArgs : EventArgs
+{
+    public Exception Exception { get; }
+
+    public AudioRouterFaultedEventArgs(Exception exception) => Exception = exception;
+}
+
 /// <summary>
 /// Argument for <see cref="AudioRouter.PumpPressure"/> when chunks are dropped.
 /// <c>readonly record struct</c> so the steady-state path under sustained drop pressure stays

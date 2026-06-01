@@ -274,6 +274,10 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         _eofReached = false;
         _drainPacketSent = false;
         _primedAfterSeek = null;
+        // Re-anchor the no-PTS fallback counter to the seek target so streams without
+        // container timestamps resume at ~position instead of a stale future time.
+        var fallbackFps = Format.FrameRate.ToDouble();
+        _framesEmitted = fallbackFps > 0 ? (long)Math.Round(position.TotalSeconds * fallbackFps) : 0;
         Position = position;
         ConsumeDecoderUntilPts(position);
     }

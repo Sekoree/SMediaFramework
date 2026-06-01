@@ -34,10 +34,22 @@ internal sealed class WallClockRouterClock : IRouterClock
         _nextDeadline = _chunkDuration;
     }
 
+    /// <summary>
+    /// After falling more than this many chunks behind (GC pause, scheduling, slow source), re-anchor
+    /// the deadline to "now" instead of bursting the whole backlog as fast as the loop runs — matches
+    /// <see cref="S.Media.Core.Clock.MediaClock"/>'s bounded-burst behaviour.
+    /// </summary>
+    private const int MaxCatchupChunks = 64;
+
     public bool WaitForNextChunk(CancellationToken token)
     {
         if (token.IsCancellationRequested) return false;
-        var sleep = _nextDeadline - _stopwatch.Elapsed;
+        var elapsed = _stopwatch.Elapsed;
+        // Cap catch-up: a long stall must not make the router produce chunks back-to-back at full
+        // speed to "catch up" — that just floods output pumps and CPU. Drop the excess backlog.
+        if (elapsed - _nextDeadline > _chunkDuration * MaxCatchupChunks)
+            _nextDeadline = elapsed;
+        var sleep = _nextDeadline - elapsed;
         _nextDeadline += _chunkDuration;
         if (sleep <= TimeSpan.Zero) return true; // behind schedule — produce immediately
         return !token.WaitHandle.WaitOne(sleep);

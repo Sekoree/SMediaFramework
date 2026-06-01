@@ -109,6 +109,8 @@ public sealed class PortAudioPlaybackHost : IDisposable
         ArgumentNullException.ThrowIfNull(router);
         ArgumentNullException.ThrowIfNull(clock);
         ArgumentException.ThrowIfNullOrEmpty(decoderMuxAudioSourceId);
+        PortAudioOutput? output = null;
+        string? sinkMain = null;
         try
         {
             if (!router.SourceIds.Contains(decoderMuxAudioSourceId))
@@ -119,7 +121,7 @@ public sealed class PortAudioPlaybackHost : IDisposable
 
             var audioSource = container.Audio;
             double? latencySec = deviceLatencyMs is > 0 ? deviceLatencyMs.Value / 1000.0 : null;
-            var output = new PortAudioOutput(
+            output = new PortAudioOutput(
                 audioSource.Format,
                 deviceIndex: deviceIndex,
                 suggestedLatency: latencySec,
@@ -137,13 +139,21 @@ public sealed class PortAudioPlaybackHost : IDisposable
 
             output.TargetQueueSamples = target;
 
-            string sinkMain = router.AddOutput(output);
+            sinkMain = router.AddOutput(output);
             router.Connect(decoderMuxAudioSourceId, sinkMain);
 
             return new PortAudioPlaybackHost(container, router, clock, decoderMuxAudioSourceId, output, sinkMain, playerOwnership);
         }
         catch (Exception ex)
         {
+            // Setup failed partway. Undo any router registration and dispose the native
+            // PortAudio stream so a partial-wire failure can't leak the device. The router
+            // owns only the pump wrapper (on success the returned host owns the output), so
+            // RemoveOutput tears down the pump and we still dispose the output ourselves.
+            if (sinkMain is not null)
+                MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveOutput(sinkMain), "TryWirePortAudioMainForRouter: rollback RemoveOutput");
+            if (output is not null)
+                MediaDiagnostics.SwallowDisposeErrors(output.Dispose, "TryWirePortAudioMainForRouter: rollback output dispose");
             onWireFailedMessage?.Invoke(ex.Message);
             return null;
         }

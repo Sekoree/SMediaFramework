@@ -51,6 +51,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     private long _overflowSamples;
     private long _conversionDrops;
     private bool _disposed;
+    private volatile Exception? _faultEx;
 
     /// <summary>True once at least one audio frame has been received and
     /// <see cref="Format"/> is meaningful.</summary>
@@ -67,7 +68,15 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         }
     }
 
-    public bool IsExhausted => _disposed;
+    public bool IsExhausted => _disposed || _faultEx is not null;
+
+    /// <summary>Non-null after the background capture thread faulted. The receiver is then terminal:
+    /// <see cref="IsExhausted"/> becomes true so the router stops pulling.</summary>
+    public Exception? Fault => _faultEx;
+
+    /// <summary>Raised once if the background capture thread faults (native/conversion error). The handler
+    /// runs on the capture thread; keep it lightweight.</summary>
+    public event Action<Exception>? Faulted;
 
     /// <summary>Approximate samples-per-channel currently buffered.</summary>
     public int AvailableSamples
@@ -299,6 +308,18 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                     _receiver.FreeMetadata(metadata);
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            // Background capture must never crash the host. Record a terminal fault and surface it;
+            // ReadInto then drains to empty and IsExhausted becomes true so the router stops pulling.
+            _faultEx = ex;
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "NDIAudioReceiver.CaptureLoop faulted");
+#else
+            _ = ex;
+#endif
+            try { Faulted?.Invoke(ex); } catch { /* subscriber best effort */ }
         }
         finally
         {

@@ -32,6 +32,38 @@ public sealed class AudioClipTests : IDisposable
     }
 
     [Fact]
+    public void Voice_StopAtEndOfClip_BecomesExhausted()
+    {
+        // Regression: Stop() called when the cursor is already at clip end must still
+        // drive the release ramp to completion so IsExhausted becomes true. Before the
+        // fix the voice lingered forever returning zero samples (never reaped).
+        var format = new AudioFormat(48_000, 2);
+        const int frames = 480;
+        var data = new float[frames * format.Channels];
+        for (var i = 0; i < data.Length; i++)
+            data[i] = 0.25f;
+        var clip = AudioClip.FromSamples(format, data);
+        var voice = clip.CreateVoice();
+
+        // Drain the whole clip in one read; the cursor lands exactly on the end and the
+        // voice is naturally exhausted (without _stopped having been set).
+        var buf = new float[frames * format.Channels];
+        Assert.Equal(buf.Length, voice.ReadInto(buf));
+        Assert.True(voice.IsExhausted);
+
+        // Stop() restarts the release ramp and clears natural exhaustion (the bug window).
+        voice.Stop();
+
+        // A few reads must complete the (silent) release and re-exhaust the voice
+        // instead of spinning forever returning zero samples.
+        for (var i = 0; i < 4 && !voice.IsExhausted; i++)
+            voice.ReadInto(buf);
+
+        Assert.True(voice.IsExhausted);
+        Assert.Equal(0, voice.ReadInto(buf));
+    }
+
+    [Fact]
     public void Voice_ReadInto_NoAllocationsAfterWarmup()
     {
         var format = new AudioFormat(48_000, 2);

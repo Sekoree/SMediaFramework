@@ -24,6 +24,10 @@ internal sealed class PlaybackSlavedRouterClock : IRouterClock
 
     public void Reset() => _nextChunkDeadline = _chunkDuration;
 
+    /// <summary>After a master-timeline jump/stall larger than this many chunks, re-anchor instead of
+    /// bursting the whole backlog back-to-back (matches <see cref="S.Media.Core.Clock.MediaClock"/>).</summary>
+    private const int MaxCatchupChunks = 64;
+
     public bool WaitForNextChunk(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
@@ -31,6 +35,9 @@ internal sealed class PlaybackSlavedRouterClock : IRouterClock
             var elapsed = _master.ElapsedSinceStart;
             if (elapsed >= _nextChunkDeadline)
             {
+                // Cap catch-up after a large master jump/stall: drop the excess backlog and re-anchor.
+                if (elapsed - _nextChunkDeadline > _chunkDuration * MaxCatchupChunks)
+                    _nextChunkDeadline = elapsed;
                 _nextChunkDeadline += _chunkDuration;
                 return true;
             }

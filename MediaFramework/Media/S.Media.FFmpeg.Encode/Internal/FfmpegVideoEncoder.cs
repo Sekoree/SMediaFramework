@@ -87,7 +87,10 @@ internal sealed unsafe class FfmpegVideoEncoder : IVideoOutput, IDisposable
 
                 try
                 {
-                    av_frame_make_writable(_frame);
+                    // Frame buffers were allocated once in OpenCodecLocked; make them writable (the
+                    // encoder may still hold a ref from the previous submit) and copy into them.
+                    var wr = av_frame_make_writable(_frame);
+                    FFmpegException.ThrowIfError(wr, nameof(av_frame_make_writable));
                     FfmpegAvFrameFill.CopyVideoFrame(working, _frame, _encodePixel);
                     _frame->pts = ResolvePts(frame.PresentationTime);
                     EncodeFrameLocked(_frame);
@@ -199,6 +202,15 @@ internal sealed unsafe class FfmpegVideoEncoder : IVideoOutput, IDisposable
         _frame = av_frame_alloc();
         if (_frame is null)
             throw new OutOfMemoryException("av_frame_alloc returned NULL");
+
+        // Allocate the frame's plane buffers ONCE for the fixed encode format/dimensions (the same
+        // pattern the audio encoder uses). Submit then calls av_frame_make_writable and copies into
+        // these buffers — calling av_frame_get_buffer per frame would reallocate/leak every submit.
+        _frame->format = (int)avPix;
+        _frame->width = _format.Width;
+        _frame->height = _format.Height;
+        ret = av_frame_get_buffer(_frame, 32);
+        FFmpegException.ThrowIfError(ret, nameof(av_frame_get_buffer));
     }
 
     public void Dispose()

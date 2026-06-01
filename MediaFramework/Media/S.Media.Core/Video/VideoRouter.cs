@@ -154,9 +154,10 @@ public sealed class VideoRouter : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(outputId);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        IDisposable? ownedToDispose = null;
         lock (_gate)
         {
-            if (!_outputs.ContainsKey(outputId)) return false;
+            if (!_outputs.TryGetValue(outputId, out var removed)) return false;
 
             foreach (var kv in _inputs.ToArray())
             {
@@ -173,8 +174,21 @@ public sealed class VideoRouter : IDisposable
                     ReconfigureInputIfNeededLocked(reg);
             }
 
-            return true;
+            // The router owns the registered output/pump when it was added with
+            // disposeOutputOnRouterDispose (always true on the default pump-by-default
+            // path). Dispose it on removal too — Dispose() does, but RemoveOutput
+            // previously dropped the registration without disposing, leaking the pump's
+            // drainer thread and the inner output's native resources.
+            if (removed.DisposeOutputOnRouterDispose && removed.Output is IDisposable d)
+                ownedToDispose = d;
         }
+
+        // Outside the lock: VideoOutputPump.Dispose joins its drainer thread, so we must
+        // not hold _gate during teardown.
+        if (ownedToDispose is not null)
+            MediaDiagnostics.SwallowDisposeErrors(ownedToDispose.Dispose, $"VideoRouter.RemoveOutput: output '{outputId}'");
+
+        return true;
     }
 
     /// <summary>

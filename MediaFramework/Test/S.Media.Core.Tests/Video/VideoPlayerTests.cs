@@ -205,6 +205,46 @@ public class VideoPlayerTests
         player.Dispose();
     }
 
+    [Fact]
+    public void Submit_Success_With_Throwing_PresentationEvent_Does_Not_Release_Frame()
+    {
+        // Regression for the post-submit double-dispose: once Submit succeeds the output owns
+        // the frame. A throwing FramePresentationTimePresented subscriber must not make the
+        // player release it — an async output may still hold it queued and an early release
+        // would free the backing out from under it. (VideoFrame.Dispose is idempotent, so the
+        // real symptom is a premature release, not a literal double free.)
+        var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16));
+        var output = new HoldingVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4)
+        {
+            EarlyTolerance = TimeSpan.FromMilliseconds(2),
+            LateThreshold = TimeSpan.FromMilliseconds(500),
+        };
+        player.FramePresentationTimePresented += _ => throw new InvalidOperationException("subscriber boom");
+        player.Play();
+        output.WaitForConfigured();
+        WaitFor(() => src.Reads >= 1, TimeSpan.FromSeconds(1));
+
+        // Re-tick until the decode thread has enqueued the frame and it gets submitted.
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(10));
+        WaitFor(() =>
+        {
+            clock.RaiseVideoTick();
+            return output.Held.Count >= 1;
+        }, TimeSpan.FromSeconds(1));
+
+        // The output holds the frame; despite the throwing event the player must not have
+        // released it. The source's outstanding counter only decrements when the backing is
+        // released, so it must still read 1.
+        Assert.Equal(1, src.UndisposedFramesHandedOut);
+
+        // The output owns it — disposing now runs the release exactly once.
+        output.DisposeHeld();
+        Assert.Equal(0, src.UndisposedFramesHandedOut);
+    }
+
     private static VideoFormat VideoFmt(int w, int h)
         => new(w, h, PixelFormat.Bgra32, new Rational(30, 1));
 
@@ -284,6 +324,38 @@ internal sealed class FakeVideoOutput : IVideoOutput
         // the frame so the source's outstanding counter decrements.
         Submitted.Add(frame);
         frame.Dispose();
+    }
+
+    public void WaitForConfigured() => _configured.Wait(TimeSpan.FromSeconds(1));
+}
+
+internal sealed class HoldingVideoOutput : IVideoOutput
+{
+    private readonly PixelFormat[] _accepted;
+    private readonly ManualResetEventSlim _configured = new(false);
+
+    /// <summary>Frames the output has taken ownership of and is still holding (mimics an async output).</summary>
+    public List<VideoFrame> Held { get; } = new();
+    public VideoFormat Format { get; private set; }
+
+    public HoldingVideoOutput(PixelFormat[] accepted) => _accepted = accepted;
+
+    public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _accepted;
+
+    public void Configure(VideoFormat format)
+    {
+        Format = format;
+        _configured.Set();
+    }
+
+    // Takes ownership but does not dispose in Submit — like a pump/render-thread output that
+    // disposes later. The player must never dispose a frame after a successful Submit.
+    public void Submit(VideoFrame frame) => Held.Add(frame);
+
+    public void DisposeHeld()
+    {
+        foreach (var f in Held) f.Dispose();
+        Held.Clear();
     }
 
     public void WaitForConfigured() => _configured.Wait(TimeSpan.FromSeconds(1));

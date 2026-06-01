@@ -61,11 +61,12 @@ internal static class AvPlaybackCoordinator
         Action? flushSharedMuxAfterPause = null)
     {
         ArgumentNullException.ThrowIfNull(video);
+
+        // Silence/stop audio FIRST. video.Pause can block up to the decode-thread join cap while a
+        // native read unwinds; if we paused video first (the old order), the audio router + clock
+        // would keep running for that whole window — audible pause latency and A/V divergence. The
+        // audio pause is quick (stop the router thread + clock), so do it up front.
         try
-        {
-            video.Pause(cancellationToken);
-        }
-        finally
         {
             if (audioRouter is not null && audioClock is not null)
             {
@@ -76,8 +77,17 @@ internal static class AvPlaybackCoordinator
             {
                 video.Clock.Pause(cancellationToken);
             }
-
-            flushSharedMuxAfterPause?.Invoke();
+        }
+        finally
+        {
+            try
+            {
+                video.Pause(cancellationToken);
+            }
+            finally
+            {
+                flushSharedMuxAfterPause?.Invoke();
+            }
         }
     }
 

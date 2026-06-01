@@ -148,6 +148,8 @@ public sealed class GlVideoCompositor : IVideoCompositor
         var savedScissor = _gl.IsEnabled(EnableCap.ScissorTest);
         _gl.GetInteger(GetPName.UnpackAlignment, out var savedUnpackAlignment);
         _gl.GetInteger(GetPName.UnpackRowLength, out var savedUnpackRowLength);
+        _gl.GetInteger(GetPName.PackAlignment, out var savedPackAlignment);
+        _gl.GetInteger(GetPName.PackRowLength, out var savedPackRowLength);
 
         try
         {
@@ -197,6 +199,10 @@ public sealed class GlVideoCompositor : IVideoCompositor
             // --- Restore host state. ---
             _gl.PixelStore(PixelStoreParameter.UnpackAlignment, savedUnpackAlignment);
             _gl.PixelStore(PixelStoreParameter.UnpackRowLength, savedUnpackRowLength);
+            // glReadPixels above mutated GL_PACK_* — restore so embedding the compositor
+            // in another GL renderer can't corrupt that renderer's later readbacks.
+            _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
+            _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
             if (!savedBlendEnabled) _gl.Disable(EnableCap.Blend);
             _gl.BlendFuncSeparate((BlendingFactor)savedBlendSrcRgb, (BlendingFactor)savedBlendDstRgb,
                 (BlendingFactor)savedBlendSrcAlpha, (BlendingFactor)savedBlendDstAlpha);

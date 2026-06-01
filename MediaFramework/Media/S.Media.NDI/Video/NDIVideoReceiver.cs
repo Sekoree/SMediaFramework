@@ -37,6 +37,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     private bool _disposed;
     private long _overflowFrames;
     private long _unpackDrops;
+    private volatile Exception? _faultEx;
 
     public bool IsConnected => _hasFormat;
 
@@ -48,9 +49,17 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
     public IReadOnlyList<PixelFormat> NativePixelFormats => _native;
 
-    public bool IsExhausted => _disposed;
+    public bool IsExhausted => _disposed || _faultEx is not null;
 
     public long OverflowFrames => Interlocked.Read(ref _overflowFrames);
+
+    /// <summary>Non-null after the background capture thread faulted. The receiver is then terminal:
+    /// <see cref="IsExhausted"/> becomes true and <see cref="TryReadNextFrame"/> stops blocking.</summary>
+    public Exception? Fault => _faultEx;
+
+    /// <summary>Raised once if the background capture thread faults (native/unpack error). The handler
+    /// runs on the capture thread; keep it lightweight.</summary>
+    public event Action<Exception>? Faulted;
 
     /// <summary>
     /// Discards any frames currently queued and resets the PTS counter so the next captured frame is
@@ -141,7 +150,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         VideoFrame? next;
         while (!_queue.TryDequeue(out next))
         {
-            if (_disposed)
+            if (_disposed || _faultEx is not null)
             {
                 frame = null!;
                 return false;
@@ -149,7 +158,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
             lock (_waitGate)
             {
-                if (_queue.IsEmpty && !_disposed)
+                if (_queue.IsEmpty && !_disposed && _faultEx is null)
                     Monitor.Wait(_waitGate, 100);
             }
         }
@@ -159,6 +168,29 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     }
 
     private void CaptureLoop(CancellationToken token)
+    {
+        // Background capture must never crash the host. A native/unpack error records a terminal fault,
+        // wakes any blocked reader, and surfaces via Fault / Faulted / IsExhausted instead of escaping
+        // the thread and terminating the process.
+        try
+        {
+            CaptureLoopCore(token);
+        }
+        catch (Exception ex)
+        {
+            _faultEx = ex;
+#if DEBUG
+            MediaDiagnostics.LogError(ex, "NDIVideoReceiver.CaptureLoop faulted");
+#else
+            _ = ex;
+#endif
+            lock (_waitGate)
+                Monitor.PulseAll(_waitGate);
+            try { Faulted?.Invoke(ex); } catch { /* subscriber best effort */ }
+        }
+    }
+
+    private void CaptureLoopCore(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {

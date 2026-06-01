@@ -94,6 +94,7 @@ public sealed partial class AudioRouter : IDisposable
     private CancellationTokenSource? _cts;
     private bool _isRunning;
     private bool _disposed;
+    private volatile Exception? _fault;
     private long _chunksProduced;
     private int _idCounter;
     private string? _lastSourceId;
@@ -122,6 +123,14 @@ public sealed partial class AudioRouter : IDisposable
 
     /// <summary>Raised when a output throws from <see cref="IAudioOutput.Submit"/> (non-fatal; pump keeps running).</summary>
     public event EventHandler<AudioRouterOutputErrorEventArgs>? OutputErrored;
+
+    /// <summary>Raised when the router loop hits an unhandled error (bad source read, clock, mix) and stops.
+    /// The router transitions to stopped/faulted instead of crashing the host; inspect <see cref="Fault"/>.
+    /// Handler runs on the router thread as it unwinds.</summary>
+    public event EventHandler<AudioRouterFaultedEventArgs>? Faulted;
+
+    /// <summary>Non-null after the router loop faulted and stopped (see <see cref="Faulted"/>). Cleared by <see cref="Start"/>.</summary>
+    public Exception? Fault => _fault;
 
     /// <summary>Raised when a output pump drops chunks — sustained drops mean the output is behind.</summary>
     public event EventHandler<AudioRouterPumpPressureEventArgs>? PumpPressure;
@@ -867,6 +876,7 @@ public sealed partial class AudioRouter : IDisposable
             }
 
             CompletedNaturally = false;
+            _fault = null;
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
             _clock.Reset();
@@ -1104,6 +1114,12 @@ public sealed partial class AudioRouter : IDisposable
         return collected;
     }
 
+    private void RaiseFaulted(Exception ex)
+    {
+        try { Faulted?.Invoke(this, new AudioRouterFaultedEventArgs(ex)); }
+        catch (Exception hex) { MediaDiagnostics.LogError(hex, "AudioRouter.Faulted handler threw"); }
+    }
+
     private void RaiseOutputErrored(string outputId, Exception ex)
     {
         OutputErrored?.Invoke(this, new AudioRouterOutputErrorEventArgs(outputId, ex));
@@ -1153,7 +1169,17 @@ public sealed partial class AudioRouter : IDisposable
                 foreach (var (_, src) in snapshot.Sources)
                 {
                     var read = src.Source.ReadInto(src.Scratch);
-                    if (read < src.Scratch.Length)
+                    if ((uint)read > (uint)src.Scratch.Length)
+                    {
+                        // Contract: ReadInto returns a count in [0, scratch.Length]. A negative
+                        // count would throw in AsSpan below (crashing the router thread); an
+                        // over-count would skip silence-padding and leak stale data. Don't trust a
+                        // misbehaving source — clear the whole chunk and keep routing.
+                        Trace.LogError("RunLoop: source returned invalid read count {Read} (scratch={Len}); clearing chunk",
+                            read, src.Scratch.Length);
+                        Array.Clear(src.Scratch);
+                    }
+                    else if (read < src.Scratch.Length)
                         src.Scratch.AsSpan(read).Clear(); // silence-pad partial reads
                     if (!src.Source.IsExhausted) keepRunning = true;
                 }
@@ -1212,8 +1238,12 @@ public sealed partial class AudioRouter : IDisposable
         }
         catch (Exception ex)
         {
-            Trace.LogError(ex, "RunLoop: unhandled exception, exiting");
-            throw;
+            // A source-read / clock / mix error must NOT crash the host. Record a terminal fault,
+            // stop the loop, and surface it via Fault / Faulted so the host can decide policy (swap
+            // the bad source, restart, surface to UI). The finally still tears the thread/cts down.
+            _fault = ex;
+            Trace.LogError(ex, "RunLoop: unhandled exception — router faulted and stopped");
+            RaiseFaulted(ex);
         }
         finally
         {
@@ -1579,6 +1609,10 @@ public sealed partial class AudioRouter : IDisposable
             while (_ready.TryTake(out var buf))
             {
                 _free.Enqueue(buf);
+                // Each chunk we take here was counted in _enqueued and will never reach the
+                // drainer, so count it as processed too — otherwise WaitForIdle sees
+                // processed < enqueued forever and blocks for the full timeout after a flush.
+                Interlocked.Increment(ref _processed);
                 RecordDrop();
             }
         }
