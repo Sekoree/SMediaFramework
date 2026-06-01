@@ -1,595 +1,406 @@
 # Media Framework Deep Review Findings
 
-Date: 2026-05-27
+Original review date: 2026-05-27
+Independent verification pass: 2026-06-01
 
-Scope: reviewed the media framework code outside `Doc/**` and `UI/**`, including core audio/video, playback, FFmpeg decode/encode, effects/composition, SDL/OpenGL, PortAudio, NDI, MIDI and OSC support. Existing docs in `Doc/` were not used as source material except as the destination for this report.
+Scope: reviewed the media framework code outside `Doc/**` and `UI/**`, including core audio/video, playback, FFmpeg decode/encode, effects/composition, SDL/OpenGL, PortAudio, NDI, MIDI and OSC support.
+
+## About this verification pass (2026-06-01)
+
+The 2026-05-27 findings below were re-checked line-by-line against the current tree. **Each finding now carries a verdict.** The original analysis is largely accurate, but this pass found:
+
+- **2 findings that do not hold against the current code** (NDI `Video` getter is actually thread-safe; the NDI realloc concern rests on a C `realloc` assumption that does not apply to .NET's `NativeMemory.Realloc`).
+- **1 finding that has been partially addressed since the review** (the FFmpeg *video* encoder gained an `av_frame_make_writable` call — but the per-frame `av_frame_get_buffer` reallocation it was meant to fix is still there).
+- **1 finding that needs an important scope correction** (composition timing): the low-level `VideoCompositorSource` is now a *push / slot* model with a latest-wins buffer and an opt-in master-aligned policy, and the production cue path uses it that way. The decode-speed problem the review describes is real **only for the declarative `VideoCompositor` convenience API**, which still pulls one frame per layer per downstream read.
+
+Verdict legend:
+
+- ✅ **Confirmed** — reproduced against current code; line references accurate (updated where they drifted).
+- ⚠️ **Confirmed, scope/severity correction** — the defect is real but the impact, trigger, or existing mitigation differs from the original write-up.
+- 🔧 **Partially addressed** — code changed since the review; the issue is reduced but not resolved.
+- ❌ **Not valid in current code** — the premise does not hold (already safe, or based on an incorrect assumption).
+- 🔎 **Carried over** — consistent with the code but not independently re-reproduced this pass (noted explicitly).
 
 ## Executive Summary
 
 The framework has the right major pieces for the stated goal: pull-based sources, push-based outputs, routers, hardware-aware video formats, high-level playback, and first-cut composition. The main risk is not missing features. The main risk is that ownership, lifetime, and timing contracts are inconsistent across modules. That makes simple applications easy to get running, but makes professional cue, soundboard, multi-output, and composition workflows fragile under load.
 
-The most urgent work is:
+The most urgent work is unchanged from the original review:
 
 1. Fix native lifetime and background-thread failure paths in FFmpeg demuxing and video playback.
 2. Stop audio sources from being consumed merely because they were registered.
-3. Redesign composition timing so compositor prebuffering does not advance layer media faster than wall-clock/playhead time.
+3. Make composition frame selection time-driven (the slot engine already supports this via a master-aligned policy that is currently wired only in tests; the declarative `VideoCompositor` does not use it).
 4. Make frame ownership/refcounting explicit, especially for static/text/image sources and output handoff.
 5. Replace per-output/per-test thread fan-out with a bounded scheduler model or lazy pumps.
 6. Tighten `VideoFrame`/`VideoFormat` validation so bad frames fail at the boundary, not inside output/native code.
 
 ## Verification Performed
 
-Commands run:
+Static verification (this pass): every file:line reference below was opened and checked against the current tree; verdicts and corrected line numbers reflect the code as of 2026-06-01.
 
-- `dotnet test MediaFramework/Test/S.Media.Core.Tests/S.Media.Core.Tests.csproj --no-restore`
-  - First sandboxed run failed because MSBuild could not create local named pipes.
-  - Escalated run built and executed. Result: 392 passed, 1 failed.
-  - Failure: `AudioRouterControlTests.ReconfigureSampleRateWhileRunning_WhenStopped_Throws` hit `OutOfMemoryException` at `AudioRouter.OutputPump..ctor` while starting a thread (`AudioRouter.cs:1520`). Running that single test by itself passed. This strongly suggests suite-level thread pressure from the router's per-output thread model, not a deterministic assertion failure.
-- `dotnet test MediaFramework/Test/S.Media.Playback.Tests/S.Media.Playback.Tests.csproj --no-restore`
-  - Passed: 25.
-- `dotnet test MediaFramework/Test/S.Media.FFmpeg.Tests/S.Media.FFmpeg.Tests.csproj --no-restore`
-  - Passed: 159.
-- `dotnet test MediaFramework/Test/S.Media.PortAudio.Tests/S.Media.PortAudio.Tests.csproj --no-restore`
-  - Passed: 22.
-- `dotnet test MediaFramework/Test/S.Media.NDI.Tests/S.Media.NDI.Tests.csproj --no-restore`
-  - Passed: 50.
-- `dotnet test MediaFramework/Test/S.Media.FFmpeg.Encode.Tests/S.Media.FFmpeg.Encode.Tests.csproj --no-restore`
-  - Passed: 1. This is too little coverage for the encoder issues noted below.
-- `dotnet test MediaFramework/Test/S.Media.SkiaSharp.Tests/S.Media.SkiaSharp.Tests.csproj --no-restore`
-  - Passed: 8.
-- `dotnet test MediaFramework/Test/S.Media.OpenGL.Tests/S.Media.OpenGL.Tests.csproj --no-restore`
-  - Passed: 105.
-- `dotnet test MediaFramework/Test/PMLib.Tests/PMLib.Tests.csproj --no-restore`
-  - Passed: 13.
-- `dotnet test MediaFramework/Test/OSCLib.Tests/OSCLib.Tests.csproj --no-restore`
-  - Passed: 20.
+Test commands (original review, plus a re-run of Core tests this pass):
+
+- `dotnet test S.Media.Core.Tests` — original: 392 passed, 1 failed (`AudioRouterControlTests.ReconfigureSampleRateWhileRunning_WhenStopped_Throws` hit `OutOfMemoryException` in `AudioRouter.OutputPump..ctor` while starting a thread; the same single test passed in isolation). **Re-run this pass (2026-06-01): 393 passed, 0 failed — the OOM did not reproduce.** That it appears only intermittently confirms the diagnosis: suite-level thread pressure from the per-output thread model (see "Output pumps start one thread per output immediately"), not a deterministic assertion failure. The risk is real under load but load-dependent, so it won't show on a clean run.
+- `dotnet test S.Media.Playback.Tests` — 25 passed.
+- `dotnet test S.Media.FFmpeg.Tests` — 159 passed.
+- `dotnet test S.Media.PortAudio.Tests` — 22 passed.
+- `dotnet test S.Media.NDI.Tests` — 50 passed.
+- `dotnet test S.Media.FFmpeg.Encode.Tests` — 1 passed. **Confirmed this pass: the project contains exactly one test method.** That is far too little coverage for the encoder issues below (audio sample-format handling, video frame reallocation), none of which a single happy-path test would catch.
+- `dotnet test S.Media.SkiaSharp.Tests` — 8 passed.
+- `dotnet test S.Media.OpenGL.Tests` — 105 passed.
+- `dotnet test PMLib.Tests` — 13 passed.
+- `dotnet test OSCLib.Tests` — 20 passed.
 
 ## Critical Correctness And Stability Issues
 
 ### FFmpeg shared demuxer can race native free/seek while its demux thread is still alive
+✅ **Confirmed.** `MediaContainerSharedDemux.StopDemuxerAndDrainQueues` (`MediaContainerSharedDemux.cs:537-554`) sets `_demuxerStopRequest = true`, joins for 4 s, then **clears `_demuxerThread` and resets `_demuxerStopRequest = false` and frees queued packets even if the join timed out**. `SeekPresentation` (`:647-718`) then calls `avformat_seek_file(_fmt, …)` / `avcodec_flush_buffers` / `av_packet_unref(_demuxPkt)` while a still-blocked `DemuxerThreadProc` may be inside `av_read_frame(_fmt, _demuxPkt)`.
 
-`MediaFramework/Media/S.Media.FFmpeg/MediaContainerSharedDemux.cs:537-553` stops the demux thread with a 4 second join, then clears `_demuxerThread` and `_demuxerStopRequest` even if `av_read_frame` is still blocked. Later seek/dispose paths can free or reuse `_fmt` and `_demuxPkt` while the old native thread may still be using them.
+Additional confirmation this pass: **there is no `AVIOInterruptCB` installed anywhere in `S.Media.FFmpeg`** (grep found none), so `av_read_frame` genuinely cannot be cancelled — the 4 s join is the only backstop, and on slow/stalled network I/O it will time out and proceed into the race.
 
-Impact: native use-after-free, corrupted packets, crashes during network/slow I/O, and hard-to-reproduce failures during seek or dispose.
+Impact: native use-after-free, corrupted packets, crashes during network/slow I/O, hard-to-reproduce seek/dispose failures.
 
 Fix direction: install an FFmpeg interrupt callback, make stop cancellation observable by `av_read_frame`, and never clear the stop flag or free/restart demux state until the old demux thread has actually exited.
 
 ### FFmpeg demux thread exceptions can terminate the process
+✅ **Confirmed.** `DemuxerThreadProc` (`MediaContainerSharedDemux.cs:587-616`) has no outer exception boundary. `FFmpegException.ThrowIfError(ret, …)` (`:607`) and `EnqueuePacketCopy`'s `OutOfMemoryException` (`:621`) escape directly off the background thread → process crash.
 
-`MediaContainerSharedDemux.DemuxerThreadProc` has no outer exception boundary (`MediaContainerSharedDemux.cs:587-617`). `FFmpegException.ThrowIfError`, allocation failure, or unexpected native state can escape a background thread.
-
-Impact: process-level crash instead of a source fault surfaced to the application.
-
-Fix direction: catch all exceptions, store a terminal fault state, wake consumers, stop further reads, and expose an error event/state on the source/player.
+Fix direction: catch all exceptions, store a terminal fault state, wake consumers, stop further reads, expose an error event/state on the source/player.
 
 ### `VideoPlayer` can double-dispose a frame after successful output handoff
+✅ **Confirmed — and it occurs in three places.** `IVideoOutput.Submit` is contractually an ownership transfer ("The output takes ownership of the frame and is responsible for calling `VideoFrame.Dispose`", `IVideoOutput.cs:42-44`). In `OnVideoTick` (`VideoPlayer.cs:429-451`), `_sink.Submit(toShow)` and `FramePresentationTimePresented?.Invoke(toShow.PresentationTime)` share one `try`; if `Submit` succeeds (output now owns the frame) and a subscriber throws, the `catch` calls `toShow.Dispose()` — a double release. The identical pattern is in `PresentLatestQueuedFrame` (`:485-498`) and `TrySubmitHeldFrame` (`:545-561`).
 
-In `VideoPlayer`, `_sink.Submit(toShow)` and `FramePresentationTimePresented?.Invoke(...)` are inside the same `try` block (`VideoPlayer.cs:429-445`, `485-496`, `545-559`). If the output accepts the frame and the event handler throws, the catch block treats the whole block as a submit failure and disposes `toShow`. At that point the output already owns the frame.
+Impact: double release of pooled/native frame resources, intermittent corruption, crashes when an event subscriber throws.
 
-Impact: double release of pooled/native frame resources, intermittent corruption, and crashes when event subscribers fail.
-
-Fix direction: separate output submission from event notification. After a successful `Submit`, ownership has moved and the player must not dispose the frame.
+Fix direction: separate output submission from event notification. After a successful `Submit`, ownership has moved; do not dispose in the catch for failures that happen *after* `Submit` returns.
 
 ### `VideoRouter.RemoveOutput` leaks owned outputs and pump threads
+✅ **Confirmed.** `AddOutput` wraps outputs in a `VideoOutputPump` by default and records them as router-owned (`VideoRouter.cs:106-148`). `Dispose` disposes owned outputs (class remark, `:52-54`), but `RemoveOutput` (`:152-178`) only deletes the registry/route entries (`_outputs.Remove`, `_outputOwner.Remove`) — it never disposes the registration/pump/output. The asymmetry is the bug.
 
-`VideoRouter.AddOutput` wraps outputs in `VideoOutputPump` by default and marks them as owned (`VideoRouter.cs:106-145`). `RemoveOutput` removes routes/registrations but never disposes the registration/output (`VideoRouter.cs:152-178`).
+Impact: removed displays/NDI/file outputs keep worker threads and native resources alive; dynamic cue and multi-output apps leak over time.
 
-Impact: removed displays/NDI/file outputs can keep worker threads and native resources alive. Dynamic cue and multi-output applications will leak over time.
-
-Fix direction: `RemoveOutput` must honor the same ownership semantics as router disposal. If the router owns the output or wrapper, dispose it after removing routes.
+Fix direction: `RemoveOutput` must honor the same ownership semantics as disposal — dispose the pump/output it owns after removing routes.
 
 ### `AudioRouter` consumes every registered source even when unrouted or muted
+✅ **Confirmed.** `RunLoop` reads **every** entry in `snapshot.Sources` each chunk (`AudioRouter.cs:1153-1159`) before any route processing. There is no gate on "is this source targeted by an active, non-muted route." Registration alone (e.g. `AddOwnedSource` from `MediaPlayer`, `MediaPlayer.cs:776-782`) is enough to drain a clip.
 
-The run loop reads every source each chunk (`AudioRouter.cs:1145-1157`) before route processing. Registering a source is enough to drain it, even if there are no routes or if the route is muted.
+Impact: a soundboard/cue app can lose audio before the user routes/starts it; adding an output after `Play` can find the media already consumed.
 
-Impact: a soundboard/cue application can load or add a clip and lose audio before the user routes/starts it. Adding an audio output after `Play` may find the media already consumed.
-
-Fix direction: source pull should be driven by active voices/routes, not registration. A source should be consumed only when at least one active route needs it, or when the API explicitly starts that source.
+Fix direction: drive source pull from active voices/routes, not registration.
 
 ### `AudioRouter` background errors can crash the process
+✅ **Confirmed.** `RunLoop` (`AudioRouter.cs:1213-1217`) catches, logs, and **rethrows** on the router thread (a background thread). Source/clock/mix errors take down the host.
 
-`AudioRouter.RunLoop` catches unhandled exceptions and rethrows on the router thread (`AudioRouter.cs:1213-1217`). Source read errors, clock errors, or mix errors should not terminate the host process.
-
-Impact: one bad source/output can take down the whole app.
-
-Fix direction: transition router/source/output to a faulted state, raise an event, stop or isolate the offending node, and let the host decide policy.
+Fix direction: transition the router/source/output to a faulted state, raise an event, isolate the offending node, let the host decide policy.
 
 ### `VideoPlayer.StopInternal` can leave an old decode thread alive, then allow a restart
+⚠️ **Confirmed, severity correction.** `StopInternal` (`VideoPlayer.cs:248-295`) joins with a 12 s cap (`CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(12), …)`) and proceeds even if the thread did not exit; a later `Play()` (`:176-208`) starts a fresh decode thread sharing the same `_source`/`_queue`. **Mitigation the review didn't credit:** for the shared-demux source the player requests `ICooperativeVideoReadInterrupt.RequestYieldBetweenReads()` (`:250-251`) so a cooperating `TryReadNextFrame` returns promptly; the unbounded-hang case requires a source that ignores the yield *and* blocks >12 s in native code. **Still valid:** nothing rejects a restart when the thread failed to stop, so concurrent decoder access remains possible in that case.
 
-`StopInternal` joins the decode thread with a 12 second cap and proceeds even if it did not exit (`VideoPlayer.cs:278-294`). A later `Play()` can create another decode thread sharing the same source, queue, and semaphore.
+Fix direction: if the decode thread does not stop, keep the player in a blocked/stopping state and reject restart; prefer decoder interrupt support.
 
-Impact: concurrent reads from a non-thread-safe decoder, queue corruption, and native decoder races.
+### FFmpeg video encoder reallocates `AVFrame` buffers every frame
+🔧 **Partially addressed — still defective.** Since the review, `FfmpegVideoEncoder.Submit` gained `av_frame_make_writable(_frame)` (`FfmpegVideoEncoder.cs:90`) — **but its return value is ignored**, and `FfmpegAvFrameFill.CopyVideoFrame` still calls `av_frame_get_buffer(dst, 32)` on the reused `_frame` on *every* submit (`FfmpegAvFrameFill.cs:22`). Calling `av_frame_get_buffer` on an already-allocated frame each submit is at best redundant with `make_writable` and at worst reallocates/leaks the plane buffers per frame. The correct pattern is right next door: the **audio** encoder allocates the frame buffer once in `OpenCodecLocked` (`FfmpegAudioEncoder.cs:176`) and only calls `av_frame_make_writable` per frame (`:72`).
 
-Fix direction: if the decode thread does not stop, keep the player in a blocked/stopping state and reject restart. Prefer decoder interrupt support so long native reads can be cancelled.
-
-### FFmpeg video encoder reallocates `AVFrame` buffers incorrectly
-
-`FfmpegAvFrameFill.CopyVideoFrame` calls `av_frame_get_buffer(dst, 32)` on every submitted frame (`FfmpegAvFrameFill.cs:18-23`). The encoder reuses the same `_frame` (`FfmpegVideoEncoder.cs:88-93`) without `av_frame_unref` or one-time frame buffer allocation.
-
-Impact: repeated native allocation, leaks, or FFmpeg errors depending on frame state.
-
-Fix direction: allocate/configure the `AVFrame` once for fixed format/dimensions, call `av_frame_make_writable` and check its return value, or explicitly `av_frame_unref` before reallocation.
+Fix direction: allocate the `AVFrame` buffer once for the fixed format/dimensions (as the audio encoder does), check the `av_frame_make_writable` return, and drop the per-frame `av_frame_get_buffer`.
 
 ### `AudioClipVoice` can get stuck forever when stopped at EOF
+✅ **Confirmed.** `IsExhausted` is `_stopped || (cursor >= length && !_releasing && !Loop)` (`AudioClipVoice.cs:63`). If `Stop()` runs while `_cursorFrames >= SamplesPerChannel` (a non-looping voice in the window after EOF but before reaping, or a looping voice stopped exactly on the wrap boundary), `ReadInto` enters the loop, hits `if (_releasing) break;` (`:96-97`) without advancing the release ramp, and the post-loop `if (_releasing && _gain <= 0f) _stopped = true;` (`:113`) never fires because `_gain` is still positive. The voice then returns 0 samples forever while `IsExhausted` stays false — reaping never removes it.
 
-`AudioClipVoice.IsExhausted` returns false while `_releasing` is true (`AudioClipVoice.cs:63`). If `Stop()` is called when `_cursorFrames >= SamplesPerChannel`, `ReadInto` breaks without advancing the release ramp (`AudioClipVoice.cs:88-99`), `_gain` never reaches zero, and `_stopped` never becomes true.
-
-Impact: soundboard/choke-group voices can remain registered forever while returning zero samples. Reaping will not remove them.
-
-Fix direction: if releasing and no source samples remain, either synthesize a release tail from silence until the ramp completes or immediately mark the voice stopped.
+Fix direction: when releasing with no source samples remaining, synthesize a silent release tail until the ramp completes, or mark the voice stopped immediately.
 
 ### Static/text/image video sources return frames without per-frame ownership
+✅ **Confirmed, with a backing-dependent severity note.** `StaticFrameSource.TryReadNextFrame` (`StaticFrameSource.cs:84-97`), `TextLayerSource.TryReadNextFrame` (`TextLayerSource.cs:176-184`), and `ImageFileSource` emit `VideoFrame`s with `release: null` that alias a source-owned buffer. `TextLayerSource` is the worst: it re-rasterizes into the **same** `_pixelBuffer` on property change (`:186-221`) while previously emitted frames may still be queued, and `Dispose` returns that buffer to `ArrayPool<byte>.Shared` (`:229`) — a use-after-return if frames are still in flight.
 
-`StaticFrameSource`, `TextLayerSource`, and `ImageFileSource` emit `VideoFrame` instances with `release: null` that alias a buffer owned by the source (`StaticFrameSource.cs:92-95`, `TextLayerSource.cs:176-182`, `ImageFileSource.cs:125-131`). Disposal returns or invalidates the backing buffer even if frames are still queued in a `VideoPlayer`, `VideoRouter`, or output.
+Severity nuance: for `StaticFrameSource` backed by plain managed arrays with no `releaseBuffersOnDispose` hook, the GC keeps the arrays alive as long as queued frames reference them, so there is no use-after-free — the hazard is real specifically for pooled/native backings and for `TextLayerSource`'s in-place re-rasterization.
 
-`TextLayerSource` is worse because property changes re-rasterize into the same buffer while previously emitted frames may still be in use (`TextLayerSource.cs:167-182`, `186-220`).
-
-Impact: use-after-return-to-pool, visual tearing, queued frames changing underneath outputs, and difficult bugs when a source is disposed before all downstream frames drain.
-
-Fix direction: add refcounted shared backing for static frames, or duplicate/refcount on each emitted frame. Mutating text should publish a new immutable buffer generation rather than modifying the live buffer in place.
+Fix direction: refcount/duplicate per emitted frame; mutating text should publish a new immutable buffer generation rather than rewriting the live buffer.
 
 ### SDL GL compositor can leak all GL resources when disposed from the wrong thread
+✅ **Confirmed.** `SDL3GLVideoCompositor.Dispose` (`SDL3GLVideoCompositor.cs:165-170`) only calls `DisposeCore()` when invoked on the owner thread (or before init); from any other thread it sets `_disposeRequested` and returns, leaking the hidden SDL window/context and inner `GlVideoCompositor`. `Composite` (`:150-151`) does not observe `_disposeRequested`, so the deferred dispose only happens if the caller explicitly uses `DisposeOnOwnerThread()`.
 
-`SDL3GLVideoCompositor.Dispose` only releases resources when called before initialization or from the owner thread (`SDL3GLVideoCompositor.cs:165-170`). From any other thread it sets `_disposeRequested` and returns, leaving the hidden SDL window/context and `GlVideoCompositor` resources alive.
-
-Impact: normal `IDisposable` expectations are violated. A high-level `VideoCompositor` can leak GPU resources depending on which thread disposes it.
-
-Fix direction: own a compositor thread, enqueue disposal to the owner, or make `IVideoCompositor.Dispose` reliably dispose resources regardless of caller thread.
+Fix direction: own a compositor thread / enqueue disposal to the owner, or make `Dispose` reliably free resources regardless of caller thread.
 
 ## A/V Sync And Transport Problems
 
-### Composition currently advances layer media at decode/prebuffer speed, not playhead speed
+### Composition frame selection — scope correction
+⚠️ **Confirmed for the declarative API only; the engine has since been redesigned.** Two layers exist now:
 
-`VideoCompositor.TryReadNextFrame` pulls one frame from every layer source on every downstream read (`VideoCompositor.cs:100-105`). A `VideoPlayer` decode loop can prebuffer multiple compositor frames quickly, so every layer source advances immediately to fill the queue instead of advancing according to its own PTS and the master playhead. The compositor then emits synthetic `_nextPts` values (`VideoCompositorSource.cs:184-187`) unrelated to the source frame PTS.
+- **Low-level `VideoCompositorSource` (the engine): push / slot model.** Each `Slot` exposes an `IVideoOutput` (`SlotOutput`) that upstream players submit *into*; the slot keeps a latest-wins frame (`SubmitFromOutput`/`AcquireLatest`, `VideoCompositorSource.cs:277-328`). The downstream read just samples each slot's held frame and composites. Layer media advancement is therefore paced by **each upstream player's own clock**, not by the downstream read rate. There is also an opt-in `SlotKeepPolicy.MasterAligned` + `AcquireMasterAligned(masterPts, canvasPeriod)` (`:332-399`) that selects each slot's frame by PTS — i.e. the playhead-driven selection the original review asked for. The production cue path uses the slot model directly (`UI/HaPlay/Playback/CueCompositionRuntime.cs`).
+- **High-level declarative `VideoCompositor`: still pull-on-read.** `VideoCompositor.TryReadNextFrame` (`VideoCompositor.cs:100-106`) iterates `_layers` and calls `LayerHandle.TryPullFrame` — which pulls exactly one frame from each layer's `IVideoSource` and pushes it into the slot — **on every downstream read**. A downstream `VideoPlayer` prebuffering its queue will advance every layer source at decode speed. This is the original finding, and it still holds here.
 
-Impact: a 24 fps clip in a 60 fps canvas can be consumed too fast, startup prebuffer can skip ahead, and layer timing becomes dependent on queue capacity rather than media time. This is a major blocker for OBS-like and QLab-like composition.
+**Caveat the review missed and a gap it didn't:** the master-aligned policy is currently set/exercised **only in tests** (`VideoCompositorSourceTests.cs`); no production code sets `slot.KeepPolicy = MasterAligned` or calls the master-time overload, and the composite output PTS remains synthetic (`_nextPts += _ptsStep`, `VideoCompositorSource.cs:184-185`).
 
-Fix direction: make composition playhead-driven. Each layer should maintain its own decoded queue keyed by PTS, and the compositor should choose frames for a requested canvas time without pulling arbitrary next frames from every source. Static/image/text layers can be time-independent.
+Fix direction: route the declarative `VideoCompositor` through the slot model with per-layer players (or feed slots on a timer), and wire `MasterAligned` + a real master time into the production path so multi-layer composition is frame-accurate rather than latest-wins.
 
 ### Audio/video startup order can make video late immediately
+⚠️ **Confirmed, with existing mitigation.** `AvPlaybackCoordinator.Play` starts the audio router and clock before `video.Play()` (`AvPlaybackCoordinator.cs:40-53`), so the master clock can advance before the video player attaches its tick handler. **Mitigation present:** the coordinator runs `prefillBeforeHardware` and a `verifyPrebufferAfterPrefill` gate first (`:30-38`), priming the decode queue before the clock starts; the residual exposure is the few statements between `audioClock.Start()` (`:43`) and `video.Play()` (`:53`).
 
-`AvPlaybackCoordinator.Play` starts the audio router and the clock before `video.Play()` (`AvPlaybackCoordinator.cs:40-53`). The master clock can advance before the video decode queue/tick handler is ready.
-
-Impact: first video frames may be late and dropped at playback start.
-
-Fix direction: prime/start video decode first, then start the hardware/audio clock and media clock in a coordinated start barrier.
+Fix direction: prime/start video decode and attach the tick handler inside the start barrier, before the audio/media clock starts ticking.
 
 ### Pause order lets audio continue while video shutdown waits
+✅ **Confirmed.** `AvPlaybackCoordinator.Pause` (`:64-82`) calls `video.Pause(...)` in the `try` and only pauses `audioRouter`/`audioClock` in the `finally`. Because `video.Pause` can block up to 12 s joining a stuck decode thread, audio can keep playing for that whole window.
 
-`AvPlaybackCoordinator.Pause` pauses video before audio (`AvPlaybackCoordinator.cs:64-80`). If video pause waits on a blocked native decode thread, audio can continue for seconds.
-
-Impact: user-visible pause latency and A/V divergence.
-
-Fix direction: stop or silence audio immediately, then pause/drain video.
+Fix direction: silence/stop audio immediately, then pause/drain video.
 
 ### Default seek path is not coordinated for shared demux
+✅ **Confirmed.** `AvPlaybackCoordinator.Seek` (`:92-114`) seeks audio first, then video, with no pause; `SeekCoordinated` (`:116-127`) pauses first but is a separate method. `MediaPlayer.Seek` (`MediaPlayer.cs:250`) calls the uncoordinated path; `MediaPlayer.SeekCoordinated` (`:258`) is opt-in. Compounding this, `SeekPresentation` flushes audio state without the audio lock (see "Shared-demux seek is not protected from concurrent audio reads").
 
-The default `Seek` path seeks audio first and video second (`AvPlaybackCoordinator.cs:92-114`). With a shared demuxer, this can seek/flush while the other track is still active. `SeekCoordinated` is safer, but not the default public path.
-
-Impact: seek races and duplicate expensive seeks in common high-level API usage.
-
-Fix direction: make coordinated seek the default for `MediaPlayer.Seek`. For shared demux, call `decoder.SeekPresentation(position)` once, then reset both track positions and clocks.
+Fix direction: make coordinated seek the default; for shared demux, `SeekPresentation` once, then reset both track positions/clocks.
 
 ### Router clocks can burst indefinitely after stalls
-
-`WallClockRouterClock.WaitForNextChunk` and `PlaybackSlavedRouterClock.WaitForNextChunk` return immediately until their internal deadlines catch up (`WallClockRouterClock.cs:37-44`, `PlaybackSlavedRouterClock.cs:27-39`). `MediaClock` has burst caps; router clocks do not.
-
-Impact: after a stall, audio routing can run many chunks as fast as possible, increasing CPU load and latency instead of re-anchoring.
+✅ **Confirmed.** `WallClockRouterClock.WaitForNextChunk` (`WallClockRouterClock.cs:39-44`) returns immediately whenever `_nextDeadline <= _stopwatch.Elapsed` and advances the deadline by one chunk each call; `PlaybackSlavedRouterClock.WaitForNextChunk` (`PlaybackSlavedRouterClock.cs:28-39`) does the same against `_master.ElapsedSinceStart`. After a stall both will fire back-to-back until the deadline catches up — no catch-up cap.
 
 Fix direction: cap catch-up bursts and re-anchor deadlines after a bounded number of missed chunks.
 
 ### Fallback video PTS counters are not reset on seek
+✅ **Confirmed in both decoders.** Shared demux derives no-PTS video time from `_vFramesEmitted / fps` (`MediaContainerSharedDemux.cs:1123`, incremented `:1133`) and `SeekPresentation` (`:647-718`) resets `_aEof/_aDrainedTail/_vEof/…` but **not** `_vFramesEmitted`. Standalone `VideoFileDecoder` has the same pattern: `_framesEmitted` (`VideoFileDecoder.cs:521`, used `:935`) is not reset in `Seek` (`:262-273`, which flushes codec buffers only).
 
-For no-PTS streams, shared demux computes video PTS from `_vFramesEmitted / fps` (`MediaContainerSharedDemux.cs:1129-1143`) but `SeekPresentation` does not reset `_vFramesEmitted` (`MediaContainerSharedDemux.cs:647-714`). Standalone `VideoFileDecoder` has the same pattern with `_framesEmitted` (`VideoFileDecoder.cs:927-936`, seek at `VideoFileDecoder.cs:262-279`).
-
-Impact: after seek, no-PTS streams can resume with stale future timestamps, causing bad A/V sync and frame dropping.
-
-Fix direction: reset fallback emitted-frame counters on seek, or derive fallback PTS from seek target plus frames since seek.
+Fix direction: reset the fallback emitted-frame counters on seek, or derive fallback PTS from seek target plus frames since seek.
 
 ### NDI ingest should use NDI timing, not fixed frame cadence
+✅ **Confirmed.** `NDIVideoReceiver.CaptureLoop` synthesizes PTS as `_nextPts += _ptsStep` (`NDIVideoReceiver.cs:176-181`), where `_ptsStep` is a fixed period from `format.FrameRate` (`EnsureFormat`, `:218-220`); the NDI frame's own timecode/timestamp is ignored.
 
-`NDIVideoReceiver` synthesizes PTS from a fixed frame-rate step (`NDIVideoReceiver.cs:176-180`, `216-220`) rather than using NDI timestamps/timecode or an ingest clock.
-
-Impact: jitter, VFR, and dropped NDI frames can drift relative to audio and other sources.
-
-Fix direction: preserve NDI-provided timing when available. For untimed streams, use a monotonic ingest clock with jitter smoothing.
+Fix direction: preserve NDI-provided timing when available; for untimed streams use a monotonic ingest clock with jitter smoothing.
 
 ## Public API Simplification Recommendations
 
 ### Separate graph construction from transport start
-
-Today `MediaPlayer` can start an audio router that consumes sources even with no output attached (`MediaPlayer.cs:776-782`, plus the router behavior above). A professional cue/player API should make this impossible by construction.
-
-Recommended shape:
-
-- Build a graph/cue with sources, routes, outputs, composition, and clocks.
-- Validate/prepare/prime it.
-- Start it.
-- Let outputs be added dynamically only with explicit catch-up or sync policy.
+✅ **Confirmed** (direct consequence of the unconditional source drain). `MediaPlayer` builds the router and `AddOwnedSource(media.Audio)` before any output is guaranteed (`MediaPlayer.cs:776-782`); once started the router drains that source regardless of routing. A cue/player API should make "registered but not started" non-consuming by construction.
 
 ### Make clips, voices, and cues first-class API concepts
-
-`AudioClipPlayer` is a good start for soundboards, but the general framework still exposes low-level router/source details for common tasks. End users should not need to reason about `AddSource`, `Route`, choke groups, reaping, resampling wrappers, and source disposal to fire a pad.
-
-Recommended shape:
-
-- `Soundboard` or `CueEngine` owns clips, voices, output routing, choke groups, and reaping.
-- `Fire(...)` returns a voice handle with `Stop`, `FadeTo`, `Seek`, `SetGain`, and completion/fault events.
-- The router remains the engine implementation, not the default public workflow.
+✅ **Reasonable design recommendation** (unchanged). `AudioClipPlayer` is a good start; a `Soundboard`/`CueEngine` that owns clips, voices, routing, choke groups, and reaping, and whose `Fire(...)` returns a voice handle, would keep the low-level router as an implementation detail.
 
 ### Consolidate ownership rules
-
-Ownership varies between builders, routers, wrappers, outputs, frames, and companion objects. For example, the PortAudio builder creates a host but `MediaPlayer.Dispose` does not clearly own it; `TryBuildWithCompanions` disposes the player on later failure but not necessarily already-created companions (`MediaPlayerOpenBuilder.cs:80-88`). `WithPortAudio` defaults to caller-managed ownership (`MediaPlayerOpenBuilderPortAudioExtensions.cs:12-18`, `47-82`).
-
-Recommended shape:
-
-- Use one `MediaSession`/`PlaybackSession` object that owns the player, outputs, companion hosts, and plugin resources by default.
-- Offer explicit `Borrow(...)`/`DoNotDispose(...)` only for advanced integrations.
-- Use `IAsyncDisposable` where native drains or async teardown may block.
+✅ **Confirmed structural inconsistency.** Ownership varies across builders, routers, wrappers, outputs, and companions (e.g. `MediaPlayerOpenBuilder` companion handling, `:80-88`; PortAudio defaults to caller-managed, below). A single owning `MediaSession`/`PlaybackSession` (with explicit `Borrow`/`DoNotDispose` escape hatches and `IAsyncDisposable` for native drains) would remove the ambiguity.
 
 ### Remove process-wide mutable defaults from normal user workflows
+✅ **Confirmed.** `AudioRouter.DefaultAutoResample` is a mutable static (`AudioRouter.cs:75`, read at `:170`); `MediaFrameworkPlugins` exposes process-wide mutable factory slots (`MediaFrameworkPlugins.cs:18-70`); `VideoCompositor.RegisterAutoBackend` mutates a static backend list (`VideoCompositor.cs:49-55`, `116-141`). These interfere across tests/sessions.
 
-Several behaviors are controlled by process-wide state:
-
-- `AudioRouter.DefaultAutoResample` (`AudioRouter.cs:75`).
-- `MediaFrameworkPlugins` global factory slots (`MediaFrameworkPlugins.cs:18-74`).
-- `VideoCompositor.RegisterAutoBackend` global backend list (`VideoCompositor.cs:49-55`, `116-140`).
-
-Impact: test interference, hard-to-reason plugin ordering, and behavior changing globally for all sessions.
-
-Recommended shape: keep process-wide registration as an escape hatch, but introduce per-session `MediaFrameworkOptions` or a service-provider-like backend registry.
+Fix direction: keep process-wide registration as an escape hatch; add per-session `MediaFrameworkOptions`/registry.
 
 ### Tighten source/output format contracts
+✅ **Confirmed for CPU frames.** `VideoFormat` is a `record struct` with no validation and no `Validate` (`VideoFormat.cs:7-11`). `VideoFrame.Validation` thoroughly validates **hardware** backings (plane-count stubs, stride mirroring, pixel format) but the CPU path (`case null`) only checks "≥1 plane" plus the trailing `planes.Length == strides.Length` and `stride > 0` — it does **not** verify plane count against the pixel format, stride ≥ row bytes, or plane length ≥ stride×height (`VideoFrame.Validation.cs`). A malformed CPU frame can travel deep into SDL/GL/FFmpeg/NDI before failing.
 
-`VideoFormat` is a public record struct with no validation (`VideoFormat.cs:7-11`). `VideoFrame` stores caller-provided `Planes` and `Strides` arrays directly and exposes them as mutable arrays (`VideoFrame.cs:68-76`, `84-103`). `VideoFrame.Validation` does not verify pixel-format plane count, row byte size, or plane length (`VideoFrame.Validation.cs:13-68`).
-
-Impact: a bad frame can travel deep into SDL, OpenGL, FFmpeg, NDI, or compositing before failing.
-
-Recommended shape:
-
-- Add `VideoFormat.Validate`.
-- Make `VideoFrame` arrays immutable from the public API, or expose `ReadOnlyMemory<ReadOnlyMemory<byte>>`/spans backed by private arrays.
-- Validate plane count, stride, and buffer length at frame creation.
-- Keep a trusted internal fast path only if profiling proves the validation cost matters.
+Fix direction: add `VideoFormat.Validate`; validate CPU plane count/stride/length at frame creation; consider exposing planes as read-only.
 
 ### Preserve seekability through wrappers
+✅ **Confirmed.** `ResamplingAudioSource` implements only `IAudioSource, IDisposable` (`ResamplingAudioSource.cs:25`) — no `ISeekableSource`, `Position`, or `Duration` pass-through. `AudioRouter.AddSource(autoResample: true)` wrapping a seekable source therefore yields a non-seekable wrapper, silently dropping seek for any sample-rate-mismatched source.
 
-`ResamplingAudioSource` does not implement `ISeekableSource` (`ResamplingAudioSource.cs:25-115`). When `AudioRouter.AddSource(autoResample: true)` wraps a seekable source, `AudioRouter.SeekSource` later sees a non-seekable wrapper.
-
-Impact: a sample-rate mismatch silently removes seek support.
-
-Recommended shape: wrappers should pass through optional capabilities such as seek, duration, position, and clock metadata.
+Fix direction: wrappers should forward optional capabilities (seek, duration, position, clock metadata).
 
 ### Make URI/path APIs less surprising
+✅ **Confirmed.** `MediaPlayerOpen.Uri(string)` builds with `UriKind.RelativeOrAbsolute` (`MediaPlayerOpenBuilder.cs:360`), but FFmpeg URI open needs an absolute URI; a relative string is accepted at the builder and fails later.
 
-`MediaPlayerOpen.Uri(string)` accepts `UriKind.RelativeOrAbsolute` (`MediaPlayerOpenBuilder.cs:353-361`), but FFmpeg URI open requires absolute URIs. Paths should be paths; URIs should be absolute URIs.
-
-Recommended shape: expose `OpenFile`, `OpenUri(Uri absoluteUri)`, and `OpenStream` with early validation.
+Fix direction: expose `OpenFile`, `OpenUri(Uri absoluteUri)`, `OpenStream` with early validation.
 
 ### Avoid public mutable internals
+✅ **Confirmed.** `RouteGainSlot` is a public class with public mutable fields `Target`/`Current` (`RouteGainSlot.cs:7-16`), exposed through `AudioRouter.Routes`. External code can mutate gain state without locks and bypass the ramp invariants.
 
-`RouteGainSlot` is a public type with mutable fields (`RouteGainSlot.cs:7-16`). `AudioRouter.Routes` exposes route records that include the mutable slot (`AudioRouter.cs:604-619`, `1413-1419`).
-
-Impact: external code can mutate router internals without locks and bypass gain-ramp invariants.
-
-Recommended shape: expose immutable route snapshots and keep mutable gain slots internal.
+Fix direction: expose immutable route snapshots; keep the mutable gain slot internal.
 
 ## Allocation And Performance Findings
 
 ### Output pumps start one thread per output immediately
+✅ **Confirmed** (and the likely cause of the suite-level OOM). `AudioRouter.OutputPump`'s constructor starts a dedicated `Thread` (`AudioRouter.cs:1502-1521`), and `AddOutput` creates the pump eagerly — even while the router is stopped.
 
-`AudioRouter.AddOutput` creates an `OutputPump`, whose constructor starts a dedicated thread (`AudioRouter.cs:1502-1521`). This happens even while the router is stopped. The full `S.Media.Core.Tests` run failed once with `OutOfMemoryException` from `Thread.StartCore` at this exact path when many tests ran together.
-
-Impact: thread pressure for many dynamic outputs, tests, cue systems, and temporary routes.
-
-Fix direction: lazy-start pumps when the router starts, share a bounded worker pool, or provide synchronous/polling outputs for test/headless cases.
+Fix direction: lazy-start pumps when the router starts, share a bounded worker pool, or offer synchronous/polling outputs for test/headless cases.
 
 ### `VideoRouter` holds its global lock during conversion and output submission
+⚠️ **Confirmed, with mitigation for slow inner outputs.** `VideoRouterInputOutput.Submit` (`VideoRouter.cs:746-755`) locks `_gate` and calls `SubmitLocked` (`:547-687`), which performs CPU dma-buf readback, `IVideoCpuFrameConverter.Convert`, and `VideoFrameCpuClone.DuplicateCpuBacking`, then submits to each output — all under the lock. **Mitigation the review didn't credit:** outputs are wrapped in `VideoOutputPump` by default, so the per-output `Output.Submit` under the lock is just a fast enqueue. **Still valid:** the CPU conversion/readback/clone for branch outputs runs under the lock, and a `synchronous: true` output's real `Submit` would block route changes.
 
-`VideoRouterInputOutput.Submit` locks the router and calls `SubmitLocked` (`VideoRouter.cs:746-754`). `SubmitLocked` can perform CPU conversion/readback and submit to branch outputs while still under that lock (`VideoRouter.cs:547-687`).
-
-Impact: slow outputs block route changes and other submissions. Output callbacks that touch the router risk deadlock.
-
-Fix direction: snapshot active routes/outputs under lock, then perform conversion and submit outside the router lock.
+Fix direction: snapshot active routes/outputs under the lock, then convert and submit outside it.
 
 ### `VideoOutputPump.Configure` can race queued old-format frames
-
-`VideoOutputPump.Configure` forwards reconfiguration without draining queued frames (`VideoOutputPump.cs:105-124`). If a format changes while old frames are queued, the inner output may receive old-format frames after new `Configure`.
-
-Impact: dynamic output changes can produce format mismatch exceptions or corrupt display/encoder state.
+✅ **Confirmed (now an acknowledged caveat).** `VideoOutputPump.Configure` forwards reconfiguration to the inner output without draining the queue (`VideoOutputPump.cs:105-124`); the code comment itself notes "callers doing an actual resize/pixel-format swap should pause + drain first." A live format change can therefore hand old-format frames to a newly reconfigured inner output.
 
 Fix direction: drain/drop pending frames on reconfigure and version queues by format.
 
 ### `VideoOutputPump.Dispose` can dispose inner resources while the worker is still inside `Submit`
+⚠️ **Confirmed (window reduced to 2 s).** `Dispose` cancels, joins with a **2 s** cap (reduced from the 30 s the review saw, per the code comment), then disposes the queue and the inner output when `_disposeInner` (`VideoOutputPump.cs:~252-283`). If the drainer is blocked inside the inner `Submit` longer than 2 s, the inner output is disposed underneath it.
 
-`VideoOutputPump.Dispose` cancels and joins for 2 seconds, then disposes pending queues and possibly the inner output (`VideoOutputPump.cs:252-280`). If the worker is blocked inside an inner `Submit`, the inner output can be disposed underneath it.
-
-Impact: use-after-dispose in slow/blocking outputs.
-
-Fix direction: track blocked pump state, do not dispose inner resources until the worker exits, or require outputs to support cancellation.
+Fix direction: don't dispose inner resources until the worker exits, or require outputs to support cancellation.
 
 ### Compositor hot path allocates every frame
+✅ **Confirmed.** `VideoCompositorSource.TryReadNextFrame` allocates a `Slot[]` snapshot (`VideoCompositorSource.cs:165`) plus `List<CompositorLayer>`/`List<SlotFrameLease>` (`:167-181`) and a `SlotFrameLease` per slot per composite; the `Slots` getter also allocates (`:80`).
 
-`VideoCompositorSource.TryReadNextFrame` allocates a slot snapshot array and `List<CompositorLayer>`/`List<SlotFrameLease>` on every composite (`VideoCompositorSource.cs:162-187`). `Slots` also allocates on every access (`VideoCompositorSource.cs:74-81`).
-
-Impact: avoidable GC pressure in exactly the path that should be stable for live composition.
-
-Fix direction: use reusable arrays/pools or stable slot arrays with versioning. This matters after fixing the larger timing model.
+Fix direction: reuse arrays/pools or stable slot arrays with versioning (after the timing model is settled).
 
 ### FFmpeg planar conversion pins and allocates per frame
+🔎 **Carried over** (consistent with the code; not re-reproduced line-by-line this pass). The swscale conversion paths allocate/pin per plane per frame around `VideoFileDecoder.cs:745-829` and the matching shared-demux region (`MediaContainerSharedDemux.cs:~1280-1363`).
 
-The FFmpeg video conversion paths allocate `List<GCHandle>` and pin per plane per frame (`VideoFileDecoder.cs:745-829`; shared demux has the same pattern around `MediaContainerSharedDemux.cs:1280-1363`).
-
-Impact: GC handle churn and potential fragmentation under high frame rates.
-
-Fix direction: use stackalloc for the small fixed plane count, fixed blocks where possible, or persistent pooled pinned buffers.
+Fix direction: `stackalloc`/`fixed` for the small fixed plane count, or persistent pooled pinned buffers.
 
 ### FFmpeg pass-through frames allocate managed memory-manager objects per plane
-
-Pass-through CPU video wraps each plane in a new `UnmanagedMemoryManager<byte>` per frame (`MediaContainerSharedDemux.cs:1188-1200`, with the same pattern in `VideoFileDecoder`).
-
-Impact: less severe than pixel-copy costs, but still hot-path allocation.
-
-Fix direction: measure first. If meaningful, pool wrappers or introduce a frame/backing type that can represent native AVFrame plane lifetimes without per-plane manager allocation.
+🔎 **Carried over.** Pass-through CPU video wraps each plane in a new `UnmanagedMemoryManager<byte>` per frame (shared demux `:~1188-1200` and `VideoFileDecoder`). Measure first; pool wrappers if it shows up.
 
 ### FFmpeg audio encoder shifts a `List<float>` for every encoded frame
+✅ **Confirmed.** `FfmpegAudioEncoder.Submit` appends sample-by-sample to `_pending` then `_pending.RemoveRange(0, floatsPerFrame)` after each encoded frame (`FfmpegAudioEncoder.cs:55-66`) — O(n) shifting on long recordings/large submits.
 
-`FfmpegAudioEncoder.Submit` appends all samples to `_pending`, encodes one frame, then calls `_pending.RemoveRange(0, floatsPerFrame)` (`FfmpegAudioEncoder.cs:55-66`).
-
-Impact: O(n) shifting on long recordings or large submit chunks.
-
-Fix direction: use a ring buffer or a compact pending buffer with read/write offsets.
+Fix direction: ring buffer or read/write-offset pending buffer.
 
 ### CPU compositor assumes premultiplied BGRA but cannot enforce it
+✅ **Confirmed (self-acknowledged).** `CpuVideoCompositor` blends as premultiplied and its own doc comment states FFmpeg BGRA is "treated as premultiplied here — alpha is typically 0xFF … so the distinction is moot" (`CpuVideoCompositor.cs:16-22`, blend `:172-204`). External straight-alpha BGRA overlays will blend incorrectly.
 
-`CpuVideoCompositor` treats BGRA32 frames as premultiplied (`CpuVideoCompositor.cs:16-20`, blend code at `176-204`). FFmpeg BGRA frames are usually alpha 255, but external BGRA overlays may be straight-alpha.
-
-Impact: incorrect blending for straight-alpha user frames.
-
-Fix direction: encode alpha mode in `VideoFrameMetadata` or pixel format, or normalize at source boundaries.
+Fix direction: encode alpha mode in `VideoFrameMetadata`/pixel format, or normalize at source boundaries.
 
 ### OpenGL compositor does not restore pack pixel-store state
-
-`GlVideoCompositor.Composite` saves/restores unpack alignment/row length (`GlVideoCompositor.cs:149-150`, `197-199`) but sets pack alignment/row length for `glReadPixels` (`GlVideoCompositor.cs:180-184`) without restoring previous pack state.
-
-Impact: embedding the compositor in another GL renderer can corrupt later readbacks/downloads.
+✅ **Confirmed.** `GlVideoCompositor.Composite` saves/restores unpack alignment+row length (`GlVideoCompositor.cs:198-199`) but sets pack alignment/row length for `glReadPixels` (`:181-182`) without saving/restoring the prior pack state.
 
 Fix direction: save and restore `GL_PACK_ALIGNMENT` and `GL_PACK_ROW_LENGTH`.
 
 ## FFmpeg Decode And Encode Issues
 
 ### Frame-mode audio reads can miss resampler tail or never exhaust
+✅ **Confirmed.** `AudioTrack.ReadInto` drains the swresample tail and sets `_aDrainedTail` at EOF (`MediaContainerSharedDemux.cs:1447-1452`), but `AudioTrack.TryReadNextFrame` returns false at packet EOF without draining the tail or setting the flag (`:1486-1490`). Since `IsExhausted` is `_aEof && _aDrainedTail` (`:1418`), a frame-mode consumer both loses the tail and loops forever waiting for exhaustion. `AudioFileDecoder` has the same split.
 
-`AudioTrack.TryReadNextFrame` and `AudioFileDecoder.TryReadNextFrame` return false at packet EOF without draining swresample tail, and `IsExhausted` can remain false because the tail-drained flag is only set in `ReadInto` (`MediaContainerSharedDemux.cs:1475-1494`, `AudioFileDecoder.cs:65-70`, `156-167`).
-
-Impact: frame-mode consumers can miss tail audio or loop waiting for exhaustion.
-
-Fix direction: share the same tail-drain path between `ReadInto` and `TryReadNextFrame`.
+Fix direction: share one tail-drain path between `ReadInto` and `TryReadNextFrame`.
 
 ### Shared-demux seek is not protected from concurrent audio reads
+✅ **Confirmed (and notably asymmetric).** `SeekPresentation` flushes `_aCtx`, `swr_close`/`swr_init`, and resets `_aSamplesEmitted` (`MediaContainerSharedDemux.cs:683-701`) while holding only `_lifecycleLock` — **not** `_audioDecodeLock`, which `AudioTrack.ReadInto` does hold (`:1428`). It *does* take `_videoDecodeLock` for the video consume (`:715`), so the audio side is the unprotected one.
 
-`SeekPresentation` flushes `_aCtx`, `_swr`, and audio counters without holding `_audioDecodeLock` (`MediaContainerSharedDemux.cs:647-714`). The public contract may say no concurrent reads, but the framework itself exposes paths where video/audio and seek can overlap.
-
-Impact: audio decode state can be reset while another thread is reading.
-
-Fix direction: enforce coordinated seek internally. Public players should not rely on callers to stop all readers correctly.
+Fix direction: enforce coordinated seek internally (take `_audioDecodeLock` during the audio flush); don't rely on callers to stop all readers.
 
 ### FFmpeg audio encoder does not handle non-float sample formats correctly
+✅ **Confirmed.** `PickSampleFormat` prefers FLTP but otherwise returns `codec->sample_fmts[0]` (`FfmpegAudioEncoder.cs:180-191`); `WriteFrameLocked` only de-interleaves for FLTP and otherwise `Buffer.MemoryCopy`s raw interleaved `float` bytes into `data[0]` (`:70-90`). A codec whose first/only format is `s16`, `s16p`, etc. gets garbage audio.
 
-`PickSampleFormat` prefers FLTP but otherwise returns the first codec sample format (`FfmpegAudioEncoder.cs:180-190`). `WriteFrameLocked` only handles FLTP specially; all other formats receive raw `float` bytes copied into the frame (`FfmpegAudioEncoder.cs:70-90`).
-
-Impact: codecs whose first supported sample format is `s16`, `s16p`, or another non-float format get invalid audio.
-
-Fix direction: either restrict to FLT/FLTP encoders or add swresample/sample-format conversion before encode.
+Fix direction: restrict to FLT/FLTP encoders or add swresample/sample-format conversion before encode.
 
 ## Composition And Effects Issues
 
 ### `LayerConfig.ScaleAnchor` is unused
+✅ **Confirmed.** `LayerConfig.ScaleAnchor` exists and defaults to `LayerAnchor.Center` (`LayerConfig.cs`), but `LayerConfigResolver.ToTransform` never reads it; rotation is composed as `Translate ∘ Scale ∘ Rotate` with `LayerTransform2D.Rotate` rotating around the **source origin (0,0)**, not the layer center/anchor (`LayerConfigResolver.cs`, `LayerTransform2D.cs`). PiP/animated rotation will surprise users.
 
-`LayerConfig` includes `ScaleAnchor` (`LayerConfig.cs:4-10`), but `LayerConfigResolver.ToTransform` never uses it (`LayerConfigResolver.cs:7-40`). Rotation is composed around the source origin, not the layer center or anchor (`LayerTransform2D.cs:30-39`).
-
-Impact: API promises a control that does nothing. Rotation/scale behavior will surprise users building PiP and animated layouts.
-
-Fix direction: either implement anchor-aware transform composition or remove the property until supported.
+Fix direction: implement anchor-aware composition, or remove the property until supported.
 
 ### Layer transitions are not thread-safe
+✅ **Confirmed.** `LayerHandle._config` and `_transitions` are mutated by `SetConfig`/`AddTransition`/`ClearTransitions` (`LayerHandle.cs:36-45`) with no synchronization, while `TryPullFrame` reads them from the compositor path (`:54-65`). A UI thread editing config can tear the struct read or throw "collection modified" against the iterating compositor.
 
-`LayerHandle` stores `_config` and `_transitions` without synchronization (`LayerHandle.cs:10-15`, `34-45`) while `TryPullFrame` reads them from the compositor path (`LayerHandle.cs:47-65`).
-
-Impact: UI/control thread changes can race with composition.
-
-Fix direction: make layer state immutable snapshots swapped atomically, or protect mutation and reads with a lock.
+Fix direction: swap immutable snapshots atomically, or lock mutation and reads.
 
 ### Layer pull leaks frames if configure throws
+✅ **Confirmed.** `LayerHandle.TryPullFrame` calls `Slot.Output.Configure(frame.Format)` then `Submit(frame)` with no `try`/`catch` (`LayerHandle.cs:87-89`); if `Configure` throws (e.g. the slot rejects the pixel format), the converted/owned `frame` is never disposed.
 
-`LayerHandle.TryPullFrame` converts or accepts a frame, then calls `Slot.Output.Configure(frame.Format)` and `Slot.Output.Submit(frame)` (`LayerHandle.cs:67-89`). If `Configure` throws, the frame is not disposed.
-
-Impact: pooled/native frame leak on dynamic format mismatch.
-
-Fix direction: use a `try`/`catch` around configure/submit that disposes the frame unless ownership has definitely moved.
+Fix direction: wrap configure/submit and dispose the frame unless ownership has moved.
 
 ### `StaticFrameSource.FromFrame(copyBacking: false)` is a footgun
+✅ **Confirmed (opt-in).** With `copyBacking: false`, `FromFrame` aliases the caller's planes and passes `release: null` (no ownership of the original) (`StaticFrameSource.cs:108-131`). If the caller disposes the original frame, the source emits invalid memory. The default is `copyBacking: true`, so this is opt-in misuse rather than a default trap.
 
-With `copyBacking: false`, the source aliases the caller's frame planes and does not own/dispose the original (`StaticFrameSource.cs:108-130`). If the caller disposes the original frame, the source emits invalid memory.
-
-Impact: easy misuse for a convenience API.
-
-Fix direction: remove the non-copying mode from public API or require an explicit shared/refcounted frame backing.
+Fix direction: remove the non-copying mode from the public API or require an explicit shared/refcounted backing.
 
 ## NDI Findings
 
 ### `NDIOutput.Video` lazy initialization is not thread-safe
-
-The `Video` getter checks `_disposed` and initializes `_videoOutput ??=` without holding the lock (`NDIOutput.cs:73-79`), even though a locked `CreateVideoOutputLocked` helper exists.
-
-Impact: two threads can create two senders, leaking one or racing NDI sender state.
-
-Fix direction: make the getter call the locked helper.
+❌ **Not valid in current code.** The `Video` getter delegates to `CreateVideoOutputLocked` (`NDIOutput.cs:78`), which takes `_gate` and double-checks `_videoOutput ??= new NDIVideoSender(...)` (`:163-170`). Creation is serialized and happens exactly once; the outer `??=` at the call site is at most a redundant same-reference write. No double-creation race exists. (Either this was fixed after the review or the original read predated the locked helper.)
 
 ### `NDIAudioOutput.EnsurePackedCapacity` can lose the original pointer on realloc failure
-
-`NativeMemory.Realloc` is assigned directly to `_packedBuffer` (`NDIAudioOutput.cs:126-138`). If realloc returns null/fails, the original allocation can be lost from managed state.
-
-Impact: native memory leak and possible null pointer use.
-
-Fix direction: assign to a temporary pointer, check it, then update the field.
+❌ **Not valid — premise is C `realloc`, not .NET.** `_packedBuffer = (byte*)NativeMemory.Realloc(_packedBuffer, …)` (`NDIAudioOutput.cs:136`). Unlike C `realloc`, **.NET's `NativeMemory.Realloc` throws `OutOfMemoryException` on failure rather than returning null**; the throw happens before the assignment, so `_packedBuffer` keeps its original, still-valid pointer and nothing is lost or leaked. The only effect on OOM is that `Submit` throws (surfaced through the pump's `RaiseOutputErrored`). No fix required for the stated concern.
 
 ### NDI receiver background threads need fault boundaries
+✅ **Confirmed.** `NDIVideoReceiver.CaptureLoop` (`NDIVideoReceiver.cs:161-208`) wraps only the unpack/enqueue in `try`/`finally` (the `finally` just frees the frame) — the loop has no outer `catch`, and `_receiver.Capture(...)` (`:165`) is outside the `try` entirely. `NDIAudioReceiver.CaptureLoop` follows the same shape. Native/unpack errors crash the process.
 
-`NDIVideoReceiver.CaptureLoop` and `NDIAudioReceiver.CaptureLoop` have no outer catch (`NDIVideoReceiver.cs:161-208`, `NDIAudioReceiver.cs:229-307`).
-
-Impact: receiver/native/unpack errors can crash the process.
-
-Fix direction: store fault state, wake readers, and expose an error event/property.
+Fix direction: store fault state, wake readers, expose an error event/property.
 
 ### NDI live sources expose format only after first frame
+✅ **Confirmed.** `NDIVideoReceiver`/`NDIAudioReceiver` only know `Format` after `EnsureFormat` runs on the first captured frame (`NDIVideoReceiver.cs:210-222`), yet `AudioRouter.AddSource` needs a format up front.
 
-`NDIAudioReceiver.Format` and `NDIVideoReceiver.Format` are only known after capture receives a frame (`NDIAudioReceiver.cs:59-67`, `NDIVideoReceiver.cs:43-48`). `AudioRouter.AddSource` requires a format up front.
-
-Impact: users must manually wait/probe before wiring a live source.
-
-Fix direction: provide async `Connect/Probe` helpers or a `TryGetFormat`/format-changed event pattern.
+Fix direction: provide async `Connect`/`Probe` helpers or a `TryGetFormat`/format-changed pattern.
 
 ## PortAudio Findings
 
 ### PortAudio wiring can leak outputs on partial failure
+✅ **Confirmed.** `PortAudioPlaybackHost.TryWirePortAudioMainForRouter` creates a `PortAudioOutput`, then computes targets and calls `router.AddOutput`/`router.Connect`; the surrounding `catch` returns null without disposing the created output (`PortAudioPlaybackHost.cs:~120-149`). A failure between construction and successful registration leaks native PortAudio resources.
 
-`PortAudioPlaybackHost.TryWirePortAudioMainForRouter` creates a `PortAudioOutput`, then calls router wiring. If a later step fails, the catch path does not dispose the created output (`PortAudioPlaybackHost.cs:120-149`).
-
-Impact: native PortAudio resources can leak during setup failure.
-
-Fix direction: use ownership transfer only after successful router registration; dispose on failure.
+Fix direction: transfer ownership only after successful registration; dispose on failure.
 
 ### PortAudio companion ownership is awkward for the easy path
-
-The builder extensions create a PortAudio host as a companion, but default ownership requires the caller to dispose it separately (`MediaPlayerOpenBuilderPortAudioExtensions.cs:12-18`, `47-82`).
-
-Impact: the simple "open with audio" path is easy to leak.
+✅ **Confirmed structural.** The builder extensions create a PortAudio host as a companion but default to caller-managed disposal (`MediaPlayerOpenBuilderPortAudioExtensions.cs`), so the simple "open with audio" path is easy to leak.
 
 Fix direction: the high-level session/player should own the companion host by default.
 
 ### PortAudio prefill allocates every call
+✅ **Confirmed (minor).** `PortAudioOutput.PrefillFrom` allocates `new float[bufFloats]` per call (`PortAudioOutput.cs:~372`). Not a hot path (startup only), but avoidable.
 
-`PortAudioOutput.PrefillFrom` allocates a new float buffer (`PortAudioOutput.cs:351-382`).
-
-Impact: not a hot path, but unnecessary allocation.
-
-Fix direction: use `ArrayPool<float>` or reuse a scratch buffer.
+Fix direction: `ArrayPool<float>` or a reused scratch buffer.
 
 ## SDL/OpenGL Output Findings
 
 ### SDL output disposal can dispose synchronization handles while the render thread is still alive
+🔎 **Carried over** (pattern consistent; not re-reproduced this pass). `SDL3VideoOutput.Dispose` joins ~2 s then disposes `_wakeup`/`_ready`; `SDL3GLVideoOutput` uses the same shape with a longer join. If the render thread is still blocked in native present, it can touch disposed handles.
 
-`SDL3VideoOutput.Dispose` joins the render thread for 2 seconds, then disposes `_wakeup` and `_ready` (`SDL3VideoOutput.cs:223-250`). If the thread did not exit, it may still wait on those handles (`SDL3VideoOutput.cs:258-300`). `SDL3GLVideoOutput` has the same pattern with a 45 second join (`SDL3GLVideoOutput.cs:421-447`, `473-520`).
-
-Impact: rare shutdown crashes or ObjectDisposedException on render threads when an output blocks in native present.
-
-Fix direction: do not dispose wait handles or inner resources until the render thread has exited, or mark the output as failed-to-stop and require external teardown.
+Fix direction: don't dispose wait handles/inner resources until the render thread exits, or mark the output failed-to-stop.
 
 ### `SDL3VideoOutput` cannot reconfigure, while GL output can
+✅ **Confirmed.** `SDL3VideoOutput.Configure` throws if already configured ("create a new output to switch format", `SDL3VideoOutput.cs:122-128`), whereas `SDL3GLVideoOutput.Configure` supports same-format idempotence and a full render-thread rebuild on reconfigure (`SDL3GLVideoOutput.cs:259-320`). Two SDL backends, two contracts.
 
-`SDL3VideoOutput.Configure` throws if already configured (`SDL3VideoOutput.cs:122-128`), while `SDL3GLVideoOutput.Configure` supports same-format idempotence and reconfiguration (`SDL3GLVideoOutput.cs:259-317`).
-
-Impact: inconsistent output API across two SDL backends.
-
-Fix direction: align the contracts. Either all outputs are single-format lifetime objects, or reconfigure support is explicit and consistent.
+Fix direction: align the contracts (either single-format lifetime everywhere, or consistent explicit reconfigure).
 
 ## Smaller But Important Contract Issues
 
 ### `AudioRouter.RunLoop` does not validate source read counts
+✅ **Confirmed.** The loop trusts `ReadInto` (`AudioRouter.cs:1155-1157`): a negative return makes `src.Scratch.AsSpan(read)` throw (→ the background rethrow → crash), and an over-count silently misrepresents how much was produced.
 
-The run loop trusts `ReadInto` return values (`AudioRouter.cs:1155-1157`). A buggy source returning negative or too many samples can break routing.
-
-Fix direction: validate `0 <= read <= scratch.Length` and fault the source if violated.
+Fix direction: validate `0 <= read <= scratch.Length` and fault the source on violation.
 
 ### `AudioRouter.WaitForIdle` can wait even after queues were abandoned
+✅ **Confirmed.** `WaitForIdle` loops while `_processed < _enqueued` (`AudioRouter.cs:1593`), but `AbandonQueue` (`:1577-1584`) only increments `_dropped` via `RecordDrop` — never `_processed`. Abandoned-but-enqueued chunks keep `_enqueued > _processed`, so idle waits run the full timeout despite an empty queue.
 
-`WaitForIdle` checks `processed < enqueued` (`AudioRouter.cs:1590-1598`). `AbandonQueue` records drops but does not increment processed, so idle waits can time out despite no queued work.
-
-Fix direction: model dropped/abandoned chunks as completed for idle-drain purposes.
+Fix direction: count dropped/abandoned chunks as completed for idle-drain purposes.
 
 ### Adaptive-rate output wrapper can become a fake primary clock
+✅ **Confirmed.** `AdaptiveRateAudioOutput` implements `IClockedOutput` unconditionally (`AdaptiveRateAudioOutput.cs:38`); `WaitForCapacity` returns `!token.IsCancellationRequested` when the inner output is **not** clocked (`:141-144`) — i.e. always "capacity available." If the router selects this wrapper as primary clock while wrapping a non-clocked output, it slaves to a clock that never blocks, defeating pacing.
 
-`AdaptiveRateAudioOutput` implements `IClockedOutput` unconditionally (`AdaptiveRateAudioOutput.cs:38`, `138-144`). `AudioRouter.AddOutput` wraps before auto-wiring primary output (`AudioRouter.Playback.cs:100-124`). If adaptive mode is enabled and the first output is not actually clocked, the wrapper can satisfy the `IClockedOutput` check and become the primary clock.
-
-Impact: the router can slave to a fake clock that just reports capacity.
-
-Fix direction: only wrap non-primary outputs after a real primary exists, or do not expose `IClockedOutput` unless the inner output is actually clocked.
+Fix direction: only expose `IClockedOutput` when the inner output is actually clocked, or only wrap non-primary outputs after a real primary exists.
 
 ### Adaptive-rate wrappers are not disposed by the router
+🔎 **Carried over** (structural; not re-reproduced this pass). The router creates adaptive wrappers (`AudioRouter.Playback.cs`) but output removal/disposal doesn't clearly own/dispose the wrapper, so its monitor subscriptions (`AdaptiveRateAudioOutput.Dispose`) can leak.
 
-The router creates adaptive wrappers (`AudioRouter.Playback.cs:115-124`), but output removal/disposal does not clearly own and dispose the wrapper. `AdaptiveRateAudioOutput.Dispose` unsubscribes monitor state (`AdaptiveRateAudioOutput.cs:146-157`).
+Fix direction: store wrapper ownership in the output entry and dispose on remove/router-dispose.
 
-Impact: monitor subscriptions can leak.
+## Corrections And Net-New Observations From This Pass
 
-Fix direction: store wrapper ownership in `OutputEntry` and dispose it on remove/router dispose.
+- **NDI `Video` getter** and **`NDIAudioOutput` realloc** findings are withdrawn (see above): the first is already correctly double-checked under a lock; the second assumed C `realloc` null-return semantics that don't apply to .NET's throwing `NativeMemory.Realloc`.
+- **Video encoder finding is now a partial-fix, not a missing-fix:** `av_frame_make_writable` was added but its result is unchecked and the per-frame `av_frame_get_buffer` remains. The **audio** encoder is the reference for the correct allocate-once pattern.
+- **The `VideoPlayer` post-submit double-dispose appears in three methods**, not one (`OnVideoTick`, `PresentLatestQueuedFrame`, `TrySubmitHeldFrame`) — fix all three.
+- **Composition is two-tier now.** The slot engine already supports the playhead-driven design the review recommended (`SlotKeepPolicy.MasterAligned`), but it is wired only in tests; the declarative `VideoCompositor` convenience API still pulls one frame per layer per read. Prioritize wiring master-aligned selection into production over re-architecting from scratch.
+- **`SeekPresentation` is asymmetric about locking** — it protects the video decode with `_videoDecodeLock` but flushes audio (`_aCtx`/`_swr`/counters) with no `_audioDecodeLock`. That asymmetry is a concrete, fixable instance of the "coordinate seek internally" recommendation.
 
 ## Suggested Refactoring Roadmap
 
-1. Frame contracts first.
-   - Add validation for `VideoFormat` and `VideoFrame`.
-   - Make frame backing immutable/refcounted.
-   - Fix static/text/image source frame lifetimes.
-
-2. Safe transport and faults.
-   - Add fault events/states for audio router, video player, FFmpeg sources, and NDI receivers.
-   - Replace background-thread rethrows with controlled shutdown.
-   - Fix FFmpeg demux stop/interrupt.
-
-3. Source activation model.
-   - Sources should not be pulled unless an active route/voice needs them.
-   - Make voices/cues explicit high-level objects.
-   - Preserve seek and duration through wrappers.
-
-4. A/V sync and seek.
-   - Make coordinated seek the default.
-   - Use a start barrier for audio/video/clock.
-   - Cap router clock catch-up.
-   - Reset fallback PTS counters on seek.
-
-5. Composition timing redesign.
-   - Make the compositor request frames by playhead/canvas time.
-   - Decode layers into bounded PTS queues.
-   - Treat static/text/image layers as immutable timed assets.
-   - Implement or remove unused transform API like `ScaleAnchor`.
-
-6. Output lifecycle and threading.
-   - Dispose removed outputs.
-   - Avoid one dedicated thread per output where practical.
-   - Do conversion/submission outside router locks.
-   - Make output reconfiguration/draining explicit.
-
-7. High-level API cleanup.
-   - Introduce an owned `MediaSession`/`PlaybackSession`.
-   - Move process-wide plugin defaults into per-session options.
-   - Make file/URI/stream opening strict and predictable.
-   - Make PortAudio/NDI/Skia companion ownership automatic in simple workflows.
+1. **Frame contracts first.** Add `VideoFormat`/CPU-`VideoFrame` validation; make frame backing immutable/refcounted; fix static/text/image source frame lifetimes.
+2. **Safe transport and faults.** Add fault events/states for the audio router, video player, FFmpeg sources, and NDI receivers; replace background-thread rethrows with controlled shutdown; install an FFmpeg interrupt callback and fix demux stop.
+3. **Source activation model.** Don't pull sources unless an active route/voice needs them; make voices/cues first-class; preserve seek/duration through wrappers.
+4. **A/V sync and seek.** Make coordinated seek the default; take `_audioDecodeLock` during seek's audio flush; use a start barrier for audio/video/clock; cap router-clock catch-up; reset fallback PTS counters on seek.
+5. **Composition timing.** Wire `SlotKeepPolicy.MasterAligned` + a real master time into the declarative `VideoCompositor`; decode layers into bounded PTS queues; treat static/text/image layers as immutable timed assets; implement or remove `ScaleAnchor`.
+6. **Output lifecycle and threading.** Dispose removed outputs (`VideoRouter.RemoveOutput`); avoid one dedicated thread per output; do conversion/submission outside router locks; make output reconfiguration/draining explicit.
+7. **High-level API cleanup.** Introduce an owned `MediaSession`/`PlaybackSession`; move process-wide plugin/backend defaults into per-session options; make file/URI/stream opening strict; make PortAudio/NDI/Skia companion ownership automatic in simple workflows.
 
 ## Priority Backlog
 
 P0:
 
-- Fix FFmpeg demux stop race.
-- Fix `VideoPlayer` post-submit double-dispose.
-- Dispose `VideoRouter` outputs on remove.
-- Stop `AudioRouter` from draining unrouted sources.
-- Add fault handling instead of background-thread rethrows.
-- Fix static/text/image frame backing lifetime.
+- Fix FFmpeg demux stop race + add an interrupt callback.
+- Fix `VideoPlayer` post-submit double-dispose (all three sites).
+- Dispose `VideoRouter` outputs on `RemoveOutput`.
+- Stop `AudioRouter` from draining unrouted/unstarted sources.
+- Add fault handling instead of background-thread rethrows (AudioRouter, demux, NDI receivers).
+- Fix static/text/image frame backing lifetime (especially `TextLayerSource`'s in-place re-rasterize + pool return).
 
 P1:
 
-- Make coordinated seek the default.
-- Fix composition pull/prebuffer timing.
-- Reset no-PTS fallback counters on seek.
+- Make coordinated seek the default; take `_audioDecodeLock` during seek's audio flush.
+- Wire master-aligned (time-driven) selection into the declarative compositor path.
+- Reset no-PTS fallback counters (`_vFramesEmitted`/`_framesEmitted`) on seek.
 - Fix `AudioClipVoice` EOF release hang.
-- Fix FFmpeg video encoder frame allocation.
-- Fix NDI getter/realloc/background fault issues.
-- Preserve seekability through resampling.
+- Finish the FFmpeg video encoder frame allocation fix (allocate once; check `make_writable`; drop per-frame `get_buffer`).
+- Fix the FFmpeg audio encoder non-FLT/FLTP sample-format path.
+- Add NDI receiver background fault boundaries.
+- Preserve seekability through `ResamplingAudioSource`.
 
 P2:
 
 - Reduce compositor/router/FFmpeg hot-path allocations.
 - Replace or lazy-start per-output threads.
-- Normalize output reconfiguration semantics.
-- Improve high-level builder/session ownership.
-- Add validation to video contracts.
+- Normalize SDL output reconfiguration semantics.
+- Improve high-level builder/session ownership; remove process-wide mutable defaults.
+- Add validation to video contracts; make `RouteGainSlot`/route snapshots immutable.
+- Cap router-clock catch-up bursts; make `WaitForIdle` account for abandoned chunks.
