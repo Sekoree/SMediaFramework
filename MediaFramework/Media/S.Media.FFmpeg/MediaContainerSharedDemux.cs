@@ -75,6 +75,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private bool _aDrainSent;
     private long _aSamplesEmitted;
     private bool _aDrainedTail;
+    // After a seek the container lands on a video keyframe that can be a whole GOP before the requested
+    // position; PrimeBothAfterSeekLocked advances audio (and video) forward to the exact target so they
+    // resume together. _aHasBufferedFrame pushes the straddling "keeper" frame back so the next read emits
+    // it instead of re-receiving (and skipping) it.
+    private bool _aHasBufferedFrame;
 
     private int _vStream = -1;
     private bool _hasVideo;
@@ -92,6 +97,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private bool _vEof;
     private bool _vDrainSent;
     private VideoFrame? _vPrimedAfterSeek;
+    // Position the demux is currently primed at. A coordinated A/V seek calls SeekPresentation twice on
+    // the same shared demux (audio track + video track, same position); when the freshly primed state has
+    // not been consumed, the second call is deduplicated instead of repeating the avformat_seek + decode.
+    private TimeSpan? _seekPrimedPosition;
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
     private bool _d3d11GpuNv12Path;
@@ -718,6 +727,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             lock (_lifecycleLock)
             {
                 ThrowIfDisposedUnsafe();
+
+                // Coordinated A/V seek seeks this shared demux twice (audio then video) at the same target.
+                // If neither stream has consumed the freshly primed state yet, the demux is already exactly
+                // where the second call wants it — skip the repeat avformat_seek + decode-to-target.
+                if (_seekPrimedPosition == position
+                    && (!_hasVideo || _vPrimedAfterSeek is not null)
+                    && (!_hasAudio || _aHasBufferedFrame))
+                    return;
+
                 if (!StopDemuxerAndDrainQueues())
                     throw new InvalidOperationException(
                         "Cannot seek: the demux thread did not stop, so the shared FFmpeg demux state cannot be safely reused.");
@@ -761,6 +779,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                     _aEof = false;
                     _aDrainSent = false;
                     _aDrainedTail = false;
+                    _aHasBufferedFrame = false;
+                    // Provisional; corrected to the real keeper-frame start by PrimeBothAfterSeekLocked, which
+                    // advances audio forward to the exact target (the container landed on the video keyframe).
                     _aSamplesEmitted = _hasAudio ? (long)(position.TotalSeconds * Audio.Format.SampleRate) : 0;
                     Audio.Position = position;
                 }
@@ -788,11 +809,17 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 _fileReadCompleted = false;
                 StartDemuxerThread();
 
-                if (_hasVideo)
-                {
-                    lock (_videoDecodeLock)
-                        ConsumeDecoderUntilPts(position);
-                }
+                // Advance both decoders to the exact target in one interleaved, bounded pass so audio and
+                // video resume together (not at the keyframe). Both decode locks are held: no reader can be
+                // active under the write gate, so taking them together here is contention-free.
+                lock (_videoDecodeLock)
+                lock (_audioDecodeLock)
+                    PrimeBothAfterSeekLocked(position);
+
+                // Record where the demux is now primed so the paired (audio/video) call of a coordinated
+                // seek to the same target can dedup. Consumed reads null _vPrimedAfterSeek / clear the audio
+                // keeper, so a later genuine reseek to the same position still runs in full.
+                _seekPrimedPosition = position;
             }
         }
         finally
@@ -908,6 +935,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     private bool TryReceiveAudioFrame()
     {
+        // A post-seek skip may have decoded the straddling frame and pushed it back so the next emit uses
+        // it instead of receiving (and discarding) past it.
+        if (_aHasBufferedFrame)
+        {
+            _aHasBufferedFrame = false;
+            return true;
+        }
+
         while (true)
         {
             if (IsReadYieldRequested)
@@ -1027,6 +1062,267 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         return pts == AV_NOPTS_VALUE
             ? TimeSpan.FromSeconds((double)_aSamplesEmitted / Audio.Format.SampleRate)
             : PtsToTimeSpanAudio(pts);
+    }
+
+    /// <summary>
+    /// After a seek lands on a keyframe, advances BOTH decoders forward to <paramref name="target"/> in one
+    /// interleaved pass: video is primed (<see cref="_vPrimedAfterSeek"/>) at the first frame ≥ target and
+    /// audio is discarded up to the target with the straddling frame pushed back (<see cref="_aHasBufferedFrame"/>),
+    /// so both streams resume together at the requested position instead of the (possibly whole-GOP-earlier)
+    /// keyframe. The caller holds both <c>_videoDecodeLock</c> and <c>_audioDecodeLock</c>.
+    /// </summary>
+    /// <remarks>
+    /// Draining only one stream (the old video-only catch-up) let the other queue fill and block the single
+    /// demux thread, starving the stream being drained — on a large-GOP file that hung the seek while it held
+    /// the read/seek write gate, and because the seek is not cancellable the hang orphaned this thread and
+    /// deadlocked everything after it. Interleaving drains whichever queue has data, so the demux never blocks.
+    /// A wall-clock deadline bounds a stalled/corrupt demux to a best-effort position rather than an unbounded
+    /// hang. Bails on a yield request (a superseding seek/stop).
+    /// </remarks>
+    private void PrimeBothAfterSeekLocked(TimeSpan target)
+    {
+        var videoDone = !_hasVideo;
+        var audioDone = !_hasAudio;
+        if (videoDone && audioDone)
+            return;
+
+        var deadline = Environment.TickCount64 + 4000;
+        while (!videoDone || !audioDone)
+        {
+            if (IsReadYieldRequested || Volatile.Read(ref _videoDecodeYieldRequested) != 0)
+                return; // superseded by a newer seek / stop — abandon; the new op re-primes from its target
+
+            var progressed = false;
+            if (!videoDone)
+                progressed |= TryAdvanceVideoTowardTarget(target, ref videoDone);
+            if (!audioDone)
+                progressed |= TryAdvanceAudioTowardTarget(target, ref audioDone);
+
+            if (videoDone && audioDone)
+                return;
+
+            if (!progressed)
+            {
+                if (Environment.TickCount64 >= deadline)
+                    return; // demux stalled — keep the best-effort position rather than hang the (uncancellable) seek
+
+                lock (_queueGate)
+                {
+                    var aEmpty = _audioPacketQ.Count == 0 && _aPendingPacket == nint.Zero;
+                    var vEmpty = _videoPacketQ.Count == 0 && _vPendingPacket == nint.Zero;
+                    if (aEmpty && vEmpty && !_fileReadCompleted && !_demuxerStopRequest && !IsReadYieldRequested)
+                        Monitor.Wait(_queueGate, 10);
+                }
+            }
+        }
+    }
+
+    /// <summary>One non-blocking step of the video seek catch-up: decodes one already-available video frame,
+    /// priming <see cref="_vPrimedAfterSeek"/> and setting <paramref name="done"/> once a frame ≥ target (or
+    /// EOF) is reached. Returns whether it made progress (decoded a frame or fed a packet).</summary>
+    private bool TryAdvanceVideoTowardTarget(TimeSpan target, ref bool done)
+    {
+        var ret = avcodec_receive_frame(_vCtx, _vFrame);
+        if (ret == AVERROR_EOF)
+        {
+            _vEof = true;
+            done = true;
+            return false;
+        }
+        if (ret == AVERROR(EAGAIN))
+            return TryPumpVideoPacketNonBlocking(); // fed a packet → progress; nothing available → no progress
+        FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
+
+        var workFrame = ResolveWorkVideoFrame();
+        SyncVideoPixelFormatIfNeeded(workFrame);
+        var meta = ExtractVideoMetadata(_vFrame);
+        var pts = ResolveVideoPts(workFrame);
+        if (pts >= target)
+        {
+            _vPrimedAfterSeek = BuildVideoFrame(workFrame, meta);
+            av_frame_unref(_vFrame);
+            done = true;
+            return true;
+        }
+
+        av_frame_unref(_vFrame);
+        return true;
+    }
+
+    /// <summary>One non-blocking step of the audio seek catch-up: decodes one already-available audio frame,
+    /// discarding it when wholly before the target or pushing it back as the keeper (<see cref="_aHasBufferedFrame"/>)
+    /// and setting <paramref name="done"/> once the target (or EOF) is reached. Returns whether it made
+    /// progress.</summary>
+    private bool TryAdvanceAudioTowardTarget(TimeSpan target, ref bool done)
+    {
+        var ret = avcodec_receive_frame(_aCtx, _aFrame);
+        if (ret == AVERROR_EOF)
+        {
+            _aEof = true;
+            done = true;
+            return false;
+        }
+        if (ret == AVERROR(EAGAIN))
+            return TryPumpAudioPacketNonBlocking();
+        FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
+
+        var pts = ResolveAudioPts();
+        var srcRate = _aFrame->sample_rate > 0 ? _aFrame->sample_rate : Audio.Format.SampleRate;
+        var frameEnd = pts + TimeSpan.FromSeconds((double)_aFrame->nb_samples / srcRate);
+        if (frameEnd <= target)
+        {
+            av_frame_unref(_aFrame); // wholly before the target — drop it (swr is not fed, so no leftover)
+            return true;
+        }
+
+        // This frame contains (or starts at/after) the target: emit it next. Anchor the emitted-sample
+        // counter to its real start so Position is honest rather than the provisional seek estimate.
+        _aHasBufferedFrame = true;
+        _aSamplesEmitted = (long)Math.Round(pts.TotalSeconds * Audio.Format.SampleRate);
+        done = true;
+        return true;
+    }
+
+    /// <summary>
+    /// Sends at most one already-queued/pending video packet (or an EOF drain) to the decoder without ever
+    /// waiting. Returns <see langword="false"/> when nothing is available. Mirrors the packet-send half of
+    /// <see cref="FeedVideoFromQueue"/> minus the blocking wait.
+    /// </summary>
+    private bool TryPumpVideoPacketNonBlocking()
+    {
+        AVPacket* pkt = null;
+        var packetGeneration = 0;
+        var fileComplete = false;
+        lock (_queueGate)
+        {
+            if (_vPendingPacket != nint.Zero)
+            {
+                pkt = (AVPacket*)_vPendingPacket;
+                _vPendingPacket = nint.Zero;
+                packetGeneration = _seekGeneration;
+            }
+            else if (_videoPacketQ.Count > 0)
+            {
+                pkt = (AVPacket*)_videoPacketQ.Dequeue();
+                packetGeneration = _seekGeneration;
+            }
+            else
+            {
+                fileComplete = _fileReadCompleted;
+            }
+
+            Monitor.PulseAll(_queueGate);
+        }
+
+        if (pkt != null)
+        {
+            var ret = avcodec_send_packet(_vCtx, pkt);
+            if (ret == 0)
+            {
+                av_packet_free(&pkt);
+                _vDrainSent = false;
+                return true;
+            }
+            if (ret == AVERROR(EAGAIN))
+            {
+                lock (_queueGate)
+                {
+                    if (IsReadYieldRequested || packetGeneration != _seekGeneration)
+                        av_packet_free(&pkt);
+                    else
+                        _vPendingPacket = (nint)pkt;
+                    Monitor.PulseAll(_queueGate);
+                }
+                return true;
+            }
+            av_packet_free(&pkt);
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+            return false;
+        }
+
+        if (fileComplete && !_vDrainSent)
+        {
+            var ret = avcodec_send_packet(_vCtx, null);
+            if (ret == 0 || ret == AVERROR(EAGAIN))
+            {
+                _vDrainSent = true;
+                return true;
+            }
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Sends at most one already-queued/pending audio packet (or an EOF drain) to the decoder without ever
+    /// waiting. Returns <see langword="false"/> when nothing is available. Mirrors the packet-send half of
+    /// <see cref="FeedAudioFromQueue"/> minus the blocking wait.
+    /// </summary>
+    private bool TryPumpAudioPacketNonBlocking()
+    {
+        AVPacket* pkt = null;
+        var packetGeneration = 0;
+        var fileComplete = false;
+        lock (_queueGate)
+        {
+            if (_aPendingPacket != nint.Zero)
+            {
+                pkt = (AVPacket*)_aPendingPacket;
+                _aPendingPacket = nint.Zero;
+                packetGeneration = _seekGeneration;
+            }
+            else if (_audioPacketQ.Count > 0)
+            {
+                pkt = (AVPacket*)_audioPacketQ.Dequeue();
+                packetGeneration = _seekGeneration;
+            }
+            else
+            {
+                fileComplete = _fileReadCompleted;
+            }
+
+            Monitor.PulseAll(_queueGate);
+        }
+
+        if (pkt != null)
+        {
+            var ret = avcodec_send_packet(_aCtx, pkt);
+            if (ret == 0)
+            {
+                av_packet_free(&pkt);
+                _aDrainSent = false;
+                return true;
+            }
+            if (ret == AVERROR(EAGAIN))
+            {
+                lock (_queueGate)
+                {
+                    if (IsReadYieldRequested || packetGeneration != _seekGeneration)
+                        av_packet_free(&pkt);
+                    else
+                        _aPendingPacket = (nint)pkt;
+                    Monitor.PulseAll(_queueGate);
+                }
+                return true;
+            }
+            av_packet_free(&pkt);
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+            return false;
+        }
+
+        if (fileComplete && !_aDrainSent)
+        {
+            var ret = avcodec_send_packet(_aCtx, null);
+            if (ret == 0 || ret == AVERROR(EAGAIN))
+            {
+                _aDrainSent = true;
+                return true;
+            }
+            FFmpegException.ThrowIfError(ret, nameof(avcodec_send_packet));
+        }
+
+        return false;
     }
 
         private AudioFrame ConvertAudioFrame()
@@ -1586,48 +1882,6 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                     ArrayPool<byte>.Shared.Return(b);
             }),
             metadata: meta);
-    }
-
-    private void ConsumeDecoderUntilPts(TimeSpan targetPresentationTime)
-    {
-        // Guard against pathological timestamp / demux states that would spin forever.
-        const int maxIterations = 2_000_000;
-        var iterations = 0;
-        while (true)
-        {
-            if (++iterations > maxIterations)
-            {
-                throw new InvalidOperationException(
-                    "MediaContainerSharedDemux.SeekPresentation: ConsumeDecoderUntilPts exceeded iteration guard — " +
-                    "aborting to avoid an unbounded hang (check mux timestamps vs target PTS).");
-            }
-
-            var ret = avcodec_receive_frame(_vCtx, _vFrame);
-            if (ret == AVERROR_EOF)
-            {
-                _vEof = true;
-                return;
-            }
-            if (ret == AVERROR(EAGAIN))
-            {
-                FeedVideoFromQueue();
-                continue;
-            }
-            FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
-
-            var workFrame = ResolveWorkVideoFrame();
-            SyncVideoPixelFormatIfNeeded(workFrame);
-            var meta = ExtractVideoMetadata(_vFrame);
-            var pts = ResolveVideoPts(workFrame);
-            if (pts >= targetPresentationTime)
-            {
-                _vPrimedAfterSeek = BuildVideoFrame(workFrame, meta);
-                av_frame_unref(_vFrame);
-                return;
-            }
-
-            av_frame_unref(_vFrame);
-        }
     }
 
     internal sealed class AudioTrack : IAudioSource, ISeekableSource, IDisposable
