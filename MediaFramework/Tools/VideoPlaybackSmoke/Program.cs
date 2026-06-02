@@ -12,6 +12,18 @@ using VideoPlaybackSmoke;
 
 Console.OutputEncoding = Encoding.UTF8;
 
+if (args.Contains("--list-audio"))
+{
+    Console.WriteLine("PortAudio host APIs:");
+    foreach (var api in PortAudioDeviceCatalog.EnumerateHostApis())
+        Console.WriteLine($"  hostApi {api.Index}: {api.Name} ({api.DeviceCount} devices)");
+    Console.WriteLine("Output devices (pass the index with --audio-device=<n>):");
+    foreach (var d in PortAudioDeviceCatalog.EnumerateOutputDevices())
+        Console.WriteLine($"  [{d.GlobalDeviceIndex,3}] hostApi {d.HostApiIndex}  {d.MaxOutputChannels}ch  {d.DefaultSampleRate:0}Hz  {d.Name}");
+    Console.WriteLine("Tip: on PipeWire/Pulse systems the default ALSA device often won't play at true real-time — pick the 'pipewire'/'pulse' device, or a direct 'hw:' device at the file's rate.");
+    return 0;
+}
+
 if (!PlaybackCli.TryParse(args, out var opt, out var usageErr))
 {
     PlaybackCli.WriteUsageToStdErr();
@@ -203,6 +215,7 @@ file static class PlaybackCli
         bool d3d11GlSharedHandleOnly = false;
         int chunkSamples = SmokeDefaults.DefaultAudioChunkSamples;
         int? deviceLatencyMs = null;
+        int? audioDeviceIndex = null;
         int ndiAudioAggregateSamples = -1;
         var ndiPumpFromCli = false;
         var ndiPumpCliValue = 0;
@@ -259,6 +272,12 @@ file static class PlaybackCli
                     if (TryParseKeyedInt(a, "--device-latency-ms=", out var dlm) && dlm > 0)
                     {
                         deviceLatencyMs = dlm;
+                        break;
+                    }
+
+                    if (TryParseKeyedInt(a, "--audio-device=", out var adi) && adi >= 0)
+                    {
+                        audioDeviceIndex = adi;
                         break;
                     }
 
@@ -343,7 +362,8 @@ file static class PlaybackCli
             OperatingSystem.IsWindows() && d3d11Gl, OperatingSystem.IsWindows() && d3d11Gl && d3d11GlZeroHost,
             OperatingSystem.IsWindows() && d3d11Gl && d3d11GlSharedHandleOnly, chunkSamples,
             deviceLatencyMs, ndiAudioAggregateSamples, ndiPumpCap,
-            ndiClockVideo, ndiDisableWallPace, ndiVideoPumpFrames, ndiVideoTc, ndiWaitFirstRxMs);
+            ndiClockVideo, ndiDisableWallPace, ndiVideoPumpFrames, ndiVideoTc, ndiWaitFirstRxMs,
+            AudioDeviceIndex: audioDeviceIndex);
         return true;
     }
 

@@ -37,6 +37,28 @@ public sealed class MediaSessionTests
     }
 
     [Fact]
+    public void BuildSession_WrapsPlayerInOwningSession_DisposeTearsDownPlayerAndCompanions()
+    {
+        // The builder convenience for P3-1: one call yields a session that owns the player; disposing it
+        // tears down the player (and its registered companions) — the "open with audio, dispose one thing"
+        // path end to end.
+        var audio = new SilenceSource(new AudioFormat(48_000, 2));
+        var video = new SolidVideoSource(new VideoFormat(32, 32, PixelFormat.Bgra32, new Rational(10, 1)));
+        var session = MediaPlayer.OpenLive(audio, video)
+            .WithDisposeSourcesOnPlayerDispose(false)
+            .BuildSession();
+
+        Assert.False(session.Player.IsDisposed);
+        var companion = new OrderFlag("companion", []);
+        session.Player.RegisterOwnedCompanion(companion);
+
+        session.Dispose();
+
+        Assert.True(session.Player.IsDisposed);
+        Assert.True(companion.Disposed);
+    }
+
+    [Fact]
     public void Borrowing_DoesNotDisposePlayer_ButDisposesOwnedResources()
     {
         using var player = BuildLivePlayer();

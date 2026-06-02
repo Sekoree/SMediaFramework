@@ -472,6 +472,17 @@ public sealed class VideoRouter : IDisposable
         private IVideoSource? _borrowVideoSourceForWin32Nv12Gl;
         private int _nv12FanoutCpuBranchWarned;
 
+        // P2-2: branch CPU conversion runs OUTSIDE the router _gate. _submitLock serializes submits on
+        // this input (swscale converters are not reentrant) without taking _gate, so it never blocks
+        // other inputs or route mutations. _convertInFlight (guarded by _owner._gate) tells TearDownPaths
+        // a submit is mid-conversion, so it defers disposing the leased converters into _deferredConverters
+        // instead of freeing them under the in-flight Convert; the submit drains them when it re-takes the
+        // lock to deliver. (A plain per-input lock taken by both submit and TearDownPaths would deadlock
+        // against router-level RemoveOutput, which holds _gate and reconfigures multiple inputs.)
+        private readonly Lock _submitLock = new();
+        private bool _convertInFlight;
+        private readonly List<IVideoCpuFrameConverter> _deferredConverters = [];
+
         public InputRegistration(VideoRouter owner, string id, string primaryOutputId, IReadOnlyList<PixelFormat> accepted)
         {
             _owner = owner;
@@ -545,10 +556,27 @@ public sealed class VideoRouter : IDisposable
         public void TearDownPaths()
         {
             foreach (var p in _paths.Values)
-                p.Converter?.Dispose();
+            {
+                if (p.Converter is not { } conv) continue;
+                if (_convertInFlight)
+                    _deferredConverters.Add(conv); // a submit may be converting with it — free it when the submit drains
+                else
+                    conv.Dispose();
+            }
             _paths.Clear();
             Configured = false;
             NegotiatedFormat = null;
+            if (!_convertInFlight)
+                DrainDeferredConvertersLocked();
+        }
+
+        /// <summary>Disposes converters that were deferred while a submit held them. Caller holds <c>_owner._gate</c>.</summary>
+        private void DrainDeferredConvertersLocked()
+        {
+            if (_deferredConverters.Count == 0) return;
+            foreach (var c in _deferredConverters)
+                MediaDiagnostics.SwallowDisposeErrors(c.Dispose, "VideoRouter: deferred branch converter");
+            _deferredConverters.Clear();
         }
 
         internal void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource)
@@ -558,148 +586,188 @@ public sealed class VideoRouter : IDisposable
             VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primaryOutput, _borrowVideoSourceForWin32Nv12Gl);
         }
 
-        public void SubmitLocked(VideoFrame frame)
+        /// <summary>
+        /// P2-2: submit with branch conversion performed OUTSIDE the router <c>_gate</c>. Phase 1 snapshots
+        /// the routed outputs + their branch converters under the lock and leases the converters; phase 2
+        /// does the readback / convert / clone with the lock released (the expensive part, so route
+        /// mutations on this and other inputs aren't blocked by it); phase 3 re-takes the lock, releases the
+        /// lease, frees any converters a concurrent reconfigure deferred, and delivers to the outputs that
+        /// still exist. <c>_submitLock</c> serializes submits on this input (converters aren't reentrant).
+        /// </summary>
+        public void SubmitPhased(VideoFrame frame, VideoRouterInputOutput sink)
         {
-            if (!Configured || NegotiatedFormat is null)
+            lock (_submitLock)
             {
-                frame.Dispose();
-                throw new InvalidOperationException($"VideoRouter input '{Id}'.Submit called before Configure");
-            }
-
-            var needsHwReadbackForConverter = false;
-            if (RoutedOutputIds.Count > 1)
-            {
-                for (var j = 1; j < RoutedOutputIds.Count; j++)
+                SubmitPlan plan;
+                lock (_owner._gate)
                 {
-                    if (_paths[RoutedOutputIds[j]].Converter is null) continue;
-                    if (frame.DmabufNv12 is not null || frame.DmabufP010 is not null || frame.DmabufP016 is not null || frame.Win32Nv12 is not null)
-                    {
-                        needsHwReadbackForConverter = true;
-                        break;
-                    }
-                }
-            }
-
-            VideoFrame? converterReadback = null;
-            if (needsHwReadbackForConverter)
-            {
-                if (frame.Win32Nv12 is not null)
-                {
-                    frame.Dispose();
-                    throw new NotSupportedException(
-                        $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 outputs for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
-                }
-
-                if (frame.DmabufNv12 is not null)
-                {
-                    if (!VideoDmabufCpuReadback.TryCreateNv12CpuCopy(frame, out converterReadback))
+                    ObjectDisposedException.ThrowIf(sink.IsSinkDisposed, sink);
+                    ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                    if (!Configured || NegotiatedFormat is null)
                     {
                         frame.Dispose();
-                        throw new NotSupportedException(
-                            $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                        throw new InvalidOperationException($"VideoRouter input '{Id}'.Submit called before Configure");
                     }
-                }
-                else if (frame.DmabufP010 is not null)
-                {
-                    if (!VideoDmabufCpuReadback.TryCreateP010CpuCopy(frame, out converterReadback))
-                    {
-                        frame.Dispose();
-                        throw new NotSupportedException(
-                            $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
-                    }
-                }
-                else if (frame.DmabufP016 is not null)
-                {
-                    if (!VideoDmabufCpuReadback.TryCreateP016CpuCopy(frame, out converterReadback))
-                    {
-                        frame.Dispose();
-                        throw new NotSupportedException(
-                            $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
-                    }
-                }
-            }
 
-            if (RoutedOutputIds.Count == 1)
-            {
-                _owner._outputs[RoutedOutputIds[0]].Output.Submit(frame);
-                return;
-            }
-
-            VideoFrame?[] branchFrames = new VideoFrame?[RoutedOutputIds.Count - 1];
-            try
-            {
-                var n = RoutedOutputIds.Count;
-                var negotiatedFmt = NegotiatedFormat!.Value;
-                var canNv12CpuFanOut = n > 1
-                    && negotiatedFmt.PixelFormat == PixelFormat.Nv12
-                    && frame.DmabufNv12 is null
-                    && frame.DmabufP010 is null
-                    && frame.DmabufP016 is null
-                    && frame.Win32Nv12 is null;
-                if (canNv12CpuFanOut)
-                {
-                    for (var j = 1; j < n; j++)
+                    // Single output: no branch conversion — deliver directly under the lock (fast path).
+                    if (RoutedOutputIds.Count == 1)
                     {
-                        if (_paths[RoutedOutputIds[j]].Converter != null)
+                        _owner._outputs[RoutedOutputIds[0]].Output.Submit(frame);
+                        return;
+                    }
+
+                    plan = BuildSubmitPlanLocked(frame);
+                    _convertInFlight = true; // lease the snapshotted converters from disposal by TearDownPaths
+                }
+
+                var n = plan.OutputIds.Length;
+                var hint = frame.ColorTransferHint;
+                VideoFrame? primary = frame;
+                var branchFrames = new VideoFrame?[n - 1];
+                VideoFrame? converterReadback = null;
+                try
+                {
+                    // ---- Phase 2: readback + build branch frames, NO _gate held ----
+                    if (plan.NeedsHwReadback)
+                    {
+                        if (frame.Win32Nv12 is not null)
                         {
-                            canNv12CpuFanOut = false;
-                            break;
+                            frame.Dispose();
+                            throw new NotSupportedException(
+                                $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 outputs for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                        }
+                        if (frame.DmabufNv12 is not null && !VideoDmabufCpuReadback.TryCreateNv12CpuCopy(frame, out converterReadback))
+                        {
+                            frame.Dispose();
+                            throw new NotSupportedException(
+                                $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                        }
+                        if (frame.DmabufP010 is not null && !VideoDmabufCpuReadback.TryCreateP010CpuCopy(frame, out converterReadback))
+                        {
+                            frame.Dispose();
+                            throw new NotSupportedException(
+                                $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
+                        }
+                        if (frame.DmabufP016 is not null && !VideoDmabufCpuReadback.TryCreateP016CpuCopy(frame, out converterReadback))
+                        {
+                            frame.Dispose();
+                            throw new NotSupportedException(
+                                $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
+                        }
+                    }
+
+                    if (plan.CanNv12FanOut &&
+                        VideoFrame.TryCreateNv12CpuFanOutViews(frame, n, hint, out var fanViews))
+                    {
+                        for (var i = 1; i < n; i++)
+                            branchFrames[i - 1] = fanViews[i];
+                        frame.Dispose();
+                        primary = fanViews[0];
+                    }
+                    else
+                    {
+                        for (var i = 1; i < n; i++)
+                        {
+                            var conv = plan.BranchConverters[i - 1];
+                            branchFrames[i - 1] = conv != null
+                                ? conv.Convert(converterReadback ?? frame, hint)
+                                : frame.DmabufNv12 is not null
+                                    ? VideoFrame.CreateNv12DmabufSharedReference(frame)
+                                    : frame.DmabufP010 is not null
+                                        ? VideoFrame.CreateP010DmabufSharedReference(frame)
+                                        : frame.DmabufP016 is not null
+                                            ? VideoFrame.CreateP016DmabufSharedReference(frame)
+                                            : frame.Win32Nv12 is not null
+                                                ? VideoFrame.CreateNv12Win32SharedReference(frame)
+                                                : VideoFrameCpuClone.DuplicateCpuBacking(frame, hint);
+                        }
+                    }
+
+                    converterReadback?.Dispose();
+                    converterReadback = null;
+
+                    // ---- Phase 3: release the lease, free deferred converters, deliver under _gate ----
+                    lock (_owner._gate)
+                    {
+                        _convertInFlight = false;
+                        DrainDeferredConvertersLocked();
+
+                        // Re-validate each output: it may have been removed during the out-of-lock convert.
+                        if (primary is not null)
+                        {
+                            if (_owner._outputs.TryGetValue(PrimaryOutputId, out var pe))
+                                pe.Output.Submit(primary);
+                            else
+                                primary.Dispose();
+                            primary = null;
+                        }
+
+                        for (var i = 0; i < branchFrames.Length; i++)
+                        {
+                            var f = branchFrames[i];
+                            branchFrames[i] = null;
+                            if (f is null) continue;
+                            if (_owner._outputs.TryGetValue(plan.OutputIds[i + 1], out var be))
+                                be.Output.Submit(f);
+                            else
+                                f.Dispose();
                         }
                     }
                 }
-
-                if (canNv12CpuFanOut &&
-                    VideoFrame.TryCreateNv12CpuFanOutViews(frame, n, frame.ColorTransferHint, out var fanViews))
+                catch
                 {
-                    for (var i = 1; i < n; i++)
-                        branchFrames[i - 1] = fanViews[i];
-                    frame.Dispose();
-                    frame = fanViews[0];
-                }
-                else
-                {
-                    for (var i = 1; i < n; i++)
+                    lock (_owner._gate)
                     {
-                        var oid = RoutedOutputIds[i];
-                        var path = _paths[oid];
-                        branchFrames[i - 1] = path.Converter != null
-                            ? path.Converter.Convert(converterReadback ?? frame, frame.ColorTransferHint)
-                            : frame.DmabufNv12 is not null
-                                ? VideoFrame.CreateNv12DmabufSharedReference(frame)
-                                : frame.DmabufP010 is not null
-                                    ? VideoFrame.CreateP010DmabufSharedReference(frame)
-                                    : frame.DmabufP016 is not null
-                                        ? VideoFrame.CreateP016DmabufSharedReference(frame)
-                                        : frame.Win32Nv12 is not null
-                                            ? VideoFrame.CreateNv12Win32SharedReference(frame)
-                                            : VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                        _convertInFlight = false;
+                        DrainDeferredConvertersLocked();
                     }
+                    converterReadback?.Dispose();
+                    foreach (var bf in branchFrames)
+                        bf?.Dispose();
+                    primary?.Dispose();
+                    throw;
                 }
-
-                converterReadback?.Dispose();
-                converterReadback = null;
-
-                _owner._outputs[PrimaryOutputId].Output.Submit(frame);
-                frame = null!;
-
-                for (var i = 0; i < branchFrames.Length; i++)
-                {
-                    var oid = RoutedOutputIds[i + 1];
-                    var f = branchFrames[i]!;
-                    branchFrames[i] = null;
-                    _owner._outputs[oid].Output.Submit(f);
-                }
-            }
-            catch
-            {
-                converterReadback?.Dispose();
-                foreach (var bf in branchFrames)
-                    bf?.Dispose();
-                frame?.Dispose();
-                throw;
             }
         }
+
+        /// <summary>Snapshots the routed outputs + their branch converters + fan-out/readback decisions for a
+        /// submit, so phase 2 can convert without holding <c>_owner._gate</c>. Caller holds <c>_owner._gate</c>.</summary>
+        private SubmitPlan BuildSubmitPlanLocked(VideoFrame frame)
+        {
+            var ids = RoutedOutputIds.ToArray();
+            var n = ids.Length;
+            var converters = new IVideoCpuFrameConverter?[n - 1];
+            var hasHw = frame.DmabufNv12 is not null || frame.DmabufP010 is not null
+                        || frame.DmabufP016 is not null || frame.Win32Nv12 is not null;
+            var needsReadback = false;
+            for (var i = 1; i < n; i++)
+            {
+                var conv = _paths.TryGetValue(ids[i], out var st) ? st.Converter : null;
+                converters[i - 1] = conv;
+                if (conv is not null && hasHw)
+                    needsReadback = true;
+            }
+
+            var negotiated = NegotiatedFormat!.Value;
+            var canFanOut = negotiated.PixelFormat == PixelFormat.Nv12 && !hasHw;
+            if (canFanOut)
+            {
+                for (var i = 1; i < n; i++)
+                {
+                    if (converters[i - 1] is not null) { canFanOut = false; break; }
+                }
+            }
+
+            return new SubmitPlan(ids, converters, negotiated, needsReadback, canFanOut);
+        }
     }
+
+    private readonly record struct SubmitPlan(
+        string[] OutputIds,
+        IVideoCpuFrameConverter?[] BranchConverters,
+        VideoFormat NegotiatedFmt,
+        bool NeedsHwReadback,
+        bool CanNv12FanOut);
 
     /// <param name="Converter">When null, branch uses <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/> for CPU frames unless <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> applies (negotiated <see cref="PixelFormat.Nv12"/>, no dma-buf / Win32 backings, no branch converter).</param>
     private readonly record struct OutputPathState(IVideoCpuFrameConverter? Converter);
@@ -719,6 +787,8 @@ public sealed class VideoRouter : IDisposable
         }
 
         public void MarkDisposed() => _sinkDisposed = true;
+
+        internal bool IsSinkDisposed => _sinkDisposed;
 
         public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _accepted;
 
@@ -760,12 +830,9 @@ public sealed class VideoRouter : IDisposable
         public void Submit(VideoFrame frame)
         {
             ArgumentNullException.ThrowIfNull(frame);
-            lock (_owner._gate)
-            {
-                ObjectDisposedException.ThrowIf(_sinkDisposed, this);
-                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                _reg.SubmitLocked(frame);
-            }
+            // SubmitPhased does the disposed checks under _gate in its snapshot phase, then converts with
+            // the lock released (P2-2). Do NOT wrap it in lock(_gate) here.
+            _reg.SubmitPhased(frame, this);
         }
     }
 }

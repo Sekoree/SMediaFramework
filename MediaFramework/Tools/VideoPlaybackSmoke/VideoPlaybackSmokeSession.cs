@@ -223,7 +223,11 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                 initialWidth: Math.Min(videoSource.Format.Width, capW),
                 initialHeight: Math.Min(videoSource.Format.Height, capH),
                 createFallbackD3D11InteropDeviceForWin32Nv12: win32Nv12HandleOnlyRequested
-                    || !(opt.WindowsD3d11SharedGl && opt.WindowsD3d11ZeroHostGl));
+                    || !(opt.WindowsD3d11SharedGl && opt.WindowsD3d11ZeroHostGl))
+            {
+                // Preserve the source aspect ratio (letterbox) instead of stretching to the window.
+                ViewportFit = S.Media.OpenGL.VideoViewportFit.Contain,
+            };
 
             var mpOpt = new MediaPlayerOpenOptions(
                 TryHardwareAcceleration: !opt.NoHardwareDecode && !opt.NDIEnable,
@@ -271,7 +275,8 @@ public sealed class VideoPlaybackSmokeSession : IDisposable
                 opt.AudioChunkSamples,
                 opt.DeviceLatencyMs,
                 onAudioWireFailedMessage,
-                PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer);
+                PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer,
+                deviceIndex: opt.AudioDeviceIndex);
 
             if (ndi is not null && audioHost is not null)
             {

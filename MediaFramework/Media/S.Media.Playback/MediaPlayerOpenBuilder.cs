@@ -63,6 +63,39 @@ public abstract class MediaPlayerOpenBuilder
             return player!;
         }, cancellationToken);
 
+    /// <summary>
+    /// Builds the player and wraps it in an owning <see cref="MediaSession"/> — disposing the session
+    /// tears down the player and everything it owns (companion hosts wired via <c>WithPortAudio</c>, etc.).
+    /// Returns <see langword="false"/> (session null) with the same <paramref name="error"/> as
+    /// <see cref="TryBuild"/> on failure.
+    /// </summary>
+    public bool TryBuildSession([NotNullWhen(true)] out MediaSession? session, out string? error)
+    {
+        if (!TryBuild(out var player, out error))
+        {
+            session = null;
+            return false;
+        }
+        session = MediaSession.Owning(player);
+        return true;
+    }
+
+    /// <summary>Builds the player and wraps it in an owning <see cref="MediaSession"/>; throws on failure.</summary>
+    public MediaSession BuildSession()
+    {
+        if (!TryBuildSession(out var session, out var error))
+            throw new InvalidOperationException(error ?? "MediaPlayer open failed.");
+        return session;
+    }
+
+    /// <summary>Async <see cref="BuildSession"/>.</summary>
+    public Task<MediaSession> OpenSessionAsync(CancellationToken cancellationToken = default) =>
+        Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return BuildSession();
+        }, cancellationToken);
+
     protected bool TryBuildWithCompanions(
         bool opened,
         MediaPlayer? player,

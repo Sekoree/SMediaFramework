@@ -1453,14 +1453,18 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             strides[i] = PixelFormatInfo.PlaneByteWidth(_vOutPixFmt, width, i);
 
         var buffers = new byte[n][];
-        var handles = new List<GCHandle>(n);
+        // Transient pinning scratch (freed before return) — stack-allocate it; `allocated` tracks how
+        // many were pinned so a mid-loop Rent failure frees exactly those.
+        Span<GCHandle> handles = stackalloc GCHandle[n];
+        var allocated = 0;
         try
         {
             for (var i = 0; i < n; i++)
             {
                 var len = PixelFormatInfo.PlanePitchBufferLength(_vOutPixFmt, width, height, i, strides[i]);
                 buffers[i] = ArrayPool<byte>.Shared.Rent(len);
-                handles.Add(GCHandle.Alloc(buffers[i], GCHandleType.Pinned));
+                handles[i] = GCHandle.Alloc(buffers[i], GCHandleType.Pinned);
+                allocated = i + 1;
             }
 
             for (var i = 0; i < n; i++)
@@ -1477,11 +1481,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
         catch
         {
-            foreach (var h in handles)
-            {
-                if (h.IsAllocated)
-                    h.Free();
-            }
+            for (var i = 0; i < allocated; i++)
+                handles[i].Free();
             foreach (var b in buffers)
             {
                 if (b is not null)
@@ -1490,8 +1491,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             throw;
         }
 
-        foreach (var h in handles)
-            h.Free();
+        for (var i = 0; i < n; i++)
+            handles[i].Free();
 
         var memories = new ReadOnlyMemory<byte>[n];
         for (var i = 0; i < n; i++)

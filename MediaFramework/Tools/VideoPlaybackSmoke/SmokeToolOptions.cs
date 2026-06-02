@@ -20,4 +20,5 @@ public readonly record struct SmokeToolOptions(
     bool NDIDisableWallPace,
     int NDIVideoPumpFrames,
     NDIVideoTimecodeMode NDIVideoTimecodeMode,
-    int NDIWaitFirstReceiverMs);
+    int NDIWaitFirstReceiverMs,
+    int? AudioDeviceIndex = null);
