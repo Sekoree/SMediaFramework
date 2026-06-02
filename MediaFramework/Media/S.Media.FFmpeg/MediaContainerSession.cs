@@ -42,7 +42,7 @@ public sealed class MediaContainerSession
         Session.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
 
     public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
-        Session.Pause(cancellationToken, flushSharedMuxAfterPause);
+        Session.Pause(cancellationToken, flushSharedMuxAfterPause ?? Container.FlushCodecPipelines);
 
     public void Pause(CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
         Session.Pause(cancellationToken, ResolveFlush(flushPolicy));
@@ -60,7 +60,7 @@ public sealed class MediaContainerSession
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
         Action? flushSharedMuxAfterPause = null) =>
         AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
-            position, cancellationToken, flushSharedMuxAfterPause);
+            position, cancellationToken, flushSharedMuxAfterPause ?? Container.FlushCodecPipelines);
 
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
         AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,

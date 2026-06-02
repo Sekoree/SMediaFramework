@@ -68,11 +68,12 @@ internal sealed unsafe class FfmpegVideoEncoder : IVideoOutput, IDisposable
     {
         ArgumentNullException.ThrowIfNull(frame);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_configured)
-            throw new InvalidOperationException("Configure must be called before Submit.");
 
         try
         {
+            if (!_configured)
+                throw new InvalidOperationException("Configure must be called before Submit.");
+
             lock (_gate)
             {
                 var working = frame;

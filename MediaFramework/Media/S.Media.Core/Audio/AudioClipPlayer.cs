@@ -163,6 +163,28 @@ public sealed class AudioClipPlayer
         lock (_gate) return ReapExhaustedLocked();
     }
 
+    internal void AbortVoice(AudioClipVoice voice)
+    {
+        ArgumentNullException.ThrowIfNull(voice);
+        lock (_gate)
+        {
+            for (var i = _activeVoices.Count - 1; i >= 0; i--)
+            {
+                var reg = _activeVoices[i];
+                if (!ReferenceEquals(reg.Voice, voice))
+                    continue;
+
+                DisposeRegistration(reg);
+                _activeVoices.RemoveAt(i);
+                if (ReferenceEquals(_latched, reg))
+                    _latched = null;
+                return;
+            }
+        }
+
+        voice.Dispose();
+    }
+
     private int ReapExhaustedLocked()
     {
         var reaped = 0;

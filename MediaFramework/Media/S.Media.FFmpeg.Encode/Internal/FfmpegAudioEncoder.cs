@@ -54,6 +54,10 @@ internal sealed unsafe class FfmpegAudioEncoder : IAudioOutput, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_configured)
             throw new InvalidOperationException("Configure must be called before Submit.");
+        if (packedSamples.Length % _format.Channels != 0)
+            throw new ArgumentException(
+                $"packedSamples length {packedSamples.Length} is not a multiple of channel count {_format.Channels}.",
+                nameof(packedSamples));
 
         lock (_gate)
         {

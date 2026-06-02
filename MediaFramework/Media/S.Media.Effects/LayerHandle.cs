@@ -65,52 +65,55 @@ public sealed class LayerHandle
     /// </summary>
     internal void AdvanceTo(TimeSpan masterTime, VideoFormat canvasFormat)
     {
-        // 1. Catch up: pull future frames until the newest queued frame reaches/passes the master time
-        //    (so the look-ahead brackets it), bounded by buffer size and a per-advance pull cap.
-        var pulls = 0;
-        while (_lookahead.Count < MaxQueuedFrames
-               && pulls < MaxPullsPerAdvance
-               && (_lookahead.Count == 0 || _newestQueuedPts < masterTime))
+        lock (_gate)
         {
-            if (!Source.TryReadNextFrame(out var src))
-                break;
-            _lookahead.Add(src);
-            _newestQueuedPts = src.PresentationTime;
-            pulls++;
-        }
+            // 1. Catch up: pull future frames until the newest queued frame reaches/passes the master time
+            //    (so the look-ahead brackets it), bounded by buffer size and a per-advance pull cap.
+            var pulls = 0;
+            while (_lookahead.Count < MaxQueuedFrames
+                   && pulls < MaxPullsPerAdvance
+                   && (_lookahead.Count == 0 || _newestQueuedPts < masterTime))
+            {
+                if (!Source.TryReadNextFrame(out var src))
+                    break;
+                _lookahead.Add(src);
+                _newestQueuedPts = src.PresentationTime;
+                pulls++;
+            }
 
-        // 2a. Drop anything at or before what we've already shown (duplicate / non-monotonic source).
-        while (_hasDisplayed && _lookahead.Count > 0 && _lookahead[0].PresentationTime <= _displayedPts)
-        {
-            _lookahead[0].Dispose();
-            _lookahead.RemoveAt(0);
-        }
+            // 2a. Drop anything at or before what we've already shown (duplicate / non-monotonic source).
+            while (_hasDisplayed && _lookahead.Count > 0 && _lookahead[0].PresentationTime <= _displayedPts)
+            {
+                _lookahead[0].Dispose();
+                _lookahead.RemoveAt(0);
+            }
 
-        // 2b. Drop frames superseded by a newer frame that is also ≤ master time — they'll never be the
-        //     cover (the newer one is closer to / contains master time).
-        while (_lookahead.Count >= 2 && _lookahead[1].PresentationTime <= masterTime)
-        {
-            _lookahead[0].Dispose();
-            _lookahead.RemoveAt(0);
-        }
+            // 2b. Drop frames superseded by a newer frame that is also ≤ master time — they'll never be the
+            //     cover (the newer one is closer to / contains master time).
+            while (_lookahead.Count >= 2 && _lookahead[1].PresentationTime <= masterTime)
+            {
+                _lookahead[0].Dispose();
+                _lookahead.RemoveAt(0);
+            }
 
-        // 3. The front is now the cover (last frame ≤ master time), or — before the master time has
-        //    reached any frame — the earliest future frame stands in as start-up pre-roll. Submit it
-        //    once; subsequent advances within its interval just re-resolve the slot params.
-        if (_lookahead.Count > 0
-            && (_lookahead[0].PresentationTime <= masterTime || !_hasDisplayed))
-        {
-            var cover = _lookahead[0];
-            _lookahead.RemoveAt(0);
-            _displayedSrcFormat = cover.Format;
-            _displayedPts = cover.PresentationTime;
-            _hasDisplayed = true;
-            SubmitFrameToSlot(cover, masterTime, canvasFormat);
-            return;
-        }
+            // 3. The front is now the cover (last frame ≤ master time), or — before the master time has
+            //    reached any frame — the earliest future frame stands in as start-up pre-roll. Submit it
+            //    once; subsequent advances within its interval just re-resolve the slot params.
+            if (_lookahead.Count > 0
+                && (_lookahead[0].PresentationTime <= masterTime || !_hasDisplayed))
+            {
+                var cover = _lookahead[0];
+                _lookahead.RemoveAt(0);
+                _displayedSrcFormat = cover.Format;
+                _displayedPts = cover.PresentationTime;
+                _hasDisplayed = true;
+                SubmitFrameToSlot(cover, masterTime, canvasFormat);
+                return;
+            }
 
-        // Frame unchanged (held in the slot) — refresh time-driven slot params only.
-        UpdateSlotParams(masterTime, canvasFormat);
+            // Frame unchanged (held in the slot) — refresh time-driven slot params only.
+            UpdateSlotParams(masterTime, canvasFormat);
+        }
     }
 
     /// <summary>
@@ -120,9 +123,12 @@ public sealed class LayerHandle
     /// </summary>
     internal void PullOneAndSubmit(TimeSpan timelineTime, VideoFormat canvasFormat)
     {
-        if (!Source.TryReadNextFrame(out var src))
-            return;
-        SubmitFrameToSlot(src, timelineTime, canvasFormat);
+        lock (_gate)
+        {
+            if (!Source.TryReadNextFrame(out var src))
+                return;
+            SubmitFrameToSlot(src, timelineTime, canvasFormat);
+        }
     }
 
     private (LayerConfig Config, ScheduledTransition[] Transitions) SnapshotState()
@@ -188,10 +194,13 @@ public sealed class LayerHandle
     /// removed or the compositor is disposed.</summary>
     internal void Close()
     {
-        foreach (var f in _lookahead)
-            f.Dispose();
-        _lookahead.Clear();
-        _toBgra?.Dispose();
-        _toBgra = null;
+        lock (_gate)
+        {
+            foreach (var f in _lookahead)
+                f.Dispose();
+            _lookahead.Clear();
+            _toBgra?.Dispose();
+            _toBgra = null;
+        }
     }
 }

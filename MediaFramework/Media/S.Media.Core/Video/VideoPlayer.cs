@@ -60,6 +60,7 @@ public sealed class VideoPlayer : IDisposable
     private EventHandler? _tickHandler;
     private bool _isRunning;
     private bool _disposed;
+    private volatile Exception? _fault;
     /// <summary>Set when a decode thread failed to exit within the join cap (blocked in a native read).
     /// A restart would create a second decode thread sharing this source/queue, so <see cref="Play"/>
     /// is refused once this is set — the player is terminally stuck and must be disposed.</summary>
@@ -94,11 +95,19 @@ public sealed class VideoPlayer : IDisposable
     /// <remarks>Runs on the <see cref="IMediaClock"/> driver thread (same thread as <see cref="IMediaClock.VideoTick"/>). Keep handlers lightweight or marshal work elsewhere.</remarks>
     public event Action<TimeSpan>? FramePresentationTimePresented;
 
+    /// <summary>
+    /// Raised when the decode loop hits an unhandled source/conversion error and stops.
+    /// The player becomes terminal; dispose it and create a new instance to recover.
+    /// </summary>
+    public event EventHandler<VideoPlayerFaultedEventArgs>? Faulted;
+
     /// <summary>The clock that paces <see cref="IMediaClock.VideoTick"/> and <see cref="Play"/>.</summary>
     public IMediaClock Clock => _clock;
 
     public VideoFormat Format => _sink.Format;
     public bool IsRunning { get { lock (_gate) return _isRunning; } }
+    /// <summary>Non-null after the decode loop faulted or shutdown left a live decode thread behind.</summary>
+    public Exception? Fault => _fault;
 
     /// <summary>True after the source signalled <see cref="IVideoSource.IsExhausted"/> AND every queued frame has been displayed.</summary>
     public bool CompletedNaturally { get; private set; }
@@ -187,6 +196,10 @@ public sealed class VideoPlayer : IDisposable
                 throw new InvalidOperationException(
                     "VideoPlayer cannot restart: a previous decode thread is still blocked in a native read and never exited. " +
                     "Dispose this player and create a new one.");
+            if (_fault is not null)
+                throw new InvalidOperationException(
+                    "VideoPlayer cannot restart after a decode fault. Dispose this player and create a new one.",
+                    _fault);
             if (_isRunning)
             {
                 Trace.LogTrace("Play: already running");
@@ -256,15 +269,19 @@ public sealed class VideoPlayer : IDisposable
 
     private void StopInternal(CancellationToken cancellationToken = default)
     {
-        if (_source is ICooperativeVideoReadInterrupt iv)
-            iv.RequestYieldBetweenReads();
+        var interrupt = _source as ICooperativeVideoReadInterrupt;
+        interrupt?.RequestYieldBetweenReads();
 
         Thread? toJoin;
         CancellationTokenSource? toDispose;
         EventHandler? handler;
         lock (_gate)
         {
-            if (!_isRunning) return;
+            if (!_isRunning)
+            {
+                interrupt?.ClearYieldRequest();
+                return;
+            }
             _isRunning = false;
             handler = _tickHandler;
             _tickHandler = null;
@@ -284,6 +301,7 @@ public sealed class VideoPlayer : IDisposable
         // semaphore so Wait throws ObjectDisposedException and the thread can exit.
         DrainQueue();
 
+        var joinCancelled = false;
         try
         {
             // Never join the decode thread without a wall-clock cap: with CancellationToken.None,
@@ -291,25 +309,45 @@ public sealed class VideoPlayer : IDisposable
             // in native code, Pause/Dispose can hang for minutes. Bounded join + cancelled CTS unblocks Wait.
             CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(12), cancellationToken);
         }
+        catch (OperationCanceledException)
+        {
+            joinCancelled = true;
+            if (toJoin is { IsAlive: true })
+            {
+                var ex = new OperationCanceledException(
+                    "VideoPlayer stop was cancelled before the decode thread exited; the player is now non-restartable.",
+                    cancellationToken);
+                _fault = ex;
+                _decodeThreadStuck = true;
+                Trace.LogError(ex, "StopInternal: stop cancelled with decode thread still alive; player is now non-restartable (dispose it).");
+                RaiseFaulted(ex);
+            }
+            throw;
+        }
         finally
         {
-            toDispose?.Dispose();
+            if (toJoin is not { IsAlive: true })
+                toDispose?.Dispose();
+            else
+                MediaDiagnostics.LogWarning("VideoPlayer.StopInternal: decode thread still alive after join; leaking CancellationTokenSource to avoid use-after-dispose.");
+            if (_source is ICooperativeVideoReadInterrupt clearYield)
+                clearYield.ClearYieldRequest();
+
+            DrainQueue();
+            ReleaseHeldFrame();
         }
 
-        if (toJoin is { IsAlive: true } && !cancellationToken.IsCancellationRequested)
+        if (toJoin is { IsAlive: true } && !joinCancelled)
         {
             // The decode thread is still blocked in native code after the full join cap (not an early
             // cooperative cancel). A subsequent Play() must NOT start a second decode thread sharing
             // this source/queue/semaphore — concurrent non-thread-safe decoder access. Mark terminal.
             _decodeThreadStuck = true;
-            Trace.LogError("StopInternal: decode thread did not exit within the join cap; player is now non-restartable (dispose it).");
+            var ex = new TimeoutException("VideoPlayer decode thread did not exit within the join cap; the player is now non-restartable.");
+            _fault = ex;
+            Trace.LogError(ex, "StopInternal: decode thread did not exit within the join cap; player is now non-restartable (dispose it).");
+            RaiseFaulted(ex);
         }
-
-        if (_source is ICooperativeVideoReadInterrupt clearYield)
-            clearYield.ClearYieldRequest();
-
-        DrainQueue();
-        ReleaseHeldFrame();
     }
 
     private void DrainQueue()
@@ -370,8 +408,27 @@ public sealed class VideoPlayer : IDisposable
         catch (ObjectDisposedException) { /* StopInternal disposed semaphore mid-wait */ }
         catch (Exception ex)
         {
-            Trace.LogError(ex, "VideoPlayer.DecodeLoop: unhandled exception");
-            throw;
+            EventHandler? handler = null;
+            CancellationTokenSource? toDispose = null;
+            _fault = ex;
+            lock (_gate)
+            {
+                _isRunning = false;
+                handler = _tickHandler;
+                _tickHandler = null;
+                if (ReferenceEquals(_decodeThread, Thread.CurrentThread))
+                    _decodeThread = null;
+                toDispose = _cts;
+                _cts = null;
+            }
+            if (handler is not null)
+                _clock.VideoTick -= handler;
+            try { toDispose?.Cancel(); } catch { /* best effort */ }
+            try { toDispose?.Dispose(); } catch { /* best effort */ }
+            DrainQueue();
+            ReleaseHeldFrame();
+            Trace.LogError(ex, "VideoPlayer.DecodeLoop: unhandled exception; player faulted and stopped");
+            RaiseFaulted(ex);
         }
         finally
         {
@@ -624,6 +681,12 @@ public sealed class VideoPlayer : IDisposable
         }
     }
 
+    private void RaiseFaulted(Exception ex)
+    {
+        try { Faulted?.Invoke(this, new VideoPlayerFaultedEventArgs(ex)); }
+        catch (Exception hex) { MediaDiagnostics.LogError(hex, "VideoPlayer.Faulted handler threw"); }
+    }
+
     private void ReleaseHeldFrame()
     {
         _heldPlanes = null;
@@ -633,4 +696,12 @@ public sealed class VideoPlayer : IDisposable
         _heldOriginalPts = TimeSpan.Zero;
         Volatile.Write(ref _holdSubmitCount, 0);
     }
+}
+
+/// <summary>Argument for <see cref="VideoPlayer.Faulted"/>.</summary>
+public sealed class VideoPlayerFaultedEventArgs : EventArgs
+{
+    public Exception Exception { get; }
+
+    public VideoPlayerFaultedEventArgs(Exception exception) => Exception = exception;
 }

@@ -245,6 +245,31 @@ public class VideoPlayerTests
         Assert.Equal(0, src.UndisposedFramesHandedOut);
     }
 
+    [Fact]
+    public void DecodeLoop_SourceThrows_FaultsPlayerInsteadOfRethrowing()
+    {
+        var src = new ThrowingVideoSource(VideoFmt(16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
+        Exception? fault = null;
+        using var faulted = new ManualResetEventSlim(false);
+        player.Faulted += (_, e) =>
+        {
+            fault = e.Exception;
+            faulted.Set();
+        };
+
+        player.Play();
+
+        Assert.True(faulted.Wait(TimeSpan.FromSeconds(2)), "player should surface decode source faults");
+        Assert.IsType<InvalidOperationException>(fault);
+        Assert.NotNull(player.Fault);
+        WaitFor(() => !player.IsRunning, TimeSpan.FromSeconds(1));
+        Assert.Throws<InvalidOperationException>(() => player.Play());
+    }
+
     private static VideoFormat VideoFmt(int w, int h)
         => new(w, h, PixelFormat.Bgra32, new Rational(30, 1));
 
@@ -299,6 +324,15 @@ internal sealed class FakeVideoSource : IVideoSource
             release: DisposableRelease.Wrap(() => Interlocked.Decrement(ref _outstanding)));
         return true;
     }
+}
+
+internal sealed class ThrowingVideoSource(VideoFormat format) : IVideoSource
+{
+    public VideoFormat Format { get; } = format;
+    public IReadOnlyList<PixelFormat> NativePixelFormats => new[] { format.PixelFormat };
+    public bool IsExhausted => false;
+    public void SelectOutputFormat(PixelFormat format) { }
+    public bool TryReadNextFrame(out VideoFrame frame) => throw new InvalidOperationException("source boom");
 }
 
 internal sealed class FakeVideoOutput : IVideoOutput

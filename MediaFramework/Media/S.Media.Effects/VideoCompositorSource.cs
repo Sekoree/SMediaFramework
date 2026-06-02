@@ -100,6 +100,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_slotsGate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             var slotId = id ?? $"slot_{_slots.Count + 1}";
             foreach (var s in _slots)
             {
@@ -120,7 +121,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         ArgumentNullException.ThrowIfNull(comparison);
         ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_slotsGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             _slots.Sort(comparison);
+        }
     }
 
     /// <summary>Removes a slot and disposes any frame it was holding.</summary>
@@ -131,6 +135,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         Slot? toDispose = null;
         lock (_slotsGate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             for (var i = 0; i < _slots.Count; i++)
             {
                 if (_slots[i].Id != id) continue;
@@ -160,15 +165,15 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     /// frame whose PTS is closest to this position.</param>
     public bool TryReadNextFrame(TimeSpan? masterAlignmentTime, out VideoFrame frame)
     {
-        if (_disposed)
-        {
-            frame = null!;
-            return false;
-        }
-
         // Single-consumer read (class contract): serialize so the reused scratch below is exclusive.
         lock (_readGate)
         {
+            if (_disposed)
+            {
+                frame = null!;
+                return false;
+            }
+
             // Snapshot slot refs under _slotsGate (brief — keeps AddSlot/RemoveSlot from contending
             // with the whole composite), then acquire each slot's held frame outside it. AddRange from
             // an ICollection copies without per-element/enumerator alloc once the scratch is warm.
@@ -217,18 +222,21 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        Slot[] toClose;
-        lock (_slotsGate)
+        lock (_readGate)
         {
-            toClose = _slots.ToArray();
-            _slots.Clear();
+            if (_disposed) return;
+            _disposed = true;
+            Slot[] toClose;
+            lock (_slotsGate)
+            {
+                toClose = _slots.ToArray();
+                _slots.Clear();
+            }
+            foreach (var s in toClose)
+                s.Close();
+            if (_disposeCompositorOnDispose)
+                _compositor.Dispose();
         }
-        foreach (var s in toClose)
-            s.Close();
-        if (_disposeCompositorOnDispose)
-            _compositor.Dispose();
     }
 
     private static TimeSpan DerivePeriod(Rational frameRate)

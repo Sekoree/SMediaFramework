@@ -101,11 +101,22 @@ public sealed class Soundboard : IDisposable
 
         if (!entry.Player.TryFire(_router, entry.OutputId, out var voice, out var sourceId, entry.Map, entry.Gain, options)
             || voice is null)
+        {
+            lock (_gate)
+                ObjectDisposedException.ThrowIf(_disposed, this);
             return null;
+        }
 
         var handle = new CueVoice(cueId, voice, _router, sourceId, entry.OutputId);
         lock (_gate)
+        {
+            if (_disposed)
+            {
+                entry.Player.AbortVoice(voice);
+                throw new ObjectDisposedException(nameof(Soundboard));
+            }
             _live.Add(handle);
+        }
         return handle;
     }
 

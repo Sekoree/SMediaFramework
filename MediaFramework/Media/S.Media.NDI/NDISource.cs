@@ -651,8 +651,20 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
         try { _cts.Cancel(); } catch { /* best effort */ }
         try { CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2)); } catch { /* best effort */ }
-        try { _ingestClock?.NotifyCaptureStopped(); } catch { /* best effort */ }
-        try { _cts.Dispose(); } catch { /* best effort */ }
+        var captureStopped = !_captureThread.IsAlive;
+        if (captureStopped)
+        {
+            try { _ingestClock?.NotifyCaptureStopped(); } catch { /* best effort */ }
+        }
+        if (captureStopped)
+        {
+            try { _cts.Dispose(); } catch { /* best effort */ }
+        }
+        else
+        {
+            _faultEx ??= new TimeoutException("NDISource capture thread did not exit during Dispose; native receiver/runtime were intentionally leaked.");
+            Trace.LogError(_faultEx, "NDISource.Dispose: capture thread still alive after join cap; leaking native receiver/runtime and CTS to avoid use-after-dispose.");
+        }
 
         while (_videoQueue.TryDequeue(out var f))
             f.Dispose();
@@ -660,8 +672,11 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         lock (_videoWaitGate)
             Monitor.PulseAll(_videoWaitGate);
 
-        try { _receiver.Dispose(); } catch { /* best effort */ }
-        try { _runtime.Dispose(); } catch { /* best effort */ }
+        if (captureStopped)
+        {
+            try { _receiver.Dispose(); } catch { /* best effort */ }
+            try { _runtime.Dispose(); } catch { /* best effort */ }
+        }
     }
 
     private static readonly AudioFormat StandbyAudioFormat = new(48_000, 2);

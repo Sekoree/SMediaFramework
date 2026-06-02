@@ -426,6 +426,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             return;
         }
 
+        frame.ValidateCpuGeometry();
         BeginUnpackSession();
         try { _uploadFromFrame(frame); }
         finally { EndUnpackSession(); }

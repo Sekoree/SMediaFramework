@@ -20,6 +20,26 @@ public sealed class VideoRouterConcurrencyTests
     private static readonly VideoFormat Nv12 = new(W, H, PixelFormat.Nv12, new Rational(60, 1));
 
     [Fact]
+    public void MultiOutput_BranchSubmitThrows_DisposesEveryFanoutFrame()
+    {
+        using var router = new VideoRouter(null);
+        var primary = new CountingOutput(PixelFormat.Nv12);
+        var branch = new ThrowingOutput(PixelFormat.Nv12);
+        var primId = router.AddOutput(primary, "primary", synchronous: true);
+        var branchId = router.AddOutput(branch, "branch", synchronous: true);
+        var input = router.AddInput(primId, "in");
+        Assert.True(router.TryAddRoute(input.Id, branchId, out _));
+        input.Output.Configure(Nv12);
+
+        var released = 0;
+        Assert.Throws<InvalidOperationException>(() =>
+            input.Output.Submit(MakeNv12Frame(new CountingRelease(() => Interlocked.Increment(ref released)))));
+
+        Assert.Equal(1, primary.SubmitCount);
+        Assert.Equal(1, Volatile.Read(ref released));
+    }
+
+    [Fact]
     public void MultiOutput_BranchConverter_ConcurrentSubmitAndRouteToggle_NeverConvertsAfterDispose()
     {
         var savedFactory = MediaFrameworkPlugins.VideoCpuFrameConverterFactory;
@@ -82,6 +102,52 @@ public sealed class VideoRouterConcurrencyTests
             // The property under test: a converter must never be used while/after it is disposed.
             Assert.Equal(0, tracker.ConvertAfterDispose);
             Assert.Equal(0, tracker.DisposeDuringConvert);
+        }
+        finally
+        {
+            MediaFrameworkPlugins.VideoCpuFrameConverterFactory = savedFactory;
+            MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = savedProbe;
+        }
+    }
+
+    [Fact]
+    public void MultiOutput_PerRouterConverterOptions_DoNotMutateProcessWidePlugins()
+    {
+        var savedFactory = MediaFrameworkPlugins.VideoCpuFrameConverterFactory;
+        var savedProbe = MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe;
+        try
+        {
+            MediaFrameworkPlugins.VideoCpuFrameConverterFactory = null;
+            MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = (_, _, _, _) => false;
+
+            var scopedTracker = new LifetimeTracker();
+            using var scopedRouter = new VideoRouter(null, new VideoRouterOptions(
+                VideoCpuFrameConverterFactory: () => new InstrumentedConverter(scopedTracker),
+                VideoCpuFrameCanConvertProbe: (_, _, _, _) => true));
+            var scopedPrimary = new CountingOutput(PixelFormat.Nv12);
+            var scopedBranch = new CountingOutput(PixelFormat.Bgra32);
+            var scopedPrimaryId = scopedRouter.AddOutput(scopedPrimary, "primary", synchronous: true);
+            var scopedBranchId = scopedRouter.AddOutput(scopedBranch, "branch", synchronous: true);
+            var scopedInput = scopedRouter.AddInput(scopedPrimaryId, "in");
+            Assert.True(scopedRouter.TryAddRoute(scopedInput.Id, scopedBranchId, out _));
+            scopedInput.Output.Configure(Nv12);
+
+            scopedInput.Output.Submit(MakeNv12Frame());
+
+            Assert.Equal(1, scopedPrimary.SubmitCount);
+            Assert.Equal(1, scopedBranch.SubmitCount);
+            Assert.Equal(1, scopedTracker.TotalConverts);
+            Assert.Equal(PixelFormat.Bgra32, scopedBranch.LastFormat);
+
+            using var fallbackRouter = new VideoRouter(null);
+            var fallbackPrimary = new CountingOutput(PixelFormat.Nv12);
+            var fallbackBranch = new CountingOutput(PixelFormat.Bgra32);
+            var fallbackPrimaryId = fallbackRouter.AddOutput(fallbackPrimary, "primary", synchronous: true);
+            var fallbackBranchId = fallbackRouter.AddOutput(fallbackBranch, "branch", synchronous: true);
+            var fallbackInput = fallbackRouter.AddInput(fallbackPrimaryId, "in");
+            Assert.True(fallbackRouter.TryAddRoute(fallbackInput.Id, fallbackBranchId, out _));
+
+            Assert.Throws<InvalidOperationException>(() => fallbackInput.Output.Configure(Nv12));
         }
         finally
         {
@@ -235,5 +301,13 @@ public sealed class VideoRouterConcurrencyTests
             Interlocked.Increment(ref _submits);
             frame.Dispose(); // output takes ownership
         }
+    }
+
+    private sealed class ThrowingOutput(PixelFormat accepted) : IVideoOutput
+    {
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = new[] { accepted };
+        public VideoFormat Format { get; private set; }
+        public void Configure(VideoFormat format) => Format = format;
+        public void Submit(VideoFrame frame) => throw new InvalidOperationException("branch boom");
     }
 }

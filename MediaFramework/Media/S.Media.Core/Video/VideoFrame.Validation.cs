@@ -2,6 +2,40 @@ namespace S.Media.Core.Video;
 
 public sealed partial class VideoFrame
 {
+    /// <summary>
+    /// Validates that this CPU-backed frame has the planes, strides, and byte lengths required by
+    /// its <see cref="Format"/>. Call at native/encoder/GPU-upload boundaries before indexing planes.
+    /// </summary>
+    public void ValidateCpuGeometry()
+    {
+        if (_hardwareBacking is not null)
+            throw new NotSupportedException("Hardware-backed frames do not expose validated CPU plane geometry.");
+
+        Format.Validate(nameof(Format));
+        var requiredPlanes = PixelFormatInfo.PlaneCount(Format.PixelFormat);
+        if (_planes.Length < requiredPlanes)
+            throw new InvalidOperationException(
+                $"frame has {_planes.Length} plane(s), but {Format.PixelFormat} requires {requiredPlanes}.");
+        if (_strides.Length < requiredPlanes)
+            throw new InvalidOperationException(
+                $"frame has {_strides.Length} stride(s), but {Format.PixelFormat} requires {requiredPlanes}.");
+
+        for (var i = 0; i < requiredPlanes; i++)
+        {
+            var rowBytes = PixelFormatInfo.PlaneByteWidth(Format.PixelFormat, Format.Width, i);
+            var rows = PixelFormatInfo.PlaneHeight(Format.PixelFormat, Format.Height, i);
+            var stride = _strides[i];
+            if (stride < rowBytes)
+                throw new InvalidOperationException(
+                    $"frame stride[{i}] {stride} is shorter than required row bytes {rowBytes} for {Format.PixelFormat}.");
+
+            var requiredLength = rows <= 0 ? 0 : checked(((rows - 1) * stride) + rowBytes);
+            if (_planes[i].Length < requiredLength)
+                throw new InvalidOperationException(
+                    $"frame plane[{i}] length {_planes[i].Length} is shorter than required {requiredLength} bytes for {Format.PixelFormat}.");
+        }
+    }
+
     private static void ValidateHardwareBacking(
         VideoFrameHardwareBacking? backing,
         VideoFormat format,

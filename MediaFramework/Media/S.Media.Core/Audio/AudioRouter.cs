@@ -105,6 +105,7 @@ public sealed partial class AudioRouter : IDisposable
     private CancellationTokenSource? _cts;
     private bool _isRunning;
     private bool _disposed;
+    private volatile bool _runThreadStuck;
     private volatile Exception? _fault;
     private long _chunksProduced;
     /// <summary>Router-thread-only scratch: source ids already read this chunk (a source feeding many
@@ -894,6 +895,10 @@ public sealed partial class AudioRouter : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_runThreadStuck)
+                throw new InvalidOperationException(
+                    "AudioRouter cannot restart: a previous run loop thread is still alive after stop cancellation/timeout. Dispose this router and create a new one.",
+                    _fault);
             if (_isRunning)
             {
                 Trace.LogTrace("Start: already running (outputCount={OutputCount} sourceCount={SourceCount})",
@@ -1029,8 +1034,31 @@ public sealed partial class AudioRouter : IDisposable
                 sinksForFlush = CollectOutputs(_state.Outputs);
         }
         toDispose?.Cancel();
-        CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(2), cancellationToken);
-        toDispose?.Dispose();
+        var joinCancelled = false;
+        try
+        {
+            CooperativePlaybackJoin.JoinThread(toJoin, TimeSpan.FromSeconds(2), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            joinCancelled = true;
+            if (toJoin is { IsAlive: true })
+                MarkRunThreadStuck(new OperationCanceledException(
+                    "AudioRouter stop was cancelled before the run loop thread exited; the router is now non-restartable.",
+                    cancellationToken));
+            throw;
+        }
+        finally
+        {
+            if (toJoin is not { IsAlive: true })
+                toDispose?.Dispose();
+            else
+                MediaDiagnostics.LogWarning("AudioRouter.StopInternal: run loop still alive after join; leaking CancellationTokenSource to avoid use-after-dispose.");
+        }
+
+        if (toJoin is { IsAlive: true } && !joinCancelled)
+            MarkRunThreadStuck(new TimeoutException(
+                "AudioRouter run loop thread did not exit within the join cap; the router is now non-restartable."));
 
         foreach (var p in activePumps)
         {
@@ -1155,6 +1183,17 @@ public sealed partial class AudioRouter : IDisposable
     {
         try { Faulted?.Invoke(this, new AudioRouterFaultedEventArgs(ex)); }
         catch (Exception hex) { MediaDiagnostics.LogError(hex, "AudioRouter.Faulted handler threw"); }
+    }
+
+    private void MarkRunThreadStuck(Exception ex)
+    {
+        _runThreadStuck = true;
+        _fault = ex;
+        if (_log is { } l)
+            l.LogError(ex, "AudioRouter run loop did not stop cleanly; router is now non-restartable");
+        else
+            MediaDiagnostics.LogError(ex, "AudioRouter run loop did not stop cleanly; router is now non-restartable");
+        RaiseFaulted(ex);
     }
 
     private void RaiseOutputErrored(string outputId, Exception ex)
@@ -1746,6 +1785,14 @@ public sealed partial class AudioRouter : IDisposable
                 }
 
                 CooperativePlaybackJoin.JoinThread(_thread, TimeSpan.FromSeconds(1));
+            }
+
+            if (_thread.IsAlive)
+            {
+                Trace.LogError(
+                    "AudioRouter.OutputPump '{OutputId}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.",
+                    _sinkId);
+                return;
             }
 
             _ready.Dispose();

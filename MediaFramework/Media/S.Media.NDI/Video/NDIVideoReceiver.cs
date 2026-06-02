@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
@@ -14,6 +15,8 @@ namespace S.Media.NDI.Video;
 /// </summary>
 internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Video.NDIVideoReceiver");
+
     private const int DefaultQueueDepth = 4;
 
     private readonly NDIRuntime _runtime;
@@ -309,8 +312,20 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
         try { _cts.Cancel(); } catch { /* best effort */ }
         try { CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2)); } catch { /* best effort */ }
-        try { _ingestClock?.NotifyCaptureStopped(); } catch { /* best effort */ }
-        try { _cts.Dispose(); } catch { /* best effort */ }
+        var captureStopped = !_captureThread.IsAlive;
+        if (captureStopped)
+        {
+            try { _ingestClock?.NotifyCaptureStopped(); } catch { /* best effort */ }
+        }
+        if (captureStopped)
+        {
+            try { _cts.Dispose(); } catch { /* best effort */ }
+        }
+        else
+        {
+            _faultEx ??= new TimeoutException("NDIVideoReceiver capture thread did not exit during Dispose; native receiver/runtime were intentionally leaked.");
+            Trace.LogError(_faultEx, "NDIVideoReceiver.Dispose: capture thread still alive after join cap; leaking native receiver/runtime and CTS to avoid use-after-dispose.");
+        }
 
         while (_queue.TryDequeue(out var f))
             f.Dispose();
@@ -318,7 +333,10 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         lock (_waitGate)
             Monitor.PulseAll(_waitGate);
 
-        try { _receiver.Dispose(); } catch { /* best effort */ }
-        try { _runtime.Dispose(); } catch { /* best effort */ }
+        if (captureStopped)
+        {
+            try { _receiver.Dispose(); } catch { /* best effort */ }
+            try { _runtime.Dispose(); } catch { /* best effort */ }
+        }
     }
 }

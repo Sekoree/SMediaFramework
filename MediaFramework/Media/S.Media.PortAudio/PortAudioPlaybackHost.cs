@@ -55,15 +55,19 @@ public sealed class PortAudioPlaybackHost : IDisposable
         PortAudioPlaybackHostPlayerOwnership playerOwnership = PortAudioPlaybackHostPlayerOwnership.HostDisposesPlayer)
     {
         ArgumentNullException.ThrowIfNull(container);
+        AudioRouter? router = null;
+        PortAudioOutput? output = null;
+        string? sourceId = null;
+        string? sinkMain = null;
         try
         {
             var audioSource = container.Audio;
             var clock = new MediaClock();
-            var router = new AudioRouter(audioSource.Format.SampleRate, chunkSamples);
+            router = new AudioRouter(audioSource.Format.SampleRate, chunkSamples);
             router.AttachMasterClock(clock);
 
             double? latencySec = deviceLatencyMs is > 0 ? deviceLatencyMs.Value / 1000.0 : null;
-            var output = new PortAudioOutput(
+            output = new PortAudioOutput(
                 audioSource.Format,
                 deviceIndex: null,
                 suggestedLatency: latencySec,
@@ -81,14 +85,24 @@ public sealed class PortAudioPlaybackHost : IDisposable
 
             output.TargetQueueSamples = target;
 
-            string sourceId = router.AddSource(audioSource);
-            string sinkMain = router.AddOutput(output);
+            sourceId = router.AddSource(audioSource);
+            sinkMain = router.AddOutput(output);
             router.Connect(sourceId, sinkMain);
 
             return new PortAudioPlaybackHost(container, router, clock, sourceId, output, sinkMain, playerOwnership);
         }
         catch (Exception ex)
         {
+            if (router is not null)
+            {
+                if (sinkMain is not null)
+                    MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveOutput(sinkMain), "TryCreatePortAudioMain: rollback RemoveOutput");
+                if (sourceId is not null)
+                    MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveSource(sourceId), "TryCreatePortAudioMain: rollback RemoveSource");
+                MediaDiagnostics.SwallowDisposeErrors(router.Dispose, "TryCreatePortAudioMain: rollback router dispose");
+            }
+            if (output is not null)
+                MediaDiagnostics.SwallowDisposeErrors(output.Dispose, "TryCreatePortAudioMain: rollback output dispose");
             onWireFailedMessage?.Invoke(ex.Message);
             return null;
         }

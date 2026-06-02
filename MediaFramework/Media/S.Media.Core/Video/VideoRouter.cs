@@ -26,8 +26,9 @@ public readonly record struct VideoRouterFanOutPixelFormat(string OutputId, Pixe
 /// Pixel negotiation uses the <strong>primary</strong> output registered with
 /// <see cref="AddInput"/> — its <see cref="IVideoOutput.AcceptedPixelFormats"/> are re-exposed
 /// on the returned <see cref="IVideoOutput"/>. Branch outputs receive
-/// <see cref="IVideoCpuFrameConverter"/> conversion (via <see cref="VideoCpuFrameConverterRegistry"/>)
-/// when needed; the shipping converter is FFmpeg's swscale-backed implementation.
+/// <see cref="IVideoCpuFrameConverter"/> conversion when needed. Per-router
+/// <see cref="VideoRouterOptions"/> take precedence over process-wide
+/// <see cref="MediaFrameworkPlugins"/> converter defaults.
 /// </para>
 /// <para>
 /// <strong>DRM dma-buf NV12</strong> can fan out to multiple outputs when every
@@ -58,6 +59,7 @@ public sealed class VideoRouter : IDisposable
 {
     private readonly Lock _gate = new();
     private readonly ILogger? _log;
+    private readonly VideoRouterOptions _options;
     private readonly Dictionary<string, OutputRegistration> _outputs = new(StringComparer.Ordinal);
     private readonly Dictionary<string, InputRegistration> _inputs = new(StringComparer.Ordinal);
     /// <summary>Each output id → owning input id (exclusive).</summary>
@@ -68,7 +70,11 @@ public sealed class VideoRouter : IDisposable
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoRouter");
 
-    public VideoRouter(ILogger? logger = null) => _log = logger;
+    public VideoRouter(ILogger? logger = null, VideoRouterOptions? options = null)
+    {
+        _log = logger;
+        _options = options ?? VideoRouterOptions.Default;
+    }
 
     /// <summary>Optional: raised when an async <see cref="VideoOutputPump"/> on an output drops an oldest frame; arguments include <see cref="VideoRouterPumpPressureEventArgs.OutputId"/> and cumulative drops. Handler runs on the pump's <see cref="IVideoOutput.Submit"/> caller thread (typically the router input path).</summary>
     public event EventHandler<VideoRouterPumpPressureEventArgs>? PumpPressure
@@ -434,6 +440,14 @@ public sealed class VideoRouter : IDisposable
     private void RaisePumpPressure(string outputId, long droppedFramesTotal) =>
         _pumpPressure?.Invoke(this, new VideoRouterPumpPressureEventArgs(outputId, droppedFramesTotal));
 
+    private IVideoCpuFrameConverter CreateCpuFrameConverter() =>
+        _options.VideoCpuFrameConverterFactory?.Invoke()
+        ?? VideoCpuFrameConverterRegistry.Create();
+
+    private bool CanConvertCpuFrame(PixelFormat src, PixelFormat dst, int width, int height) =>
+        _options.VideoCpuFrameCanConvertProbe?.Invoke(src, dst, width, height)
+        ?? VideoCpuFrameConverterRegistry.CanConvert(src, dst, width, height);
+
     private static void ApplyD3D11GlBorrowVideoSourceToOutput(IVideoOutput output, IVideoSource? videoSource)
     {
         if (output is not IVideoOutputD3D11GlBorrowSetup borrowSetup)
@@ -519,7 +533,10 @@ public sealed class VideoRouter : IDisposable
             {
                 var oid = RoutedOutputIds[i];
                 var branchOutput = _owner._outputs[oid].Output;
-                var branchFmt = VideoOutputFanoutFormats.PickBranchPixelFormat(negotiated, branchOutput.AcceptedPixelFormats);
+                var branchFmt = VideoOutputFanoutFormats.PickBranchPixelFormat(
+                    negotiated,
+                    branchOutput.AcceptedPixelFormats,
+                    _owner.CanConvertCpuFrame);
                 var needsConversion = branchFmt != negotiated.PixelFormat;
                 var branchVideoFormat = new VideoFormat(negotiated.Width, negotiated.Height, branchFmt, negotiated.FrameRate);
 
@@ -534,7 +551,7 @@ public sealed class VideoRouter : IDisposable
                     IVideoCpuFrameConverter? pumpConv = null;
                     if (needsConversion)
                     {
-                        pumpConv = VideoCpuFrameConverterRegistry.Create();
+                        pumpConv = _owner.CreateCpuFrameConverter();
                         pumpConv.Configure(negotiated.PixelFormat, branchFmt, negotiated.Width, negotiated.Height);
                     }
                     branchOutput.Configure(branchVideoFormat);
@@ -546,7 +563,7 @@ public sealed class VideoRouter : IDisposable
                 IVideoCpuFrameConverter? conv = null;
                 if (needsConversion)
                 {
-                    conv = VideoCpuFrameConverterRegistry.Create();
+                    conv = _owner.CreateCpuFrameConverter();
                     conv.Configure(negotiated.PixelFormat, branchFmt, negotiated.Width, negotiated.Height);
                 }
                 branchOutput.Configure(branchVideoFormat);
@@ -743,12 +760,17 @@ public sealed class VideoRouter : IDisposable
                         for (var i = 0; i < branchFrames.Length; i++)
                         {
                             var f = branchFrames[i];
-                            branchFrames[i] = null;
                             if (f is null) continue;
                             if (_owner._outputs.TryGetValue(plan.OutputIds[i + 1], out var be))
+                            {
                                 be.Output.Submit(f);
+                                branchFrames[i] = null;
+                            }
                             else
+                            {
                                 f.Dispose();
+                                branchFrames[i] = null;
+                            }
                         }
                     }
                 }

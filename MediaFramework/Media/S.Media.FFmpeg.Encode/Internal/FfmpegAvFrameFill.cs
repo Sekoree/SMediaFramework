@@ -27,6 +27,7 @@ internal static unsafe class FfmpegAvFrameFill
             throw new InvalidOperationException(
                 $"encoder frame size {frame.Format.Width}x{frame.Format.Height} does not match configured {dst->width}x{dst->height}.");
 
+        frame.ValidateCpuGeometry();
         CopyMatchingLayout(frame, dst, dstPixel, frame.Format.Width, frame.Format.Height);
     }
 
@@ -52,7 +53,7 @@ internal static unsafe class FfmpegAvFrameFill
     {
         for (var y = 0; y < height; y++)
         {
-            var row = src.Slice(y * srcStride, Math.Min(widthBytes, srcStride));
+            var row = src.Slice(y * srcStride, widthBytes);
             row.CopyTo(new Span<byte>(dst + y * dstStride, widthBytes));
         }
     }

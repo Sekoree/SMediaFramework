@@ -402,6 +402,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
 
     private void PresentFrame(VideoFrame frame)
     {
+        frame.ValidateCpuGeometry();
         switch (_format.PixelFormat)
         {
             case PixelFormat.Bgra32:

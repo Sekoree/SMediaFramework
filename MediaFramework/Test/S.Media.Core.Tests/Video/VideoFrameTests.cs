@@ -96,6 +96,42 @@ public class VideoFrameTests
     }
 
     [Fact]
+    public void ValidateCpuGeometry_RejectsShortPackedPlane()
+    {
+        using var frame = new VideoFrame(
+            TimeSpan.Zero,
+            new VideoFormat(4, 4, PixelFormat.Bgra32, new Rational(30, 1)),
+            new byte[4 * 4 * 4 - 1],
+            stride: 4 * 4);
+
+        Assert.Throws<InvalidOperationException>(() => frame.ValidateCpuGeometry());
+    }
+
+    [Fact]
+    public void ValidateCpuGeometry_RejectsMissingNv12Plane()
+    {
+        using var frame = new VideoFrame(
+            TimeSpan.Zero,
+            new VideoFormat(4, 4, PixelFormat.Nv12, new Rational(30, 1)),
+            planes: [new byte[4 * 4]],
+            strides: [4]);
+
+        Assert.Throws<InvalidOperationException>(() => frame.ValidateCpuGeometry());
+    }
+
+    [Fact]
+    public void ValidateCpuGeometry_AcceptsValidI420()
+    {
+        using var frame = new VideoFrame(
+            TimeSpan.Zero,
+            new VideoFormat(4, 4, PixelFormat.I420, new Rational(30, 1)),
+            planes: [new byte[16], new byte[4], new byte[4]],
+            strides: [4, 2, 2]);
+
+        frame.ValidateCpuGeometry();
+    }
+
+    [Fact]
     public void Dispose_InvokesReleaseExactlyOnce()
     {
         var calls = 0;

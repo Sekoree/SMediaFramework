@@ -22,9 +22,17 @@ public static class VideoOutputFanoutFormats
     ];
 
     /// <summary>Picks the best destination pixel format for <paramref name="branchAccepted"/>.</summary>
-    public static PixelFormat PickBranchPixelFormat(VideoFormat negotiated, IReadOnlyList<PixelFormat> branchAccepted)
+    public static PixelFormat PickBranchPixelFormat(VideoFormat negotiated, IReadOnlyList<PixelFormat> branchAccepted) =>
+        PickBranchPixelFormat(negotiated, branchAccepted, VideoCpuFrameConverterRegistry.CanConvert);
+
+    /// <summary>Picks the best destination pixel format using a caller-scoped converter probe.</summary>
+    public static PixelFormat PickBranchPixelFormat(
+        VideoFormat negotiated,
+        IReadOnlyList<PixelFormat> branchAccepted,
+        Func<PixelFormat, PixelFormat, int, int, bool> canConvert)
     {
         ArgumentNullException.ThrowIfNull(branchAccepted);
+        ArgumentNullException.ThrowIfNull(canConvert);
         var w = negotiated.Width;
         var h = negotiated.Height;
         var src = negotiated.PixelFormat;
@@ -46,14 +54,14 @@ public static class VideoOutputFanoutFormats
         foreach (var pref in BranchFormatPreference)
         {
             if (!OutputHas(branchAccepted, pref)) continue;
-            if (VideoCpuFrameConverterRegistry.CanConvert(src, pref, w, h))
+            if (canConvert(src, pref, w, h))
                 return pref;
         }
 
         for (var i = 0; i < branchAccepted.Count; i++)
         {
             var p = branchAccepted[i];
-            if (p == src || VideoCpuFrameConverterRegistry.CanConvert(src, p, w, h))
+            if (p == src || canConvert(src, p, w, h))
                 return p;
         }
 

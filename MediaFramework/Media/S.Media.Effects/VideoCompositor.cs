@@ -13,6 +13,7 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
     private static readonly List<VideoCompositorBackendFactory> AutoBackendFactories = [];
 
     private readonly VideoCompositorSource _source;
+    private readonly object _layersGate = new();
     private readonly List<LayerHandle> _layers = [];
     private readonly VideoFormat _output;
     private readonly long _framePeriodTicks;
@@ -34,7 +35,7 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
 
     public IPlaybackClock? Clock { get; set; }
 
-    public IReadOnlyList<LayerHandle> Layers => _layers;
+    public IReadOnlyList<LayerHandle> Layers { get { lock (_layersGate) return _layers.ToArray(); } }
 
     /// <summary>
     /// Registers an optional process-wide compositor backend used by <see cref="VideoCompositorBackend.Auto"/>.
@@ -80,18 +81,28 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
     {
         ArgumentNullException.ThrowIfNull(source);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var slot = _source.AddSlot();
-        var handle = new LayerHandle(this, source, slot, config);
-        _layers.Add(handle);
-        return handle;
+        lock (_layersGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var slot = _source.AddSlot();
+            var handle = new LayerHandle(this, source, slot, config);
+            _layers.Add(handle);
+            return handle;
+        }
     }
 
     public bool RemoveLayer(LayerHandle handle)
     {
         ArgumentNullException.ThrowIfNull(handle);
-        if (!_layers.Remove(handle))
-            return false;
-        var removed = _source.RemoveSlot(handle.Slot.Id);
+        bool removed;
+        lock (_layersGate)
+        {
+            if (_disposed)
+                return false;
+            if (!_layers.Remove(handle))
+                return false;
+            removed = _source.RemoveSlot(handle.Slot.Id);
+        }
         handle.Close(); // dispose the layer's look-ahead buffer + converter
         return removed;
     }
@@ -101,6 +112,9 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
     public bool TryReadNextFrame(out VideoFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        LayerHandle[] layers;
+        lock (_layersGate)
+            layers = _layers.ToArray();
         if (Clock is { } clock)
         {
             // Timeline mode: every layer advances to the master clock rather than by one frame per
@@ -108,7 +122,7 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
             // layer forward at decode speed, and each layer shows the frame whose interval contains the
             // clock position (frame-accurate). The composite is stamped with the master time.
             var masterTime = clock.ElapsedSinceStart;
-            foreach (var layer in _layers)
+            foreach (var layer in layers)
                 layer.AdvanceTo(masterTime, _output);
             return _source.TryReadNextFrame(masterTime, out frame);
         }
@@ -118,18 +132,23 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
         // drift. Transitions resolve against a synthetic read-index timeline; output PTS stays synthetic.
         var readTime = TimeSpan.FromTicks(_framePeriodTicks * _compositeReads);
         _compositeReads++;
-        foreach (var layer in _layers)
+        foreach (var layer in layers)
             layer.PullOneAndSubmit(readTime, _output);
         return _source.TryReadNextFrame(out frame);
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        foreach (var layer in _layers)
+        LayerHandle[] layers;
+        lock (_layersGate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            layers = _layers.ToArray();
+            _layers.Clear();
+        }
+        foreach (var layer in layers)
             layer.Close();
-        _layers.Clear();
         _source.Dispose();
     }
 

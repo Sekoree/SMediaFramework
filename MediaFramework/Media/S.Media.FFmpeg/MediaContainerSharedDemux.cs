@@ -40,6 +40,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private readonly object _lifecycleLock = new();
     private readonly Lock _audioDecodeLock = new();
     private readonly Lock _videoDecodeLock = new();
+    private readonly ReaderWriterLockSlim _readSeekGate = new(LockRecursionPolicy.NoRecursion);
     private readonly object _queueGate = new();
 
     private volatile bool _disposed;
@@ -48,6 +49,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private volatile bool _fileReadCompleted;
     private volatile Exception? _demuxFault;
     private volatile bool _demuxerThreadStuck;
+    private int _readYieldRequested;
     private Thread? _demuxerThread;
     private GCHandle _interruptHandle;
     private AVFormatContext* _fmt;
@@ -698,85 +700,94 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         if (!_inputSeekable)
             throw new NotSupportedException("cannot seek a non-seekable stream-backed container");
 
-        lock (_lifecycleLock)
+        RequestReadYield();
+        _readSeekGate.EnterWriteLock();
+        try
         {
-            ThrowIfDisposedUnsafe();
-            ClearVideoDecodeYield();
-            if (!StopDemuxerAndDrainQueues())
-                throw new InvalidOperationException(
-                    "Cannot seek: the demux thread did not stop, so the shared FFmpeg demux state cannot be safely reused.");
-
-            var timestampUs = (long)(position.TotalSeconds * AvTimeBase);
-            var ret = avformat_seek_file(_fmt, -1, long.MinValue, timestampUs, long.MaxValue, AVSEEK_FLAG_BACKWARD);
-            if (ret < 0)
+            ClearReadYield();
+            lock (_lifecycleLock)
             {
-                if (_hasVideo)
-                {
-                    var vTs = (long)(position.TotalSeconds * _vTb.den / _vTb.num);
-                    ret = av_seek_frame(_fmt, _vStream, vTs, AVSEEK_FLAG_BACKWARD);
-                    FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
-                }
-                else if (_hasAudio)
-                {
-                    var aTs = (long)(position.TotalSeconds * _aTb.den / _aTb.num);
-                    ret = av_seek_frame(_fmt, _aStream, aTs, AVSEEK_FLAG_BACKWARD);
-                    FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
-                }
-                else
-                {
-                    FFmpegException.ThrowIfError(ret, nameof(avformat_seek_file));
-                }
-            }
+                ThrowIfDisposedUnsafe();
+                if (!StopDemuxerAndDrainQueues())
+                    throw new InvalidOperationException(
+                        "Cannot seek: the demux thread did not stop, so the shared FFmpeg demux state cannot be safely reused.");
 
-            // Hold _audioDecodeLock while flushing/resetting audio decode state (_aCtx, _swr, counters):
-            // AudioTrack.ReadInto runs on the router thread and takes the same lock, so without this a
-            // concurrent read could decode against a half-flushed codec/resampler. (The demux thread was
-            // already stopped above; this guards the consumer side.) The video consume below takes
-            // _videoDecodeLock sequentially, so there is no nested lock-ordering hazard.
-            lock (_audioDecodeLock)
-            {
-                if (_hasAudio)
-                    avcodec_flush_buffers(_aCtx);
-                if (_hasVideo)
-                    avcodec_flush_buffers(_vCtx);
+                var timestampUs = (long)(position.TotalSeconds * AvTimeBase);
+                var ret = avformat_seek_file(_fmt, -1, long.MinValue, timestampUs, long.MaxValue, AVSEEK_FLAG_BACKWARD);
+                if (ret < 0)
+                {
+                    if (_hasVideo)
+                    {
+                        var vTs = (long)(position.TotalSeconds * _vTb.den / _vTb.num);
+                        ret = av_seek_frame(_fmt, _vStream, vTs, AVSEEK_FLAG_BACKWARD);
+                        FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
+                    }
+                    else if (_hasAudio)
+                    {
+                        var aTs = (long)(position.TotalSeconds * _aTb.den / _aTb.num);
+                        ret = av_seek_frame(_fmt, _aStream, aTs, AVSEEK_FLAG_BACKWARD);
+                        FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
+                    }
+                    else
+                    {
+                        FFmpegException.ThrowIfError(ret, nameof(avformat_seek_file));
+                    }
+                }
 
                 av_packet_unref(_demuxPkt);
-                if (_hasAudio)
+
+                lock (_audioDecodeLock)
                 {
-                    av_frame_unref(_aFrame);
-                    swr_close(_swr);
-                    ret = swr_init(_swr);
-                    FFmpegException.ThrowIfError(ret, nameof(swr_init));
+                    if (_hasAudio)
+                    {
+                        avcodec_flush_buffers(_aCtx);
+                        av_frame_unref(_aFrame);
+                        swr_close(_swr);
+                        ret = swr_init(_swr);
+                        FFmpegException.ThrowIfError(ret, nameof(swr_init));
+                    }
+
+                    _aEof = false;
+                    _aDrainSent = false;
+                    _aDrainedTail = false;
+                    _aSamplesEmitted = _hasAudio ? (long)(position.TotalSeconds * Audio.Format.SampleRate) : 0;
+                    Audio.Position = position;
                 }
-                if (_hasVideo)
-                    av_frame_unref(_vFrame);
 
-                _aEof = false;
-                _aDrainSent = false;
-                _aDrainedTail = false;
-                _aSamplesEmitted = _hasAudio ? (long)(position.TotalSeconds * Audio.Format.SampleRate) : 0;
-                Audio.Position = position;
-
-                _vEof = false;
-                _vDrainSent = false;
-                _vPrimedAfterSeek?.Dispose();
-                _vPrimedAfterSeek = null;
-                // Re-anchor the no-PTS fallback video counter to the seek target so streams
-                // without container timestamps resume at ~position (matches ResolveVideoPts)
-                // instead of continuing from a stale pre-seek frame index.
-                var vFallbackFps = Video.Format.FrameRate.ToDouble();
-                _vFramesEmitted = vFallbackFps > 0 ? (long)Math.Round(position.TotalSeconds * vFallbackFps) : 0;
-                Video.Position = position;
-            }
-
-            _fileReadCompleted = false;
-            StartDemuxerThread();
-
-            if (_hasVideo)
-            {
                 lock (_videoDecodeLock)
-                    ConsumeDecoderUntilPts(position);
+                {
+                    if (_hasVideo)
+                    {
+                        avcodec_flush_buffers(_vCtx);
+                        av_frame_unref(_vFrame);
+                    }
+
+                    _vEof = false;
+                    _vDrainSent = false;
+                    _vPrimedAfterSeek?.Dispose();
+                    _vPrimedAfterSeek = null;
+                    // Re-anchor the no-PTS fallback video counter to the seek target so streams
+                    // without container timestamps resume at ~position (matches ResolveVideoPts)
+                    // instead of continuing from a stale pre-seek frame index.
+                    var vFallbackFps = Video.Format.FrameRate.ToDouble();
+                    _vFramesEmitted = vFallbackFps > 0 ? (long)Math.Round(position.TotalSeconds * vFallbackFps) : 0;
+                    Video.Position = position;
+                }
+
+                _fileReadCompleted = false;
+                StartDemuxerThread();
+
+                if (_hasVideo)
+                {
+                    lock (_videoDecodeLock)
+                        ConsumeDecoderUntilPts(position);
+                }
             }
+        }
+        finally
+        {
+            ClearReadYield();
+            _readSeekGate.ExitWriteLock();
         }
     }
 
@@ -784,50 +795,61 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         if (_disposed) return;
 
-        lock (_lifecycleLock)
+        RequestReadYield();
+        _readSeekGate.EnterWriteLock();
+        try
         {
-            if (_disposed) return;
-            _disposed = true;
-
-            var canFreeNativeState = StopDemuxerAndDrainQueues();
-            if (!canFreeNativeState)
-                return;
-
-            MediaDiagnostics.SwallowDisposeErrors(() => _vPrimedAfterSeek?.Dispose(), "MediaContainerSharedDemux.Dispose: _vPrimedAfterSeek");
-            _vPrimedAfterSeek = null;
-
-            if (_demuxPkt != null) { var p = _demuxPkt; av_packet_free(&p); _demuxPkt = null; }
-            if (_aFrame != null) { var f = _aFrame; av_frame_free(&f); _aFrame = null; }
-            if (_vFrame != null) { var f = _vFrame; av_frame_free(&f); _vFrame = null; }
-
-            if (_swr != null) { var s = _swr; swr_free(&s); _swr = null; }
-            ReleaseSws();
-
-            if (_aCtx != null) { var c = _aCtx; avcodec_free_context(&c); _aCtx = null; }
-            if (_vCtx != null)
+            ClearReadYield();
+            lock (_lifecycleLock)
             {
-                _hwAccel?.DetachFromCodec(_vCtx);
-                var c = _vCtx;
-                avcodec_free_context(&c);
-                _vCtx = null;
+                if (_disposed) return;
+                _disposed = true;
+
+                var canFreeNativeState = StopDemuxerAndDrainQueues();
+                if (!canFreeNativeState)
+                    return;
+
+                MediaDiagnostics.SwallowDisposeErrors(() => _vPrimedAfterSeek?.Dispose(), "MediaContainerSharedDemux.Dispose: _vPrimedAfterSeek");
+                _vPrimedAfterSeek = null;
+
+                if (_demuxPkt != null) { var p = _demuxPkt; av_packet_free(&p); _demuxPkt = null; }
+                if (_aFrame != null) { var f = _aFrame; av_frame_free(&f); _aFrame = null; }
+                if (_vFrame != null) { var f = _vFrame; av_frame_free(&f); _vFrame = null; }
+
+                if (_swr != null) { var s = _swr; swr_free(&s); _swr = null; }
+                ReleaseSws();
+
+                if (_aCtx != null) { var c = _aCtx; avcodec_free_context(&c); _aCtx = null; }
+                if (_vCtx != null)
+                {
+                    _hwAccel?.DetachFromCodec(_vCtx);
+                    var c = _vCtx;
+                    avcodec_free_context(&c);
+                    _vCtx = null;
+                }
+
+                MediaDiagnostics.SwallowDisposeErrors(() => _hwAccel?.Dispose(), "MediaContainerSharedDemux.Dispose: _hwAccel");
+                _hwAccel = null;
+
+                MediaDiagnostics.SwallowDisposeErrors(_passThroughArena.Dispose, "MediaContainerSharedDemux.Dispose: _passThroughArena");
+
+                if (_fmt != null)
+                {
+                    var f = _fmt;
+                    f->pb = null;
+                    avformat_close_input(&f);
+                    _fmt = null;
+                }
+
+                _streamIo?.Dispose();
+                _streamIo = null;
+                FreeInterruptHandle();
             }
-
-            MediaDiagnostics.SwallowDisposeErrors(() => _hwAccel?.Dispose(), "MediaContainerSharedDemux.Dispose: _hwAccel");
-            _hwAccel = null;
-
-            MediaDiagnostics.SwallowDisposeErrors(_passThroughArena.Dispose, "MediaContainerSharedDemux.Dispose: _passThroughArena");
-
-            if (_fmt != null)
-            {
-                var f = _fmt;
-                f->pb = null;
-                avformat_close_input(&f);
-                _fmt = null;
-            }
-
-            _streamIo?.Dispose();
-            _streamIo = null;
-            FreeInterruptHandle();
+        }
+        finally
+        {
+            ClearReadYield();
+            _readSeekGate.ExitWriteLock();
         }
     }
 
@@ -877,6 +899,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         while (true)
         {
+            if (IsReadYieldRequested)
+                return false;
+
             var ret = avcodec_receive_frame(_aCtx, _aFrame);
             if (ret == 0) return true;
             if (ret == AVERROR_EOF)
@@ -887,6 +912,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (ret == AVERROR(EAGAIN))
             {
                 FeedAudioFromQueue();
+                if (IsReadYieldRequested)
+                    return false;
                 continue;
             }
             FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
@@ -898,6 +925,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     {
         while (true)
         {
+            if (IsReadYieldRequested)
+                return;
+
             AVPacket* pkt = null;
             lock (_queueGate)
             {
@@ -908,10 +938,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 }
                 else
                 {
-                    while (_audioPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest)
+                    while (_audioPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest && !IsReadYieldRequested)
                         Monitor.Wait(_queueGate, 50);
 
-                    if (_audioPacketQ.Count > 0)
+                    if (!IsReadYieldRequested && _audioPacketQ.Count > 0)
                         pkt = (AVPacket*)_audioPacketQ.Dequeue();
                 }
 
@@ -930,7 +960,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
                 if (ret == AVERROR(EAGAIN))
                 {
-                    _aPendingPacket = (nint)pkt;
+                    lock (_queueGate)
+                    {
+                        if (IsReadYieldRequested)
+                            av_packet_free(&pkt);
+                        else
+                            _aPendingPacket = (nint)pkt;
+                        Monitor.PulseAll(_queueGate);
+                    }
                     return;
                 }
 
@@ -1084,14 +1121,26 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
     internal void ClearVideoDecodeYield() => Volatile.Write(ref _videoDecodeYieldRequested, 0);
 
+    private bool IsReadYieldRequested =>
+        Volatile.Read(ref _readYieldRequested) != 0;
+
+    private void RequestReadYield()
+    {
+        Volatile.Write(ref _readYieldRequested, 1);
+        lock (_queueGate)
+            Monitor.PulseAll(_queueGate);
+    }
+
+    private void ClearReadYield() => Volatile.Write(ref _readYieldRequested, 0);
+
     private void FeedVideoFromQueue()
     {
-        if (Volatile.Read(ref _videoDecodeYieldRequested) != 0)
+        if (Volatile.Read(ref _videoDecodeYieldRequested) != 0 || IsReadYieldRequested)
             return;
 
         while (true)
         {
-            if (Volatile.Read(ref _videoDecodeYieldRequested) != 0)
+            if (Volatile.Read(ref _videoDecodeYieldRequested) != 0 || IsReadYieldRequested)
                 return;
 
             AVPacket* pkt = null;
@@ -1105,10 +1154,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 else
                 {
                     while (_videoPacketQ.Count == 0 && !_fileReadCompleted && !_demuxerStopRequest
-                           && Volatile.Read(ref _videoDecodeYieldRequested) == 0)
+                           && Volatile.Read(ref _videoDecodeYieldRequested) == 0 && !IsReadYieldRequested)
                         Monitor.Wait(_queueGate, 50);
 
-                    if (_videoPacketQ.Count > 0)
+                    if (!IsReadYieldRequested && _videoPacketQ.Count > 0)
                         pkt = (AVPacket*)_videoPacketQ.Dequeue();
                 }
 
@@ -1127,7 +1176,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
                 if (ret == AVERROR(EAGAIN))
                 {
-                    _vPendingPacket = (nint)pkt;
+                    lock (_queueGate)
+                    {
+                        if (IsReadYieldRequested)
+                            av_packet_free(&pkt);
+                        else
+                            _vPendingPacket = (nint)pkt;
+                        Monitor.PulseAll(_queueGate);
+                    }
                     return;
                 }
 
@@ -1568,75 +1624,109 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         public int ReadInto(Span<float> dst)
         {
-            ObjectDisposedException.ThrowIf(_o._disposed, this);
-            if (!_o._hasAudio) return 0;
-            if (dst.Length % Format.Channels != 0)
-                throw new ArgumentException(
-                    $"destination length {dst.Length} is not a multiple of channel count {Format.Channels}", nameof(dst));
-
-            lock (_o._audioDecodeLock)
+            _o._readSeekGate.EnterReadLock();
+            try
             {
-                _o.ThrowIfDisposedUnsafe();
-                if (IsExhausted) return 0;
+                ObjectDisposedException.ThrowIf(_o._disposed, this);
+                if (!_o._hasAudio) return 0;
+                if (dst.Length % Format.Channels != 0)
+                    throw new ArgumentException(
+                        $"destination length {dst.Length} is not a multiple of channel count {Format.Channels}", nameof(dst));
 
-                var written = 0;
-                while (written < dst.Length)
+                lock (_o._audioDecodeLock)
                 {
-                    var remainingFrames = (dst.Length - written) / Format.Channels;
-                    if (remainingFrames == 0) break;
+                    _o.ThrowIfDisposedUnsafe();
+                    if (IsExhausted) return 0;
 
-                    var drained = _o.SwrConvertInto(dst[written..], remainingFrames, null, 0);
-                    if (drained > 0)
+                    var written = 0;
+                    while (written < dst.Length)
                     {
-                        written += drained * Format.Channels;
-                        _o._aSamplesEmitted += drained;
-                    }
-                    if (drained == remainingFrames) continue;
+                        if (_o.IsReadYieldRequested) break;
 
-                    if (_o._aEof)
-                    {
-                        if (drained == 0)
+                        var remainingFrames = (dst.Length - written) / Format.Channels;
+                        if (remainingFrames == 0) break;
+
+                        var drained = _o.SwrConvertInto(dst[written..], remainingFrames, null, 0);
+                        if (drained > 0)
                         {
-                            _o._aDrainedTail = true;
-                            break;
+                            written += drained * Format.Channels;
+                            _o._aSamplesEmitted += drained;
                         }
-                        continue;
+                        if (drained == remainingFrames) continue;
+
+                        if (_o._aEof)
+                        {
+                            if (drained == 0)
+                            {
+                                _o._aDrainedTail = true;
+                                break;
+                            }
+                            continue;
+                        }
+
+                        if (!_o.TryReceiveAudioFrame())
+                        {
+                            if (_o.IsReadYieldRequested) break;
+                            continue;
+                        }
+
+                        var capacity = (dst.Length - written) / Format.Channels;
+                        var produced = _o.SwrConvertInto(dst[written..], capacity, _o._aFrame->extended_data, _o._aFrame->nb_samples);
+                        if (produced > 0)
+                        {
+                            written += produced * Format.Channels;
+                            _o._aSamplesEmitted += produced;
+                        }
+                        av_frame_unref(_o._aFrame);
                     }
 
-                    if (!_o.TryReceiveAudioFrame()) continue;
-
-                    var capacity = (dst.Length - written) / Format.Channels;
-                    var produced = _o.SwrConvertInto(dst[written..], capacity, _o._aFrame->extended_data, _o._aFrame->nb_samples);
-                    if (produced > 0)
-                    {
-                        written += produced * Format.Channels;
-                        _o._aSamplesEmitted += produced;
-                    }
-                    av_frame_unref(_o._aFrame);
+                    if (written > 0)
+                        Position = TimeSpan.FromSeconds((double)_o._aSamplesEmitted / Format.SampleRate);
+                    return written;
                 }
-
-                if (written > 0)
-                    Position = TimeSpan.FromSeconds((double)_o._aSamplesEmitted / Format.SampleRate);
-                return written;
+            }
+            finally
+            {
+                _o._readSeekGate.ExitReadLock();
             }
         }
 
         public bool TryReadNextFrame(out AudioFrame frame)
         {
-            ObjectDisposedException.ThrowIf(_o._disposed, this);
-            if (!_o._hasAudio)
+            _o._readSeekGate.EnterReadLock();
+            try
             {
-                frame = default;
-                return false;
+                ObjectDisposedException.ThrowIf(_o._disposed, this);
+                if (!_o._hasAudio)
+                {
+                    frame = default;
+                    return false;
+                }
+                lock (_o._audioDecodeLock)
+                {
+                    _o.ThrowIfDisposedUnsafe();
+                    if (_o.IsReadYieldRequested)
+                    {
+                        frame = default;
+                        return false;
+                    }
+                    if (!_o.TryReceiveAudioFrame())
+                    {
+                        if (_o.IsReadYieldRequested)
+                        {
+                            frame = default;
+                            return false;
+                        }
+                        return _o.TryDrainAudioTailFrame(out frame);
+                    }
+                    frame = _o.ConvertAudioFrame();
+                    av_frame_unref(_o._aFrame);
+                    return true;
+                }
             }
-            lock (_o._audioDecodeLock)
+            finally
             {
-                _o.ThrowIfDisposedUnsafe();
-                if (!_o.TryReceiveAudioFrame())
-                    return _o.TryDrainAudioTailFrame(out frame);
-                frame = _o.ConvertAudioFrame();
-                av_frame_unref(_o._aFrame);
-                return true;
+                _o._readSeekGate.ExitReadLock();
             }
         }
 
@@ -1666,82 +1756,98 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         public void SelectOutputFormat(PixelFormat format)
         {
-            ObjectDisposedException.ThrowIf(_o._disposed, this);
-            if (format == PixelFormat.Unknown)
-                throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
-
-            if (!_o._hasVideo)
+            _o._readSeekGate.EnterReadLock();
+            try
             {
-                // No real video stream — just record the negotiated output format on the stub so the
-                // output's Configure(Format) call sees a coherent VideoFormat. The decode path is inert.
-                Format = Format with { PixelFormat = format };
-                _o._vOutPixFmt = format;
-                return;
+                ObjectDisposedException.ThrowIf(_o._disposed, this);
+                if (format == PixelFormat.Unknown)
+                    throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
+
+                if (!_o._hasVideo)
+                {
+                    // No real video stream — just record the negotiated output format on the stub so the
+                    // output's Configure(Format) call sees a coherent VideoFormat. The decode path is inert.
+                    Format = Format with { PixelFormat = format };
+                    _o._vOutPixFmt = format;
+                    return;
+                }
+
+                lock (_o._videoDecodeLock)
+                {
+                    _o.ThrowIfDisposedUnsafe();
+                    _o.SelectVideoOutputFormatLocked(format);
+                }
             }
-
-            lock (_o._videoDecodeLock)
+            finally
             {
-                _o.ThrowIfDisposedUnsafe();
-                _o.SelectVideoOutputFormatLocked(format);
+                _o._readSeekGate.ExitReadLock();
             }
         }
 
         public bool TryReadNextFrame(out VideoFrame frame)
         {
-            ObjectDisposedException.ThrowIf(_o._disposed, this);
-            if (!_o._hasVideo)
+            _o._readSeekGate.EnterReadLock();
+            try
             {
-                frame = null!;
-                return false;
-            }
-            lock (_o._videoDecodeLock)
-            {
-                _o.ThrowIfDisposedUnsafe();
-
-                if (Volatile.Read(ref _o._videoDecodeYieldRequested) != 0)
+                ObjectDisposedException.ThrowIf(_o._disposed, this);
+                if (!_o._hasVideo)
                 {
                     frame = null!;
                     return false;
                 }
-
-                if (_o._vPrimedAfterSeek is { } primed)
+                lock (_o._videoDecodeLock)
                 {
-                    frame = primed;
-                    _o._vPrimedAfterSeek = null;
-                    return true;
-                }
+                    _o.ThrowIfDisposedUnsafe();
 
-                while (true)
-                {
-                    if (Volatile.Read(ref _o._videoDecodeYieldRequested) != 0)
+                    if (Volatile.Read(ref _o._videoDecodeYieldRequested) != 0 || _o.IsReadYieldRequested)
                     {
                         frame = null!;
                         return false;
                     }
 
-                    var ret = avcodec_receive_frame(_o._vCtx, _o._vFrame);
-                    if (ret == 0)
+                    if (_o._vPrimedAfterSeek is { } primed)
                     {
-                        var workFrame = _o.ResolveWorkVideoFrame();
-                        _o.SyncVideoPixelFormatIfNeeded(workFrame);
-                        var meta = _o.ExtractVideoMetadata(_o._vFrame);
-                        frame = _o.BuildVideoFrame(workFrame, meta);
-                        av_frame_unref(_o._vFrame);
+                        frame = primed;
+                        _o._vPrimedAfterSeek = null;
                         return true;
                     }
-                    if (ret == AVERROR_EOF)
+
+                    while (true)
                     {
-                        _o._vEof = true;
-                        frame = null!;
-                        return false;
+                        if (Volatile.Read(ref _o._videoDecodeYieldRequested) != 0 || _o.IsReadYieldRequested)
+                        {
+                            frame = null!;
+                            return false;
+                        }
+
+                        var ret = avcodec_receive_frame(_o._vCtx, _o._vFrame);
+                        if (ret == 0)
+                        {
+                            var workFrame = _o.ResolveWorkVideoFrame();
+                            _o.SyncVideoPixelFormatIfNeeded(workFrame);
+                            var meta = _o.ExtractVideoMetadata(_o._vFrame);
+                            frame = _o.BuildVideoFrame(workFrame, meta);
+                            av_frame_unref(_o._vFrame);
+                            return true;
+                        }
+                        if (ret == AVERROR_EOF)
+                        {
+                            _o._vEof = true;
+                            frame = null!;
+                            return false;
+                        }
+                        if (ret == AVERROR(EAGAIN))
+                        {
+                            _o.FeedVideoFromQueue();
+                            continue;
+                        }
+                        FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
                     }
-                    if (ret == AVERROR(EAGAIN))
-                    {
-                        _o.FeedVideoFromQueue();
-                        continue;
-                    }
-                    FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
                 }
+            }
+            finally
+            {
+                _o._readSeekGate.ExitReadLock();
             }
         }
 
