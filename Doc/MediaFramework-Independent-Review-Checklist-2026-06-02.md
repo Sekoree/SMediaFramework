@@ -1009,9 +1009,24 @@ Before closing a batch:
 - [x] `dotnet test MediaFramework/Test/S.Media.NDI.Tests/S.Media.NDI.Tests.csproj --no-restore -v:m`
 - [x] `dotnet test MediaFramework/Test/S.Media.PortAudio.Tests/S.Media.PortAudio.Tests.csproj --no-restore -v:m`
 - [ ] Run Windows-specific D3D11/Win32 shared-handle tests on Windows.
-- [ ] Run SDL/GL smoke tests on a machine with display/GPU support.
-- [ ] Run NDI ingest/egress smoke tests with real NDI runtime installed.
-- [ ] Run PortAudio device smoke tests on the target OS/audio backend.
+      - Still open: requires Windows; not runnable on this Linux host.
+- [x] Run SDL/GL smoke tests on a machine with display/GPU support.
+      - `CompositorSmoke` ran on the real GPU (SDL3 window + GL context): decoded
+        RGB24 bg+fg layers → GL composite → BGRA32 GPU readback (~21.6 ms) → PNG.
+      - `S.Media.OpenGL.Tests` 105/105 on this GPU.
+- [x] Run NDI ingest/egress smoke tests with real NDI runtime installed
+      (`libndi.so.6`).
+      - Ingest: `NDIReceiver "PGM"` connected to `SEKO-S1MAX (OBS PGM)`
+        (192.168.2.76:5961); received 1177 video + 919 audio frames over ~18 s.
+      - Egress: `NDIPlayer` sent the synth clip as `MFEgress` (149 video + 235
+        audio frames, realtime wall pacing, A/V drift held to ±30 ms).
+      - Round-trip: `NDIReceiver "MFEgress"` received exactly 149 video + 235
+        audio frames — frame-exact match with the sender.
+- [x] Run PortAudio device smoke tests on the target OS/audio backend.
+      - PortAudio exposes a JACK host API (PipeWire). `PlaybackSmoke` (extended
+        with `--list`/`--hostapi`/`--device`) resolved JACK → `[13] Scarlett 2i2
+        3rd Gen Pro @ 48000 Hz` and played a 5 s clip in realtime: 207 k samp/ch,
+        0 dropped, completed naturally (end-of-stream drain underrun only).
 
 Known verification issue from the earlier review environment:
 
