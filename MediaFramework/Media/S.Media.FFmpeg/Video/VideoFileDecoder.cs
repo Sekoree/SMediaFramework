@@ -544,7 +544,8 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         MapColorSpace(source->colorspace),
         MapColorRange(source->color_range),
         MapFieldOrder(source),
-        ReadS12mTimecode(source, Format.FrameRate));
+        ReadS12mTimecode(source, Format.FrameRate),
+        MapAlphaMode((AVPixelFormat)source->format));
 
     private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, VideoFrameMetadata meta) =>
         CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Format, meta);
@@ -992,6 +993,26 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         AVPixelFormat.AV_PIX_FMT_P010LE      => PixelFormat.P010,
         AVPixelFormat.AV_PIX_FMT_P016LE      => PixelFormat.P016,
         _                                   => PixelFormat.Unknown,
+    };
+
+    internal static VideoAlphaMode MapAlphaMode(AVPixelFormat src) => src switch
+    {
+        AVPixelFormat.AV_PIX_FMT_BGRA
+            or AVPixelFormat.AV_PIX_FMT_RGBA
+            or AVPixelFormat.AV_PIX_FMT_ARGB
+            or AVPixelFormat.AV_PIX_FMT_ABGR
+            or AVPixelFormat.AV_PIX_FMT_YUVA420P
+            or AVPixelFormat.AV_PIX_FMT_YUVA422P
+            or AVPixelFormat.AV_PIX_FMT_YUVA444P
+            or AVPixelFormat.AV_PIX_FMT_YUVA420P10LE
+            or AVPixelFormat.AV_PIX_FMT_YUVA422P10LE
+            or AVPixelFormat.AV_PIX_FMT_YUVA444P10LE
+            or AVPixelFormat.AV_PIX_FMT_YUVA422P12LE
+            or AVPixelFormat.AV_PIX_FMT_YUVA444P12LE
+            or AVPixelFormat.AV_PIX_FMT_YUVA420P16LE
+            or AVPixelFormat.AV_PIX_FMT_YUVA422P16LE
+            or AVPixelFormat.AV_PIX_FMT_YUVA444P16LE => VideoAlphaMode.Straight,
+        _ => VideoAlphaMode.Opaque,
     };
 
     internal static int BytesPerPackedPixel(PixelFormat fmt) => fmt switch

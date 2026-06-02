@@ -100,29 +100,45 @@ public sealed class AudioClipPlayer
                     v.Voice.Stop();
             }
 
+            if (!router.TryGetOutput(outputId, out var output) || output is null)
+                throw new ArgumentException($"output '{outputId}' is not registered", nameof(outputId));
+            var routeMap = map ?? ChannelMap.Identity(output.Format.Channels);
+
             var voiceOptions = options ?? AudioClipVoiceOptions.Default;
             if (Mode == AudioClipPlayerMode.LatchedLoop)
                 voiceOptions = voiceOptions with { Loop = true };
 
             var newVoice = _clip.CreateVoice(voiceOptions);
             var newSourceId = router.AddSource(newVoice, autoResample: true);
-            var routeMap = map ?? (router.TryGetOutput(outputId, out var output) && output is not null
-                ? ChannelMap.Identity(output.Format.Channels)
-                : ChannelMap.Identity(_clip.Format.Channels));
-            router.Route(newSourceId, outputId, routeMap, gain);
+            var chokeRegistered = false;
+            try
+            {
+                router.Route(newSourceId, outputId, routeMap, gain);
 
-            if (ChokeGroup is { } group)
-                router.RegisterChokeGroup(group, newVoice);
+                if (ChokeGroup is { } group)
+                {
+                    router.RegisterChokeGroup(group, newVoice);
+                    chokeRegistered = true;
+                }
 
-            var registration = new VoiceRegistration(newVoice, newSourceId, router, ChokeGroup);
-            if (Mode == AudioClipPlayerMode.LatchedLoop)
-                _latched = registration;
+                var registration = new VoiceRegistration(newVoice, newSourceId, router, ChokeGroup);
+                if (Mode == AudioClipPlayerMode.LatchedLoop)
+                    _latched = registration;
 
-            _activeVoices.Add(registration);
-            EnforcePolyphonyLocked();
-            voice = newVoice;
-            sourceId = newSourceId;
-            return true;
+                _activeVoices.Add(registration);
+                EnforcePolyphonyLocked();
+                voice = newVoice;
+                sourceId = newSourceId;
+                return true;
+            }
+            catch
+            {
+                if (chokeRegistered && ChokeGroup is { } group)
+                    router.UnregisterChokeGroup(group, newVoice);
+                router.RemoveSource(newSourceId);
+                newVoice.Dispose();
+                throw;
+            }
         }
     }
 

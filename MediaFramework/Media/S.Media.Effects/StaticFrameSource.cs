@@ -10,8 +10,10 @@ namespace S.Media.Effects;
 /// <para>
 /// The constructor takes the plane data as <see cref="ReadOnlyMemory{T}"/>; every
 /// <see cref="TryReadNextFrame"/> wraps the same memory references in a fresh
-/// <see cref="VideoFrame"/> (zero-copy). The frames carry <c>release: null</c> — the source owns the
-/// underlying buffers and releases them once on <see cref="Dispose"/>.
+/// <see cref="VideoFrame"/> (zero-copy). When <paramref name="releaseBuffersOnDispose"/> is supplied,
+/// the source and every emitted frame share a small refcount so pooled/native backing is released only
+/// after the source and all in-flight frames are disposed. With no release hook, emitted frames carry
+/// <c>release: null</c>; plain managed arrays remain GC-rooted by the frames that reference them.
 /// </para>
 /// <para>
 /// PTS spacing matches <see cref="VideoFormat.FrameRate"/> (falls back to 30 FPS when the rate is
@@ -32,7 +34,7 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
     private readonly ReadOnlyMemory<byte>[] _planes;
     private readonly int[] _strides;
     private readonly Action? _bufferRelease;
-    private readonly VideoTransferHint _transferHint;
+    private readonly VideoFrameMetadata _metadata;
     private readonly PixelFormat[] _native;
     private readonly TimeSpan _ptsStep;
     // Refcount guarding the shared backing when a release hook is present (pooled/native buffers via
@@ -58,7 +60,8 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
         int[] strides,
         TimeSpan? ptsCadence = null,
         VideoTransferHint colorTransferHint = default,
-        Action? releaseBuffersOnDispose = null)
+        Action? releaseBuffersOnDispose = null,
+        VideoFrameMetadata? metadata = null)
     {
         ArgumentNullException.ThrowIfNull(planes);
         ArgumentNullException.ThrowIfNull(strides);
@@ -70,7 +73,7 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
         _format = format;
         _planes = planes;
         _strides = strides;
-        _transferHint = colorTransferHint;
+        _metadata = metadata ?? new VideoFrameMetadata(ColorTransferHint: colorTransferHint);
         _bufferRelease = releaseBuffersOnDispose;
         _native = [format.PixelFormat];
         _ptsStep = ptsCadence ?? DerivePeriod(format.FrameRate);
@@ -103,7 +106,7 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
             var release = _bufferRelease is not null ? DisposableRelease.Wrap(ReleaseBackingRef) : null;
             frame = new VideoFrame(_nextPts, _format, _planes, _strides,
                 release: release,
-                metadata: new VideoFrameMetadata(ColorTransferHint: _transferHint));
+                metadata: _metadata);
             // Commit the ref only after the frame was constructed successfully (ctor validates).
             if (release is not null)
                 _backingRefs++;
@@ -167,7 +170,8 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
             strides,
             ptsCadence,
             owned.ColorTransferHint,
-            owned.Dispose);
+            owned.Dispose,
+            owned.Metadata);
     }
 
     private static TimeSpan DerivePeriod(Rational frameRate)

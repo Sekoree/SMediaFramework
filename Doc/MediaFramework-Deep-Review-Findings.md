@@ -54,13 +54,9 @@ Test commands (original review, plus a re-run of Core tests this pass):
 ## Critical Correctness And Stability Issues
 
 ### FFmpeg shared demuxer can race native free/seek while its demux thread is still alive
-✅ **Confirmed.** `MediaContainerSharedDemux.StopDemuxerAndDrainQueues` (`MediaContainerSharedDemux.cs:537-554`) sets `_demuxerStopRequest = true`, joins for 4 s, then **clears `_demuxerThread` and resets `_demuxerStopRequest = false` and frees queued packets even if the join timed out**. `SeekPresentation` (`:647-718`) then calls `avformat_seek_file(_fmt, …)` / `avcodec_flush_buffers` / `av_packet_unref(_demuxPkt)` while a still-blocked `DemuxerThreadProc` may be inside `av_read_frame(_fmt, _demuxPkt)`.
+✅ **Confirmed and fixed 2026-06-02.** The original bug was that `MediaContainerSharedDemux.StopDemuxerAndDrainQueues` set `_demuxerStopRequest = true`, joined for 4 s, then cleared `_demuxerThread`, reset `_demuxerStopRequest = false`, and freed/reused native demux state even if the demux thread was still blocked in `av_read_frame`.
 
-Additional confirmation this pass: **there is no `AVIOInterruptCB` installed anywhere in `S.Media.FFmpeg`** (grep found none), so `av_read_frame` genuinely cannot be cancelled — the 4 s join is the only backstop, and on slow/stalled network I/O it will time out and proceed into the race.
-
-Impact: native use-after-free, corrupted packets, crashes during network/slow I/O, hard-to-reproduce seek/dispose failures.
-
-Fix direction: install an FFmpeg interrupt callback, make stop cancellation observable by `av_read_frame`, and never clear the stop flag or free/restart demux state until the old demux thread has actually exited.
+Fixed via an installed FFmpeg `AVIOInterruptCB` on the shared demux `AVFormatContext` (FFmpeg.AutoGen 8 callback wrapper verified), returning abort when `_demuxerStopRequest` or `_disposed` is set. `AVERROR_EXIT` during stop is treated as clean. If a demux thread still fails to exit, seek/restart now throws and dispose deliberately does **not** free the native demux state under the running thread.
 
 ### FFmpeg demux thread exceptions can terminate the process
 ✅ **Confirmed.** `DemuxerThreadProc` (`MediaContainerSharedDemux.cs:587-616`) has no outer exception boundary. `FFmpegException.ThrowIfError(ret, …)` (`:607`) and `EnqueuePacketCopy`'s `OutOfMemoryException` (`:621`) escape directly off the background thread → process crash.
@@ -143,9 +139,7 @@ Fix direction: prime/start video decode and attach the tick handler inside the s
 Fix direction: silence/stop audio immediately, then pause/drain video.
 
 ### Default seek path is not coordinated for shared demux
-✅ **Confirmed.** `AvPlaybackCoordinator.Seek` (`:92-114`) seeks audio first, then video, with no pause; `SeekCoordinated` (`:116-127`) pauses first but is a separate method. `MediaPlayer.Seek` (`MediaPlayer.cs:250`) calls the uncoordinated path; `MediaPlayer.SeekCoordinated` (`:258`) is opt-in. Compounding this, `SeekPresentation` flushes audio state without the audio lock (see "Shared-demux seek is not protected from concurrent audio reads").
-
-Fix direction: make coordinated seek the default; for shared demux, `SeekPresentation` once, then reset both track positions/clocks.
+✅ **Confirmed and fixed 2026-06-02 for shared-demux playback.** `MediaContainerSession.Seek` now performs the session-layer fix rather than swapping to the old `SeekCoordinated` helper: it pauses, calls `Container.SeekPresentation(position)` once, seeks playback clock(s), and resumes only if the graph was already running. Explicit `SeekCoordinated` remains pause-and-stay-paused. `MediaPlayer.Seek` for file/container playback uses the fixed bundle session path.
 
 ### Router clocks can burst indefinitely after stalls
 ✅ **Confirmed.** `WallClockRouterClock.WaitForNextChunk` (`WallClockRouterClock.cs:39-44`) returns immediately whenever `_nextDeadline <= _stopwatch.Elapsed` and advances the deadline by one chunk each call; `PlaybackSlavedRouterClock.WaitForNextChunk` (`PlaybackSlavedRouterClock.cs:28-39`) does the same against `_master.ElapsedSinceStart`. After a stall both will fire back-to-back until the deadline catches up — no catch-up cap.
@@ -158,9 +152,7 @@ Fix direction: cap catch-up bursts and re-anchor deadlines after a bounded numbe
 Fix direction: reset the fallback emitted-frame counters on seek, or derive fallback PTS from seek target plus frames since seek.
 
 ### NDI ingest should use NDI timing, not fixed frame cadence
-✅ **Confirmed.** `NDIVideoReceiver.CaptureLoop` synthesizes PTS as `_nextPts += _ptsStep` (`NDIVideoReceiver.cs:176-181`), where `_ptsStep` is a fixed period from `format.FrameRate` (`EnsureFormat`, `:218-220`); the NDI frame's own timecode/timestamp is ignored.
-
-Fix direction: preserve NDI-provided timing when available; for untimed streams use a monotonic ingest clock with jitter smoothing.
+✅ **Confirmed and fixed 2026-06-02.** `NDIVideoReceiver` and the public combined `NDISource` now use NDI `Timecode`/`Timestamp` when available, while preserving the live `RebaseToLatest(playClock.CurrentPosition)` contract: the first post-rebase NDI time becomes the session origin and frame PTS is `rebaseBase + (frameNdiTime - origin)`. Untimed frames fall back to the existing synthetic cadence, corrected to the negotiated frame rate once format is known.
 
 ## Public API Simplification Recommendations
 
@@ -239,9 +231,7 @@ Fix direction: `stackalloc`/`fixed` for the small fixed plane count, or persiste
 Fix direction: ring buffer or read/write-offset pending buffer.
 
 ### CPU compositor assumes premultiplied BGRA but cannot enforce it
-✅ **Confirmed (self-acknowledged).** `CpuVideoCompositor` blends as premultiplied and its own doc comment states FFmpeg BGRA is "treated as premultiplied here — alpha is typically 0xFF … so the distinction is moot" (`CpuVideoCompositor.cs:16-22`, blend `:172-204`). External straight-alpha BGRA overlays will blend incorrectly.
-
-Fix direction: encode alpha mode in `VideoFrameMetadata`/pixel format, or normalize at source boundaries.
+✅ **Confirmed and fixed 2026-06-02.** `VideoFrameMetadata` now carries `VideoAlphaMode`, exposed through `VideoFrame.AlphaMode`. `CpuVideoCompositor` keeps legacy behavior for `Unspecified` (premultiplied), normalizes explicit `Straight` alpha before `Source`/`SourceOver`, treats `Opaque` as full-alpha, and emits premultiplied output metadata. Skia sources mark premultiplied frames; FFmpeg marks alpha-bearing libav formats as straight and non-alpha formats opaque; NDI marks packed BGRA/RGBA alpha as straight.
 
 ### OpenGL compositor does not restore pack pixel-store state
 ✅ **Confirmed.** `GlVideoCompositor.Composite` saves/restores unpack alignment+row length (`GlVideoCompositor.cs:198-199`) but sets pack alignment/row length for `glReadPixels` (`:181-182`) without saving/restoring the prior pack state.
@@ -251,9 +241,7 @@ Fix direction: save and restore `GL_PACK_ALIGNMENT` and `GL_PACK_ROW_LENGTH`.
 ## FFmpeg Decode And Encode Issues
 
 ### Frame-mode audio reads can miss resampler tail or never exhaust
-✅ **Confirmed.** `AudioTrack.ReadInto` drains the swresample tail and sets `_aDrainedTail` at EOF (`MediaContainerSharedDemux.cs:1447-1452`), but `AudioTrack.TryReadNextFrame` returns false at packet EOF without draining the tail or setting the flag (`:1486-1490`). Since `IsExhausted` is `_aEof && _aDrainedTail` (`:1418`), a frame-mode consumer both loses the tail and loops forever waiting for exhaustion. `AudioFileDecoder` has the same split.
-
-Fix direction: share one tail-drain path between `ReadInto` and `TryReadNextFrame`.
+✅ **Confirmed and fixed 2026-06-02.** `AudioFileDecoder.TryReadNextFrame` and shared-demux `AudioTrack.TryReadNextFrame` now drain `swr` tail samples into pooled `AudioFrame`s after decoder EOF and set the drained-tail flag once empty. Frame-mode consumers no longer lose tail audio or loop forever waiting for `IsExhausted`.
 
 ### Shared-demux seek is not protected from concurrent audio reads
 ✅ **Confirmed (and notably asymmetric).** `SeekPresentation` flushes `_aCtx`, `swr_close`/`swr_init`, and resets `_aSamplesEmitted` (`MediaContainerSharedDemux.cs:683-701`) while holding only `_lifecycleLock` — **not** `_audioDecodeLock`, which `AudioTrack.ReadInto` does hold (`:1428`). It *does* take `_videoDecodeLock` for the video consume (`:715`), so the audio side is the unprotected one.
@@ -363,44 +351,30 @@ Fix direction: store wrapper ownership in the output entry and dispose on remove
 - **The `VideoPlayer` post-submit double-dispose appears in three methods**, not one (`OnVideoTick`, `PresentLatestQueuedFrame`, `TrySubmitHeldFrame`) — fix all three.
 - **Composition is two-tier now.** The slot engine already supports the playhead-driven design the review recommended (`SlotKeepPolicy.MasterAligned`), but it is wired only in tests; the declarative `VideoCompositor` convenience API still pulls one frame per layer per read. Prioritize wiring master-aligned selection into production over re-architecting from scratch.
 - **`SeekPresentation` is asymmetric about locking** — it protects the video decode with `_videoDecodeLock` but flushes audio (`_aCtx`/`_swr`/counters) with no `_audioDecodeLock`. That asymmetry is a concrete, fixable instance of the "coordinate seek internally" recommendation.
+- **Late verification correction (2026-06-02): combined `NDISource` is a third NDI receive path.** The original NDI fault finding named the standalone `NDIVideoReceiver`/`NDIAudioReceiver`; HaPlay actually opens the public combined `NDISource`, whose capture loop had the same missing outer fault boundary. That path has now been patched to expose terminal `Fault`/`Faulted`, wake blocked video reads, and report audio/video adapters exhausted on fault.
+- **Late verification correction (2026-06-02): first-class cue firing needed rollback.** The new `Soundboard`/`AudioClipPlayer.TryFire` path added after the original review could add an `AudioRouter` source before failing route creation for a stale/removed output. That is now guarded by output validation and source/choke rollback.
 
 ## Suggested Refactoring Roadmap
 
 1. **Frame contracts first.** Add `VideoFormat`/CPU-`VideoFrame` validation; make frame backing immutable/refcounted; fix static/text/image source frame lifetimes.
-2. **Safe transport and faults.** Add fault events/states for the audio router, video player, FFmpeg sources, and NDI receivers; replace background-thread rethrows with controlled shutdown; install an FFmpeg interrupt callback and fix demux stop.
-3. **Source activation model.** Don't pull sources unless an active route/voice needs them; make voices/cues first-class; preserve seek/duration through wrappers.
-4. **A/V sync and seek.** Make coordinated seek the default; take `_audioDecodeLock` during seek's audio flush; use a start barrier for audio/video/clock; cap router-clock catch-up; reset fallback PTS counters on seek.
-5. **Composition timing.** Wire `SlotKeepPolicy.MasterAligned` + a real master time into the declarative `VideoCompositor`; decode layers into bounded PTS queues; treat static/text/image layers as immutable timed assets; implement or remove `ScaleAnchor`.
-6. **Output lifecycle and threading.** Dispose removed outputs (`VideoRouter.RemoveOutput`); avoid one dedicated thread per output; do conversion/submission outside router locks; make output reconfiguration/draining explicit.
-7. **High-level API cleanup.** Introduce an owned `MediaSession`/`PlaybackSession`; move process-wide plugin/backend defaults into per-session options; make file/URI/stream opening strict; make PortAudio/NDI/Skia companion ownership automatic in simple workflows.
+2. **Safe transport and faults.** Done for the reviewed paths: AudioRouter/demux/NDI fault boundaries, VideoPlayer restart guard, and FFmpeg demux interrupt/stop handling are implemented.
+3. **Source activation model.** Done for the router/cue scope: unrouted sources are no longer drained, seekability is preserved through resampling wrappers, and `Soundboard`/`CueVoice` provide first-class cue handles.
+4. **A/V sync and seek.** Mostly done: shared-demux default seek is coordinated, seek flushes hold `_audioDecodeLock`, fallback PTS counters reset, NDI video timing uses NDI time when available, and router clock catch-up is capped. Residual: tighter start-barrier work could still reduce the tiny gap between clock start and video tick attachment.
+5. **Composition timing.** Done for the declarative compositor: clock-driven layer selection is wired. Remaining work is mainly product-level policy around which production graphs opt into master-aligned slot behavior.
+6. **Output lifecycle and threading.** Mostly done: removed outputs are disposed, pumps lazy-start, and output reconfigure/drain/dispose races were hardened. Remaining open item: conversion/readback/clone still happens under `VideoRouter._gate`.
+7. **High-level API cleanup.** Mostly done: `MediaSession`, per-session options, stricter URI handling, and companion ownership are implemented. Remaining cleanup is incremental API polish, not a known correctness blocker.
 
 ## Priority Backlog
 
 P0:
 
-- Fix FFmpeg demux stop race + add an interrupt callback.
-- Fix `VideoPlayer` post-submit double-dispose (all three sites).
-- Dispose `VideoRouter` outputs on `RemoveOutput`.
-- Stop `AudioRouter` from draining unrouted/unstarted sources.
-- Add fault handling instead of background-thread rethrows (AudioRouter, demux, NDI receivers).
-- Fix static/text/image frame backing lifetime (especially `TextLayerSource`'s in-place re-rasterize + pool return).
+- No P0 findings remain open after the 2026-06-02 implementation follow-up.
 
 P1:
 
-- Make coordinated seek the default; take `_audioDecodeLock` during seek's audio flush.
-- Wire master-aligned (time-driven) selection into the declarative compositor path.
-- Reset no-PTS fallback counters (`_vFramesEmitted`/`_framesEmitted`) on seek.
-- Fix `AudioClipVoice` EOF release hang.
-- Finish the FFmpeg video encoder frame allocation fix (allocate once; check `make_writable`; drop per-frame `get_buffer`).
-- Fix the FFmpeg audio encoder non-FLT/FLTP sample-format path.
-- Add NDI receiver background fault boundaries.
-- Preserve seekability through `ResamplingAudioSource`.
+- No P1 findings remain open after the 2026-06-02 implementation follow-up.
 
 P2:
 
-- Reduce compositor/router/FFmpeg hot-path allocations.
-- Replace or lazy-start per-output threads.
-- Normalize SDL output reconfiguration semantics.
-- Improve high-level builder/session ownership; remove process-wide mutable defaults.
-- Add validation to video contracts; make `RouteGainSlot`/route snapshots immutable.
-- Cap router-clock catch-up bursts; make `WaitForIdle` account for abandoned chunks.
+- Move `VideoRouter` conversion/readback/clone and synchronous output submission outside the global router lock. Correct implementation needs converter lifetime leases or deferred converter disposal so route reconfiguration cannot dispose a converter while an in-flight submit snapshot still uses it.
+- Profile planar swscale conversion before pooling the escaping per-frame descriptor arrays. The remaining allocations are mostly frame-owned arrays that live until `VideoFrame.Dispose`; pooling them is feasible but should be driven by measured hot-path pressure.

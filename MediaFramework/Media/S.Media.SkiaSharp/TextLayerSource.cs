@@ -190,7 +190,8 @@ public sealed class TextLayerSource : IVideoSource, IDisposable
             _format,
             new ReadOnlyMemory<byte>(gen.Buffer, 0, _pixelByteCount),
             _stride,
-            release: gen);
+            release: gen,
+            metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied));
         _nextPts += _ptsStep;
         return true;
     }

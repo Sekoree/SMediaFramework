@@ -55,7 +55,7 @@ public sealed class MediaContainerSession
             position, cancellationToken, flushSharedMuxAfterPause: null);
 
     public void Seek(TimeSpan position) =>
-        AvPlaybackCoordinator.Seek(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId, position);
+        SeekSharedDemuxPreservingPlaybackState(position, CancellationToken.None, ResolveFlush(PauseFlushPolicy.FlushCodecPipelines));
 
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
         Action? flushSharedMuxAfterPause = null) =>
@@ -67,6 +67,25 @@ public sealed class MediaContainerSession
             position, cancellationToken, ResolveFlush(flushPolicy));
 
     public void SeekPresentation(TimeSpan position) => Container.SeekPresentation(position);
+
+    private void SeekSharedDemuxPreservingPlaybackState(
+        TimeSpan position,
+        CancellationToken cancellationToken,
+        Action? flushSharedMuxAfterPause)
+    {
+        var resume = Session.Clock.IsRunning
+                     || Session.Video.IsRunning
+                     || Session.AudioRouter?.IsRunning == true;
+
+        Session.Pause(cancellationToken, flushSharedMuxAfterPause);
+        Container.SeekPresentation(position);
+        Session.Clock.Seek(position);
+        if (Session.AudioClock is not null && !ReferenceEquals(Session.Clock, Session.AudioClock))
+            Session.AudioClock.Seek(position);
+
+        if (resume)
+            Session.Play();
+    }
 
     private Action? ResolveFlush(PauseFlushPolicy policy) =>
         policy == PauseFlushPolicy.FlushCodecPipelines ? Container.FlushCodecPipelines : null;

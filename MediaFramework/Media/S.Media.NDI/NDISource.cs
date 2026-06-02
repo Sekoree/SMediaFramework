@@ -44,6 +44,11 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     private PixelFormat[] _videoNative = [];
     private TimeSpan _videoPtsStep = TimeSpan.FromMilliseconds(33);
     private TimeSpan _nextVideoPts;
+    private TimeSpan _videoRebaseBasePts;
+    private TimeSpan _lastResolvedVideoPts;
+    private long _videoNdiTimingOriginTicks;
+    private bool _videoNdiTimingOriginSet;
+    private bool _hasLastResolvedVideoPts;
     private bool _hasVideoFormat;
     private bool _disposed;
     private NDIConnectionState _state = NDIConnectionState.Opening;
@@ -52,6 +57,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     private long _videoOverflowFrames;
     private long _videoUnpackDrops;
     private long _videoFramesUnpacked;
+    private volatile Exception? _faultEx;
 
     /// <summary>Discovers NDI sources visible on the network.</summary>
     public static IReadOnlyList<NDIDiscoveredSource> Find(TimeSpan timeout, NDIFindOptions? options = null)
@@ -134,12 +140,12 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
                 throw new NDIException(rc, "NDIReceiver.Create");
             _receiver = recv;
             _receiver.Connect(source);
+            _state = NDIConnectionState.Connected;
             if (Trace.IsEnabled(LogLevel.Information))
             {
                 Trace.LogInformation(
                     "NDISource: connected source='{Source}' colorFormat={ColorFormat} bandwidth={Bandwidth}",
                     source.Name, options.ColorFormat, options.Bandwidth);
-                _state = NDIConnectionState.Connected;
             }
         }
         catch (Exception ex)
@@ -198,6 +204,14 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
     public bool IsDisposed => _disposed;
 
+    /// <summary>Non-null after the combined NDI capture thread faulted. The source is then terminal:
+    /// audio/video adapters report exhausted and blocked video reads stop waiting.</summary>
+    public Exception? Fault => _faultEx;
+
+    /// <summary>Raised once if the combined capture thread faults. The handler runs on the capture
+    /// thread; keep it lightweight.</summary>
+    public event Action<Exception>? Faulted;
+
     public AudioFormat AudioFormat =>
         Volatile.Read(ref _audioState)?.Format
         ?? throw new InvalidOperationException("NDI source has not delivered an audio frame yet.");
@@ -243,6 +257,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (_disposed) return false;
+            if (_faultEx is not null) return false;
             var audioReady = !wantAudio || IsAudioConnected;
             var videoReady = !wantVideo || IsVideoConnected;
             if (audioReady && videoReady) return true;
@@ -304,12 +319,18 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             while (_videoQueue.TryDequeue(out var frame))
                 frame.Dispose();
             _nextVideoPts = nextPresentationTime;
+            _videoRebaseBasePts = nextPresentationTime;
+            _lastResolvedVideoPts = nextPresentationTime;
+            _hasLastResolvedVideoPts = false;
+            _videoNdiTimingOriginTicks = 0;
+            _videoNdiTimingOriginSet = false;
         }
     }
 
     private int ReadAudioInto(Span<float> dst)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_faultEx is not null) return 0;
         var snap = Volatile.Read(ref _audioState);
         if (snap is null) return 0;
 
@@ -341,7 +362,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         VideoFrame? next;
         while (!_videoQueue.TryDequeue(out next))
         {
-            if (_disposed)
+            if (_disposed || _faultEx is not null)
             {
                 frame = null!;
                 return false;
@@ -349,7 +370,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
             lock (_videoWaitGate)
             {
-                if (_videoQueue.IsEmpty && !_disposed)
+                if (_videoQueue.IsEmpty && !_disposed && _faultEx is null)
                     Monitor.Wait(_videoWaitGate, 100);
             }
         }
@@ -414,6 +435,19 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
                 }
             }
         }
+        catch (Exception ex)
+        {
+            // The combined NDISource is the path HaPlay uses. Keep it aligned with the standalone
+            // NDIAudioReceiver/NDIVideoReceiver fault-boundary contract: never let a background
+            // capture/unpack/native error escape the thread and crash the host.
+            _faultEx = ex;
+            _state = NDIConnectionState.Disconnected;
+            Trace.LogError(ex, "NDISource.CaptureLoop faulted");
+            lock (_videoWaitGate)
+                Monitor.PulseAll(_videoWaitGate);
+            try { Faulted?.Invoke(ex); } catch { /* subscriber best effort */ }
+            try { _ingestClock?.NotifyCaptureStopped(); } catch { /* best effort */ }
+        }
         finally
         {
             if (audioPin.IsAllocated) audioPin.Free();
@@ -464,11 +498,11 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     {
         lock (_videoPtsLock)
         {
-            if (NDIVideoFrameUnpack.TryUnpack(video, _nextVideoPts, out var vf) && vf is not null)
+            var pts = ResolveVideoPresentationTime(in video);
+            if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
             {
                 EnsureVideoFormat(vf.Format);
                 EnqueueVideoFrame(vf);
-                _nextVideoPts += _videoPtsStep;
                 var unpacked = Interlocked.Increment(ref _videoFramesUnpacked);
                 if (unpacked <= 3 && Trace.IsEnabled(LogLevel.Information))
                 {
@@ -567,7 +601,32 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         _videoPtsStep = format.FrameRate.Denominator > 0 && format.FrameRate.ToDouble() > 0
             ? TimeSpan.FromSeconds(1.0 / format.FrameRate.ToDouble())
             : TimeSpan.FromMilliseconds(33);
+        if (_hasLastResolvedVideoPts)
+            _nextVideoPts = _lastResolvedVideoPts + _videoPtsStep;
         _hasVideoFormat = true;
+    }
+
+    private TimeSpan ResolveVideoPresentationTime(in NDIVideoFrameV2 video)
+    {
+        if (NDIFrameTiming.TryMapPresentationTime(
+                video.Timecode,
+                video.Timestamp,
+                ref _videoNdiTimingOriginTicks,
+                ref _videoNdiTimingOriginSet,
+                out var relative))
+        {
+            var pts = _videoRebaseBasePts + relative;
+            _lastResolvedVideoPts = pts;
+            _hasLastResolvedVideoPts = true;
+            _nextVideoPts = pts + _videoPtsStep;
+            return pts;
+        }
+
+        var synthetic = _nextVideoPts;
+        _lastResolvedVideoPts = synthetic;
+        _hasLastResolvedVideoPts = true;
+        _nextVideoPts += _videoPtsStep;
+        return synthetic;
     }
 
     private void EnqueueVideoFrame(VideoFrame frame)
@@ -614,7 +673,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         public AudioFormat Format =>
             owner._receiveAudio && owner.IsAudioConnected ? owner.AudioFormat : StandbyAudioFormat;
 
-        public bool IsExhausted => owner.IsDisposed;
+        public bool IsExhausted => owner.IsDisposed || owner.Fault is not null;
 
         public int ReadInto(Span<float> destination)
         {
@@ -638,7 +697,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         public IReadOnlyList<PixelFormat> NativePixelFormats =>
             owner._receiveVideo ? owner.NativeVideoPixelFormats : [PixelFormat.Bgra32];
 
-        public bool IsExhausted => owner.IsDisposed || !owner._receiveVideo;
+        public bool IsExhausted => owner.IsDisposed || owner.Fault is not null || !owner._receiveVideo;
 
         public void SelectOutputFormat(PixelFormat format)
         {

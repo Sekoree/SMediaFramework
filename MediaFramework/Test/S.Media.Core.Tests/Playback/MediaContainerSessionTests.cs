@@ -79,6 +79,70 @@ public sealed class MediaContainerSessionTests
         }
     }
 
+    [Fact]
+    public void Seek_WhenRunning_SeeksSharedDemuxAndResumes()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"avrouter_seek_resume_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateAudioVideo(path))
+            return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            using var clock = new MediaClock();
+            var output = new FakeVideoOutput(c.Video.NativePixelFormats.ToArray());
+            using var video = new VideoPlayer(c.Video, output, clock);
+            var session = new MediaPlaybackSession(video, clock);
+            var router = new MediaContainerSession(c, session);
+
+            router.Play();
+            output.WaitForConfigured();
+            Thread.Sleep(120);
+
+            var target = TimeSpan.FromMilliseconds(250);
+            router.Seek(target);
+
+            Assert.True(video.IsRunning);
+            Assert.True(clock.IsRunning);
+            var deltaMs = Math.Abs((clock.CurrentPosition - target).TotalMilliseconds);
+            Assert.True(deltaMs < 80.0, $"clock at {clock.CurrentPosition}, expected near {target}");
+
+            router.Pause();
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerSessionTests)}: temp media delete");
+        }
+    }
+
+    [Fact]
+    public void Seek_WhenPaused_StaysPaused()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"avrouter_seek_paused_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateAudioVideo(path))
+            return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            using var clock = new MediaClock();
+            var output = new FakeVideoOutput(c.Video.NativePixelFormats.ToArray());
+            using var video = new VideoPlayer(c.Video, output, clock);
+            var session = new MediaPlaybackSession(video, clock);
+            var router = new MediaContainerSession(c, session);
+
+            var target = TimeSpan.FromMilliseconds(250);
+            router.Seek(target);
+
+            Assert.False(video.IsRunning);
+            Assert.False(clock.IsRunning);
+            var deltaMs = Math.Abs((clock.CurrentPosition - target).TotalMilliseconds);
+            Assert.True(deltaMs < 2.0, $"clock at {clock.CurrentPosition}, expected ~{target}");
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerSessionTests)}: temp media delete");
+        }
+    }
+
     private static bool TryGenerateAudioVideo(string path)
     {
         try

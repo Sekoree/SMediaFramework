@@ -18,9 +18,9 @@ namespace S.Media.Core.Video;
 /// </para>
 /// <para>
 /// Optional metadata (transfer hint, color space / range, field order, SMPTE
-/// timecode) is bundled into <see cref="Metadata"/>; individual properties
-/// (<see cref="ColorTransferHint"/>, <see cref="ColorSpace"/>, etc.) forward
-/// to the bundle for convenient access.
+/// timecode, alpha mode) is bundled into <see cref="Metadata"/>; individual
+/// properties (<see cref="ColorTransferHint"/>, <see cref="ColorSpace"/>, etc.)
+/// forward to the bundle for convenient access.
 /// </para>
 /// </remarks>
 public sealed partial class VideoFrame : IDisposable
@@ -50,6 +50,9 @@ public sealed partial class VideoFrame : IDisposable
 
     /// <inheritdoc cref="VideoFrameMetadata.Timecode" />
     public VideoTimecode? Timecode => Metadata.Timecode;
+
+    /// <inheritdoc cref="VideoFrameMetadata.AlphaMode" />
+    public VideoAlphaMode AlphaMode => Metadata.AlphaMode;
 
     /// <summary>Hardware backing when present; <c>null</c> for CPU-only frames.</summary>
     public VideoFrameHardwareBacking? HardwareBacking => _hardwareBacking;

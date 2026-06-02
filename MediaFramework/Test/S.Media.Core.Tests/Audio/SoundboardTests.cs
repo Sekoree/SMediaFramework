@@ -70,6 +70,44 @@ public sealed class SoundboardTests
     }
 
     [Fact]
+    public void AddCue_UnknownOutput_Throws()
+    {
+        using var router = new AudioRouter(48_000, chunkSamples: 480);
+        using var board = new Soundboard(router);
+
+        Assert.Throws<ArgumentException>(() => board.AddCue("a", MakeClip(0.1), "missing"));
+    }
+
+    [Fact]
+    public void Fire_WhenOutputWasRemoved_RollsBackRouterSource()
+    {
+        using var router = new AudioRouter(48_000, chunkSamples: 480);
+        var outId = router.AddOutput(new RecordingOutput(Stereo));
+        using var board = new Soundboard(router);
+        board.AddCue("a", MakeClip(0.1), outId);
+        Assert.True(router.RemoveOutput(outId));
+        var beforeSources = router.SourceIds.Count;
+
+        Assert.Throws<ArgumentException>(() => board.Fire("a"));
+
+        Assert.Equal(beforeSources, router.SourceIds.Count);
+    }
+
+    [Fact]
+    public void Fire_WhenRouteCreationFailsAfterAddSource_RollsBackRouterSource()
+    {
+        using var router = new AudioRouter(48_000, chunkSamples: 480);
+        var outId = router.AddOutput(new RecordingOutput(Stereo));
+        using var board = new Soundboard(router);
+        board.AddCue("a", MakeClip(0.1), outId, map: new ChannelMap([0, 2]));
+        var beforeSources = router.SourceIds.Count;
+
+        Assert.Throws<InvalidOperationException>(() => board.Fire("a"));
+
+        Assert.Equal(beforeSources, router.SourceIds.Count);
+    }
+
+    [Fact]
     public void Dispose_OwningRouter_HardStopsVoices_AndDisposesRouter()
     {
         var router = new AudioRouter(48_000, chunkSamples: 480);

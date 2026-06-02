@@ -20,9 +20,9 @@ namespace S.Media.SkiaSharp;
 /// </para>
 /// <para>
 /// Decoding happens once at <see cref="OpenFromFile"/> / <see cref="OpenFromStream"/>. The pixel
-/// buffer is rented from <see cref="ArrayPool{T}.Shared"/> and returned on <see cref="Dispose"/>;
-/// emitted frames carry <c>release: null</c> because the source owns the buffer for its entire
-/// lifetime (the buffer outlives every frame the source ever emits).
+/// buffer is rented from <see cref="ArrayPool{T}.Shared"/> and refcounted across the source plus every
+/// emitted frame. Disposing the source stops future reads, but the buffer returns to the pool only
+/// after all in-flight frames have also been disposed.
 /// </para>
 /// <para>
 /// Default frame rate is 30 FPS — only used for PTS spacing of the re-emitted frames (the player
@@ -139,7 +139,8 @@ public sealed class ImageFileSource : IVideoSource, IDisposable
                 _format,
                 _planes,
                 _strides,
-                release: release);
+                release: release,
+                metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied));
             _backingRefs++;
             _nextPts += _ptsStep;
             return true;

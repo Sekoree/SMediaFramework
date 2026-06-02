@@ -103,6 +103,7 @@ public sealed class AudioFileDecoderTests : IDisposable
         }
 
         Assert.True(decoder.IsAtEnd);
+        Assert.True(decoder.IsExhausted);
         var expected = (long)(SampleRate * DurationSeconds);
         Assert.InRange(total, expected - SampleRate / 100, expected + SampleRate / 100);
     }

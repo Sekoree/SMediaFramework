@@ -65,7 +65,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
     /// <summary>
     /// <see cref="IAudioSource.IsExhausted"/>: true once the codec has hit EOF
     /// AND <c>swr</c>'s internal output queue has been fully drained by a
-    /// prior <see cref="ReadInto"/>.
+    /// prior <see cref="ReadInto"/> or <see cref="TryReadNextFrame"/>.
     /// </summary>
     public bool IsExhausted => _eofReached && _drainedTail;
 
@@ -157,10 +157,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!TryReceiveDecodedFrame())
-        {
-            frame = default;
-            return false;
-        }
+            return TryDrainTailFrame(out frame);
         frame = ConvertFrame();
         av_frame_unref(_frame);
         return true;
@@ -405,6 +402,64 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
                 if (Interlocked.Exchange(ref released, 1) == 0)
                     ArrayPool<float>.Shared.Return(owned, clearArray: false);
             }));
+    }
+
+    private bool TryDrainTailFrame(out AudioFrame frame)
+    {
+        if (_drainedTail)
+        {
+            frame = default;
+            return false;
+        }
+
+        var delay = swr_get_delay(_swrCtx, Format.SampleRate);
+        var outCapacity = (int)av_rescale_rnd(delay, Format.SampleRate, Format.SampleRate, AVRounding.AV_ROUND_UP);
+        if (outCapacity <= 0)
+        {
+            _drainedTail = true;
+            frame = default;
+            return false;
+        }
+
+        var totalFloats = outCapacity * Format.Channels;
+        var samples = ArrayPool<float>.Shared.Rent(totalFloats);
+        int converted;
+        fixed (float* outPtr = samples)
+        {
+            var outBuf = (byte*)outPtr;
+            converted = swr_convert(_swrCtx, &outBuf, outCapacity, null, 0);
+        }
+        if (converted < 0)
+        {
+            ArrayPool<float>.Shared.Return(samples);
+            FFmpegException.ThrowIfError(converted, nameof(swr_convert));
+        }
+
+        if (converted == 0)
+        {
+            ArrayPool<float>.Shared.Return(samples);
+            _drainedTail = true;
+            frame = default;
+            return false;
+        }
+
+        var pts = TimeSpan.FromSeconds((double)_samplesEmitted / Format.SampleRate);
+        Position = pts + TimeSpan.FromSeconds((double)converted / Format.SampleRate);
+        _samplesEmitted += converted;
+
+        var owned = samples;
+        var released = 0;
+        frame = new AudioFrame(
+            pts,
+            Format,
+            converted,
+            samples.AsMemory(0, converted * Format.Channels),
+            Release: DisposableRelease.Wrap(() =>
+            {
+                if (Interlocked.Exchange(ref released, 1) == 0)
+                    ArrayPool<float>.Shared.Return(owned, clearArray: false);
+            }));
+        return true;
     }
 
     private TimeSpan ResolvePts()

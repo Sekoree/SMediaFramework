@@ -47,6 +47,8 @@ public sealed class Soundboard : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(cueId);
         ArgumentNullException.ThrowIfNull(clip);
         ArgumentException.ThrowIfNullOrEmpty(outputId);
+        if (!_router.TryGetOutput(outputId, out _))
+            throw new ArgumentException($"output '{outputId}' is not registered", nameof(outputId));
 
         var player = new AudioClipPlayer(clip)
         {

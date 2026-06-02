@@ -98,7 +98,8 @@ public sealed class CpuVideoCompositor : IVideoCompositor
             _output,
             plane,
             _outputStride,
-            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)));
+            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)),
+            metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied));
     }
 
     private void DrawLayer(byte[] dst, CompositorLayer layer, float opacity)
@@ -108,6 +109,7 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         var srcW = src.Format.Width;
         var srcH = src.Format.Height;
         var srcPlane = src.Planes[0];
+        var alphaMode = ResolveAlphaMode(src.AlphaMode);
 
         // Compute destination AABB from the four transformed corners, clipped to canvas.
         var (x0, y0) = layer.Transform.Apply(0, 0);
@@ -165,9 +167,9 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                     }
                 }
 
-                // Effective layer alpha = source.alpha × opacity (both in 0..1).
-                // We keep math in 0..255 for speed; final alpha rounds via /255.
-                var effA = (int)(a * opacity + 0.5f);
+                NormalizeForPremultipliedBlend(b, g, r, a, opacity, alphaMode,
+                    out var premulB, out var premulG, out var premulR, out var effA,
+                    out var multiplyB, out var multiplyG, out var multiplyR);
                 if (effA <= 0) continue;
 
                 var dstIdx = rowOffset + dx * 4;
@@ -175,31 +177,24 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                 {
                     case BlendMode.Source:
                     {
-                        // Replace destination with source × opacity. Source is already premultiplied
-                        // (SkiaSharp convention), so RGB carry the alpha-scaling — applying opacity
-                        // once preserves the premultiplied relationship.
-                        dst[dstIdx + 0] = (byte)(b * opacity + 0.5f);
-                        dst[dstIdx + 1] = (byte)(g * opacity + 0.5f);
-                        dst[dstIdx + 2] = (byte)(r * opacity + 0.5f);
+                        // Replace destination with source × opacity in premultiplied form.
+                        dst[dstIdx + 0] = ToByte(premulB);
+                        dst[dstIdx + 1] = ToByte(premulG);
+                        dst[dstIdx + 2] = ToByte(premulR);
                         dst[dstIdx + 3] = (byte)effA;
                         break;
                     }
                     case BlendMode.SourceOver:
                     {
-                        // Premultiplied source-over: dst.rgb = src.rgb*opacity + dst.rgb*(1 - effA/255).
-                        // Source pixel is premultiplied already (SkiaSharp convention) so RGB are
-                        // pre-scaled by source alpha; we only need to apply opacity on top.
-                        var sB = (b * opacity);
-                        var sG = (g * opacity);
-                        var sR = (r * opacity);
+                        // Premultiplied source-over: dst.rgb = src.rgb + dst.rgb*(1 - effA/255).
                         var oneMinusA = 1f - (effA / 255f);
                         var dB = dst[dstIdx + 0];
                         var dG = dst[dstIdx + 1];
                         var dR = dst[dstIdx + 2];
                         var dA = dst[dstIdx + 3];
-                        dst[dstIdx + 0] = (byte)Math.Clamp((int)(sB + dB * oneMinusA + 0.5f), 0, 255);
-                        dst[dstIdx + 1] = (byte)Math.Clamp((int)(sG + dG * oneMinusA + 0.5f), 0, 255);
-                        dst[dstIdx + 2] = (byte)Math.Clamp((int)(sR + dR * oneMinusA + 0.5f), 0, 255);
+                        dst[dstIdx + 0] = ToByte(premulB + dB * oneMinusA);
+                        dst[dstIdx + 1] = ToByte(premulG + dG * oneMinusA);
+                        dst[dstIdx + 2] = ToByte(premulR + dR * oneMinusA);
                         dst[dstIdx + 3] = (byte)Math.Clamp((int)(effA + dA * oneMinusA + 0.5f), 0, 255);
                         break;
                     }
@@ -210,9 +205,9 @@ public sealed class CpuVideoCompositor : IVideoCompositor
                         var dB = dst[dstIdx + 0];
                         var dG = dst[dstIdx + 1];
                         var dR = dst[dstIdx + 2];
-                        var mulB = (b * dB + 127) / 255;
-                        var mulG = (g * dG + 127) / 255;
-                        var mulR = (r * dR + 127) / 255;
+                        var mulB = (multiplyB * dB + 127) / 255;
+                        var mulG = (multiplyG * dG + 127) / 255;
+                        var mulR = (multiplyR * dR + 127) / 255;
                         var w = effA / 255f;
                         var oneMinusW = 1f - w;
                         dst[dstIdx + 0] = (byte)Math.Clamp((int)(mulB * w + dB * oneMinusW + 0.5f), 0, 255);
@@ -227,6 +222,54 @@ public sealed class CpuVideoCompositor : IVideoCompositor
             }
         }
     }
+
+    private static VideoAlphaMode ResolveAlphaMode(VideoAlphaMode alphaMode) => alphaMode switch
+    {
+        VideoAlphaMode.Straight => VideoAlphaMode.Straight,
+        VideoAlphaMode.Opaque => VideoAlphaMode.Opaque,
+        _ => VideoAlphaMode.Premultiplied,
+    };
+
+    private static void NormalizeForPremultipliedBlend(
+        byte b, byte g, byte r, byte a, float opacity, VideoAlphaMode alphaMode,
+        out float premulB, out float premulG, out float premulR, out int effectiveAlpha,
+        out byte multiplyB, out byte multiplyG, out byte multiplyR)
+    {
+        if (alphaMode == VideoAlphaMode.Opaque)
+        {
+            effectiveAlpha = (int)(255 * opacity + 0.5f);
+            premulB = b * opacity;
+            premulG = g * opacity;
+            premulR = r * opacity;
+            multiplyB = b;
+            multiplyG = g;
+            multiplyR = r;
+            return;
+        }
+
+        effectiveAlpha = (int)(a * opacity + 0.5f);
+        if (alphaMode == VideoAlphaMode.Straight)
+        {
+            var alpha = a / 255f;
+            premulB = b * alpha * opacity;
+            premulG = g * alpha * opacity;
+            premulR = r * alpha * opacity;
+            multiplyB = b;
+            multiplyG = g;
+            multiplyR = r;
+            return;
+        }
+
+        premulB = b * opacity;
+        premulG = g * opacity;
+        premulR = r * opacity;
+        multiplyB = b;
+        multiplyG = g;
+        multiplyR = r;
+    }
+
+    private static byte ToByte(float value) =>
+        (byte)Math.Clamp((int)(value + 0.5f), 0, 255);
 
     /// <summary>
     /// 4-tap bilinear sample at fractional <paramref name="sxf"/>/<paramref name="syf"/> source coords (pixel-center convention).

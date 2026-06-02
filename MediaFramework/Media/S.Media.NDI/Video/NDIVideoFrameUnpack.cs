@@ -22,7 +22,8 @@ internal static class NDIVideoFrameUnpack
     private static readonly VideoFrameMetadata NdiSdrFullRangeBt709 = new(
         ColorTransferHint: VideoTransferHint.Sdr,
         ColorSpace: VideoColorSpace.Bt709,
-        ColorRange: VideoColorRange.Full);
+        ColorRange: VideoColorRange.Full,
+        AlphaMode: VideoAlphaMode.Opaque);
 
     /// <summary>Quick sanity metric for logs — average luma (Y or BGRA G) after unpack.</summary>
     internal static double SampleAveragePackedLuma(VideoFrame frame)
@@ -112,6 +113,7 @@ internal static class NDIVideoFrameUnpack
             ? new Rational(native.FrameRateN, native.FrameRateD)
             : new Rational(30, 1);
         var format = new VideoFormat(width, height, pixelFormat, rate);
+        var metadata = MetadataForFourCc(native.FourCC);
 
         try
         {
@@ -119,18 +121,18 @@ internal static class NDIVideoFrameUnpack
             {
                 // Alpha-bearing variants keep UYVY color data in the first plane.
                 NDIFourCCVideoType.Uyva =>
-                    UnpackPacked(native, format, stride, presentationTime),
+                    UnpackPacked(native, format, stride, presentationTime, metadata),
                 // High bit-depth 4:2:2 paths (P216/PA16) are converted to 8-bit UYVY so
                 // the existing outputs/renderers can display them without dropping frames.
                 NDIFourCCVideoType.P216 or NDIFourCCVideoType.Pa16 =>
-                    UnpackP216LikeToUyvy(native, format, stride, presentationTime),
+                    UnpackP216LikeToUyvy(native, format, stride, presentationTime, metadata),
                 _ => pixelFormat switch
                 {
                     PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Uyvy =>
-                        UnpackPacked(native, format, stride, presentationTime),
-                    PixelFormat.Nv12 => UnpackNv12(native, format, stride, presentationTime),
-                    PixelFormat.I420 => UnpackI420(native, format, stride, presentationTime),
-                    PixelFormat.Yv12 => UnpackYv12(native, format, stride, presentationTime),
+                        UnpackPacked(native, format, stride, presentationTime, metadata),
+                    PixelFormat.Nv12 => UnpackNv12(native, format, stride, presentationTime, metadata),
+                    PixelFormat.I420 => UnpackI420(native, format, stride, presentationTime, metadata),
+                    PixelFormat.Yv12 => UnpackYv12(native, format, stride, presentationTime, metadata),
                     _ => null,
                 },
             };
@@ -163,6 +165,11 @@ internal static class NDIVideoFrameUnpack
         };
         return pixelFormat != PixelFormat.Unknown;
     }
+
+    private static VideoFrameMetadata MetadataForFourCc(NDIFourCCVideoType fourCc) =>
+        fourCc is NDIFourCCVideoType.Bgra or NDIFourCCVideoType.Rgba
+            ? NdiSdrFullRangeBt709 with { AlphaMode = VideoAlphaMode.Straight }
+            : NdiSdrFullRangeBt709;
 
     private static int DefaultLineStride(PixelFormat format, int width) => format switch
     {
@@ -288,7 +295,12 @@ internal static class NDIVideoFrameUnpack
         return lineStride > minLineStride * 2;
     }
 
-    private static VideoFrame UnpackPacked(in NDIVideoFrameV2 native, VideoFormat format, int stride, TimeSpan pts)
+    private static VideoFrame UnpackPacked(
+        in NDIVideoFrameV2 native,
+        VideoFormat format,
+        int stride,
+        TimeSpan pts,
+        VideoFrameMetadata metadata)
     {
         var width = format.Width;
         var height = format.Height;
@@ -320,7 +332,7 @@ internal static class NDIVideoFrameUnpack
                 tight.AsMemory(0, tightBytes),
                 visibleStride,
                 release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(tight)),
-                metadata: NdiSdrFullRangeBt709);
+                metadata: metadata);
         }
         catch
         {
@@ -336,7 +348,12 @@ internal static class NDIVideoFrameUnpack
         _ => throw new InvalidOperationException($"not a packed pixel format: {format}"),
     };
 
-    private static VideoFrame UnpackNv12(in NDIVideoFrameV2 native, VideoFormat format, int yStride, TimeSpan pts)
+    private static VideoFrame UnpackNv12(
+        in NDIVideoFrameV2 native,
+        VideoFormat format,
+        int yStride,
+        TimeSpan pts,
+        VideoFrameMetadata metadata)
     {
         var width = format.Width;
         var height = format.Height;
@@ -366,7 +383,7 @@ internal static class NDIVideoFrameUnpack
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
                 }),
-                metadata: NdiSdrFullRangeBt709);
+                metadata: metadata);
         }
         catch
         {
@@ -376,7 +393,12 @@ internal static class NDIVideoFrameUnpack
         }
     }
 
-    private static VideoFrame UnpackI420(in NDIVideoFrameV2 native, VideoFormat format, int yStride, TimeSpan pts)
+    private static VideoFrame UnpackI420(
+        in NDIVideoFrameV2 native,
+        VideoFormat format,
+        int yStride,
+        TimeSpan pts,
+        VideoFrameMetadata metadata)
     {
         var width = format.Width;
         var height = format.Height;
@@ -413,7 +435,7 @@ internal static class NDIVideoFrameUnpack
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
                 }),
-                metadata: NdiSdrFullRangeBt709);
+                metadata: metadata);
         }
         catch
         {
@@ -424,7 +446,12 @@ internal static class NDIVideoFrameUnpack
         }
     }
 
-    private static VideoFrame UnpackYv12(in NDIVideoFrameV2 native, VideoFormat format, int yStride, TimeSpan pts)
+    private static VideoFrame UnpackYv12(
+        in NDIVideoFrameV2 native,
+        VideoFormat format,
+        int yStride,
+        TimeSpan pts,
+        VideoFrameMetadata metadata)
     {
         var width = format.Width;
         var height = format.Height;
@@ -462,7 +489,7 @@ internal static class NDIVideoFrameUnpack
                     foreach (var b in rented)
                         ArrayPool<byte>.Shared.Return(b);
                 }),
-                metadata: NdiSdrFullRangeBt709);
+                metadata: metadata);
         }
         catch
         {
@@ -489,7 +516,12 @@ internal static class NDIVideoFrameUnpack
                 .CopyTo(dst.Slice(row * visibleBytesPerRow, visibleBytesPerRow));
     }
 
-    private static VideoFrame UnpackP216LikeToUyvy(in NDIVideoFrameV2 native, VideoFormat format, int yStride, TimeSpan pts)
+    private static VideoFrame UnpackP216LikeToUyvy(
+        in NDIVideoFrameV2 native,
+        VideoFormat format,
+        int yStride,
+        TimeSpan pts,
+        VideoFrameMetadata metadata)
     {
         var width = format.Width;
         var height = format.Height;
@@ -540,7 +572,7 @@ internal static class NDIVideoFrameUnpack
                 uyvyBuffer.AsMemory(0, uyvyBytes),
                 uyvyStride,
                 release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(uyvyBuffer)),
-                metadata: NdiSdrFullRangeBt709);
+                metadata: metadata);
         }
         catch
         {

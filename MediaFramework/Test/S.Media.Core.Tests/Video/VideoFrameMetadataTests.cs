@@ -18,6 +18,7 @@ public sealed class VideoFrameMetadataTests
             Assert.Equal(VideoColorSpace.Unspecified, frame.ColorSpace);
             Assert.Equal(VideoColorRange.Unspecified, frame.ColorRange);
             Assert.Equal(VideoFieldOrder.Progressive, frame.FieldOrder);
+            Assert.Equal(VideoAlphaMode.Unspecified, frame.AlphaMode);
             Assert.Null(frame.Timecode);
         }
         finally { frame.Dispose(); }
@@ -32,7 +33,8 @@ public sealed class VideoFrameMetadataTests
             ColorSpace: VideoColorSpace.Bt2020,
             ColorRange: VideoColorRange.Limited,
             FieldOrder: VideoFieldOrder.TopFieldFirst,
-            Timecode: tc);
+            Timecode: tc,
+            AlphaMode: VideoAlphaMode.Straight);
         var frame = new VideoFrame(TimeSpan.Zero, Bgra32_4x4, plane, 16, release: null, metadata: meta);
         try
         {
@@ -40,6 +42,7 @@ public sealed class VideoFrameMetadataTests
             Assert.Equal(VideoColorRange.Limited, frame.ColorRange);
             Assert.Equal(VideoFieldOrder.TopFieldFirst, frame.FieldOrder);
             Assert.NotNull(frame.Timecode);
+            Assert.Equal(VideoAlphaMode.Straight, frame.AlphaMode);
             Assert.Equal(0, frame.Timecode!.Value.Frames);
             Assert.Equal(1, frame.Timecode.Value.Seconds);
             // Property-style read forwards to the same value as direct Metadata access.

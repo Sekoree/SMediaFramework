@@ -10,6 +10,7 @@ namespace S.Media.Core.Video;
 /// <param name="ColorRange">YUV value range (Limited / Full / Unspecified).</param>
 /// <param name="FieldOrder">Interlace field order; <see cref="VideoFieldOrder.Progressive"/> for the common case.</param>
 /// <param name="Timecode">SMPTE 12M timecode when the source carries one; null otherwise.</param>
+/// <param name="AlphaMode">How alpha-bearing pixel data encodes RGB relative to alpha.</param>
 /// <remarks>
 /// <para>
 /// All fields default to "unspecified" so producers only have to fill in what they know. The
@@ -26,4 +27,5 @@ public readonly record struct VideoFrameMetadata(
     VideoColorSpace ColorSpace = default,
     VideoColorRange ColorRange = default,
     VideoFieldOrder FieldOrder = default,
-    VideoTimecode? Timecode = null);
+    VideoTimecode? Timecode = null,
+    VideoAlphaMode AlphaMode = default);

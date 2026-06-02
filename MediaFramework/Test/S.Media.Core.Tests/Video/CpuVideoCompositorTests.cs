@@ -58,6 +58,55 @@ public sealed class CpuVideoCompositorTests
     }
 
     [Fact]
+    public void SourceOver_StraightAlpha_PremultipliesBeforeBlend()
+    {
+        var basePlane = MakeSolid(4, 4, 255, 0, 0, 255);
+        var topPlane = MakeSolid(4, 4, 0, 0, 255, 128);
+        using var baseFrame = new VideoFrame(TimeSpan.Zero, Bgra32_4x4, basePlane, 16, release: null,
+            metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Opaque));
+        using var topFrame = new VideoFrame(TimeSpan.Zero, Bgra32_4x4, topPlane, 16, release: null,
+            metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Straight));
+        using var c = new CpuVideoCompositor(Bgra32_4x4);
+
+        var result = c.Composite(
+            [
+                new CompositorLayer(baseFrame, LayerTransform2D.Identity, 1f, BlendMode.Source),
+                new CompositorLayer(topFrame, LayerTransform2D.Identity, 1f, BlendMode.SourceOver),
+            ],
+            TimeSpan.Zero);
+        try
+        {
+            var span = result.Planes[0].Span;
+            Assert.InRange(span[0], 126, 128);
+            Assert.Equal(0, span[1]);
+            Assert.InRange(span[2], 127, 129);
+            Assert.Equal(255, span[3]);
+            Assert.Equal(VideoAlphaMode.Premultiplied, result.AlphaMode);
+        }
+        finally { result.Dispose(); }
+    }
+
+    [Fact]
+    public void Source_StraightAlpha_OutputsPremultipliedPixel()
+    {
+        var srcPlane = MakeSolid(4, 4, 0, 0, 255, 128);
+        using var srcFrame = new VideoFrame(TimeSpan.Zero, Bgra32_4x4, srcPlane, 16, release: null,
+            metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Straight));
+        using var c = new CpuVideoCompositor(Bgra32_4x4);
+
+        var result = c.Composite([new CompositorLayer(srcFrame, LayerTransform2D.Identity, 1f, BlendMode.Source)], TimeSpan.Zero);
+        try
+        {
+            var span = result.Planes[0].Span;
+            Assert.Equal(0, span[0]);
+            Assert.Equal(0, span[1]);
+            Assert.InRange(span[2], 127, 129);
+            Assert.Equal(128, span[3]);
+        }
+        finally { result.Dispose(); }
+    }
+
+    [Fact]
     public void Multiply_GrayOnWhite_ProducesGray()
     {
         // dst = solid white, src = solid mid-gray (128,128,128,255). Multiply at full opacity.

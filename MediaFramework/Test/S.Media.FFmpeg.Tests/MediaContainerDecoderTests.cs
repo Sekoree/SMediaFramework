@@ -43,6 +43,31 @@ public class MediaContainerDecoderTests
     }
 
     [Fact]
+    public void SharedDemux_FrameModeAudio_DrainsTailAndExhausts()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mc_audio_frames_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateAudioVideo(path)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+
+            long total = 0;
+            while (c.Audio.TryReadNextFrame(out var frame))
+            {
+                total += frame.SamplesPerChannel;
+                frame.Dispose();
+            }
+
+            Assert.True(c.Audio.IsExhausted);
+            Assert.True(total > 0);
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp media delete");
+        }
+    }
+
+    [Fact]
     public void Open_WithDecoderOptions_DoesNotThrow()
     {
         var path = Path.Combine(Path.GetTempPath(), $"mc_opts_{Guid.NewGuid():N}.mp4");

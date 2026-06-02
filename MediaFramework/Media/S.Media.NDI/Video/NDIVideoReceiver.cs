@@ -33,6 +33,11 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     private PixelFormat[] _native = [];
     private TimeSpan _ptsStep = TimeSpan.FromMilliseconds(33);
     private TimeSpan _nextPts;
+    private TimeSpan _rebaseBasePts;
+    private TimeSpan _lastResolvedPts;
+    private long _ndiTimingOriginTicks;
+    private bool _ndiTimingOriginSet;
+    private bool _hasLastResolvedPts;
     private bool _hasFormat;
     private bool _disposed;
     private long _overflowFrames;
@@ -80,6 +85,11 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             while (_queue.TryDequeue(out var frame))
                 frame.Dispose();
             _nextPts = nextPresentationTime;
+            _rebaseBasePts = nextPresentationTime;
+            _lastResolvedPts = nextPresentationTime;
+            _hasLastResolvedPts = false;
+            _ndiTimingOriginTicks = 0;
+            _ndiTimingOriginSet = false;
         }
     }
 
@@ -205,11 +215,11 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
                     // read _nextPts = 0) or after us (it drains the just-enqueued frame).
                     lock (_ptsLock)
                     {
-                        if (NDIVideoFrameUnpack.TryUnpack(video, _nextPts, out var vf) && vf is not null)
+                        var pts = ResolvePresentationTime(in video);
+                        if (NDIVideoFrameUnpack.TryUnpack(video, pts, out var vf) && vf is not null)
                         {
                             EnsureFormat(vf.Format);
                             EnqueueFrame(vf);
-                            _nextPts += _ptsStep;
                         }
                         else
                         {
@@ -250,7 +260,32 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         _ptsStep = format.FrameRate.Denominator > 0 && format.FrameRate.ToDouble() > 0
             ? TimeSpan.FromSeconds(1.0 / format.FrameRate.ToDouble())
             : TimeSpan.FromMilliseconds(33);
+        if (_hasLastResolvedPts)
+            _nextPts = _lastResolvedPts + _ptsStep;
         _hasFormat = true;
+    }
+
+    private TimeSpan ResolvePresentationTime(in NDIVideoFrameV2 video)
+    {
+        if (NDIFrameTiming.TryMapPresentationTime(
+                video.Timecode,
+                video.Timestamp,
+                ref _ndiTimingOriginTicks,
+                ref _ndiTimingOriginSet,
+                out var relative))
+        {
+            var pts = _rebaseBasePts + relative;
+            _lastResolvedPts = pts;
+            _hasLastResolvedPts = true;
+            _nextPts = pts + _ptsStep;
+            return pts;
+        }
+
+        var synthetic = _nextPts;
+        _lastResolvedPts = synthetic;
+        _hasLastResolvedPts = true;
+        _nextPts += _ptsStep;
+        return synthetic;
     }
 
     private void EnqueueFrame(VideoFrame frame)
