@@ -208,6 +208,7 @@ public sealed unsafe class YadifDeinterlacer : IDeinterlacer
 
     private bool PushFrame(VideoFrame frame)
     {
+        frame.ValidateCpuGeometry();
         av_frame_unref(_scratchIn);
         _scratchIn->width = _input.Width;
         _scratchIn->height = _input.Height;

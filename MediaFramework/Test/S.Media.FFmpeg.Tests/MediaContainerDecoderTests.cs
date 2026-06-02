@@ -142,6 +142,94 @@ public class MediaContainerDecoderTests
     }
 
     [Fact]
+    public void SharedDemux_DirectAudioRead_RacingSeekPresentation_NoThrowOrDeadlock()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mc_audio_seek_race_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateAudioVideo(path)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            var errors = new List<Exception>();
+            var stop = 0;
+            var reader = new Thread(() =>
+            {
+                var scratch = new float[c.Audio.Format.Channels * 256];
+                try
+                {
+                    while (Volatile.Read(ref stop) == 0)
+                        c.Audio.ReadInto(scratch);
+                }
+                catch (Exception ex)
+                {
+                    lock (errors) errors.Add(ex);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "SharedDemuxAudioSeekRaceReader",
+            };
+
+            reader.Start();
+            for (var i = 0; i < 40; i++)
+                c.SeekPresentation(TimeSpan.FromMilliseconds((i % 8) * 90));
+
+            Volatile.Write(ref stop, 1);
+            Assert.True(reader.Join(TimeSpan.FromSeconds(5)), "audio reader did not exit after seek race");
+            lock (errors)
+                Assert.Empty(errors);
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp audio seek race delete");
+        }
+    }
+
+    [Fact]
+    public void SharedDemux_DirectVideoRead_RacingSeekPresentation_NoThrowOrDeadlock()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mc_video_seek_race_{Guid.NewGuid():N}.mp4");
+        if (!TryGenerateAudioVideo(path)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            var errors = new List<Exception>();
+            var stop = 0;
+            var reader = new Thread(() =>
+            {
+                try
+                {
+                    while (Volatile.Read(ref stop) == 0)
+                    {
+                        if (c.Video.TryReadNextFrame(out var frame))
+                            frame.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    lock (errors) errors.Add(ex);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "SharedDemuxVideoSeekRaceReader",
+            };
+
+            reader.Start();
+            for (var i = 0; i < 40; i++)
+                c.SeekPresentation(TimeSpan.FromMilliseconds((i % 8) * 90));
+
+            Volatile.Write(ref stop, 1);
+            Assert.True(reader.Join(TimeSpan.FromSeconds(5)), "video reader did not exit after seek race");
+            lock (errors)
+                Assert.Empty(errors);
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp video seek race delete");
+        }
+    }
+
+    [Fact]
     public void Open_VideoOnly_Duration_UsesVideoOrContainerDuration()
     {
         var path = Path.Combine(Path.GetTempPath(), $"mc_video_only_{Guid.NewGuid():N}.mp4");

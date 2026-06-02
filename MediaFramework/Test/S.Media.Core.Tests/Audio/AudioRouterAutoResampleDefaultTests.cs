@@ -1,9 +1,11 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Tests.Diagnostics;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
 
+[Collection(ProcessWideMediaFrameworkPluginsCollection.Name)]
 public sealed class AudioRouterAutoResampleDefaultTests
 {
     [Fact]

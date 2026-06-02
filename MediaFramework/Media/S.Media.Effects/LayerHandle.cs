@@ -22,6 +22,7 @@ public sealed class LayerHandle
     private TimeSpan _newestQueuedPts = TimeSpan.MinValue;
     private TimeSpan _displayedPts = TimeSpan.MinValue;
     private bool _hasDisplayed;
+    private bool _closed;
 
     internal LayerHandle(
         VideoCompositor owner,
@@ -67,6 +68,12 @@ public sealed class LayerHandle
     {
         lock (_gate)
         {
+            // The layer was removed/closed (RemoveLayer disposed the look-ahead and the slot). A composite
+            // iterating a pre-removal layer snapshot must not re-pull source frames into _lookahead here —
+            // nothing would dispose them again, leaking the native backing.
+            if (_closed)
+                return;
+
             // 1. Catch up: pull future frames until the newest queued frame reaches/passes the master time
             //    (so the look-ahead brackets it), bounded by buffer size and a per-advance pull cap.
             var pulls = 0;
@@ -125,6 +132,8 @@ public sealed class LayerHandle
     {
         lock (_gate)
         {
+            if (_closed)
+                return;
             if (!Source.TryReadNextFrame(out var src))
                 return;
             SubmitFrameToSlot(src, timelineTime, canvasFormat);
@@ -196,6 +205,7 @@ public sealed class LayerHandle
     {
         lock (_gate)
         {
+            _closed = true;
             foreach (var f in _lookahead)
                 f.Dispose();
             _lookahead.Clear();

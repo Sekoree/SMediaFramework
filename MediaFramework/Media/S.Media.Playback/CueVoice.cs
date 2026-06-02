@@ -1,4 +1,6 @@
-namespace S.Media.Core.Audio;
+using S.Media.Core.Audio;
+
+namespace S.Media.Playback;
 
 /// <summary>
 /// Live handle for one sounding cue voice, returned by <see cref="Soundboard.Fire"/>. Lets a host

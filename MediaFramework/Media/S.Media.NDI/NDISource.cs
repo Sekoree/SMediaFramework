@@ -51,6 +51,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     private bool _hasLastResolvedVideoPts;
     private bool _hasVideoFormat;
     private bool _disposed;
+    private int _captureThreadStuck;
     private NDIConnectionState _state = NDIConnectionState.Opening;
     private long _audioOverflowFloats;
     private long _audioConversionDrops;
@@ -190,6 +191,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     {
         get
         {
+            if (IsCaptureStuck)
+                return NDIConnectionState.Stuck;
             if (_disposed)
                 return NDIConnectionState.Disposed;
             if (_state == NDIConnectionState.Opening && (IsAudioConnected || IsVideoConnected))
@@ -203,6 +206,12 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     public bool IsVideoConnected => _hasVideoFormat;
 
     public bool IsDisposed => _disposed;
+
+    /// <summary>
+    /// True after <see cref="Dispose"/> timed out while the capture thread was still alive.
+    /// Native receiver/runtime state is intentionally retained in this state.
+    /// </summary>
+    public bool IsCaptureStuck => Volatile.Read(ref _captureThreadStuck) != 0;
 
     /// <summary>Non-null after the combined NDI capture thread faulted. The source is then terminal:
     /// audio/video adapters report exhausted and blocked video reads stop waiting.</summary>
@@ -649,34 +658,34 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         _disposed = true;
         _state = NDIConnectionState.Disposed;
 
-        try { _cts.Cancel(); } catch { /* best effort */ }
-        try { CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2)); } catch { /* best effort */ }
-        var captureStopped = !_captureThread.IsAlive;
-        if (captureStopped)
-        {
-            try { _ingestClock?.NotifyCaptureStopped(); } catch { /* best effort */ }
-        }
-        if (captureStopped)
-        {
-            try { _cts.Dispose(); } catch { /* best effort */ }
-        }
-        else
-        {
-            _faultEx ??= new TimeoutException("NDISource capture thread did not exit during Dispose; native receiver/runtime were intentionally leaked.");
-            Trace.LogError(_faultEx, "NDISource.Dispose: capture thread still alive after join cap; leaking native receiver/runtime and CTS to avoid use-after-dispose.");
-        }
-
-        while (_videoQueue.TryDequeue(out var f))
-            f.Dispose();
-
-        lock (_videoWaitGate)
-            Monitor.PulseAll(_videoWaitGate);
-
-        if (captureStopped)
-        {
-            try { _receiver.Dispose(); } catch { /* best effort */ }
-            try { _runtime.Dispose(); } catch { /* best effort */ }
-        }
+        NDICaptureThreadLifecycle.StopAndDispose(
+            nameof(NDISource),
+            _captureThread,
+            _cts,
+            TimeSpan.FromSeconds(2),
+            () => _ingestClock.NotifyCaptureStopped(),
+            () =>
+            {
+                MediaDiagnostics.SwallowDisposeErrors(_receiver.Dispose, "NDISource.Dispose: NDIReceiver");
+                MediaDiagnostics.SwallowDisposeErrors(_runtime.Dispose, "NDISource.Dispose: NDIRuntime");
+            },
+            () =>
+            {
+                while (_videoQueue.TryDequeue(out var f))
+                    f.Dispose();
+            },
+            () =>
+            {
+                lock (_videoWaitGate)
+                    Monitor.PulseAll(_videoWaitGate);
+            },
+            ex =>
+            {
+                Volatile.Write(ref _captureThreadStuck, 1);
+                _state = NDIConnectionState.Stuck;
+                _faultEx ??= ex;
+            },
+            Trace);
     }
 
     private static readonly AudioFormat StandbyAudioFormat = new(48_000, 2);

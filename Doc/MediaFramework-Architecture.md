@@ -3,9 +3,40 @@
 Companion to the inline XML `<remarks>` on the framework's core orchestration types. The source docs cover the day-to-day surface; the longer-form discussion below is split out so IDE hover stays terse.
 
 Types covered here:
+- [Project layering (Core vs Playback)](#project-layering-core-vs-playback) — where a type belongs
 - [`AudioRouter`](#audiorouter) — graph routing & per-output pumps
 - [`MediaContainerSession`](#mediacontainersession) — FFmpeg-aware playback session pairing
 - [`MediaContainerPlaybackBundle`](#mediacontainerplaybackbundle) — single-`using` lifetime owner
+
+---
+
+## Project layering (Core vs Playback)
+
+The rule for deciding which assembly a type belongs in:
+
+- **`S.Media.Core`** is the **engine + primitive layer**. It has no FFmpeg or host
+  dependencies (only `Microsoft.Extensions.Logging.Abstractions`) and contains:
+  the abstractions/interfaces (`IAudioSource`, `IVideoSource`, `IAudioOutput`,
+  `IVideoOutput`, `ISeekableSource`, `IMediaClock`, …), the routing/playback
+  engines (`AudioRouter`, `VideoRouter`, `VideoPlayer`), the clip/voice
+  primitives (`AudioClip`, `AudioClipPlayer`, `AudioClipVoice`, `AudioBus`),
+  clocks, and the `TriggerBus`. Core must not contain product/show-control
+  facades. Decoding-from-file primitives reach FFmpeg through the
+  `MediaFrameworkPlugins` indirection, never a direct reference.
+
+- **`S.Media.Playback`** is the **product / show-control tier**. It references
+  Core + FFmpeg and is where the high-level, application-facing facades live:
+  `MediaPlayer`, `MediaSession`, `MediaGraph` / `MediaGraphBuilder`,
+  `MediaPlayerController`, `CueGraph` / `CueShowFile`, `RoutingScene`,
+  `Soundboard` / `CueVoice`, `SoundboardGrid`, and `TriggerBindingSet`.
+
+So: an orchestration facade a host app drives (a soundboard, a cue stack, a
+routing scene, a player controller) belongs in **Playback**; a reusable engine or
+buffer/voice primitive belongs in **Core**. `Soundboard` and `CueVoice` were moved
+from `Core/Audio` to Playback on 2026-06-02 to colocate them with the rest of the
+product tier (`SoundboardGrid` wraps `Soundboard`; `CueGraph` is the cue model);
+the underlying `AudioClip` / `AudioClipPlayer` / `AudioClipVoice` / `AudioBus`
+primitives stay in Core.
 
 ---
 

@@ -1,9 +1,12 @@
 using System.Diagnostics;
+using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Video;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Audio;
 using S.Media.FFmpeg.Encode;
+using S.Media.FFmpeg.Encode.Internal;
 using S.Media.FFmpeg.Video;
 using Xunit;
 
@@ -62,6 +65,75 @@ public sealed class FFmpegMuxRoundTripTests : IDisposable
         using var verify = VideoFileDecoder.Open(outPath, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
         Assert.True(verify.TryReadNextFrame(out var frame));
         frame.Dispose();
+    }
+
+    [Fact]
+    public void Video_submit_before_configure_disposes_input_frame()
+    {
+        var outPath = Path.Combine(Path.GetTempPath(), $"mf_enc_unconfigured_{Guid.NewGuid():N}.mp4");
+        _tempPaths.Add(outPath);
+        var released = 0;
+        using var mux = FFmpegMuxFileOutput.Open(outPath, new FFmpegMuxFileOutputOptions
+        {
+            IncludeAudio = false,
+            IncludeVideo = true,
+            Video = new FFmpegVideoFileOutputOptions { Codec = FFmpegVideoCodec.H264 },
+        });
+
+        Assert.Throws<InvalidOperationException>(() =>
+            mux.Video!.Submit(MakeBgraFrame(16, 16, DisposableRelease.Wrap(() => Interlocked.Increment(ref released)))));
+
+        Assert.Equal(1, Volatile.Read(ref released));
+    }
+
+    [Fact]
+    public void Video_configured_submit_disposes_input_frame_once()
+    {
+        var outPath = Path.Combine(Path.GetTempPath(), $"mf_enc_submit_{Guid.NewGuid():N}.mp4");
+        _tempPaths.Add(outPath);
+        var released = 0;
+        using var mux = FFmpegMuxFileOutput.Open(outPath, new FFmpegMuxFileOutputOptions
+        {
+            IncludeAudio = false,
+            IncludeVideo = true,
+            Video = new FFmpegVideoFileOutputOptions { Codec = FFmpegVideoCodec.H264 },
+        });
+        var format = new VideoFormat(16, 16, PixelFormat.I420, new Rational(30, 1));
+        mux.Video!.Configure(format);
+
+        mux.Video.Submit(MakeI420Frame(16, 16, DisposableRelease.Wrap(() => Interlocked.Increment(ref released))));
+
+        Assert.Equal(1, Volatile.Read(ref released));
+    }
+
+    [Fact]
+    public void Video_conversion_path_disposes_converted_frame_once()
+    {
+        var outPath = Path.Combine(Path.GetTempPath(), $"mf_enc_convert_{Guid.NewGuid():N}.mp4");
+        _tempPaths.Add(outPath);
+        var originalReleased = 0;
+        var convertedReleased = 0;
+        try
+        {
+            FfmpegVideoEncoder.ConverterFactoryForTests = () => new TrackingConverter(
+                () => Interlocked.Increment(ref convertedReleased));
+            using var mux = FFmpegMuxFileOutput.Open(outPath, new FFmpegMuxFileOutputOptions
+            {
+                IncludeAudio = false,
+                IncludeVideo = true,
+                Video = new FFmpegVideoFileOutputOptions { Codec = FFmpegVideoCodec.H264 },
+            });
+            mux.Video!.Configure(new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1)));
+
+            mux.Video.Submit(MakeBgraFrame(16, 16, DisposableRelease.Wrap(() => Interlocked.Increment(ref originalReleased))));
+
+            Assert.Equal(1, Volatile.Read(ref originalReleased));
+            Assert.Equal(1, Volatile.Read(ref convertedReleased));
+        }
+        finally
+        {
+            FfmpegVideoEncoder.ConverterFactoryForTests = null;
+        }
     }
 
     [Fact]
@@ -128,6 +200,70 @@ public sealed class FFmpegMuxRoundTripTests : IDisposable
         Assert.InRange(rms, expected * 0.6, expected * 1.4);
     }
 
+    [Fact]
+    public void Audio_submit_rejects_misaligned_interleaved_samples()
+    {
+        var outPath = Path.Combine(Path.GetTempPath(), $"mf_enc_misaligned_{Guid.NewGuid():N}.mka");
+        _tempPaths.Add(outPath);
+
+        using var mux = FFmpegMuxFileOutput.Open(outPath, new FFmpegMuxFileOutputOptions
+        {
+            Container = FFmpegEncodeContainer.Matroska,
+            IncludeVideo = false,
+            IncludeAudio = true,
+            Audio = new FFmpegAudioFileOutputOptions { Codec = FFmpegAudioCodec.Flac },
+        });
+        mux.Audio!.Configure(new AudioFormat(48_000, 2));
+
+        var ex = Assert.Throws<ArgumentException>(() => mux.Audio.Submit([0f, 0f, 0f]));
+
+        Assert.Contains("multiple of channel count", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Audio_channel_aligned_partial_chunks_buffer_until_flush()
+    {
+        var outPath = Path.Combine(Path.GetTempPath(), $"mf_enc_partial_{Guid.NewGuid():N}.mka");
+        _tempPaths.Add(outPath);
+        const int sampleRate = 48_000;
+        const int channels = 2;
+        const int totalFrames = 1500;
+        const int chunkFrames = 17;
+        var format = new AudioFormat(sampleRate, channels);
+
+        using (var mux = FFmpegMuxFileOutput.Open(outPath, new FFmpegMuxFileOutputOptions
+        {
+            Container = FFmpegEncodeContainer.Matroska,
+            IncludeVideo = false,
+            IncludeAudio = true,
+            Audio = new FFmpegAudioFileOutputOptions { Codec = FFmpegAudioCodec.Flac },
+        }))
+        {
+            mux.Audio!.Configure(format);
+            var chunk = new float[chunkFrames * channels];
+            for (var off = 0; off < totalFrames; off += chunkFrames)
+            {
+                var frames = Math.Min(chunkFrames, totalFrames - off);
+                var samples = frames * channels;
+                Array.Fill(chunk, 0.125f, 0, samples);
+                mux.Audio.Submit(chunk.AsSpan(0, samples));
+            }
+        }
+
+        Assert.True(File.Exists(outPath));
+        Assert.True(new FileInfo(outPath).Length > 256);
+
+        using var dec = AudioFileDecoder.Open(outPath);
+        var buffer = new float[chunkFrames * channels];
+        var decodedSamples = 0;
+        int read;
+        while ((read = dec.ReadInto(buffer)) > 0)
+            decodedSamples += read;
+
+        Assert.True(decodedSamples >= totalFrames * channels,
+            $"expected at least submitted sample count after flush padding, got {decodedSamples}");
+    }
+
     private static bool TryGenerateVideo(string path, int width, int height, int fps, int durationSec)
     {
         try
@@ -152,5 +288,72 @@ public sealed class FFmpegMuxRoundTripTests : IDisposable
         {
             return false;
         }
+    }
+
+    private static VideoFrame MakeBgraFrame(int width, int height, IDisposable? release = null)
+    {
+        var format = new VideoFormat(width, height, PixelFormat.Bgra32, new Rational(30, 1));
+        return new VideoFrame(TimeSpan.Zero, format, new byte[width * height * 4], width * 4, release: release);
+    }
+
+    private static VideoFrame MakeI420Frame(int width, int height, IDisposable? release = null)
+    {
+        var format = new VideoFormat(width, height, PixelFormat.I420, new Rational(30, 1));
+        var chromaWidth = PixelFormatInfo.ChromaWidth420(width);
+        var chromaHeight = PixelFormatInfo.ChromaHeight420(height);
+        return new VideoFrame(
+            TimeSpan.Zero,
+            format,
+            planes:
+            [
+                new byte[width * height],
+                new byte[chromaWidth * chromaHeight],
+                new byte[chromaWidth * chromaHeight],
+            ],
+            strides: [width, chromaWidth, chromaWidth],
+            release: release);
+    }
+
+    private static VideoFrame MakeNv12Frame(int width, int height, IDisposable? release = null)
+    {
+        var format = new VideoFormat(width, height, PixelFormat.Nv12, new Rational(30, 1));
+        var chromaWidth = PixelFormatInfo.ChromaWidth420(width);
+        var chromaHeight = PixelFormatInfo.ChromaHeight420(height);
+        return new VideoFrame(
+            TimeSpan.Zero,
+            format,
+            planes:
+            [
+                new byte[width * height],
+                new byte[chromaWidth * chromaHeight * 2],
+            ],
+            strides: [width, chromaWidth * 2],
+            release: release);
+    }
+
+    private sealed class TrackingConverter(Action onConvertedDisposed) : IVideoCpuFrameConverter
+    {
+        private PixelFormat _dst;
+        private int _width;
+        private int _height;
+
+        public void Configure(PixelFormat src, PixelFormat dst, int width, int height)
+        {
+            _dst = dst;
+            _width = width;
+            _height = height;
+        }
+
+        public VideoFrame Convert(VideoFrame source, VideoTransferHint hint)
+        {
+            return _dst switch
+            {
+                PixelFormat.I420 => MakeI420Frame(_width, _height, DisposableRelease.Wrap(onConvertedDisposed)),
+                PixelFormat.Nv12 => MakeNv12Frame(_width, _height, DisposableRelease.Wrap(onConvertedDisposed)),
+                _ => throw new InvalidOperationException($"test converter does not support destination {_dst}."),
+            };
+        }
+
+        public void Dispose() { }
     }
 }

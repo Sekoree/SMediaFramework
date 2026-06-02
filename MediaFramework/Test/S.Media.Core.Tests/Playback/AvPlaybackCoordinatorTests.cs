@@ -3,6 +3,7 @@ using S.Media.Core.Clock;
 using S.Media.Core.Playback;
 using S.Media.Core.Tests.Video;
 using S.Media.Core.Video;
+using S.Media.FFmpeg;
 using Xunit;
 
 namespace S.Media.Core.Tests.Playback;
@@ -158,6 +159,51 @@ public class AvPlaybackCoordinatorTests
     }
 
     [Fact]
+    public void MediaContainerSession_Pause_DefaultInvokesFlush()
+    {
+        using var fixture = new ContainerSessionFixture();
+
+        fixture.Session.Pause();
+
+        Assert.Equal(1, fixture.FlushCalls);
+        Assert.Equal(1, fixture.Inner.PauseCalls);
+    }
+
+    [Fact]
+    public void MediaContainerSession_PauseSkippingSharedMuxFlush_SkipsFlush()
+    {
+        using var fixture = new ContainerSessionFixture();
+
+        fixture.Session.PauseSkippingSharedMuxFlush();
+
+        Assert.Equal(0, fixture.FlushCalls);
+        Assert.Equal(1, fixture.Inner.PauseCalls);
+    }
+
+    [Fact]
+    public void MediaContainerSession_PausePolicy_ControlsFlush()
+    {
+        using var fixture = new ContainerSessionFixture();
+
+        fixture.Session.Pause(default, PauseFlushPolicy.SkipFlush);
+        fixture.Session.Pause(default, PauseFlushPolicy.FlushCodecPipelines);
+
+        Assert.Equal(1, fixture.FlushCalls);
+        Assert.Equal(2, fixture.Inner.PauseCalls);
+    }
+
+    [Fact]
+    public void MediaContainerSession_SeekCoordinatedPolicy_ControlsFlush()
+    {
+        using var fixture = new ContainerSessionFixture(seekableVideo: true);
+
+        fixture.Session.SeekCoordinated(TimeSpan.FromMilliseconds(250), default, PauseFlushPolicy.SkipFlush);
+        fixture.Session.SeekCoordinated(TimeSpan.FromMilliseconds(500), default, PauseFlushPolicy.FlushCodecPipelines);
+
+        Assert.Equal(1, fixture.FlushCalls);
+    }
+
+    [Fact]
     public void IAvPlaybackSession_SubscribePositionChanged_DisposeUnsubscribes()
     {
         var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
@@ -179,5 +225,63 @@ public class AvPlaybackCoordinatorTests
         var after = hits;
         clock.AdvanceTo(TimeSpan.FromSeconds(2));
         Assert.Equal(after, hits);
+    }
+
+    private sealed class ContainerSessionFixture : IDisposable
+    {
+        private static readonly VideoFormat Fmt = new(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+        private static readonly byte[] FrameBytes = new byte[16 * 16 * 4];
+        private readonly VideoPlayer _video;
+
+        public ContainerSessionFixture(bool seekableVideo = false)
+        {
+            var source = new FakeVideoSource(Fmt, (TimeSpan.Zero, FrameBytes, 16 * 4));
+            IVideoSource videoSource = seekableVideo ? new SeekableFakeVideoSource(source) : source;
+            var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+            var clock = new FakeMediaClock();
+            _video = new VideoPlayer(videoSource, output, clock);
+            Inner = new RecordingAvPlaybackSession(_video, clock);
+            Session = new MediaContainerSession(Inner, () => FlushCalls++);
+        }
+
+        public MediaContainerSession Session { get; }
+        public RecordingAvPlaybackSession Inner { get; }
+        public int FlushCalls { get; private set; }
+
+        public void Dispose() => _video.Dispose();
+    }
+
+    private sealed class RecordingAvPlaybackSession(VideoPlayer video, IMediaClock clock) : IAvPlaybackSession
+    {
+        public int PauseCalls { get; private set; }
+        public VideoPlayer Video { get; } = video;
+        public IMediaClock Clock { get; } = clock;
+        public AudioRouter? AudioRouter => null;
+        public MediaClock? AudioClock => null;
+        public string? AudioSourceId => null;
+
+        public void Play(
+            Action? prefillBeforeHardware = null,
+            Action? startHardware = null,
+            IPlaybackClock? videoOnlyMaster = null,
+            Func<bool>? verifyPrebufferAfterPrefill = null)
+        {
+            Video.Play();
+        }
+
+        public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null)
+        {
+            PauseCalls++;
+            flushSharedMuxAfterPause?.Invoke();
+        }
+
+        public void Seek(TimeSpan position) => Video.Seek(position);
+
+        public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
+            Action? flushSharedMuxAfterPause = null)
+        {
+            Pause(cancellationToken, flushSharedMuxAfterPause);
+            Seek(position);
+        }
     }
 }

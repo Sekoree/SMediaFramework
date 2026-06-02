@@ -83,6 +83,7 @@ public sealed class BobDeinterlacer : IDeinterlacer
         if (outputs.Length < 2)
             throw new ArgumentException("interlaced input requires outputs span with >= 2 slots", nameof(outputs));
 
+        frame.ValidateCpuGeometry();
         var tff = frame.FieldOrder != VideoFieldOrder.BottomFieldFirst; // unknown → assume TFF
         // Emit first field (temporally first), then second field. Each output PTS spaced by half-frame.
         var halfPeriod = _output.FrameRate.Denominator > 0

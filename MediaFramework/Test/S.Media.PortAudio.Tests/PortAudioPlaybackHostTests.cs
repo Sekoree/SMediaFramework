@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
@@ -63,6 +64,49 @@ public sealed class PortAudioPlaybackHostTests
         }
     }
 
+    [Fact]
+    public void RollbackPartialWire_ForTryCreate_RemovesGraphDisposesOutputAndRouter()
+    {
+        var router = new AudioRouter(48_000, chunkSamples: 480);
+        var sourceId = router.AddSource(new SilenceSource(new AudioFormat(48_000, 2)));
+        var output = new DisposableOutput(new AudioFormat(48_000, 2));
+        var outputId = router.AddOutput(output);
+        router.Connect(sourceId, outputId);
+
+        PortAudioPlaybackHost.RollbackPartialWireForTests(
+            router,
+            output,
+            sourceId,
+            outputId,
+            disposeRouter: true);
+
+        Assert.True(output.Disposed);
+        Assert.Throws<ObjectDisposedException>(() => router.AddOutput(new DisposableOutput(new AudioFormat(48_000, 2))));
+    }
+
+    [Fact]
+    public void RollbackPartialWire_ForExistingRouter_RemovesOutputButKeepsRouterAndSource()
+    {
+        using var router = new AudioRouter(48_000, chunkSamples: 480);
+        var sourceId = router.AddSource(new SilenceSource(new AudioFormat(48_000, 2)));
+        var output = new DisposableOutput(new AudioFormat(48_000, 2));
+        var outputId = router.AddOutput(output);
+        router.Connect(sourceId, outputId);
+
+        PortAudioPlaybackHost.RollbackPartialWireForTests(
+            router,
+            output,
+            sourceId: null,
+            sinkMain: outputId,
+            disposeRouter: false);
+
+        Assert.True(output.Disposed);
+        Assert.Contains(sourceId, router.SourceIds);
+        Assert.DoesNotContain(outputId, router.OutputIds);
+        var replacement = router.AddOutput(new DisposableOutput(new AudioFormat(48_000, 2)));
+        Assert.Contains(replacement, router.OutputIds);
+    }
+
     private static bool TryGenerateAudioVideo(string path)
     {
         try
@@ -95,5 +139,24 @@ public sealed class PortAudioPlaybackHostTests
         {
             return false;
         }
+    }
+
+    private sealed class SilenceSource(AudioFormat format) : IAudioSource
+    {
+        public AudioFormat Format { get; } = format;
+        public bool IsExhausted => false;
+        public int ReadInto(Span<float> dst)
+        {
+            dst.Clear();
+            return dst.Length;
+        }
+    }
+
+    private sealed class DisposableOutput(AudioFormat format) : IAudioOutput, IDisposable
+    {
+        public AudioFormat Format { get; } = format;
+        public bool Disposed { get; private set; }
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+        public void Dispose() => Disposed = true;
     }
 }

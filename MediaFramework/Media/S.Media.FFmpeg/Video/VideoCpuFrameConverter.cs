@@ -92,6 +92,7 @@ public sealed unsafe class VideoCpuFrameConverter : IVideoCpuFrameConverter, IDi
         if (source.Format.Width != _width || source.Format.Height != _height || source.Format.PixelFormat != _src)
             throw new ArgumentException(
                 $"source format {source.Format} does not match converter ({_width}x{_height} {_src})", nameof(source));
+        source.ValidateCpuGeometry();
 
         if (_src == _dst)
             return DuplicateCpuBacking(source, hint);

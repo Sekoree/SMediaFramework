@@ -24,7 +24,7 @@ internal sealed unsafe class FfmpegVideoEncoder : IVideoOutput, IDisposable
     private readonly FfmpegMuxContext _mux;
     private readonly FFmpegVideoFileOutputOptions _options;
     private readonly Lock _gate = new();
-    private VideoCpuFrameConverter? _converter;
+    private IVideoCpuFrameConverter? _converter;
     private AVCodecContext* _codec;
     private AVStream* _stream;
     private AVFrame* _frame;
@@ -33,6 +33,13 @@ internal sealed unsafe class FfmpegVideoEncoder : IVideoOutput, IDisposable
     private long _frameIndex;
     private bool _configured;
     private bool _disposed;
+    private static readonly AsyncLocal<Func<IVideoCpuFrameConverter>?> TestConverterFactory = new();
+
+    internal static Func<IVideoCpuFrameConverter>? ConverterFactoryForTests
+    {
+        get => TestConverterFactory.Value;
+        set => TestConverterFactory.Value = value;
+    }
 
     public FfmpegVideoEncoder(FfmpegMuxContext mux, FFmpegVideoFileOutputOptions options)
     {
@@ -80,7 +87,7 @@ internal sealed unsafe class FfmpegVideoEncoder : IVideoOutput, IDisposable
                 var disposeConverted = false;
                 if (frame.Format.PixelFormat != _encodePixel)
                 {
-                    _converter ??= new VideoCpuFrameConverter();
+                    _converter ??= CreateConverter();
                     _converter.Configure(frame.Format.PixelFormat, _encodePixel, frame.Format.Width, frame.Format.Height);
                     working = _converter.Convert(frame, frame.ColorTransferHint);
                     disposeConverted = true;
@@ -120,6 +127,9 @@ internal sealed unsafe class FfmpegVideoEncoder : IVideoOutput, IDisposable
 
         return _frameIndex++;
     }
+
+    private static IVideoCpuFrameConverter CreateConverter() =>
+        ConverterFactoryForTests?.Invoke() ?? new VideoCpuFrameConverter();
 
     private void EncodeFrameLocked(AVFrame* frame)
     {

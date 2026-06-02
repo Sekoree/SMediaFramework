@@ -46,6 +46,69 @@ public sealed class AudioRouterPumpLifecycleTests
         r.Stop();
     }
 
+    [Fact]
+    public void OutputAddedBeforeStart_DisposeBeforeStart_DoesNotThrow()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        r.AddSource(new SilenceSource(Stereo), "src");
+        r.AddOutput(new RecordingOutput(Stereo), "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        var ex = Record.Exception(r.Dispose);
+
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void NormalPumpLifecycle_DoesNotReportStuck()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        var output = new RecordingOutput(Stereo);
+        r.AddSource(new SilenceSource(Stereo), "src");
+        r.AddOutput(output, "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        r.Start();
+        Assert.True(SpinUntil(() => output.SubmitCount > 0, 2000),
+            "normal pump should process at least one chunk");
+        r.Stop();
+
+        Assert.False(r.GetPumpStats("out").IsStuck);
+        Assert.Empty(r.StuckOutputPumpIds);
+    }
+
+    [Fact]
+    public async Task Dispose_WithOutputBlockedInSubmit_ReturnsWithoutDisposingLivePumpState()
+    {
+        var output = new BlockingOutput(Stereo);
+        var router = new AudioRouter(SampleRate, chunkSamples: 64);
+        router.AddSource(new SilenceSource(Stereo), "src");
+        router.AddOutput(output, "out");
+        router.AddRoute("src", "out", ChannelMap.Identity(2));
+        Task? disposeTask = null;
+
+        try
+        {
+            router.Start();
+            Assert.True(output.Entered.Wait(TimeSpan.FromSeconds(2)), "output pump should be blocked inside Submit");
+
+            disposeTask = Task.Run(router.Dispose);
+            var completed = await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(7))) == disposeTask;
+
+            Assert.True(completed,
+                "router dispose should return after bounded pump join attempts even when Submit remains blocked");
+            await disposeTask;
+            Assert.Contains("out", router.StuckOutputPumpIds);
+        }
+        finally
+        {
+            output.Release();
+            router.Dispose();
+            if (disposeTask is { IsCompleted: false })
+                await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(2)));
+        }
+    }
+
     private static bool SpinUntil(Func<bool> cond, int timeoutMs)
     {
         var deadline = Environment.TickCount64 + timeoutMs;
@@ -70,5 +133,20 @@ public sealed class AudioRouterPumpLifecycleTests
         public int SubmitCount => Volatile.Read(ref _submits);
         public AudioFormat Format { get; } = fmt;
         public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Increment(ref _submits);
+    }
+
+    private sealed class BlockingOutput(AudioFormat fmt) : IAudioOutput
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public AudioFormat Format { get; } = fmt;
+
+        public void Submit(ReadOnlySpan<float> packedSamples)
+        {
+            Entered.Set();
+            _release.Wait();
+        }
+
+        public void Release() => _release.Set();
     }
 }

@@ -1,7 +1,8 @@
 using S.Media.Core.Audio;
+using S.Media.Playback;
 using Xunit;
 
-namespace S.Media.Core.Tests.Audio;
+namespace S.Media.Playback.Tests;
 
 public sealed class SoundboardTests
 {
@@ -70,6 +71,21 @@ public sealed class SoundboardTests
     }
 
     [Fact]
+    public void Fire_OneShotAlreadySounding_ReturnsNull()
+    {
+        using var router = new AudioRouter(48_000, chunkSamples: 480);
+        var outId = router.AddOutput(new RecordingOutput(Stereo));
+        using var board = new Soundboard(router);
+        board.AddCue("a", MakeClip(2.0), outId, mode: AudioClipPlayerMode.OneShot);
+
+        var first = board.Fire("a");
+        var second = board.Fire("a");
+
+        Assert.NotNull(first);
+        Assert.Null(second);
+    }
+
+    [Fact]
     public void AddCue_UnknownOutput_Throws()
     {
         using var router = new AudioRouter(48_000, chunkSamples: 480);
@@ -122,6 +138,70 @@ public sealed class SoundboardTests
 
         Assert.False(v!.IsActive); // hard-stopped (not just fading)
         Assert.Throws<ObjectDisposedException>(() => router.AddOutput(new RecordingOutput(Stereo)));
+    }
+
+    [Fact]
+    public void Fire_RacingDisposeWithBorrowedRouter_RollsBackCreatedVoice()
+    {
+        using var router = new AudioRouter(48_000, chunkSamples: 480);
+        var outId = router.AddOutput(new RecordingOutput(Stereo));
+        var board = new Soundboard(router);
+        board.AddCue("a", MakeClip(2.0), outId, chokeGroup: "g");
+        var sourceCountBefore = router.SourceIds.Count;
+
+        try
+        {
+            Soundboard.AfterTryFireBeforeLiveAddForTests = board.Dispose;
+
+            Assert.Throws<ObjectDisposedException>(() => board.Fire("a"));
+
+            Assert.Equal(sourceCountBefore, router.SourceIds.Count);
+        }
+        finally
+        {
+            Soundboard.AfterTryFireBeforeLiveAddForTests = null;
+            board.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Fire_RacingDisposeWithOwnedRouter_DoesNotUseDisposedRouterAfterRollback()
+    {
+        var router = new AudioRouter(48_000, chunkSamples: 480);
+        var outId = router.AddOutput(new RecordingOutput(Stereo));
+        var board = new Soundboard(router, ownsRouter: true);
+        board.AddCue("a", MakeClip(2.0), outId);
+
+        try
+        {
+            Soundboard.AfterTryFireBeforeLiveAddForTests = board.Dispose;
+
+            Assert.Throws<ObjectDisposedException>(() => board.Fire("a"));
+            Assert.Throws<ObjectDisposedException>(() => router.AddOutput(new RecordingOutput(Stereo)));
+        }
+        finally
+        {
+            Soundboard.AfterTryFireBeforeLiveAddForTests = null;
+            board.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Dispose_RaisesCompletedOnceForLiveVoice()
+    {
+        using var router = new AudioRouter(48_000, chunkSamples: 480);
+        var outId = router.AddOutput(new RecordingOutput(Stereo));
+        var board = new Soundboard(router);
+        board.AddCue("a", MakeClip(2.0), outId);
+        var voice = board.Fire("a");
+        Assert.NotNull(voice);
+        var completed = 0;
+        voice!.Completed += _ => Interlocked.Increment(ref completed);
+
+        board.Dispose();
+        board.Dispose();
+
+        Assert.Equal(1, Volatile.Read(ref completed));
     }
 
     private static bool SpinUntil(Func<bool> cond, int timeoutMs)

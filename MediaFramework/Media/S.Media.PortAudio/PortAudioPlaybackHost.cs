@@ -93,16 +93,7 @@ public sealed class PortAudioPlaybackHost : IDisposable
         }
         catch (Exception ex)
         {
-            if (router is not null)
-            {
-                if (sinkMain is not null)
-                    MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveOutput(sinkMain), "TryCreatePortAudioMain: rollback RemoveOutput");
-                if (sourceId is not null)
-                    MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveSource(sourceId), "TryCreatePortAudioMain: rollback RemoveSource");
-                MediaDiagnostics.SwallowDisposeErrors(router.Dispose, "TryCreatePortAudioMain: rollback router dispose");
-            }
-            if (output is not null)
-                MediaDiagnostics.SwallowDisposeErrors(output.Dispose, "TryCreatePortAudioMain: rollback output dispose");
+            RollbackPartialWire(router, output, sourceId, sinkMain, disposeRouter: true, "TryCreatePortAudioMain");
             onWireFailedMessage?.Invoke(ex.Message);
             return null;
         }
@@ -164,13 +155,40 @@ public sealed class PortAudioPlaybackHost : IDisposable
             // PortAudio stream so a partial-wire failure can't leak the device. The router
             // owns only the pump wrapper (on success the returned host owns the output), so
             // RemoveOutput tears down the pump and we still dispose the output ourselves.
-            if (sinkMain is not null)
-                MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveOutput(sinkMain), "TryWirePortAudioMainForRouter: rollback RemoveOutput");
-            if (output is not null)
-                MediaDiagnostics.SwallowDisposeErrors(output.Dispose, "TryWirePortAudioMainForRouter: rollback output dispose");
+            RollbackPartialWire(router, output, sourceId: null, sinkMain, disposeRouter: false, "TryWirePortAudioMainForRouter");
             onWireFailedMessage?.Invoke(ex.Message);
             return null;
         }
+    }
+
+    internal static void RollbackPartialWireForTests(
+        AudioRouter? router,
+        IDisposable? output,
+        string? sourceId,
+        string? sinkMain,
+        bool disposeRouter) =>
+        RollbackPartialWire(router, output, sourceId, sinkMain, disposeRouter, "PortAudioPlaybackHost.Tests");
+
+    private static void RollbackPartialWire(
+        AudioRouter? router,
+        IDisposable? output,
+        string? sourceId,
+        string? sinkMain,
+        bool disposeRouter,
+        string label)
+    {
+        if (router is not null)
+        {
+            if (sinkMain is not null)
+                MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveOutput(sinkMain), $"{label}: rollback RemoveOutput");
+            if (sourceId is not null)
+                MediaDiagnostics.SwallowDisposeErrors(() => router.RemoveSource(sourceId), $"{label}: rollback RemoveSource");
+            if (disposeRouter)
+                MediaDiagnostics.SwallowDisposeErrors(router.Dispose, $"{label}: rollback router dispose");
+        }
+
+        if (output is not null)
+            MediaDiagnostics.SwallowDisposeErrors(output.Dispose, $"{label}: rollback output dispose");
     }
 
     public void PrefillMainOutputDirectFromDecoder(TimeSpan timeout, IAudioOutput? mirrorPackedFloats = null)

@@ -59,7 +59,10 @@ public static class VideoDeinterlacerRegistry
         set => MediaFrameworkPlugins.VideoDeinterlacerFactory = value;
     }
 
-    /// <summary>Creates a deinterlacer via the registered <see cref="Factory"/>, or a <see cref="BobDeinterlacer"/> when none is installed.</summary>
-    public static IDeinterlacer Create(VideoFormat input) =>
-        Factory?.Invoke(input) ?? new BobDeinterlacer(input);
+    /// <summary>
+    /// Creates a deinterlacer. Resolution order is scoped factory, process-wide
+    /// <see cref="Factory"/>, then the built-in <see cref="BobDeinterlacer"/> fallback.
+    /// </summary>
+    public static IDeinterlacer Create(VideoFormat input, Func<VideoFormat, IDeinterlacer>? scopedFactory = null) =>
+        scopedFactory?.Invoke(input) ?? MediaFrameworkPlugins.VideoDeinterlacerFactory?.Invoke(input) ?? new BobDeinterlacer(input);
 }

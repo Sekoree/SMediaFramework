@@ -43,6 +43,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     private bool _hasLastResolvedPts;
     private bool _hasFormat;
     private bool _disposed;
+    private int _captureThreadStuck;
     private long _overflowFrames;
     private long _unpackDrops;
     private volatile Exception? _faultEx;
@@ -58,6 +59,12 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     public IReadOnlyList<PixelFormat> NativePixelFormats => _native;
 
     public bool IsExhausted => _disposed || _faultEx is not null;
+
+    /// <summary>
+    /// True after <see cref="Dispose"/> timed out while the capture thread was still alive.
+    /// Native receiver/runtime state is intentionally retained in this state.
+    /// </summary>
+    public bool IsCaptureStuck => Volatile.Read(ref _captureThreadStuck) != 0;
 
     public long OverflowFrames => Interlocked.Read(ref _overflowFrames);
 
@@ -310,33 +317,32 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             return;
         _disposed = true;
 
-        try { _cts.Cancel(); } catch { /* best effort */ }
-        try { CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2)); } catch { /* best effort */ }
-        var captureStopped = !_captureThread.IsAlive;
-        if (captureStopped)
-        {
-            try { _ingestClock?.NotifyCaptureStopped(); } catch { /* best effort */ }
-        }
-        if (captureStopped)
-        {
-            try { _cts.Dispose(); } catch { /* best effort */ }
-        }
-        else
-        {
-            _faultEx ??= new TimeoutException("NDIVideoReceiver capture thread did not exit during Dispose; native receiver/runtime were intentionally leaked.");
-            Trace.LogError(_faultEx, "NDIVideoReceiver.Dispose: capture thread still alive after join cap; leaking native receiver/runtime and CTS to avoid use-after-dispose.");
-        }
-
-        while (_queue.TryDequeue(out var f))
-            f.Dispose();
-
-        lock (_waitGate)
-            Monitor.PulseAll(_waitGate);
-
-        if (captureStopped)
-        {
-            try { _receiver.Dispose(); } catch { /* best effort */ }
-            try { _runtime.Dispose(); } catch { /* best effort */ }
-        }
+        NDICaptureThreadLifecycle.StopAndDispose(
+            nameof(NDIVideoReceiver),
+            _captureThread,
+            _cts,
+            TimeSpan.FromSeconds(2),
+            () => _ingestClock?.NotifyCaptureStopped(),
+            () =>
+            {
+                MediaDiagnostics.SwallowDisposeErrors(_receiver.Dispose, "NDIVideoReceiver.Dispose: NDIReceiver");
+                MediaDiagnostics.SwallowDisposeErrors(_runtime.Dispose, "NDIVideoReceiver.Dispose: NDIRuntime");
+            },
+            () =>
+            {
+                while (_queue.TryDequeue(out var f))
+                    f.Dispose();
+            },
+            () =>
+            {
+                lock (_waitGate)
+                    Monitor.PulseAll(_waitGate);
+            },
+            ex =>
+            {
+                Volatile.Write(ref _captureThreadStuck, 1);
+                _faultEx ??= ex;
+            },
+            Trace);
     }
 }

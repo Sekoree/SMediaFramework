@@ -750,7 +750,8 @@ public sealed class VideoRouter : IDisposable
                         // Re-validate each output: it may have been removed during the out-of-lock convert.
                         if (primary is not null)
                         {
-                            if (_owner._outputs.TryGetValue(PrimaryOutputId, out var pe))
+                            if (IsStillCurrentRouteLocked(PrimaryOutputId) &&
+                                _owner._outputs.TryGetValue(PrimaryOutputId, out var pe))
                                 pe.Output.Submit(primary);
                             else
                                 primary.Dispose();
@@ -761,7 +762,8 @@ public sealed class VideoRouter : IDisposable
                         {
                             var f = branchFrames[i];
                             if (f is null) continue;
-                            if (_owner._outputs.TryGetValue(plan.OutputIds[i + 1], out var be))
+                            if (IsStillCurrentRouteLocked(plan.OutputIds[i + 1]) &&
+                                _owner._outputs.TryGetValue(plan.OutputIds[i + 1], out var be))
                             {
                                 be.Output.Submit(f);
                                 branchFrames[i] = null;
@@ -834,6 +836,11 @@ public sealed class VideoRouter : IDisposable
 
             return new SubmitPlan(ids, converters, pumpConverts, negotiated, needsReadback, canFanOut);
         }
+
+        private bool IsStillCurrentRouteLocked(string outputId)
+            => _owner._inputs.TryGetValue(Id, out var current)
+               && ReferenceEquals(current, this)
+               && RoutedSet.Contains(outputId);
     }
 
     private readonly record struct SubmitPlan(

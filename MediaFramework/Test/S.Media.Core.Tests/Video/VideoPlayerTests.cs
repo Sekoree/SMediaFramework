@@ -270,6 +270,73 @@ public class VideoPlayerTests
         Assert.Throws<InvalidOperationException>(() => player.Play());
     }
 
+    [Fact]
+    public void Dispose_AfterDecodeFault_IsIdempotent()
+    {
+        var src = new ThrowingVideoSource(VideoFmt(16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
+        using var faulted = new ManualResetEventSlim(false);
+        player.Faulted += (_, _) => faulted.Set();
+
+        player.Play();
+        Assert.True(faulted.Wait(TimeSpan.FromSeconds(2)), "player should fault before dispose");
+
+        player.Dispose();
+        var secondDispose = Record.Exception(player.Dispose);
+
+        Assert.Null(secondDispose);
+    }
+
+    [Fact]
+    public void ObjectDisposedException_DuringCooperativeShutdown_DoesNotFaultPlayer()
+    {
+        var src = new ObjectDisposedOnYieldVideoSource(VideoFmt(16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
+        var faulted = false;
+        player.Faulted += (_, _) => faulted = true;
+
+        player.Play();
+        Assert.True(src.Entered.Wait(TimeSpan.FromSeconds(2)), "decode loop should enter source read");
+
+        player.Stop();
+
+        Assert.False(faulted);
+        Assert.Null(player.Fault);
+        Assert.False(player.IsRunning);
+    }
+
+    [Fact]
+    public void StopCancellation_WithLiveDecodeThread_MakesPlayerNonRestartable()
+    {
+        var src = new BlockingVideoSource(VideoFmt(16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
+
+        try
+        {
+            player.Play();
+            Assert.True(src.Entered.Wait(TimeSpan.FromSeconds(2)), "decode loop should be blocked in source read");
+
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => player.Stop(cts.Token));
+            Assert.NotNull(player.Fault);
+            Assert.Throws<InvalidOperationException>(() => player.Play());
+        }
+        finally
+        {
+            src.Release();
+        }
+    }
+
     private static VideoFormat VideoFmt(int w, int h)
         => new(w, h, PixelFormat.Bgra32, new Rational(30, 1));
 
@@ -326,13 +393,74 @@ internal sealed class FakeVideoSource : IVideoSource
     }
 }
 
-internal sealed class ThrowingVideoSource(VideoFormat format) : IVideoSource
+internal sealed class ThrowingVideoSource : IVideoSource
 {
-    public VideoFormat Format { get; } = format;
-    public IReadOnlyList<PixelFormat> NativePixelFormats => new[] { format.PixelFormat };
+    public ThrowingVideoSource(VideoFormat format)
+    {
+        Format = format;
+        NativePixelFormats = new[] { format.PixelFormat };
+    }
+
+    public VideoFormat Format { get; }
+    public IReadOnlyList<PixelFormat> NativePixelFormats { get; }
     public bool IsExhausted => false;
     public void SelectOutputFormat(PixelFormat format) { }
     public bool TryReadNextFrame(out VideoFrame frame) => throw new InvalidOperationException("source boom");
+}
+
+internal sealed class ObjectDisposedOnYieldVideoSource : IVideoSource, ICooperativeVideoReadInterrupt
+{
+    private readonly ManualResetEventSlim _yieldRequested = new(false);
+
+    public ObjectDisposedOnYieldVideoSource(VideoFormat format)
+    {
+        Format = format;
+        NativePixelFormats = new[] { format.PixelFormat };
+    }
+
+    public ManualResetEventSlim Entered { get; } = new(false);
+    public VideoFormat Format { get; }
+    public IReadOnlyList<PixelFormat> NativePixelFormats { get; }
+    public bool IsExhausted => false;
+    public void SelectOutputFormat(PixelFormat format) { }
+
+    public bool TryReadNextFrame(out VideoFrame frame)
+    {
+        Entered.Set();
+        _yieldRequested.Wait(TimeSpan.FromSeconds(5));
+        throw new ObjectDisposedException(nameof(ObjectDisposedOnYieldVideoSource));
+    }
+
+    public void RequestYieldBetweenReads() => _yieldRequested.Set();
+
+    public void ClearYieldRequest() => _yieldRequested.Reset();
+}
+
+internal sealed class BlockingVideoSource : IVideoSource
+{
+    private readonly ManualResetEventSlim _release = new(false);
+
+    public BlockingVideoSource(VideoFormat format)
+    {
+        Format = format;
+        NativePixelFormats = new[] { format.PixelFormat };
+    }
+
+    public ManualResetEventSlim Entered { get; } = new(false);
+    public VideoFormat Format { get; }
+    public IReadOnlyList<PixelFormat> NativePixelFormats { get; }
+    public bool IsExhausted => false;
+    public void SelectOutputFormat(PixelFormat format) { }
+
+    public bool TryReadNextFrame(out VideoFrame frame)
+    {
+        Entered.Set();
+        _release.Wait();
+        frame = null!;
+        return false;
+    }
+
+    public void Release() => _release.Set();
 }
 
 internal sealed class FakeVideoOutput : IVideoOutput

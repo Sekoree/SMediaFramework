@@ -7,9 +7,18 @@ public static class VideoSource
 {
     /// <summary>Opens the video track of a media file. Requires <c>.UseFFmpeg()</c>.</summary>
     public static IVideoSource OpenFile(string path, VideoSourceOpenOptions? options = null)
+        => OpenFile(path, options, scopedFactory: null);
+
+    /// <summary>
+    /// Opens the video track of a media file. Resolution order is scoped factory, process-wide plugin factory.
+    /// </summary>
+    public static IVideoSource OpenFile(
+        string path,
+        VideoSourceOpenOptions? options,
+        Func<string, VideoSourceOpenOptions?, IVideoSource>? scopedFactory)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
-        var factory = MediaFrameworkPlugins.VideoSourceFileFactory
+        var factory = scopedFactory ?? MediaFrameworkPlugins.VideoSourceFileFactory
             ?? throw new InvalidOperationException(
                 "VideoSource.OpenFile: no backend installed — call MediaFrameworkRuntime.Init().UseFFmpeg() (requires S.Media.FFmpeg).");
         return factory(path, options);
@@ -17,9 +26,18 @@ public static class VideoSource
 
     /// <summary>Opens the video track of a media stream. Requires FFmpeg init.</summary>
     public static IVideoSource OpenStream(Stream stream, VideoSourceOpenOptions? options = null)
+        => OpenStream(stream, options, scopedFactory: null);
+
+    /// <summary>
+    /// Opens the video track of a media stream. Resolution order is scoped factory, process-wide plugin factory.
+    /// </summary>
+    public static IVideoSource OpenStream(
+        Stream stream,
+        VideoSourceOpenOptions? options,
+        Func<Stream, VideoSourceOpenOptions?, IVideoSource>? scopedFactory)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var factory = MediaFrameworkPlugins.VideoSourceStreamFactory
+        var factory = scopedFactory ?? MediaFrameworkPlugins.VideoSourceStreamFactory
             ?? throw new InvalidOperationException(
                 "VideoSource.OpenStream: no backend installed — call MediaFrameworkRuntime.Init().UseFFmpeg() (requires S.Media.FFmpeg).");
         return factory(stream, options);
@@ -30,8 +48,17 @@ public static class VideoSource
     /// then falls back to <see cref="MediaFrameworkPlugins.ImageFileSourceFactory"/>.
     /// </summary>
     public static IVideoSource OpenImage(string path)
+        => OpenImage(path, scopedFactory: null);
+
+    /// <summary>
+    /// Opens a still image file. Resolution order is scoped factory, extension registry, process-wide image factory.
+    /// </summary>
+    public static IVideoSource OpenImage(string path, Func<string, IVideoSource>? scopedFactory)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        if (scopedFactory is not null)
+            return scopedFactory(path);
+
         var ext = Path.GetExtension(path);
         if (ext.Length > 0)
         {
@@ -48,9 +75,15 @@ public static class VideoSource
 
     /// <summary>Opens a still image from a stream. Requires SkiaSharp image backend.</summary>
     public static IVideoSource OpenImage(Stream stream)
+        => OpenImage(stream, scopedFactory: null);
+
+    /// <summary>
+    /// Opens a still image from a stream. Resolution order is scoped factory, process-wide image factory.
+    /// </summary>
+    public static IVideoSource OpenImage(Stream stream, Func<Stream, IVideoSource>? scopedFactory)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        var factory = MediaFrameworkPlugins.ImageStreamSourceFactory
+        var factory = scopedFactory ?? MediaFrameworkPlugins.ImageStreamSourceFactory
             ?? throw new InvalidOperationException(
                 "VideoSource.OpenImage: no backend installed — call MediaFrameworkRuntime.Init().UseSkiaSharpImages() (requires S.Media.SkiaSharp).");
         return factory(stream);

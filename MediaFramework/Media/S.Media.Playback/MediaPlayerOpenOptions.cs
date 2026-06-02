@@ -24,7 +24,13 @@ public readonly record struct MediaPlayerOpenOptions(
     /// <summary>When true, <see cref="MediaPlayer.TryOpenStream"/> spools to disk instead of AVIO.</summary>
     bool SpoolStreamToDisk = false,
     /// <summary>When true (and not spooling), allows libav seek on the input stream.</summary>
-    bool StreamIsSeekable = false)
+    bool StreamIsSeekable = false,
+    /// <summary>
+    /// Per-session deinterlacer override. When null, consumers fall back to
+    /// <see cref="S.Media.Core.Diagnostics.MediaFrameworkPlugins.VideoDeinterlacerFactory"/>,
+    /// then the built-in Core fallback.
+    /// </summary>
+    Func<VideoFormat, IDeinterlacer>? VideoDeinterlacerFactory = null)
 {
     public MediaPlayerOpenOptions()
         : this(
@@ -40,7 +46,8 @@ public readonly record struct MediaPlayerOpenOptions(
             LiveVideoDecodeQueueCapacity: 0,
             LiveVideoPresentation: VideoPresentationMode.Scheduled,
             SpoolStreamToDisk: false,
-            StreamIsSeekable: false)
+            StreamIsSeekable: false,
+            VideoDeinterlacerFactory: null)
     {
     }
 

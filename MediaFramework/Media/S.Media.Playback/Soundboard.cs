@@ -1,6 +1,7 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 
-namespace S.Media.Core.Audio;
+namespace S.Media.Playback;
 
 /// <summary>
 /// High-level cue / soundboard engine over an <see cref="AudioRouter"/>. Owns named cues (a clip plus
@@ -21,6 +22,14 @@ public sealed class Soundboard : IDisposable
     private readonly List<CueVoice> _live = [];
     private readonly Lock _gate = new();
     private bool _disposed;
+
+    private static readonly AsyncLocal<Action?> TestAfterTryFireBeforeLiveAdd = new();
+
+    internal static Action? AfterTryFireBeforeLiveAddForTests
+    {
+        get => TestAfterTryFireBeforeLiveAdd.Value;
+        set => TestAfterTryFireBeforeLiveAdd.Value = value;
+    }
 
     /// <param name="router">The router voices are fired into.</param>
     /// <param name="ownsRouter">When true, <see cref="Dispose"/> also disposes <paramref name="router"/>.</param>
@@ -108,6 +117,7 @@ public sealed class Soundboard : IDisposable
         }
 
         var handle = new CueVoice(cueId, voice, _router, sourceId, entry.OutputId);
+        AfterTryFireBeforeLiveAddForTests?.Invoke();
         lock (_gate)
         {
             if (_disposed)

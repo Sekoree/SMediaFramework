@@ -54,6 +54,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     private long _overflowSamples;
     private long _conversionDrops;
     private bool _disposed;
+    private int _captureThreadStuck;
     private volatile Exception? _faultEx;
 
     /// <summary>True once at least one audio frame has been received and
@@ -72,6 +73,12 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     }
 
     public bool IsExhausted => _disposed || _faultEx is not null;
+
+    /// <summary>
+    /// True after <see cref="Dispose"/> timed out while the capture thread was still alive.
+    /// Native receiver/runtime state is intentionally retained in this state.
+    /// </summary>
+    public bool IsCaptureStuck => Volatile.Read(ref _captureThreadStuck) != 0;
 
     /// <summary>Non-null after the background capture thread faulted. The receiver is then terminal:
     /// <see cref="IsExhausted"/> becomes true so the router stops pulling.</summary>
@@ -447,24 +454,25 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        MediaDiagnostics.SwallowDisposeErrors(_cts.Cancel, "NDIAudioReceiver.Dispose: Cancel");
-        MediaDiagnostics.SwallowDisposeErrors(() => CooperativePlaybackJoin.JoinThread(_captureThread, TimeSpan.FromSeconds(2)), "NDIAudioReceiver.Dispose: JoinThread");
-        var captureStopped = !_captureThread.IsAlive;
-        if (captureStopped)
-            MediaDiagnostics.SwallowDisposeErrors(() => _ingestClock?.NotifyCaptureStopped(), "NDIAudioReceiver.Dispose: NotifyCaptureStopped");
-        if (captureStopped)
-            MediaDiagnostics.SwallowDisposeErrors(_cts.Dispose, "NDIAudioReceiver.Dispose: CancellationTokenSource.Dispose");
-        else
-        {
-            _faultEx ??= new TimeoutException("NDIAudioReceiver capture thread did not exit during Dispose; native receiver/runtime were intentionally leaked.");
-            Trace.LogError(_faultEx, "NDIAudioReceiver.Dispose: capture thread still alive after join cap; leaking native receiver/runtime and CTS to avoid use-after-dispose.");
-        }
-
-        if (captureStopped)
-        {
-            MediaDiagnostics.SwallowDisposeErrors(_receiver.Dispose, "NDIAudioReceiver.Dispose: NDIReceiver");
-            MediaDiagnostics.SwallowDisposeErrors(_runtime.Dispose, "NDIAudioReceiver.Dispose: NDIRuntime");
-        }
+        NDICaptureThreadLifecycle.StopAndDispose(
+            nameof(NDIAudioReceiver),
+            _captureThread,
+            _cts,
+            TimeSpan.FromSeconds(2),
+            () => _ingestClock?.NotifyCaptureStopped(),
+            () =>
+            {
+                MediaDiagnostics.SwallowDisposeErrors(_receiver.Dispose, "NDIAudioReceiver.Dispose: NDIReceiver");
+                MediaDiagnostics.SwallowDisposeErrors(_runtime.Dispose, "NDIAudioReceiver.Dispose: NDIRuntime");
+            },
+            static () => { },
+            static () => { },
+            ex =>
+            {
+                Volatile.Write(ref _captureThreadStuck, 1);
+                _faultEx ??= ex;
+            },
+            Trace);
     }
 
     /// <summary>

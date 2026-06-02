@@ -36,11 +36,81 @@ public sealed class AudioRouterFaultTests
         Assert.False(router.IsRunning);
     }
 
+    [Fact]
+    public void StopCancellation_WithLiveRunLoopThread_MakesRouterNonRestartable()
+    {
+        var source = new BlockingSource(Stereo);
+        using var router = new AudioRouter(SampleRate, chunkSamples: 64);
+        router.AddSource(source, "blocked");
+        router.AddOutput(new NullOutput(Stereo), "out");
+        router.Connect("blocked", "out");
+
+        try
+        {
+            router.Start();
+            Assert.True(source.Entered.Wait(TimeSpan.FromSeconds(2)), "run loop should be blocked in source read");
+
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => router.Stop(cts.Token));
+            Assert.NotNull(router.Fault);
+            Assert.Throws<InvalidOperationException>(() => router.Start());
+        }
+        finally
+        {
+            source.Release();
+        }
+    }
+
+    [Fact]
+    public void StopTimeout_WithLiveRunLoopThread_MakesRouterNonRestartable()
+    {
+        var source = new BlockingSource(Stereo);
+        using var router = new AudioRouter(SampleRate, chunkSamples: 64);
+        router.AddSource(source, "blocked");
+        router.AddOutput(new NullOutput(Stereo), "out");
+        router.Connect("blocked", "out");
+
+        try
+        {
+            router.Start();
+            Assert.True(source.Entered.Wait(TimeSpan.FromSeconds(2)), "run loop should be blocked in source read");
+
+            router.Stop();
+
+            Assert.NotNull(router.Fault);
+            Assert.Throws<InvalidOperationException>(() => router.Start());
+        }
+        finally
+        {
+            source.Release();
+        }
+    }
+
     private sealed class ThrowingSource(AudioFormat fmt) : IAudioSource
     {
         public AudioFormat Format { get; } = fmt;
         public bool IsExhausted => false;
         public int ReadInto(Span<float> dst) => throw new InvalidOperationException("source boom");
+    }
+
+    private sealed class BlockingSource(AudioFormat fmt) : IAudioSource
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public AudioFormat Format { get; } = fmt;
+        public bool IsExhausted => false;
+
+        public int ReadInto(Span<float> dst)
+        {
+            Entered.Set();
+            _release.Wait();
+            dst.Clear();
+            return dst.Length;
+        }
+
+        public void Release() => _release.Set();
     }
 
     private sealed class NullOutput(AudioFormat fmt) : IAudioOutput

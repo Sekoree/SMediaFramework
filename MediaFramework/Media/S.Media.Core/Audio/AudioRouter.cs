@@ -90,6 +90,7 @@ public sealed partial class AudioRouter : IDisposable
     private readonly int _chunkSamples;
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<OutputPump> _pumpsAwaitingDispose = new();
+    private readonly ConcurrentDictionary<string, byte> _stuckOutputPumps = new(StringComparer.Ordinal);
     private readonly ILogger? _log;
     private readonly int _pumpCapacityChunks;
 
@@ -149,6 +150,12 @@ public sealed partial class AudioRouter : IDisposable
 
     /// <summary>Raised when a output pump drops chunks — sustained drops mean the output is behind.</summary>
     public event EventHandler<AudioRouterPumpPressureEventArgs>? PumpPressure;
+
+    /// <summary>
+    /// Output ids whose pump drainer was still alive after bounded dispose joins.
+    /// These pumps intentionally keep their queue/CTS alive to avoid use-after-dispose.
+    /// </summary>
+    public IReadOnlyList<string> StuckOutputPumpIds => _stuckOutputPumps.Keys.ToArray();
 
     public AudioRouter(int sampleRate, int chunkSamples = 480, int pumpCapacityChunks = 8)
         : this(sampleRate, chunkSamples, clock: null, pumpCapacityChunks, logger: null) { }
@@ -936,6 +943,10 @@ public sealed partial class AudioRouter : IDisposable
     /// <see cref="Stop"/> reaches its output. Use <see cref="Pause"/> instead for
     /// "stop now and go silent immediately."
     /// </summary>
+    /// <remarks>
+    /// If <paramref name="cancellationToken"/> is cancelled while the run loop thread is still alive,
+    /// the router becomes terminal/non-restartable; dispose it and create a new router.
+    /// </remarks>
     public void Stop(CancellationToken cancellationToken = default)
     {
         Trace.LogDebug("Stop: draining run loop (chunksProduced={Chunks})", Volatile.Read(ref _chunksProduced));
@@ -1211,6 +1222,8 @@ public sealed partial class AudioRouter : IDisposable
         if (_log is { } l && l.IsEnabled(LogLevel.Trace))
             l.LogTrace("Output {OutputId} audio pump drop (running total {Dropped})", outputId, droppedTotal);
     }
+
+    private void MarkOutputPumpStuck(string outputId) => _stuckOutputPumps.TryAdd(outputId, 0);
 
     // --- inner loop --------------------------------------------------------
 
@@ -1537,8 +1550,15 @@ public sealed partial class AudioRouter : IDisposable
 
     private sealed record ResolvedRoute(AudioRoute Route, SourceEntry Source, OutputEntry Output);
 
-    /// <summary>Snapshot of pump throughput stats.</summary>
-    public readonly record struct OutputPumpStats(long Enqueued, long Processed, long Dropped, int PumpCapacityChunks);
+    /// <summary>Snapshot of pump throughput/lifetime stats.</summary>
+    public readonly record struct OutputPumpStats(long Enqueued, long Processed, long Dropped, int PumpCapacityChunks)
+    {
+        /// <summary>
+        /// True when pump disposal hit the bounded join cap while the drainer thread was still alive.
+        /// In that state the pump intentionally leaks its queue/CTS to avoid use-after-dispose.
+        /// </summary>
+        public bool IsStuck { get; init; }
+    }
 
     /// <summary>
     /// Single snapshot of summed per-output pump counters from <see cref="AudioRouter.GetAggregatePumpStats"/>. Hints only — hosts still own
@@ -1606,13 +1626,17 @@ public sealed partial class AudioRouter : IDisposable
         private long _enqueued;
         private long _processed;
         private long _dropped;
+        private int _stuck;
         private volatile bool _disposed;
 
         public OutputPumpStats Stats => new(
             Volatile.Read(ref _enqueued),
             Volatile.Read(ref _processed),
             Volatile.Read(ref _dropped),
-            _pumpCapacityChunks);
+            _pumpCapacityChunks)
+        {
+            IsStuck = Volatile.Read(ref _stuck) != 0,
+        };
 
         /// <summary>
         /// Producer-thread scratch — the buffer the router currently writes
@@ -1789,6 +1813,8 @@ public sealed partial class AudioRouter : IDisposable
 
             if (_thread.IsAlive)
             {
+                Volatile.Write(ref _stuck, 1);
+                _router.MarkOutputPumpStuck(_sinkId);
                 Trace.LogError(
                     "AudioRouter.OutputPump '{OutputId}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.",
                     _sinkId);

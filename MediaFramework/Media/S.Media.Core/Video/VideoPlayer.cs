@@ -234,6 +234,10 @@ public sealed class VideoPlayer : IDisposable
     /// both pause and stop semantics — when the master clock is also paused,
     /// the displayed frame just freezes anyway.
     /// </summary>
+    /// <remarks>
+    /// If <paramref name="cancellationToken"/> is cancelled while the decode thread is still alive,
+    /// the player becomes terminal/non-restartable; dispose it and create a new player.
+    /// </remarks>
     /// <param name="cancellationToken">Cooperative cancel while joining the decode thread.</param>
     public void Pause(CancellationToken cancellationToken = default) => StopInternal(cancellationToken);
 

@@ -10,10 +10,20 @@ namespace S.Media.FFmpeg;
 /// </summary>
 public sealed class MediaContainerSession
 {
+    private readonly Action _defaultFlushSharedMuxAfterPause;
+
     internal MediaContainerSession(MediaContainerDecoder container, IAvPlaybackSession session)
     {
         Container = container ?? throw new ArgumentNullException(nameof(container));
         Session = session ?? throw new ArgumentNullException(nameof(session));
+        _defaultFlushSharedMuxAfterPause = Container.FlushCodecPipelines;
+    }
+
+    internal MediaContainerSession(IAvPlaybackSession session, Action defaultFlushSharedMuxAfterPause)
+    {
+        Session = session ?? throw new ArgumentNullException(nameof(session));
+        _defaultFlushSharedMuxAfterPause = defaultFlushSharedMuxAfterPause ?? throw new ArgumentNullException(nameof(defaultFlushSharedMuxAfterPause));
+        Container = null!;
     }
 
     public static MediaContainerSession Create(
@@ -42,7 +52,7 @@ public sealed class MediaContainerSession
         Session.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
 
     public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
-        Session.Pause(cancellationToken, flushSharedMuxAfterPause ?? Container.FlushCodecPipelines);
+        Session.Pause(cancellationToken, flushSharedMuxAfterPause ?? _defaultFlushSharedMuxAfterPause);
 
     public void Pause(CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
         Session.Pause(cancellationToken, ResolveFlush(flushPolicy));
@@ -60,7 +70,7 @@ public sealed class MediaContainerSession
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
         Action? flushSharedMuxAfterPause = null) =>
         AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
-            position, cancellationToken, flushSharedMuxAfterPause ?? Container.FlushCodecPipelines);
+            position, cancellationToken, flushSharedMuxAfterPause ?? _defaultFlushSharedMuxAfterPause);
 
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
         AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
@@ -88,5 +98,5 @@ public sealed class MediaContainerSession
     }
 
     private Action? ResolveFlush(PauseFlushPolicy policy) =>
-        policy == PauseFlushPolicy.FlushCodecPipelines ? Container.FlushCodecPipelines : null;
+        policy == PauseFlushPolicy.FlushCodecPipelines ? _defaultFlushSharedMuxAfterPause : null;
 }

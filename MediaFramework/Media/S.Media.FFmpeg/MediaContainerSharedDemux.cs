@@ -50,6 +50,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private volatile Exception? _demuxFault;
     private volatile bool _demuxerThreadStuck;
     private int _readYieldRequested;
+    private int _seekGeneration;
     private Thread? _demuxerThread;
     private GCHandle _interruptHandle;
     private AVFormatContext* _fmt;
@@ -615,6 +616,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
     }
 
+    private void AdvanceSeekGeneration()
+    {
+        lock (_queueGate)
+        {
+            unchecked { _seekGeneration++; }
+            Monitor.PulseAll(_queueGate);
+        }
+    }
+
     private void DemuxerThreadProc()
     {
         try
@@ -711,6 +721,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 if (!StopDemuxerAndDrainQueues())
                     throw new InvalidOperationException(
                         "Cannot seek: the demux thread did not stop, so the shared FFmpeg demux state cannot be safely reused.");
+                AdvanceSeekGeneration();
 
                 var timestampUs = (long)(position.TotalSeconds * AvTimeBase);
                 var ret = avformat_seek_file(_fmt, -1, long.MinValue, timestampUs, long.MaxValue, AVSEEK_FLAG_BACKWARD);
@@ -929,12 +940,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 return;
 
             AVPacket* pkt = null;
+            var packetGeneration = 0;
             lock (_queueGate)
             {
                 if (_aPendingPacket != nint.Zero)
                 {
                     pkt = (AVPacket*)_aPendingPacket;
                     _aPendingPacket = nint.Zero;
+                    packetGeneration = _seekGeneration;
                 }
                 else
                 {
@@ -942,7 +955,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                         Monitor.Wait(_queueGate, 50);
 
                     if (!IsReadYieldRequested && _audioPacketQ.Count > 0)
+                    {
                         pkt = (AVPacket*)_audioPacketQ.Dequeue();
+                        packetGeneration = _seekGeneration;
+                    }
                 }
 
                 Monitor.PulseAll(_queueGate);
@@ -962,7 +978,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 {
                     lock (_queueGate)
                     {
-                        if (IsReadYieldRequested)
+                        if (IsReadYieldRequested || packetGeneration != _seekGeneration)
                             av_packet_free(&pkt);
                         else
                             _aPendingPacket = (nint)pkt;
@@ -1144,12 +1160,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 return;
 
             AVPacket* pkt = null;
+            var packetGeneration = 0;
             lock (_queueGate)
             {
                 if (_vPendingPacket != nint.Zero)
                 {
                     pkt = (AVPacket*)_vPendingPacket;
                     _vPendingPacket = nint.Zero;
+                    packetGeneration = _seekGeneration;
                 }
                 else
                 {
@@ -1158,7 +1176,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                         Monitor.Wait(_queueGate, 50);
 
                     if (!IsReadYieldRequested && _videoPacketQ.Count > 0)
+                    {
                         pkt = (AVPacket*)_videoPacketQ.Dequeue();
+                        packetGeneration = _seekGeneration;
+                    }
                 }
 
                 Monitor.PulseAll(_queueGate);
@@ -1178,7 +1199,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 {
                     lock (_queueGate)
                     {
-                        if (IsReadYieldRequested)
+                        if (IsReadYieldRequested || packetGeneration != _seekGeneration)
                             av_packet_free(&pkt);
                         else
                             _vPendingPacket = (nint)pkt;

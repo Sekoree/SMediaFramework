@@ -72,4 +72,46 @@ public static class MediaFrameworkPlugins
 
     /// <summary>Registered by FFmpeg to support <see cref="AudioRouter.EnableAdaptiveRateOnNonMasterOutputs"/>.</summary>
     public static AdaptiveRateOutputWrapper? WrapAdaptiveRateOutput { get; set; }
+
+    /// <summary>
+    /// Captures all process-wide plugin/default slots and restores them when the returned scope is disposed.
+    /// Use this around tests or short-lived host customization so static defaults do not leak across sessions.
+    /// </summary>
+    public static IDisposable PreserveDefaults() => new DefaultsScope();
+
+    private sealed class DefaultsScope : IDisposable
+    {
+        private readonly Func<string, AudioSourceOpenOptions?, IAudioSource>? _audioSourceFileFactory = AudioSourceFileFactory;
+        private readonly Func<Stream, AudioSourceOpenOptions?, IAudioSource>? _audioSourceStreamFactory = AudioSourceStreamFactory;
+        private readonly Func<string, VideoSourceOpenOptions?, IVideoSource>? _videoSourceFileFactory = VideoSourceFileFactory;
+        private readonly Func<Stream, VideoSourceOpenOptions?, IVideoSource>? _videoSourceStreamFactory = VideoSourceStreamFactory;
+        private readonly Func<string, IVideoSource>? _imageFileSourceFactory = ImageFileSourceFactory;
+        private readonly Func<Stream, IVideoSource>? _imageStreamSourceFactory = ImageStreamSourceFactory;
+        private readonly Func<IAudioSource, int, IAudioSource>? _audioResampleSourceWrapper = AudioResampleSourceWrapper;
+        private readonly Func<IVideoCpuFrameConverter>? _videoCpuFrameConverterFactory = VideoCpuFrameConverterFactory;
+        private readonly Func<PixelFormat, PixelFormat, int, int, bool>? _videoCpuFrameCanConvertProbe = VideoCpuFrameCanConvertProbe;
+        private readonly Func<VideoFormat, IDeinterlacer>? _videoDeinterlacerFactory = VideoDeinterlacerFactory;
+        private readonly AdaptiveRateOutputWrapper? _wrapAdaptiveRateOutput = WrapAdaptiveRateOutput;
+        private readonly bool _defaultAutoResample = AudioRouter.DefaultAutoResample;
+        private int _disposed;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            AudioSourceFileFactory = _audioSourceFileFactory;
+            AudioSourceStreamFactory = _audioSourceStreamFactory;
+            VideoSourceFileFactory = _videoSourceFileFactory;
+            VideoSourceStreamFactory = _videoSourceStreamFactory;
+            ImageFileSourceFactory = _imageFileSourceFactory;
+            ImageStreamSourceFactory = _imageStreamSourceFactory;
+            AudioResampleSourceWrapper = _audioResampleSourceWrapper;
+            VideoCpuFrameConverterFactory = _videoCpuFrameConverterFactory;
+            VideoCpuFrameCanConvertProbe = _videoCpuFrameCanConvertProbe;
+            VideoDeinterlacerFactory = _videoDeinterlacerFactory;
+            WrapAdaptiveRateOutput = _wrapAdaptiveRateOutput;
+            AudioRouter.DefaultAutoResample = _defaultAutoResample;
+        }
+    }
 }

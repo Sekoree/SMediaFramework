@@ -260,7 +260,73 @@ public sealed class VideoCompositorSourceTests
             $"per-read allocation scales with slot count (P2-5 regression): 1-slot={perRead1}B, 8-slot={perRead8}B");
     }
 
-    private static VideoFrame MakeFrame(byte b, byte g, byte r, byte a, TimeSpan pts = default)
+    [Fact]
+    public async Task VideoCompositor_AddRemoveLayerWhileAdvanceToIsReadingSource_DoesNotCorruptLayerList()
+    {
+        using var blockedSource = new BlockingVideoSource(Bgra32_4x4);
+        using var addedSource = StaticFrameSource.FromFrame(MakeFrame(0, 255, 0, 255));
+        using var program = VideoCompositor.Create(Bgra32_4x4, VideoCompositorBackend.Cpu);
+        program.Clock = new FixedPlaybackClock(TimeSpan.Zero);
+        var blockedLayer = program.AddLayer(blockedSource, LayerConfig.Background);
+
+        var readTask = Task.Run(() =>
+        {
+            var ok = program.TryReadNextFrame(out var frame);
+            frame?.Dispose();
+            return ok;
+        });
+
+        Assert.True(blockedSource.Entered.Wait(TimeSpan.FromSeconds(2)), "read should be blocked inside layer source");
+
+        var addedLayer = program.AddLayer(addedSource, LayerConfig.Background);
+        var removeTask = Task.Run(() => program.RemoveLayer(blockedLayer));
+
+        blockedSource.Release();
+
+        Assert.True(await CompleteWithin(readTask, TimeSpan.FromSeconds(2)), "read should complete after source release");
+        Assert.True(await readTask);
+        Assert.True(await CompleteWithin(removeTask, TimeSpan.FromSeconds(2)), "remove should complete after source release");
+        Assert.True(await removeTask);
+        Assert.Equal([addedLayer], program.Layers);
+    }
+
+    [Fact]
+    public async Task DisposeWhileTryReadNextFrameIsInCompositor_WaitsAndDisposesHeldFrame()
+    {
+        var compositor = new BlockingCompositor(Bgra32_4x4);
+        using var output = new VideoCompositorSource(Bgra32_4x4, compositor, disposeCompositorOnDispose: true);
+        var slot = output.AddSlot();
+        slot.Output.Configure(Bgra32_4x4);
+        var heldReleased = 0;
+        slot.Output.Submit(MakeFrame(0, 0, 255, 255, release: DisposableRelease.Wrap(() => Interlocked.Increment(ref heldReleased))));
+
+        var readTask = Task.Run(() =>
+        {
+            var ok = output.TryReadNextFrame(out var frame);
+            frame?.Dispose();
+            return ok;
+        });
+
+        Assert.True(compositor.Entered.Wait(TimeSpan.FromSeconds(2)), "read should be blocked inside compositor");
+
+        var disposeTask = Task.Run(output.Dispose);
+        await Task.Delay(50);
+        Assert.False(disposeTask.IsCompleted, "Dispose should wait for the active read to release slot frames");
+
+        compositor.Release();
+
+        Assert.True(await CompleteWithin(readTask, TimeSpan.FromSeconds(2)), "read should complete after compositor release");
+        Assert.True(await readTask);
+        Assert.True(await CompleteWithin(disposeTask, TimeSpan.FromSeconds(2)), "dispose should finish after read exits");
+        await disposeTask;
+        Assert.Equal(1, Volatile.Read(ref heldReleased));
+        Assert.True(compositor.IsDisposed);
+    }
+
+    private static async Task<bool> CompleteWithin(Task task, TimeSpan timeout)
+        => await Task.WhenAny(task, Task.Delay(timeout)) == task;
+
+    private static VideoFrame MakeFrame(byte b, byte g, byte r, byte a, TimeSpan pts = default, IDisposable? release = null)
     {
         var buf = new byte[4 * 4 * 4];
         for (var i = 0; i < 4 * 4; i++)
@@ -270,7 +336,7 @@ public sealed class VideoCompositorSourceTests
             buf[i * 4 + 2] = r;
             buf[i * 4 + 3] = a;
         }
-        return new VideoFrame(pts, Bgra32_4x4, buf, 4 * 4, release: null);
+        return new VideoFrame(pts, Bgra32_4x4, buf, 4 * 4, release: release);
     }
 
     private sealed class TrackingCompositor : IVideoCompositor
@@ -297,5 +363,70 @@ public sealed class VideoCompositorSourceTests
                 OutputFormat.Width * 4, release: null);
         }
         public void Dispose() => IsDisposed = true;
+    }
+
+    private sealed class BlockingCompositor(VideoFormat outputFormat) : IVideoCompositor
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public bool IsDisposed { get; private set; }
+        public VideoFormat OutputFormat { get; } = outputFormat;
+        public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats { get; } = new[] { PixelFormat.Bgra32 };
+        public void Configure(VideoFormat output) { }
+
+        public VideoFrame Composite(IReadOnlyList<CompositorLayer> layers, TimeSpan pts)
+        {
+            Entered.Set();
+            _release.Wait();
+            return new VideoFrame(pts, OutputFormat, new byte[OutputFormat.Width * OutputFormat.Height * 4],
+                OutputFormat.Width * 4, release: null);
+        }
+
+        public void Release() => _release.Set();
+
+        public void Dispose()
+        {
+            Release();
+            IsDisposed = true;
+        }
+    }
+
+    private sealed class FixedPlaybackClock(TimeSpan elapsed) : S.Media.Core.Clock.IPlaybackClock
+    {
+        public TimeSpan ElapsedSinceStart { get; } = elapsed;
+        public bool IsAdvancing => true;
+    }
+
+    private sealed class BlockingVideoSource(VideoFormat format) : IVideoSource, IDisposable
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        private int _disposed;
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public VideoFormat Format { get; } = format;
+        public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = new[] { PixelFormat.Bgra32 };
+        public bool IsExhausted => Volatile.Read(ref _disposed) != 0;
+        public void SelectOutputFormat(PixelFormat format) { }
+
+        public bool TryReadNextFrame(out VideoFrame frame)
+        {
+            Entered.Set();
+            _release.Wait();
+            if (IsExhausted)
+            {
+                frame = null!;
+                return false;
+            }
+
+            frame = MakeFrame(0, 0, 255, 255);
+            return true;
+        }
+
+        public void Release() => _release.Set();
+
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref _disposed, 1);
+            Release();
+        }
     }
 }

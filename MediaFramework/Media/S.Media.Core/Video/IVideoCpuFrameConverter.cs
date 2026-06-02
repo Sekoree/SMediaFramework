@@ -77,6 +77,7 @@ public static class VideoFrameCpuClone
             throw new NotSupportedException("DuplicateCpuBacking does not support DRM dma-buf frames.");
         if (source.Win32Nv12 is not null)
             throw new NotSupportedException("DuplicateCpuBacking does not support Win32 D3D11 shared-handle frames.");
+        source.ValidateCpuGeometry();
         var fmt = source.Format.PixelFormat;
         var fw = source.Format.Width;
         var fh = source.Format.Height;

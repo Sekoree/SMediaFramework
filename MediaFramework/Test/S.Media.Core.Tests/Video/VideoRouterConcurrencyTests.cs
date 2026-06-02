@@ -1,5 +1,6 @@
 using S.Media.Core;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Tests.Diagnostics;
 using S.Media.Core.Video;
 using Xunit;
 
@@ -14,6 +15,7 @@ namespace S.Media.Core.Tests.Video;
 /// the regression guard once submission converts outside <c>_gate</c> — a missing converter lifetime
 /// lease would surface here as a use-after-dispose.
 /// </summary>
+[Collection(ProcessWideMediaFrameworkPluginsCollection.Name)]
 public sealed class VideoRouterConcurrencyTests
 {
     private const int W = 64, H = 64;
@@ -108,6 +110,38 @@ public sealed class VideoRouterConcurrencyTests
             MediaFrameworkPlugins.VideoCpuFrameConverterFactory = savedFactory;
             MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = savedProbe;
         }
+    }
+
+    [Fact]
+    public async Task MultiOutput_BranchRemovedDuringPhase2Conversion_DisposesBranchFrame()
+    {
+        var converter = new BlockingConverter();
+        using var router = new VideoRouter(null, new VideoRouterOptions(
+            VideoCpuFrameConverterFactory: () => converter,
+            VideoCpuFrameCanConvertProbe: (_, _, _, _) => true));
+        var primary = new CountingOutput(PixelFormat.Nv12);
+        var branch = new CountingOutput(PixelFormat.Bgra32);
+        var primId = router.AddOutput(primary, "primary", synchronous: true);
+        var branchId = router.AddOutput(branch, "branch", synchronous: true);
+        var input = router.AddInput(primId, "in");
+        Assert.True(router.TryAddRoute(input.Id, branchId, out _));
+        input.Output.Configure(Nv12);
+
+        var originalReleased = 0;
+        var submitTask = Task.Run(() =>
+            input.Output.Submit(MakeNv12Frame(new CountingRelease(() => Interlocked.Increment(ref originalReleased)))));
+
+        Assert.True(converter.Entered.Wait(TimeSpan.FromSeconds(2)), "branch conversion should be in phase 2");
+        Assert.True(router.TryRemoveRoute(input.Id, branchId, out _));
+        converter.Release();
+
+        var completed = await Task.WhenAny(submitTask, Task.Delay(TimeSpan.FromSeconds(2))) == submitTask;
+        Assert.True(completed, "submit should finish after converter release");
+        await submitTask;
+        Assert.Equal(1, primary.SubmitCount);
+        Assert.Equal(0, branch.SubmitCount);
+        Assert.Equal(1, Volatile.Read(ref originalReleased));
+        Assert.Equal(1, converter.ConvertedFrameReleased);
     }
 
     [Fact]
@@ -284,6 +318,40 @@ public sealed class VideoRouterConcurrencyTests
             if (_inConvert) tracker.RecordDisposeDuringConvert();
             _disposed = true;
         }
+    }
+
+    private sealed class BlockingConverter : IVideoCpuFrameConverter
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        private int _convertedFrameReleased;
+        private PixelFormat _dst = PixelFormat.Bgra32;
+        private int _w = W, _h = H;
+
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public int ConvertedFrameReleased => Volatile.Read(ref _convertedFrameReleased);
+
+        public void Configure(PixelFormat src, PixelFormat dst, int width, int height)
+        {
+            _dst = dst;
+            _w = width;
+            _h = height;
+        }
+
+        public VideoFrame Convert(VideoFrame source, VideoTransferHint hint)
+        {
+            Entered.Set();
+            _release.Wait();
+            return new VideoFrame(
+                source.PresentationTime,
+                new VideoFormat(_w, _h, _dst, source.Format.FrameRate),
+                new byte[_w * _h * 4],
+                _w * 4,
+                release: new CountingRelease(() => Interlocked.Increment(ref _convertedFrameReleased)));
+        }
+
+        public void Release() => _release.Set();
+
+        public void Dispose() => Release();
     }
 
     private sealed class CountingOutput(PixelFormat accepted) : IVideoOutput
