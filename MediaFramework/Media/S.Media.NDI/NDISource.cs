@@ -207,6 +207,50 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             ? _videoFormat
             : throw new InvalidOperationException("NDI source has not delivered a video frame yet.");
 
+    /// <summary>Non-throwing audio-format accessor: true with the format once an audio frame has been
+    /// received, false (default) before then. Use instead of catching from <see cref="AudioFormat"/>
+    /// when the stream may not be connected yet.</summary>
+    public bool TryGetAudioFormat(out AudioFormat format)
+    {
+        var state = Volatile.Read(ref _audioState);
+        if (state is null) { format = default; return false; }
+        format = state.Format;
+        return true;
+    }
+
+    /// <summary>Non-throwing video-format accessor: true with the format once a video frame has been
+    /// received, false (default) before then.</summary>
+    public bool TryGetVideoFormat(out VideoFormat format)
+    {
+        if (!_hasVideoFormat) { format = default; return false; }
+        format = _videoFormat;
+        return true;
+    }
+
+    /// <summary>
+    /// Blocks until every <em>enabled</em> stream (<see cref="ReceiveAudio"/> / <see cref="ReceiveVideo"/>)
+    /// has delivered its first frame — i.e. a format is available — or <paramref name="timeout"/> elapses.
+    /// Returns true only if all enabled streams connected. Lets a caller obtain the format up front (e.g.
+    /// before <c>AudioRouter.AddSource</c>) without hand-rolling a poll loop. The receiver runs from
+    /// <see cref="Open"/>, so this just waits for the first frame(s).
+    /// </summary>
+    public bool WaitForStreams(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var wantAudio = ReceiveAudio;
+        var wantVideo = ReceiveVideo;
+        var deadline = Environment.TickCount64 + (long)Math.Ceiling(timeout.TotalMilliseconds);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_disposed) return false;
+            var audioReady = !wantAudio || IsAudioConnected;
+            var videoReady = !wantVideo || IsVideoConnected;
+            if (audioReady && videoReady) return true;
+            if (Environment.TickCount64 >= deadline) return false;
+            Thread.Sleep(20);
+        }
+    }
+
     public IReadOnlyList<PixelFormat> NativeVideoPixelFormats => _videoNative;
 
     public long AudioOverflowFloats => Volatile.Read(ref _audioOverflowFloats);

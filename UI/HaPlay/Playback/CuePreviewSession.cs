@@ -127,7 +127,9 @@ internal sealed class CuePreviewSession : IDisposable
                     builder = builder.WithVideoLead(sdl, disposeOnPlayerDispose: false);
 
                 if (hasAudio)
-                    builder = builder.WithPortAudio(deviceIndex: previewAudioDeviceIndex);
+                    // This session owns paHost explicitly (stored + disposed in its lifecycle below),
+                    // so opt out of player-owned-host transfer to keep a single owner.
+                    builder = builder.WithPortAudio(deviceIndex: previewAudioDeviceIndex, transferHostOwnershipToPlayer: false);
 
                 if (!builder.TryBuild(out player, out var err))
                 {

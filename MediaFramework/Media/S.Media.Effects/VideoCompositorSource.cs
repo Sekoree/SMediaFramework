@@ -44,6 +44,13 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     private readonly TimeSpan _ptsStep;
     private readonly Lock _slotsGate = new();
     private readonly List<Slot> _slots = [];
+    // Reusable scratch for the single-consumer read path (serialized by _readGate) so a steady-state
+    // composite allocates nothing: the slot snapshot, the per-slot composite layers, and the slots to
+    // release once Composite has read them.
+    private readonly Lock _readGate = new();
+    private readonly List<Slot> _snapshotScratch = [];
+    private readonly List<CompositorLayer> _layerScratch = [];
+    private readonly List<Slot> _acquiredScratch = [];
     private TimeSpan _nextPts = TimeSpan.Zero;
     private long _compositesEmitted;
     private bool _disposed;
@@ -159,40 +166,51 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             return false;
         }
 
-        // Snapshot slots and lease each held frame for the duration of this composite.
-        Slot[] snapshot;
-        lock (_slotsGate)
-            snapshot = _slots.ToArray();
-
-        List<CompositorLayer>? layers = null;
-        List<Slot.SlotFrameLease>? leases = null;
-        try
+        // Single-consumer read (class contract): serialize so the reused scratch below is exclusive.
+        lock (_readGate)
         {
-            foreach (var slot in snapshot)
+            // Snapshot slot refs under _slotsGate (brief — keeps AddSlot/RemoveSlot from contending
+            // with the whole composite), then acquire each slot's held frame outside it. AddRange from
+            // an ICollection copies without per-element/enumerator alloc once the scratch is warm.
+            _snapshotScratch.Clear();
+            lock (_slotsGate)
+                _snapshotScratch.AddRange(_slots);
+
+            _layerScratch.Clear();
+            _acquiredScratch.Clear();
+            try
             {
-                var lease = slot.KeepPolicy == SlotKeepPolicy.MasterAligned && masterAlignmentTime is { } masterPts
-                    ? slot.AcquireMasterAligned(masterPts, _ptsStep)
-                    : slot.AcquireLatest();
-                if (lease is null) continue;
-                leases ??= [];
-                leases.Add(lease);
-                var f = lease.Frame;
-                layers ??= [];
-                layers.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode));
+                foreach (var slot in _snapshotScratch)
+                {
+                    // Acquire holds a read-ref on the slot's frame (the slot won't dispose it until we
+                    // ReleaseFrame below). Track the slot, not a per-call lease object, to release it.
+                    var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned && masterAlignmentTime is { } masterPts
+                        ? slot.AcquireMasterAlignedFrame(masterPts, _ptsStep)
+                        : slot.AcquireLatestFrame();
+                    if (f is null) continue;
+                    _acquiredScratch.Add(slot);
+                    _layerScratch.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode));
+                }
+
+                // When the caller drives composition from a master timeline (the declarative
+                // VideoCompositor), stamp the composite with that master time so downstream players
+                // align to a real clock rather than a synthetic free-running counter. The no-arg /
+                // production-slot path keeps the synthetic PTS (which still advances either way).
+                var pts = masterAlignmentTime ?? _nextPts;
+                _nextPts += _ptsStep;
+                // Composite reads the layer list synchronously and returns an independent (rented) frame;
+                // it must not retain the list — both shipping compositors copy out, so reuse is safe.
+                frame = _compositor.Composite(_layerScratch, pts);
+                Interlocked.Increment(ref _compositesEmitted);
+                return true;
             }
-
-            var pts = _nextPts;
-            _nextPts += _ptsStep;
-            frame = _compositor.Composite(layers ?? (IReadOnlyList<CompositorLayer>)Array.Empty<CompositorLayer>(), pts);
-            Interlocked.Increment(ref _compositesEmitted);
-            return true;
-        }
-        finally
-        {
-            if (leases is not null)
+            finally
             {
-                foreach (var lease in leases)
-                    lease.Dispose();
+                foreach (var slot in _acquiredScratch)
+                    slot.ReleaseFrame();
+                _acquiredScratch.Clear();
+                _layerScratch.Clear();
+                _snapshotScratch.Clear();
             }
         }
     }
@@ -301,7 +319,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 throw new ObjectDisposedException(nameof(Slot));
         }
 
-        internal SlotFrameLease? AcquireLatest()
+        /// <summary>Returns the slot's latest held frame and registers an active read-ref on it (the
+        /// slot won't dispose it until <see cref="ReleaseFrame"/>). Returns null (no ref taken) when the
+        /// slot is closed or empty.</summary>
+        internal VideoFrame? AcquireLatestFrame()
         {
             VideoFrame? toDispose = null;
             VideoFrame? frame;
@@ -324,12 +345,13 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             }
 
             toDispose?.Dispose();
-            return new SlotFrameLease(this, frame);
+            return frame;
         }
 
         /// <summary>Picks the held frame whose PTS is closest to <paramref name="masterPts"/> without
-        /// selecting a frame that is more than one canvas period in the future.</summary>
-        internal SlotFrameLease? AcquireMasterAligned(TimeSpan masterPts, TimeSpan canvasPeriod)
+        /// selecting a frame that is more than one canvas period in the future. Registers an active
+        /// read-ref (release via <see cref="ReleaseFrame"/>) when it returns non-null.</summary>
+        internal VideoFrame? AcquireMasterAlignedFrame(TimeSpan masterPts, TimeSpan canvasPeriod)
         {
             VideoFrame? toDispose = null;
             VideoFrame? frame;
@@ -345,7 +367,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             }
 
             toDispose?.Dispose();
-            return new SlotFrameLease(this, frame);
+            return frame;
         }
 
         private VideoFrame? ChooseMasterAlignedFrame(TimeSpan masterPts, TimeSpan canvasPeriod, ref VideoFrame? toDispose)
@@ -418,7 +440,9 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             currentToDispose?.Dispose();
         }
 
-        private void ReleaseLease()
+        /// <summary>Releases one read-ref taken by <see cref="AcquireLatestFrame"/> /
+        /// <see cref="AcquireMasterAlignedFrame"/>. Must be called exactly once per non-null acquire.</summary>
+        internal void ReleaseFrame()
         {
             VideoFrame? toDispose = null;
             lock (_gate)
@@ -432,25 +456,6 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 }
             }
             toDispose?.Dispose();
-        }
-
-        internal sealed class SlotFrameLease : IDisposable
-        {
-            private Slot? _owner;
-
-            public SlotFrameLease(Slot owner, VideoFrame frame)
-            {
-                _owner = owner;
-                Frame = frame;
-            }
-
-            public VideoFrame Frame { get; }
-
-            public void Dispose()
-            {
-                var owner = Interlocked.Exchange(ref _owner, null);
-                owner?.ReleaseLease();
-            }
         }
 
         private sealed class SlotOutput(Slot owner, IReadOnlyList<PixelFormat> accepted) : IVideoOutput

@@ -425,12 +425,13 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         _disposed = true;
         _win32Nv12Device.SetBorrowVideoSourceForWin32Nv12Gl(null);
 
+        var threadStillRunning = false;
         if (_ownsThread)
         {
             _cts?.Cancel();
             _wakeup.Set();
             CooperativePlaybackJoin.JoinThread(_renderThread, TimeSpan.FromSeconds(45));
-            _cts?.Dispose();
+            threadStillRunning = _renderThread is { IsAlive: true };
         }
         else
         {
@@ -441,6 +442,17 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         var leftover = Interlocked.Exchange(ref _pendingFrame, null);
         leftover?.Dispose();
 
+        if (threadStillRunning)
+        {
+            // Render thread didn't stop within the join window — it may still touch _wakeup / _ready /
+            // the cts token / the D3D11 device. Leak them rather than dispose under the live thread
+            // (use-after-dispose / handle-reuse race). Same policy as VideoOutputPump.Dispose (P2-4).
+            MediaDiagnostics.LogWarning(
+                "SDL3GLVideoOutput: render thread did not stop within 45 s on Dispose; leaking wait handles/cts/device to avoid disposing them under the live thread.");
+            return;
+        }
+
+        _cts?.Dispose();
         _wakeup.Dispose();
         _ready.Dispose();
         _win32Nv12Device.Dispose();

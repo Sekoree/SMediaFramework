@@ -15,12 +15,14 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
     private readonly VideoCompositorSource _source;
     private readonly List<LayerHandle> _layers = [];
     private readonly VideoFormat _output;
-    private readonly DateTime _wallStart = DateTime.UtcNow;
+    private readonly long _framePeriodTicks;
+    private long _compositeReads;
     private bool _disposed;
 
     private VideoCompositor(VideoFormat output, IVideoCompositor compositor)
     {
         _output = output;
+        _framePeriodTicks = FramePeriodTicks(output.FrameRate);
         _source = new VideoCompositorSource(output, compositor, disposeCompositorOnDispose: true);
     }
 
@@ -33,9 +35,6 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
     public IPlaybackClock? Clock { get; set; }
 
     public IReadOnlyList<LayerHandle> Layers => _layers;
-
-    internal TimeSpan TimelinePosition =>
-        Clock?.ElapsedSinceStart ?? DateTime.UtcNow - _wallStart;
 
     /// <summary>
     /// Registers an optional process-wide compositor backend used by <see cref="VideoCompositorBackend.Auto"/>.
@@ -66,13 +65,13 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
             VideoCompositorBackend.Gl when options.Gl is not null =>
                 new GlVideoCompositor(options.Gl, output, options.GlOutputPrecision),
             VideoCompositorBackend.Gl =>
-                TryCreateRegisteredBackend(output, out var error)
+                TryCreateRegisteredBackend(output, options.AutoBackends, out var error)
                 ?? throw new ArgumentException(
                     $"No registered GL compositor backend could create {output}. " +
-                    "Provide VideoCompositorOptions.Gl or register a host backend such as S.Media.SDL3. " +
+                    "Provide VideoCompositorOptions.Gl / VideoCompositorOptions.AutoBackends or register a host backend such as S.Media.SDL3. " +
                     (string.IsNullOrWhiteSpace(error) ? string.Empty : $"Last error: {error}"),
                     nameof(options)),
-            _ => TryCreateRegisteredBackend(output, out _) ?? new CpuVideoCompositor(output, options.CpuSampling),
+            _ => TryCreateRegisteredBackend(output, options.AutoBackends, out _) ?? new CpuVideoCompositor(output, options.CpuSampling),
         };
         return new VideoCompositor(output, compositor);
     }
@@ -92,7 +91,9 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
         ArgumentNullException.ThrowIfNull(handle);
         if (!_layers.Remove(handle))
             return false;
-        return _source.RemoveSlot(handle.Slot.Id);
+        var removed = _source.RemoveSlot(handle.Slot.Id);
+        handle.Close(); // dispose the layer's look-ahead buffer + converter
+        return removed;
     }
 
     public void SelectOutputFormat(S.Media.Core.Video.PixelFormat format) => _source.SelectOutputFormat(format);
@@ -100,8 +101,25 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
     public bool TryReadNextFrame(out VideoFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (Clock is { } clock)
+        {
+            // Timeline mode: every layer advances to the master clock rather than by one frame per
+            // downstream read — so a downstream player prebuffering its queue no longer races every
+            // layer forward at decode speed, and each layer shows the frame whose interval contains the
+            // clock position (frame-accurate). The composite is stamped with the master time.
+            var masterTime = clock.ElapsedSinceStart;
+            foreach (var layer in _layers)
+                layer.AdvanceTo(masterTime, _output);
+            return _source.TryReadNextFrame(masterTime, out frame);
+        }
+
+        // Read-paced mode (no clock): exactly one inner frame per read — preserves a single-layer
+        // scaler/adapter's 1:1 passthrough (e.g. HaPlay's OutputPresetVideoSource) with no PTS-grid
+        // drift. Transitions resolve against a synthetic read-index timeline; output PTS stays synthetic.
+        var readTime = TimeSpan.FromTicks(_framePeriodTicks * _compositeReads);
+        _compositeReads++;
         foreach (var layer in _layers)
-            layer.TryPullFrame(_output, out _, out _);
+            layer.PullOneAndSubmit(readTime, _output);
         return _source.TryReadNextFrame(out frame);
     }
 
@@ -109,16 +127,33 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        foreach (var layer in _layers)
+            layer.Close();
         _layers.Clear();
         _source.Dispose();
     }
 
-    private static IVideoCompositor? TryCreateRegisteredBackend(VideoFormat output, out string? error)
+    private static long FramePeriodTicks(S.Media.Core.Video.Rational frameRate)
+    {
+        if (frameRate.Numerator <= 0 || frameRate.Denominator <= 0)
+            return TimeSpan.FromMilliseconds(33).Ticks;
+        return TimeSpan.FromSeconds((double)frameRate.Denominator / frameRate.Numerator).Ticks;
+    }
+
+    private static IVideoCompositor? TryCreateRegisteredBackend(
+        VideoFormat output,
+        IReadOnlyList<VideoCompositorBackendFactory>? perCallBackends,
+        out string? error)
     {
         error = null;
-        VideoCompositorBackendFactory[] factories;
+        VideoCompositorBackendFactory[] registered;
         lock (AutoBackendGate)
-            factories = AutoBackendFactories.ToArray();
+            registered = AutoBackendFactories.ToArray();
+
+        // Per-call (session-scoped) backends take precedence over process-wide registered ones.
+        IEnumerable<VideoCompositorBackendFactory> factories = perCallBackends is { Count: > 0 }
+            ? [.. perCallBackends, .. registered]
+            : registered;
 
         var errors = new List<string>();
         foreach (var factory in factories)

@@ -16,4 +16,12 @@ public sealed class VideoCompositorOptions
 
     /// <summary>GL compositor FBO / readback precision. Default <see cref="GlCompositorOutputPrecision.Rgba8"/>.</summary>
     public GlCompositorOutputPrecision GlOutputPrecision { get; init; } = GlCompositorOutputPrecision.Rgba8;
+
+    /// <summary>
+    /// Per-call compositor backend factories, tried in order for <see cref="VideoCompositorBackend.Auto"/>
+    /// and <see cref="VideoCompositorBackend.Gl"/> <em>before</em> the process-wide ones registered via
+    /// <see cref="VideoCompositor.RegisterAutoBackend"/>. Lets a session supply its own backend without
+    /// mutating process-wide state (which can otherwise leak across sessions/tests).
+    /// </summary>
+    public IReadOnlyList<VideoCompositorBackendFactory>? AutoBackends { get; init; }
 }

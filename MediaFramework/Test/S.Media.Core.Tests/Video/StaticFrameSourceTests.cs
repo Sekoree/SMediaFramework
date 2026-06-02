@@ -57,6 +57,53 @@ public sealed class StaticFrameSourceTests
     }
 
     [Fact]
+    public void Dispose_WithReleaseHook_DefersReleaseUntilInFlightFramesDisposed()
+    {
+        // P0-6: emitted frames alias the source-owned (pooled/native) backing. Disposing the source
+        // must NOT fire releaseBuffersOnDispose while a frame is still in flight — otherwise the buffer
+        // is returned/freed under a frame still reading it. The hook fires once, after the source AND
+        // every emitted frame are disposed.
+        var pixels = new byte[64 * 64 * 4];
+        var released = 0;
+        var src = new StaticFrameSource(
+            Bgra32_64x64,
+            [new ReadOnlyMemory<byte>(pixels)],
+            [64 * 4],
+            releaseBuffersOnDispose: () => released++);
+
+        Assert.True(src.TryReadNextFrame(out var f1));
+        Assert.True(src.TryReadNextFrame(out var f2));
+
+        src.Dispose();
+        Assert.Equal(0, released);              // two frames still alive → must not release yet
+        Assert.False(src.TryReadNextFrame(out _)); // disposed → no new frames
+
+        f1.Dispose();
+        Assert.Equal(0, released);              // one frame still alive
+        f2.Dispose();
+        Assert.Equal(1, released);              // last ref gone → release fires exactly once
+    }
+
+    [Fact]
+    public void ReleaseHook_FiresOnce_WhenFrameOutlivesSource_AndFrameDisposeIsIdempotent()
+    {
+        var pixels = new byte[64 * 64 * 4];
+        var released = 0;
+        var src = new StaticFrameSource(
+            Bgra32_64x64,
+            [new ReadOnlyMemory<byte>(pixels)],
+            [64 * 4],
+            releaseBuffersOnDispose: () => released++);
+
+        Assert.True(src.TryReadNextFrame(out var f));
+        f.Dispose();
+        Assert.Equal(0, released); // source still holds its ref
+        f.Dispose();               // idempotent — must not decrement twice
+        src.Dispose();
+        Assert.Equal(1, released);
+    }
+
+    [Fact]
     public void SelectOutputFormat_ThrowsForMismatch()
     {
         var pixels = new byte[64 * 64 * 4];

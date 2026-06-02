@@ -530,7 +530,10 @@ public sealed class VideoPlayer : IDisposable
         if (submitted)
         {
             Interlocked.Increment(ref _displayed);
-            FramePresentationTimePresented?.Invoke(presentedPts);
+            // Via RaisePresented (not a direct Invoke): this runs on the clock-driver
+            // thread (OnVideoTick → LatestOnTick), so a throwing subscriber must not be
+            // allowed to escape and kill the clock driver. Same contract as OnVideoTick.
+            RaisePresented(presentedPts);
         }
     }
 

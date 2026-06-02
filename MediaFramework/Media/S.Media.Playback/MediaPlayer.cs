@@ -39,6 +39,10 @@ public sealed class MediaPlayer : IDisposable
     private readonly IMediaClock? _liveClock;
     private readonly MediaClock? _liveFreerun;
     private readonly List<IDisposable> _ownedLiveDisposables = [];
+    // Companion resources (e.g. a PortAudio host wired via WithPortAudio) the player owns and disposes
+    // on Dispose — disposed AFTER the bundle/live graph so the router has stopped submitting before a
+    // companion closes its hardware output. Keeps the simple "open with audio" path from leaking.
+    private readonly List<IDisposable> _ownedCompanions = [];
     private readonly string _videoRouterInputId;
     private readonly IVideoOutput _videoInput;
     private readonly string? _audioSourceId;
@@ -91,6 +95,9 @@ public sealed class MediaPlayer : IDisposable
 
     public bool IsLive => _bundle is null;
 
+    /// <summary>True once <see cref="Dispose"/> has run.</summary>
+    public bool IsDisposed => _disposed;
+
     public bool HasContainerDecoder => _bundle is not null;
 
     public MediaContainerDecoder Decoder =>
@@ -139,6 +146,17 @@ public sealed class MediaPlayer : IDisposable
     public TriggerBus Triggers => _triggerBus;
 
     internal void AttachBuilderContext(MediaPlayerOpenBuilder builder) { }
+
+    /// <summary>
+    /// Registers a companion resource the player owns and disposes when it is disposed (after the
+    /// playback graph is torn down). Used by builder wire-ups (e.g. <c>WithPortAudio</c>) so the
+    /// caller can dispose just the player and not leak the companion host.
+    /// </summary>
+    internal void RegisterOwnedCompanion(IDisposable companion)
+    {
+        ArgumentNullException.ThrowIfNull(companion);
+        _ownedCompanions.Add(companion);
+    }
 
     internal void SetPortAudioPlaybackStats(IAudioOutputPlaybackStats stats) =>
         _portAudioPlaybackStats = stats ?? throw new ArgumentNullException(nameof(stats));
@@ -277,16 +295,22 @@ public sealed class MediaPlayer : IDisposable
         if (_bundle is not null)
         {
             _bundle.Dispose();
-            return;
+        }
+        else
+        {
+            TryDispose(() => _liveVideo?.Dispose(), "MediaPlayer.Dispose: live VideoPlayer");
+            TryDispose(() => _liveAudioRouter?.Dispose(), "MediaPlayer.Dispose: live AudioRouter");
+            TryDispose(() => _liveAudioClock?.Dispose(), "MediaPlayer.Dispose: live AudioClock");
+            TryDispose(() => _liveVideoRouter?.Dispose(), "MediaPlayer.Dispose: live VideoRouter");
+            TryDispose(() => _liveFreerun?.Dispose(), "MediaPlayer.Dispose: live MediaClock");
+            foreach (var d in _ownedLiveDisposables)
+                TryDispose(d.Dispose, "MediaPlayer.Dispose: live source");
         }
 
-        TryDispose(() => _liveVideo?.Dispose(), "MediaPlayer.Dispose: live VideoPlayer");
-        TryDispose(() => _liveAudioRouter?.Dispose(), "MediaPlayer.Dispose: live AudioRouter");
-        TryDispose(() => _liveAudioClock?.Dispose(), "MediaPlayer.Dispose: live AudioClock");
-        TryDispose(() => _liveVideoRouter?.Dispose(), "MediaPlayer.Dispose: live VideoRouter");
-        TryDispose(() => _liveFreerun?.Dispose(), "MediaPlayer.Dispose: live MediaClock");
-        foreach (var d in _ownedLiveDisposables)
-            TryDispose(d.Dispose, "MediaPlayer.Dispose: live source");
+        // After the playback graph is down (router stopped) so a companion can close its hardware
+        // output without the router still submitting into it.
+        foreach (var c in _ownedCompanions)
+            TryDispose(c.Dispose, "MediaPlayer.Dispose: owned companion");
     }
 
     private static void TryDispose(Action? dispose, string debugLabel)

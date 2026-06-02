@@ -28,4 +28,30 @@ public sealed class NDISourceApiTests
         Assert.True(o.ReceiveAudio);
         Assert.True(o.ReceiveVideo);
     }
+
+    [Fact]
+    public void TryGetFormat_FalseAndWaitForStreams_TimesOut_WhenSourceNeverDelivers()
+    {
+        // P2-15: a receiver opened to a source that isn't sending reports "no format yet" without
+        // throwing, and WaitForStreams returns false on timeout (doesn't hang or throw). Video-only so
+        // the test never depends on a real sender being present on the network.
+        NDISource source;
+        try
+        {
+            source = NDISource.Open(
+                new NDIDiscoveredSource($"nonexistent-{Guid.NewGuid():N}", null),
+                new NDISourceOptions { ReceiveAudio = false, ReceiveVideo = true });
+        }
+        catch
+        {
+            return; // NDI runtime unavailable in this environment — skip.
+        }
+
+        using (source)
+        {
+            Assert.False(source.TryGetVideoFormat(out var fmt));
+            Assert.Equal(default, fmt);
+            Assert.False(source.WaitForStreams(TimeSpan.FromMilliseconds(150)));
+        }
+    }
 }

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Video;
 
@@ -8,7 +9,7 @@ internal static class CompositorBgraHelper
     public static bool TryToBgra(
         VideoFrame source,
         ref VideoCpuFrameConverter? converter,
-        out VideoFrame? layer)
+        [NotNullWhen(true)] out VideoFrame? layer)
     {
         ArgumentNullException.ThrowIfNull(source);
         layer = null;

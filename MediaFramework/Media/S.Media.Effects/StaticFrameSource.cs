@@ -35,6 +35,14 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
     private readonly VideoTransferHint _transferHint;
     private readonly PixelFormat[] _native;
     private readonly TimeSpan _ptsStep;
+    // Refcount guarding the shared backing when a release hook is present (pooled/native buffers via
+    // releaseBuffersOnDispose / FromFrame's ArrayPool clone). The source holds one ref; each emitted
+    // frame holds one while alive. The hook fires only once the source is disposed AND every emitted
+    // frame is — so a still-queued frame can't read buffers Dispose has already returned to the pool.
+    // No refs / no per-frame allocation when the backing is plain managed arrays (hook null): the GC
+    // keeps those alive behind any queued frame, so there's nothing to defer.
+    private readonly Lock _gate = new();
+    private int _backingRefs = 1;
     private TimeSpan _nextPts;
     private bool _disposed;
 
@@ -83,25 +91,54 @@ public sealed class StaticFrameSource : IVideoSource, IDisposable
 
     public bool TryReadNextFrame(out VideoFrame frame)
     {
-        if (_disposed)
+        lock (_gate)
         {
-            frame = null!;
-            return false;
-        }
+            if (_disposed)
+            {
+                frame = null!;
+                return false;
+            }
 
-        frame = new VideoFrame(_nextPts, _format, _planes, _strides,
-            release: null,
-            metadata: new VideoFrameMetadata(ColorTransferHint: _transferHint));
-        _nextPts += _ptsStep;
-        return true;
+            // Only refcount when there's a release hook to defer; otherwise emit a release-free frame.
+            var release = _bufferRelease is not null ? DisposableRelease.Wrap(ReleaseBackingRef) : null;
+            frame = new VideoFrame(_nextPts, _format, _planes, _strides,
+                release: release,
+                metadata: new VideoFrameMetadata(ColorTransferHint: _transferHint));
+            // Commit the ref only after the frame was constructed successfully (ctor validates).
+            if (release is not null)
+                _backingRefs++;
+            _nextPts += _ptsStep;
+            return true;
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        if (_bufferRelease is null) return;
-        try { _bufferRelease(); }
+        bool fire;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (_bufferRelease is null) return;
+            // Drop the source's ref; the hook fires here only if no emitted frame is still alive.
+            fire = --_backingRefs == 0;
+        }
+        if (fire)
+            InvokeBufferRelease();
+    }
+
+    private void ReleaseBackingRef()
+    {
+        bool fire;
+        lock (_gate)
+            fire = --_backingRefs == 0;
+        if (fire)
+            InvokeBufferRelease();
+    }
+
+    private void InvokeBufferRelease()
+    {
+        try { _bufferRelease!(); }
         catch { /* best effort — buffer release is the consumer's hook */ }
     }
 

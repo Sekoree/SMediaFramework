@@ -222,6 +222,44 @@ public sealed class VideoCompositorSourceTests
         Assert.Equal(1, used.CompositeCalls);
     }
 
+    [Fact]
+    public void SteadyStateCompositeRead_AllocationDoesNotScaleWithSlotCount()
+    {
+        // P2-5: TryReadNextFrame reuses scratch (slot snapshot + layer list) and no longer allocates a
+        // per-slot lease object, so a pure composite read (held frames, no new submits) allocates a
+        // slot-count-INDEPENDENT amount — just the compositor's fixed output frame. TrackingCompositor
+        // allocates a constant buffer per Composite regardless of layer count, so any growth in
+        // per-read allocation between 1 and 8 slots would be the per-slot leases / per-call lists
+        // regressing back in.
+        static long PerReadBytes(int slotCount)
+        {
+            var compositor = new TrackingCompositor(Bgra32_4x4);
+            using var output = new VideoCompositorSource(Bgra32_4x4, compositor, disposeCompositorOnDispose: true);
+            for (var i = 0; i < slotCount; i++)
+            {
+                var slot = output.AddSlot();
+                slot.Output.Configure(Bgra32_4x4);
+                slot.Output.Submit(MakeFrame(0, 0, 255, 255));
+            }
+            // Warm up: JIT, first-frame promotion into each slot, scratch-list capacity growth.
+            for (var i = 0; i < 300; i++) { output.TryReadNextFrame(out var f); f.Dispose(); }
+
+            const int iters = 1000;
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < iters; i++) { output.TryReadNextFrame(out var f); f.Dispose(); }
+            var after = GC.GetAllocatedBytesForCurrentThread();
+            return (after - before) / iters;
+        }
+
+        var perRead1 = PerReadBytes(1);
+        var perRead8 = PerReadBytes(8);
+
+        // Old path allocated ~7 extra lease objects + a larger Slot[] snapshot + List backing per read
+        // for the 8-slot case; the new path reuses all of it. Allow slack for measurement noise.
+        Assert.True(perRead8 - perRead1 < 200,
+            $"per-read allocation scales with slot count (P2-5 regression): 1-slot={perRead1}B, 8-slot={perRead8}B");
+    }
+
     private static VideoFrame MakeFrame(byte b, byte g, byte r, byte a, TimeSpan pts = default)
     {
         var buf = new byte[4 * 4 * 4];

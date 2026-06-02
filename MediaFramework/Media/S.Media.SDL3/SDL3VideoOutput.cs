@@ -233,12 +233,13 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        var threadStillRunning = false;
         if (_ownsThread)
         {
             _cts?.Cancel();
             _wakeup.Set(); // poke the render thread out of WaitOne
             CooperativePlaybackJoin.JoinThread(_renderThread, TimeSpan.FromSeconds(2));
-            _cts?.Dispose();
+            threadStillRunning = _renderThread is { IsAlive: true };
         }
         else
         {
@@ -253,6 +254,20 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
         var leftover = Interlocked.Exchange(ref _pendingFrame, null);
         leftover?.Dispose();
 
+        if (threadStillRunning)
+        {
+            // The render thread didn't stop within the join window — it may still be blocked in a
+            // native present and could touch _wakeup / _ready / the cts token's WaitHandle. Deliberately
+            // leak those rather than dispose them under the live thread (which would risk
+            // ObjectDisposedException or a handle-reuse race on the render thread). Same policy as
+            // VideoOutputPump.Dispose (P2-4).
+            MediaDiagnostics.LogWarning(
+                "SDL3VideoOutput '{Title}': render thread did not stop within 2 s on Dispose; leaking wait handles/cts to avoid disposing them under the live thread.",
+                _title);
+            return;
+        }
+
+        _cts?.Dispose();
         _wakeup.Dispose();
         _ready.Dispose();
     }

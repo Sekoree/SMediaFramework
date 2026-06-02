@@ -7,29 +7,36 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
 {
     /// <summary>
     /// After the player is built, wires the decoder mux audio to the default PortAudio device.
-    /// The returned host is stored on the builder (<see cref="WiredPortAudioHost"/>); dispose it before or with the player.
     /// </summary>
+    /// <param name="transferHostOwnershipToPlayer">
+    /// When <c>true</c> (default), the built <see cref="MediaPlayer"/> owns the PortAudio host and
+    /// disposes it (after its router stops) when the player is disposed — so the simple "open with
+    /// audio" path can't leak the host. The host is still reachable via
+    /// <see cref="GetWiredPortAudioHost"/> for stats/inspection, but the caller must NOT dispose it.
+    /// Pass <c>false</c> to manage the host lifetime yourself (dispose the player first, then the host).
+    /// </param>
     public static MediaPlayerOpenFileBuilder WithPortAudio(
         this MediaPlayerOpenFileBuilder builder,
         int? deviceLatencyMs = null,
         int? chunkSamples = null,
-        PortAudioPlaybackHostPlayerOwnership ownership = PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer,
+        bool transferHostOwnershipToPlayer = true,
         int? deviceIndex = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, ownership, deviceIndex);
+        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, transferHostOwnershipToPlayer, deviceIndex);
         return builder;
     }
 
+    /// <inheritdoc cref="WithPortAudio(MediaPlayerOpenFileBuilder,int?,int?,bool,int?)"/>
     public static MediaPlayerOpenDecoderBuilder WithPortAudio(
         this MediaPlayerOpenDecoderBuilder builder,
         int? deviceLatencyMs = null,
         int? chunkSamples = null,
-        PortAudioPlaybackHostPlayerOwnership ownership = PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer,
+        bool transferHostOwnershipToPlayer = true,
         int? deviceIndex = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, ownership, deviceIndex);
+        RegisterPortAudioCompanion(builder, deviceLatencyMs, chunkSamples, transferHostOwnershipToPlayer, deviceIndex);
         return builder;
     }
 
@@ -41,7 +48,7 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
         MediaPlayerOpenBuilder builder,
         int? deviceLatencyMs,
         int? chunkSamples,
-        PortAudioPlaybackHostPlayerOwnership ownership,
+        bool transferHostOwnershipToPlayer,
         int? deviceIndex = null)
     {
         builder.CompanionSteps.Add(player =>
@@ -60,6 +67,8 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
 
             var samples = chunkSamples ?? builder.Options.AudioChunkSamples;
 
+            // Always CallerDisposesPlayer: the host's Dispose then closes only its MainOutput (never the
+            // router/clock the player owns), so the player can own + dispose the host without recursion.
             var host = PortAudioPlaybackHost.TryWirePortAudioMainForRouter(
                 player.Decoder,
                 player.AudioRouter,
@@ -68,7 +77,7 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
                 samples,
                 deviceLatencyMs,
                 msg => builder.CompanionFailureMessage = msg,
-                ownership,
+                PortAudioPlaybackHostPlayerOwnership.CallerDisposesPlayer,
                 deviceIndex);
 
             if (host is null)
@@ -79,6 +88,10 @@ public static class MediaPlayerOpenBuilderPortAudioExtensions
 
             builder.WiredPortAudioHost = host;
             player.SetPortAudioPlaybackStats(host.MainOutput);
+            // Default: hand the host to the player so disposing the player alone tears down the hardware
+            // output (after the router stops). Opt out to manage the host lifetime yourself.
+            if (transferHostOwnershipToPlayer)
+                player.RegisterOwnedCompanion(host);
             return true;
         });
     }

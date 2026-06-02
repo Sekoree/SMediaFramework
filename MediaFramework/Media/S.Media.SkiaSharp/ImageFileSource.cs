@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Threading;
+using S.Media.Core;
 using S.Media.Core.Video;
 using SkiaSharp;
 
@@ -36,6 +38,12 @@ public sealed class ImageFileSource : IVideoSource, IDisposable
     private readonly int[] _strides;
     private readonly PixelFormat[] _native;
     private readonly TimeSpan _ptsStep;
+    // The pooled pixel buffer is shared by every emitted frame. Refcount it (source ref + one per live
+    // frame) so it returns to ArrayPool only once the source AND all emitted frames are disposed —
+    // otherwise disposing the source mid-playback returns a buffer a still-queued frame is reading,
+    // and the pool could hand it to another renter (corruption).
+    private readonly Lock _gate = new();
+    private int _backingRefs = 1;
     private TimeSpan _nextPts;
     private bool _disposed;
 
@@ -116,26 +124,53 @@ public sealed class ImageFileSource : IVideoSource, IDisposable
 
     public bool TryReadNextFrame(out VideoFrame frame)
     {
-        if (_disposed)
+        lock (_gate)
         {
-            frame = null!;
-            return false;
-        }
+            if (_disposed)
+            {
+                frame = null!;
+                return false;
+            }
 
-        frame = new VideoFrame(
-            _nextPts,
-            _format,
-            _planes,
-            _strides,
-            release: null);
-        _nextPts += _ptsStep;
-        return true;
+            // Each emitted frame holds a ref on the pooled buffer until it (the frame) is disposed.
+            var release = DisposableRelease.Wrap(ReleaseBackingRef);
+            frame = new VideoFrame(
+                _nextPts,
+                _format,
+                _planes,
+                _strides,
+                release: release);
+            _backingRefs++;
+            _nextPts += _ptsStep;
+            return true;
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        bool fire;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            // Drop the source's ref; the buffer returns to the pool here only if no frame is still alive.
+            fire = --_backingRefs == 0;
+        }
+        if (fire)
+            ReturnBuffer();
+    }
+
+    private void ReleaseBackingRef()
+    {
+        bool fire;
+        lock (_gate)
+            fire = --_backingRefs == 0;
+        if (fire)
+            ReturnBuffer();
+    }
+
+    private void ReturnBuffer()
+    {
         // pixelBufferSize is < pixelBuffer.Length because ArrayPool may give a larger array.
         _ = _pixelBufferSize;
         ArrayPool<byte>.Shared.Return(_pixelBuffer, clearArray: false);

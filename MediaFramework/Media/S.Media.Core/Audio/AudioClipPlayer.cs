@@ -54,10 +54,28 @@ public sealed class AudioClipPlayer
         string outputId,
         ChannelMap? map = null,
         float gain = 1f,
+        AudioClipVoiceOptions? options = null) =>
+        TryFire(router, outputId, out _, out var sourceId, map, gain, options) ? sourceId : string.Empty;
+
+    /// <summary>
+    /// Like <see cref="Fire"/> but also yields the created <see cref="AudioClipVoice"/> and its router
+    /// source id, so a higher-level engine can build a voice handle (gain/stop/position). Returns false —
+    /// with <paramref name="voice"/> null and <paramref name="sourceId"/> empty — when the fire was
+    /// suppressed (OneShot already sounding) or only stopped a latched loop.
+    /// </summary>
+    public bool TryFire(
+        AudioRouter router,
+        string outputId,
+        out AudioClipVoice? voice,
+        out string sourceId,
+        ChannelMap? map = null,
+        float gain = 1f,
         AudioClipVoiceOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(router);
         ArgumentException.ThrowIfNullOrEmpty(outputId);
+        voice = null;
+        sourceId = string.Empty;
 
         lock (_gate)
         {
@@ -70,11 +88,11 @@ public sealed class AudioClipPlayer
                 latched.Voice.Loop = false;
                 latched.Voice.Stop();
                 _latched = null;
-                return string.Empty;
+                return false;
             }
 
             if (Mode == AudioClipPlayerMode.OneShot && _activeVoices.Any(v => !v.Voice.IsExhausted))
-                return string.Empty;
+                return false;
 
             if (Mode == AudioClipPlayerMode.MonoRetrigger)
             {
@@ -82,27 +100,29 @@ public sealed class AudioClipPlayer
                     v.Voice.Stop();
             }
 
-            var voiceOptions = options ?? default;
+            var voiceOptions = options ?? AudioClipVoiceOptions.Default;
             if (Mode == AudioClipPlayerMode.LatchedLoop)
                 voiceOptions = voiceOptions with { Loop = true };
 
-            var voice = _clip.CreateVoice(voiceOptions);
-            var sourceId = router.AddSource(voice, autoResample: true);
+            var newVoice = _clip.CreateVoice(voiceOptions);
+            var newSourceId = router.AddSource(newVoice, autoResample: true);
             var routeMap = map ?? (router.TryGetOutput(outputId, out var output) && output is not null
                 ? ChannelMap.Identity(output.Format.Channels)
                 : ChannelMap.Identity(_clip.Format.Channels));
-            router.Route(sourceId, outputId, routeMap, gain);
+            router.Route(newSourceId, outputId, routeMap, gain);
 
             if (ChokeGroup is { } group)
-                router.RegisterChokeGroup(group, voice);
+                router.RegisterChokeGroup(group, newVoice);
 
-            var registration = new VoiceRegistration(voice, sourceId, router, ChokeGroup);
+            var registration = new VoiceRegistration(newVoice, newSourceId, router, ChokeGroup);
             if (Mode == AudioClipPlayerMode.LatchedLoop)
                 _latched = registration;
 
             _activeVoices.Add(registration);
             EnforcePolyphonyLocked();
-            return sourceId;
+            voice = newVoice;
+            sourceId = newSourceId;
+            return true;
         }
     }
 

@@ -93,6 +93,85 @@ public sealed class VideoCompositorCrossFadeTests
         }
     }
 
+    [Fact]
+    public void TimeDriven_SelectsFrameCoveringMasterTime_AndDecouplesFromReadRate()
+    {
+        // P3-4: layers advance to the master clock, not by one frame per downstream read. So (a) the
+        // composited layer frame is the one whose interval contains the clock position (frame-accurate),
+        // (b) reading repeatedly at a FIXED clock time neither pulls nor advances the layer (no
+        // decode-speed coupling), and (c) the composite is stamped with the master time.
+        var fmt = new VideoFormat(2, 2, PixelFormat.Bgra32, new Rational(30, 1));
+        var src = new IndexedFrameSource(fmt);
+        using var program = VideoCompositor.Create(fmt, VideoCompositorBackend.Cpu);
+        program.AddLayer(src, LayerConfig.Background);
+
+        // 70 ms → frame 2 (PTS 66.7 ms ≤ 70 < 100 ms) is the cover.
+        program.Clock = new FakePlaybackClock(TimeSpan.FromMilliseconds(70));
+        Assert.True(program.TryReadNextFrame(out var f1));
+        Assert.Equal(2, f1.Planes[0].Span[2]);                            // R channel encodes the frame index
+        Assert.Equal(TimeSpan.FromMilliseconds(70), f1.PresentationTime); // composite stamped with master time
+        f1.Dispose();
+
+        // Reading 10 more times at the SAME clock position must not advance/pull the layer.
+        var pulledAfterFirst = src.FramesPulled;
+        for (var i = 0; i < 10; i++)
+        {
+            Assert.True(program.TryReadNextFrame(out var f));
+            Assert.Equal(2, f.Planes[0].Span[2]);
+            f.Dispose();
+        }
+        Assert.Equal(pulledAfterFirst, src.FramesPulled);
+
+        // Advancing the clock advances the displayed frame: 140 ms → frame 4 (133.3 ms ≤ 140 < 166.7 ms).
+        program.Clock = new FakePlaybackClock(TimeSpan.FromMilliseconds(140));
+        Assert.True(program.TryReadNextFrame(out var f2));
+        Assert.Equal(4, f2.Planes[0].Span[2]);
+        f2.Dispose();
+    }
+
+    [Fact]
+    public void NoClock_IsReadPaced_OneInnerFramePerRead()
+    {
+        // With no Clock the compositor is read-paced: a single-layer scaler/adapter (OutputPresetVideoSource)
+        // advances its inner source exactly one frame per read — a 1:1 passthrough with no PTS-grid drift
+        // and no wall-clock stall. Inner frame N shows on read N.
+        var fmt = new VideoFormat(2, 2, PixelFormat.Bgra32, new Rational(30, 1));
+        var src = new IndexedFrameSource(fmt);
+        using var program = VideoCompositor.Create(fmt, VideoCompositorBackend.Cpu);
+        program.AddLayer(src, LayerConfig.Background);
+
+        for (var n = 0; n < 6; n++)
+        {
+            Assert.True(program.TryReadNextFrame(out var f));
+            Assert.Equal(n, f.Planes[0].Span[2]);
+            f.Dispose();
+        }
+        Assert.Equal(6, src.FramesPulled);
+    }
+
+    private sealed class IndexedFrameSource(VideoFormat fmt) : IVideoSource
+    {
+        private int _next;
+        public VideoFormat Format { get; } = fmt;
+        public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = new[] { PixelFormat.Bgra32 };
+        public bool IsExhausted => false;
+        public int FramesPulled => _next;
+        public void SelectOutputFormat(PixelFormat format) { }
+
+        public bool TryReadNextFrame(out VideoFrame frame)
+        {
+            var idx = _next++;
+            var buf = new byte[Format.Width * Format.Height * 4];
+            for (var i = 0; i < Format.Width * Format.Height; i++)
+            {
+                buf[i * 4 + 2] = (byte)idx; // R = frame index, so the composite identifies which frame was chosen
+                buf[i * 4 + 3] = 255;       // opaque
+            }
+            frame = new VideoFrame(TimeSpan.FromSeconds(idx / 30.0), Format, [buf], [Format.Width * 4], release: null);
+            return true;
+        }
+    }
+
     private static VideoFrame MakeSolid(byte r, byte g, byte b, byte a)
     {
         var buf = new byte[8 * 8 * 4];

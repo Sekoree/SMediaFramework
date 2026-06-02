@@ -146,6 +146,34 @@ public sealed class MediaPlayerSmokeTests
     }
 
     [Fact]
+    public void Dispose_DisposesRegisteredOwnedCompanion()
+    {
+        // P2-18: WithPortAudio (and any builder companion) hands its host to the player so disposing
+        // the player alone tears it down — the simple "open with audio" path can't leak the host.
+        // Verifies the ownership hook independent of PortAudio hardware.
+        using var audio = new SilenceSource(new AudioFormat(48_000, 2));
+        using var video = new SolidVideoSource(new VideoFormat(64, 64, PixelFormat.Bgra32, new Rational(10, 1)));
+        Assert.True(
+            MediaPlayer.OpenLive(audio, video)
+                .WithDisposeSourcesOnPlayerDispose(false)
+                .TryBuild(out var p, out var err),
+            err);
+
+        var companion = new DisposeFlag();
+        p!.RegisterOwnedCompanion(companion);
+        Assert.False(companion.Disposed);
+
+        p.Dispose();
+        Assert.True(companion.Disposed, "player must dispose its registered owned companion");
+    }
+
+    private sealed class DisposeFlag : IDisposable
+    {
+        public bool Disposed { get; private set; }
+        public void Dispose() => Disposed = true;
+    }
+
+    [Fact]
     public void MidPlay_audio_output_swap_routes_to_second_output()
     {
         var path = Path.Combine(Path.GetTempPath(), $"mf_smoke_swap_{Guid.NewGuid():N}.wav");

@@ -73,7 +73,7 @@ public sealed class AudioClip
 
     /// <summary>Mints a new voice that reads from this clip's shared buffer.</summary>
     public AudioClipVoice CreateVoice(AudioClipVoiceOptions? options = null) =>
-        new(this, options ?? default);
+        new(this, options ?? AudioClipVoiceOptions.Default);
 
     private static AudioClip LoadFromSource(IAudioSource source, int? targetSampleRate, ChannelMap? mixdown)
     {

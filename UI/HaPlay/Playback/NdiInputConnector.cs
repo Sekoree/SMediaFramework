@@ -63,36 +63,21 @@ internal static class NdiInputConnector
                     Bandwidth = ResolveBandwidth(wantAudio, wantVideo, item.LowBandwidth),
                 });
 
-            var deadline = DateTime.UtcNow.AddSeconds(2);
-            while (DateTime.UtcNow < deadline)
+            // Wait for the enabled stream(s) to deliver a format up front (NDISource encapsulates the
+            // poll — see P2-15) so the format is known before the router/session wires the source.
+            if (!receiver.WaitForStreams(TimeSpan.FromSeconds(2)))
             {
-                var audioReady = !wantAudio || receiver.IsAudioConnected;
-                var videoReady = !wantVideo || receiver.IsVideoConnected;
-                if (audioReady && videoReady)
-                    break;
-                Thread.Sleep(50);
-            }
-
-            if (wantAudio && !receiver.IsAudioConnected)
-            {
-                errorMessage = $"NDI source '{item.SourceName}' resolved but delivered no audio in 2 s.";
-                CleanupReceiver(receiver);
-                receiver = null;
-                return false;
-            }
-
-            if (wantVideo && !receiver.IsVideoConnected)
-            {
-                errorMessage = $"NDI source '{item.SourceName}' resolved but delivered no video in 2 s.";
+                var missing = wantAudio && !receiver.IsAudioConnected ? "audio" : "video";
+                errorMessage = $"NDI source '{item.SourceName}' resolved but delivered no {missing} in 2 s.";
                 CleanupReceiver(receiver);
                 receiver = null;
                 return false;
             }
 
             if (wantAudio)
-                audioFormat = receiver.AudioFormat;
+                receiver.TryGetAudioFormat(out audioFormat);
             if (wantVideo)
-                videoFormat = receiver.VideoFormat;
+                receiver.TryGetVideoFormat(out videoFormat);
 
             return true;
         }

@@ -71,8 +71,19 @@ namespace S.Media.Core.Audio;
 /// </remarks>
 public sealed partial class AudioRouter : IDisposable
 {
-    /// <summary>Default for <see cref="AddSource(IAudioSource, string?, bool)"/> when <paramref name="autoResample"/> is omitted.</summary>
+    /// <summary>Process-wide default for <see cref="AddSource(IAudioSource, string?, bool)"/> when
+    /// <paramref name="autoResample"/> is omitted and no per-instance <see cref="AutoResampleDefault"/>
+    /// is set. Kept as an escape hatch; prefer the per-instance default for session-scoped behavior so
+    /// one session/test can't change another's policy.</summary>
     public static bool DefaultAutoResample { get; set; }
+
+    /// <summary>
+    /// Per-instance auto-resample default. When set, <see cref="AddSource(IAudioSource, string?, bool)"/>
+    /// (with <c>autoResample: null</c>) uses this instead of the process-wide <see cref="DefaultAutoResample"/>.
+    /// Resolution order is per-call argument → this → <see cref="DefaultAutoResample"/>. Lets a session set
+    /// its own policy without mutating a process-wide static.
+    /// </summary>
+    public bool? AutoResampleDefault { get; set; }
 
     private static int _defaultAutoResampleMismatchLogged;
     private int _sampleRate;
@@ -179,7 +190,7 @@ public sealed partial class AudioRouter : IDisposable
         ArgumentNullException.ThrowIfNull(source);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var resample = autoResample ?? DefaultAutoResample;
+        var resample = autoResample ?? AutoResampleDefault ?? DefaultAutoResample;
         source.Format.Validate(nameof(source));
         IDisposable? ownedWrapper = null;
         if (source.Format.SampleRate != _sampleRate)
@@ -333,6 +344,10 @@ public sealed partial class AudioRouter : IDisposable
             output = MaybeWrapAdaptiveRateOutputLocked(output, id);
             var floatsPerChunk = _chunkSamples * output.Format.Channels;
             var pump = new OutputPump(this, output, capacity, floatsPerChunk, id);
+            // Pumps start idle; if the router is already running the drainer must start now so
+            // this output receives chunks. If stopped, Start() will launch it later.
+            if (_isRunning)
+                pump.EnsureStarted();
             var entry = new OutputEntry(id, output, pump);
             _sinkFormats[id] = output.Format;
             Volatile.Write(ref _state, _state with { Outputs = _state.Outputs.Add(id, entry) });
@@ -891,6 +906,13 @@ public sealed partial class AudioRouter : IDisposable
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
             _clock.Reset();
+
+            // Launch each output's drainer now (lazy-start: the pumps were created idle at
+            // AddOutput time). Done before the run loop thread so the first committed chunk
+            // has a consumer.
+            foreach (var entry in _state.Outputs.Values)
+                entry.Pump.EnsureStarted();
+
             _thread = new Thread(() => RunLoop(token))
             {
                 IsBackground = true,
@@ -1536,6 +1558,11 @@ public sealed partial class AudioRouter : IDisposable
         private readonly CancellationTokenSource _cts = new();
         private readonly int _floatsPerChunk;
         private readonly int _pumpCapacityChunks;
+        // Start/dispose are serialized so a late EnsureStarted can never launch the
+        // drainer after Dispose has completed the collection / disposed the cts —
+        // that would crash the freshly started thread (disposed _ready / _cts.Token).
+        private readonly object _startGate = new();
+        private bool _started;
         private float[] _working;
         private long _enqueued;
         private long _processed;
@@ -1567,13 +1594,33 @@ public sealed partial class AudioRouter : IDisposable
                 _free.Enqueue(new float[floatsPerChunk]);
             _working = new float[floatsPerChunk];
 
+            // Create the managed Thread object now (cheap), but do NOT Start() it here.
+            // Start() is what allocates the OS thread + stack; starting one per output at
+            // AddOutput time — even for outputs whose router never runs — is the source of
+            // the suite-level thread pressure / intermittent OOM. The drainer is launched
+            // lazily via EnsureStarted() when the router actually starts (or when an output
+            // is added to an already-running router).
             _thread = new Thread(() => DrainLoop(_cts.Token))
             {
                 IsBackground = true,
                 Priority = ThreadPriority.AboveNormal,
                 Name = $"OutputPump:{outputId}",
             };
-            _thread.Start();
+        }
+
+        /// <summary>
+        /// Idempotently launches the drainer thread. Called when the router starts (for every
+        /// registered pump) and when an output is added to an already-running router. A no-op
+        /// after <see cref="Dispose"/> or once already started.
+        /// </summary>
+        public void EnsureStarted()
+        {
+            lock (_startGate)
+            {
+                if (_disposed || _started) return;
+                _started = true;
+                _thread.Start();
+            }
         }
 
         private long RecordDrop()
@@ -1675,8 +1722,14 @@ public sealed partial class AudioRouter : IDisposable
 
         public void Dispose()
         {
-            if (_disposed) return;
-            _disposed = true;
+            lock (_startGate)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                // Block any concurrent EnsureStarted from here on. If the thread was never
+                // started, the joins below are no-ops (JoinThread/IsAlive guard on IsAlive,
+                // which is false for an unstarted Thread).
+            }
             MediaDiagnostics.SwallowDisposeErrors(_ready.CompleteAdding, "OutputPump.CompleteAdding");
 
             CooperativePlaybackJoin.JoinThread(_thread, TimeSpan.FromSeconds(2));
