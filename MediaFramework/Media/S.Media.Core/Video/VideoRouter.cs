@@ -499,7 +499,7 @@ public sealed class VideoRouter : IDisposable
         }
 
         public bool BranchUsesCpuConverter(string outputId) =>
-            outputId != PrimaryOutputId && _paths.TryGetValue(outputId, out var st) && st.Converter != null;
+            outputId != PrimaryOutputId && _paths.TryGetValue(outputId, out var st) && (st.Converter != null || st.PumpConverts);
 
         public void ApplyConfigureLocked(VideoFormat negotiated)
         {
@@ -521,13 +521,35 @@ public sealed class VideoRouter : IDisposable
                 var branchOutput = _owner._outputs[oid].Output;
                 var branchFmt = VideoOutputFanoutFormats.PickBranchPixelFormat(negotiated, branchOutput.AcceptedPixelFormats);
                 var needsConversion = branchFmt != negotiated.PixelFormat;
+                var branchVideoFormat = new VideoFormat(negotiated.Width, negotiated.Height, branchFmt, negotiated.FrameRate);
+
+                // P2-7: when the branch output is asynchronous (a VideoOutputPump — the default wrapping), hand
+                // any pixel conversion to the pump so the swscale repack runs on the pump's drain thread instead
+                // of the player submit thread (matters for heavy branches like NDI yuv422p10le→UYVY at 4K60). The
+                // branch then flows through the no-converter fan-out path in SubmitPhased and receives a
+                // zero-copy raw view. Always (re)set the pump converter so a reconfigure that no longer needs one
+                // clears the previous converter rather than leaving it repacking stale frames.
+                if (branchOutput is VideoOutputPump pump)
+                {
+                    IVideoCpuFrameConverter? pumpConv = null;
+                    if (needsConversion)
+                    {
+                        pumpConv = VideoCpuFrameConverterRegistry.Create();
+                        pumpConv.Configure(negotiated.PixelFormat, branchFmt, negotiated.Width, negotiated.Height);
+                    }
+                    branchOutput.Configure(branchVideoFormat);
+                    pump.SetBranchConverter(pumpConv);
+                    _paths[oid] = new OutputPathState(Converter: null, PumpConverts: needsConversion);
+                    continue;
+                }
+
                 IVideoCpuFrameConverter? conv = null;
                 if (needsConversion)
                 {
                     conv = VideoCpuFrameConverterRegistry.Create();
                     conv.Configure(negotiated.PixelFormat, branchFmt, negotiated.Width, negotiated.Height);
                 }
-                branchOutput.Configure(new VideoFormat(negotiated.Width, negotiated.Height, branchFmt, negotiated.FrameRate));
+                branchOutput.Configure(branchVideoFormat);
                 _paths[oid] = new OutputPathState(Converter: conv);
             }
 
@@ -536,7 +558,7 @@ public sealed class VideoRouter : IDisposable
                 for (var i = 1; i < RoutedOutputIds.Count; i++)
                 {
                     var oid = RoutedOutputIds[i];
-                    if (_paths.TryGetValue(oid, out var st) && st.Converter != null)
+                    if (_paths.TryGetValue(oid, out var st) && (st.Converter != null || st.PumpConverts))
                     {
                         if (Interlocked.Exchange(ref _nv12FanoutCpuBranchWarned, 1) == 0)
                         {
@@ -656,9 +678,11 @@ public sealed class VideoRouter : IDisposable
                         }
                     }
 
-                    if (plan.CanNv12FanOut &&
-                        VideoFrame.TryCreateNv12CpuFanOutViews(frame, n, hint, out var fanViews))
+                    if (plan.CanCpuFanOut &&
+                        VideoFrame.TryCreateCpuFanOutViews(frame, n, hint, out var fanViews))
                     {
+                        // Zero-copy: every output (primary + branches) shares the one backing. A pump-converts
+                        // branch receives its raw view here and repacks it on its own drain thread.
                         for (var i = 1; i < n; i++)
                             branchFrames[i - 1] = fanViews[i];
                         frame.Dispose();
@@ -669,9 +693,22 @@ public sealed class VideoRouter : IDisposable
                         for (var i = 1; i < n; i++)
                         {
                             var conv = plan.BranchConverters[i - 1];
-                            branchFrames[i - 1] = conv != null
-                                ? conv.Convert(converterReadback ?? frame, hint)
-                                : frame.DmabufNv12 is not null
+                            if (conv != null)
+                            {
+                                // Synchronous branch conversion on the submit thread.
+                                branchFrames[i - 1] = conv.Convert(converterReadback ?? frame, hint);
+                            }
+                            else if (plan.PumpConvertsBranch[i - 1])
+                            {
+                                // Pump-converts branch on the per-branch path (a sync-converter sibling blocked
+                                // fan-out, or the frame was hardware-backed and read back): hand the pump a CPU
+                                // frame it can repack on its own thread (converterReadback is the dma-buf / Win32
+                                // CPU copy when applicable, else the CPU frame itself).
+                                branchFrames[i - 1] = VideoFrameCpuClone.DuplicateCpuBacking(converterReadback ?? frame, hint);
+                            }
+                            else
+                            {
+                                branchFrames[i - 1] = frame.DmabufNv12 is not null
                                     ? VideoFrame.CreateNv12DmabufSharedReference(frame)
                                     : frame.DmabufP010 is not null
                                         ? VideoFrame.CreateP010DmabufSharedReference(frame)
@@ -680,6 +717,7 @@ public sealed class VideoRouter : IDisposable
                                             : frame.Win32Nv12 is not null
                                                 ? VideoFrame.CreateNv12Win32SharedReference(frame)
                                                 : VideoFrameCpuClone.DuplicateCpuBacking(frame, hint);
+                            }
                         }
                     }
 
@@ -737,19 +775,33 @@ public sealed class VideoRouter : IDisposable
             var ids = RoutedOutputIds.ToArray();
             var n = ids.Length;
             var converters = new IVideoCpuFrameConverter?[n - 1];
+            var pumpConverts = new bool[n - 1];
             var hasHw = frame.DmabufNv12 is not null || frame.DmabufP010 is not null
                         || frame.DmabufP016 is not null || frame.Win32Nv12 is not null;
             var needsReadback = false;
             for (var i = 1; i < n; i++)
             {
-                var conv = _paths.TryGetValue(ids[i], out var st) ? st.Converter : null;
+                IVideoCpuFrameConverter? conv = null;
+                var pc = false;
+                if (_paths.TryGetValue(ids[i], out var st))
+                {
+                    conv = st.Converter;
+                    pc = st.PumpConverts;
+                }
+
                 converters[i - 1] = conv;
-                if (conv is not null && hasHw)
+                pumpConverts[i - 1] = pc;
+                // Both a submit-thread converter and a pump-thread converter need CPU planes, so a hardware
+                // (dma-buf / Win32) frame must be read back for either before it can be repacked.
+                if (hasHw && (conv is not null || pc))
                     needsReadback = true;
             }
 
             var negotiated = NegotiatedFormat!.Value;
-            var canFanOut = negotiated.PixelFormat == PixelFormat.Nv12 && !hasHw;
+            // Any CPU-backed format can fan out into shared zero-copy views; a branch that converts on the
+            // submit thread (st.Converter != null) forces the per-branch path, but a pump-converts branch
+            // (repacked on its own thread) does not — it just receives a raw view to convert there.
+            var canFanOut = !hasHw;
             if (canFanOut)
             {
                 for (var i = 1; i < n; i++)
@@ -758,19 +810,21 @@ public sealed class VideoRouter : IDisposable
                 }
             }
 
-            return new SubmitPlan(ids, converters, negotiated, needsReadback, canFanOut);
+            return new SubmitPlan(ids, converters, pumpConverts, negotiated, needsReadback, canFanOut);
         }
     }
 
     private readonly record struct SubmitPlan(
         string[] OutputIds,
         IVideoCpuFrameConverter?[] BranchConverters,
+        bool[] PumpConvertsBranch,
         VideoFormat NegotiatedFmt,
         bool NeedsHwReadback,
-        bool CanNv12FanOut);
+        bool CanCpuFanOut);
 
-    /// <param name="Converter">When null, branch uses <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/> for CPU frames unless <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/> applies (negotiated <see cref="PixelFormat.Nv12"/>, no dma-buf / Win32 backings, no branch converter).</param>
-    private readonly record struct OutputPathState(IVideoCpuFrameConverter? Converter);
+    /// <param name="Converter">When null, branch uses a shared CPU fan-out view (<see cref="VideoFrame.TryCreateCpuFanOutViews"/>, or the NV12-specific <see cref="VideoFrame.TryCreateNv12CpuFanOutViews"/>) when the frame is CPU-backed, else <see cref="VideoFrameCpuClone.DuplicateCpuBacking"/> / a dma-buf / Win32 shared reference. Non-null means the conversion runs synchronously on the submit thread.</param>
+    /// <param name="PumpConverts">True when this branch's <see cref="IVideoCpuFrameConverter"/> was handed to its <see cref="VideoOutputPump"/> (<see cref="VideoOutputPump.SetBranchConverter"/>) to run on the pump's drain thread; <see cref="Converter"/> is then null here and the branch receives an unconverted (fan-out) view to repack off the submit thread.</param>
+    private readonly record struct OutputPathState(IVideoCpuFrameConverter? Converter, bool PumpConverts = false);
 
     private sealed class VideoRouterInputOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup
     {

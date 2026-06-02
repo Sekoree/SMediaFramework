@@ -90,16 +90,100 @@ public sealed class VideoRouterConcurrencyTests
         }
     }
 
-    private static VideoFrame MakeNv12Frame() =>
-        new(TimeSpan.Zero, Nv12, [new byte[W * H], new byte[W * (H / 2)]], [W, W], release: null);
+    /// <summary>
+    /// P2-7: a converting branch whose output is asynchronous (a <see cref="VideoOutputPump"/>) must repack on
+    /// the pump's drain thread, NOT the player submit thread. Proves the conversion ran off-thread, that the
+    /// converter saw the raw negotiated frame (a zero-copy fan-out view), that the primary got the native
+    /// format while the branch inner got the converted format, and that every shared backing was released
+    /// (no leak from the fan-out refcount).
+    /// </summary>
+    [Fact]
+    public void MultiOutput_PumpBranchConverter_RepacksOnPumpThread_NotSubmitThread()
+    {
+        var savedFactory = MediaFrameworkPlugins.VideoCpuFrameConverterFactory;
+        var savedProbe = MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe;
+        var tracker = new LifetimeTracker();
+        try
+        {
+            MediaFrameworkPlugins.VideoCpuFrameConverterFactory = () => new InstrumentedConverter(tracker);
+            MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = (_, _, _, _) => true;
+
+            using var router = new VideoRouter(null);
+            var primary = new CountingOutput(PixelFormat.Nv12);            // native — receives a raw fan-out view
+            var branchInner = new CountingOutput(PixelFormat.Bgra32);      // different fmt → needs a converter
+            var primId = router.AddOutput(primary, "primary", synchronous: true);
+            // Branch is asynchronous (pump-wrapped): the conversion must run on the pump's drain thread.
+            var branchId = router.AddOutput(branchInner, "branch",
+                asyncPump: new VideoOutputPumpAttachOptions(MaxQueuedFrames: 512));
+            var input = router.AddInput(primId, "in");
+            Assert.True(router.TryAddRoute(input.Id, branchId, out _));
+            input.Output.Configure(Nv12);
+
+            var submitThreadId = Environment.CurrentManagedThreadId;
+            var released = 0;
+            const int frames = 120;
+            for (var i = 0; i < frames; i++)
+                input.Output.Submit(MakeNv12Frame(new CountingRelease(() => Interlocked.Increment(ref released))));
+
+            // Let the pump drain every frame to the inner branch output.
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while ((branchInner.SubmitCount < frames || Volatile.Read(ref released) < frames) && DateTime.UtcNow < deadline)
+                Thread.Sleep(10);
+
+            // Primary saw every frame synchronously, in the NATIVE format (zero-copy fan-out view).
+            Assert.Equal(frames, primary.SubmitCount);
+            Assert.Equal(PixelFormat.Nv12, primary.LastFormat);
+
+            // Branch saw every frame, CONVERTED to its accepted format.
+            Assert.Equal(frames, branchInner.SubmitCount);
+            Assert.Equal(PixelFormat.Bgra32, branchInner.LastFormat);
+
+            // The conversion ran on the pump thread (off the submit thread) and consumed the raw negotiated
+            // frame handed to it as a fan-out view — the whole point of moving it off the submit path.
+            Assert.Equal(frames, tracker.TotalConverts);
+            Assert.Equal(PixelFormat.Nv12, tracker.LastSourceFormat);
+            Assert.NotEqual(0, tracker.LastConvertThreadId);
+            Assert.NotEqual(submitThreadId, tracker.LastConvertThreadId);
+
+            // No use-after-dispose, and every shared backing was released (fan-out refcount balanced).
+            Assert.Equal(0, tracker.ConvertAfterDispose);
+            Assert.Equal(0, tracker.DisposeDuringConvert);
+            Assert.Equal(frames, Volatile.Read(ref released));
+        }
+        finally
+        {
+            MediaFrameworkPlugins.VideoCpuFrameConverterFactory = savedFactory;
+            MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = savedProbe;
+        }
+    }
+
+    private static VideoFrame MakeNv12Frame(IDisposable? release = null) =>
+        new(TimeSpan.Zero, Nv12, [new byte[W * H], new byte[W * (H / 2)]], [W, W], release: release);
+
+    private sealed class CountingRelease(Action onDispose) : IDisposable
+    {
+        private int _disposed;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0) onDispose();
+        }
+    }
 
     private sealed class LifetimeTracker
     {
-        private int _total, _afterDispose, _duringConvert;
+        private int _total, _afterDispose, _duringConvert, _lastConvertThreadId;
+        private volatile object _lastSourceFormat = PixelFormat.Unknown;
         public int TotalConverts => Volatile.Read(ref _total);
         public int ConvertAfterDispose => Volatile.Read(ref _afterDispose);
         public int DisposeDuringConvert => Volatile.Read(ref _duringConvert);
+        public int LastConvertThreadId => Volatile.Read(ref _lastConvertThreadId);
+        public PixelFormat LastSourceFormat => (PixelFormat)_lastSourceFormat;
         public void Convert() => Interlocked.Increment(ref _total);
+        public void RecordConvert(int threadId, PixelFormat sourceFormat)
+        {
+            Interlocked.Exchange(ref _lastConvertThreadId, threadId);
+            _lastSourceFormat = sourceFormat;
+        }
         public void RecordConvertAfterDispose() => Interlocked.Increment(ref _afterDispose);
         public void RecordDisposeDuringConvert() => Interlocked.Increment(ref _duringConvert);
     }
@@ -121,6 +205,7 @@ public sealed class VideoRouterConcurrencyTests
             if (_disposed) tracker.RecordConvertAfterDispose();
             _inConvert = true;
             tracker.Convert();
+            tracker.RecordConvert(Environment.CurrentManagedThreadId, source.Format.PixelFormat);
             Thread.SpinWait(200);                 // widen the race window
             if (_disposed) tracker.RecordDisposeDuringConvert();
             _inConvert = false;
@@ -138,12 +223,15 @@ public sealed class VideoRouterConcurrencyTests
     private sealed class CountingOutput(PixelFormat accepted) : IVideoOutput
     {
         private int _submits;
+        private volatile object _lastFormat = PixelFormat.Unknown;
         public int SubmitCount => Volatile.Read(ref _submits);
+        public PixelFormat LastFormat => (PixelFormat)_lastFormat;
         public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = new[] { accepted };
         public VideoFormat Format { get; private set; }
         public void Configure(VideoFormat format) => Format = format;
         public void Submit(VideoFrame frame)
         {
+            _lastFormat = frame.Format.PixelFormat;
             Interlocked.Increment(ref _submits);
             frame.Dispose(); // output takes ownership
         }

@@ -62,6 +62,16 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     private int _firstSubmitLogged;
     private EventHandler<VideoOutputPumpPressureEventArgs>? _pumpPressure;
 
+    // Optional branch conversion performed on THIS pump's drain thread instead of the router submit thread
+    // (P2-7): the router hands a slow converting branch — e.g. NDI's yuv422p10le→UYVY at 4K60 — a zero-copy
+    // raw view via VideoFrame.TryCreateCpuFanOutViews and lets the heavy swscale run here, off the player's
+    // per-frame budget. _branchConverter is touched only by the drain thread; SetBranchConverter stages a
+    // swap under _gate that the drain thread adopts BETWEEN frames, so a reconfigure can never dispose a
+    // converter while Convert is running on it.
+    private IVideoCpuFrameConverter? _branchConverter;
+    private IVideoCpuFrameConverter? _pendingBranchConverter;
+    private bool _branchConverterPending;
+
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoOutputPump");
 
     public VideoOutputPump(IVideoOutput inner, int maxQueuedFrames = 3, string name = "VideoOutputPump", ILogger? log = null,
@@ -141,6 +151,45 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             Priority = ThreadPriority.AboveNormal,
         };
         _thread.Start();
+    }
+
+    /// <summary>
+    /// Sets (or clears) the per-frame converter run on the drain thread before delivery to the inner output.
+    /// Used by <see cref="VideoRouter"/> for a converting branch so the swscale repack happens here rather than
+    /// on the player submit thread. The swap is staged under the gate and adopted by the drain thread between
+    /// frames; the previously-set converter is disposed by the drain thread (or by <see cref="Dispose"/>), never
+    /// while a <c>Convert</c> is in flight. The pump owns the converter and disposes it.
+    /// </summary>
+    public void SetBranchConverter(IVideoCpuFrameConverter? converter)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_gate)
+        {
+            // A prior staged converter the drain thread never got to adopt would otherwise leak.
+            if (_branchConverterPending && !ReferenceEquals(_pendingBranchConverter, converter))
+                _pendingBranchConverter?.Dispose();
+            _pendingBranchConverter = converter;
+            _branchConverterPending = true;
+        }
+    }
+
+    /// <summary>Drain-thread-only: adopt a staged converter swap between frames and dispose the one it replaces.</summary>
+    private void AdoptPendingBranchConverterIfAny()
+    {
+        IVideoCpuFrameConverter? toDispose = null;
+        lock (_gate)
+        {
+            if (_branchConverterPending)
+            {
+                toDispose = _branchConverter;
+                _branchConverter = _pendingBranchConverter;
+                _pendingBranchConverter = null;
+                _branchConverterPending = false;
+            }
+        }
+
+        if (toDispose is not null)
+            MediaDiagnostics.SwallowDisposeErrors(toDispose.Dispose, $"VideoOutputPump.SetBranchConverter: previous converter ({_name})");
     }
 
     public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource)
@@ -231,9 +280,32 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                 }
 
                 if (next is null) break;
+
+                // Branch conversion (if configured) runs HERE, on the drain thread, so the player submit
+                // thread is never charged for it. Adopt any staged converter swap first (between frames).
+                AdoptPendingBranchConverterIfAny();
+                var toSubmit = next;
+                if (_branchConverter is { } conv)
+                {
+                    try
+                    {
+                        var converted = conv.Convert(next, next.ColorTransferHint);
+                        next.Dispose();
+                        toSubmit = converted;
+                    }
+                    catch (Exception cex)
+                    {
+                        _log?.LogError(cex, "VideoOutputPump {Name}: branch convert failed — frame dropped", _name);
+                        Trace.LogError(cex, $"{_name}: branch convert failed — frame dropped");
+                        next.Dispose();
+                        Interlocked.Increment(ref _dropped);
+                        continue;
+                    }
+                }
+
                 try
                 {
-                    _inner.Submit(next);
+                    _inner.Submit(toSubmit);
                     var n = Interlocked.Increment(ref _submitted);
                     if (n == 1)
                     {
@@ -245,7 +317,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                 {
                     _log?.LogError(ex, "VideoOutputPump {Name}: inner Submit failed", _name);
                     Trace.LogError(ex, $"{_name}: inner Submit failed");
-                    next.Dispose();
+                    toSubmit.Dispose();
                 }
             }
         }
@@ -297,6 +369,13 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             while (_queue.Count > 0)
                 _queue.Dequeue().Dispose();
         }
+
+        // Drain thread has exited (threadExited above), so the branch converter is no longer in use.
+        MediaDiagnostics.SwallowDisposeErrors(() =>
+        {
+            _branchConverter?.Dispose();
+            _pendingBranchConverter?.Dispose();
+        }, $"VideoOutputPump.Dispose: branch converter ({_name})");
 
         if (_disposeInner && _inner is IDisposable d)
         {

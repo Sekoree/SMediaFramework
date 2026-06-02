@@ -299,6 +299,82 @@ public sealed partial class VideoFrame : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Like <see cref="TryCreateNv12CpuFanOutViews"/> but for any CPU-backed pixel format: produces
+    /// <paramref name="viewCount"/> independently-disposable frames that share <paramref name="source"/>'s
+    /// planes (zero copy) and refcount its backing so the underlying release fires only once every view is
+    /// disposed. The router uses this to hand a converting branch a raw view it repacks asynchronously on
+    /// its own pump thread instead of converting on the submit thread. Fails (returns false, leaving
+    /// <paramref name="source"/> untouched) for hardware (dma-buf / Win32) backings or a frame with no
+    /// release to share.
+    /// </summary>
+    public static bool TryCreateCpuFanOutViews(
+        VideoFrame source,
+        int viewCount,
+        VideoTransferHint hint,
+        [NotNullWhen(true)] out VideoFrame[]? views)
+    {
+        views = null;
+        if (viewCount < 2 || !IsCpuFanOutEligible(source))
+            return false;
+
+        var inner = Interlocked.Exchange(ref source._release, null);
+        if (inner is null)
+            return false;
+
+        var viewsLocal = new VideoFrame[viewCount];
+        var countdown = DisposableRelease.SharedCountdown(inner, viewCount);
+        var viewMeta = source.Metadata with { ColorTransferHint = hint };
+        var created = 0;
+        try
+        {
+            for (; created < viewCount; created++)
+            {
+                viewsLocal[created] = new VideoFrame(
+                    source.PresentationTime,
+                    source.Format,
+                    source._planes,
+                    source._strides,
+                    viewMeta,
+                    release: DisposableRelease.Wrap(countdown.Dispose));
+            }
+
+            views = viewsLocal;
+            return true;
+        }
+        catch
+        {
+            if (created == 0)
+            {
+                if (Interlocked.CompareExchange(ref source._release, inner, null) is not null)
+                    inner.Dispose();
+            }
+            else
+            {
+                DisposableRelease.AdjustSharedCountdown(countdown, created - viewCount);
+                for (var j = 0; j < created; j++)
+                    viewsLocal[j].Dispose();
+            }
+
+            return false;
+        }
+    }
+
+    private static bool IsCpuFanOutEligible(VideoFrame source)
+    {
+        if (source._hardwareBacking is not null)
+            return false;
+        if (source._planes.Length == 0)
+            return false;
+        foreach (var p in source._planes)
+        {
+            if (p.IsEmpty)
+                return false;
+        }
+
+        return true;
+    }
+
     /// <summary>Convenience overload for single-plane (packed) formats like <see cref="PixelFormat.Bgra32"/>.</summary>
     public VideoFrame(
         TimeSpan presentationTime,
