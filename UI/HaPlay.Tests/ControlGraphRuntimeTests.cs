@@ -215,6 +215,145 @@ public sealed class ControlGraphRuntimeTests
     }
 
     [Fact]
+    public async Task Output_WithMinSendInterval_SuppressesRapidSecondSend()
+    {
+        var inputNodeId = Guid.NewGuid();
+        var outputNodeId = Guid.NewGuid();
+        var graph = new ControlGraphConfig
+        {
+            Nodes =
+            [
+                new ControlNodeConfig
+                {
+                    Id = inputNodeId,
+                    Kind = ControlNodeKind.OscInput,
+                    Settings = new OscInputControlNodeSettings { AddressPattern = "/in" },
+                },
+                new ControlNodeConfig
+                {
+                    Id = outputNodeId,
+                    Kind = ControlNodeKind.OscOutput,
+                    Settings = new OscOutputControlNodeSettings
+                    {
+                        Host = "127.0.0.1",
+                        Address = "/out",
+                        MinSendIntervalMs = 1000,
+                    },
+                },
+            ],
+            Connections =
+            [
+                new ControlConnectionConfig { FromNodeId = inputNodeId, ToNodeId = outputNodeId },
+            ],
+        };
+        var sender = new RecordingOscSender();
+        var runtime = new ControlGraphRuntime(graph, sender);
+
+        await runtime.InjectOscMessageAsync(inputNodeId, "/in", [OSCArgument.Float32(0.1f)]);
+        await runtime.InjectOscMessageAsync(inputNodeId, "/in", [OSCArgument.Float32(0.2f)]);
+
+        var sent = Assert.Single(sender.Sent);
+        Assert.InRange(Assert.Single(sent.Arguments).AsFloat32(), 0.09f, 0.11f);
+    }
+
+    [Fact]
+    public async Task MidiOutput_MotorFeedbackOnly_SuppressesEventsFromSameMidiEndpoint()
+    {
+        var midiEndpointId = Guid.NewGuid();
+        var inputNodeId = Guid.NewGuid();
+        var outputNodeId = Guid.NewGuid();
+        var graph = new ControlGraphConfig
+        {
+            Nodes =
+            [
+                new ControlNodeConfig
+                {
+                    Id = inputNodeId,
+                    Kind = ControlNodeKind.MidiInput,
+                    Settings = new MidiInputControlNodeSettings
+                    {
+                        EndpointId = midiEndpointId,
+                        Channel = 1,
+                        Controller = 0,
+                    },
+                },
+                new ControlNodeConfig
+                {
+                    Id = outputNodeId,
+                    Kind = ControlNodeKind.MidiOutput,
+                    Settings = new MidiOutputControlNodeSettings
+                    {
+                        EndpointId = midiEndpointId,
+                        Channel = 1,
+                        Controller = 0,
+                        FeedbackMode = ControlFeedbackMode.MotorFeedbackOnly,
+                    },
+                },
+            ],
+            Connections =
+            [
+                new ControlConnectionConfig { FromNodeId = inputNodeId, ToNodeId = outputNodeId },
+            ],
+        };
+        var midiSender = new RecordingMidiSender();
+        var runtime = new ControlGraphRuntime(graph, new RecordingOscSender(), midiSender);
+
+        await runtime.InjectMidiControlChangeAsync(inputNodeId, channel: 1, controller: 0, value: 64);
+
+        Assert.Empty(midiSender.Sent);
+    }
+
+    [Fact]
+    public async Task MidiInput_WithSoftTakeover_SuppressesUntilTargetCrossed()
+    {
+        var inputNodeId = Guid.NewGuid();
+        var outputNodeId = Guid.NewGuid();
+        var graph = new ControlGraphConfig
+        {
+            Nodes =
+            [
+                new ControlNodeConfig
+                {
+                    Id = inputNodeId,
+                    Kind = ControlNodeKind.MidiInput,
+                    Settings = new MidiInputControlNodeSettings
+                    {
+                        Channel = 1,
+                        Controller = 0,
+                        SoftTakeoverEnabled = true,
+                        SoftTakeoverTolerance = 0.02,
+                    },
+                },
+                new ControlNodeConfig
+                {
+                    Id = outputNodeId,
+                    Kind = ControlNodeKind.OscOutput,
+                    Settings = new OscOutputControlNodeSettings
+                    {
+                        Host = "127.0.0.1",
+                        Address = "/out",
+                    },
+                },
+            ],
+            Connections =
+            [
+                new ControlConnectionConfig { FromNodeId = inputNodeId, ToNodeId = outputNodeId },
+            ],
+        };
+        var sender = new RecordingOscSender();
+        var runtime = new ControlGraphRuntime(graph, sender);
+        runtime.SetSoftTakeoverTarget(inputNodeId, 0.5);
+
+        await runtime.InjectMidiControlChangeAsync(inputNodeId, channel: 1, controller: 0, value: 10);
+        await runtime.InjectMidiControlChangeAsync(inputNodeId, channel: 1, controller: 0, value: 64);
+        await runtime.InjectMidiControlChangeAsync(inputNodeId, channel: 1, controller: 0, value: 80);
+
+        Assert.Equal(2, sender.Sent.Count);
+        Assert.InRange(Assert.Single(sender.Sent[0].Arguments).AsFloat32(), 63.9f, 64.1f);
+        Assert.InRange(Assert.Single(sender.Sent[1].Arguments).AsFloat32(), 79.9f, 80.1f);
+    }
+
+    [Fact]
     public void Bcf2000Preset_CreatesEightHighResolutionChannelSlots()
     {
         var layer = X32Presets.CreateDefaultBcf2000ChannelLayer(firstChannel: 9, firstController: 0);

@@ -33,6 +33,8 @@ public sealed class ControlGraphRuntime
     private readonly IControlMidiSender _midiSender;
     private readonly Dictionary<Guid, ControlNodeConfig> _nodes;
     private readonly Dictionary<Guid, List<ControlConnectionConfig>> _outgoing;
+    private readonly Dictionary<Guid, DateTimeOffset> _lastOutputSendUtc = new();
+    private readonly Dictionary<Guid, SoftTakeoverState> _softTakeover = new();
 
     public ControlGraphRuntime(ControlGraphConfig graph, IControlOscSender oscSender, IControlMidiSender? midiSender = null)
     {
@@ -47,6 +49,16 @@ public sealed class ControlGraphRuntime
         var validation = Validate(graph);
         if (!validation.IsValid)
             throw new InvalidOperationException(string.Join("; ", validation.Issues.Select(i => i.Message)));
+    }
+
+    public void SetSoftTakeoverTarget(Guid midiInputNodeId, double normalizedValue)
+    {
+        if (!_nodes.TryGetValue(midiInputNodeId, out var node))
+            throw new ArgumentException($"Unknown control node '{midiInputNodeId}'.", nameof(midiInputNodeId));
+        if (node.Settings is not MidiInputControlNodeSettings)
+            throw new ArgumentException($"Node '{midiInputNodeId}' is not a MIDI input node.", nameof(midiInputNodeId));
+
+        _softTakeover[midiInputNodeId] = new SoftTakeoverState(Math.Clamp(normalizedValue, 0.0, 1.0), Captured: false);
     }
 
     public static ControlGraphValidationResult Validate(ControlGraphConfig graph)
@@ -105,6 +117,8 @@ public sealed class ControlGraphRuntime
         if (settings.Channel > 0 && channel != settings.Channel)
             return Task.CompletedTask;
         if (controller != settings.Controller)
+            return Task.CompletedTask;
+        if (!AllowsSoftTakeover(nodeId, settings, value))
             return Task.CompletedTask;
 
         var evt = new MidiControlEvent(
@@ -191,6 +205,8 @@ public sealed class ControlGraphRuntime
             case OscOutputControlNodeSettings osc:
                 if (ShouldSuppressEcho(input, osc.EndpointId, osc.FeedbackMode))
                     return [];
+                if (ShouldRateLimit(node.Id, osc.MinSendIntervalMs))
+                    return [];
                 await _oscSender.SendAsync(
                     osc.Host,
                     osc.Port,
@@ -202,6 +218,8 @@ public sealed class ControlGraphRuntime
             case X32ChannelFaderControlNodeSettings x32:
                 if (ShouldSuppressEcho(input, x32.EndpointId, x32.FeedbackMode))
                     return [];
+                if (ShouldRateLimit(node.Id, x32.MinSendIntervalMs))
+                    return [];
                 await _oscSender.SendAsync(
                     x32.Host,
                     x32.Port,
@@ -212,6 +230,8 @@ public sealed class ControlGraphRuntime
 
             case MidiOutputControlNodeSettings midi:
                 if (ShouldSuppressEcho(input, midi.EndpointId, midi.FeedbackMode))
+                    return [];
+                if (ShouldRateLimit(node.Id, midi.MinSendIntervalMs))
                     return [];
                 if (!TryGetScalar(input, out var midiScalar))
                     return [];
@@ -306,9 +326,50 @@ public sealed class ControlGraphRuntime
     }
 
     private static bool ShouldSuppressEcho(ControlEvent input, Guid? endpointId, ControlFeedbackMode feedbackMode) =>
-        feedbackMode == ControlFeedbackMode.DoNotEchoToOrigin
+        (feedbackMode == ControlFeedbackMode.DoNotEchoToOrigin
+         || feedbackMode == ControlFeedbackMode.MotorFeedbackOnly)
         && endpointId.HasValue
         && input.OriginId == endpointId.Value;
+
+    private bool ShouldRateLimit(Guid nodeId, int minSendIntervalMs)
+    {
+        if (minSendIntervalMs <= 0)
+            return false;
+
+        var now = DateTimeOffset.UtcNow;
+        if (_lastOutputSendUtc.TryGetValue(nodeId, out var last)
+            && now - last < TimeSpan.FromMilliseconds(minSendIntervalMs))
+        {
+            return true;
+        }
+
+        _lastOutputSendUtc[nodeId] = now;
+        return false;
+    }
+
+    private bool AllowsSoftTakeover(Guid nodeId, MidiInputControlNodeSettings settings, int rawValue)
+    {
+        if (!settings.SoftTakeoverEnabled)
+            return true;
+        if (!_softTakeover.TryGetValue(nodeId, out var state))
+            return true;
+        if (state.Captured)
+            return true;
+
+        var normalized = NormalizeMidiValue(rawValue, settings.HighResolution14Bit);
+        var tolerance = Math.Clamp(settings.SoftTakeoverTolerance, 0.0, 1.0);
+        if (Math.Abs(normalized - state.TargetNormalizedValue) > tolerance)
+            return false;
+
+        _softTakeover[nodeId] = state with { Captured = true };
+        return true;
+    }
+
+    private static double NormalizeMidiValue(int value, bool highResolution14Bit)
+    {
+        var max = highResolution14Bit ? 16383.0 : 127.0;
+        return Math.Clamp(value / max, 0.0, 1.0);
+    }
 
     private static bool OscAddressMatches(string pattern, string address) =>
         string.IsNullOrWhiteSpace(pattern)
@@ -358,6 +419,8 @@ internal sealed class NullControlMidiSender : IControlMidiSender
         CancellationToken cancellationToken = default) =>
         ValueTask.CompletedTask;
 }
+
+internal sealed record SoftTakeoverState(double TargetNormalizedValue, bool Captured);
 
 public static class ControlMath
 {

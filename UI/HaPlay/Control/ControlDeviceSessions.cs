@@ -36,7 +36,7 @@ public sealed class ControlEndpointSessionManager : IControlOscSender, IControlM
     private readonly IReadOnlyDictionary<Guid, ActionEndpoint> _endpoints;
     private readonly Dictionary<(string Host, int Port), OSCClient> _oscClients = new();
     private readonly Dictionary<Guid, MIDIOutputDevice> _midiOutputs = new();
-    private bool _midiInitialized;
+    private ControlMidiLibraryLease? _midiLease;
     private bool _disposed;
 
     public ControlEndpointSessionManager(IEnumerable<ActionEndpoint> endpoints)
@@ -133,13 +133,9 @@ public sealed class ControlEndpointSessionManager : IControlOscSender, IControlM
 
     private void EnsureMidiInitialized()
     {
-        if (_midiInitialized)
+        if (_midiLease is not null)
             return;
-
-        var err = PMUtil.Initialize();
-        if (err != PmError.NoError)
-            throw new InvalidOperationException(PMUtil.GetErrorText(err) ?? err.ToString());
-        _midiInitialized = true;
+        _midiLease = ControlMidiLibraryLease.Acquire();
     }
 
     private static PmDeviceEntry? ResolveMidiOutput(MidiActionEndpoint endpoint)
@@ -180,11 +176,8 @@ public sealed class ControlEndpointSessionManager : IControlOscSender, IControlM
             output.Dispose();
         _midiOutputs.Clear();
 
-        if (_midiInitialized)
-        {
-            PMUtil.Terminate();
-            _midiInitialized = false;
-        }
+        _midiLease?.Dispose();
+        _midiLease = null;
 
         Health = ControlSessionHealth.Stopped();
     }
@@ -203,11 +196,8 @@ public sealed class ControlEndpointSessionManager : IControlOscSender, IControlM
             output.Dispose();
         _midiOutputs.Clear();
 
-        if (_midiInitialized)
-        {
-            PMUtil.Terminate();
-            _midiInitialized = false;
-        }
+        _midiLease?.Dispose();
+        _midiLease = null;
 
         Health = ControlSessionHealth.Stopped();
     }
@@ -308,6 +298,7 @@ public sealed class ControlMidiInputSession : IDisposable
     private readonly MidiInputControlNodeSettings _settings;
     private readonly Func<Guid, int, int, int, bool, CancellationToken, Task> _dispatchAsync;
     private readonly HighResCCAccumulator _highResAccumulator = new();
+    private ControlMidiLibraryLease? _midiLease;
     private MIDIInputDevice? _device;
     private bool _disposed;
 
@@ -338,6 +329,7 @@ public sealed class ControlMidiInputSession : IDisposable
         try
         {
             Health = new ControlSessionHealth(ControlSessionState.Starting, $"Opening MIDI input {DeviceId}", DateTimeOffset.UtcNow);
+            _midiLease ??= ControlMidiLibraryLease.Acquire();
             var device = new MIDIInputDevice(DeviceId);
             device.MessageReceived += OnMessageReceived;
             var err = device.Open();
@@ -395,7 +387,53 @@ public sealed class ControlMidiInputSession : IDisposable
             _device.Dispose();
             _device = null;
         }
+        _midiLease?.Dispose();
+        _midiLease = null;
 
         Health = ControlSessionHealth.Stopped();
+    }
+}
+
+internal sealed class ControlMidiLibraryLease : IDisposable
+{
+    private static readonly object Gate = new();
+    private static int _refCount;
+    private bool _disposed;
+
+    private ControlMidiLibraryLease()
+    {
+    }
+
+    public static ControlMidiLibraryLease Acquire()
+    {
+        lock (Gate)
+        {
+            if (_refCount == 0)
+            {
+                var err = PMUtil.Initialize();
+                if (err != PmError.NoError)
+                    throw new InvalidOperationException(PMUtil.GetErrorText(err) ?? err.ToString());
+            }
+
+            _refCount++;
+            return new ControlMidiLibraryLease();
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+
+        lock (Gate)
+        {
+            if (_refCount <= 0)
+                return;
+
+            _refCount--;
+            if (_refCount == 0)
+                PMUtil.Terminate();
+        }
     }
 }

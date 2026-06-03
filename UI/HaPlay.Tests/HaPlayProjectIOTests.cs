@@ -621,6 +621,8 @@ public sealed class HaPlayProjectIOTests
                                 Channel = 1,
                                 Controller = 0,
                                 HighResolution14Bit = true,
+                                SoftTakeoverEnabled = true,
+                                SoftTakeoverTolerance = 0.03,
                             },
                         },
                         new ControlNodeConfig
@@ -643,6 +645,7 @@ public sealed class HaPlayProjectIOTests
                             {
                                 Host = "192.168.1.50",
                                 Channel = 1,
+                                MinSendIntervalMs = 25,
                             },
                         },
                         new ControlNodeConfig
@@ -667,6 +670,7 @@ public sealed class HaPlayProjectIOTests
                                 Controller = 0,
                                 HighResolution14Bit = true,
                                 FeedbackMode = ControlFeedbackMode.MotorFeedbackOnly,
+                                MinSendIntervalMs = 15,
                             },
                         },
                     ],
@@ -689,13 +693,17 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(3, graph.Connections.Count);
         var midi = Assert.IsType<MidiInputControlNodeSettings>(graph.Nodes[0].Settings);
         Assert.True(midi.HighResolution14Bit);
+        Assert.True(midi.SoftTakeoverEnabled);
+        Assert.Equal(0.03, midi.SoftTakeoverTolerance);
         var x32 = Assert.IsType<X32ChannelFaderControlNodeSettings>(graph.Nodes[2].Settings);
         Assert.Equal("192.168.1.50", x32.Host);
+        Assert.Equal(25, x32.MinSendIntervalMs);
         var osc = Assert.IsType<OscInputControlNodeSettings>(graph.Nodes[3].Settings);
         Assert.Equal(10023, osc.LocalPort);
         Assert.Equal("/ch/01/mix/fader", osc.AddressPattern);
         var midiOut = Assert.IsType<MidiOutputControlNodeSettings>(graph.Nodes[4].Settings);
         Assert.Equal(ControlFeedbackMode.MotorFeedbackOnly, midiOut.FeedbackMode);
+        Assert.Equal(15, midiOut.MinSendIntervalMs);
     }
 
     [Fact]

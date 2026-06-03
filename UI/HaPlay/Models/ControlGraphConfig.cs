@@ -73,6 +73,8 @@ public sealed record MidiInputControlNodeSettings : ControlNodeSettings
     public int Channel { get; init; } = 1;
     public int Controller { get; init; }
     public bool HighResolution14Bit { get; init; }
+    public bool SoftTakeoverEnabled { get; init; }
+    public double SoftTakeoverTolerance { get; init; } = 0.02;
 }
 
 public sealed record OscInputControlNodeSettings : ControlNodeSettings
@@ -99,6 +101,7 @@ public sealed record OscOutputControlNodeSettings : ControlNodeSettings
     public string Address { get; init; } = "/ch/01/mix/fader";
     public ControlOscArgumentMode ArgumentMode { get; init; } = ControlOscArgumentMode.FirstScalarAsFloat;
     public ControlFeedbackMode FeedbackMode { get; init; } = ControlFeedbackMode.DoNotEchoToOrigin;
+    public int MinSendIntervalMs { get; init; }
 }
 
 public sealed record MidiOutputControlNodeSettings : ControlNodeSettings
@@ -108,6 +111,7 @@ public sealed record MidiOutputControlNodeSettings : ControlNodeSettings
     public int Controller { get; init; }
     public bool HighResolution14Bit { get; init; }
     public ControlFeedbackMode FeedbackMode { get; init; } = ControlFeedbackMode.DoNotEchoToOrigin;
+    public int MinSendIntervalMs { get; init; }
 }
 
 public sealed record X32ChannelFaderControlNodeSettings : ControlNodeSettings
@@ -117,6 +121,7 @@ public sealed record X32ChannelFaderControlNodeSettings : ControlNodeSettings
     public int Port { get; init; } = 10023;
     public int Channel { get; init; } = 1;
     public ControlFeedbackMode FeedbackMode { get; init; } = ControlFeedbackMode.DoNotEchoToOrigin;
+    public int MinSendIntervalMs { get; init; }
 }
 
 public enum ControlOscArgumentMode

@@ -62,6 +62,70 @@ public sealed class ControlDeviceSessionTests
         Assert.InRange(Assert.Single(result.Args).AsFloat32(), 0.74f, 0.76f);
     }
 
+    [Fact]
+    public async Task ControlGraphSession_StartsOscInputAndRelaysToOscOutput()
+    {
+        var listenPort = GetFreeUdpPort();
+        var outputPort = GetFreeUdpPort();
+        var inputNodeId = Guid.NewGuid();
+        var outputNodeId = Guid.NewGuid();
+        var received = new TaskCompletionSource<OSCMessageContext>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new OSCServer(new OSCServerOptions { Port = outputPort });
+        using var registration = server.RegisterHandler("/haplay/out", (context, _) =>
+        {
+            received.TrySetResult(context);
+            return ValueTask.CompletedTask;
+        });
+        await server.StartAsync();
+
+        var graph = new ControlGraphConfig
+        {
+            Name = "OSC relay",
+            Nodes =
+            [
+                new ControlNodeConfig
+                {
+                    Id = inputNodeId,
+                    Kind = ControlNodeKind.OscInput,
+                    Settings = new OscInputControlNodeSettings
+                    {
+                        LocalPort = listenPort,
+                        AddressPattern = "/haplay/in",
+                    },
+                },
+                new ControlNodeConfig
+                {
+                    Id = outputNodeId,
+                    Kind = ControlNodeKind.OscOutput,
+                    Settings = new OscOutputControlNodeSettings
+                    {
+                        Host = "127.0.0.1",
+                        Port = outputPort,
+                        Address = "/haplay/out",
+                        ArgumentMode = ControlOscArgumentMode.FirstScalarAsFloat,
+                    },
+                },
+            ],
+            Connections =
+            [
+                new ControlConnectionConfig { FromNodeId = inputNodeId, ToNodeId = outputNodeId },
+            ],
+        };
+        await using var session = new ControlGraphSession(graph, []);
+        await session.StartAsync();
+        await using var client = await OSCClient.CreateAsync("127.0.0.1", listenPort);
+
+        await client.SendMessageAsync("/haplay/in", [OSCArgument.Float32(0.25f)]);
+
+        var context = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(ControlSessionState.Running, session.Health.State);
+        Assert.Equal("/haplay/out", context.Message.Address);
+        Assert.InRange(Assert.Single(context.Message.Arguments).AsFloat32(), 0.24f, 0.26f);
+
+        await session.StopAsync();
+        Assert.Equal(ControlSessionState.Stopped, session.Health.State);
+    }
+
     private static int GetFreeUdpPort()
     {
         using var udp = new System.Net.Sockets.UdpClient(0);
