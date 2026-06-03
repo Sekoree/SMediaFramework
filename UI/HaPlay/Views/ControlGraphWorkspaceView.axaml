@@ -1,0 +1,296 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:controls="clr-namespace:NodifyM.Avalonia.Controls;assembly=NodifyM.Avalonia"
+             xmlns:viewModelBase="clr-namespace:NodifyM.Avalonia.ViewModelBase;assembly=NodifyM.Avalonia"
+             xmlns:converters="clr-namespace:NodifyM.Avalonia.Converters;assembly=NodifyM.Avalonia"
+             mc:Ignorable="d" d:DesignWidth="920" d:DesignHeight="640"
+             x:Class="HaPlay.Views.ControlGraphWorkspaceView"
+             x:DataType="vm:ControlGraphWorkspaceViewModel">
+  <UserControl.Resources>
+    <converters:FlowToDirectionConverter x:Key="FlowToDirectionConverter" />
+  </UserControl.Resources>
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,12">
+      <TextBlock Text="Control" FontSize="22" FontWeight="SemiBold" />
+      <TextBlock Text="Manage MIDI/OSC control graphs and start or stop their runtime sessions."
+                 Opacity="0.7" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <Grid RowDefinitions="*,150" RowSpacing="10">
+    <Grid ColumnDefinitions="260,*,300" ColumnSpacing="12">
+      <DockPanel Grid.Column="0">
+      <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,10">
+        <DockPanel>
+          <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,6">
+            <TextBlock Grid.Column="0" Text="Graphs" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Content="+ Graph" Command="{Binding AddGraphCommand}" />
+            <Button Grid.Column="2" Content="Remove" Command="{Binding RemoveSelectedGraphCommand}" />
+          </Grid>
+
+          <TextBlock DockPanel.Dock="Bottom"
+                     Text="Select a graph to edit its nodes and runtime."
+                     Opacity="0.55" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0" />
+
+          <ListBox ItemsSource="{Binding Graphs}"
+                   SelectedItem="{Binding SelectedGraph, Mode=TwoWay}">
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="vm:ControlGraphRowViewModel">
+                <StackPanel Spacing="2" Margin="0,3">
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                    <TextBlock Grid.Column="0" Text="{Binding Name}" FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="1" Text="{Binding HealthState}" Opacity="0.75" />
+                  </Grid>
+                  <TextBlock Text="{Binding Summary}" FontSize="12" Opacity="0.65" />
+                  <TextBlock Text="{Binding HealthDetail}" FontSize="12" Opacity="0.75" TextWrapping="Wrap" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+
+      <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Node Palette" FontWeight="SemiBold" Margin="0,0,0,6" />
+          <ScrollViewer>
+            <ItemsControl ItemsSource="{Binding PaletteGroups}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="vm:ControlNodePaletteGroup">
+                  <Expander Header="{Binding Name}" IsExpanded="True" Classes="dense" Margin="0,0,0,4">
+                    <ItemsControl ItemsSource="{Binding Items}">
+                      <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:ControlNodePaletteItem">
+                          <Button Classes="sidebar"
+                                  HorizontalAlignment="Stretch"
+                                  Command="{Binding $parent[UserControl].((vm:ControlGraphWorkspaceViewModel)DataContext).AddNodeCommand}"
+                                  CommandParameter="{Binding}">
+                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap" />
+                          </Button>
+                        </DataTemplate>
+                      </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                  </Expander>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+      </DockPanel>
+
+      <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" ClipToBounds="True">
+        <Grid>
+          <controls:NodifyEditor x:Name="ControlEditor"
+                                 Background="Transparent"
+                                 ItemsSource="{Binding SelectedEditor.Nodes}"
+                                 SelectedItems="{Binding SelectedEditor.SelectedNodes}"
+                                 Connections="{Binding SelectedEditor.Connections}"
+                                 PendingConnection="{Binding SelectedEditor.PendingConnection}"
+                                 OffsetX="{Binding SelectedEditor.OffsetX, Mode=TwoWay}"
+                                 OffsetY="{Binding SelectedEditor.OffsetY, Mode=TwoWay}"
+                                 Zoom="{Binding SelectedEditor.Zoom, Mode=TwoWay}"
+                                 DisconnectConnectorCommand="{Binding SelectedEditor.DisconnectConnectorCommand}">
+            <controls:NodifyEditor.GridLineTemplate>
+              <DataTemplate>
+                <controls:LargeGridLine Width="{Binding $parent[controls:NodifyEditor].Bounds.Width}"
+                                        Height="{Binding $parent[controls:NodifyEditor].Bounds.Height}"
+                                        OffsetX="{Binding $parent[controls:NodifyEditor].OffsetX}"
+                                        OffsetY="{Binding $parent[controls:NodifyEditor].OffsetY}"
+                                        Zoom="{Binding $parent[controls:NodifyEditor].Zoom}"
+                                        Spacing="30"
+                                        Thickness="0.5"
+                                        Opacity="0.45" />
+              </DataTemplate>
+            </controls:NodifyEditor.GridLineTemplate>
+
+            <controls:NodifyEditor.ConnectionTemplate>
+              <DataTemplate DataType="{x:Type viewModelBase:ConnectionViewModelBase}">
+                <controls:Connection Source="{Binding Source.Anchor}"
+                                     Target="{Binding Target.Anchor}"
+                                     Text="{Binding Text}"
+                                     Direction="{Binding ., Converter={StaticResource FlowToDirectionConverter}}">
+                  <controls:Connection.Stroke>
+                    <SolidColorBrush Color="#88AADD" Opacity="0.8" />
+                  </controls:Connection.Stroke>
+                </controls:Connection>
+              </DataTemplate>
+            </controls:NodifyEditor.ConnectionTemplate>
+
+            <controls:NodifyEditor.PendingConnectionTemplate>
+              <DataTemplate DataType="{x:Type viewModelBase:PendingConnectionViewModelBase}">
+                <controls:PendingConnection StartedCommand="{Binding StartCommand}"
+                                            CompletedCommand="{Binding FinishCommand}"
+                                            Direction="{Binding Source.Flow, Converter={StaticResource FlowToDirectionConverter}}"
+                                            PreviewTarget="{Binding PreviewTarget, Mode=OneWayToSource}"
+                                            EnablePreview="True"
+                                            EnableSnapping="True" />
+              </DataTemplate>
+            </controls:NodifyEditor.PendingConnectionTemplate>
+
+            <controls:NodifyEditor.ItemTemplate>
+              <DataTemplate DataType="vm:ControlGraphNodeViewModel">
+                <controls:Node IsResize="False"
+                               Location="{Binding Location, Mode=TwoWay}"
+                               Input="{Binding Inputs}"
+                               Output="{Binding Outputs}">
+                  <controls:Node.Header>
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                      <TextBlock Grid.Column="0" Text="{Binding Title}" FontWeight="SemiBold" />
+                      <TextBlock Grid.Column="1" Text="{Binding KindLabel}" FontSize="11" Opacity="0.7" />
+                    </Grid>
+                  </controls:Node.Header>
+                  <controls:Node.InputConnectorTemplate>
+                    <DataTemplate DataType="vm:ControlGraphConnectorViewModel">
+                      <controls:NodeInput IsConnected="{Binding IsConnected}"
+                                          Anchor="{Binding Anchor, Mode=OneWayToSource}">
+                        <TextBlock Text="{Binding Title}" FontSize="11" />
+                      </controls:NodeInput>
+                    </DataTemplate>
+                  </controls:Node.InputConnectorTemplate>
+                  <controls:Node.OutputConnectorTemplate>
+                    <DataTemplate DataType="vm:ControlGraphConnectorViewModel">
+                      <controls:NodeOutput IsConnected="{Binding IsConnected}"
+                                           Anchor="{Binding Anchor, Mode=OneWayToSource}">
+                        <controls:NodeOutput.Header>
+                          <TextBlock Text="{Binding Title}" FontSize="11" />
+                        </controls:NodeOutput.Header>
+                      </controls:NodeOutput>
+                    </DataTemplate>
+                  </controls:Node.OutputConnectorTemplate>
+                </controls:Node>
+              </DataTemplate>
+            </controls:NodifyEditor.ItemTemplate>
+          </controls:NodifyEditor>
+
+          <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" Padding="6"
+                  Background="#AA202020" CornerRadius="4">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <TextBlock Text="Zoom" />
+              <TextBlock Text="{Binding SelectedEditor.Zoom, StringFormat={}{0:0.00}x}" />
+            </StackPanel>
+          </Border>
+        </Grid>
+      </Border>
+
+      <Border Grid.Column="2" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+        <ScrollViewer>
+        <StackPanel Spacing="8">
+          <TextBlock Text="Inspector" FontSize="18" FontWeight="SemiBold" />
+
+          <StackPanel Spacing="8" IsVisible="{Binding HasSelectedGraph}">
+            <Grid ColumnDefinitions="90,*" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Text="Graph" VerticalAlignment="Center" />
+              <TextBox Grid.Column="1" Text="{Binding SelectedGraph.Name, Mode=TwoWay}" />
+            </Grid>
+            <CheckBox Content="Enabled in project" IsChecked="{Binding SelectedGraph.IsEnabled, Mode=TwoWay}" />
+            <TextBlock Text="{Binding SelectedGraph.Summary}" Opacity="0.75" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button Content="Start" Command="{Binding StartSelectedGraphCommand}" />
+              <Button Content="Stop" Command="{Binding StopSelectedGraphCommand}" />
+            </StackPanel>
+            <Button Content="Remove selected node" Command="{Binding RemoveSelectedNodeCommand}" />
+
+            <Border BorderBrush="#44808080" BorderThickness="1" CornerRadius="4" Padding="6">
+              <StackPanel Spacing="4">
+                <TextBlock Text="Runtime Health" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding SelectedGraph.HealthState}" />
+                <TextBlock Text="{Binding SelectedGraph.HealthDetail}" Opacity="0.7" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding SelectedGraph.LastError}" Foreground="#D36" TextWrapping="Wrap"
+                           IsVisible="{Binding SelectedGraph.HasLastError}" />
+              </StackPanel>
+            </Border>
+          </StackPanel>
+
+          <Border BorderBrush="#44808080" BorderThickness="1" CornerRadius="4" Padding="6"
+                  IsVisible="{Binding SelectedEditor.HasSelectedNode}">
+            <StackPanel Spacing="6">
+              <TextBlock Text="Selected Node" FontWeight="SemiBold" />
+              <TextBox Text="{Binding SelectedEditor.SelectedEditorNode.Title, Mode=TwoWay}" />
+              <TextBlock Text="{Binding SelectedEditor.SelectedEditorNode.KindLabel}" Opacity="0.65" />
+
+              <StackPanel Spacing="4" IsVisible="{Binding SelectedEditor.SelectedEditorNode.IsMidiInput}">
+                <TextBlock Text="MIDI Input" FontWeight="SemiBold" />
+                <NumericUpDown Minimum="1" Maximum="16" Value="{Binding SelectedEditor.SelectedEditorNode.MidiChannel, Mode=TwoWay}" />
+                <NumericUpDown Minimum="0" Maximum="127" Value="{Binding SelectedEditor.SelectedEditorNode.MidiController, Mode=TwoWay}" />
+                <CheckBox Content="14-bit CC" IsChecked="{Binding SelectedEditor.SelectedEditorNode.HighResolution14Bit, Mode=TwoWay}" />
+              </StackPanel>
+
+              <StackPanel Spacing="4" IsVisible="{Binding SelectedEditor.SelectedEditorNode.IsMidiOutput}">
+                <TextBlock Text="MIDI Output" FontWeight="SemiBold" />
+                <NumericUpDown Minimum="1" Maximum="16" Value="{Binding SelectedEditor.SelectedEditorNode.MidiChannel, Mode=TwoWay}" />
+                <NumericUpDown Minimum="0" Maximum="127" Value="{Binding SelectedEditor.SelectedEditorNode.MidiController, Mode=TwoWay}" />
+                <CheckBox Content="14-bit CC" IsChecked="{Binding SelectedEditor.SelectedEditorNode.HighResolution14Bit, Mode=TwoWay}" />
+              </StackPanel>
+
+              <StackPanel Spacing="4" IsVisible="{Binding SelectedEditor.SelectedEditorNode.IsOscInput}">
+                <TextBlock Text="OSC Input" FontWeight="SemiBold" />
+                <NumericUpDown Minimum="1" Maximum="65535" Value="{Binding SelectedEditor.SelectedEditorNode.OscLocalPort, Mode=TwoWay}" />
+                <TextBox Text="{Binding SelectedEditor.SelectedEditorNode.OscAddressPattern, Mode=TwoWay}" />
+              </StackPanel>
+
+              <StackPanel Spacing="4" IsVisible="{Binding SelectedEditor.SelectedEditorNode.IsOscOutput}">
+                <TextBlock Text="OSC Output" FontWeight="SemiBold" />
+                <TextBox Text="{Binding SelectedEditor.SelectedEditorNode.Host, Mode=TwoWay}" />
+                <NumericUpDown Minimum="1" Maximum="65535" Value="{Binding SelectedEditor.SelectedEditorNode.Port, Mode=TwoWay}" />
+                <TextBox Text="{Binding SelectedEditor.SelectedEditorNode.OscAddress, Mode=TwoWay}" />
+              </StackPanel>
+
+              <StackPanel Spacing="4" IsVisible="{Binding SelectedEditor.SelectedEditorNode.IsX32ChannelFader}">
+                <TextBlock Text="X32 Channel Fader" FontWeight="SemiBold" />
+                <TextBox Text="{Binding SelectedEditor.SelectedEditorNode.Host, Mode=TwoWay}" />
+                <NumericUpDown Minimum="1" Maximum="65535" Value="{Binding SelectedEditor.SelectedEditorNode.Port, Mode=TwoWay}" />
+                <NumericUpDown Minimum="1" Maximum="32" Value="{Binding SelectedEditor.SelectedEditorNode.X32Channel, Mode=TwoWay}" />
+              </StackPanel>
+
+              <StackPanel Spacing="4" IsVisible="{Binding SelectedEditor.SelectedEditorNode.IsMapRange}">
+                <TextBlock Text="Map Range" FontWeight="SemiBold" />
+                <NumericUpDown Value="{Binding SelectedEditor.SelectedEditorNode.MapInputMin, Mode=TwoWay}" />
+                <NumericUpDown Value="{Binding SelectedEditor.SelectedEditorNode.MapInputMax, Mode=TwoWay}" />
+                <NumericUpDown Value="{Binding SelectedEditor.SelectedEditorNode.MapOutputMin, Mode=TwoWay}" />
+                <NumericUpDown Value="{Binding SelectedEditor.SelectedEditorNode.MapOutputMax, Mode=TwoWay}" />
+                <CheckBox Content="Clamp" IsChecked="{Binding SelectedEditor.SelectedEditorNode.MapClamp, Mode=TwoWay}" />
+              </StackPanel>
+
+              <StackPanel Spacing="4" IsVisible="{Binding SelectedEditor.SelectedEditorNode.IsScriptTransform}">
+                <TextBlock Text="Mond Script" FontWeight="SemiBold" />
+                <NumericUpDown Minimum="1" Maximum="10000000" Value="{Binding SelectedEditor.SelectedEditorNode.ScriptInstructionLimit, Mode=TwoWay}" />
+                <TextBox Text="{Binding SelectedEditor.SelectedEditorNode.ScriptSource, Mode=TwoWay}"
+                         AcceptsReturn="True" MinHeight="100" FontFamily="monospace" />
+              </StackPanel>
+            </StackPanel>
+          </Border>
+
+          <Border BorderBrush="#44808080" BorderThickness="1" CornerRadius="4" Padding="6"
+                  IsVisible="{Binding SelectedGraph.HasScriptDiagnostics}">
+            <StackPanel Spacing="4">
+              <TextBlock Text="Script Diagnostics" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding SelectedGraph.ScriptDiagnostics}" FontSize="12" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+        </ScrollViewer>
+      </Border>
+    </Grid>
+    <Border Grid.Row="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Top" Text="Live Event Monitor" FontWeight="SemiBold" Margin="0,0,0,6" />
+        <ListBox ItemsSource="{Binding MonitorEntries}">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:ControlGraphMonitorEntryViewModel">
+              <Grid ColumnDefinitions="70,90,*" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Text="{Binding TimestampDisplay}" Opacity="0.65" />
+                <TextBlock Grid.Column="1" Text="{Binding Kind}" FontWeight="SemiBold" />
+                <TextBlock Grid.Column="2" Text="{Binding Detail}" TextWrapping="Wrap" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+    </Grid>
+  </DockPanel>
+</UserControl>

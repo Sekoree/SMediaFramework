@@ -42,6 +42,7 @@ public partial class MainViewModel : ViewModelBase
     {
         OutputManagement = new OutputManagementViewModel();
         CuePlayer = new CuePlayerViewModel();
+        ControlGraphs = new ControlGraphWorkspaceViewModel(ActionEndpoints);
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
         // First player can't be removed — there's always at least one in the UI.
@@ -136,6 +137,7 @@ public partial class MainViewModel : ViewModelBase
         WorkspaceItem.Outputs,
         WorkspaceItem.OscConnections,
         WorkspaceItem.MidiDevices,
+        WorkspaceItem.Control,
         WorkspaceItem.Project,
     ];
 
@@ -153,6 +155,7 @@ public partial class MainViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(IsOutputsWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsOscConnectionsWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsMidiDevicesWorkspaceSelected))]
+    [NotifyPropertyChangedFor(nameof(IsControlWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsProjectWorkspaceSelected))]
     private WorkspaceItem _selectedWorkspace = WorkspaceItem.Players;
 
@@ -161,6 +164,7 @@ public partial class MainViewModel : ViewModelBase
     public bool IsOutputsWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Outputs;
     public bool IsOscConnectionsWorkspaceSelected => SelectedWorkspace == WorkspaceItem.OscConnections;
     public bool IsMidiDevicesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.MidiDevices;
+    public bool IsControlWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Control;
     public bool IsProjectWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Project;
 
     partial void OnSidebarCollapsedChanged(bool value)
@@ -230,6 +234,7 @@ public partial class MainViewModel : ViewModelBase
 
     public OutputManagementViewModel OutputManagement { get; }
     public CuePlayerViewModel CuePlayer { get; }
+    public ControlGraphWorkspaceViewModel ControlGraphs { get; }
     public ObservableCollection<MediaPlayerViewModel> Players { get; }
     public ObservableCollection<ActionEndpoint> ActionEndpoints { get; } = new();
 
@@ -1038,6 +1043,7 @@ public partial class MainViewModel : ViewModelBase
         Players = Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList(),
         ActionEndpoints = ActionEndpoints.ToList(),
         CueLists = CuePlayer.BuildCueListsSnapshot(),
+        ControlGraphs = ControlGraphs.BuildSnapshot().ToList(),
     };
 
     /// <summary>
@@ -1065,6 +1071,7 @@ public partial class MainViewModel : ViewModelBase
         RebuildEndpointWorkspaceLists();
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         CuePlayer.ApplyCueLists(project.CueLists);
+        ControlGraphs.LoadGraphs(project.ControlGraphs);
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)

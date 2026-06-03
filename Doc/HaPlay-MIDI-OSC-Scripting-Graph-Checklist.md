@@ -81,14 +81,14 @@ Source plan: `Doc/HaPlay-MIDI-OSC-Scripting-Graph-Plan.md`
 
 ## Phase 7: NodifyM UI
 
-- [ ] Add `Control` workspace to the main shell.
-- [ ] Add graph list and runtime start/stop controls.
-- [ ] Add NodifyM graph canvas.
-- [ ] Add node palette grouped by Inputs, Outputs, Transforms, Scripts, State,
+- [x] Add `Control` workspace to the main shell.
+- [x] Add graph list and runtime start/stop controls.
+- [x] Add NodifyM graph canvas.
+- [x] Add node palette grouped by Inputs, Outputs, Transforms, Scripts, State,
   and Presets.
-- [ ] Add selected-node inspector.
-- [ ] Add live event monitor.
-- [ ] Persist node positions, connections, and viewport.
+- [x] Add selected-node inspector.
+- [x] Add live event monitor.
+- [x] Persist node positions, connections, and viewport.
 
 ## Phase 8: Preset UX
 
@@ -117,5 +117,9 @@ Source plan: `Doc/HaPlay-MIDI-OSC-Scripting-Graph-Plan.md`
   `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~ControlDeviceSessionTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
 - [x] Run focused script/control-graph tests:
   `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlScriptHostTests|FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
+- [x] Run focused control workspace tests:
+  `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlGraphWorkspaceViewModelTests|FullyQualifiedName~ControlScriptHostTests|FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
+- [x] Run focused control UI editor tests:
+  `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlGraphWorkspaceViewModelTests|FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
 - [x] Update this checklist after each implementation slice.
 

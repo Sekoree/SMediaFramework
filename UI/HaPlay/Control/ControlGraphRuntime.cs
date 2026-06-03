@@ -54,6 +54,7 @@ public sealed class ControlGraphRuntime
     }
 
     public IReadOnlyList<ControlScriptDiagnostic> ScriptDiagnostics => _scriptDiagnostics;
+    public event EventHandler<ControlEvent>? EventDispatched;
 
     public void SetSoftTakeoverTarget(Guid midiInputNodeId, double normalizedValue)
     {
@@ -163,6 +164,7 @@ public sealed class ControlGraphRuntime
 
     private async Task DispatchAsync(ControlEvent evt, CancellationToken cancellationToken)
     {
+        EventDispatched?.Invoke(this, evt);
         if (!_outgoing.TryGetValue(evt.SourceNodeId, out var connections))
             return;
 

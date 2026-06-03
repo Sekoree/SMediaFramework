@@ -46,6 +46,8 @@
     <KeyBinding Gesture="Ctrl+5" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.MidiDevices}" />
     <KeyBinding Gesture="Ctrl+6" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.Control}" />
+    <KeyBinding Gesture="Ctrl+7" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Project}" />
   </UserControl.KeyBindings>
 
@@ -213,6 +215,9 @@
 
       <views:MidiDevicesView
           IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsMidiDevicesWorkspaceSelected}" />
+
+      <views:ControlGraphWorkspaceView DataContext="{Binding ControlGraphs}"
+          IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsControlWorkspaceSelected}" />
 
       <DockPanel Margin="16" IsVisible="{Binding IsProjectWorkspaceSelected}">
         <StackPanel DockPanel.Dock="Top" Spacing="8" Margin="0,0,0,12">
