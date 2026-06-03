@@ -62,13 +62,13 @@ Source plan: `Doc/HaPlay-MIDI-OSC-Scripting-Graph-Plan.md`
 
 ## Phase 5: X32/M32 Runtime Support
 
-- [ ] Add X32 endpoint preset with port `10023`.
-- [ ] Add `/xremote` renewal.
-- [ ] Add `/subscribe` renewal.
-- [ ] Add `/meters` renewal and blob parsing.
-- [ ] Add channel strip presets for fader, mute, pan, solo/status.
-- [ ] Add DCA, main stereo, bus, and matrix presets.
-- [ ] Add X32 fader normalized-value and dB conversion helpers.
+- [x] Add X32 endpoint preset with port `10023`.
+- [x] Add `/xremote` renewal.
+- [x] Add `/subscribe` renewal.
+- [x] Add `/meters` renewal and blob parsing.
+- [x] Add channel strip presets for fader, mute, pan, solo/status.
+- [x] Add DCA, main stereo, bus, and matrix presets.
+- [x] Add X32 fader normalized-value and dB conversion helpers.
 
 ## Phase 6: Mond Scripting
 
