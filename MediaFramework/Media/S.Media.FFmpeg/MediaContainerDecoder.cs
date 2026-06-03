@@ -176,6 +176,15 @@ public sealed class MediaContainerDecoder : IDisposable
     public void SeekPresentation(TimeSpan position) => _shared.SeekPresentation(position);
 
     /// <summary>
+    /// Cooperatively aborts an in-flight <see cref="SeekPresentation"/> (or coordinated seek) whose
+    /// decode-to-target prime is running long. The seek returns at its best-effort position rather than
+    /// blocking the caller for the full internal deadline. Wire a host seek <see cref="CancellationToken"/>
+    /// to this (see <c>MediaContainerSession.SeekCoordinated</c>) so a UI seek timeout can actually stop the
+    /// native work instead of orphaning the thread. A no-op when no seek is running.
+    /// </summary>
+    public void CancelInFlightSeek() => _shared.CancelInFlightSeek();
+
+    /// <summary>
     /// Re-syncs libav decoders and the demuxer to the current mux playhead without changing the
     /// logical timeline: <see cref="SeekPresentation"/> at <c>max(</c><see cref="Video.Position"/><c>, </c>
     /// <see cref="Audio.Position"/><c>)</c>.

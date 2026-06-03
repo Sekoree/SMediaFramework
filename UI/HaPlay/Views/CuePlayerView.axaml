@@ -209,18 +209,31 @@
                                  Maximum="120000"
                                  Value="{Binding SelectedCueNode.FadeOutMs, Mode=TwoWay}" />
                 </Grid>
-                <Grid ColumnDefinitions="Auto,*,Auto,Auto,*"
+                <Grid ColumnDefinitions="Auto,*,Auto,*"
                       ColumnSpacing="8"
                       IsVisible="{Binding HasSelectedMediaCue}">
                   <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StartMsLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="1"
-                                 Minimum="0"
-                                 Maximum="86400000"
-                                 Value="{Binding SelectedCueNode.StartOffsetMs, Mode=TwoWay}" />
-                  <CheckBox Grid.Column="2" Content="{x:Static res:Strings.LoopLabel}" VerticalAlignment="Center"
+                  <TimePicker Grid.Column="1"
+                              ClockIdentifier="24HourClock"
+                              UseSeconds="True"
+                              MinuteIncrement="1"
+                              SecondIncrement="1"
+                              SelectedTime="{Binding SelectedCueNode.StartOffsetTime, Mode=TwoWay}" />
+                  <TextBlock Grid.Column="2" Text="{x:Static res:Strings.EndTrimMsLabel}" VerticalAlignment="Center" />
+                  <TimePicker Grid.Column="3"
+                              ClockIdentifier="24HourClock"
+                              UseSeconds="True"
+                              MinuteIncrement="1"
+                              SecondIncrement="1"
+                              SelectedTime="{Binding SelectedCueNode.EndOffsetTime, Mode=TwoWay}" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,Auto,*"
+                      ColumnSpacing="8"
+                      IsVisible="{Binding HasSelectedMediaCue}">
+                  <CheckBox Grid.Column="0" Content="{x:Static res:Strings.LoopLabel}" VerticalAlignment="Center"
                             IsChecked="{Binding SelectedCueNode.Loop, Mode=TwoWay}" />
-                  <TextBlock Grid.Column="3" Text="{x:Static res:Strings.EndLabel}" VerticalAlignment="Center" />
-                  <ComboBox Grid.Column="4"
+                  <TextBlock Grid.Column="1" Text="{x:Static res:Strings.EndLabel}" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="2"
                             MinWidth="140"
                             ItemsSource="{Binding CueEndBehaviors}"
                             SelectedItem="{Binding SelectedCueNode.EndBehavior, Mode=TwoWay}" />

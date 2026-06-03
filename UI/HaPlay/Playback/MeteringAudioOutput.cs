@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Clock;
 
 namespace HaPlay.Playback;
 
@@ -7,17 +8,41 @@ namespace HaPlay.Playback;
 /// Measures the peak sample magnitude on every <see cref="Submit"/> call and
 /// exposes it as a thread-safe dB value that the UI can poll.
 /// </summary>
-internal sealed class MeteringAudioOutput : IAudioOutput
+internal class MeteringAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput
 {
-    private readonly IAudioOutput _inner;
+    protected readonly IAudioOutput Inner;
     private float _peakLinear;
 
     public MeteringAudioOutput(IAudioOutput inner)
     {
-        _inner = inner;
+        Inner = inner;
     }
 
-    public AudioFormat Format => _inner.Format;
+    public static MeteringAudioOutput Wrap(IAudioOutput inner)
+    {
+        ArgumentNullException.ThrowIfNull(inner);
+        if (inner is IClockedOutput clocked)
+        {
+            return inner is IPlaybackClock playbackClock
+                ? new ClockedPlaybackMeteringAudioOutput(inner, clocked, playbackClock)
+                : new ClockedMeteringAudioOutput(inner, clocked);
+        }
+
+        return new MeteringAudioOutput(inner);
+    }
+
+    public AudioFormat Format => Inner.Format;
+
+    public AudioOutputChannelCapabilities ChannelCapabilities =>
+        Inner is IAudioOutputChannelCapabilities caps
+            ? caps.ChannelCapabilities
+            : AudioOutputChannelCapabilities.Fixed(Format.Channels);
+
+    public void Flush()
+    {
+        if (Inner is IFlushableOutput flushable)
+            flushable.Flush();
+    }
 
     /// <summary>Peak level in dB since the last call to <see cref="ReadAndResetPeakDb"/>.
     /// Returns negative infinity when silent.</summary>
@@ -43,6 +68,24 @@ internal sealed class MeteringAudioOutput : IAudioOutput
             if (localPeak <= prev) break;
         } while (Interlocked.CompareExchange(ref _peakLinear, localPeak, prev) != prev);
 
-        _inner.Submit(packedSamples);
+        Inner.Submit(packedSamples);
+    }
+
+    private class ClockedMeteringAudioOutput(
+        IAudioOutput inner,
+        IClockedOutput clocked) : MeteringAudioOutput(inner), IClockedOutput
+    {
+        public bool WaitForCapacity(int chunkSamples, CancellationToken token) =>
+            clocked.WaitForCapacity(chunkSamples, token);
+    }
+
+    private sealed class ClockedPlaybackMeteringAudioOutput(
+        IAudioOutput inner,
+        IClockedOutput clocked,
+        IPlaybackClock playbackClock) : ClockedMeteringAudioOutput(inner, clocked), IPlaybackClock
+    {
+        public TimeSpan ElapsedSinceStart => playbackClock.ElapsedSinceStart;
+
+        public bool IsAdvancing => playbackClock.IsAdvancing;
     }
 }

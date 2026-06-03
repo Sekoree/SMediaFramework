@@ -4,6 +4,7 @@ using HaPlay.Resources;
 using HaPlay.ViewModels;
 using S.Media.Core.Clock;
 using S.Media.Core.Playback;
+using S.Media.Core.Video;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg;
@@ -30,6 +31,7 @@ public sealed class CuePlaybackEngine : IDisposable
     private readonly object _gate = new();
 
     private readonly Dictionary<Guid, ActiveCue> _active = new();
+    private readonly Dictionary<Guid, PreparedCue> _prepared = new();
     private readonly Dictionary<Guid, CueCompositionRuntime> _compositions = new();
     private readonly Dictionary<Guid, CueAudioOutputRuntime> _audioOutputs = new();
     private readonly object _previewGate = new();
@@ -59,6 +61,9 @@ public sealed class CuePlaybackEngine : IDisposable
     /// bars without per-row polling.</summary>
     public event EventHandler<CuePlaybackProgress>? CueProgress;
 
+    /// <summary>Raised when standby preparation changes the set of warmed cue ids.</summary>
+    public event Action<IReadOnlyCollection<Guid>>? PreparedCuesChanged;
+
     /// <summary>Raised on the UI thread when preview playback ends (natural end, operator stop,
     /// or preview window closed).</summary>
     public event EventHandler<Guid>? PreviewEnded;
@@ -70,6 +75,8 @@ public sealed class CuePlaybackEngine : IDisposable
     }
 
     public int? PreviewAudioDeviceIndex { get; set; }
+
+    public Func<IReadOnlyCollection<Guid>, Task>? ReleaseConflictingPlayerOutputsAsync { get; set; }
 
     public async Task<string?> PreviewCueAsync(MediaCueNode cue, CancellationToken ct)
     {
@@ -148,6 +155,65 @@ public sealed class CuePlaybackEngine : IDisposable
     public Task<string?> ExecuteAsync(MediaCueNode cue, CancellationToken ct) =>
         ExecuteCoreAsync(cue, ct, deferPlay: false);
 
+    public async Task RefreshPreparedCuesAsync(IReadOnlyList<MediaCueNode> cues, CancellationToken ct = default)
+    {
+        if (cues.Count == 0)
+        {
+            await ClearPreparedCuesAsync().ConfigureAwait(false);
+            return;
+        }
+
+        var list = await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.SelectedCueList?.ToModel());
+        if (list is null)
+        {
+            await ClearPreparedCuesAsync().ConfigureAwait(false);
+            return;
+        }
+
+        var keepIds = new HashSet<Guid>();
+        foreach (var cue in cues)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (cue.Source is not FilePlaylistItem)
+                continue;
+
+            if (HasActiveCue(cue.Id))
+                continue;
+
+            var plan = BuildRoutePlan(cue);
+            if (!plan.HasAnyRoute)
+                continue;
+
+            keepIds.Add(cue.Id);
+            var cacheKey = BuildPreparedCueKey(cue, list);
+            if (HasMatchingPreparedCue(cue.Id, cacheKey))
+                continue;
+
+            await RemovePreparedCueAsync(cue.Id).ConfigureAwait(false);
+
+            var (entry, err) = await OpenCueEntryAsync(cue, list, plan, deferPlay: true, wireRoutes: false, ct)
+                .ConfigureAwait(false);
+            if (entry is null)
+            {
+                if (!string.IsNullOrWhiteSpace(err))
+                    Trace.LogWarning("CuePlaybackEngine.RefreshPreparedCuesAsync: {Cue} failed: {Error}", cue.Id, err);
+                continue;
+            }
+
+            if (HasActiveCue(cue.Id))
+            {
+                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
+                continue;
+            }
+
+            await StorePreparedCueAsync(cue.Id, cacheKey, entry).ConfigureAwait(false);
+        }
+
+        await EvictPreparedExceptAsync(keepIds, Math.Max(1, cues.Count)).ConfigureAwait(false);
+        RaisePreparedCuesChanged();
+    }
+
     /// <summary>
     /// Fires a group of cues with coordinated start: all decoders are opened in parallel, routes are
     /// wired with audio initially paused, and then all audio sources are unpaused at once so playback
@@ -207,6 +273,78 @@ public sealed class CuePlaybackEngine : IDisposable
         if (list is null)
             return "No cue list selected.";
 
+        var plan = BuildRoutePlan(cue);
+        if (!plan.HasAnyRoute)
+            return "Cue has no audio routes or video placements wired to outputs.";
+
+        // If the same cue id is already running, stop its prior instance. A matching prepared
+        // standby instance is kept and consumed below.
+        await StopActiveCueAsync(cue.Id).ConfigureAwait(false);
+
+        var cacheKey = BuildPreparedCueKey(cue, list);
+        var entry = TryTakePreparedCue(cue.Id, cacheKey);
+        if (entry is not null)
+        {
+            await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.PlacementsByComp.Keys)
+                .ConfigureAwait(false);
+
+            var wireErr = await WireEntryRoutesAsync(entry, list, plan, startPaused: true).ConfigureAwait(false);
+            if (wireErr is not null)
+            {
+                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
+                return wireErr;
+            }
+        }
+        else
+        {
+            await RemovePreparedCueAsync(cue.Id).ConfigureAwait(false);
+            await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.PlacementsByComp.Keys)
+                .ConfigureAwait(false);
+
+            var result = await OpenCueEntryAsync(cue, list, plan, deferPlay, wireRoutes: true, ct).ConfigureAwait(false);
+            entry = result.Entry;
+            if (entry is null)
+                return result.Error ?? "Failed to open cue media.";
+        }
+
+        lock (_gate)
+            _active[cue.Id] = entry;
+
+        if (!deferPlay)
+        {
+            try
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster);
+                    entry.IsPaused = false;
+                    foreach (var source in entry.PausableAudioSources)
+                        source.IsPaused = false;
+                    CueStarted?.Invoke(this, cue.Id);
+                });
+            }
+            catch (Exception ex)
+            {
+                Trace.LogError(ex, "CuePlaybackEngine: Play threw");
+                await StopCueAsync(cue.Id).ConfigureAwait(false);
+                return ex.Message;
+            }
+
+            _ = WatchNaturalEndAsync(entry);
+        }
+
+        var targets = new List<string>();
+        targets.AddRange(plan.AudioByOutput.Keys
+            .Select(id => _outputs.Outputs.FirstOrDefault(l => l.Definition.Id == id)?.Definition.DisplayName ?? "")
+            .Where(n => n.Length > 0));
+        targets.AddRange(plan.PlacementsByComp.Keys
+            .Select(id => list.Compositions.FirstOrDefault(c => c.Id == id)?.Name ?? "")
+            .Where(n => n.Length > 0));
+        return $"playing {fileItem.DisplayName} → {string.Join(", ", targets)}";
+    }
+
+    private static RoutePlan BuildRoutePlan(MediaCueNode cue)
+    {
         // Group audio routes by target output line — each group becomes one shared-runtime source.
         var audioByOutput = cue.AudioRoutes
             .Where(r => r.OutputLineId != Guid.Empty)
@@ -219,11 +357,19 @@ public sealed class CuePlaybackEngine : IDisposable
             .GroupBy(p => p.CompositionId)
             .ToDictionary(g => g.Key, g => g.OrderBy(p => p.LayerIndex).First());
 
-        if (audioByOutput.Count == 0 && placementsByComp.Count == 0)
-            return "Cue has no audio routes or video placements wired to outputs.";
+        return new RoutePlan(audioByOutput, placementsByComp);
+    }
 
-        // If the same cue id is already running, stop its prior instance.
-        await StopCueAsync(cue.Id).ConfigureAwait(false);
+    private async Task<(ActiveCue? Entry, string? Error)> OpenCueEntryAsync(
+        MediaCueNode cue,
+        CueList list,
+        RoutePlan plan,
+        bool deferPlay,
+        bool wireRoutes,
+        CancellationToken ct)
+    {
+        if (cue.Source is not FilePlaylistItem fileItem)
+            return (null, "Cue source is not a file.");
 
         // Whether to use MediaPlayer's *internal* audio router. We turn it off only when this
         // cue's audio is being mixed externally via CueAudioOutputRuntime — otherwise we leave
@@ -231,7 +377,7 @@ public sealed class CuePlaybackEngine : IDisposable
         // Skipping consumption back-pressures the demuxer and starves the video pump, which is
         // what was breaking video playback on a video-with-audio file that had no audio routes
         // wired (e.g. the operator only set up a video placement on it).
-        var hasAudioRoutes = audioByOutput.Count > 0;
+        var hasAudioRoutes = plan.AudioByOutput.Count > 0;
 
         MediaPlayer? player = null;
         string? openErr = null;
@@ -257,60 +403,89 @@ public sealed class CuePlaybackEngine : IDisposable
         }, ct).ConfigureAwait(false);
 
         if (player is null)
-            return openErr ?? "Failed to open cue media.";
+            return (null, openErr ?? "Failed to open cue media.");
 
-        var entry = new ActiveCue(cue, player, new CancellationTokenSource());
+        var entry = new ActiveCue(cue, player, new CancellationTokenSource(), CueClipWindow.From(cue, player.Duration));
 
-        // Wire audio (shared mixer per output line) and video (shared compositor per composition).
-        // When deferPlay is set, audio sources start paused so all cues in a group begin together.
-        // Failure of any one wiring tears the cue down and surfaces the error.
+        if (wireRoutes)
+        {
+            var wireErr = await WireEntryRoutesAsync(entry, list, plan, startPaused: true).ConfigureAwait(false);
+            if (wireErr is not null)
+            {
+                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
+                return (null, wireErr);
+            }
+        }
+
+        if (entry.ClipWindow.Start > TimeSpan.Zero)
+        {
+            var seekErr = await SeekEntryToSourcePositionAsync(entry, entry.ClipWindow.Start, ct).ConfigureAwait(false);
+            if (seekErr is not null)
+            {
+                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
+                return (null, seekErr);
+            }
+        }
+
+        return (entry, null);
+    }
+
+    private async Task<string?> WireEntryRoutesAsync(ActiveCue entry, CueList list, RoutePlan plan, bool startPaused)
+    {
+        if (entry.RoutesWired)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                entry.IsPaused = startPaused;
+                foreach (var source in entry.PausableAudioSources)
+                    source.IsPaused = startPaused;
+            });
+            return null;
+        }
+
+        // Wire audio (shared mixer per output line) and video (shared compositor per composition)
+        // before on-demand seeking. Prepared cues are already seeked, but still defer actual output
+        // registration until Go so standby does not advance cue output clocks.
         try
         {
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                if (deferPlay) entry.IsPaused = true;
-                WireAudioRoutes(entry, audioByOutput);
-                WireVideoPlacements(entry, list, placementsByComp);
+                entry.IsPaused = startPaused;
+                WireAudioRoutes(entry, plan.AudioByOutput);
+                WireVideoPlacements(entry, list, plan.PlacementsByComp);
+                entry.RoutesWired = true;
             });
+            return null;
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "CuePlaybackEngine: wiring failed");
-            await DisposeEntryAsync(entry).ConfigureAwait(false);
             return ex.Message;
         }
+    }
 
-        lock (_gate)
-            _active[cue.Id] = entry;
+    private async Task ReleaseConflictingOutputsAsync(
+        CueList list,
+        IEnumerable<Guid> audioOutputLineIds,
+        IEnumerable<Guid> placementCompositionIds)
+    {
+        var callback = ReleaseConflictingPlayerOutputsAsync;
+        if (callback is null)
+            return;
 
-        if (!deferPlay)
+        var ids = new HashSet<Guid>(audioOutputLineIds.Where(id => id != Guid.Empty));
+        var placementComps = new HashSet<Guid>(placementCompositionIds.Where(id => id != Guid.Empty));
+        foreach (var binding in list.VideoOutputs)
         {
-            try
-            {
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    player.Play(videoOnlyMaster: entry.VideoClockMaster);
-                    CueStarted?.Invoke(this, cue.Id);
-                });
-            }
-            catch (Exception ex)
-            {
-                Trace.LogError(ex, "CuePlaybackEngine: Play threw");
-                await StopCueAsync(cue.Id).ConfigureAwait(false);
-                return ex.Message;
-            }
-
-            _ = WatchNaturalEndAsync(entry);
+            if (binding.OutputLineId == Guid.Empty) continue;
+            if (placementComps.Contains(binding.CompositionId))
+                ids.Add(binding.OutputLineId);
         }
 
-        var targets = new List<string>();
-        targets.AddRange(audioByOutput.Keys
-            .Select(id => _outputs.Outputs.FirstOrDefault(l => l.Definition.Id == id)?.Definition.DisplayName ?? "")
-            .Where(n => n.Length > 0));
-        targets.AddRange(placementsByComp.Keys
-            .Select(id => list.Compositions.FirstOrDefault(c => c.Id == id)?.Name ?? "")
-            .Where(n => n.Length > 0));
-        return $"playing {fileItem.DisplayName} → {string.Join(", ", targets)}";
+        if (ids.Count == 0)
+            return;
+
+        await callback(ids.ToList()).ConfigureAwait(false);
     }
 
     /// <summary>Stop all active cues — used by the Cue VM's Stop / Panic commands.</summary>
@@ -319,17 +494,29 @@ public sealed class CuePlaybackEngine : IDisposable
         await StopPreviewAsync().ConfigureAwait(false);
 
         List<ActiveCue> toDispose;
+        List<PreparedCue> preparedToDispose;
         lock (_gate)
         {
             toDispose = _active.Values.ToList();
+            preparedToDispose = _prepared.Values.ToList();
             _active.Clear();
+            _prepared.Clear();
         }
         foreach (var entry in toDispose)
             await DisposeEntryAsync(entry).ConfigureAwait(false);
+        foreach (var prepared in preparedToDispose)
+            await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
+        RaisePreparedCuesChanged();
     }
 
     /// <summary>Stop a specific cue.</summary>
     public async Task StopCueAsync(Guid cueId)
+    {
+        await StopActiveCueAsync(cueId).ConfigureAwait(false);
+        await RemovePreparedCueAsync(cueId).ConfigureAwait(false);
+    }
+
+    private async Task StopActiveCueAsync(Guid cueId)
     {
         ActiveCue? entry;
         lock (_gate)
@@ -382,7 +569,118 @@ public sealed class CuePlaybackEngine : IDisposable
         }
     }
 
-    private async Task DisposeEntryAsync(ActiveCue entry)
+    private bool HasActiveCue(Guid cueId)
+    {
+        lock (_gate)
+            return _active.ContainsKey(cueId);
+    }
+
+    private bool HasMatchingPreparedCue(Guid cueId, string cacheKey)
+    {
+        lock (_gate)
+            return _prepared.TryGetValue(cueId, out var prepared)
+                   && string.Equals(prepared.CacheKey, cacheKey, StringComparison.Ordinal);
+    }
+
+    private ActiveCue? TryTakePreparedCue(Guid cueId, string cacheKey)
+    {
+        ActiveCue? entry = null;
+        lock (_gate)
+        {
+            if (_prepared.TryGetValue(cueId, out var prepared)
+                && string.Equals(prepared.CacheKey, cacheKey, StringComparison.Ordinal))
+            {
+                _prepared.Remove(cueId);
+                entry = prepared.Entry;
+            }
+        }
+        if (entry is not null)
+            RaisePreparedCuesChanged();
+        return entry;
+    }
+
+    private async Task StorePreparedCueAsync(Guid cueId, string cacheKey, ActiveCue entry)
+    {
+        PreparedCue? replaced = null;
+        lock (_gate)
+        {
+            if (_prepared.Remove(cueId, out var existing))
+                replaced = existing;
+            _prepared[cueId] = new PreparedCue(cacheKey, entry);
+        }
+
+        if (replaced is not null)
+            await DisposeEntryAsync(replaced.Entry, notifyEnded: false).ConfigureAwait(false);
+        RaisePreparedCuesChanged();
+    }
+
+    private async Task RemovePreparedCueAsync(Guid cueId)
+    {
+        PreparedCue? prepared;
+        lock (_gate)
+            _prepared.Remove(cueId, out prepared);
+
+        if (prepared is null)
+            return;
+
+        await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
+        RaisePreparedCuesChanged();
+    }
+
+    private async Task ClearPreparedCuesAsync()
+    {
+        List<PreparedCue> toDispose;
+        lock (_gate)
+        {
+            if (_prepared.Count == 0)
+                return;
+            toDispose = _prepared.Values.ToList();
+            _prepared.Clear();
+        }
+
+        foreach (var prepared in toDispose)
+            await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
+        RaisePreparedCuesChanged();
+    }
+
+    private async Task EvictPreparedExceptAsync(IReadOnlyCollection<Guid> keepCueIds, int maxEntries)
+    {
+        List<PreparedCue> toDispose = new();
+        lock (_gate)
+        {
+            var keep = keepCueIds is HashSet<Guid> hs ? hs : keepCueIds.ToHashSet();
+            foreach (var id in _prepared.Keys.Where(id => !keep.Contains(id)).ToList())
+            {
+                toDispose.Add(_prepared[id]);
+                _prepared.Remove(id);
+            }
+
+            while (_prepared.Count > maxEntries)
+            {
+                var oldest = _prepared.OrderBy(kv => kv.Value.CreatedUtc).First().Key;
+                toDispose.Add(_prepared[oldest]);
+                _prepared.Remove(oldest);
+            }
+        }
+
+        if (toDispose.Count == 0)
+            return;
+
+        foreach (var prepared in toDispose)
+            await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
+        RaisePreparedCuesChanged();
+    }
+
+    private void RaisePreparedCuesChanged()
+    {
+        Guid[] snapshot;
+        lock (_gate)
+            snapshot = _prepared.Keys.ToArray();
+        try { PreparedCuesChanged?.Invoke(snapshot); }
+        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreparedCuesChanged handler"); }
+    }
+
+    private async Task DisposeEntryAsync(ActiveCue entry, bool notifyEnded = true)
     {
         try { entry.Cts.Cancel(); } catch { /* best effort */ }
         try { entry.Cts.Dispose(); } catch { /* best effort */ }
@@ -434,8 +732,11 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             ReleaseEmptyRuntimes();
 
-            try { CueEnded?.Invoke(this, entry.Cue.Id); }
-            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: CueEnded handler"); }
+            if (notifyEnded)
+            {
+                try { CueEnded?.Invoke(this, entry.Cue.Id); }
+                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: CueEnded handler"); }
+            }
         });
     }
 
@@ -499,7 +800,7 @@ public sealed class CuePlaybackEngine : IDisposable
             entry.PausableAudioSources.Add(pausable);
             entry.AudioDisposables.Add(pausable);
 
-            var srcId = runtime.AddSource(pausable, routes, sourceIdHint: $"cue_{entry.Cue.Id:N}");
+            var srcId = runtime.AddSource(pausable, routes, sourceIdHint: $"cue_{entry.Cue.Id:N}_{entry.InstanceId:N}");
             entry.AudioSources.Add((runtime, srcId));
             if (runtime.PlaybackClock is { } playbackClock)
                 entry.VideoClockMaster ??= playbackClock;
@@ -545,7 +846,7 @@ public sealed class CuePlaybackEngine : IDisposable
             var slot = runtime.AddLayer(sourceFormat, placement);
             entry.LayerSlots.Add(slot);
 
-            var layerOutput = slot.Output;
+            IVideoOutput layerOutput = slot.Output;
             if (runtime.RequiresBgraLayerConversion)
             {
                 // CPU composition is BGRA32-only. The OpenGL compositor advertises native YUV/YUVA
@@ -557,7 +858,10 @@ public sealed class CuePlaybackEngine : IDisposable
                 layerOutput = converter;
             }
 
-            var outId = router.AddOutput(layerOutput, id: $"cuecomp_{entry.Cue.Id:N}_{compId:N}",
+            if (entry.ClipWindow.Start > TimeSpan.Zero)
+                layerOutput = new PtsRebasingVideoOutput(layerOutput, entry.ClipWindow.Start);
+
+            var outId = router.AddOutput(layerOutput, id: $"cuecomp_{entry.Cue.Id:N}_{entry.InstanceId:N}_{compId:N}",
                 disposeOutputOnRouterDispose: false,
                 synchronous: true);
             if (!router.TryAddRoute(inputId, outId, out var routeErr))
@@ -651,7 +955,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
     private async Task SeekPreviewAsync(CuePreviewSession preview, TimeSpan position)
     {
-        position = ClampSeekPosition(preview.Player.Duration, position);
+        position = preview.ClipWindow.ToSourcePosition(position);
         try
         {
             await Task.Run(() =>
@@ -662,9 +966,36 @@ public sealed class CuePlaybackEngine : IDisposable
         await Dispatcher.UIThread.InvokeAsync(() => preview.Play());
     }
 
+    private async Task<string?> SeekEntryToSourcePositionAsync(ActiveCue entry, TimeSpan sourcePosition, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Run(() =>
+                entry.Player.SeekCoordinated(sourcePosition, CancellationToken.None, PauseFlushPolicy.SkipFlush), ct)
+                .ConfigureAwait(false);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "CuePlaybackEngine: start-offset seek failed");
+            return ex.Message;
+        }
+    }
+
     private async Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position)
     {
-        position = ClampSeekPosition(entry.Player.Duration, position);
+        position = entry.ClipWindow.ToSourcePosition(position);
+        var resume = !entry.IsPaused;
+        if (resume)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                entry.IsPaused = true;
+                foreach (var source in entry.PausableAudioSources)
+                    source.IsPaused = true;
+            });
+        }
+
         try
         {
             await Task.Run(() =>
@@ -672,18 +1003,14 @@ public sealed class CuePlaybackEngine : IDisposable
             ).WaitAsync(BoundedPauseTimeout);
         }
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCueAsync: seek timed out or failed"); }
-        if (!entry.IsPaused)
+        if (resume)
             await Dispatcher.UIThread.InvokeAsync(() =>
-                entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster));
-    }
-
-    private static TimeSpan ClampSeekPosition(TimeSpan duration, TimeSpan position)
-    {
-        if (position < TimeSpan.Zero)
-            return TimeSpan.Zero;
-        if (duration > TimeSpan.Zero && position >= duration)
-            return duration - TimeSpan.FromMilliseconds(50);
-        return position;
+            {
+                entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster);
+                entry.IsPaused = false;
+                foreach (var source in entry.PausableAudioSources)
+                    source.IsPaused = false;
+            });
     }
 
     private async Task WatchPreviewEndAsync(CuePreviewSession session)
@@ -695,16 +1022,18 @@ public sealed class CuePlaybackEngine : IDisposable
             {
                 await Task.Delay(150, ct).ConfigureAwait(false);
 
-                var duration = session.Player.Duration;
                 TimeSpan pos;
                 try { pos = session.Player.PlayClock.CurrentPosition; }
                 catch { continue; }
 
-                var progress = new CuePlaybackProgress(session.CueId, pos, duration);
+                var progress = new CuePlaybackProgress(
+                    session.CueId,
+                    session.ClipWindow.ToRelativePosition(pos),
+                    session.ClipWindow.Duration);
                 await Dispatcher.UIThread.InvokeAsync(() => CueProgress?.Invoke(this, progress));
 
-                if (duration <= TimeSpan.Zero) continue;
-                if (pos >= duration - TimeSpan.FromMilliseconds(50))
+                if (!session.ClipWindow.HasKnownEnd) continue;
+                if (session.ClipWindow.IsAtEnd(pos))
                 {
                     await StopPreviewAsync().ConfigureAwait(false);
                     return;
@@ -727,19 +1056,27 @@ public sealed class CuePlaybackEngine : IDisposable
             {
                 await Task.Delay(150, ct).ConfigureAwait(false);
 
-                var duration = entry.Player.Duration;
                 TimeSpan pos;
                 try { pos = entry.Player.PlayClock.CurrentPosition; }
                 catch { continue; }
 
                 // Emit progress for the Now Playing panel even when duration isn't known yet
                 // (live sources advertise Duration.Zero but still have a real position).
-                var progress = new CuePlaybackProgress(entry.Cue.Id, pos, duration);
+                var progress = new CuePlaybackProgress(
+                    entry.Cue.Id,
+                    entry.ClipWindow.ToRelativePosition(pos),
+                    entry.ClipWindow.Duration);
                 await Dispatcher.UIThread.InvokeAsync(() => CueProgress?.Invoke(this, progress));
 
-                if (duration <= TimeSpan.Zero) continue;
-                if (pos >= duration - TimeSpan.FromMilliseconds(50))
+                if (!entry.ClipWindow.HasKnownEnd) continue;
+                if (entry.ClipWindow.IsAtEnd(pos))
                 {
+                    if (entry.Cue.Loop || entry.Cue.EndBehavior == CueEndBehavior.Loop)
+                    {
+                        await SeekActiveCueAsync(entry, TimeSpan.Zero).ConfigureAwait(false);
+                        continue;
+                    }
+
                     lock (_gate) _active.Remove(entry.Cue.Id);
                     await Dispatcher.UIThread.InvokeAsync(() => NaturalEnd?.Invoke(this, EventArgs.Empty));
                     await DisposeEntryAsync(entry).ConfigureAwait(false);
@@ -772,20 +1109,85 @@ public sealed class CuePlaybackEngine : IDisposable
         foreach (var r in audioLeft) { try { r.Dispose(); } catch { } }
     }
 
+    private static string BuildPreparedCueKey(MediaCueNode cue, CueList list)
+    {
+        var source = cue.Source?.CacheKey() ?? string.Empty;
+        var audio = string.Join(";", cue.AudioRoutes
+            .OrderBy(r => r.OutputLineId)
+            .ThenBy(r => r.SourceChannel)
+            .ThenBy(r => r.OutputChannel)
+            .Select(r => string.Join(",",
+                r.SourceChannel,
+                r.OutputLineId.ToString("N"),
+                r.OutputChannel,
+                r.GainDb.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                r.Muted ? "1" : "0")));
+        var placements = string.Join(";", cue.VideoPlacements
+            .OrderBy(p => p.CompositionId)
+            .ThenBy(p => p.LayerIndex)
+            .Select(p => string.Join(",",
+                p.CompositionId.ToString("N"),
+                p.LayerIndex,
+                p.Position,
+                p.Opacity.ToString("R", System.Globalization.CultureInfo.InvariantCulture))));
+        var compositions = string.Join(";", list.Compositions
+            .OrderBy(c => c.Id)
+            .Select(c => string.Join(",",
+                c.Id.ToString("N"),
+                c.Width,
+                c.Height,
+                c.FrameRateNum,
+                c.FrameRateDen)));
+        var videoOutputs = string.Join(";", list.VideoOutputs
+            .OrderBy(o => o.OutputLineId)
+            .ThenBy(o => o.CompositionId)
+            .Select(o => $"{o.OutputLineId:N},{o.CompositionId:N}"));
+
+        return string.Join("|",
+            source,
+            $"start:{Math.Max(0, cue.StartOffsetMs)}",
+            $"end:{Math.Max(0, cue.EndOffsetMs)}",
+            $"loop:{cue.Loop}",
+            $"endBehavior:{cue.EndBehavior}",
+            $"audio:{audio}",
+            $"video:{placements}",
+            $"comps:{compositions}",
+            $"outputs:{videoOutputs}");
+    }
+
+    private sealed record RoutePlan(
+        Dictionary<Guid, List<CueAudioRoute>> AudioByOutput,
+        Dictionary<Guid, CueVideoPlacement> PlacementsByComp)
+    {
+        public bool HasAnyRoute => AudioByOutput.Count > 0 || PlacementsByComp.Count > 0;
+    }
+
+    private sealed record PreparedCue(string CacheKey, ActiveCue Entry, DateTime CreatedUtc)
+    {
+        public PreparedCue(string cacheKey, ActiveCue entry)
+            : this(cacheKey, entry, DateTime.UtcNow)
+        {
+        }
+    }
+
     private sealed class ActiveCue
     {
-        public ActiveCue(MediaCueNode cue, MediaPlayer player, CancellationTokenSource cts)
+        public ActiveCue(MediaCueNode cue, MediaPlayer player, CancellationTokenSource cts, CueClipWindow clipWindow)
         {
             Cue = cue;
             Player = player;
             Cts = cts;
+            ClipWindow = clipWindow;
         }
 
         public MediaCueNode Cue { get; }
+        public Guid InstanceId { get; } = Guid.NewGuid();
         public MediaPlayer Player { get; }
         public CancellationTokenSource Cts { get; }
+        public CueClipWindow ClipWindow { get; }
         public IPlaybackClock? VideoClockMaster { get; set; }
         public bool IsPaused { get; set; }
+        public bool RoutesWired { get; set; }
         public List<CueCompositionRuntime.LayerSlot> LayerSlots { get; } = new();
         public List<BgraConvertingVideoOutput> ConvertingOutputs { get; } = new();
         public List<(CueAudioOutputRuntime Runtime, string SourceId)> AudioSources { get; } = new();
@@ -796,3 +1198,63 @@ public sealed class CuePlaybackEngine : IDisposable
 
 /// <summary>Periodic progress sample for the Now Playing panel.</summary>
 public readonly record struct CuePlaybackProgress(Guid CueId, TimeSpan Position, TimeSpan Duration);
+
+internal readonly record struct CueClipWindow(
+    TimeSpan Start,
+    TimeSpan End,
+    TimeSpan Duration,
+    bool HasKnownEnd)
+{
+    private static readonly TimeSpan EndGuard = TimeSpan.FromMilliseconds(50);
+
+    public static CueClipWindow From(MediaCueNode cue, TimeSpan sourceDuration)
+    {
+        var start = TimeSpan.FromMilliseconds(Math.Max(0, cue.StartOffsetMs));
+        if (sourceDuration <= TimeSpan.Zero)
+            return new CueClipWindow(start, TimeSpan.Zero, TimeSpan.Zero, HasKnownEnd: false);
+
+        var maxStart = sourceDuration > EndGuard ? sourceDuration - EndGuard : TimeSpan.Zero;
+        if (start > maxStart)
+            start = maxStart;
+
+        var end = sourceDuration - TimeSpan.FromMilliseconds(Math.Max(0, cue.EndOffsetMs));
+        if (end > sourceDuration)
+            end = sourceDuration;
+        if (end < start)
+            end = start;
+
+        return new CueClipWindow(start, end, end - start, HasKnownEnd: true);
+    }
+
+    public TimeSpan ToSourcePosition(TimeSpan relativePosition)
+    {
+        if (relativePosition < TimeSpan.Zero)
+            relativePosition = TimeSpan.Zero;
+
+        if (!HasKnownEnd)
+            return Start + relativePosition;
+
+        var maxRelative = Duration > EndGuard ? Duration - EndGuard : TimeSpan.Zero;
+        if (relativePosition > maxRelative)
+            relativePosition = maxRelative;
+        return Start + relativePosition;
+    }
+
+    public TimeSpan ToRelativePosition(TimeSpan sourcePosition)
+    {
+        var relative = sourcePosition - Start;
+        if (relative < TimeSpan.Zero)
+            return TimeSpan.Zero;
+        if (HasKnownEnd && relative > Duration)
+            return Duration;
+        return relative;
+    }
+
+    public bool IsAtEnd(TimeSpan sourcePosition)
+    {
+        if (!HasKnownEnd)
+            return false;
+        var threshold = End > EndGuard ? End - EndGuard : End;
+        return sourcePosition >= threshold;
+    }
+}

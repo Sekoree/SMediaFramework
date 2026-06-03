@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
 
 namespace S.Media.FFmpeg.Audio;
@@ -17,10 +18,10 @@ namespace S.Media.FFmpeg.Audio;
 /// resampler state instead of bleeding across discontinuities.
 /// </para>
 /// </remarks>
-public sealed class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IDisposable
+public class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCapabilities, IFlushableOutput, IDisposable
 {
-    private readonly IAudioOutput _inner;
-    private readonly AudioFormat _routerFormat;
+    protected readonly IAudioOutput Inner;
+    protected readonly AudioFormat RouterFormat;
     private readonly object _gate = new();
     private AudioResampler? _swr;
     private float[] _dstScratch;
@@ -36,23 +37,36 @@ public sealed class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCap
         if (inner.Format.Channels != routerFormat.Channels)
             throw new ArgumentException("Inner output channel count must match router format channels.", nameof(inner));
 
-        _inner = inner;
-        _routerFormat = routerFormat;
+        Inner = inner;
+        RouterFormat = routerFormat;
         _dstScratch = new float[checked(8192 * routerFormat.Channels)];
+    }
+
+    public static ResamplingAudioOutput Wrap(IAudioOutput inner, AudioFormat routerFormat)
+    {
+        ArgumentNullException.ThrowIfNull(inner);
+        if (inner is IClockedOutput clocked)
+        {
+            return inner is IPlaybackClock playbackClock
+                ? new ClockedPlaybackResamplingAudioOutput(inner, routerFormat, clocked, playbackClock)
+                : new ClockedResamplingAudioOutput(inner, routerFormat, clocked);
+        }
+
+        return new ResamplingAudioOutput(inner, routerFormat);
     }
 
     /// <inheritdoc />
     /// <summary>Router-side format (input to <see cref="Submit"/>).</summary>
-    public AudioFormat Format => _routerFormat;
+    public AudioFormat Format => RouterFormat;
     public AudioOutputChannelCapabilities ChannelCapabilities =>
-        _inner is IAudioOutputChannelCapabilities c
-            ? c.ChannelCapabilities with { CurrentChannels = _routerFormat.Channels }
-            : AudioOutputChannelCapabilities.Fixed(_routerFormat.Channels);
+        Inner is IAudioOutputChannelCapabilities c
+            ? c.ChannelCapabilities with { CurrentChannels = RouterFormat.Channels }
+            : AudioOutputChannelCapabilities.Fixed(RouterFormat.Channels);
 
     public void Submit(ReadOnlySpan<float> packedSamples)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var ch = _routerFormat.Channels;
+        var ch = RouterFormat.Channels;
         if (packedSamples.Length % ch != 0)
             throw new ArgumentException(
                 $"packedSamples.Length {packedSamples.Length} is not a multiple of channel count {ch}",
@@ -65,15 +79,15 @@ public sealed class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCap
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            _swr ??= AudioResampler.Create(_routerFormat, _inner.Format);
+            _swr ??= AudioResampler.Create(RouterFormat, Inner.Format);
 
-            var dstMax = (int)Math.Ceiling(srcFrames * (double)_inner.Format.SampleRate / _routerFormat.SampleRate)
+            var dstMax = (int)Math.Ceiling(srcFrames * (double)Inner.Format.SampleRate / RouterFormat.SampleRate)
                 + 64;
             EnsureScratch(checked(dstMax * ch));
 
             var got = _swr.Convert(packedSamples, srcFrames, _dstScratch, dstMax);
             if (got > 0)
-                _inner.Submit(_dstScratch.AsSpan(0, checked(got * ch)));
+                Inner.Submit(_dstScratch.AsSpan(0, checked(got * ch)));
         }
     }
 
@@ -85,7 +99,7 @@ public sealed class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCap
             _swr = null;
         }
 
-        if (_inner is IFlushableOutput f)
+        if (Inner is IFlushableOutput f)
             f.Flush();
     }
 
@@ -106,5 +120,33 @@ public sealed class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCap
         if (_dstScratch.Length >= minFloats)
             return;
         _dstScratch = new float[Math.Max(minFloats, checked(_dstScratch.Length * 2))];
+    }
+
+    private class ClockedResamplingAudioOutput(
+        IAudioOutput inner,
+        AudioFormat routerFormat,
+        IClockedOutput clocked) : ResamplingAudioOutput(inner, routerFormat), IClockedOutput
+    {
+        public bool WaitForCapacity(int chunkSamples, CancellationToken token)
+        {
+            if (chunkSamples <= 0)
+                return clocked.WaitForCapacity(chunkSamples, token);
+
+            var innerSamples = RouterFormat.SampleRate == Inner.Format.SampleRate
+                ? chunkSamples
+                : (int)Math.Ceiling(chunkSamples * (double)Inner.Format.SampleRate / RouterFormat.SampleRate) + 2;
+            return clocked.WaitForCapacity(innerSamples, token);
+        }
+    }
+
+    private sealed class ClockedPlaybackResamplingAudioOutput(
+        IAudioOutput inner,
+        AudioFormat routerFormat,
+        IClockedOutput clocked,
+        IPlaybackClock playbackClock) : ClockedResamplingAudioOutput(inner, routerFormat, clocked), IPlaybackClock
+    {
+        public TimeSpan ElapsedSinceStart => playbackClock.ElapsedSinceStart;
+
+        public bool IsAdvancing => playbackClock.IsAdvancing;
     }
 }

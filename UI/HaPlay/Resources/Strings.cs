@@ -172,6 +172,7 @@ public static class Strings
     public static string FadeInMsLabel => Get(nameof(FadeInMsLabel));
     public static string FadeOutMsLabel => Get(nameof(FadeOutMsLabel));
     public static string StartMsLabel => Get(nameof(StartMsLabel));
+    public static string EndTrimMsLabel => Get(nameof(EndTrimMsLabel));
     public static string LoopLabel => Get(nameof(LoopLabel));
     public static string EndLabel => Get(nameof(EndLabel));
     public static string VirtualOutputsHeader => Get(nameof(VirtualOutputsHeader));

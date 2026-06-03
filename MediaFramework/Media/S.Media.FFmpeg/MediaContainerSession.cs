@@ -60,23 +60,43 @@ public sealed class MediaContainerSession
     public void PauseSkippingSharedMuxFlush(CancellationToken cancellationToken = default) =>
         Session.Pause(cancellationToken, flushSharedMuxAfterPause: null);
 
-    public void SeekCoordinatedSkippingSharedMuxFlush(TimeSpan position, CancellationToken cancellationToken = default) =>
+    public void SeekCoordinatedSkippingSharedMuxFlush(TimeSpan position, CancellationToken cancellationToken = default)
+    {
+        using var _ = RegisterSeekCancellation(cancellationToken);
         AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
             position, cancellationToken, flushSharedMuxAfterPause: null);
+    }
 
     public void Seek(TimeSpan position) =>
         SeekSharedDemuxPreservingPlaybackState(position, CancellationToken.None, ResolveFlush(PauseFlushPolicy.FlushCodecPipelines));
 
     public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken = default,
-        Action? flushSharedMuxAfterPause = null) =>
+        Action? flushSharedMuxAfterPause = null)
+    {
+        using var _ = RegisterSeekCancellation(cancellationToken);
         AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
             position, cancellationToken, flushSharedMuxAfterPause ?? _defaultFlushSharedMuxAfterPause);
+    }
 
-    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
+    public void SeekCoordinated(TimeSpan position, CancellationToken cancellationToken, PauseFlushPolicy flushPolicy)
+    {
+        using var _ = RegisterSeekCancellation(cancellationToken);
         AvPlaybackCoordinator.SeekCoordinated(Session.Video, Session.AudioRouter, Session.AudioClock, Session.AudioSourceId,
             position, cancellationToken, ResolveFlush(flushPolicy));
+    }
 
     public void SeekPresentation(TimeSpan position) => Container.SeekPresentation(position);
+
+    /// <summary>
+    /// Bridges a host seek <see cref="CancellationToken"/> to the shared demux so a UI seek timeout aborts
+    /// the (otherwise uninterruptible) decode-to-target prime instead of letting it run on for seconds and
+    /// race the next transport command. No-op for the container-less session ctor or a token that can never
+    /// be cancelled.
+    /// </summary>
+    private CancellationTokenRegistration RegisterSeekCancellation(CancellationToken cancellationToken) =>
+        Container is { } container && cancellationToken.CanBeCanceled
+            ? cancellationToken.Register(container.CancelInFlightSeek)
+            : default;
 
     private void SeekSharedDemuxPreservingPlaybackState(
         TimeSpan position,
@@ -88,7 +108,8 @@ public sealed class MediaContainerSession
                      || Session.AudioRouter?.IsRunning == true;
 
         Session.Pause(cancellationToken, flushSharedMuxAfterPause);
-        Container.SeekPresentation(position);
+        using (RegisterSeekCancellation(cancellationToken))
+            Container.SeekPresentation(position);
         Session.Clock.Seek(position);
         if (Session.AudioClock is not null && !ReferenceEquals(Session.Clock, Session.AudioClock))
             Session.AudioClock.Seek(position);

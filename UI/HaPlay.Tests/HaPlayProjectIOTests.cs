@@ -344,6 +344,7 @@ public sealed class HaPlayProjectIOTests
         {
             Name = "Matrix Player",
             SelectedOutputDisplayNames = { "Main Speakers" },
+            AudioMatrixInputChannels = 6,
             InputTrims =
             {
                 new InputChannelTrimConfig { InputChannel = 0, GainDb = -3.0, Muted = false },
@@ -373,6 +374,7 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(-6.0, gain.MatrixCells[1].GainDb);
         Assert.Equal(-12.0, gain.MatrixCells[2].GainDb);
         Assert.Equal(1, gain.MatrixCells[2].OutputChannel);
+        Assert.Equal(6, loaded.Players[0].AudioMatrixInputChannels);
         Assert.Equal(2, loaded.Players[0].InputTrims.Count);
         Assert.True(loaded.Players[0].InputTrims[1].Muted);
     }

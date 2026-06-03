@@ -18,8 +18,18 @@ public readonly record struct MediaPlayerOpenOptions(
     int AudioPacketQueueDepth = 0,
     /// <summary>Max demuxed video packets buffered ahead of the video decoder. <c>0</c> = use the demuxer default (384). Raise for HEVC 4K B-frame reorder.</summary>
     int VideoPacketQueueDepth = 0,
+    /// <summary>AVIO read buffer for local-file opens, in bytes. <c>0</c> = FFmpeg's native ~32 KB file reads. Set 1–4 MB for big sequential reads on high-latency media (USB/external drives).</summary>
+    int FileReadBufferBytes = 0,
     /// <summary><see cref="S.Media.Core.Video.VideoPlayer"/> decode queue depth for live opens. <c>0</c> = default (4).</summary>
     int LiveVideoDecodeQueueCapacity = 0,
+    /// <summary>
+    /// <see cref="S.Media.Core.Video.VideoPlayer"/> decode queue depth for file/decoder opens. <c>0</c> = default (16).
+    /// This is the post-decode jitter buffer: file content has high per-frame decode-time variance
+    /// (complex scenes, post-seek warmup), and the bare 4-frame player default drops ~25–40% of frames as
+    /// "late" right after a seek. ~16 frames (~0.7 s @ 24 fps) lets decode pre-buffer during easy stretches
+    /// and spend it during heavy ones. Raise for very high-variance 4K content (at a memory cost).
+    /// </summary>
+    int FileVideoDecodeQueueCapacity = 0,
     VideoPresentationMode LiveVideoPresentation = VideoPresentationMode.Scheduled,
     /// <summary>When true, <see cref="MediaPlayer.TryOpenStream"/> spools to disk instead of AVIO.</summary>
     bool SpoolStreamToDisk = false,
@@ -43,7 +53,9 @@ public readonly record struct MediaPlayerOpenOptions(
             IncludeAudioRouter: true,
             AudioPacketQueueDepth: 0,
             VideoPacketQueueDepth: 0,
+            FileReadBufferBytes: 0,
             LiveVideoDecodeQueueCapacity: 0,
+            FileVideoDecodeQueueCapacity: 0,
             LiveVideoPresentation: VideoPresentationMode.Scheduled,
             SpoolStreamToDisk: false,
             StreamIsSeekable: false,
@@ -78,5 +90,6 @@ public readonly record struct MediaPlayerOpenOptions(
             Win32Nv12SharedHandleOnlyExport = Win32Nv12SharedHandleOnlyExport,
             AudioPacketQueueDepth = AudioPacketQueueDepth,
             VideoPacketQueueDepth = VideoPacketQueueDepth,
+            FileReadBufferBytes = FileReadBufferBytes,
         };
 }

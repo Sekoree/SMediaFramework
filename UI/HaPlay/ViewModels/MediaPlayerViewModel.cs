@@ -289,9 +289,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 StatusMessage = null;
                 created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
                 ApplyCueRouteOverrides(cueRoutes);
-                var srcCh = SourceChannelCountOrFallback(created);
-                foreach (var binding in Outputs)
-                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                SyncMatrixSourceChannelsFromSession(created);
+                ResizeSelectedAudioMatrices(created);
                 RebuildAudioMatrixRows();
                 ApplyAllOutputMatricesToSession();
                 ApplyAllOutputGainsToSession();
@@ -302,8 +301,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private async Task ApplyCueTransportAsync(MediaCueNode cue, CancellationToken ct)
     {
-        if (cue.StartOffsetMs > 0 && _session?.IsLive != true)
-            await SeekToTimeAsync(TimeSpan.FromMilliseconds(cue.StartOffsetMs), ct).ConfigureAwait(false);
+        if (_session?.IsLive != true)
+        {
+            var clip = CueClipWindow.From(cue, Duration);
+            if (clip.Start > TimeSpan.Zero)
+                await SeekToTimeAsync(clip.Start, ct).ConfigureAwait(false);
+        }
 
         BeginCueFades(cue);
     }
@@ -415,9 +418,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 StatusMessage = null;
                 created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
                 ApplyCueRouteOverrides(cueRoutes);
-                var srcCh = SourceChannelCountOrFallback(created);
-                foreach (var binding in Outputs)
-                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                SyncMatrixSourceChannelsFromSession(created);
+                ResizeSelectedAudioMatrices(created);
                 RebuildAudioMatrixRows();
                 ApplyAllOutputMatricesToSession();
                 ApplyAllOutputGainsToSession();
@@ -603,16 +605,71 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <summary>Phase C.5 — return the active source's channel count regardless of whether it was
     /// opened via container decoder (files) or via <see cref="MediaPlayer.TryOpenLive"/> (live items).
     /// Live sessions surface the negotiated format on <see cref="HaPlayPlaybackSession.SourceAudioFormat"/>;
-    /// file sessions still have a real <c>Decoder</c> and can read it from there. Falls back to 2 when
-    /// nothing is loaded so the audio matrix sizes sanely on early calls.</summary>
-    private static int SourceChannelCountOrFallback(HaPlayPlaybackSession? session)
+    /// file sessions still have a real <c>Decoder</c> and can read it from there. Returns 0 when
+    /// nothing is loaded or the source has no known audio format.</summary>
+    private static int SourceChannelCountOrZero(HaPlayPlaybackSession? session)
     {
-        if (session is null) return 2;
+        if (session is null) return 0;
         if (session.IsLive)
-            return session.SourceAudioFormat.Channels > 0 ? session.SourceAudioFormat.Channels : 2;
+            return session.SourceAudioFormat.Channels > 0 ? session.SourceAudioFormat.Channels : 0;
         if (session.Player.HasContainerDecoder && session.Player.Decoder.Audio is { } a)
             return a.Format.Channels;
-        return 2;
+        return 0;
+    }
+
+    private int MatrixInputChannelCountFor(HaPlayPlaybackSession? session)
+    {
+        if (_audioMatrixSourceChannelsExplicit)
+            return Math.Clamp(AudioMatrixSourceChannels, 1, 64);
+
+        var sourceChannels = SourceChannelCountOrZero(session);
+        return sourceChannels > 0
+            ? Math.Clamp(sourceChannels, 1, 64)
+            : Math.Clamp(AudioMatrixSourceChannels, 1, 64);
+    }
+
+    private void ResizeSelectedAudioMatrices(HaPlayPlaybackSession? session)
+    {
+        var inputChannels = MatrixInputChannelCountFor(session);
+        foreach (var binding in Outputs)
+        {
+            if (!binding.IsSelected) continue;
+            binding.Matrix.Resize(inputChannels, OutputChannelCountOrZero(binding.Line));
+        }
+    }
+
+    private void SyncMatrixSourceChannelsFromSession(HaPlayPlaybackSession? session)
+    {
+        if (_audioMatrixSourceChannelsExplicit)
+            return;
+
+        var sourceChannels = SourceChannelCountOrZero(session);
+        if (sourceChannels <= 0)
+            return;
+
+        SetAudioMatrixSourceChannels(sourceChannels, explicitValue: false, resize: false);
+    }
+
+    private void SetAudioMatrixSourceChannels(int channels, bool explicitValue, bool resize)
+    {
+        var clamped = Math.Clamp(channels, 1, 64);
+        _updatingAudioMatrixSourceChannels = true;
+        try
+        {
+            AudioMatrixSourceChannels = clamped;
+        }
+        finally
+        {
+            _updatingAudioMatrixSourceChannels = false;
+        }
+
+        _audioMatrixSourceChannelsExplicit = explicitValue;
+        if (resize)
+        {
+            ResizeSelectedAudioMatrices(_session);
+            RebuildAudioMatrixRows();
+            ApplyAllOutputMatricesToSession();
+        }
     }
 
     /// <summary>
@@ -870,8 +927,18 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// </summary>
     public ObservableCollection<AudioMatrixInputTrimViewModel> AudioMatrixInputTrims { get; } = new();
 
+    private bool _audioMatrixSourceChannelsExplicit;
+    private bool _updatingAudioMatrixSourceChannels;
+
+    /// <summary>
+    /// User-configurable source channel count for pre-sizing the matrix before a file is open.
+    /// When no explicit value was loaded/edited, the active session's real channel count still wins.
+    /// </summary>
+    [ObservableProperty]
+    private int _audioMatrixSourceChannels = 2;
+
     /// <summary>Phase C (§4.3.4) — current source channel count for the TreeDataGrid's input columns.
-    /// 0 until a session opens. Watched by the view's code-behind to rebuild input columns.</summary>
+    /// 0 until a matrix has been sized. Watched by the view's code-behind to rebuild input columns.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasAudioMatrix))]
     [NotifyPropertyChangedFor(nameof(HasAudioMatrixRoutes))]
@@ -1303,6 +1370,23 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RebuildAudioMatrixRouteRows();
     }
 
+    partial void OnAudioMatrixSourceChannelsChanged(int value)
+    {
+        var clamped = Math.Clamp(value, 1, 64);
+        if (value != clamped)
+        {
+            SetAudioMatrixSourceChannels(clamped, explicitValue: true, resize: true);
+            return;
+        }
+
+        if (!_updatingAudioMatrixSourceChannels)
+            _audioMatrixSourceChannelsExplicit = true;
+
+        ResizeSelectedAudioMatrices(_session);
+        RebuildAudioMatrixRows();
+        ApplyAllOutputMatricesToSession();
+    }
+
     /// <summary>Mirror the shared outputs list into per-player bindings, preserving selection on the survivors.
     /// Clones (§3.4) are deliberately excluded — their routing is mirrored from the parent's checkbox by
     /// <see cref="SelectedOutputLines"/>, so showing them as separate checkboxes would be misleading.</summary>
@@ -1438,6 +1522,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (e.PropertyName == nameof(PlayerOutputBinding.IsSelected))
         {
             OnPropertyChanged(nameof(RoutingSummary));
+            if (binding.IsSelected)
+                binding.Matrix.Resize(MatrixInputChannelCountFor(_session), OutputChannelCountOrZero(binding.Line));
             RebuildAudioMatrixRows();
             // Hot toggle: if a session is running, mirror the checkbox change into the playback graph so
             // routing takes effect without reload. Without this, ticking a new output mid-play did nothing
@@ -1755,8 +1841,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
                         var binding = Outputs.FirstOrDefault(b => b.Line == line);
                         if (binding is not null)
                         {
-                            var srcCh = SourceChannelCountOrFallback(_session);
-                            binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                            SyncMatrixSourceChannelsFromSession(_session);
+                            binding.Matrix.Resize(MatrixInputChannelCountFor(_session),
+                                OutputChannelCountOrZero(binding.Line));
                             ApplyOutputMatrixToSession(binding);
                         }
                     ApplyOutputCompoundGainToSession(line);
@@ -1778,10 +1865,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
             binding.GainDb = gain.GainDb;
             binding.IsMuted = gain.Muted;
             binding.MixMode = gain.MixMode;
-            // Persisted cells apply once the matrix has been sized (which happens on session open / hot-add).
-            // Until then, MixMode acts as the placeholder preset — when the matrix Resize runs it picks the
-            // identity layout, and a subsequent ApplyConfig overlays the saved cells.
-            if (gain.MatrixCells.Count > 0 && binding.Matrix.InputChannelCount > 0)
+            // Persisted cells must be usable before media is opened and before the output is selected.
+            // Size the binding now so a saved 5.1 matrix can be edited immediately and survives later toggles.
+            if (gain.MatrixCells.Count > 0 && binding.Matrix.InputChannelCount == 0)
+                binding.Matrix.Resize(MatrixInputChannelCountFor(_session), OutputChannelCountOrZero(binding.Line));
+            if (gain.MatrixCells.Count > 0)
                 binding.Matrix.ApplyConfig(gain.MatrixCells);
         }
     }
@@ -1825,8 +1913,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
                         var b = Outputs.FirstOrDefault(o => o.Line == target);
                         if (b is not null)
                         {
-                            var srcCh = SourceChannelCountOrFallback(session);
-                            b.Matrix.Resize(srcCh, OutputChannelCountOrZero(b.Line));
+                            SyncMatrixSourceChannelsFromSession(session);
+                            b.Matrix.Resize(MatrixInputChannelCountFor(session), OutputChannelCountOrZero(b.Line));
                             ApplyOutputMatrixToSession(b);
                         }
                         ApplyOutputCompoundGainToSession(target);
@@ -2337,6 +2425,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         var owner = TryGetMainWindow();
         if (owner is null) return;
+        ResizeSelectedAudioMatrices(_session);
+        RebuildAudioMatrixRows();
+        ApplyAllOutputMatricesToSession();
         var dialog = new Views.Dialogs.AudioMatrixDialog { DataContext = this };
         await dialog.ShowDialog<object?>(owner);
     }
@@ -2437,6 +2528,18 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public bool IsActivelyPlayingThroughLine(OutputLineViewModel line) =>
         IsPlaying && _session?.HasWiredLine(line) == true;
 
+    public bool IsHoldingAnyOutputLine(IReadOnlySet<Guid> outputLineIds)
+    {
+        if (_session is null || outputLineIds.Count == 0)
+            return false;
+
+        return _outputs.Outputs.Any(line =>
+            outputLineIds.Contains(line.Definition.Id) && _session.HasWiredLine(line));
+    }
+
+    public Task ReleaseSessionForExternalPlaybackAsync() =>
+        WithPlaybackArcAsync(() => CloseSessionCoreInnerAsync(deferIdleSync: false));
+
     /// <summary>
     /// Apply cue-level audio routing overrides onto this player's matrix model.
     /// Uses cue virtual output channel numbers (VOut 1..N) mapped in current selected-output order.
@@ -2523,6 +2626,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 MatrixCells = HasNonDefaultMatrix(b) ? b.Matrix.ToPersistableCells().ToList() : new(),
             })
             .ToList(),
+        AudioMatrixInputChannels = ShouldPersistAudioMatrixInputChannels()
+            ? Math.Clamp(AudioMatrixSourceChannels, 1, 64)
+            : 0,
         InputTrims = AudioMatrixInputTrims
             .Where(t => Math.Abs(t.GainDb) > 0.0001 || t.Muted)
             .Select(t => new InputChannelTrimConfig
@@ -2533,6 +2639,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
             })
             .ToList(),
     };
+
+    private bool ShouldPersistAudioMatrixInputChannels() =>
+        _audioMatrixSourceChannelsExplicit
+        || AudioMatrixInputTrims.Any(t => Math.Abs(t.GainDb) > 0.0001 || t.Muted)
+        || Outputs.Any(HasNonDefaultMatrix);
 
     /// <summary>Phase C — a matrix is non-default when any cell deviates from the identity layout
     /// produced by <see cref="AudioMatrixViewModel.Resize"/> (audible diagonal cells at 0 dB; everything
@@ -2608,6 +2719,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
             binding.IsSelected = selected;
             if (selected) missing.Remove(name);
         }
+
+        var savedInputChannels = config.AudioMatrixInputChannels > 0
+            ? config.AudioMatrixInputChannels
+            : InferSavedAudioMatrixInputChannels(config);
+        SetAudioMatrixSourceChannels(savedInputChannels > 0 ? savedInputChannels : 2,
+            explicitValue: savedInputChannels > 0,
+            resize: true);
+
         ApplyBindingGainFromConfig(config.OutputGains
             .Where(g => !string.IsNullOrWhiteSpace(g.OutputDisplayName))
             .GroupBy(g => g.OutputDisplayName, StringComparer.OrdinalIgnoreCase)
@@ -2626,6 +2745,22 @@ public partial class MediaPlayerViewModel : ViewModelBase
         StatusMessage = missing.Count > 0
             ? $"Loaded. Missing outputs: {string.Join(", ", missing)}."
             : null;
+    }
+
+    private static int InferSavedAudioMatrixInputChannels(MediaPlayerConfig config)
+    {
+        var fromCells = config.OutputGains
+            .SelectMany(g => g.MatrixCells)
+            .Where(c => c.InputChannel >= 0)
+            .Select(c => c.InputChannel + 1)
+            .DefaultIfEmpty(0)
+            .Max();
+        var fromTrims = config.InputTrims
+            .Where(t => t.InputChannel >= 0)
+            .Select(t => t.InputChannel + 1)
+            .DefaultIfEmpty(0)
+            .Max();
+        return Math.Max(fromCells, fromTrims);
     }
 
     private static string SanitizeFileName(string name, string extension = "haplay.json")
@@ -2748,9 +2883,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 session.SetHoldFallback(HoldFallbackVideo);
 
                 ApplyCueRouteOverrides(cueRoutes);
-                var srcCh = SourceChannelCountOrFallback(session);
-                foreach (var binding in Outputs)
-                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
+                SyncMatrixSourceChannelsFromSession(session);
+                ResizeSelectedAudioMatrices(session);
                 RebuildAudioMatrixRows();
                 ApplyAllOutputMatricesToSession();
                 ApplyAllOutputGainsToSession();
@@ -2849,10 +2983,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     created.ApplyFallbackImage(FallbackImagePath);
                 created.SetHoldFallback(HoldFallbackVideo);
 
-                var srcCh = SourceChannelCountOrFallback(created);
-                foreach (var binding in Outputs)
-                    binding.Matrix.Resize(srcCh, OutputChannelCountOrZero(binding.Line));
-                SDebug.ChangeTrace.Step($"OpenOrReload: matrix resized (srcCh={srcCh})");
+                SyncMatrixSourceChannelsFromSession(created);
+                ResizeSelectedAudioMatrices(created);
+                SDebug.ChangeTrace.Step($"OpenOrReload: matrix resized (srcCh={MatrixInputChannelCountFor(created)})");
 
                 RebuildAudioMatrixRows();
                 SDebug.ChangeTrace.Step("OpenOrReload: RebuildAudioMatrixRows");

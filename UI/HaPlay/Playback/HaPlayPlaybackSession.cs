@@ -334,6 +334,29 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// Decoder/open options for file playback. Single source of truth so both <see cref="TryCreate(string,
+    /// IReadOnlyList{OutputLineViewModel}, OutputManagementViewModel, out HaPlayPlaybackSession?, out string?,
+    /// HaPlayFilePlaybackOptions?, MediaContainerDecoder?)"/> and the speculative <see cref="PlaylistDecoderCache"/>
+    /// pre-open use the same deep read-ahead and large file read buffer (otherwise a cached track would play
+    /// with the shallow ~4 s audio buffer / ~32 KB reads and stutter on slow media).
+    /// </summary>
+    /// <remarks>
+    /// Deep demux read-ahead buffers the single demux thread through variable file read throughput (an
+    /// external/USB drive whose sustained rate dips for a second or two): bare defaults give audio only ~4 s
+    /// (192 pkts) and video ~16 s (384), so a brief read stall drains the audio buffer and underruns the
+    /// router. These are compressed packets — ~15-20 s of look-ahead is only tens of MB. The large
+    /// <c>FileReadBufferBytes</c> makes each read a big sequential block (vs FFmpeg's ~32 KB native reads) so
+    /// the demux keeps up on high-per-IOP-latency media — the gap vs players like VLC.
+    /// </remarks>
+    internal static MediaPlayerOpenOptions BuildFileOpenOptions(bool anyNDI) =>
+        new(
+            TryHardwareAcceleration: !anyNDI,
+            IncludeAudioRouter: true,
+            AudioPacketQueueDepth: 720,   // ~15 s @ ~21 ms/packet
+            VideoPacketQueueDepth: 512,   // ~21 s @ 24 fps
+            FileReadBufferBytes: 4 * 1024 * 1024);
+
     public static bool TryCreate(
         string mediaPath,
         IReadOnlyList<OutputLineViewModel> selectedOutputs,
@@ -352,9 +375,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             mediaPath, lines.Count,
             string.Join(",", lines.Select(l => l.Definition.GetType().Name)),
             anyNDI, preOpenedDecoder is not null);
-        var mpOpt = new MediaPlayerOpenOptions(
-            TryHardwareAcceleration: !anyNDI,
-            IncludeAudioRouter: true);
+        var mpOpt = BuildFileOpenOptions(anyNDI);
 
         MediaContainerDecoder? decoder = preOpenedDecoder;
         if (decoder is null)
@@ -918,8 +939,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     // Acquire the persistent PortAudio output owned by OutputManagementViewModel —
                     // the stream stays open across sessions so receivers don't see Pa_OpenStream cost
                     // on every track change. Different decoder sample rates flow through a per-session
-                    // ResamplingAudioOutput (the wrapper drops IClockedOutput/IPlaybackClock, so the router
-                    // pacing falls back to its wall clock — acceptable for our chunk sizes).
+                    // ResamplingAudioOutput preserves IClockedOutput/IPlaybackClock when the wrapped output
+                    // has them, so PortAudio remains eligible to pace the router even through rate conversion.
                     var outDev = outputs.TryAcquirePortAudioForPlayback(line);
                     if (outDev is null)
                     {
@@ -956,7 +977,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     var needsResample = outDev.Format.SampleRate != dec.SampleRate || outDev.Format.Channels != sinkChannels;
                     if (needsResample)
                     {
-                        var resampler = new ResamplingAudioOutput(outDev, targetFmt);
+                        var resampler = ResamplingAudioOutput.Wrap(outDev, targetFmt);
                         playback._portAudioResamplers.Add(resampler);
                         routerSink = resampler;
                         Trace.LogDebug("WireAudio: PortAudio '{Name}' wrapped in ResamplingAudioOutput (decoder={Dec} hardware={Hw}) — router will NOT slave to PortAudio",
@@ -968,7 +989,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                             pa.DisplayName, outDev.Format);
                     }
 
-                    var meter = new MeteringAudioOutput(routerSink);
+                    var meter = MeteringAudioOutput.Wrap(routerSink);
                     playback._meters.Add(meter);
                     var outputId = player.AudioRouter!.AddOutput(meter);
                     player.AudioRouter!.Connect(player.AudioSourceId!, outputId, map);
@@ -981,6 +1002,16 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     wiring.PortAudioUnderrunBaseline = outDev.UnderrunSamples;
                     wiring.PortAudioForTargetRestore = targetQueueOwner;
                     wiring.PreviousPortAudioTargetQueue = previousTargetQueue;
+                    // A/V sync fallback: if this output could not become the media-clock master (for example
+                    // a non-clocked wrapper), the clock is wall-time and video can lead the queued audio.
+                    // When PortAudio is the actual master, do not also subtract the ring target here.
+                    if (player.HasContainerDecoder && outDev.Format.SampleRate > 0)
+                    {
+                        player.Video.PlayheadOffset =
+                            player.AudioClock?.Master is null
+                                ? TimeSpan.FromSeconds(outDev.TargetQueueSamples / (double)outDev.Format.SampleRate)
+                                : TimeSpan.Zero;
+                    }
                     break;
                 }
                 case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly:
@@ -1002,7 +1033,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     IAudioOutput routerSink = ndiOutput;
                     if (ndiAudioFmt.SampleRate != dec.SampleRate)
                     {
-                        var resampler = new ResamplingAudioOutput(ndiOutput, targetFmt);
+                        var resampler = ResamplingAudioOutput.Wrap(ndiOutput, targetFmt);
                         playback._ndiAudioResamplers.Add(resampler);
                         routerSink = resampler;
                         Trace.LogDebug("WireAudio: NDI '{Name}' wrapped in ResamplingAudioOutput (decoder={Dec} ndi={Ndi})",
@@ -1013,7 +1044,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         Trace.LogDebug("WireAudio: NDI '{Name}' wired direct ({Fmt})", nd.DisplayName, ndiAudioFmt);
                     }
 
-                    var ndiMeter = new MeteringAudioOutput(routerSink);
+                    var ndiMeter = MeteringAudioOutput.Wrap(routerSink);
                     playback._meters.Add(ndiMeter);
                     var outputId = player.AudioRouter!.AddOutput(ndiMeter);
                     player.AudioRouter!.Connect(player.AudioSourceId!, outputId, map);
@@ -1656,7 +1687,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         IAudioOutput routerSink = outDev;
         if (needsResample)
         {
-            var resampler = new ResamplingAudioOutput(outDev, targetFmt);
+            var resampler = ResamplingAudioOutput.Wrap(outDev, targetFmt);
             _portAudioResamplers.Add(resampler);
             routerSink = resampler;
             wiring.Resampler = resampler;
@@ -1794,7 +1825,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             IAudioOutput routerSink = ndiOutput;
             if (ndiAudioFmt.SampleRate != dec.SampleRate)
             {
-                var resampler = new ResamplingAudioOutput(ndiOutput, targetFmt);
+                var resampler = ResamplingAudioOutput.Wrap(ndiOutput, targetFmt);
                 _ndiAudioResamplers.Add(resampler);
                 routerSink = resampler;
                 wiring.Resampler = resampler;

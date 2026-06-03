@@ -372,6 +372,21 @@ public sealed partial class CueNodeViewModel : ObservableObject
     private int _startOffsetMs;
 
     [ObservableProperty]
+    private int _endOffsetMs;
+
+    public TimeSpan? StartOffsetTime
+    {
+        get => TimeSpan.FromMilliseconds(Math.Max(0, StartOffsetMs));
+        set => StartOffsetMs = ToOffsetMilliseconds(value);
+    }
+
+    public TimeSpan? EndOffsetTime
+    {
+        get => TimeSpan.FromMilliseconds(Math.Max(0, EndOffsetMs));
+        set => EndOffsetMs = ToOffsetMilliseconds(value);
+    }
+
+    [ObservableProperty]
     private bool _loop;
 
     [ObservableProperty]
@@ -417,9 +432,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
         {
             if (Kind == CueNodeKind.Group)
                 return BuildGroupDurationDisplay();
-            if (Kind != CueNodeKind.Media || DurationMs <= 0)
+            if (Kind != CueNodeKind.Media || EffectiveDurationMs <= 0)
                 return Strings.EmDash;
-            return FormatDurationMs(DurationMs);
+            return FormatDurationMs(EffectiveDurationMs);
         }
     }
 
@@ -466,14 +481,14 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     /// <summary>Effective duration for roll-ups: groups recursively roll up via their own
     /// <see cref="BuildGroupDurationDisplay"/> rules; media cues return their probed
-    /// <see cref="DurationMs"/>; other kinds (Action / Comment) return 0.</summary>
+    /// <see cref="EffectiveDurationMs"/>; other kinds (Action / Comment) return 0.</summary>
     public long RolledDurationMs
     {
         get
         {
             switch (Kind)
             {
-                case CueNodeKind.Media: return DurationMs;
+                case CueNodeKind.Media: return EffectiveDurationMs;
                 case CueNodeKind.Group:
                 {
                     switch (GroupFireMode)
@@ -491,6 +506,11 @@ public sealed partial class CueNodeViewModel : ObservableObject
         }
     }
 
+    public int EffectiveDurationMs =>
+        Kind == CueNodeKind.Media && DurationMs > 0
+            ? Math.Max(0, DurationMs - Math.Max(0, StartOffsetMs) - Math.Max(0, EndOffsetMs))
+            : 0;
+
     private static string FormatDurationMs(int ms)
     {
         var ts = TimeSpan.FromMilliseconds(ms);
@@ -504,6 +524,32 @@ public sealed partial class CueNodeViewModel : ObservableObject
         _ = value;
         OnPropertyChanged(nameof(DurationDisplay));
         OnPropertyChanged(nameof(RolledDurationMs));
+        OnPropertyChanged(nameof(EffectiveDurationMs));
+    }
+
+    partial void OnStartOffsetMsChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(DurationDisplay));
+        OnPropertyChanged(nameof(RolledDurationMs));
+        OnPropertyChanged(nameof(EffectiveDurationMs));
+        OnPropertyChanged(nameof(StartOffsetTime));
+    }
+
+    partial void OnEndOffsetMsChanged(int value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(DurationDisplay));
+        OnPropertyChanged(nameof(RolledDurationMs));
+        OnPropertyChanged(nameof(EffectiveDurationMs));
+        OnPropertyChanged(nameof(EndOffsetTime));
+    }
+
+    private static int ToOffsetMilliseconds(TimeSpan? value)
+    {
+        if (value is null || value.Value <= TimeSpan.Zero)
+            return 0;
+        return (int)Math.Min(int.MaxValue, Math.Round(value.Value.TotalMilliseconds));
     }
 
     partial void OnExtraChanged(string value)
@@ -545,6 +591,9 @@ public sealed partial class CueNodeViewModel : ObservableObject
         if (Kind != CueNodeKind.Group) return;
         if (e.PropertyName is nameof(RolledDurationMs)
             or nameof(DurationMs)
+            or nameof(StartOffsetMs)
+            or nameof(EndOffsetMs)
+            or nameof(EffectiveDurationMs)
             or nameof(GroupFireMode))
         {
             OnPropertyChanged(nameof(DurationDisplay));
@@ -596,6 +645,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceFrameRateNum = m.SourceFrameRateNum,
                     SourceFrameRateDen = m.SourceFrameRateDen,
                     StartOffsetMs = m.StartOffsetMs,
+                    EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
                 };
@@ -675,6 +725,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 SourceFrameRateNum = Math.Max(0, SourceFrameRateNum),
                 SourceFrameRateDen = Math.Max(0, SourceFrameRateDen),
                 StartOffsetMs = Math.Max(0, StartOffsetMs),
+                EndOffsetMs = Math.Max(0, EndOffsetMs),
                 Loop = Loop,
                 EndBehavior = EndBehavior,
                 AudioRoutes = AudioRoutes.Select(r => r.ToModel()).ToList(),
@@ -806,8 +857,10 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPreviewingSelectedCue))]
+    [NotifyPropertyChangedFor(nameof(IsCueScrubberVisible))]
     [NotifyPropertyChangedFor(nameof(PreviewButtonLabel))]
     [NotifyCanExecuteChangedFor(nameof(TogglePreviewCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SeekActiveCueFromScrubberCommand))]
     private Guid? _previewingCueId;
 
     public bool IsPreviewing => PreviewingCueId is not null;
@@ -899,7 +952,8 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     /// <summary>Visible when the selected cue is active in the Now Playing panel (Phase 5.5.2).</summary>
     public bool IsCueScrubberVisible =>
-        SelectedCueNode is not null && ActiveCues.Any(a => a.CueId == SelectedCueNode.Id);
+        SelectedCueNode is not null
+        && (ActiveCues.Any(a => a.CueId == SelectedCueNode.Id) || IsPreviewingSelectedCue);
 
     [ObservableProperty]
     private double _cueScrubberValue;
@@ -1356,11 +1410,16 @@ public partial class CuePlayerViewModel : ViewModelBase
         RebuildUpcomingCues();
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
-        PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
+        if (!_suppressStandbyPreRollRefresh)
+            SuggestPreRollRefresh();
     }
 
     /// <summary>Host subscribes to warm the selected player's pre-roll cache (§5.7).</summary>
     public event EventHandler? PreRollRefreshSuggested;
+
+    private void SuggestPreRollRefresh() => PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
+
+    private bool _suppressStandbyPreRollRefresh;
 
     /// <summary>Next <paramref name="maxCount"/> file media cues from standby (or list start).</summary>
     public IReadOnlyList<(Guid CueId, PlaylistItem Item, int FadeInMs, int FadeOutMs)> GetPreRollTargets(int maxCount)
@@ -1390,6 +1449,39 @@ public partial class CuePlayerViewModel : ViewModelBase
                 || !source.SupportsPreRoll())
                 continue;
             targets.Add((cue.Id, source, Math.Max(0, cue.FadeInMs), Math.Max(0, cue.FadeOutMs)));
+        }
+
+        return targets;
+    }
+
+    /// <summary>Next file media cues from standby for the cue engine's own opened/routed cache.</summary>
+    public IReadOnlyList<MediaCueNode> GetPreparedMediaCueTargets(int maxCount)
+    {
+        if (maxCount <= 0 || SelectedCueList is null)
+            return [];
+
+        var ordered = EnumerateFireableCueOrder().ToList();
+        if (ordered.Count == 0)
+            return [];
+
+        var startIdx = 0;
+        if (StandbyCueNode is not null)
+        {
+            var resolved = ResolveFireableCue(StandbyCueNode) ?? StandbyCueNode;
+            var idx = ordered.FindIndex(c => ReferenceEquals(c, resolved));
+            if (idx >= 0)
+                startIdx = idx;
+        }
+
+        var targets = new List<MediaCueNode>();
+        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        {
+            var cue = ordered[i];
+            if (cue.Kind != CueNodeKind.Media
+                || cue.MediaSourceItem is not FilePlaylistItem
+                || cue.ToModel() is not MediaCueNode media)
+                continue;
+            targets.Add(media);
         }
 
         return targets;
@@ -1467,7 +1559,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             var entry = new ActiveCueViewModel(node, cueId, id => _ = (CancelCueCallback?.Invoke(id) ?? Task.CompletedTask))
             {
-                DurationMs = Math.Max(0, node.DurationMs),
+                DurationMs = Math.Max(0, node.EffectiveDurationMs),
             };
             ActiveCues.Add(entry);
         }
@@ -1524,9 +1616,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (SelectedCueNode is null)
             return;
         var active = ActiveCues.FirstOrDefault(a => a.CueId == SelectedCueNode.Id);
-        if (active is null || active.DurationMs <= 0)
+        var durationMs = active?.DurationMs ?? SelectedCueNode.EffectiveDurationMs;
+        if (durationMs <= 0)
             return;
-        CueScrubberValue = active.PositionMs * 1000.0 / active.DurationMs;
+        var positionMs = active?.PositionMs ?? 0;
+        CueScrubberValue = positionMs * 1000.0 / durationMs;
     }
 
     [RelayCommand(CanExecute = nameof(CanTogglePreview))]
@@ -1578,10 +1672,11 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
 
         var active = ActiveCues.FirstOrDefault(a => a.CueId == SelectedCueNode.Id);
-        if (active is null || active.DurationMs <= 0)
+        var durationMs = active?.DurationMs ?? SelectedCueNode.EffectiveDurationMs;
+        if (durationMs <= 0)
             return;
 
-        var position = TimeSpan.FromMilliseconds(CueScrubberValue * active.DurationMs / 1000.0);
+        var position = TimeSpan.FromMilliseconds(CueScrubberValue * durationMs / 1000.0);
         await SeekCueCallback(SelectedCueNode.Id, position);
     }
 
@@ -1725,6 +1820,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         comp.CompositionFrameRateChanged += OnCompositionFrameRateChanged;
         SelectedComposition = comp;
         RefreshVideoFrameRateMismatchWarning();
+        SuggestPreRollRefresh();
     }
 
     [RelayCommand(CanExecute = nameof(CanRemoveComposition))]
@@ -1741,6 +1837,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (SelectedCueList.VideoOutputs[i].CompositionId == removedId)
                 SelectedCueList.VideoOutputs.RemoveAt(i);
         SelectedComposition = SelectedCueList.Compositions.FirstOrDefault();
+        SuggestPreRollRefresh();
     }
 
     private bool CanRemoveComposition() => SelectedComposition is not null;
@@ -1756,6 +1853,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         };
         SelectedCueList.VideoOutputs.Add(binding);
         SelectedVideoOutput = binding;
+        SuggestPreRollRefresh();
     }
 
     [RelayCommand(CanExecute = nameof(CanRemoveVideoOutput))]
@@ -1764,6 +1862,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (SelectedCueList is null || SelectedVideoOutput is null) return;
         if (!SelectedCueList.VideoOutputs.Remove(SelectedVideoOutput)) return;
         SelectedVideoOutput = SelectedCueList.VideoOutputs.FirstOrDefault();
+        SuggestPreRollRefresh();
     }
 
     private bool CanRemoveVideoOutput() => SelectedVideoOutput is not null;
@@ -1805,6 +1904,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             SelectedAudioRoute = lastOnPrimary;
         OnPropertyChanged(nameof(VisibleAudioRoutes));
         OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
+        SuggestPreRollRefresh();
     }
 
     private static int GetAudioOutputChannelCount(OutputLineViewModel? line) =>
@@ -1827,6 +1927,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             SelectedAudioRoute = media.AudioRoutes.FirstOrDefault();
             OnPropertyChanged(nameof(VisibleAudioRoutes));
             OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
+            SuggestPreRollRefresh();
         }
     }
 
@@ -1857,6 +1958,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             SelectedVideoPlacement = lastOnPrimary;
         OnPropertyChanged(nameof(VisibleVideoPlacements));
         RefreshVideoFrameRateMismatchWarning();
+        SuggestPreRollRefresh();
     }
 
     private bool CanAddVideoPlacement() => SelectedCueNode is { Kind: CueNodeKind.Media };
@@ -1880,6 +1982,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             SelectedVideoPlacement = media.VideoPlacements.FirstOrDefault();
             OnPropertyChanged(nameof(VisibleVideoPlacements));
+            SuggestPreRollRefresh();
         }
     }
 
@@ -2509,21 +2612,31 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (plan.Count == 0)
             return;
 
+        var resolvedFire = ResolveFireableCue(fire) ?? fire;
+        var nextStandby = NextCueAfter(resolvedFire, ordered);
         CurrentCueNode = plan[0].Cue;
         IsTransportPaused = false;
-        StandbyCueNode = NextCueAfter(ResolveFireableCue(fire) ?? fire, ordered);
+        _suppressStandbyPreRollRefresh = true;
+        try
+        {
+            StandbyCueNode = nextStandby;
+        }
+        finally
+        {
+            _suppressStandbyPreRollRefresh = false;
+        }
         SelectedCueNode = plan[0].Cue;
         StatusMessage = Strings.Format(
             nameof(Strings.CueGoStatusFormat),
             CueDisplay(fire),
             plan.Count,
             plan.Count == 1 ? string.Empty : Strings.PluralSuffixS);
-        PreRollRefreshSuggested?.Invoke(this, EventArgs.Empty);
 
         _transportRunCts = new CancellationTokenSource();
         try
         {
             await RunTriggerPlanAsync(plan, _transportRunCts.Token).ConfigureAwait(false);
+            SuggestPreRollRefresh();
         }
         catch (OperationCanceledException)
         {

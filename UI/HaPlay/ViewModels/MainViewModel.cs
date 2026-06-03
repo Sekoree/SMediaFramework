@@ -47,6 +47,13 @@ public partial class MainViewModel : ViewModelBase
         _cuePlaybackEngine.CueStarted += (_, id) => CuePlayer.OnCueStarted(id);
         _cuePlaybackEngine.CueEnded += (_, id) => CuePlayer.OnCueEnded(id);
         _cuePlaybackEngine.CueProgress += (_, p) => CuePlayer.OnCueProgress(p);
+        _cuePlaybackEngine.PreparedCuesChanged += ids =>
+        {
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+                CuePlayer.OnPreRollCacheChanged(ids);
+            else
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreRollCacheChanged(ids));
+        };
         _cuePlaybackEngine.PreviewEnded += (_, id) => CuePlayer.OnPreviewEnded(id);
         CuePlayer.CancelCueCallback = _cuePlaybackEngine.StopCueAsync;
         CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;
@@ -60,6 +67,7 @@ public partial class MainViewModel : ViewModelBase
         };
         CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
         CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
+        _cuePlaybackEngine.ReleaseConflictingPlayerOutputsAsync = ReleaseMediaPlayerOutputsForCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
         CuePlayer.RefreshPreviewAudioDevices();
@@ -192,6 +200,19 @@ public partial class MainViewModel : ViewModelBase
         var idx = oneBasedIndex - 1;
         if (idx >= 0 && idx < Workspaces.Count)
             SelectedWorkspace = Workspaces[idx];
+    }
+
+    private async Task ReleaseMediaPlayerOutputsForCueAsync(IReadOnlyCollection<Guid> outputLineIds)
+    {
+        if (outputLineIds.Count == 0)
+            return;
+
+        var wanted = outputLineIds.ToHashSet();
+        var targets = await Dispatcher.UIThread.InvokeAsync(() =>
+            Players.Where(p => p.IsHoldingAnyOutputLine(wanted)).ToList());
+
+        foreach (var player in targets)
+            await player.ReleaseSessionForExternalPlaybackAsync().ConfigureAwait(false);
     }
 
     public OutputManagementViewModel OutputManagement { get; }
@@ -702,16 +723,19 @@ public partial class MainViewModel : ViewModelBase
     {
         var player = SelectedPlayer;
         var list = CuePlayer.SelectedCueList;
-        if (player is null || list is null)
+        if (list is null)
             return;
 
         var n = list.PreRollCount;
-        var fileTargets = CuePlayer.GetPreRollTargets(n);
+        var engineTargets = CuePlayer.GetPreparedMediaCueTargets(n);
         var ndiTargets = CuePlayer.GetNdiPreConnectTargets(n);
         var paTargets = CuePlayer.GetPortAudioPreConnectTargets(n);
         try
         {
-            await player.RefreshCuePreRollAsync(fileTargets).ConfigureAwait(false);
+            player?.InvalidateCuePreRoll();
+            await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets).ConfigureAwait(false);
+            if (player is null)
+                return;
             await player.RefreshNdiPreConnectAsync(ndiTargets).ConfigureAwait(false);
             await player.RefreshPortAudioPreConnectAsync(paTargets).ConfigureAwait(false);
         }

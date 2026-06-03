@@ -21,6 +21,16 @@
     <ScrollViewer HorizontalScrollBarVisibility="Auto">
       <StackPanel Spacing="8">
 
+        <Grid ColumnDefinitions="Auto,96,*" ColumnSpacing="8" Margin="0,0,0,4">
+          <TextBlock Grid.Column="0" Text="Source channels" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Column="1"
+                         Minimum="1"
+                         Maximum="64"
+                         FormatString="0"
+                         Value="{Binding AudioMatrixSourceChannels, Mode=TwoWay}"
+                         ToolTip.Tip="Expected source channel count for pre-sizing the matrix before media is opened." />
+        </Grid>
+
         <!-- Per-output mix-mode preset row -->
         <ItemsControl ItemsSource="{Binding Outputs}">
           <ItemsControl.ItemTemplate>

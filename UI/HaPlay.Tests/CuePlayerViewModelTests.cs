@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using HaPlay.Models;
+using HaPlay.Playback;
 using HaPlay.ViewModels;
 using Xunit;
 
@@ -825,6 +826,49 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void GetPreparedMediaCueTargets_FromStandby_ReturnsFileCueModelsWithTrimAndRoutes()
+    {
+        var vm = new CuePlayerViewModel();
+        var audioOutputId = Guid.NewGuid();
+        var compositionId = Guid.NewGuid();
+
+        vm.AddMediaCueCommand.Execute(null);
+        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        first.MediaSourceItem = new FilePlaylistItem("/a.mp4");
+        first.StartOffsetMs = 80 * 60 * 1000;
+        first.EndOffsetMs = 1500;
+        first.AudioRoutes.Add(new CueAudioRouteViewModel
+        {
+            SourceChannel = 0,
+            OutputLineId = audioOutputId,
+            OutputChannel = 1,
+            GainDb = -3,
+        });
+        first.VideoPlacements.Add(new CueVideoPlacementViewModel
+        {
+            CompositionId = compositionId,
+            LayerIndex = 2,
+            Position = CueLayerPosition.Letterbox,
+            Opacity = 0.75,
+        });
+
+        vm.AddMediaCueCommand.Execute(null);
+        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        second.MediaSourceItem = new NDIInputPlaylistItem("Studio-PC (Output 1)");
+
+        vm.SelectedCueNode = first;
+        vm.StandbySelectedCommand.Execute(null);
+
+        var target = Assert.Single(vm.GetPreparedMediaCueTargets(2));
+        Assert.Equal(first.Id, target.Id);
+        Assert.Equal("/a.mp4", Assert.IsType<FilePlaylistItem>(target.Source).Path);
+        Assert.Equal(80 * 60 * 1000, target.StartOffsetMs);
+        Assert.Equal(1500, target.EndOffsetMs);
+        Assert.Equal(audioOutputId, Assert.Single(target.AudioRoutes).OutputLineId);
+        Assert.Equal(compositionId, Assert.Single(target.VideoPlacements).CompositionId);
+    }
+
+    [Fact]
     public void GetNdiPreConnectTargets_IncludesNdiMediaFromStandby()
     {
         var vm = new CuePlayerViewModel();
@@ -847,13 +891,44 @@ public sealed class CuePlayerViewModelTests
         vm.AddMediaCueCommand.Execute(null);
         var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         media.StartOffsetMs = 1500;
+        media.EndOffsetMs = 2500;
         media.Loop = true;
         media.EndBehavior = CueEndBehavior.FreezeLastFrame;
 
         var node = Assert.IsType<MediaCueNode>(Assert.Single(vm.BuildCueListsSnapshot()[0].Nodes));
         Assert.Equal(1500, node.StartOffsetMs);
+        Assert.Equal(2500, node.EndOffsetMs);
         Assert.True(node.Loop);
         Assert.Equal(CueEndBehavior.FreezeLastFrame, node.EndBehavior);
+    }
+
+    [Fact]
+    public void MediaCue_EffectiveDuration_UsesStartAndEndOffsets()
+    {
+        var cue = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            DurationMs = 60_000,
+            StartOffsetMs = 10_000,
+            EndOffsetMs = 5_000,
+        };
+
+        Assert.Equal(45_000, cue.EffectiveDurationMs);
+        Assert.Equal(45_000, cue.RolledDurationMs);
+        Assert.Equal("00:45", cue.DurationDisplay);
+    }
+
+    [Fact]
+    public void MediaCue_TimePickerOffsets_MapToPersistedMilliseconds()
+    {
+        var cue = new CueNodeViewModel(CueNodeKind.Media);
+
+        cue.StartOffsetTime = new TimeSpan(1, 20, 30);
+        cue.EndOffsetTime = TimeSpan.FromMinutes(2.5);
+
+        Assert.Equal(4_830_000, cue.StartOffsetMs);
+        Assert.Equal(150_000, cue.EndOffsetMs);
+        Assert.Equal(new TimeSpan(1, 20, 30), cue.StartOffsetTime);
+        Assert.Equal(TimeSpan.FromMinutes(2.5), cue.EndOffsetTime);
     }
 
     [Fact]
@@ -1033,6 +1108,8 @@ public sealed class CuePlayerViewModelTests
         vm.AddMediaCueCommand.Execute(null);
         var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
         cue.DurationMs = 60_000;
+        cue.StartOffsetMs = 10_000;
+        cue.EndOffsetMs = 5_000;
         vm.OnCueStarted(cue.Id);
         vm.CueScrubberValue = 500;
 
@@ -1044,7 +1121,26 @@ public sealed class CuePlayerViewModelTests
         };
 
         vm.SeekActiveCueFromScrubberCommand.Execute(null);
-        Assert.Equal(TimeSpan.FromSeconds(30), seekTarget);
+        Assert.Equal(TimeSpan.FromSeconds(22.5), seekTarget);
+    }
+
+    [Fact]
+    public void CueClipWindow_MapsRelativeSeekIntoTrimmedSourceRange()
+    {
+        var cue = new MediaCueNode
+        {
+            DurationMs = 60_000,
+            StartOffsetMs = 10_000,
+            EndOffsetMs = 5_000,
+        };
+
+        var window = CueClipWindow.From(cue, TimeSpan.FromSeconds(60));
+
+        Assert.Equal(TimeSpan.FromSeconds(10), window.Start);
+        Assert.Equal(TimeSpan.FromSeconds(55), window.End);
+        Assert.Equal(TimeSpan.FromSeconds(45), window.Duration);
+        Assert.Equal(TimeSpan.FromSeconds(32.5), window.ToSourcePosition(TimeSpan.FromSeconds(22.5)));
+        Assert.Equal(TimeSpan.FromSeconds(54.95), window.ToSourcePosition(TimeSpan.FromSeconds(90)));
     }
 
     [Fact]

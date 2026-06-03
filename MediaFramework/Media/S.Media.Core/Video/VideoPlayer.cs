@@ -134,6 +134,16 @@ public sealed class VideoPlayer : IDisposable
     public TimeSpan EarlyTolerance { get; set; } = TimeSpan.FromMilliseconds(8);
 
     /// <summary>
+    /// A/V-sync compensation subtracted from the clock before scheduling video (Scheduled mode only).
+    /// The audio output buffers some samples ahead of the speakers (e.g. a PortAudio ring), so audio is
+    /// HEARD a fixed latency after the clock says "now". Video, presented immediately at clock time, would
+    /// then lead the audio by that latency. Set this to the output's buffered latency to hold video back so
+    /// it lines up with what's actually heard. Default zero (no compensation). Read on the clock's video
+    /// tick thread; setting it is a cheap volatile-ish write — safe to update live.
+    /// </summary>
+    public TimeSpan PlayheadOffset { get; set; }
+
+    /// <summary>
     /// When <c>true</c>, the player freezes the last successfully submitted frame's plane data and
     /// keeps re-submitting it on every <see cref="IMediaClock.VideoTick"/> after the source is
     /// exhausted, instead of going dark and signalling <see cref="CompletedNaturally"/>. Use for
@@ -456,17 +466,26 @@ public sealed class VideoPlayer : IDisposable
             return;
         }
 
-        var playhead = _clock.CurrentPosition;
+        // Hold video back by the audio output latency so it lines up with what's actually heard
+        // (audio is buffered ahead in the output ring; presenting video at raw clock time leads it).
+        var playhead = _clock.CurrentPosition - PlayheadOffset;
         var early = playhead + EarlyTolerance;
         var lateCutoff = playhead - LateThreshold;
 
         VideoFrame? toShow = null;
+        // Anti-freeze / catch-up fallback. When the playhead has run past EVERY queued frame — decode
+        // fell behind after a seek or a high-variance scene and the shallow queue drained — we used to
+        // drop them all and present nothing, which froze the picture permanently (the freerun clock never
+        // waits for video, so it never recovered). Instead keep the NEWEST late frame and show it when no
+        // on-time frame exists: a brief A/V lag beats a freeze, and presenting the latest decoded frame
+        // each tick lets video visually catch up as the decode bursts land.
+        VideoFrame? newestLate = null;
 
         // Walk the queue forward as long as the next frame's PTS is in the
         // past (or within early tolerance). We always prefer the latest such
         // frame — older candidates are dropped as "skipped" when we find a
-        // newer one. Frames more than LateThreshold behind are discarded
-        // outright.
+        // newer one. Frames more than LateThreshold behind are held as the
+        // newest-late fallback (newest wins) rather than discarded outright.
         while (_queue.TryPeek(out var head))
         {
             if (head.PresentationTime > early) break;
@@ -477,8 +496,12 @@ public sealed class VideoPlayer : IDisposable
 
             if (frame.PresentationTime < lateCutoff)
             {
-                frame.Dispose();
-                Interlocked.Increment(ref _droppedLate);
+                if (newestLate is not null)
+                {
+                    newestLate.Dispose();
+                    Interlocked.Increment(ref _droppedLate);
+                }
+                newestLate = frame;
                 continue;
             }
 
@@ -488,6 +511,21 @@ public sealed class VideoPlayer : IDisposable
                 Interlocked.Increment(ref _droppedLate);
             }
             toShow = frame;
+        }
+
+        if (toShow is not null)
+        {
+            // An on-time frame won this tick; the older late fallback is superseded.
+            if (newestLate is not null)
+            {
+                newestLate.Dispose();
+                Interlocked.Increment(ref _droppedLate);
+            }
+        }
+        else
+        {
+            // Nothing on time — present the newest late frame (if any) so the picture keeps moving.
+            toShow = newestLate;
         }
 
         if (toShow is not null)

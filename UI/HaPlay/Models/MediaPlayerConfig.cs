@@ -82,6 +82,12 @@ public sealed record MediaPlayerConfig
     public List<OutputGainConfig> OutputGains { get; init; } = new();
 
     /// <summary>
+    /// Explicit source channel count used to size the audio matrix before a media file is open.
+    /// 0 means "auto" for older configs: infer from the active source when possible, otherwise stereo.
+    /// </summary>
+    public int AudioMatrixInputChannels { get; init; }
+
+    /// <summary>
     /// Per-input-channel attenuation/mute (column trims) for the audio matrix.
     /// Applied on top of every cell that reads from the matching input channel.
     /// </summary>

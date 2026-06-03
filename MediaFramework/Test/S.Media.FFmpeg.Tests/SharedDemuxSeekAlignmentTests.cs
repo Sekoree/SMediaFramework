@@ -4,6 +4,7 @@ using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg;
 using S.Media.FFmpeg.Video;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace S.Media.FFmpeg.Tests;
 
@@ -15,7 +16,116 @@ namespace S.Media.FFmpeg.Tests;
 /// </summary>
 public class SharedDemuxSeekAlignmentTests
 {
-    public SharedDemuxSeekAlignmentTests() => FFmpegRuntime.EnsureInitialized();
+    private readonly ITestOutputHelper _output;
+
+    public SharedDemuxSeekAlignmentTests(ITestOutputHelper output)
+    {
+        _output = output;
+        FFmpegRuntime.EnsureInitialized();
+    }
+
+    [Fact]
+    public void ProvidedMovie_DeepSeekProbe_WhenPresent()
+    {
+        if (!string.Equals(Environment.GetEnvironmentVariable("MFPLAYER_RUN_PROVIDED_MOVIE_PROBE"), "1", StringComparison.Ordinal))
+            return;
+
+        var path = Environment.GetEnvironmentVariable("MFPLAYER_PROBE_MEDIA")
+                   ?? "/home/sekoree/Videos/THE IDOLM@STER MOVIE.mkv";
+        if (!File.Exists(path))
+            return;
+
+        var target = TimeSpan.FromHours(1) + TimeSpan.FromMinutes(50);
+        File.WriteAllText(ProbeLogPath, $"probe start {DateTimeOffset.Now:O}{Environment.NewLine}");
+        ProbeDecoderCase(path, target, "native-hw", tryHardware: true, fileReadBufferBytes: 0);
+        ProbeDecoderCase(path, target, "bigbuf-hw", tryHardware: true, fileReadBufferBytes: 4 * 1024 * 1024);
+        ProbeDecoderCase(path, target, "bigbuf-sw", tryHardware: false, fileReadBufferBytes: 4 * 1024 * 1024);
+    }
+
+    private void ProbeDecoderCase(
+        string path,
+        TimeSpan target,
+        string label,
+        bool tryHardware,
+        int fileReadBufferBytes)
+    {
+        ProbeLog($"{label}: open begin hw={tryHardware} fileReadBuffer={fileReadBufferBytes}");
+        using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions
+        {
+            TryHardwareAcceleration = tryHardware,
+            FileReadBufferBytes = fileReadBufferBytes,
+            AudioPacketQueueDepth = 720,
+            VideoPacketQueueDepth = 512,
+        });
+
+        _output.WriteLine(
+            $"{label}: duration={c.Duration} shared={c.UsesSharedDemux} audio={c.Audio.Format} video={c.Video.Format}");
+        ProbeLog($"{label}: open done duration={c.Duration} audio={c.Audio.Format} video={c.Video.Format}");
+
+        ProbeLog($"{label}: seek begin target={target}");
+        var seek = Stopwatch.StartNew();
+        c.SeekPresentation(target);
+        seek.Stop();
+        _output.WriteLine($"{label}: seekElapsedMs={seek.Elapsed.TotalMilliseconds:F1}");
+        ProbeLog($"{label}: seek done ms={seek.Elapsed.TotalMilliseconds:F1}");
+
+        ProbeLog($"{label}: first video read begin");
+        var vRead = Stopwatch.StartNew();
+        Assert.True(c.Video.TryReadNextFrame(out var vf));
+        vRead.Stop();
+        var videoPts = vf.PresentationTime;
+        vf.Dispose();
+        _output.WriteLine(
+            $"{label}: firstVideo={videoPts} deltaMs={(videoPts - target).TotalMilliseconds:F1} readMs={vRead.Elapsed.TotalMilliseconds:F1}");
+        ProbeLog($"{label}: first video done pts={videoPts} deltaMs={(videoPts - target).TotalMilliseconds:F1} ms={vRead.Elapsed.TotalMilliseconds:F1}");
+
+        ProbeLog($"{label}: first audio read begin");
+        var aRead = Stopwatch.StartNew();
+        Assert.True(c.Audio.TryReadNextFrame(out var af));
+        aRead.Stop();
+        var audioPts = af.PresentationTime;
+        af.Dispose();
+        _output.WriteLine(
+            $"{label}: firstAudio={audioPts} deltaMs={(audioPts - target).TotalMilliseconds:F1} readMs={aRead.Elapsed.TotalMilliseconds:F1}");
+        _output.WriteLine($"{label}: avDeltaMs={(videoPts - audioPts).TotalMilliseconds:F1}");
+        ProbeLog($"{label}: first audio done pts={audioPts} deltaMs={(audioPts - target).TotalMilliseconds:F1} ms={aRead.Elapsed.TotalMilliseconds:F1} avDeltaMs={(videoPts - audioPts).TotalMilliseconds:F1}");
+
+        ProbeLog($"{label}: decode burst begin");
+        var decode = Stopwatch.StartNew();
+        var frames = 0;
+        var audioFrames = 0;
+        var lateBackstep = 0;
+        var lastPts = videoPts;
+        for (; frames < 240; frames++)
+        {
+            if (!c.Video.TryReadNextFrame(out var frame))
+                break;
+            if (frame.PresentationTime < lastPts)
+                lateBackstep++;
+            lastPts = frame.PresentationTime;
+            frame.Dispose();
+
+            for (var a = 0; a < 8 && c.Audio.TryReadNextFrame(out var audioFrame); a++)
+            {
+                audioFrames++;
+                var audioEnd = audioFrame.PresentationTime
+                               + TimeSpan.FromSeconds(audioFrame.SamplesPerChannel / (double)c.Audio.Format.SampleRate);
+                audioFrame.Dispose();
+                if (audioEnd >= lastPts)
+                    break;
+            }
+        }
+
+        decode.Stop();
+        _output.WriteLine(
+            $"{label}: decodedNext={frames} audioFrames={audioFrames} elapsedMs={decode.Elapsed.TotalMilliseconds:F1} effectiveFps={(frames / Math.Max(0.001, decode.Elapsed.TotalSeconds)):F1} lastPts={lastPts} backsteps={lateBackstep}");
+        ProbeLog($"{label}: decode burst done frames={frames} audioFrames={audioFrames} ms={decode.Elapsed.TotalMilliseconds:F1} fps={(frames / Math.Max(0.001, decode.Elapsed.TotalSeconds)):F1} lastPts={lastPts} backsteps={lateBackstep}");
+    }
+
+    private const string ProbeLogPath = "/tmp/mf_seek_probe.log";
+
+    private static void ProbeLog(string line) =>
+        File.AppendAllText(ProbeLogPath, $"{DateTimeOffset.Now:O} {line}{Environment.NewLine}");
 
     [Fact]
     public void SeekPresentation_MidGop_AudioAndVideoLandTogetherAtTarget()
@@ -200,6 +310,117 @@ public class SharedDemuxSeekAlignmentTests
             t2.Join();
 
             Assert.Null(failure);
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), "SharedDemuxSeekAlignmentTests: temp media delete");
+        }
+    }
+
+    [Fact]
+    public void ReseekSameTarget_AfterReadsConsumePrimedState_RerunsAndStaysAligned()
+    {
+        // The coordinated-seek dedup is keyed on a "primed, not yet consumed" flag. Once a read pulls past
+        // the primed state, a later seek to the SAME target must run in full (not dedup to the now-advanced
+        // demux) and land back on the target.
+        var path = Path.Combine(Path.GetTempPath(), $"mc_biggop_reseek_{Guid.NewGuid():N}.mkv");
+        if (!TryGenerateLargeGopAudioVideo(path, durationSec: 7, fps: 24, keyint: 48)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+            var target = TimeSpan.FromSeconds(3.0);
+
+            c.SeekPresentation(target);
+            Assert.True(c.Video.TryReadNextFrame(out var vf0));
+            vf0.Dispose();
+            Assert.True(c.Audio.TryReadNextFrame(out var af0));
+            af0.Dispose();
+
+            // Reads above advanced the demux past the target and cleared the primed flag, so this must reseek.
+            c.SeekPresentation(target);
+            Assert.True(c.Video.TryReadNextFrame(out var vf));
+            var videoPts = vf.PresentationTime;
+            vf.Dispose();
+            Assert.True(c.Audio.TryReadNextFrame(out var af));
+            var audioPts = af.PresentationTime;
+            af.Dispose();
+
+            Assert.InRange(videoPts.TotalSeconds, 2.95, 3.30);
+            Assert.InRange(audioPts.TotalSeconds, 2.85, 3.30);
+            Assert.True(Math.Abs((audioPts - videoPts).TotalSeconds) < 0.20,
+                $"audio/video desync after reseek: audio={audioPts.TotalSeconds:F3}s video={videoPts.TotalSeconds:F3}s");
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), "SharedDemuxSeekAlignmentTests: temp media delete");
+        }
+    }
+
+    [Fact]
+    public void LargeBufferFileOpen_DecodesAndSeeks_LikeNativeOpen()
+    {
+        // FileReadBufferBytes routes the open through a large-buffer custom AVIO over a FileStream instead
+        // of FFmpeg's native file protocol. It must behave identically: decode frames and seek accurately.
+        var path = Path.Combine(Path.GetTempPath(), $"mc_bigbuf_{Guid.NewGuid():N}.mkv");
+        if (!TryGenerateLargeGopAudioVideo(path, durationSec: 7, fps: 24, keyint: 48)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions
+            {
+                TryHardwareAcceleration = false,
+                FileReadBufferBytes = 4 * 1024 * 1024,
+            });
+            Assert.True(c.UsesSharedDemux);
+            Assert.True(c.Duration > TimeSpan.FromSeconds(6));
+
+            // Decode from the start.
+            Assert.True(c.Video.TryReadNextFrame(out var first));
+            first.Dispose();
+
+            // Seek mid-GOP and confirm both tracks land on target through the big-buffer I/O path.
+            var target = TimeSpan.FromSeconds(3.0);
+            c.SeekPresentation(target);
+            Assert.True(c.Video.TryReadNextFrame(out var vf));
+            var videoPts = vf.PresentationTime;
+            vf.Dispose();
+            Assert.True(c.Audio.TryReadNextFrame(out var af));
+            var audioPts = af.PresentationTime;
+            af.Dispose();
+
+            Assert.InRange(videoPts.TotalSeconds, 2.95, 3.30);
+            Assert.InRange(audioPts.TotalSeconds, 2.85, 3.30);
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), "SharedDemuxSeekAlignmentTests: temp media delete");
+        }
+    }
+
+    [Fact]
+    public void CancelInFlightSeek_WhenIdle_IsNoOp_AndNextSeekStillLandsAtTarget()
+    {
+        // A cancel that arrives with no seek running (or after one finishes) must not wedge the demux: the
+        // cancel flag is reset at the start of the next real seek and is never read by the decode path.
+        var path = Path.Combine(Path.GetTempPath(), $"mc_biggop_cancel_{Guid.NewGuid():N}.mkv");
+        if (!TryGenerateLargeGopAudioVideo(path, durationSec: 7, fps: 24, keyint: 48)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+
+            c.CancelInFlightSeek(); // stray cancel, nothing running
+
+            var target = TimeSpan.FromSeconds(3.0);
+            c.SeekPresentation(target);
+
+            Assert.True(c.Video.TryReadNextFrame(out var vf));
+            var videoPts = vf.PresentationTime;
+            vf.Dispose();
+            Assert.True(c.Audio.TryReadNextFrame(out var af));
+            var audioPts = af.PresentationTime;
+            af.Dispose();
+
+            Assert.InRange(videoPts.TotalSeconds, 2.95, 3.30);
+            Assert.InRange(audioPts.TotalSeconds, 2.85, 3.30);
         }
         finally
         {

@@ -44,6 +44,34 @@ public class VideoPlayerTests
     }
 
     [Fact]
+    public void PlayheadOffset_HoldsVideoBack_ToMatchAudioLatency()
+    {
+        var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(40, 16, 16), Frame(80, 16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4)
+        {
+            EarlyTolerance = TimeSpan.FromMilliseconds(2),
+            LateThreshold = TimeSpan.FromMilliseconds(200),
+            // Audio is heard 30 ms after the clock; video should be held back the same so it lines up.
+            PlayheadOffset = TimeSpan.FromMilliseconds(30),
+        };
+        player.Play();
+        output.WaitForConfigured();
+        WaitFor(() => src.Reads >= 3, TimeSpan.FromSeconds(1));
+
+        // Clock at 50 ms, but offset 30 ms → effective playhead 20 ms. The 40 ms frame is still "future",
+        // so the 0 ms frame is shown — without the offset the 40 ms frame would already be displayed.
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(50));
+        clock.RaiseVideoTick();
+        WaitFor(() => output.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
+
+        Assert.Single(output.Submitted);
+        Assert.Equal(TimeSpan.FromMilliseconds(0), output.Submitted[0].PresentationTime);
+    }
+
+    [Fact]
     public void Does_Not_Submit_Future_Frames()
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(100, 16, 16), Frame(200, 16, 16));
@@ -63,7 +91,7 @@ public class VideoPlayerTests
     }
 
     [Fact]
-    public void Drops_Frames_Past_LateThreshold()
+    public void PresentsNewestLateFrame_AsCatchUp_DroppingOlderLateFrames()
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(50, 16, 16),
             Frame(500, 16, 16));
@@ -78,13 +106,16 @@ public class VideoPlayerTests
         output.WaitForConfigured();
         WaitFor(() => src.Reads >= 3, TimeSpan.FromSeconds(1));
 
-        // Playhead jumped to 400ms — 0 and 50 are both >100ms late and should be discarded.
+        // Playhead jumped to 400ms — 0 and 50 are both >100ms late. Rather than freeze (present nothing),
+        // the player shows the NEWEST late frame (50ms) so the picture keeps moving and can catch up, and
+        // drops the older late frame (0ms). 500ms is still in the future.
         clock.AdvanceTo(TimeSpan.FromMilliseconds(400));
         clock.RaiseVideoTick();
-        Thread.Sleep(50);
+        WaitFor(() => output.Submitted.Count >= 1, TimeSpan.FromSeconds(1));
 
-        Assert.Empty(output.Submitted); // 500ms is in the future
-        Assert.True(player.DroppedLate >= 2, $"expected ≥2 late drops, got {player.DroppedLate}");
+        Assert.Single(output.Submitted);
+        Assert.Equal(TimeSpan.FromMilliseconds(50), output.Submitted[0].PresentationTime);
+        Assert.True(player.DroppedLate >= 1, $"expected ≥1 late drop (the 0ms frame), got {player.DroppedLate}");
     }
 
     [Fact]

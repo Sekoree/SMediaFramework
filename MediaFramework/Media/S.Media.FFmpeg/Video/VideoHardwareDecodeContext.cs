@@ -71,6 +71,15 @@ public sealed class VideoDecoderOpenOptions
     public int VideoPacketQueueDepth { get; init; }
 
     /// <summary>
+    /// AVIO read buffer for local-file opens, in bytes. <c>0</c> uses FFmpeg's native file protocol (small
+    /// ~32 KB reads). When &gt; 0, the file is opened through a custom AVIO with this buffer size so each
+    /// read pulls a large block — markedly better sustained throughput on high-per-IOP-latency media (USB /
+    /// external drives), where many small reads can't keep the demux fed. Suggested 1–4 MB. Ignored for
+    /// stream/URI opens (those already supply their own I/O).
+    /// </summary>
+    public int FileReadBufferBytes { get; init; }
+
+    /// <summary>
     /// Returns whether shared-handle-only Win32 NV12 export is requested via <see cref="Win32Nv12SharedHandleOnlyExport"/> or
     /// <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> (<c>1</c> / <c>true</c>). Callers still require <see cref="RetainD3D11SharedHandleForGl"/>.
     /// </summary>

@@ -9,7 +9,7 @@ namespace S.Media.FFmpeg.Internal;
 /// </summary>
 internal sealed unsafe class StreamAvioBridge : IDisposable
 {
-    private const int IoBufferSize = 32 * 1024;
+    private const int DefaultIoBufferSize = 32 * 1024;
 
     private static readonly avio_alloc_context_read_packet ReadPacketCallback = ReadPacket;
     private static readonly avio_alloc_context_seek SeekCallback = Seek;
@@ -26,11 +26,13 @@ internal sealed unsafe class StreamAvioBridge : IDisposable
         _avio = avio;
     }
 
-    public static StreamAvioBridge Create(Stream stream, bool isSeekable)
+    public static StreamAvioBridge Create(Stream stream, bool isSeekable, int ioBufferSize = DefaultIoBufferSize)
     {
         ArgumentNullException.ThrowIfNull(stream);
         if (!stream.CanRead)
             throw new ArgumentException("stream must be readable.", nameof(stream));
+        if (ioBufferSize <= 0)
+            ioBufferSize = DefaultIoBufferSize;
 
         var holder = new StreamIoHolder(stream, isSeekable && stream.CanSeek);
         var handle = GCHandle.Alloc(holder);
@@ -38,14 +40,14 @@ internal sealed unsafe class StreamAvioBridge : IDisposable
         AVIOContext* avio = null;
         try
         {
-            buffer = (byte*)av_malloc((ulong)IoBufferSize);
+            buffer = (byte*)av_malloc((ulong)ioBufferSize);
             if (buffer == null)
                 throw new OutOfMemoryException("av_malloc failed for AVIO buffer.");
 
             var opaque = (void*)GCHandle.ToIntPtr(handle);
             avio = avio_alloc_context(
                 buffer,
-                IoBufferSize,
+                ioBufferSize,
                 0,
                 opaque,
                 ReadPacketCallback,

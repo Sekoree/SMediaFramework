@@ -43,7 +43,11 @@ internal sealed class PlaylistDecoderCache : IDisposable
         try
         {
             ct.ThrowIfCancellationRequested();
-            decoder = MediaContainerDecoder.Open(path);
+            // Match the live open path's deep read-ahead + large file read buffer so a cached track plays as
+            // smoothly as a freshly-opened one (anyNDI=false: the speculative pre-open can't know the future
+            // route, and HW decode is the safe default — the NDI path re-opens without it when needed).
+            decoder = MediaContainerDecoder.Open(path,
+                HaPlayPlaybackSession.BuildFileOpenOptions(anyNDI: false).ToVideoDecoderOpenOptions());
             Trace.LogDebug("PlaylistDecoderCache: pre-opened {Path}", path);
         }
         catch (OperationCanceledException)

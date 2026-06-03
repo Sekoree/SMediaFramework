@@ -343,7 +343,10 @@
     <value>Fade out (ms)</value>
   </data>
   <data name="StartMsLabel" xml:space="preserve">
-    <value>Start (ms)</value>
+    <value>Start</value>
+  </data>
+  <data name="EndTrimMsLabel" xml:space="preserve">
+    <value>End trim</value>
   </data>
   <data name="LoopLabel" xml:space="preserve">
     <value>Loop</value>

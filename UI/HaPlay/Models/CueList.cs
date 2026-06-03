@@ -135,6 +135,9 @@ public sealed record MediaCueNode : CueNode
 
     public int StartOffsetMs { get; init; }
 
+    /// <summary>Amount trimmed from the end of the source. 0 means play through the probed duration.</summary>
+    public int EndOffsetMs { get; init; }
+
     public CueEndBehavior EndBehavior { get; init; } = CueEndBehavior.Stop;
 
     public int FadeInMs { get; init; }

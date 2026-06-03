@@ -55,6 +55,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private GCHandle _interruptHandle;
     private AVFormatContext* _fmt;
     private StreamAvioBridge? _streamIo;
+    // A FileStream this demux opened itself for the large-buffer AVIO file path (FileReadBufferBytes > 0).
+    // Unlike the public OpenStream contract (caller owns the stream), we own and dispose this one.
+    private Stream? _ownedInputStream;
     private bool _inputSeekable = true;
     private AVPacket* _demuxPkt;
 
@@ -101,6 +104,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     // the same shared demux (audio track + video track, same position); when the freshly primed state has
     // not been consumed, the second call is deduplicated instead of repeating the avformat_seek + decode.
     private TimeSpan? _seekPrimedPosition;
+    // True while the demux is sitting exactly where the last SeekPresentation left it and no read has
+    // pulled past it yet. This — not the presence of a primed keeper frame — gates the coordinated-seek
+    // dedup: a prime that bailed early (4 s deadline or a cancellation) still leaves the demux positioned
+    // at the target, so the paired call must dedup rather than redo a full (and equally doomed) seek.
+    // Cleared by the first audio/video read after the seek (and re-armed by the next SeekPresentation).
+    private bool _seekPrimePending;
+    // Set by CancelInFlightSeek to abort an over-long PrimeBothAfterSeekLocked; reset at the start of each
+    // real seek. Reads never inspect it, so a stray set can never wedge playback (unlike the read yield).
+    private int _seekCancelRequested;
     private VideoHardwareDecodeContext? _hwAccel;
     private bool _drmGpuNv12Path;
     private bool _d3d11GpuNv12Path;
@@ -189,6 +201,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private void OpenInternal(string path, VideoDecoderOpenOptions? videoOptions)
     {
         ApplyQueueDepthOptions(videoOptions);
+
+        var fileReadBuffer = videoOptions?.FileReadBufferBytes ?? 0;
+        if (fileReadBuffer > 0)
+        {
+            OpenInternalLargeBufferFile(path, fileReadBuffer, videoOptions);
+            return;
+        }
+
         _inputSeekable = true;
 
         AVFormatContext* fmt = null;
@@ -204,6 +224,26 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         ret = avformat_find_stream_info(_fmt, null);
         FFmpegException.ThrowIfError(ret, nameof(avformat_find_stream_info));
 
+        OpenInternalAfterFormatOpen(videoOptions);
+    }
+
+    /// <summary>
+    /// Opens a local file through a large-buffer custom AVIO (over a minimally-buffered <see cref="FileStream"/>)
+    /// instead of FFmpeg's native file protocol, so each read pulls a big sequential block. Helps sustained
+    /// throughput on high-per-IOP-latency media (USB / external drives) where ~32 KB native reads can't keep
+    /// the single demux thread fed. The <see cref="FileStream"/> is owned and disposed by this demux.
+    /// </summary>
+    private void OpenInternalLargeBufferFile(string path, int ioBufferSize, VideoDecoderOpenOptions? videoOptions)
+    {
+        // bufferSize:1 disables FileStream's own buffering so the large AVIO read maps to a large OS read;
+        // SequentialScan hints the kernel readahead. The bridge does not own the stream — we do.
+        var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            bufferSize: 1, FileOptions.SequentialScan);
+        _ownedInputStream = fs;
+        _inputSeekable = fs.CanSeek;
+        _streamIo = StreamAvioBridge.Create(fs, _inputSeekable, ioBufferSize);
+        _fmt = _streamIo.OpenFormatContext(Path.GetFileName(path));
+        InstallInterruptCallback(_fmt);
         OpenInternalAfterFormatOpen(videoOptions);
     }
 
@@ -729,12 +769,15 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 ThrowIfDisposedUnsafe();
 
                 // Coordinated A/V seek seeks this shared demux twice (audio then video) at the same target.
-                // If neither stream has consumed the freshly primed state yet, the demux is already exactly
-                // where the second call wants it — skip the repeat avformat_seek + decode-to-target.
-                if (_seekPrimedPosition == position
-                    && (!_hasVideo || _vPrimedAfterSeek is not null)
-                    && (!_hasAudio || _aHasBufferedFrame))
+                // If no read has consumed the freshly primed state yet, the demux is already exactly where
+                // the second call wants it — skip the repeat avformat_seek + decode-to-target. Keyed on a
+                // "primed, not yet consumed" flag rather than the keeper frames so a prime that bailed early
+                // (deadline / cancellation) still dedups instead of redoing an equally-doomed full seek.
+                if (_seekPrimedPosition == position && _seekPrimePending)
                     return;
+
+                // Fresh seek: clear any leftover cancel request so a prior cancellation can't abort it.
+                Volatile.Write(ref _seekCancelRequested, 0);
 
                 if (!StopDemuxerAndDrainQueues())
                     throw new InvalidOperationException(
@@ -817,9 +860,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                     PrimeBothAfterSeekLocked(position);
 
                 // Record where the demux is now primed so the paired (audio/video) call of a coordinated
-                // seek to the same target can dedup. Consumed reads null _vPrimedAfterSeek / clear the audio
-                // keeper, so a later genuine reseek to the same position still runs in full.
+                // seek to the same target can dedup. The first real read clears _seekPrimePending, so a
+                // later genuine reseek to the same position still runs in full.
                 _seekPrimedPosition = position;
+                _seekPrimePending = true;
             }
         }
         finally
@@ -881,6 +925,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
                 _streamIo?.Dispose();
                 _streamIo = null;
+                MediaDiagnostics.SwallowDisposeErrors(() => _ownedInputStream?.Dispose(), "MediaContainerSharedDemux.Dispose: _ownedInputStream");
+                _ownedInputStream = null;
                 FreeInterruptHandle();
             }
         }
@@ -1089,8 +1135,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         var deadline = Environment.TickCount64 + 4000;
         while (!videoDone || !audioDone)
         {
-            if (IsReadYieldRequested || Volatile.Read(ref _videoDecodeYieldRequested) != 0)
-                return; // superseded by a newer seek / stop — abandon; the new op re-primes from its target
+            if (IsReadYieldRequested || Volatile.Read(ref _videoDecodeYieldRequested) != 0
+                || Volatile.Read(ref _seekCancelRequested) != 0)
+                return; // superseded by a newer seek / stop, or cancelled by the caller — keep the
+                        // best-effort position; a later op (or the dedup) re-primes from its target
 
             var progressed = false;
             if (!videoDone)
@@ -1441,6 +1489,20 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         Volatile.Write(ref _readYieldRequested, 1);
         lock (_queueGate)
             Monitor.PulseAll(_queueGate);
+    }
+
+    /// <summary>
+    /// Cooperatively aborts an in-flight <see cref="SeekPresentation"/> whose decode-to-target prime is
+    /// running long (e.g. a deep seek into a large GOP). The prime bails to its best-effort position and
+    /// the seek returns. Safe to call at any time: the flag is reset at the start of each real seek and is
+    /// never consulted by the read path, so a late call cannot wedge playback. Driven by the host's seek
+    /// cancellation token via <see cref="MediaContainerDecoder.CancelInFlightSeek"/>.
+    /// </summary>
+    internal void CancelInFlightSeek()
+    {
+        Volatile.Write(ref _seekCancelRequested, 1);
+        lock (_queueGate)
+            Monitor.PulseAll(_queueGate); // wake a prime parked in Monitor.Wait(_queueGate, …)
     }
 
     private void ClearReadYield() => Volatile.Write(ref _readYieldRequested, 0);
@@ -1911,6 +1973,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 lock (_o._audioDecodeLock)
                 {
                     _o.ThrowIfDisposedUnsafe();
+                    // First read past a seek: the primed state is now being consumed, so a later reseek to
+                    // the same position must run in full rather than dedup.
+                    _o._seekPrimePending = false;
                     if (IsExhausted) return 0;
 
                     var written = 0;
@@ -1980,6 +2045,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 lock (_o._audioDecodeLock)
                 {
                     _o.ThrowIfDisposedUnsafe();
+                    _o._seekPrimePending = false;
                     if (_o.IsReadYieldRequested)
                     {
                         frame = default;
@@ -2073,6 +2139,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 lock (_o._videoDecodeLock)
                 {
                     _o.ThrowIfDisposedUnsafe();
+                    _o._seekPrimePending = false;
 
                     if (Volatile.Read(ref _o._videoDecodeYieldRequested) != 0 || _o.IsReadYieldRequested)
                     {

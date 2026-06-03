@@ -19,13 +19,15 @@ internal sealed class CuePreviewSession : IDisposable
         MediaPlayer player,
         SDL3GLVideoOutput? videoOutput,
         PortAudioPlaybackHost? audioHost,
-        CancellationTokenSource cts)
+        CancellationTokenSource cts,
+        CueClipWindow clipWindow)
     {
         CueId = cueId;
         Player = player;
         VideoOutput = videoOutput;
         AudioHost = audioHost;
         Cts = cts;
+        ClipWindow = clipWindow;
     }
 
     public Guid CueId { get; }
@@ -33,6 +35,7 @@ internal sealed class CuePreviewSession : IDisposable
     public SDL3GLVideoOutput? VideoOutput { get; }
     public PortAudioPlaybackHost? AudioHost { get; }
     public CancellationTokenSource Cts { get; }
+    public CueClipWindow ClipWindow { get; }
 
     public IPlaybackClock? VideoMaster => AudioHost?.MainOutput;
 
@@ -144,10 +147,11 @@ internal sealed class CuePreviewSession : IDisposable
                         return ((CuePreviewSession?)null, "PortAudio preview wiring failed.");
                 }
 
-                if (cue.StartOffsetMs > 0)
-                    player.SeekCoordinated(TimeSpan.FromMilliseconds(cue.StartOffsetMs));
+                var clipWindow = CueClipWindow.From(cue, player.Duration);
+                if (clipWindow.Start > TimeSpan.Zero)
+                    player.SeekCoordinated(clipWindow.Start);
 
-                var session = new CuePreviewSession(cue.Id, player, sdl, paHost, new CancellationTokenSource());
+                var session = new CuePreviewSession(cue.Id, player, sdl, paHost, new CancellationTokenSource(), clipWindow);
                 session.AttachVideoCloseHandler();
                 player = null;
                 sdl = null;

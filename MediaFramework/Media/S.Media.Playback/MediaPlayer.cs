@@ -846,7 +846,10 @@ public sealed class MediaPlayer : IDisposable
 
             var vin = router.AddInput(primaryOutputId);
             var videoForPlayer = videoSourceOverride ?? media.Video;
-            videoPlayer = new VideoPlayer(videoForPlayer, vin.Output, playClock);
+            var fileQueueCap = options.FileVideoDecodeQueueCapacity > 0
+                ? options.FileVideoDecodeQueueCapacity
+                : 16; // post-decode jitter buffer; the bare 4-frame default drops frames after a seek
+            videoPlayer = new VideoPlayer(videoForPlayer, vin.Output, playClock, queueCapacity: fileQueueCap);
 
             var ownDecoder = decoderOwnership == MediaPlayerDecoderOwnership.BundleDisposesDecoder;
             var bundleOwned = ComputeOwnedParts(
