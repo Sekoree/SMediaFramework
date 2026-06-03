@@ -95,7 +95,14 @@ needed for composition slots.
   - Reason: retiming is useful for cue players, soundboards with video,
     composition, loop regions, and media fragments, not only HaPlay.
 
-- [ ] Make clip windows a first-class framework concept.
+- [x] Make clip windows a first-class framework concept. *(Done — promoted the
+  HaPlay-internal `CueClipWindow` math to a reusable `S.Media.Core.ClipWindow`
+  value type: source start/end, effective duration, `FromOffsets`, and
+  source↔relative mapping + guarded end detection. HaPlay's `CueClipWindow` is now
+  a thin adapter that builds one from a `MediaCueNode`; the same window already
+  drives both audio and video seek in the cue engine. Covered by
+  `S.Media.Core.Tests/ClipWindowTests`. The fuller "owns the shared seek
+  transport" piece is folded into the cue/clip-API design below.)*
   - Include source start, source end, effective duration, relative timeline PTS,
     and shared audio/video seek behavior.
   - Goal: avoid keeping trim logic split across HaPlay view models, cue engine
