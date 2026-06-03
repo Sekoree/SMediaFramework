@@ -72,11 +72,12 @@ Source plan: `Doc/HaPlay-MIDI-OSC-Scripting-Graph-Plan.md`
 
 ## Phase 6: Mond Scripting
 
-- [ ] Add constrained `ControlScriptHost`.
-- [ ] Expose event, state, emit, math, MIDI, OSC, and X32 helper APIs.
-- [ ] Add script compile/runtime diagnostics.
-- [ ] Add per-node execution timeout.
-- [ ] Add tests for script transforms and failure isolation.
+- [x] Add constrained `ControlScriptHost`.
+- [x] Expose event, state, emit, math, MIDI, OSC, and X32 helper APIs.
+- [x] Add script compile/runtime diagnostics.
+- [x] Add per-node execution timeout.
+  - [x] First cut uses a Mond debugger instruction budget per script node.
+- [x] Add tests for script transforms and failure isolation.
 
 ## Phase 7: NodifyM UI
 
@@ -106,13 +107,15 @@ Source plan: `Doc/HaPlay-MIDI-OSC-Scripting-Graph-Plan.md`
 
 ## Verification
 
-- [ ] Run `bash -c 'dotnet build MFPlayer.sln'`.
-- [ ] Run `bash -c 'dotnet test MFPlayer.sln --no-build'`.
+- [x] Run `bash -c 'dotnet build MFPlayer.sln'`.
+- [x] Run `bash -c 'dotnet test MFPlayer.sln --no-build'`.
 - [x] Run focused control-graph tests:
   `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
 - [x] Run full HaPlay test project:
   `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build'`.
 - [x] Run control graph/session focused tests with graph lifecycle:
   `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~ControlDeviceSessionTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
+- [x] Run focused script/control-graph tests:
+  `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlScriptHostTests|FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
 - [x] Update this checklist after each implementation slice.
 

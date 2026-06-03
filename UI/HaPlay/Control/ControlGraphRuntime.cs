@@ -35,6 +35,8 @@ public sealed class ControlGraphRuntime
     private readonly Dictionary<Guid, List<ControlConnectionConfig>> _outgoing;
     private readonly Dictionary<Guid, DateTimeOffset> _lastOutputSendUtc = new();
     private readonly Dictionary<Guid, SoftTakeoverState> _softTakeover = new();
+    private readonly ControlScriptHost _scriptHost = new();
+    private readonly List<ControlScriptDiagnostic> _scriptDiagnostics = new();
 
     public ControlGraphRuntime(ControlGraphConfig graph, IControlOscSender oscSender, IControlMidiSender? midiSender = null)
     {
@@ -50,6 +52,8 @@ public sealed class ControlGraphRuntime
         if (!validation.IsValid)
             throw new InvalidOperationException(string.Join("; ", validation.Issues.Select(i => i.Message)));
     }
+
+    public IReadOnlyList<ControlScriptDiagnostic> ScriptDiagnostics => _scriptDiagnostics;
 
     public void SetSoftTakeoverTarget(Guid midiInputNodeId, double normalizedValue)
     {
@@ -202,6 +206,12 @@ public sealed class ControlGraphRuntime
                         path)
                 ];
 
+            case ScriptTransformControlNodeSettings script:
+                var scriptResult = _scriptHost.ExecuteWithDiagnostics(script, input, node.Id);
+                if (scriptResult.Diagnostics.Count > 0)
+                    _scriptDiagnostics.AddRange(scriptResult.Diagnostics);
+                return scriptResult.Events;
+
             case OscOutputControlNodeSettings osc:
                 if (ShouldSuppressEcho(input, osc.EndpointId, osc.FeedbackMode))
                     return [];
@@ -255,6 +265,7 @@ public sealed class ControlGraphRuntime
             MidiInputControlNodeSettings => ControlPortType.Midi,
             OscInputControlNodeSettings => ControlPortType.Osc,
             MapRangeControlNodeSettings => ControlPortType.Scalar,
+            ScriptTransformControlNodeSettings => ControlPortType.Any,
             PassthroughControlNodeSettings => ControlPortType.Any,
             _ => ControlPortType.Any,
         };
@@ -263,6 +274,7 @@ public sealed class ControlGraphRuntime
         node.Settings switch
         {
             MapRangeControlNodeSettings => ControlPortType.Any,
+            ScriptTransformControlNodeSettings => ControlPortType.Any,
             OscOutputControlNodeSettings => ControlPortType.Any,
             MidiOutputControlNodeSettings => ControlPortType.Any,
             X32ChannelFaderControlNodeSettings => ControlPortType.Scalar,

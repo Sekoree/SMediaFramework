@@ -42,6 +42,7 @@ public enum ControlNodeKind
     OscOutput,
     MidiOutput,
     X32ChannelFader,
+    ScriptTransform,
     Passthrough,
 }
 
@@ -63,6 +64,7 @@ public enum ControlPortType
 [JsonDerivedType(typeof(OscOutputControlNodeSettings), "oscOutput")]
 [JsonDerivedType(typeof(MidiOutputControlNodeSettings), "midiOutput")]
 [JsonDerivedType(typeof(X32ChannelFaderControlNodeSettings), "x32ChannelFader")]
+[JsonDerivedType(typeof(ScriptTransformControlNodeSettings), "scriptTransform")]
 public abstract record ControlNodeSettings;
 
 public sealed record PassthroughControlNodeSettings : ControlNodeSettings;
@@ -91,6 +93,12 @@ public sealed record MapRangeControlNodeSettings : ControlNodeSettings
     public double OutputMin { get; init; }
     public double OutputMax { get; init; } = 1;
     public bool Clamp { get; init; } = true;
+}
+
+public sealed record ScriptTransformControlNodeSettings : ControlNodeSettings
+{
+    public string Source { get; init; } = "return emit.scalar(event.scalar.value);";
+    public int InstructionLimit { get; init; } = 100_000;
 }
 
 public sealed record OscOutputControlNodeSettings : ControlNodeSettings

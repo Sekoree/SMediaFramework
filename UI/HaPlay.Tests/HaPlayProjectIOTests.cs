@@ -600,6 +600,7 @@ public sealed class HaPlayProjectIOTests
         var x32NodeId = Guid.NewGuid();
         var oscNodeId = Guid.NewGuid();
         var midiOutNodeId = Guid.NewGuid();
+        var scriptNodeId = Guid.NewGuid();
 
         var project = new HaPlayProject
         {
@@ -673,6 +674,17 @@ public sealed class HaPlayProjectIOTests
                                 MinSendIntervalMs = 15,
                             },
                         },
+                        new ControlNodeConfig
+                        {
+                            Id = scriptNodeId,
+                            DisplayName = "Script",
+                            Kind = ControlNodeKind.ScriptTransform,
+                            Settings = new ScriptTransformControlNodeSettings
+                            {
+                                Source = "return emit.scalar(event.value);",
+                                InstructionLimit = 5000,
+                            },
+                        },
                     ],
                     Connections =
                     [
@@ -689,7 +701,7 @@ public sealed class HaPlayProjectIOTests
         var graph = Assert.Single(roundTripped.ControlGraphs);
         Assert.Equal("BCF2000 Layer", graph.Name);
         Assert.True(graph.IsEnabled);
-        Assert.Equal(5, graph.Nodes.Count);
+        Assert.Equal(6, graph.Nodes.Count);
         Assert.Equal(3, graph.Connections.Count);
         var midi = Assert.IsType<MidiInputControlNodeSettings>(graph.Nodes[0].Settings);
         Assert.True(midi.HighResolution14Bit);
@@ -704,6 +716,9 @@ public sealed class HaPlayProjectIOTests
         var midiOut = Assert.IsType<MidiOutputControlNodeSettings>(graph.Nodes[4].Settings);
         Assert.Equal(ControlFeedbackMode.MotorFeedbackOnly, midiOut.FeedbackMode);
         Assert.Equal(15, midiOut.MinSendIntervalMs);
+        var script = Assert.IsType<ScriptTransformControlNodeSettings>(graph.Nodes[5].Settings);
+        Assert.Equal("return emit.scalar(event.value);", script.Source);
+        Assert.Equal(5000, script.InstructionLimit);
     }
 
     [Fact]

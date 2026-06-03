@@ -79,6 +79,7 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(MidiInputControlNodeSettings))]
 [JsonSerializable(typeof(OscInputControlNodeSettings))]
 [JsonSerializable(typeof(MapRangeControlNodeSettings))]
+[JsonSerializable(typeof(ScriptTransformControlNodeSettings))]
 [JsonSerializable(typeof(OscOutputControlNodeSettings))]
 [JsonSerializable(typeof(MidiOutputControlNodeSettings))]
 [JsonSerializable(typeof(X32ChannelFaderControlNodeSettings))]
