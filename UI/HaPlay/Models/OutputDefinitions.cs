@@ -65,7 +65,13 @@ public sealed record LocalVideoOutputDefinition(
     int? WindowHeight,
     // Phase A forward-compat field (§3.4): when set, this output is a clone of the referenced parent.
     // Runtime semantics land in Phase B; for now the field is persisted so a saved project survives.
-    Guid? CloneOfId = null) : OutputDefinition(Id, DisplayName)
+    Guid? CloneOfId = null,
+    // Optional background image shown as the idle frame when no media is routed to this output. Padded
+    // to the output's pixel format (letterboxed) — applies to both the SDL and Avalonia engines.
+    string? BackgroundImagePath = null,
+    // Keep the output window above other windows. Honoured by the Avalonia (in-app preview) engine;
+    // the SDL standalone-window engine ignores it (no always-on-top hook exposed by the framework).
+    bool AlwaysOnTop = false) : OutputDefinition(Id, DisplayName)
 {
     [JsonIgnore]
     public override ManagedOutputKind Kind =>

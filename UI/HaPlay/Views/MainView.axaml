@@ -146,13 +146,20 @@
                   VerticalAlignment="Center" Margin="6,0,0,0" />
         </Grid>
 
+        <!-- All three layout hosts share this fill region (only one is visible at a time). A Grid keeps
+             them stretched to the full width/height; as bare DockPanel children the non-last ones would
+             dock Left and leave empty space to the right. -->
+        <Grid>
+
         <!-- Tabs layout — original single-player view. Content is null when not in Tabs mode (the VM
              projects SelectedPlayer through TabsLayoutContent) so the hidden branch doesn't
              materialize a second MediaPlayerView for the selected player. -->
         <Border x:Name="PlayersQuickPlayHost"
                 IsVisible="{Binding IsPlayersTabsLayout}"
                 ToolTip.Tip="{x:Static res:Strings.QuickPlayDropTooltip}">
-          <ContentControl Content="{Binding TabsLayoutContent}" />
+          <ContentControl Content="{Binding TabsLayoutContent}"
+                          HorizontalContentAlignment="Stretch"
+                          VerticalContentAlignment="Stretch" />
         </Border>
 
         <!-- Stacked layout — vertical list of every player, scrollable. ItemsSource is null in other
@@ -163,8 +170,10 @@
           <ItemsControl ItemsSource="{Binding StackedLayoutContent}">
             <ItemsControl.ItemTemplate>
               <DataTemplate DataType="vm:MediaPlayerViewModel">
+                <!-- Stacked layout has no per-player height bound, so give each deck a fixed height;
+                     the outer ScrollViewer scrolls between players. -->
                 <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6"
-                        Margin="0,0,0,8" Padding="4">
+                        Margin="0,0,0,8" Padding="4" Height="540">
                   <ContentControl Content="{Binding}" />
                 </Border>
               </DataTemplate>
@@ -189,6 +198,7 @@
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
+        </Grid>
       </DockPanel>
 
       <views:OutputManagementView DataContext="{Binding OutputManagement}"

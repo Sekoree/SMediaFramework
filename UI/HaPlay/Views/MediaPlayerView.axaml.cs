@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
-using Avalonia.VisualTree;
 using HaPlay.Models;
 using HaPlay.ViewModels;
 using S.Media.Core;
@@ -13,9 +12,6 @@ namespace HaPlay.Views;
 public partial class MediaPlayerView : UserControl
 {
     private const double CompactWidthThreshold = 500;
-
-    private static readonly DataFormat<PlaylistItem> PlaylistItemFormat =
-        DataFormat.CreateInProcessFormat<PlaylistItem>("haplay-playlist-item");
 
     public MediaPlayerView()
     {
@@ -27,10 +23,11 @@ public partial class MediaPlayerView : UserControl
         VolumeSlider.AddHandler(InputElement.DoubleTappedEvent, OnVolumeSliderDoubleTapped,
             RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
         AddHandler(KeyDownEvent, OnUserControlKeyDown, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        // Internal row reordering is handled by the Xaml.Behaviors ItemDragBehavior (ListBox.draggable).
+        // The code-behind only handles external OS file drops onto the playlist.
         DragDrop.SetAllowDrop(PlaylistListBox, true);
         PlaylistListBox.AddHandler(DragDrop.DragOverEvent, OnPlaylistDragOver, RoutingStrategies.Bubble);
         PlaylistListBox.AddHandler(DragDrop.DropEvent, OnPlaylistDrop, RoutingStrategies.Bubble);
-        PlaylistListBox.AddHandler(PointerPressedEvent, OnPlaylistPointerPressed, RoutingStrategies.Tunnel);
         SeekSlider.AddHandler(PointerMovedEvent, OnSeekSliderPointerMoved, RoutingStrategies.Tunnel);
         SizeChanged += OnSizeChanged;
     }
@@ -44,73 +41,10 @@ public partial class MediaPlayerView : UserControl
             Classes.Remove("compact");
     }
 
-    private PointerPressedEventArgs? _dragPressedArgs;
-    private PlaylistItem? _dragCandidate;
-    private Point _dragStartPoint;
-
-    private void OnPlaylistPointerPressed(object? sender, PointerPressedEventArgs e)
-    {
-        if (e.GetCurrentPoint(PlaylistListBox).Properties.IsLeftButtonPressed)
-        {
-            if (e.ClickCount >= 2)
-            {
-                CancelDragCandidate();
-                return;
-            }
-            _dragStartPoint = e.GetPosition(PlaylistListBox);
-            _dragCandidate = GetPlaylistItemAtPoint(_dragStartPoint);
-            _dragPressedArgs = _dragCandidate is not null ? e : null;
-            if (_dragCandidate is not null)
-            {
-                PlaylistListBox.AddHandler(PointerMovedEvent, OnPlaylistPointerMoved, RoutingStrategies.Tunnel);
-                PlaylistListBox.AddHandler(PointerReleasedEvent, OnPlaylistPointerReleased, RoutingStrategies.Tunnel);
-            }
-        }
-    }
-
-    private void OnPlaylistPointerReleased(object? sender, PointerReleasedEventArgs e)
-    {
-        CancelDragCandidate();
-    }
-
-    private void CancelDragCandidate()
-    {
-        _dragCandidate = null;
-        _dragPressedArgs = null;
-        PlaylistListBox.RemoveHandler(PointerMovedEvent, OnPlaylistPointerMoved);
-        PlaylistListBox.RemoveHandler(PointerReleasedEvent, OnPlaylistPointerReleased);
-    }
-
-    private async void OnPlaylistPointerMoved(object? sender, PointerEventArgs e)
-    {
-        if (_dragCandidate is null || _dragPressedArgs is null)
-        {
-            CancelDragCandidate();
-            return;
-        }
-
-        var pos = e.GetPosition(PlaylistListBox);
-        var delta = pos - _dragStartPoint;
-        if (Math.Abs(delta.Y) < 8)
-            return;
-
-        var item = _dragCandidate;
-        var pressedArgs = _dragPressedArgs;
-        CancelDragCandidate();
-
-        var data = new DataTransfer();
-        data.Add(DataTransferItem.Create(PlaylistItemFormat, item));
-        await DragDrop.DoDragDropAsync(pressedArgs, data, DragDropEffects.Move);
-    }
-
     private void OnPlaylistDragOver(object? sender, DragEventArgs e)
     {
         _ = sender;
-        if (e.DataTransfer.Contains(PlaylistItemFormat))
-        {
-            e.DragEffects = DragDropEffects.Move;
-            return;
-        }
+        // Only external file drops are accepted here; row reordering is owned by ItemDragBehavior.
         e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
@@ -122,18 +56,6 @@ public partial class MediaPlayerView : UserControl
         if (DataContext is not MediaPlayerViewModel vm)
             return;
 
-        var draggedItem = e.DataTransfer.TryGetValue(PlaylistItemFormat);
-        if (draggedItem is not null)
-        {
-            var targetItem = GetPlaylistItemAtPoint(e.GetPosition(PlaylistListBox));
-            if (targetItem is not null && !ReferenceEquals(targetItem, draggedItem))
-            {
-                var targetIndex = vm.PlaylistItems.IndexOf(targetItem);
-                vm.MovePlaylistItem(draggedItem, targetIndex);
-            }
-            return;
-        }
-
         var files = e.DataTransfer.TryGetFiles();
         if (files is null || !files.Any())
             return;
@@ -144,20 +66,6 @@ public partial class MediaPlayerView : UserControl
             .ToList();
         if (paths.Count > 0)
             vm.AddDroppedFilesToPlaylist(paths);
-    }
-
-    private PlaylistItem? GetPlaylistItemAtPoint(Point point)
-    {
-        var hit = PlaylistListBox.InputHitTest(point);
-        if (hit is not Visual visual)
-            return null;
-
-        foreach (var ancestor in visual.GetSelfAndVisualAncestors())
-        {
-            if (ancestor is ListBoxItem lbi && lbi.DataContext is PlaylistItem item)
-                return item;
-        }
-        return null;
     }
 
     private void OnPlayerNameDoubleTapped(object? sender, TappedEventArgs e)

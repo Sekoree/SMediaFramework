@@ -676,4 +676,18 @@ public static class Strings
     public static string CuePreviewNoAudioHint => Get(nameof(CuePreviewNoAudioHint));
     public static string DefaultDeviceLabel => Get(nameof(DefaultDeviceLabel));
     public static string PreviewOutputLabel => Get(nameof(PreviewOutputLabel));
+    public static string PlaybackOptionsButton => Get(nameof(PlaybackOptionsButton));
+    public static string PlaybackOptionsTooltip => Get(nameof(PlaybackOptionsTooltip));
+    public static string AddToPlaylistButton => Get(nameof(AddToPlaylistButton));
+    public static string AddToPlaylistTooltip => Get(nameof(AddToPlaylistTooltip));
+    public static string LoadingMediaLabel => Get(nameof(LoadingMediaLabel));
+    public static string ExtractingWaveformLabel => Get(nameof(ExtractingWaveformLabel));
+    public static string PlaylistDragReorderHint => Get(nameof(PlaylistDragReorderHint));
+    public static string BackgroundImageLabel => Get(nameof(BackgroundImageLabel));
+    public static string BackgroundImageHint => Get(nameof(BackgroundImageHint));
+    public static string BackgroundImagePlaceholder => Get(nameof(BackgroundImagePlaceholder));
+    public static string AlwaysOnTopLabel => Get(nameof(AlwaysOnTopLabel));
+    public static string AlwaysOnTopHint => Get(nameof(AlwaysOnTopHint));
+    public static string ClearButton => Get(nameof(ClearButton));
+    public static string ImageFilesFilterLabel => Get(nameof(ImageFilesFilterLabel));
 }

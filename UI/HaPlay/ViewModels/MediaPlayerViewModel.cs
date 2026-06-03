@@ -997,22 +997,40 @@ public partial class MediaPlayerViewModel : ViewModelBase
         };
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActiveOptions))]
+    [NotifyPropertyChangedFor(nameof(ActiveOptionCount))]
     private bool _isLooping;
 
     /// <summary>When true, the loop timer auto-loads the next playlist entry on natural end of file.
     /// Defaults to false — auto-advance is rarely wanted in performance contexts where each track is cued.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActiveOptions))]
+    [NotifyPropertyChangedFor(nameof(ActiveOptionCount))]
     private bool _autoAdvancePlaylist;
 
     /// <summary>When true (and auto-advancing), the next item is drawn from a shuffle bag instead of
     /// sequential order. Mirrors the selected tab's <see cref="PlaylistTabViewModel.Shuffle"/>.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActiveOptions))]
+    [NotifyPropertyChangedFor(nameof(ActiveOptionCount))]
     private bool _shufflePlaylist;
 
     /// <summary>When true, auto-advance wraps from the last item back to the first instead of stopping.
     /// Distinct from <see cref="IsLooping"/> (loop the current item). Mirrors the selected tab.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasActiveOptions))]
+    [NotifyPropertyChangedFor(nameof(ActiveOptionCount))]
     private bool _repeatAllPlaylist;
+
+    /// <summary>True when any of the secondary playback options (loop / auto-advance / shuffle /
+    /// repeat-all) is enabled. Drives the active badge on the transport's "Options" flyout button.</summary>
+    public bool HasActiveOptions =>
+        IsLooping || AutoAdvancePlaylist || ShufflePlaylist || RepeatAllPlaylist;
+
+    /// <summary>Count of enabled secondary playback options, shown as a small badge on the Options button.</summary>
+    public int ActiveOptionCount =>
+        (IsLooping ? 1 : 0) + (AutoAdvancePlaylist ? 1 : 0)
+        + (ShufflePlaylist ? 1 : 0) + (RepeatAllPlaylist ? 1 : 0);
 
     [ObservableProperty]
     private bool _holdFallbackVideo;
@@ -1091,10 +1109,28 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <see cref="WaitingForSourceMessage"/> and the loop timer drives reconnect attempts on the item's
     /// <see cref="NDIInputPlaylistItem.RetrySeconds"/> cadence.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsBusy))]
+    [NotifyPropertyChangedFor(nameof(BusyStatusText))]
     private bool _isWaitingForSource;
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BusyStatusText))]
     private string? _waitingForSourceMessage;
+
+    /// <summary>True whenever the header should show the slim indeterminate bar — a media open is in
+    /// flight, the waveform is still being analysed, or a live source is waiting to (re)connect.</summary>
+    public bool IsBusy => IsLoadingMedia || IsExtractingWaveform || IsWaitingForSource;
+
+    /// <summary>Status text shown beside the busy bar, picked by priority (waiting &gt; loading &gt;
+    /// analysing). Empty when <see cref="IsBusy"/> is false.</summary>
+    public string BusyStatusText =>
+        IsWaitingForSource
+            ? (string.IsNullOrWhiteSpace(WaitingForSourceMessage)
+                ? Resources.Strings.LoadingMediaLabel
+                : WaitingForSourceMessage!)
+        : IsLoadingMedia ? Resources.Strings.LoadingMediaLabel
+        : IsExtractingWaveform ? Resources.Strings.ExtractingWaveformLabel
+        : string.Empty;
 
     /// <summary>Phase C.5 — wall-clock deadline for the next reconnect attempt. The loop timer reopens
     /// the session via <see cref="OpenOrReloadAsync"/> as soon as <see cref="DateTime.UtcNow"/> reaches
@@ -1124,7 +1160,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// <see cref="StatusMessage"/>. Raises <see cref="HasLoadError"/> when it changes.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasLoadError))]
+    [NotifyPropertyChangedFor(nameof(IsLoadingMedia))]
+    [NotifyPropertyChangedFor(nameof(IsBusy))]
+    [NotifyPropertyChangedFor(nameof(BusyStatusText))]
     private PlayerLoadState _loadState = PlayerLoadState.Idle;
+
+    /// <summary>True while a media open is in flight — drives the slim indeterminate loading bar in the
+    /// transport header. Distinct from <see cref="IsWaitingForSource"/> (live source not yet connected).</summary>
+    public bool IsLoadingMedia => LoadState == PlayerLoadState.Loading;
 
     /// <summary>Sticky last failure reason (names the failing file), kept visible until the next load
     /// attempt succeeds. Unlike <see cref="StatusMessage"/> it isn't cleared by unrelated status text.</summary>
@@ -1217,6 +1260,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private int _waveformRevision;
     private CancellationTokenSource? _waveformCts;
 
+    /// <summary>True while the background waveform peaks are being computed for the loaded file — drives
+    /// the slim indeterminate bar's "Analysing waveform…" state once the media itself has opened.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsBusy))]
+    [NotifyPropertyChangedFor(nameof(BusyStatusText))]
+    private bool _isExtractingWaveform;
+
     public float[]? WaveformPeaks
     {
         get => _waveformPeaks;
@@ -1239,20 +1289,25 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             WaveformPeaks = null;
             WaveformRevision++;
+            IsExtractingWaveform = false;
             return;
         }
 
+        IsExtractingWaveform = true;
         _waveformCts = new CancellationTokenSource();
         var ct = _waveformCts.Token;
         _ = Task.Run(async () =>
         {
             var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct);
+            // A superseding extraction (or a path clear) owns the flag once this token is cancelled, so
+            // only the run that finishes naturally clears the "analysing" state.
             if (!ct.IsCancellationRequested)
             {
                 Dispatcher.UIThread.Post(() =>
                 {
                     WaveformPeaks = peaks;
                     WaveformRevision++;
+                    IsExtractingWaveform = false;
                 });
             }
         }, ct);
@@ -2309,64 +2364,49 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand]
     private async Task AddFilesToPlaylistAsync()
     {
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        Log("enter");
+        var top = TryGetMainWindow();
+        if (top is null)
+            return;
+
+        var opts = new FilePickerOpenOptions { Title = "Add files to playlist", AllowMultiple = true };
+        opts.FileTypeFilter =
+        [
+            new FilePickerFileType("Media") { Patterns = ["*.mp4", "*.mkv", "*.mov", "*.webm", "*.m4v", "*.avi", "*.mp3", "*.wav", "*.flac", "*.aac", "*.m4a", "*.ogg"] },
+            new FilePickerFileType("All files") { Patterns = ["*"] },
+        ];
+
         try
         {
-            var top = TryGetMainWindow();
-            if (top is null) { Log("no main window — abort"); return; }
-
-            var opts = new FilePickerOpenOptions { Title = "Add files to playlist", AllowMultiple = true };
-            opts.FileTypeFilter =
-            [
-                new FilePickerFileType("Media") { Patterns = ["*.mp4", "*.mkv", "*.mov", "*.webm", "*.m4v", "*.avi", "*.mp3", "*.wav", "*.flac", "*.aac", "*.m4a", "*.ogg"] },
-                new FilePickerFileType("All files") { Patterns = ["*"] },
-            ];
-
-            Log("calling OpenFilePickerAsync");
             var files = await top.StorageProvider.OpenFilePickerAsync(opts);
-            Log($"picker returned count={files.Count}");
 
-            int added = 0, skipped = 0;
+            int added = 0;
             foreach (var file in files)
             {
                 var path = file.TryGetLocalPath();
-                Log($"file path='{path}'");
                 if (string.IsNullOrEmpty(path) || !File.Exists(path))
-                {
-                    skipped++;
                     continue;
-                }
                 // Dedup against existing file items (same-path live items don't make sense and don't exist here).
                 if (PlaylistItems.OfType<FilePlaylistItem>().Any(f => string.Equals(f.Path, path, StringComparison.Ordinal)))
-                {
-                    skipped++;
                     continue;
-                }
                 PlaylistItems.Add(new FilePlaylistItem(path));
                 added++;
             }
-            Log($"foreach done added={added} skipped={skipped} count={PlaylistItems.Count}");
 
             if (SelectedPlaylistItem is null && PlaylistItems.Count > 0)
-            {
-                Log("setting initial SelectedPlaylistItem");
                 SelectedPlaylistItem = PlaylistItems[0];
-                Log("set initial SelectedPlaylistItem done");
-            }
+
+            if (added > 0)
+                StatusMessage = $"Added {added} file(s) to playlist.";
         }
         catch (Exception ex)
         {
-            Log($"EXCEPTION {ex.GetType().Name}: {ex.Message}");
-            throw;
+            // Never let a picker/add failure escape the command. An unhandled exception flowing out of an
+            // AsyncRelayCommand runs as an async-void throw on the UI thread, which can pre-empt the
+            // continuation that re-raises CanExecuteChanged — leaving the "Add files" entry stuck greyed
+            // out even though the app survives. Surface it as a status message instead (matches the other
+            // picker commands, e.g. LoadPlaylistTabAsync).
+            StatusMessage = $"Add files failed: {ex.Message}";
         }
-        finally
-        {
-            Log("exit");
-        }
-
-        void Log(string msg) =>
-            Console.WriteLine($"[AddFiles {sw.ElapsedMilliseconds,5}ms tid={Environment.CurrentManagedThreadId} ui={Dispatcher.UIThread.CheckAccess()}] {msg}");
     }
 
     [RelayCommand(CanExecute = nameof(CanRemovePlaylistItem))]

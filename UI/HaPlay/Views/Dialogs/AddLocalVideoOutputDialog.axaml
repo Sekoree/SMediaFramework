@@ -69,6 +69,22 @@
             </DataTemplate>
           </ComboBox.ItemTemplate>
         </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.BackgroundImageLabel}" FontWeight="SemiBold" Margin="0,8,0,0" />
+        <TextBlock Text="{x:Static res:Strings.BackgroundImageHint}"
+                   Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+          <TextBox Grid.Column="0" Text="{Binding BackgroundImagePath}"
+                   PlaceholderText="{x:Static res:Strings.BackgroundImagePlaceholder}" />
+          <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}" Click="BrowseBackgroundClick" />
+          <Button Grid.Column="2" Content="{x:Static res:Strings.ClearButton}" Click="ClearBackgroundClick" />
+        </Grid>
+
+        <CheckBox Content="{x:Static res:Strings.AlwaysOnTopLabel}"
+                  IsChecked="{Binding AlwaysOnTop}" Margin="0,8,0,0" />
+        <TextBlock Text="{x:Static res:Strings.AlwaysOnTopHint}"
+                   Opacity="0.6" FontSize="12" TextWrapping="Wrap"
+                   IsVisible="{Binding !AlwaysOnTopSupported}" />
       </StackPanel>
     </ScrollViewer>
   </DockPanel>

@@ -15,6 +15,13 @@
   <Application.Styles>
     <FluentTheme DensityStyle="Compact"/>
     <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml"/>
+    <!-- Xaml.Behaviors drag-to-reorder: provides the ListBox.draggable style used by the playlist. -->
+    <StyleInclude Source="avares://Xaml.Behaviors.Interactions.Draggable/Styles.axaml"/>
+    <!-- Drag feedback: the row being dragged dims + lifts above its neighbours. -->
+    <Style Selector="ListBox.draggable ListBoxItem:dragging">
+      <Setter Property="Opacity" Value="0.6"/>
+      <Setter Property="ZIndex" Value="1"/>
+    </Style>
     <Style Selector="NumericUpDown">
       <Setter Property="MinWidth" Value="120"/>
     </Style>

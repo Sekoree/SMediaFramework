@@ -1974,4 +1974,46 @@
   <data name="PreviewOutputLabel" xml:space="preserve">
     <value>Preview output:</value>
   </data>
+  <data name="PlaybackOptionsButton" xml:space="preserve">
+    <value>Options</value>
+  </data>
+  <data name="PlaybackOptionsTooltip" xml:space="preserve">
+    <value>Loop, auto-advance, shuffle and repeat-all options for this player</value>
+  </data>
+  <data name="AddToPlaylistButton" xml:space="preserve">
+    <value>+ Add</value>
+  </data>
+  <data name="AddToPlaylistTooltip" xml:space="preserve">
+    <value>Add files or a live input (PortAudio / NDI) to this playlist</value>
+  </data>
+  <data name="LoadingMediaLabel" xml:space="preserve">
+    <value>Loading…</value>
+  </data>
+  <data name="ExtractingWaveformLabel" xml:space="preserve">
+    <value>Analysing waveform…</value>
+  </data>
+  <data name="PlaylistDragReorderHint" xml:space="preserve">
+    <value>Drag rows to reorder · double-click to play · drop files to add</value>
+  </data>
+  <data name="BackgroundImageLabel" xml:space="preserve">
+    <value>Background image (optional)</value>
+  </data>
+  <data name="BackgroundImageHint" xml:space="preserve">
+    <value>Shown on this output when it is idle (no media routed). Letterboxed to the output size.</value>
+  </data>
+  <data name="BackgroundImagePlaceholder" xml:space="preserve">
+    <value>No background image</value>
+  </data>
+  <data name="AlwaysOnTopLabel" xml:space="preserve">
+    <value>Keep window always on top</value>
+  </data>
+  <data name="AlwaysOnTopHint" xml:space="preserve">
+    <value>Always-on-top applies to the In-app preview engine; the Standalone window engine ignores it.</value>
+  </data>
+  <data name="ClearButton" xml:space="preserve">
+    <value>Clear</value>
+  </data>
+  <data name="ImageFilesFilterLabel" xml:space="preserve">
+    <value>Image files</value>
+  </data>
 </root>

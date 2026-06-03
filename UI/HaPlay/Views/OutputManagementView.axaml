@@ -24,8 +24,10 @@
     </Style>
   </UserControl.Styles>
 
-  <DockPanel Margin="16">
-    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,12">
+  <!-- Rows: header / outputs (fills) / shared-headphones / virtual-channels. Previously a DockPanel,
+       which docked these cards Left as columns and squeezed the outputs list — a Grid stacks them. -->
+  <Grid Margin="16" RowDefinitions="Auto,*,Auto,Auto" RowSpacing="10">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto">
       <StackPanel Grid.Column="0" Spacing="2">
         <TextBlock Text="{x:Static res:Strings.OutputManagementHeader}" FontSize="22" FontWeight="SemiBold" />
         <TextBlock Classes="hint"
@@ -46,7 +48,7 @@
       </StackPanel>
     </Grid>
 
-    <Border Classes="card">
+    <Border Grid.Row="1" Classes="card">
       <ListBox ItemsSource="{Binding Outputs}" Background="Transparent">
         <ListBox.ItemTemplate>
           <DataTemplate x:DataType="vm:OutputLineViewModel">
@@ -56,12 +58,8 @@
                   <MenuItem Header="{x:Static res:Strings.NoPreviewActionsMenuHeader}"
                             IsVisible="{Binding IsNotLocalVideo}"
                             IsEnabled="False" />
-                  <MenuItem Header="{x:Static res:Strings.StartPreviewWindowMenuHeader}"
-                            Command="{Binding StartPreviewCommand}"
-                            IsVisible="{Binding IsLocalVideo}" />
-                  <MenuItem Header="{x:Static res:Strings.StopPreviewWindowMenuHeader}"
-                            Command="{Binding StopPreviewCommand}"
-                            IsVisible="{Binding IsLocalVideo}" />
+                  <!-- The output window opens when the output is added and closes when it's removed, so a
+                       manual open/close ("start/stop preview") was removed. Fullscreen / Windowed remain. -->
                   <MenuItem Header="{x:Static res:Strings.FullscreenPreviewMenuHeader}"
                             Command="{Binding FullscreenPreviewCommand}"
                             IsVisible="{Binding IsLocalVideo}" />
@@ -116,7 +114,7 @@
       </ListBox>
     </Border>
 
-    <Border Classes="card" Margin="0,10,0,0">
+    <Border Grid.Row="2" Classes="card">
       <DockPanel>
         <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.SharedHeadphonesBusesLabel}" FontWeight="SemiBold" Margin="0,0,0,6" />
         <TextBlock DockPanel.Dock="Top" Classes="hint"
@@ -124,7 +122,7 @@
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
           <Button Content="{x:Static res:Strings.AddBusButton}" Command="{Binding AddSharedHeadphonesBusCommand}" />
         </StackPanel>
-        <ListBox ItemsSource="{Binding SharedHeadphonesBuses}" Background="Transparent" Margin="0,6,0,0">
+        <ListBox ItemsSource="{Binding SharedHeadphonesBuses}" Background="Transparent" Margin="0,6,0,0" MaxHeight="180">
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="vm:SharedHeadphonesBusViewModel">
               <Grid ColumnDefinitions="220,*,Auto" ColumnSpacing="8" Margin="0,2">
@@ -149,7 +147,7 @@
       </DockPanel>
     </Border>
 
-    <Border Classes="card" Margin="0,10,0,0">
+    <Border Grid.Row="3" Classes="card">
       <DockPanel>
         <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.VirtualAudioChannelsHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
         <TextBlock DockPanel.Dock="Top" Classes="hint"
@@ -160,7 +158,7 @@
                 CornerRadius="4" Padding="8,4" Margin="0,6,0,0">
           <TextBlock Text="{Binding VirtualChannelCollisionMessage}" Foreground="#FFE6E6" />
         </Border>
-        <ListBox ItemsSource="{Binding VirtualAudioChannelAssignments}" Background="Transparent" Margin="0,6,0,0">
+        <ListBox ItemsSource="{Binding VirtualAudioChannelAssignments}" Background="Transparent" Margin="0,6,0,0" MaxHeight="200">
           <ListBox.ItemTemplate>
             <DataTemplate x:DataType="vm:OutputVirtualChannelAssignmentViewModel">
               <Grid ColumnDefinitions="220,90,100,90,*" ColumnSpacing="8" Margin="0,2">
@@ -184,5 +182,5 @@
         </ListBox>
       </DockPanel>
     </Border>
-  </DockPanel>
+  </Grid>
 </UserControl>

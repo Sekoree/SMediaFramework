@@ -52,12 +52,22 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(Engine))]
+    [NotifyPropertyChangedFor(nameof(AlwaysOnTopSupported))]
     private VideoEngineChoice _selectedEngine = new(
         VideoOutputEngine.SdlOpenGl, Strings.EngineStandaloneWindowLabel,
         Strings.EngineStandaloneWindowSubtitle);
 
     /// <summary>Convenience accessor for the legacy enum field; bound from <see cref="SelectedEngine"/>.</summary>
     public VideoOutputEngine Engine => SelectedEngine.Value;
+
+    /// <summary>Optional idle/background image path shown when no media is routed (both engines).</summary>
+    [ObservableProperty] private string? _backgroundImagePath;
+
+    /// <summary>Keep the output window above others. Only the in-app (Avalonia) engine applies it.</summary>
+    [ObservableProperty] private bool _alwaysOnTop;
+
+    /// <summary>True when the selected engine honours <see cref="AlwaysOnTop"/> (Avalonia in-app window).</summary>
+    public bool AlwaysOnTopSupported => SelectedEngine.Value == VideoOutputEngine.AvaloniaOpenGl;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(WindowMetricsEnabled))]
@@ -117,6 +127,8 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
                          ?? Screens.FirstOrDefault();
         WindowWidth = existing.WindowWidth ?? 1280;
         WindowHeight = existing.WindowHeight ?? 720;
+        BackgroundImagePath = existing.BackgroundImagePath;
+        AlwaysOnTop = existing.AlwaysOnTop;
 
         // Map CloneOfId onto the dropdown choice. Falls back to None when the parent is no longer in
         // the dropdown (e.g. it was removed since the project was saved).
@@ -168,6 +180,8 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
             SelectedScreen.Index,
             SurfaceMode == VideoSurfaceMode.Windowed ? WindowWidth : null,
             SurfaceMode == VideoSurfaceMode.Windowed ? WindowHeight : null,
-            CloneOfId: SelectedCloneParent.Definition?.Id);
+            CloneOfId: SelectedCloneParent.Definition?.Id,
+            BackgroundImagePath: string.IsNullOrWhiteSpace(BackgroundImagePath) ? null : BackgroundImagePath.Trim(),
+            AlwaysOnTop: AlwaysOnTop);
     }
 }

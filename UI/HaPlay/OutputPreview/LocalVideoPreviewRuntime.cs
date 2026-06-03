@@ -1,8 +1,10 @@
+using System.IO;
 using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using HaPlay.Models;
+using HaPlay.Playback;
 using HaPlay.ViewModels;
 using HaPlay.Views;
 using S.Media.Core.Video;
@@ -73,6 +75,20 @@ internal static class PreviewVideoFrames
 
     public static VideoFormat PreviewFormat(int width, int height) =>
         new(width, height, PixelFormat.Bgra32, new Rational(60, 1));
+
+    /// <summary>Idle frame for a local output: the configured background image (letterboxed into
+    /// <paramref name="format"/>) when one is set and loadable, otherwise opaque black.</summary>
+    public static VideoFrame CreateIdleFrame(VideoFormat format, string? backgroundImagePath)
+    {
+        if (!string.IsNullOrWhiteSpace(backgroundImagePath) && File.Exists(backgroundImagePath))
+        {
+            var frame = FallbackImageLoader.TryBuildHoldCpuFrame(format, backgroundImagePath);
+            if (frame is not null)
+                return frame;
+        }
+
+        return CreateBlackBgra(format);
+    }
 }
 
 internal static class LocalVideoWindowPlacement
@@ -158,7 +174,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
                 _definition.SurfaceMode == VideoSurfaceMode.FullScreen,
                 _definition.WindowWidth,
                 _definition.WindowHeight);
-            output.Submit(PreviewVideoFrames.CreateBlackBgra(format));
+            output.Submit(PreviewVideoFrames.CreateIdleFrame(format, _definition.BackgroundImagePath));
             Interlocked.Exchange(ref _sink, output);
         }, cancellationToken).ConfigureAwait(false);
     }
@@ -210,6 +226,15 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
                 newDefinition.SurfaceMode == VideoSurfaceMode.FullScreen,
                 newDefinition.WindowWidth,
                 newDefinition.WindowHeight);
+            // Reflect a background-image change immediately while idle; during playback the session owns
+            // the frame stream, so leave it alone.
+            if (Volatile.Read(ref _playbackHolders) == 0)
+            {
+                var (iw, ih) = LocalVideoWindowPlacement.InitialWindowPixelSize(newDefinition);
+                var fmt = PreviewVideoFrames.PreviewFormat(iw, ih);
+                output.Configure(fmt);
+                output.Submit(PreviewVideoFrames.CreateIdleFrame(fmt, newDefinition.BackgroundImagePath));
+            }
             Reconfigured?.Invoke(this, EventArgs.Empty);
         }, cancellationToken);
     }
@@ -236,7 +261,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
                 var (iw, ih) = LocalVideoWindowPlacement.InitialWindowPixelSize(_definition);
                 var fmt = PreviewVideoFrames.PreviewFormat(iw, ih);
                 output.Configure(fmt);
-                output.Submit(PreviewVideoFrames.CreateBlackBgra(fmt));
+                output.Submit(PreviewVideoFrames.CreateIdleFrame(fmt, _definition.BackgroundImagePath));
             }
             catch
             {
@@ -299,7 +324,11 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var win = new LocalVideoPreviewWindow { Title = _definition.DisplayName };
+            var win = new LocalVideoPreviewWindow
+            {
+                Title = _definition.DisplayName,
+                Topmost = _definition.AlwaysOnTop,
+            };
             var (w, h) = LocalVideoWindowPlacement.InitialWindowPixelSize(_definition);
             win.Width = w;
             win.Height = h;
@@ -308,7 +337,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             LocalVideoWindowPlacement.Apply(win, _definition, _screenReference, null);
             var format = PreviewVideoFrames.PreviewFormat(w, h);
             win.Video.Configure(format);
-            win.Video.Submit(PreviewVideoFrames.CreateBlackBgra(format));
+            win.Video.Submit(PreviewVideoFrames.CreateIdleFrame(format, _definition.BackgroundImagePath));
             win.Closed += OnWindowClosed;
             _window = win;
             win.Show();
@@ -357,7 +386,17 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             cancellationToken.ThrowIfCancellationRequested();
             if (_window is null)
                 return;
+            _window.Topmost = newDefinition.AlwaysOnTop;
             LocalVideoWindowPlacement.Apply(_window, newDefinition, _screenReference, null);
+            // Reflect a background-image change immediately while idle; during playback the session owns
+            // the frame stream, so leave it alone.
+            if (Volatile.Read(ref _playbackHolders) == 0)
+            {
+                var (w, h) = LocalVideoWindowPlacement.InitialWindowPixelSize(newDefinition);
+                var fmt = PreviewVideoFrames.PreviewFormat(w, h);
+                _window.Video.Configure(fmt);
+                _window.Video.Submit(PreviewVideoFrames.CreateIdleFrame(fmt, newDefinition.BackgroundImagePath));
+            }
         }, DispatcherPriority.Normal);
 
         Reconfigured?.Invoke(this, EventArgs.Empty);
@@ -385,7 +424,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
                     var (w, h) = LocalVideoWindowPlacement.InitialWindowPixelSize(_definition);
                     var fmt = PreviewVideoFrames.PreviewFormat(w, h);
                     win.Video.Configure(fmt);
-                    win.Video.Submit(PreviewVideoFrames.CreateBlackBgra(fmt));
+                    win.Video.Submit(PreviewVideoFrames.CreateIdleFrame(fmt, _definition.BackgroundImagePath));
                 }
                 catch
                 {
