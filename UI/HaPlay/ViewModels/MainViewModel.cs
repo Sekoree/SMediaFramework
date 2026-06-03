@@ -60,6 +60,13 @@ public partial class MainViewModel : ViewModelBase
             else
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreRollCacheChanged(ids));
         };
+        _cuePlaybackEngine.PreparedCueStatesChanged += states =>
+        {
+            if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+                CuePlayer.OnPreparedCueStatesChanged(states);
+            else
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => CuePlayer.OnPreparedCueStatesChanged(states));
+        };
         _cuePlaybackEngine.PreviewEnded += (_, id) => CuePlayer.OnPreviewEnded(id);
         CuePlayer.CancelCueCallback = _cuePlaybackEngine.StopCueAsync;
         CuePlayer.MediaCueExecutor = _cuePlaybackEngine.ExecuteAsync;

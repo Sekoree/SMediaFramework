@@ -27,15 +27,18 @@
                       ItemsSource="{Binding OutputPresets}"
                       SelectedItem="{Binding OutputPreset}"
                       HorizontalAlignment="Stretch" />
-            <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.TransitionLabel}" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="0" Grid.Column="2" Text="{x:Static res:Strings.TransitionLabel}" VerticalAlignment="Center"
+                       ToolTip.Tip="{x:Static res:Strings.TransitionTooltip}" />
             <ComboBox Grid.Row="0" Grid.Column="3"
                       ItemsSource="{Binding TransitionModes}"
                       SelectedItem="{Binding TransitionMode}"
+                      ToolTip.Tip="{x:Static res:Strings.TransitionTooltip}"
                       HorizontalAlignment="Stretch" />
             <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.MillisecondsShort}" VerticalAlignment="Center" />
             <NumericUpDown Grid.Row="1" Grid.Column="1" Width="120"
                            Minimum="0" Maximum="10000" Increment="50"
                            Value="{Binding TransitionDurationMs}"
+                           ToolTip.Tip="{x:Static res:Strings.TransitionTooltip}"
                            HorizontalAlignment="Left" />
           </Grid>
           <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="8"

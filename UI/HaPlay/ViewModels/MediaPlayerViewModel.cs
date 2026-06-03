@@ -20,6 +20,17 @@ using S.Media.PortAudio;
 
 namespace HaPlay.ViewModels;
 
+/// <summary>Structured load lifecycle for a player, surfaced alongside the live
+/// <c>IsWaitingForSource</c> retry state.</summary>
+public enum PlayerLoadState
+{
+    Idle,
+    Loading,
+    Ready,
+    Failed,
+    WaitingForSource,
+}
+
 public partial class MediaPlayerViewModel : ViewModelBase
 {
     private readonly OutputManagementViewModel _outputs;
@@ -569,6 +580,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         _waitingItem = item;
         IsWaitingForSource = true;
+        LoadState = PlayerLoadState.WaitingForSource;
         var retrySec = GetRetrySeconds(item);
         if (retrySec > 0)
         {
@@ -1107,6 +1119,21 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private string? _statusMessage;
+
+    /// <summary>Structured load lifecycle for the player, distinct from the transient
+    /// <see cref="StatusMessage"/>. Raises <see cref="HasLoadError"/> when it changes.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasLoadError))]
+    private PlayerLoadState _loadState = PlayerLoadState.Idle;
+
+    /// <summary>Sticky last failure reason (names the failing file), kept visible until the next load
+    /// attempt succeeds. Unlike <see cref="StatusMessage"/> it isn't cleared by unrelated status text.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasLoadError))]
+    private string? _lastLoadError;
+
+    /// <summary>True when the last load attempt failed and an error is available to show.</summary>
+    public bool HasLoadError => LoadState == PlayerLoadState.Failed && !string.IsNullOrWhiteSpace(LastLoadError);
 
     public TimeSpan RemainingTime =>
         Duration > CurrentPosition ? Duration - CurrentPosition : TimeSpan.Zero;
@@ -2872,6 +2899,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
             CurrentPosition = TimeSpan.Zero;
             Duration = TimeSpan.Zero;
             SeekSliderValue = 0;
+            // Tearing down a session returns the player to idle. A prior Failed state is set after this
+            // runs (on the next open), and the WaitingForSource retry state owns its own lifecycle, so
+            // only reset when we're not actively waiting for a live source to return.
+            if (LoadState != PlayerLoadState.WaitingForSource)
+                LoadState = PlayerLoadState.Idle;
             PlayCommand.NotifyCanExecuteChanged();
             PauseCommand.NotifyCanExecuteChanged();
             StopCommand.NotifyCanExecuteChanged();
@@ -2969,6 +3001,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             var (item, selected) = await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
+                LoadState = PlayerLoadState.Loading;
                 var lines = SelectedOutputLines();
                 _outputs.StopPreviewsForPlayback(lines);
                 PlaylistItem? effective = _currentPlaylistItem;
@@ -3004,9 +3037,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 if (created is null)
                 {
                     if (item.IsLive && GetRetrySeconds(item) > 0)
+                    {
                         EnterWaitingForSource(item, createErr ?? "source unavailable");
+                    }
                     else
+                    {
                         StatusMessage = createErr ?? "Failed to open media.";
+                        LastLoadError = $"{item.DisplayName}: {createErr ?? "failed to open media"}";
+                        LoadState = PlayerLoadState.Failed;
+                    }
                     SyncIdleSlate();
                     SDebug.ChangeTrace.Step($"OpenOrReload: create failed ({createErr ?? "unknown"})");
                     return false;
@@ -3016,6 +3055,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 _session = created;
                 IsMediaLoaded = true;
                 StatusMessage = null;
+                LastLoadError = null;
+                LoadState = PlayerLoadState.Ready;
                 Duration = item.IsLive
                     ? TimeSpan.Zero
                     : (created.Player.HasContainerDecoder

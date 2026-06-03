@@ -81,6 +81,19 @@
             <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
         </Border>
 
+        <!-- Sticky last-load-error banner: persists until the next successful load. -->
+        <Border DockPanel.Dock="Top"
+                IsVisible="{Binding HasLoadError}"
+                Background="#332B2B" BorderBrush="#88E53935" BorderThickness="1"
+                CornerRadius="4" Padding="10,6" Margin="0,0,0,12"
+                ToolTip.Tip="{x:Static res:Strings.LoadErrorBannerTooltip}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="⚠" Foreground="#FF8A80" VerticalAlignment="Center" />
+                <TextBlock Text="{Binding LastLoadError}" Foreground="#FFCDD2" TextWrapping="Wrap"
+                           VerticalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
         <ScrollViewer>
             <StackPanel Spacing="12">
 

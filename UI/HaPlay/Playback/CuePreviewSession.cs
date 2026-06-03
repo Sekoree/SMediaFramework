@@ -1,4 +1,5 @@
 using HaPlay.Models;
+using S.Media.Core;
 using S.Media.Core.Clock;
 using S.Media.Playback;
 using S.Media.PortAudio;
@@ -20,7 +21,7 @@ internal sealed class CuePreviewSession : IDisposable
         SDL3GLVideoOutput? videoOutput,
         PortAudioPlaybackHost? audioHost,
         CancellationTokenSource cts,
-        CueClipWindow clipWindow)
+        ClipWindow clipWindow)
     {
         CueId = cueId;
         Player = player;
@@ -35,7 +36,7 @@ internal sealed class CuePreviewSession : IDisposable
     public SDL3GLVideoOutput? VideoOutput { get; }
     public PortAudioPlaybackHost? AudioHost { get; }
     public CancellationTokenSource Cts { get; }
-    public CueClipWindow ClipWindow { get; }
+    public ClipWindow ClipWindow { get; }
 
     public IPlaybackClock? VideoMaster => AudioHost?.MainOutput;
 

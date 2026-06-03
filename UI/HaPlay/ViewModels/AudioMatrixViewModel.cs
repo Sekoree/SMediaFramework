@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
 using HaPlay.Models;
 using HaPlay.Resources;
 
@@ -223,6 +224,35 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
                 break;
         }
     }
+
+    /// <summary>Apply a multichannel downmix preset: mute every cell, then unmute the preset's
+    /// contributions at their gains. Shared with the cue route editor via <see cref="AudioDownmixPresets"/>.</summary>
+    public void ApplyDownmix(AudioDownmixPreset preset)
+    {
+        // Bail (leaving the matrix untouched) when the preset doesn't fit the channel layout, so a
+        // mis-clicked "5.1 → stereo" on a stereo source can't silence everything.
+        if (!AudioDownmixPresets.IsApplicable(preset, InputChannelCount, OutputChannelCount))
+            return;
+
+        foreach (var c in Cells)
+        {
+            c.GainDb = AudioMatrixDefaults.MutedFloorDb;
+            c.Muted = true;
+        }
+
+        foreach (var contrib in AudioDownmixPresets.Contributions(preset, InputChannelCount, OutputChannelCount))
+        {
+            var c = Cells.FirstOrDefault(x => x.InputChannel == contrib.InputChannel && x.OutputChannel == contrib.OutputChannel);
+            if (c is null)
+                continue;
+            c.GainDb = contrib.GainDb;
+            c.Muted = false;
+        }
+    }
+
+    /// <summary>Command form of <see cref="ApplyDownmix"/> for the quick-apply preset buttons.</summary>
+    [RelayCommand]
+    private void ApplyDownmixPreset(AudioDownmixPreset preset) => ApplyDownmix(preset);
 
     /// <summary>Phase C — current cell layout as persistable configs (filtered to changed/audible cells).</summary>
     public IReadOnlyList<AudioMatrixCellConfig> ToPersistableCells() =>

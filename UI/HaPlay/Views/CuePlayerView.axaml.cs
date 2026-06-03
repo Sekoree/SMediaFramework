@@ -7,6 +7,7 @@ using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.VisualTree;
+using HaPlay.Playback;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 
@@ -339,35 +340,49 @@ public partial class CuePlayerView : UserControl
         CueNodeViewModel? current = null;
         PropertyChangedEventHandler handler = (_, args) =>
         {
-            if (args.PropertyName is nameof(CueNodeViewModel.RowStatus) or nameof(CueNodeViewModel.IsPreRollWarm))
+            if (args.PropertyName is nameof(CueNodeViewModel.RowStatus)
+                or nameof(CueNodeViewModel.IsPreRollWarm)
+                or nameof(CueNodeViewModel.PreRollState)
+                or nameof(CueNodeViewModel.PreRollError))
                 Sync();
         };
 
         void Sync()
         {
             var status = current?.RowStatus ?? CueRowStatus.Idle;
-            var warm = current?.IsPreRollWarm ?? false;
+            var preRoll = current?.PreRollState ?? PreparedCueState.Idle;
             dot.Fill = status switch
             {
                 CueRowStatus.Current => Avalonia.Media.Brushes.OrangeRed,
                 CueRowStatus.Standby => Avalonia.Media.Brushes.Goldenrod,
                 _ => Avalonia.Media.Brushes.Transparent,
             };
-            // Idle + warm: light-blue outline so the operator sees which upcoming cues are
-            // ready-to-fire. Current/Standby keep their solid color; the warming hint would be
-            // redundant while the row is already lit.
+            // Idle rows show standby-preparation state via the outline so the operator can see, at a
+            // glance, which upcoming cues are ready / still preparing / failed to prepare. Current and
+            // Standby rows keep their solid color (the warming hint would be redundant while lit).
             if (status == CueRowStatus.Idle)
             {
-                dot.Stroke = warm
-                    ? new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(220, 80, 170, 255))
-                    : new Avalonia.Media.SolidColorBrush(Avalonia.Media.Color.FromArgb(96, 255, 255, 255));
-                dot.StrokeThickness = warm ? 2 : 1;
+                var (stroke, thickness) = preRoll switch
+                {
+                    // ready — light blue
+                    PreparedCueState.Ready => (Avalonia.Media.Color.FromArgb(220, 80, 170, 255), 2.0),
+                    // preparing — amber
+                    PreparedCueState.Preparing => (Avalonia.Media.Color.FromArgb(200, 230, 170, 60), 1.5),
+                    // failed — red
+                    PreparedCueState.Failed => (Avalonia.Media.Color.FromArgb(230, 229, 57, 53), 2.0),
+                    // idle — faint white
+                    _ => (Avalonia.Media.Color.FromArgb(96, 255, 255, 255), 1.0),
+                };
+                dot.Stroke = new Avalonia.Media.SolidColorBrush(stroke);
+                dot.StrokeThickness = thickness;
             }
             else
             {
                 dot.Stroke = null;
                 dot.StrokeThickness = 0;
             }
+
+            Avalonia.Controls.ToolTip.SetTip(dot, current?.PreRollStateTooltip);
         }
 
         void Rebind(CueNodeViewModel? next)

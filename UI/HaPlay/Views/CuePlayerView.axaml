@@ -4,6 +4,7 @@
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
              xmlns:res="using:HaPlay.Resources"
+             xmlns:models="using:HaPlay.Models"
              xmlns:controls="using:HaPlay.Views.Controls"
              mc:Ignorable="d" d:DesignWidth="980" d:DesignHeight="760"
              x:Class="HaPlay.Views.CuePlayerView"
@@ -238,6 +239,10 @@
                             ItemsSource="{Binding CueEndBehaviors}"
                             SelectedItem="{Binding SelectedCueNode.EndBehavior, Mode=TwoWay}" />
                 </Grid>
+                <CheckBox Content="{x:Static res:Strings.DisablePreRollLabel}"
+                          IsVisible="{Binding HasSelectedMediaCue}"
+                          IsChecked="{Binding SelectedCueNode.DisablePreRoll, Mode=TwoWay}"
+                          ToolTip.Tip="{x:Static res:Strings.DisablePreRollTooltip}" />
                 <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
                 <TextBox AcceptsReturn="True"
                          MinHeight="60"
@@ -320,6 +325,25 @@
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddAudioRouteButton}" Command="{Binding AddAudioRouteCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveAudioRouteCommand}" />
+                </WrapPanel>
+                <!-- Downmix quick-apply: replaces the target line's routes; ignored if the preset
+                     doesn't fit the source/output channel count. -->
+                <WrapPanel ItemSpacing="6" IsVisible="{Binding HasSelectedMediaCue}"
+                           ToolTip.Tip="{x:Static res:Strings.DownmixPresetsTooltip}">
+                  <TextBlock Text="{x:Static res:Strings.DownmixPresetsLabel}" Opacity="0.6"
+                             FontSize="11" VerticalAlignment="Center" />
+                  <Button Content="Pass-through" Padding="6,2" FontSize="11"
+                          Command="{Binding ApplyCueDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.PassThrough}" />
+                  <Button Content="Mono → St" Padding="6,2" FontSize="11"
+                          Command="{Binding ApplyCueDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.MonoToStereo}" />
+                  <Button Content="5.1 → St" Padding="6,2" FontSize="11"
+                          Command="{Binding ApplyCueDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.Surround51ToStereo}" />
+                  <Button Content="Drop LFE" Padding="6,2" FontSize="11"
+                          Command="{Binding ApplyCueDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.DropLfe}" />
                 </WrapPanel>
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"

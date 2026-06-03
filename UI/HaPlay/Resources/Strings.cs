@@ -21,6 +21,7 @@ public static class Strings
     public static string NoOutputsConfiguredHint => Get(nameof(NoOutputsConfiguredHint));
     public static string OutputPresetLabel => Get(nameof(OutputPresetLabel));
     public static string TransitionLabel => Get(nameof(TransitionLabel));
+    public static string TransitionTooltip => Get(nameof(TransitionTooltip));
     public static string MillisecondsShort => Get(nameof(MillisecondsShort));
     public static string CustomWidthLabel => Get(nameof(CustomWidthLabel));
     public static string CustomHeightLabel => Get(nameof(CustomHeightLabel));
@@ -364,6 +365,14 @@ public static class Strings
     public static string MuteToggleLabel => Get(nameof(MuteToggleLabel));
     public static string MuteToggleTooltip => Get(nameof(MuteToggleTooltip));
     public static string MasterGainTooltip => Get(nameof(MasterGainTooltip));
+    public static string LoadErrorBannerTooltip => Get(nameof(LoadErrorBannerTooltip));
+    public static string DownmixPresetsLabel => Get(nameof(DownmixPresetsLabel));
+    public static string DownmixPresetsTooltip => Get(nameof(DownmixPresetsTooltip));
+    public static string DownmixNoOutputStatus => Get(nameof(DownmixNoOutputStatus));
+    public static string DisablePreRollLabel => Get(nameof(DisablePreRollLabel));
+    public static string DisablePreRollTooltip => Get(nameof(DisablePreRollTooltip));
+    public static string DownmixNotApplicableStatusFormat => Get(nameof(DownmixNotApplicableStatusFormat));
+    public static string DownmixAppliedStatusFormat => Get(nameof(DownmixAppliedStatusFormat));
     public static string LoopToggleLabel => Get(nameof(LoopToggleLabel));
     public static string LoopToggleTooltip => Get(nameof(LoopToggleTooltip));
     public static string AutoAdvanceToggleLabel => Get(nameof(AutoAdvanceToggleLabel));

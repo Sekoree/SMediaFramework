@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:res="using:HaPlay.Resources"
         xmlns:vm="using:HaPlay.ViewModels"
+        xmlns:models="using:HaPlay.Models"
         xmlns:tdg="using:Avalonia.Controls"
         x:Class="HaPlay.Views.Dialogs.AudioMatrixDialog"
         x:DataType="vm:MediaPlayerViewModel"
@@ -35,24 +36,43 @@
         <ItemsControl ItemsSource="{Binding Outputs}">
           <ItemsControl.ItemTemplate>
             <DataTemplate x:DataType="vm:PlayerOutputBinding">
-              <Grid ColumnDefinitions="*,128,Auto,140,64" ColumnSpacing="8" Margin="0,2"
-                    IsVisible="{Binding IsSelected}">
-                <TextBlock Grid.Column="0" VerticalAlignment="Center"
-                           Text="{Binding Line.Definition.DisplayName}" />
-                <ComboBox Grid.Column="1" MinWidth="128"
-                          ItemsSource="{Binding $parent[Window].((vm:MediaPlayerViewModel)DataContext).MixModes}"
-                          SelectedItem="{Binding MixMode}"
-                          ToolTip.Tip="{x:Static res:Strings.MixPresetTooltip}" />
-                <CheckBox Grid.Column="2" Content="{x:Static res:Strings.MuteToggleLabel}"
-                          IsChecked="{Binding IsMuted}"
-                          ToolTip.Tip="{x:Static res:Strings.DeviceOutputMuteTooltip}" />
-                <Slider Grid.Column="3" Minimum="-60" Maximum="12"
-                        Value="{Binding GainDb, Mode=TwoWay}"
-                        ToolTip.Tip="{x:Static res:Strings.PerDeviceGainTooltip}" />
-                <TextBlock Grid.Column="4" FontFamily="Consolas,monospace"
-                           Text="{Binding GainText}"
-                           VerticalAlignment="Center" />
-              </Grid>
+              <StackPanel Spacing="2" Margin="0,2" IsVisible="{Binding IsSelected}">
+                <Grid ColumnDefinitions="*,128,Auto,140,64" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                             Text="{Binding Line.Definition.DisplayName}" />
+                  <ComboBox Grid.Column="1" MinWidth="128"
+                            ItemsSource="{Binding $parent[Window].((vm:MediaPlayerViewModel)DataContext).MixModes}"
+                            SelectedItem="{Binding MixMode}"
+                            ToolTip.Tip="{x:Static res:Strings.MixPresetTooltip}" />
+                  <CheckBox Grid.Column="2" Content="{x:Static res:Strings.MuteToggleLabel}"
+                            IsChecked="{Binding IsMuted}"
+                            ToolTip.Tip="{x:Static res:Strings.DeviceOutputMuteTooltip}" />
+                  <Slider Grid.Column="3" Minimum="-60" Maximum="12"
+                          Value="{Binding GainDb, Mode=TwoWay}"
+                          ToolTip.Tip="{x:Static res:Strings.PerDeviceGainTooltip}" />
+                  <TextBlock Grid.Column="4" FontFamily="Consolas,monospace"
+                             Text="{Binding GainText}"
+                             VerticalAlignment="Center" />
+                </Grid>
+                <!-- Multichannel downmix quick-apply (no-op if the preset doesn't fit the channel layout). -->
+                <StackPanel Orientation="Horizontal" Spacing="4" Margin="0,0,0,2"
+                            ToolTip.Tip="{x:Static res:Strings.DownmixPresetsTooltip}">
+                  <TextBlock Text="{x:Static res:Strings.DownmixPresetsLabel}" Opacity="0.6"
+                             FontSize="11" VerticalAlignment="Center" />
+                  <Button Content="Pass-through" Padding="6,2" FontSize="11"
+                          Command="{Binding Matrix.ApplyDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.PassThrough}" />
+                  <Button Content="Mono → St" Padding="6,2" FontSize="11"
+                          Command="{Binding Matrix.ApplyDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.MonoToStereo}" />
+                  <Button Content="5.1 → St" Padding="6,2" FontSize="11"
+                          Command="{Binding Matrix.ApplyDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.Surround51ToStereo}" />
+                  <Button Content="Drop LFE" Padding="6,2" FontSize="11"
+                          Command="{Binding Matrix.ApplyDownmixPresetCommand}"
+                          CommandParameter="{x:Static models:AudioDownmixPreset.DropLfe}" />
+                </StackPanel>
+              </StackPanel>
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>

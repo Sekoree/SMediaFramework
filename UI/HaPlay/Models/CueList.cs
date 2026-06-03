@@ -144,6 +144,11 @@ public sealed record MediaCueNode : CueNode
 
     public int FadeOutMs { get; init; }
 
+    /// <summary>Per-cue pre-roll opt-out (§ resource policy). When true this cue is never warmed in
+    /// standby — it opens cold on Go. Use it to keep several large/expensive H.264 files from each
+    /// holding an open, seeked decoder in the pre-roll window.</summary>
+    public bool DisablePreRoll { get; init; }
+
     /// <summary>Per-source-channel audio routing — picks a cue audio output + a device channel
     /// directly. Replaces the previous virtual-output + route-override model.</summary>
     public List<CueAudioRoute> AudioRoutes { get; init; } = new();

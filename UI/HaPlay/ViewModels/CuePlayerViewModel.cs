@@ -346,9 +346,46 @@ public sealed partial class CueNodeViewModel : ObservableObject
     private CueRowStatus _rowStatus = CueRowStatus.Idle;
 
     /// <summary>True while this cue's media is held warm in the pre-roll cache (Phase 5.7.2).
-    /// The status badge column draws a light outline when this is set and the row is idle.</summary>
+    /// The status badge column draws a light outline when this is set and the row is idle.
+    /// Kept in sync with <see cref="PreRollState"/> == <see cref="PreparedCueState.Ready"/>.</summary>
     [ObservableProperty]
     private bool _isPreRollWarm;
+
+    /// <summary>Structured standby preparation state (idle/preparing/ready/failed), richer than the
+    /// binary <see cref="IsPreRollWarm"/>. Drives the badge color and tooltip.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PreRollStateGlyph))]
+    [NotifyPropertyChangedFor(nameof(PreRollStateTooltip))]
+    [NotifyPropertyChangedFor(nameof(HasPreRollFailure))]
+    private PreparedCueState _preRollState = PreparedCueState.Idle;
+
+    /// <summary>Last standby preparation failure reason, when <see cref="PreRollState"/> is
+    /// <see cref="PreparedCueState.Failed"/>.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PreRollStateTooltip))]
+    private string? _preRollError;
+
+    public bool HasPreRollFailure => PreRollState == PreparedCueState.Failed;
+
+    /// <summary>Small glyph shown in the status column for the standby state.</summary>
+    public string PreRollStateGlyph => PreRollState switch
+    {
+        PreparedCueState.Preparing => "…",
+        PreparedCueState.Ready => "●",
+        PreparedCueState.Failed => "!",
+        _ => string.Empty,
+    };
+
+    public string? PreRollStateTooltip => PreRollState switch
+    {
+        PreparedCueState.Preparing => "Standby: preparing…",
+        PreparedCueState.Ready => "Standby: ready (decoder open, seeked to start)",
+        PreparedCueState.Failed => $"Standby failed: {PreRollError}",
+        _ => null,
+    };
+
+    partial void OnPreRollStateChanged(PreparedCueState value) =>
+        IsPreRollWarm = value == PreparedCueState.Ready;
 
     /// <summary>Color tag index 0..7 (Phase 5.8.1). 0 = no tag. The tree's first column shows
     /// a thin vertical strip filled with the palette color; the drawer's General tab lets the
@@ -391,6 +428,11 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     [ObservableProperty]
     private CueEndBehavior _endBehavior = CueEndBehavior.Stop;
+
+    /// <summary>Per-cue pre-roll opt-out. When set, the cue is excluded from standby warming so a
+    /// large/expensive file doesn't hold an open decoder in the pre-roll window.</summary>
+    [ObservableProperty]
+    private bool _disablePreRoll;
 
     [ObservableProperty]
     private string _endpointIdText = string.Empty;
@@ -648,6 +690,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
+                    DisablePreRoll = m.DisablePreRoll,
                 };
                 foreach (var route in m.AudioRoutes)
                     vm.AudioRoutes.Add(CueAudioRouteViewModel.FromModel(route));
@@ -728,6 +771,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 EndOffsetMs = Math.Max(0, EndOffsetMs),
                 Loop = Loop,
                 EndBehavior = EndBehavior,
+                DisablePreRoll = DisablePreRoll,
                 AudioRoutes = AudioRoutes.Select(r => r.ToModel()).ToList(),
                 VideoPlacements = VideoPlacements.Select(p => p.ToModel()).ToList(),
             },
@@ -1318,7 +1362,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (e.PropertyName is nameof(CueNodeViewModel.StartOffsetMs)
             or nameof(CueNodeViewModel.EndOffsetMs)
             or nameof(CueNodeViewModel.Loop)
-            or nameof(CueNodeViewModel.EndBehavior))
+            or nameof(CueNodeViewModel.EndBehavior)
+            or nameof(CueNodeViewModel.DisablePreRoll))
             SuggestPreRollRefresh();
     }
 
@@ -1442,6 +1487,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(SelectedCueDrawerTitle));
         AddAudioRouteCommand.NotifyCanExecuteChanged();
         RemoveAudioRouteCommand.NotifyCanExecuteChanged();
+        ApplyCueDownmixPresetCommand.NotifyCanExecuteChanged();
         AddVideoPlacementCommand.NotifyCanExecuteChanged();
         RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
         StandbySelectedCommand.NotifyCanExecuteChanged();
@@ -1569,6 +1615,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (targets.Count >= maxCount)
                 break;
             if (cue.Kind != CueNodeKind.Media
+                || cue.DisablePreRoll // per-cue resource opt-out
                 || cue.MediaSourceItem is not FilePlaylistItem
                 || cue.ToModel() is not MediaCueNode media)
                 continue;
@@ -1784,6 +1831,27 @@ public partial class CuePlayerViewModel : ViewModelBase
             var shouldBeWarm = warm.Contains(node.Id);
             if (node.IsPreRollWarm != shouldBeWarm)
                 node.IsPreRollWarm = shouldBeWarm;
+        }
+    }
+
+    /// <summary>Host callback — richer per-cue standby preparation states changed (Idle/Preparing/
+    /// Ready/Failed). Cues absent from the snapshot are Idle. Drives the status badge + tooltip and,
+    /// via <see cref="CueNodeViewModel.PreRollState"/>, keeps <c>IsPreRollWarm</c> in sync.</summary>
+    public void OnPreparedCueStatesChanged(IReadOnlyList<Playback.CuePreparationStatus> states)
+    {
+        var byId = states.ToDictionary(s => s.CueId);
+        foreach (var node in EnumerateAllCueNodes())
+        {
+            if (byId.TryGetValue(node.Id, out var status))
+            {
+                node.PreRollState = status.State;
+                node.PreRollError = status.Error;
+            }
+            else
+            {
+                node.PreRollState = PreparedCueState.Idle;
+                node.PreRollError = null;
+            }
         }
     }
 
@@ -2012,6 +2080,65 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool CanRemoveAudioRoute() =>
         SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedAudioRoute is not null;
+
+    /// <summary>Quick-apply a multichannel downmix preset to the selected cue's audio routes for one
+    /// output line (the selected route's line, else the first available audio output). Replaces that
+    /// line's routes; other lines are untouched. Shares <see cref="AudioDownmixPresets"/> with the
+    /// media player's audio matrix.</summary>
+    [RelayCommand(CanExecute = nameof(CanApplyCueDownmix))]
+    private void ApplyCueDownmixPreset(AudioDownmixPreset preset)
+    {
+        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media)
+            return;
+
+        var line = SelectedAudioRoute?.OutputLineId is { } selId && selId != Guid.Empty
+            ? AvailableAudioOutputs.FirstOrDefault(l => l.Definition.Id == selId) ?? AvailableAudioOutputs.FirstOrDefault()
+            : AvailableAudioOutputs.FirstOrDefault();
+        if (line is null)
+        {
+            StatusMessage = Strings.DownmixNoOutputStatus;
+            return;
+        }
+
+        var srcChannels = Math.Max(1, media.SourceAudioChannels);
+        var outChannels = GetAudioOutputChannelCount(line);
+        if (!AudioDownmixPresets.IsApplicable(preset, srcChannels, outChannels))
+        {
+            StatusMessage = Strings.Format(nameof(Strings.DownmixNotApplicableStatusFormat),
+                AudioDownmixPresets.DisplayName(preset), srcChannels, outChannels);
+            return;
+        }
+
+        var lineId = line.Definition.Id;
+        for (var i = media.AudioRoutes.Count - 1; i >= 0; i--)
+            if (media.AudioRoutes[i].OutputLineId == lineId)
+                media.AudioRoutes.RemoveAt(i);
+
+        CueAudioRouteViewModel? first = null;
+        foreach (var contrib in AudioDownmixPresets.Contributions(preset, srcChannels, outChannels))
+        {
+            var route = new CueAudioRouteViewModel
+            {
+                SourceChannel = contrib.InputChannel,
+                OutputLineId = lineId,
+                OutputChannel = contrib.OutputChannel + 1, // cue routes are 1-based
+                GainDb = contrib.GainDb,
+            };
+            media.AudioRoutes.Add(route);
+            first ??= route;
+        }
+
+        if (first is not null)
+            SelectedAudioRoute = first;
+        OnPropertyChanged(nameof(VisibleAudioRoutes));
+        OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
+        StatusMessage = Strings.Format(nameof(Strings.DownmixAppliedStatusFormat),
+            AudioDownmixPresets.DisplayName(preset), line.Definition.DisplayName);
+        SuggestPreRollRefresh();
+    }
+
+    private bool CanApplyCueDownmix() =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } && AvailableAudioOutputs.Count > 0;
 
     [RelayCommand(CanExecute = nameof(CanAddVideoPlacement))]
     private void AddVideoPlacement()

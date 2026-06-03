@@ -2,6 +2,7 @@ using Avalonia.Threading;
 using HaPlay.Models;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
+using S.Media.Core;
 using S.Media.Core.Clock;
 using S.Media.Core.Playback;
 using S.Media.Core.Video;
@@ -25,6 +26,10 @@ public sealed class CuePlaybackEngine : IDisposable
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.CuePlaybackEngine");
     private static readonly TimeSpan BoundedPauseTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan BoundedDisposeTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>Resource-policy ceiling on concurrently-prepared standby decoders, independent of the
+    /// requested pre-roll window size. Each prepared cue holds an opened + seeked decoder.</summary>
+    private const int MaxPreparedDecoders = 6;
 
     private readonly OutputManagementViewModel _outputs;
     private readonly CuePlayerViewModel _cuePlayer;
@@ -63,6 +68,42 @@ public sealed class CuePlaybackEngine : IDisposable
 
     /// <summary>Raised when standby preparation changes the set of warmed cue ids.</summary>
     public event Action<IReadOnlyCollection<Guid>>? PreparedCuesChanged;
+
+    /// <summary>Raised when per-cue preparation status changes (idle/preparing/ready/failed +
+    /// last failure reason), so the cue UI can show more than a binary warm marker.</summary>
+    public event Action<IReadOnlyList<CuePreparationStatus>>? PreparedCueStatesChanged;
+
+    // Per-cue preparation status, guarded by _gate. Only non-idle cues are tracked; absence == Idle.
+    private readonly Dictionary<Guid, CuePreparationStatus> _prepStatus = new();
+
+    private void SetPrepStatus(Guid cueId, PreparedCueState state, string? error = null)
+    {
+        lock (_gate)
+        {
+            if (state == PreparedCueState.Idle)
+            {
+                if (!_prepStatus.Remove(cueId))
+                    return;
+            }
+            else
+            {
+                var status = new CuePreparationStatus(cueId, state, error);
+                if (_prepStatus.TryGetValue(cueId, out var existing) && existing == status)
+                    return;
+                _prepStatus[cueId] = status;
+            }
+        }
+        RaisePreparedCueStatesChanged();
+    }
+
+    private void RaisePreparedCueStatesChanged()
+    {
+        CuePreparationStatus[] snapshot;
+        lock (_gate)
+            snapshot = _prepStatus.Values.ToArray();
+        try { PreparedCueStatesChanged?.Invoke(snapshot); }
+        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreparedCueStatesChanged handler"); }
+    }
 
     /// <summary>Raised on the UI thread when preview playback ends (natural end, operator stop,
     /// or preview window closed).</summary>
@@ -188,9 +229,13 @@ public sealed class CuePlaybackEngine : IDisposable
             keepIds.Add(cue.Id);
             var cacheKey = BuildPreparedCueKey(cue, list);
             if (HasMatchingPreparedCue(cue.Id, cacheKey))
+            {
+                SetPrepStatus(cue.Id, PreparedCueState.Ready);
                 continue;
+            }
 
             await RemovePreparedCueAsync(cue.Id).ConfigureAwait(false);
+            SetPrepStatus(cue.Id, PreparedCueState.Preparing);
 
             var (entry, err) = await OpenCueEntryAsync(cue, list, plan, wireRoutes: false, ct)
                 .ConfigureAwait(false);
@@ -198,19 +243,35 @@ public sealed class CuePlaybackEngine : IDisposable
             {
                 if (!string.IsNullOrWhiteSpace(err))
                     Trace.LogWarning("CuePlaybackEngine.RefreshPreparedCuesAsync: {Cue} failed: {Error}", cue.Id, err);
+                SetPrepStatus(cue.Id, PreparedCueState.Failed, err ?? "Failed to prepare cue.");
                 continue;
             }
 
             if (HasActiveCue(cue.Id))
             {
                 await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
+                SetPrepStatus(cue.Id, PreparedCueState.Idle);
                 continue;
             }
 
             await StorePreparedCueAsync(cue.Id, cacheKey, entry).ConfigureAwait(false);
+            SetPrepStatus(cue.Id, PreparedCueState.Ready);
         }
 
-        await EvictPreparedExceptAsync(keepIds, Math.Max(1, cues.Count)).ConfigureAwait(false);
+        // Resource policy: never hold more than MaxPreparedDecoders open standby decoders, even if a
+        // very large pre-roll window was requested — long H.264 files each keep an opened+seeked
+        // decoder. The window size (cues.Count) caps it further when smaller.
+        var cap = Math.Clamp(cues.Count, 1, MaxPreparedDecoders);
+        await EvictPreparedExceptAsync(keepIds, cap).ConfigureAwait(false);
+
+        // Reconcile: any cue we still track a status for but is no longer in the warm window
+        // (dropped out, or a Failed cue that left the pre-roll set) returns to Idle.
+        Guid[] trackedNotKept;
+        lock (_gate)
+            trackedNotKept = _prepStatus.Keys.Where(id => !keepIds.Contains(id)).ToArray();
+        foreach (var id in trackedNotKept)
+            SetPrepStatus(id, PreparedCueState.Idle);
+
         RaisePreparedCuesChanged();
     }
 
@@ -594,7 +655,11 @@ public sealed class CuePlaybackEngine : IDisposable
             }
         }
         if (entry is not null)
+        {
+            // Consumed for playback — no longer a standby entry.
+            SetPrepStatus(cueId, PreparedCueState.Idle);
             RaisePreparedCuesChanged();
+        }
         return entry;
     }
 
@@ -623,22 +688,29 @@ public sealed class CuePlaybackEngine : IDisposable
             return;
 
         await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
+        SetPrepStatus(cueId, PreparedCueState.Idle);
         RaisePreparedCuesChanged();
     }
 
     private async Task ClearPreparedCuesAsync()
     {
         List<PreparedCue> toDispose;
+        bool hadStatuses;
         lock (_gate)
         {
-            if (_prepared.Count == 0)
-                return;
             toDispose = _prepared.Values.ToList();
             _prepared.Clear();
+            hadStatuses = _prepStatus.Count > 0;
+            _prepStatus.Clear();
         }
+
+        if (toDispose.Count == 0 && !hadStatuses)
+            return;
 
         foreach (var prepared in toDispose)
             await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
+        if (hadStatuses)
+            RaisePreparedCueStatesChanged();
         RaisePreparedCuesChanged();
     }
 
@@ -666,7 +738,10 @@ public sealed class CuePlaybackEngine : IDisposable
             return;
 
         foreach (var prepared in toDispose)
+        {
             await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
+            SetPrepStatus(prepared.Entry.Cue.Id, PreparedCueState.Idle);
+        }
         RaisePreparedCuesChanged();
     }
 
@@ -1177,7 +1252,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
     private sealed class ActiveCue
     {
-        public ActiveCue(MediaCueNode cue, MediaPlayer player, CancellationTokenSource cts, CueClipWindow clipWindow)
+        public ActiveCue(MediaCueNode cue, MediaPlayer player, CancellationTokenSource cts, ClipWindow clipWindow)
         {
             Cue = cue;
             Player = player;
@@ -1189,7 +1264,7 @@ public sealed class CuePlaybackEngine : IDisposable
         public Guid InstanceId { get; } = Guid.NewGuid();
         public MediaPlayer Player { get; }
         public CancellationTokenSource Cts { get; }
-        public CueClipWindow ClipWindow { get; }
+        public ClipWindow ClipWindow { get; }
 
         /// <summary>The cue's audio-runtime playback clock, captured from the first wired
         /// <see cref="CueAudioOutputRuntime.PlaybackClock"/>. Used as the composition master
@@ -1210,62 +1285,30 @@ public sealed class CuePlaybackEngine : IDisposable
 /// <summary>Periodic progress sample for the Now Playing panel.</summary>
 public readonly record struct CuePlaybackProgress(Guid CueId, TimeSpan Position, TimeSpan Duration);
 
-internal readonly record struct CueClipWindow(
-    TimeSpan Start,
-    TimeSpan End,
-    TimeSpan Duration,
-    bool HasKnownEnd)
+/// <summary>Standby preparation lifecycle for one cue. <c>Idle</c> = not in the warm window or not
+/// attempted; <c>Preparing</c> = opening/seeking; <c>Ready</c> = opened, routed, seeked to start;
+/// <c>Failed</c> = open failed (reason in <see cref="CuePreparationStatus.Error"/>). A stale entry
+/// (config changed) is re-prepared, transiting back through <c>Preparing</c>.</summary>
+public enum PreparedCueState
 {
-    private static readonly TimeSpan EndGuard = TimeSpan.FromMilliseconds(50);
+    Idle,
+    Preparing,
+    Ready,
+    Failed,
+}
 
-    public static CueClipWindow From(MediaCueNode cue, TimeSpan sourceDuration)
-    {
-        var start = TimeSpan.FromMilliseconds(Math.Max(0, cue.StartOffsetMs));
-        if (sourceDuration <= TimeSpan.Zero)
-            return new CueClipWindow(start, TimeSpan.Zero, TimeSpan.Zero, HasKnownEnd: false);
+/// <summary>Per-cue preparation status snapshot raised by
+/// <see cref="CuePlaybackEngine.PreparedCueStatesChanged"/>.</summary>
+public readonly record struct CuePreparationStatus(Guid CueId, PreparedCueState State, string? Error);
 
-        var maxStart = sourceDuration > EndGuard ? sourceDuration - EndGuard : TimeSpan.Zero;
-        if (start > maxStart)
-            start = maxStart;
-
-        var end = sourceDuration - TimeSpan.FromMilliseconds(Math.Max(0, cue.EndOffsetMs));
-        if (end > sourceDuration)
-            end = sourceDuration;
-        if (end < start)
-            end = start;
-
-        return new CueClipWindow(start, end, end - start, HasKnownEnd: true);
-    }
-
-    public TimeSpan ToSourcePosition(TimeSpan relativePosition)
-    {
-        if (relativePosition < TimeSpan.Zero)
-            relativePosition = TimeSpan.Zero;
-
-        if (!HasKnownEnd)
-            return Start + relativePosition;
-
-        var maxRelative = Duration > EndGuard ? Duration - EndGuard : TimeSpan.Zero;
-        if (relativePosition > maxRelative)
-            relativePosition = maxRelative;
-        return Start + relativePosition;
-    }
-
-    public TimeSpan ToRelativePosition(TimeSpan sourcePosition)
-    {
-        var relative = sourcePosition - Start;
-        if (relative < TimeSpan.Zero)
-            return TimeSpan.Zero;
-        if (HasKnownEnd && relative > Duration)
-            return Duration;
-        return relative;
-    }
-
-    public bool IsAtEnd(TimeSpan sourcePosition)
-    {
-        if (!HasKnownEnd)
-            return false;
-        var threshold = End > EndGuard ? End - EndGuard : End;
-        return sourcePosition >= threshold;
-    }
+/// <summary>HaPlay adapter over the framework <see cref="ClipWindow"/>: builds one from a media
+/// cue's start/end trim offsets. The window math itself now lives in <see cref="ClipWindow"/> so it
+/// is shared with the media player and any future clip host.</summary>
+internal static class CueClipWindow
+{
+    public static ClipWindow From(MediaCueNode cue, TimeSpan sourceDuration) =>
+        ClipWindow.FromOffsets(
+            TimeSpan.FromMilliseconds(Math.Max(0, cue.StartOffsetMs)),
+            TimeSpan.FromMilliseconds(Math.Max(0, cue.EndOffsetMs)),
+            sourceDuration);
 }

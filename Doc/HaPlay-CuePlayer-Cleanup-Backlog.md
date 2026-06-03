@@ -148,7 +148,9 @@ independent of the cue work above.
 
 ### Fixes / Correctness-Adjacent
 
-- [ ] Tighten the auto-advance / loop boundary gap.
+- [x] Tighten the auto-advance / loop boundary gap. *(Done — `OnLoopTimerTick`
+  now adapts to a 60 ms poll within 1.5 s of a finite track's end and relaxes back
+  to 500 ms otherwise; live/idle stay on the relaxed cadence.)*
   - Current: `OnLoopTimerTick` polls natural completion on a fixed 500 ms
     `DispatcherTimer`, so a track can run up to ~500 ms past its end before the
     next item (or loop restart) is triggered.
@@ -156,22 +158,32 @@ independent of the cue work above.
     or drive the boundary from the router's natural-completion signal instead of
     a poll. Keep the 500 ms poll for the live reconnect/stats path.
 
-- [ ] Warm the next playlist item before auto-advance.
+- [x] Warm the next playlist item before auto-advance. *(Already present —
+  `PlaylistDecoderCache` pre-opens the next decoder on play-start, consumed by
+  `OpenOrReloadAsync`. Improved: `PreOpenAdjacentPlaylistItems` now follows the
+  active playback tab so auto-advance reliably hits a warm decoder.)*
   - Current: cue mode has pre-roll, but normal playlist advance opens the next
     file cold inside `PlayPlaylistItemAsync`, adding a decoder-open stall at every
     boundary.
   - Suggested: a small "next item" prepared-decoder cache analogous to the cue
     pre-roll, invalidated on playlist/selection edits.
 
-- [ ] Confirm what `TransitionMode` / `TransitionDurationMs` actually do on a
-  regular playlist advance.
+- [x] Confirm what `TransitionMode` / `TransitionDurationMs` actually do on a
+  regular playlist advance. *(Done — investigated: `Fade` wraps the incoming clip
+  in `FadeFromBlackVideoSource` (video fade-in-from-black) on every open including
+  auto-advance, so it is NOT a no-op; it is not a cross-fade and does not fade the
+  outgoing clip or audio. `IdleImage` is unwired (reserved). Resolved by scoping:
+  accurate tooltip added + behavior documented; a true cross-fade is left as a
+  separate larger feature.)*
   - `HaPlayFilePlaybackOptions` feeds these into cue fade timing, but it is not
     obvious they produce a real cross-fade/dip between two consecutive playlist
     items in plain player mode.
   - Decision to capture: either wire an actual transition on auto-advance, or
     scope the control so it isn't a silent no-op for the regular player.
 
-- [ ] Debounce slider scrubbing.
+- [x] Debounce slider scrubbing. *(Done — `SeekToSliderAsync` now coalesces
+  rapid commits to latest-wins behind a small gate so a burst of releases runs one
+  trailing seek instead of N queued arcs.)*
   - Current: every `SeekToSliderAsync` commit runs a full
     seek + prepare-outputs + play arc bounded at 3–5 s, serialized behind
     `WithPlaybackArcAsync`; fast drags on large files queue behind each other.
@@ -180,27 +192,36 @@ independent of the cue work above.
 
 ### Enhancements
 
-- [ ] Playlist play modes beyond the current two.
+- [x] Playlist play modes beyond the current two. *(Done — added per-tab Shuffle
+  (Fisher–Yates bag, each track once per cycle) and Repeat-all-list, persisted,
+  applied to auto-advance; manual Next/Previous stay linear. Two new toggles.)*
   - Today only loop-current (`IsLooping`) and `AutoAdvance` exist.
   - Add shuffle and repeat-all-list (distinct from loop-single).
 
-- [ ] End-of-track low-time warning.
+- [x] End-of-track low-time warning. *(Done — the middle clock turns red/semibold
+  within 10 s of a finite track's end via a themed `lowtime` style class driven by
+  `IsNearEndOfTrack`.)*
   - `RemainingTime` is already computed; color/flash the remaining readout under a
     configurable threshold (e.g. last 10 s) as a standard playout operator aid.
 
-- [ ] Structured player load/error state.
+- [x] Structured player load/error state. *(Done — see implementation note in the
+  Larger-Enhancements cross-reference; a sticky `LastLoadError` (with the failing
+  file) plus a `PlayerLoadState` enum replace the transient-only status string.)*
   - Mirror the cue "idle / preparing / ready / failed" suggestion (cue item under
     "Surface richer prepared-cue state"): replace the transient `StatusMessage`
     string with a sticky last-error that names the failing file, alongside the
     existing `IsWaitingForSource` live-retry state.
 
-- [ ] Keyboard transport parity for the focused player.
+- [x] Keyboard transport parity for the focused player. *(Done — added Home
+  (seek-to-0) and `+`/`-` volume to the existing Space / `[` `]` / `,` `.` set;
+  arrow keys deliberately left to list navigation. Hint strings updated.)*
   - Jog `,` / `.` exist; add space = play/pause, Home = seek-to-0, and
     volume up/down, then surface the set in a shortcuts list. (App-level bindings
     already live in `MainView.axaml`.)
 
-- [ ] Reuse the cue audio downmix presets (see "Add cue audio downmix presets")
-  in the player's audio matrix.
+- [x] Reuse the cue audio downmix presets (see "Add cue audio downmix presets")
+  in the player's audio matrix. *(Done — the shared `AudioDownmixPresets` quick-apply
+  buttons appear in both the cue route editor and the player matrix.)*
   - The player already exposes a matrix; expose the same `5.1 -> stereo`,
     `mono -> stereo`, and LFE-drop presets as quick-apply buttons so operators
     don't hand-enter cells.
