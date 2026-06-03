@@ -41,21 +41,23 @@ Source plan: `Doc/HaPlay-MIDI-OSC-Scripting-Graph-Plan.md`
 
 ## Phase 3: Real Device Sessions
 
-- [ ] Wrap `PMLib.MIDIInputDevice` and `MIDIOutputDevice` behind runtime
+- [x] Wrap `PMLib.MIDIInputDevice` and `MIDIOutputDevice` behind runtime
   interfaces.
-- [ ] Wrap `OSCLib.OSCServer` and `OSCClient` behind runtime interfaces.
+- [x] Wrap `OSCLib.OSCServer` and `OSCClient` behind runtime interfaces.
 - [ ] Add endpoint/session ownership and reference counting.
+  - [x] Add first-cut outgoing session ownership/caching.
 - [ ] Add graph runtime start/stop lifecycle.
 - [ ] Add reconnect/health diagnostics.
+  - [x] Add first-cut session health state.
 
 ## Phase 4: Bidirectional Feedback
 
-- [ ] Add correlation ids and origin ids to all control events.
-- [ ] Add no-echo-to-origin loop suppression.
+- [x] Add correlation ids and origin ids to all control events.
+- [x] Add no-echo-to-origin loop suppression.
 - [ ] Add soft takeover behavior.
 - [ ] Add motor-feedback-only behavior for BCF2000 faders.
 - [ ] Add feedback throttling/rate limiting.
-- [ ] Add OSC-to-MIDI feedback tests.
+- [x] Add OSC-to-MIDI feedback tests.
 
 ## Phase 5: X32/M32 Runtime Support
 
@@ -107,5 +109,9 @@ Source plan: `Doc/HaPlay-MIDI-OSC-Scripting-Graph-Plan.md`
 - [ ] Run `bash -c 'dotnet test MFPlayer.sln --no-build'`.
 - [x] Run focused control-graph tests:
   `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
+- [x] Run full HaPlay test project:
+  `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build'`.
+- [x] Run control graph/session focused tests:
+  `bash -c 'dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --filter "FullyQualifiedName~ControlGraphRuntimeTests|FullyQualifiedName~ControlDeviceSessionTests|FullyQualifiedName~RoundTrip_ControlGraphs"'`.
 - [x] Update this checklist after each implementation slice.
 

@@ -1,7 +1,9 @@
 using Avalonia;
 using Avalonia.Headless;
+using Xunit;
 
 [assembly: AvaloniaTestApplication(typeof(HaPlay.Tests.AvaloniaHeadlessTestApp))]
+[assembly: CollectionBehavior(DisableTestParallelization = true)]
 
 namespace HaPlay.Tests;
 

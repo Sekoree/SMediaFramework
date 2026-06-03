@@ -598,6 +598,8 @@ public sealed class HaPlayProjectIOTests
         var midiNodeId = Guid.NewGuid();
         var mapNodeId = Guid.NewGuid();
         var x32NodeId = Guid.NewGuid();
+        var oscNodeId = Guid.NewGuid();
+        var midiOutNodeId = Guid.NewGuid();
 
         var project = new HaPlayProject
         {
@@ -643,11 +645,36 @@ public sealed class HaPlayProjectIOTests
                                 Channel = 1,
                             },
                         },
+                        new ControlNodeConfig
+                        {
+                            Id = oscNodeId,
+                            DisplayName = "X32 Feedback",
+                            Kind = ControlNodeKind.OscInput,
+                            Settings = new OscInputControlNodeSettings
+                            {
+                                LocalPort = 10023,
+                                AddressPattern = "/ch/01/mix/fader",
+                            },
+                        },
+                        new ControlNodeConfig
+                        {
+                            Id = midiOutNodeId,
+                            DisplayName = "BCF Motor Fader",
+                            Kind = ControlNodeKind.MidiOutput,
+                            Settings = new MidiOutputControlNodeSettings
+                            {
+                                Channel = 1,
+                                Controller = 0,
+                                HighResolution14Bit = true,
+                                FeedbackMode = ControlFeedbackMode.MotorFeedbackOnly,
+                            },
+                        },
                     ],
                     Connections =
                     [
                         new ControlConnectionConfig { FromNodeId = midiNodeId, ToNodeId = mapNodeId },
                         new ControlConnectionConfig { FromNodeId = mapNodeId, ToNodeId = x32NodeId },
+                        new ControlConnectionConfig { FromNodeId = oscNodeId, ToNodeId = midiOutNodeId },
                     ],
                 },
             ],
@@ -658,12 +685,17 @@ public sealed class HaPlayProjectIOTests
         var graph = Assert.Single(roundTripped.ControlGraphs);
         Assert.Equal("BCF2000 Layer", graph.Name);
         Assert.True(graph.IsEnabled);
-        Assert.Equal(3, graph.Nodes.Count);
-        Assert.Equal(2, graph.Connections.Count);
+        Assert.Equal(5, graph.Nodes.Count);
+        Assert.Equal(3, graph.Connections.Count);
         var midi = Assert.IsType<MidiInputControlNodeSettings>(graph.Nodes[0].Settings);
         Assert.True(midi.HighResolution14Bit);
         var x32 = Assert.IsType<X32ChannelFaderControlNodeSettings>(graph.Nodes[2].Settings);
         Assert.Equal("192.168.1.50", x32.Host);
+        var osc = Assert.IsType<OscInputControlNodeSettings>(graph.Nodes[3].Settings);
+        Assert.Equal(10023, osc.LocalPort);
+        Assert.Equal("/ch/01/mix/fader", osc.AddressPattern);
+        var midiOut = Assert.IsType<MidiOutputControlNodeSettings>(graph.Nodes[4].Settings);
+        Assert.Equal(ControlFeedbackMode.MotorFeedbackOnly, midiOut.FeedbackMode);
     }
 
     [Fact]

@@ -8,6 +8,17 @@ public interface IControlOscSender
     ValueTask SendAsync(string host, int port, string address, IReadOnlyList<OSCArgument> arguments, CancellationToken cancellationToken = default);
 }
 
+public interface IControlMidiSender
+{
+    ValueTask SendControlChangeAsync(
+        Guid? endpointId,
+        int channel,
+        int controller,
+        int value,
+        bool highResolution14Bit,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record ControlGraphValidationIssue(string Code, string Message, Guid? NodeId = null, Guid? ConnectionId = null);
 
 public sealed record ControlGraphValidationResult(IReadOnlyList<ControlGraphValidationIssue> Issues)
@@ -19,13 +30,15 @@ public sealed class ControlGraphRuntime
 {
     private readonly ControlGraphConfig _graph;
     private readonly IControlOscSender _oscSender;
+    private readonly IControlMidiSender _midiSender;
     private readonly Dictionary<Guid, ControlNodeConfig> _nodes;
     private readonly Dictionary<Guid, List<ControlConnectionConfig>> _outgoing;
 
-    public ControlGraphRuntime(ControlGraphConfig graph, IControlOscSender oscSender)
+    public ControlGraphRuntime(ControlGraphConfig graph, IControlOscSender oscSender, IControlMidiSender? midiSender = null)
     {
         _graph = graph ?? throw new ArgumentNullException(nameof(graph));
         _oscSender = oscSender ?? throw new ArgumentNullException(nameof(oscSender));
+        _midiSender = midiSender ?? NullControlMidiSender.Instance;
         _nodes = graph.Nodes.ToDictionary(n => n.Id);
         _outgoing = graph.Connections
             .GroupBy(c => c.FromNodeId)
@@ -106,6 +119,30 @@ public sealed class ControlGraphRuntime
         return DispatchAsync(evt, cancellationToken);
     }
 
+    public Task InjectOscMessageAsync(
+        Guid nodeId,
+        string address,
+        IReadOnlyList<OSCArgument> arguments,
+        Guid? originId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_nodes.TryGetValue(nodeId, out var node))
+            throw new ArgumentException($"Unknown control node '{nodeId}'.", nameof(nodeId));
+        if (node.Settings is not OscInputControlNodeSettings settings)
+            throw new ArgumentException($"Node '{nodeId}' is not an OSC input node.", nameof(nodeId));
+        if (!OscAddressMatches(settings.AddressPattern, address))
+            return Task.CompletedTask;
+
+        var evt = new OscControlEvent(
+            DateTimeOffset.UtcNow,
+            nodeId,
+            originId ?? settings.EndpointId ?? nodeId,
+            Guid.NewGuid(),
+            address,
+            arguments);
+        return DispatchAsync(evt, cancellationToken);
+    }
+
     private async Task DispatchAsync(ControlEvent evt, CancellationToken cancellationToken)
     {
         if (!_outgoing.TryGetValue(evt.SourceNodeId, out var connections))
@@ -152,6 +189,8 @@ public sealed class ControlGraphRuntime
                 ];
 
             case OscOutputControlNodeSettings osc:
+                if (ShouldSuppressEcho(input, osc.EndpointId, osc.FeedbackMode))
+                    return [];
                 await _oscSender.SendAsync(
                     osc.Host,
                     osc.Port,
@@ -161,11 +200,27 @@ public sealed class ControlGraphRuntime
                 return [];
 
             case X32ChannelFaderControlNodeSettings x32:
+                if (ShouldSuppressEcho(input, x32.EndpointId, x32.FeedbackMode))
+                    return [];
                 await _oscSender.SendAsync(
                     x32.Host,
                     x32.Port,
                     X32Presets.ChannelFaderAddress(x32.Channel),
                     BuildOscArguments(ControlOscArgumentMode.FirstScalarAsFloat, input),
+                    cancellationToken).ConfigureAwait(false);
+                return [];
+
+            case MidiOutputControlNodeSettings midi:
+                if (ShouldSuppressEcho(input, midi.EndpointId, midi.FeedbackMode))
+                    return [];
+                if (!TryGetScalar(input, out var midiScalar))
+                    return [];
+                await _midiSender.SendControlChangeAsync(
+                    midi.EndpointId,
+                    midi.Channel,
+                    midi.Controller,
+                    ToMidiValue(midiScalar, midi.HighResolution14Bit),
+                    midi.HighResolution14Bit,
                     cancellationToken).ConfigureAwait(false);
                 return [];
 
@@ -178,6 +233,7 @@ public sealed class ControlGraphRuntime
         node.Settings switch
         {
             MidiInputControlNodeSettings => ControlPortType.Midi,
+            OscInputControlNodeSettings => ControlPortType.Osc,
             MapRangeControlNodeSettings => ControlPortType.Scalar,
             PassthroughControlNodeSettings => ControlPortType.Any,
             _ => ControlPortType.Any,
@@ -188,6 +244,7 @@ public sealed class ControlGraphRuntime
         {
             MapRangeControlNodeSettings => ControlPortType.Any,
             OscOutputControlNodeSettings => ControlPortType.Any,
+            MidiOutputControlNodeSettings => ControlPortType.Any,
             X32ChannelFaderControlNodeSettings => ControlPortType.Scalar,
             PassthroughControlNodeSettings => ControlPortType.Any,
             _ => ControlPortType.Any,
@@ -206,11 +263,56 @@ public sealed class ControlGraphRuntime
             case MidiControlEvent midi:
                 value = midi.Value;
                 return true;
+            case OscControlEvent { Arguments.Count: > 0 } osc:
+                return TryGetOscScalar(osc.Arguments[0], out value);
             default:
                 value = 0;
                 return false;
         }
     }
+
+    private static bool TryGetOscScalar(OSCArgument argument, out double value)
+    {
+        switch (argument.Type)
+        {
+            case OSCArgumentType.Float32:
+                value = argument.AsFloat32();
+                return true;
+            case OSCArgumentType.Double64:
+                value = argument.AsDouble64();
+                return true;
+            case OSCArgumentType.Int32:
+                value = argument.AsInt32();
+                return true;
+            case OSCArgumentType.Int64:
+                value = argument.AsInt64();
+                return true;
+            case OSCArgumentType.True:
+                value = 1;
+                return true;
+            case OSCArgumentType.False:
+                value = 0;
+                return true;
+            default:
+                value = 0;
+                return false;
+        }
+    }
+
+    private static int ToMidiValue(double value, bool highResolution14Bit)
+    {
+        var max = highResolution14Bit ? 16383 : 127;
+        return (int)Math.Clamp(Math.Round(value), 0, max);
+    }
+
+    private static bool ShouldSuppressEcho(ControlEvent input, Guid? endpointId, ControlFeedbackMode feedbackMode) =>
+        feedbackMode == ControlFeedbackMode.DoNotEchoToOrigin
+        && endpointId.HasValue
+        && input.OriginId == endpointId.Value;
+
+    private static bool OscAddressMatches(string pattern, string address) =>
+        string.IsNullOrWhiteSpace(pattern)
+        || string.Equals(pattern, address, StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<OSCArgument> BuildOscArguments(ControlOscArgumentMode mode, ControlEvent input)
     {
@@ -237,6 +339,24 @@ public sealed class ControlGraphRuntime
         next[^1] = nodeId;
         return next;
     }
+}
+
+internal sealed class NullControlMidiSender : IControlMidiSender
+{
+    public static NullControlMidiSender Instance { get; } = new();
+
+    private NullControlMidiSender()
+    {
+    }
+
+    public ValueTask SendControlChangeAsync(
+        Guid? endpointId,
+        int channel,
+        int controller,
+        int value,
+        bool highResolution14Bit,
+        CancellationToken cancellationToken = default) =>
+        ValueTask.CompletedTask;
 }
 
 public static class ControlMath

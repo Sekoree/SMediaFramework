@@ -58,8 +58,10 @@ public enum ControlPortType
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(PassthroughControlNodeSettings), "passthrough")]
 [JsonDerivedType(typeof(MidiInputControlNodeSettings), "midiInput")]
+[JsonDerivedType(typeof(OscInputControlNodeSettings), "oscInput")]
 [JsonDerivedType(typeof(MapRangeControlNodeSettings), "mapRange")]
 [JsonDerivedType(typeof(OscOutputControlNodeSettings), "oscOutput")]
+[JsonDerivedType(typeof(MidiOutputControlNodeSettings), "midiOutput")]
 [JsonDerivedType(typeof(X32ChannelFaderControlNodeSettings), "x32ChannelFader")]
 public abstract record ControlNodeSettings;
 
@@ -71,6 +73,13 @@ public sealed record MidiInputControlNodeSettings : ControlNodeSettings
     public int Channel { get; init; } = 1;
     public int Controller { get; init; }
     public bool HighResolution14Bit { get; init; }
+}
+
+public sealed record OscInputControlNodeSettings : ControlNodeSettings
+{
+    public Guid? EndpointId { get; init; }
+    public int LocalPort { get; init; } = 9000;
+    public string AddressPattern { get; init; } = "/ch/01/mix/fader";
 }
 
 public sealed record MapRangeControlNodeSettings : ControlNodeSettings
@@ -89,6 +98,16 @@ public sealed record OscOutputControlNodeSettings : ControlNodeSettings
     public int Port { get; init; } = 10023;
     public string Address { get; init; } = "/ch/01/mix/fader";
     public ControlOscArgumentMode ArgumentMode { get; init; } = ControlOscArgumentMode.FirstScalarAsFloat;
+    public ControlFeedbackMode FeedbackMode { get; init; } = ControlFeedbackMode.DoNotEchoToOrigin;
+}
+
+public sealed record MidiOutputControlNodeSettings : ControlNodeSettings
+{
+    public Guid? EndpointId { get; init; }
+    public int Channel { get; init; } = 1;
+    public int Controller { get; init; }
+    public bool HighResolution14Bit { get; init; }
+    public ControlFeedbackMode FeedbackMode { get; init; } = ControlFeedbackMode.DoNotEchoToOrigin;
 }
 
 public sealed record X32ChannelFaderControlNodeSettings : ControlNodeSettings
@@ -97,6 +116,7 @@ public sealed record X32ChannelFaderControlNodeSettings : ControlNodeSettings
     public string Host { get; init; } = "127.0.0.1";
     public int Port { get; init; } = 10023;
     public int Channel { get; init; } = 1;
+    public ControlFeedbackMode FeedbackMode { get; init; } = ControlFeedbackMode.DoNotEchoToOrigin;
 }
 
 public enum ControlOscArgumentMode
@@ -105,6 +125,14 @@ public enum ControlOscArgumentMode
     FirstScalarAsFloat,
     FirstScalarAsInt,
     FirstTextAsString,
+}
+
+public enum ControlFeedbackMode
+{
+    SendFeedback,
+    DoNotEchoToOrigin,
+    SoftTakeover,
+    MotorFeedbackOnly,
 }
 
 public sealed record X32CustomLayerConfig
