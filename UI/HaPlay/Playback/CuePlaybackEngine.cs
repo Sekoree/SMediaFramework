@@ -42,9 +42,9 @@ public sealed class CuePlaybackEngine : IDisposable
     private readonly OutputManagementViewModel _outputs;
     private readonly CuePlayerViewModel _cuePlayer;
     private readonly object _gate = new();
+    private readonly ClipStandbyEngine _standby = new();
 
     private readonly Dictionary<Guid, ActiveCue> _active = new();
-    private readonly Dictionary<Guid, PreparedCue> _prepared = new();
     private readonly Dictionary<Guid, CueCompositionRuntime> _compositions = new();
     private readonly Dictionary<Guid, CueAudioOutputRuntime> _audioOutputs = new();
     private readonly object _previewGate = new();
@@ -54,6 +54,7 @@ public sealed class CuePlaybackEngine : IDisposable
     {
         _outputs = outputs;
         _cuePlayer = cuePlayer;
+        _standby.StandbyStatesChanged += OnStandbyStatesChanged;
     }
 
     /// <summary>Raised on the UI thread when a cue's media ends naturally (file reached duration).
@@ -81,49 +82,10 @@ public sealed class CuePlaybackEngine : IDisposable
     /// last failure reason), so the cue UI can show more than a binary warm marker.</summary>
     public event Action<IReadOnlyList<CuePreparationStatus>>? PreparedCueStatesChanged;
 
-    // Per-cue preparation status, guarded by _gate. Only non-idle cues are tracked; absence == Idle.
-    private readonly Dictionary<Guid, CuePreparationStatus> _prepStatus = new();
-
-    private void SetPrepStatus(Guid cueId, PreparedCueState state, string? error = null)
-    {
-        lock (_gate)
-        {
-            if (state == PreparedCueState.Idle)
-            {
-                if (!_prepStatus.Remove(cueId))
-                    return;
-            }
-            else
-            {
-                var status = new CuePreparationStatus(cueId, state, error);
-                if (_prepStatus.TryGetValue(cueId, out var existing) && existing == status)
-                    return;
-                _prepStatus[cueId] = status;
-            }
-        }
-        RaisePreparedCueStatesChanged();
-    }
-
-    private void RaisePreparedCueStatesChanged()
-    {
-        CuePreparationStatus[] snapshot;
-        lock (_gate)
-            snapshot = _prepStatus.Values.ToArray();
-        try { PreparedCueStatesChanged?.Invoke(snapshot); }
-        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreparedCueStatesChanged handler"); }
-    }
-
     /// <summary>Flags a warmed standby cue as <see cref="PreparedCueState.Stale"/> — its config changed,
     /// so the held decoder may no longer match — until the next pre-roll refresh re-prepares it. No-op
     /// for a cue that isn't currently held warm; only a prepared (ready) entry can go stale.</summary>
-    public void MarkPreparedCueStale(Guid cueId)
-    {
-        bool isPrepared;
-        lock (_gate)
-            isPrepared = _prepared.ContainsKey(cueId);
-        if (isPrepared)
-            SetPrepStatus(cueId, PreparedCueState.Stale);
-    }
+    public void MarkPreparedCueStale(Guid cueId) => _standby.MarkStandbyStale(cueId.ToString("N"));
 
     /// <summary>Raised on the UI thread when preview playback ends (natural end, operator stop,
     /// or preview window closed).</summary>
@@ -220,22 +182,21 @@ public sealed class CuePlaybackEngine : IDisposable
     {
         if (cues.Count == 0)
         {
-            await ClearPreparedCuesAsync().ConfigureAwait(false);
+            await _standby.RefreshStandbyAsync([], new ClipStandbyPolicy(), ct).ConfigureAwait(false);
             return;
         }
 
         var list = await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.SelectedCueList?.ToModel());
         if (list is null)
         {
-            await ClearPreparedCuesAsync().ConfigureAwait(false);
+            await _standby.RefreshStandbyAsync([], new ClipStandbyPolicy(), ct).ConfigureAwait(false);
             return;
         }
 
-        // Per-list resource cap (clamped) on how many standby decoders we hold at once. We stop
-        // preparing once we hit it rather than opening the whole window and evicting the overflow.
+        // Per-list resource cap (clamped) on how many standby decoders we hold at once.
         var cap = ResolveStandbyDecoderCap(list.MaxPreparedDecoders);
 
-        var keepIds = new HashSet<Guid>();
+        var specs = new List<ClipSpec>();
         foreach (var cue in cues)
         {
             ct.ThrowIfCancellationRequested();
@@ -250,54 +211,14 @@ public sealed class CuePlaybackEngine : IDisposable
             if (!plan.HasAnyRoute)
                 continue;
 
-            if (keepIds.Count >= cap)
-                break; // standby-decoder cap reached — leave the rest of the window cold
-
-            keepIds.Add(cue.Id);
-            var cacheKey = BuildPreparedCueKey(cue, list);
-            if (HasMatchingPreparedCue(cue.Id, cacheKey))
-            {
-                SetPrepStatus(cue.Id, PreparedCueState.Ready);
-                continue;
-            }
-
-            await RemovePreparedCueAsync(cue.Id).ConfigureAwait(false);
-            SetPrepStatus(cue.Id, PreparedCueState.Preparing);
-
-            var (entry, err) = await OpenCueEntryAsync(cue, list, plan, wireRoutes: false, ct)
-                .ConfigureAwait(false);
-            if (entry is null)
-            {
-                if (!string.IsNullOrWhiteSpace(err))
-                    Trace.LogWarning("CuePlaybackEngine.RefreshPreparedCuesAsync: {Cue} failed: {Error}", cue.Id, err);
-                SetPrepStatus(cue.Id, PreparedCueState.Failed, err ?? "Failed to prepare cue.");
-                continue;
-            }
-
-            if (HasActiveCue(cue.Id))
-            {
-                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
-                SetPrepStatus(cue.Id, PreparedCueState.Idle);
-                continue;
-            }
-
-            await StorePreparedCueAsync(cue.Id, cacheKey, entry).ConfigureAwait(false);
-            SetPrepStatus(cue.Id, PreparedCueState.Ready);
+            specs.Add(BuildClipSpec(cue, list, plan));
         }
 
-        // Resource policy: drop any standby decoder no longer in the kept set, bounded by the same
-        // per-list cap used above (long H.264 files each keep an opened+seeked decoder).
-        await EvictPreparedExceptAsync(keepIds, cap).ConfigureAwait(false);
-
-        // Reconcile: any cue we still track a status for but is no longer in the warm window
-        // (dropped out, or a Failed cue that left the pre-roll set) returns to Idle.
-        Guid[] trackedNotKept;
-        lock (_gate)
-            trackedNotKept = _prepStatus.Keys.Where(id => !keepIds.Contains(id)).ToArray();
-        foreach (var id in trackedNotKept)
-            SetPrepStatus(id, PreparedCueState.Idle);
-
-        RaisePreparedCuesChanged();
+        await _standby.RefreshStandbyAsync(
+                specs,
+                new ClipStandbyPolicy(MaxPreparedDecoders: cap, Window: specs.Count),
+                ct)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -324,7 +245,7 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             foreach (var entry in group)
             {
-                try { entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster); }
+                try { entry.StartPlayback(); }
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.ExecuteGroupAsync: Play failed for {Cue}", entry.Cue.Id); }
             }
 
@@ -367,30 +288,28 @@ public sealed class CuePlaybackEngine : IDisposable
         // standby instance is kept and consumed below.
         await StopActiveCueAsync(cue.Id).ConfigureAwait(false);
 
-        var cacheKey = BuildPreparedCueKey(cue, list);
-        var entry = TryTakePreparedCue(cue.Id, cacheKey);
-        if (entry is not null)
-        {
-            await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.PlacementsByComp.Keys)
-                .ConfigureAwait(false);
+        var spec = BuildClipSpec(cue, list, plan);
 
-            var wireErr = await WireEntryRoutesAsync(entry, list, plan, startPaused: true).ConfigureAwait(false);
-            if (wireErr is not null)
-            {
-                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
-                return wireErr;
-            }
+        await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.PlacementsByComp.Keys)
+            .ConfigureAwait(false);
+
+        IArmedClip armed;
+        try
+        {
+            armed = await _standby.ArmAsync(spec, ct).ConfigureAwait(false);
         }
-        else
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            await RemovePreparedCueAsync(cue.Id).ConfigureAwait(false);
-            await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.PlacementsByComp.Keys)
-                .ConfigureAwait(false);
+            Trace.LogError(ex, "CuePlaybackEngine: clip arm failed");
+            return ex.Message;
+        }
 
-            var result = await OpenCueEntryAsync(cue, list, plan, wireRoutes: true, ct).ConfigureAwait(false);
-            entry = result.Entry;
-            if (entry is null)
-                return result.Error ?? "Failed to open cue media.";
+        var entry = new ActiveCue(cue, armed, new CancellationTokenSource(), CueClipWindow.From(cue, armed.Player.Duration));
+        var wireErr = await WireEntryRoutesAsync(entry, list, plan, startPaused: true).ConfigureAwait(false);
+        if (wireErr is not null)
+        {
+            await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
+            return wireErr;
         }
 
         lock (_gate)
@@ -402,7 +321,7 @@ public sealed class CuePlaybackEngine : IDisposable
             {
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
-                    entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster);
+                    entry.StartPlayback();
                     entry.IsPaused = false;
                     foreach (var source in entry.PausableAudioSources)
                         source.IsPaused = false;
@@ -446,15 +365,10 @@ public sealed class CuePlaybackEngine : IDisposable
         return new RoutePlan(audioByOutput, placementsByComp);
     }
 
-    private async Task<(ActiveCue? Entry, string? Error)> OpenCueEntryAsync(
-        MediaCueNode cue,
-        CueList list,
-        RoutePlan plan,
-        bool wireRoutes,
-        CancellationToken ct)
+    private static ClipSpec BuildClipSpec(MediaCueNode cue, CueList list, RoutePlan plan)
     {
         if (cue.Source is not FilePlaylistItem fileItem)
-            return (null, "Cue source is not a file.");
+            throw new InvalidOperationException("Cue source is not a file.");
 
         // Whether to use MediaPlayer's *internal* audio router. We turn it off only when this
         // cue's audio is being mixed externally via CueAudioOutputRuntime — otherwise we leave
@@ -463,56 +377,43 @@ public sealed class CuePlaybackEngine : IDisposable
         // what was breaking video playback on a video-with-audio file that had no audio routes
         // wired (e.g. the operator only set up a video placement on it).
         var hasAudioRoutes = plan.AudioByOutput.Count > 0;
+        var openOptions = new MediaPlayerOpenOptions(
+            TryHardwareAcceleration: true,
+            IncludeAudioRouter: !hasAudioRoutes);
 
-        MediaPlayer? player = null;
-        string? openErr = null;
-        await Task.Run(() =>
-        {
-            try
-            {
-                var opts = new MediaPlayerOpenOptions(
-                    TryHardwareAcceleration: true,
-                    IncludeAudioRouter: !hasAudioRoutes);
+        var source = ClipMediaSource.FromBuilder(
+            () => MediaPlayer.OpenFile(fileItem.Path)
+                .WithOptions(openOptions)
+                .WithDecoderOwnership(MediaPlayerDecoderOwnership.BundleDisposesDecoder),
+            fileItem.Path);
 
-                if (!MediaPlayer.OpenFile(fileItem.Path)
-                        .WithOptions(opts)
-                        .WithDecoderOwnership(MediaPlayerDecoderOwnership.BundleDisposesDecoder)
-                        .TryBuild(out player, out openErr))
-                    player = null;
-            }
-            catch (Exception ex)
-            {
-                Trace.LogError(ex, "CuePlaybackEngine: MediaPlayer open threw");
-                openErr = ex.Message;
-            }
-        }, ct).ConfigureAwait(false);
+        var sourceDuration = TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs));
+        var window = CueClipWindow.From(cue, sourceDuration);
+        var audioRoutes = plan.AudioByOutput
+            .SelectMany(kv => kv.Value)
+            .Select(route => new AudioRouteSpec(
+                route.OutputLineId.ToString("N"),
+                route.SourceChannel,
+                route.OutputChannel,
+                route.GainDb,
+                route.Muted))
+            .ToArray();
+        var videoPlacements = plan.PlacementsByComp
+            .Select(kv => kv.Value)
+            .Select(placement => new VideoPlacementSpec(
+                placement.CompositionId.ToString("N"),
+                placement.LayerIndex,
+                placement.Opacity,
+                placement.Position.ToString()))
+            .ToArray();
 
-        if (player is null)
-            return (null, openErr ?? "Failed to open cue media.");
-
-        var entry = new ActiveCue(cue, player, new CancellationTokenSource(), CueClipWindow.From(cue, player.Duration));
-
-        if (wireRoutes)
-        {
-            var wireErr = await WireEntryRoutesAsync(entry, list, plan, startPaused: true).ConfigureAwait(false);
-            if (wireErr is not null)
-            {
-                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
-                return (null, wireErr);
-            }
-        }
-
-        if (entry.ClipWindow.Start > TimeSpan.Zero)
-        {
-            var seekErr = await SeekEntryToSourcePositionAsync(entry, entry.ClipWindow.Start, ct).ConfigureAwait(false);
-            if (seekErr is not null)
-            {
-                await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
-                return (null, seekErr);
-            }
-        }
-
-        return (entry, null);
+        return new ClipSpec(
+            cue.Id.ToString("N"),
+            source,
+            window,
+            BuildPreparedCueKey(cue, list),
+            audioRoutes,
+            videoPlacements);
     }
 
     private async Task<string?> WireEntryRoutesAsync(ActiveCue entry, CueList list, RoutePlan plan, bool startPaused)
@@ -579,26 +480,21 @@ public sealed class CuePlaybackEngine : IDisposable
         await StopPreviewAsync().ConfigureAwait(false);
 
         List<ActiveCue> toDispose;
-        List<PreparedCue> preparedToDispose;
         lock (_gate)
         {
             toDispose = _active.Values.ToList();
-            preparedToDispose = _prepared.Values.ToList();
             _active.Clear();
-            _prepared.Clear();
         }
         foreach (var entry in toDispose)
             await DisposeEntryAsync(entry).ConfigureAwait(false);
-        foreach (var prepared in preparedToDispose)
-            await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
-        RaisePreparedCuesChanged();
+        await _standby.RefreshStandbyAsync([], new ClipStandbyPolicy()).ConfigureAwait(false);
     }
 
     /// <summary>Stop a specific cue.</summary>
     public async Task StopCueAsync(Guid cueId)
     {
         await StopActiveCueAsync(cueId).ConfigureAwait(false);
-        await RemovePreparedCueAsync(cueId).ConfigureAwait(false);
+        await _standby.RemoveStandbyAsync(cueId.ToString("N")).ConfigureAwait(false);
     }
 
     private async Task StopActiveCueAsync(Guid cueId)
@@ -647,7 +543,7 @@ public sealed class CuePlaybackEngine : IDisposable
                 else
                 {
                     await Dispatcher.UIThread.InvokeAsync(() =>
-                        entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster));
+                        entry.StartPlayback());
                 }
             }
             catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
@@ -660,121 +556,40 @@ public sealed class CuePlaybackEngine : IDisposable
             return _active.ContainsKey(cueId);
     }
 
-    private bool HasMatchingPreparedCue(Guid cueId, string cacheKey)
+    private void OnStandbyStatesChanged(IReadOnlyList<S.Media.Playback.ClipPreparationStatus> states)
     {
-        lock (_gate)
-            return _prepared.TryGetValue(cueId, out var prepared)
-                   && string.Equals(prepared.CacheKey, cacheKey, StringComparison.Ordinal);
-    }
-
-    private ActiveCue? TryTakePreparedCue(Guid cueId, string cacheKey)
-    {
-        ActiveCue? entry = null;
-        lock (_gate)
-        {
-            if (_prepared.TryGetValue(cueId, out var prepared)
-                && string.Equals(prepared.CacheKey, cacheKey, StringComparison.Ordinal))
-            {
-                _prepared.Remove(cueId);
-                entry = prepared.Entry;
-            }
-        }
-        if (entry is not null)
-        {
-            // Consumed for playback — no longer a standby entry.
-            SetPrepStatus(cueId, PreparedCueState.Idle);
-            RaisePreparedCuesChanged();
-        }
-        return entry;
-    }
-
-    private async Task StorePreparedCueAsync(Guid cueId, string cacheKey, ActiveCue entry)
-    {
-        PreparedCue? replaced = null;
-        lock (_gate)
-        {
-            if (_prepared.Remove(cueId, out var existing))
-                replaced = existing;
-            _prepared[cueId] = new PreparedCue(cacheKey, entry);
-        }
-
-        if (replaced is not null)
-            await DisposeEntryAsync(replaced.Entry, notifyEnded: false).ConfigureAwait(false);
         RaisePreparedCuesChanged();
+
+        var mapped = states
+            .Select(s => TryParseCueId(s.Key.Id, out var id)
+                ? new CuePreparationStatus(id, MapPreparationState(s.State), s.Error)
+                : (CuePreparationStatus?)null)
+            .Where(s => s.HasValue)
+            .Select(s => s!.Value)
+            .ToArray();
+
+        try { PreparedCueStatesChanged?.Invoke(mapped); }
+        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreparedCueStatesChanged handler"); }
     }
 
-    private async Task RemovePreparedCueAsync(Guid cueId)
+    private static PreparedCueState MapPreparationState(ClipPreparationState state) => state switch
     {
-        PreparedCue? prepared;
-        lock (_gate)
-            _prepared.Remove(cueId, out prepared);
+        ClipPreparationState.Preparing => PreparedCueState.Preparing,
+        ClipPreparationState.Ready => PreparedCueState.Ready,
+        ClipPreparationState.Stale => PreparedCueState.Stale,
+        ClipPreparationState.Failed => PreparedCueState.Failed,
+        _ => PreparedCueState.Idle,
+    };
 
-        if (prepared is null)
-            return;
-
-        await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
-        SetPrepStatus(cueId, PreparedCueState.Idle);
-        RaisePreparedCuesChanged();
-    }
-
-    private async Task ClearPreparedCuesAsync()
-    {
-        List<PreparedCue> toDispose;
-        bool hadStatuses;
-        lock (_gate)
-        {
-            toDispose = _prepared.Values.ToList();
-            _prepared.Clear();
-            hadStatuses = _prepStatus.Count > 0;
-            _prepStatus.Clear();
-        }
-
-        if (toDispose.Count == 0 && !hadStatuses)
-            return;
-
-        foreach (var prepared in toDispose)
-            await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
-        if (hadStatuses)
-            RaisePreparedCueStatesChanged();
-        RaisePreparedCuesChanged();
-    }
-
-    private async Task EvictPreparedExceptAsync(IReadOnlyCollection<Guid> keepCueIds, int maxEntries)
-    {
-        List<PreparedCue> toDispose = new();
-        lock (_gate)
-        {
-            var keep = keepCueIds is HashSet<Guid> hs ? hs : keepCueIds.ToHashSet();
-            foreach (var id in _prepared.Keys.Where(id => !keep.Contains(id)).ToList())
-            {
-                toDispose.Add(_prepared[id]);
-                _prepared.Remove(id);
-            }
-
-            while (_prepared.Count > maxEntries)
-            {
-                var oldest = _prepared.OrderBy(kv => kv.Value.CreatedUtc).First().Key;
-                toDispose.Add(_prepared[oldest]);
-                _prepared.Remove(oldest);
-            }
-        }
-
-        if (toDispose.Count == 0)
-            return;
-
-        foreach (var prepared in toDispose)
-        {
-            await DisposeEntryAsync(prepared.Entry, notifyEnded: false).ConfigureAwait(false);
-            SetPrepStatus(prepared.Entry.Cue.Id, PreparedCueState.Idle);
-        }
-        RaisePreparedCuesChanged();
-    }
+    private static bool TryParseCueId(string id, out Guid cueId) =>
+        Guid.TryParseExact(id, "N", out cueId) || Guid.TryParse(id, out cueId);
 
     private void RaisePreparedCuesChanged()
     {
-        Guid[] snapshot;
-        lock (_gate)
-            snapshot = _prepared.Keys.ToArray();
+        var snapshot = _standby.PreparedKeys
+            .Select(k => TryParseCueId(k.Id, out var id) ? id : Guid.Empty)
+            .Where(id => id != Guid.Empty)
+            .ToArray();
         try { PreparedCuesChanged?.Invoke(snapshot); }
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreparedCuesChanged handler"); }
     }
@@ -811,8 +626,8 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             await Task.Run(() =>
             {
-                try { entry.Player.Dispose(); }
-                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: player dispose"); }
+                try { entry.ArmedClip.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: armed clip dispose"); }
 
                 foreach (var conv in entry.ConvertingOutputs)
                 {
@@ -1071,22 +886,6 @@ public sealed class CuePlaybackEngine : IDisposable
         await Dispatcher.UIThread.InvokeAsync(() => preview.Play());
     }
 
-    private async Task<string?> SeekEntryToSourcePositionAsync(ActiveCue entry, TimeSpan sourcePosition, CancellationToken ct)
-    {
-        try
-        {
-            await Task.Run(() =>
-                entry.Player.SeekCoordinated(sourcePosition, CancellationToken.None, PauseFlushPolicy.SkipFlush), ct)
-                .ConfigureAwait(false);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            Trace.LogError(ex, "CuePlaybackEngine: start-offset seek failed");
-            return ex.Message;
-        }
-    }
-
     private async Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position)
     {
         position = entry.ClipWindow.ToSourcePosition(position);
@@ -1111,7 +910,7 @@ public sealed class CuePlaybackEngine : IDisposable
         if (resume)
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster);
+                entry.StartPlayback();
                 entry.IsPaused = false;
                 foreach (var source in entry.PausableAudioSources)
                     source.IsPaused = false;
@@ -1200,6 +999,7 @@ public sealed class CuePlaybackEngine : IDisposable
     {
         try { StopPreviewAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { StopAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
+        try { _standby.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { /* best effort */ }
 
         List<CueCompositionRuntime> compsLeft;
         List<CueAudioOutputRuntime> audioLeft;
@@ -1267,27 +1067,20 @@ public sealed class CuePlaybackEngine : IDisposable
         public bool HasAnyRoute => AudioByOutput.Count > 0 || PlacementsByComp.Count > 0;
     }
 
-    private sealed record PreparedCue(string CacheKey, ActiveCue Entry, DateTime CreatedUtc)
-    {
-        public PreparedCue(string cacheKey, ActiveCue entry)
-            : this(cacheKey, entry, DateTime.UtcNow)
-        {
-        }
-    }
-
     private sealed class ActiveCue
     {
-        public ActiveCue(MediaCueNode cue, MediaPlayer player, CancellationTokenSource cts, ClipWindow clipWindow)
+        public ActiveCue(MediaCueNode cue, IArmedClip armedClip, CancellationTokenSource cts, ClipWindow clipWindow)
         {
             Cue = cue;
-            Player = player;
+            ArmedClip = armedClip;
             Cts = cts;
             ClipWindow = clipWindow;
         }
 
         public MediaCueNode Cue { get; }
         public Guid InstanceId { get; } = Guid.NewGuid();
-        public MediaPlayer Player { get; }
+        public IArmedClip ArmedClip { get; }
+        public MediaPlayer Player => ArmedClip.Player;
         public CancellationTokenSource Cts { get; }
         public ClipWindow ClipWindow { get; }
 
@@ -1304,6 +1097,17 @@ public sealed class CuePlaybackEngine : IDisposable
         public List<(CueAudioOutputRuntime Runtime, string SourceId)> AudioSources { get; } = new();
         public List<PausableAudioSource> PausableAudioSources { get; } = new();
         public List<IDisposable> AudioDisposables { get; } = new();
+
+        public void StartPlayback()
+        {
+            if (ArmedClip.IsStarted)
+            {
+                Player.Play(videoOnlyMaster: PlaybackClockMaster);
+                return;
+            }
+
+            ArmedClip.Start(videoOnlyMaster: PlaybackClockMaster);
+        }
     }
 }
 

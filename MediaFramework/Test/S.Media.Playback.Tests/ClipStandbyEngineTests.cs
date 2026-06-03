@@ -64,6 +64,57 @@ public sealed class ClipStandbyEngineTests
     }
 
     [Fact]
+    public async Task ArmAsync_CacheKeyMismatchDropsStalePreparedClip()
+    {
+        var path = WriteWav();
+        await using var engine = new ClipStandbyEngine();
+        try
+        {
+            var first = Spec("cue-a", path, cacheKey: "v1");
+            var second = Spec("cue-a", path, cacheKey: "v2");
+
+            await engine.RefreshStandbyAsync([first], new ClipStandbyPolicy());
+            await using var firstArmed = await engine.ArmAsync(first);
+            var stalePlayer = firstArmed.Player;
+            await firstArmed.ReleaseAsync();
+
+            await using var secondArmed = await engine.ArmAsync(second);
+
+            Assert.True(stalePlayer.IsDisposed);
+            Assert.NotSame(stalePlayer, secondArmed.Player);
+            Assert.DoesNotContain(first.Key, engine.PreparedKeys);
+        }
+        finally
+        {
+            MediaPlayerSmokeTestHelpers.TryDelete(path);
+        }
+    }
+
+    [Fact]
+    public async Task RemoveStandbyAsync_DisposesPreparedClipAndClearsKey()
+    {
+        var path = WriteWav();
+        await using var engine = new ClipStandbyEngine();
+        try
+        {
+            var spec = Spec("cue-a", path, cacheKey: "v1");
+            await engine.RefreshStandbyAsync([spec], new ClipStandbyPolicy());
+            var armed = await engine.ArmAsync(spec);
+            var player = armed.Player;
+            await armed.ReleaseAsync();
+
+            await engine.RemoveStandbyAsync(spec.Id);
+
+            Assert.True(player.IsDisposed);
+            Assert.Empty(engine.PreparedKeys);
+        }
+        finally
+        {
+            MediaPlayerSmokeTestHelpers.TryDelete(path);
+        }
+    }
+
+    [Fact]
     public async Task RefreshStandbyAsync_MissingFileReportsFailedStatus()
     {
         await using var engine = new ClipStandbyEngine();

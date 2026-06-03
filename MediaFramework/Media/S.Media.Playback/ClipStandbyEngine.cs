@@ -173,6 +173,8 @@ public interface IClipStandbyEngine : IAsyncDisposable
 
     Task<IArmedClip> ArmAsync(ClipSpec spec, CancellationToken cancellationToken = default);
 
+    Task RemoveStandbyAsync(string id);
+
     Task<IReadOnlyList<IArmedClip>> StartGroupAsync(
         IReadOnlyList<ClipSpec> specs,
         CancellationToken cancellationToken = default);
@@ -249,12 +251,26 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
         var prepared = TakePrepared(spec.Key);
         if (prepared is null)
         {
+            var removed = await RemovePreparedAsync(spec.Id).ConfigureAwait(false);
+            var statusChanged = SetStatus(new ClipKey(spec.Id, string.Empty), ClipPreparationState.Idle);
+            if (removed && !statusChanged)
+                RaiseStandbyStatesChanged();
             prepared = await PrepareAsync(spec, cancellationToken).ConfigureAwait(false);
             return new ArmedClip(this, prepared, wasPrepared: false);
         }
 
         SetStatus(spec.Key, ClipPreparationState.Idle);
         return new ArmedClip(this, prepared, wasPrepared: true);
+    }
+
+    public async Task RemoveStandbyAsync(string id)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrEmpty(id);
+        var removed = await RemovePreparedAsync(id).ConfigureAwait(false);
+        var statusChanged = SetStatus(new ClipKey(id, string.Empty), ClipPreparationState.Idle);
+        if (removed && !statusChanged)
+            RaiseStandbyStatesChanged();
     }
 
     public async Task<IReadOnlyList<IArmedClip>> StartGroupAsync(
@@ -376,13 +392,18 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
         replaced?.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 
-    private async Task RemovePreparedAsync(string id)
+    private async Task<bool> RemovePreparedAsync(string id)
     {
         PreparedClip? prepared;
         lock (_gate)
             _preparedById.Remove(id, out prepared);
         if (prepared is not null)
+        {
             await prepared.DisposeAsync().ConfigureAwait(false);
+            return true;
+        }
+
+        return false;
     }
 
     private async Task ClearPreparedAsync()
@@ -445,7 +466,7 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
             RaiseStandbyStatesChanged();
     }
 
-    private void SetStatus(ClipKey key, ClipPreparationState state, string? error = null)
+    private bool SetStatus(ClipKey key, ClipPreparationState state, string? error = null)
     {
         bool changed;
         lock (_gate)
@@ -465,6 +486,7 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
 
         if (changed)
             RaiseStandbyStatesChanged();
+        return changed;
     }
 
     private void RaiseStandbyStatesChanged()

@@ -2,7 +2,8 @@
 
 Created: 2026-06-03
 Status: **Phase 1 implemented** (framework API + default standby engine landed in
-`S.Media.Playback`; HaPlay migration and output-runtime extraction remain follow-ups)
+`S.Media.Playback`; HaPlay source-lifecycle migration landed; output-runtime extraction
+remains a follow-up)
 
 Backlog origin: "Consider a framework-level cue/clip API that can power HaPlay,
 soundboards, and cue-player hosts" (see `HaPlay-CuePlayer-Cleanup-Backlog.md`,
@@ -122,6 +123,9 @@ public interface IClipStandbyEngine : IAsyncDisposable
     // Start barrier: take a prepared clip (or open cold), return ARMED-but-not-started.
     Task<IArmedClip> ArmAsync(ClipSpec spec, CancellationToken ct);
 
+    // Drop a prepared standby entry by host id.
+    Task RemoveStandbyAsync(string id);
+
     // Coordinated grouped start: arm all, then release the barrier for all at once.
     Task<IReadOnlyList<IArmedClip>> StartGroupAsync(IReadOnlyList<ClipSpec> specs, CancellationToken ct);
 }
@@ -167,6 +171,11 @@ lifetimes. Conflict release ("a new cue takes an output another cue holds") beco
 - keeps HaPlay-specific concerns (cue tree, color tags, NDI/PortAudio pre-connect,
   inspector wiring, the `Stale` badge) in the VM layer.
 
+The source-lifecycle part of this migration is implemented: HaPlay now delegates
+file-cue standby, arm, stale invalidation, standby removal, and the first-start barrier to
+`ClipStandbyEngine` while continuing to wire output runtimes host-side between `ArmAsync`
+and `Start()`.
+
 `PreparedCueState` ↔ `ClipPreparationState` is a straight rename; the new per-list
 `MaxPreparedDecoders` cap is already shaped like `ClipStandbyPolicy.MaxPreparedDecoders`.
 
@@ -203,8 +212,9 @@ lifetimes. Conflict release ("a new cue takes an output another cue holds") beco
 1. **Done:** Land `ClipSpec` / `ClipPreparationState` / `IPreparedClip` types + a
    UI-agnostic `IClipStandbyEngine` with default `ClipStandbyEngine`.
 2. **Done in framework:** Add the start barrier + `StartGroupAsync` to the interface.
-3. Reroute HaPlay onto it behind the existing public engine surface (no UI change);
-   move HaPlay's output-runtime wiring between `ArmAsync` and `Start()`.
+3. **Done in HaPlay:** Reroute file-cue source lifecycle onto it behind the existing
+   public engine surface (no UI change); keep HaPlay's output-runtime wiring between
+   `ArmAsync` and `Start()`.
 4. Build the video-capable soundboard host as the second consumer (validation that the
    API is genuinely host-agnostic).
 5. Fold live pre-connect and memory-estimate eviction in, if wanted.

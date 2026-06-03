@@ -161,7 +161,8 @@ needed for composition slots.
   UI-agnostic source lifecycle slice (`ClipSpec`, `ClipPreparationState`, `IPreparedClip`,
   `IArmedClip`, `IClipStandbyEngine`): builder-based open, `ClipWindow.Start` seek,
   cache-keyed non-consuming standby, decoder cap/window policy, explicit `Start()`, and
-  grouped starts. HaPlay migration and shared output-runtime ownership remain follow-ups.)*
+  grouped starts. HaPlay now delegates the file-cue source lifecycle to the standby
+  engine; shared output-runtime ownership and video-capable soundboard remain follow-ups.)*
   - Desired guarantees: non-consuming standby, explicit start barrier,
     coordinated grouped starts, clip-relative audio/video timing, and clear
     output ownership.
@@ -333,8 +334,9 @@ both an RFC and a phase-1 playback implementation.
   `AudioRoutes` (see the item note).
 - **Framework cue/clip API — RFC + phase-1 implementation.** RFC at
   `Doc/MediaFramework-Cue-Clip-API-RFC.md`; implementation in
-  `S.Media.Playback.ClipStandbyEngine` with focused playback tests. HaPlay migration is
-  the next extraction step.
+  `S.Media.Playback.ClipStandbyEngine` with focused playback tests. HaPlay file-cue
+  source lifecycle now delegates to the framework standby engine; shared output-runtime
+  ownership and video-capable soundboard are the next extraction steps.
 
 Coverage: added `MaxPreparedDecoders` round-trip/default tests and `Stale`-state
 glyph/tooltip/mapping tests. Full suite green (142 tests).
