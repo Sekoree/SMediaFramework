@@ -1024,7 +1024,7 @@
     <value>No media loaded — pick an item from the playlist below.</value>
   </data>
   <data name="SeekSliderTooltip" xml:space="preserve">
-    <value>Drag to scrub. Keys: Space play/pause · [ ] prev/next · , . jog ±5 s.</value>
+    <value>Drag to scrub. Keys: Space play/pause · [ ] prev/next · , . jog ±5 s · Home to start · + - volume.</value>
   </data>
   <data name="PositionTimeLabel" xml:space="preserve">
     <value>Position</value>
@@ -1076,6 +1076,18 @@
   </data>
   <data name="AutoAdvanceToggleTooltip" xml:space="preserve">
     <value>When on, the next playlist entry loads and plays automatically when the current track ends.</value>
+  </data>
+  <data name="ShuffleToggleLabel" xml:space="preserve">
+    <value>🔀 Shuffle</value>
+  </data>
+  <data name="ShuffleToggleTooltip" xml:space="preserve">
+    <value>When auto-advancing, play tracks in a random order (each once per cycle). Manual Next/Previous stay in list order.</value>
+  </data>
+  <data name="RepeatAllToggleLabel" xml:space="preserve">
+    <value>🔁 Repeat all</value>
+  </data>
+  <data name="RepeatAllToggleTooltip" xml:space="preserve">
+    <value>When auto-advancing past the last track, wrap back to the first instead of stopping. (Loop repeats the single current track.)</value>
   </data>
   <data name="PlaylistCardTooltip" xml:space="preserve">
     <value>Double-click a row to load + play. Single-click selects so Play loads that file.</value>
@@ -1894,7 +1906,7 @@
     <value>Open routing configuration (add/remove outputs, headphones cue bus)</value>
   </data>
   <data name="TransportKeyboardHints" xml:space="preserve">
-    <value>Space play/pause · [ ] prev/next · , . jog ±5 s</value>
+    <value>Space play/pause · [ ] prev/next · , . jog ±5 s · Home start · + - volume</value>
   </data>
   <data name="ResetVolumeTooltip" xml:space="preserve">
     <value>Double-click to reset to 0 dB</value>

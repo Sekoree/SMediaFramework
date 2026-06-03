@@ -26,6 +26,11 @@
             <Setter Property="FontFamily" Value="Consolas,monospace" />
             <Setter Property="FontSize" Value="13" />
         </Style>
+        <!-- Low-time warning: highlight the clock when a finite track is near its end. -->
+        <Style Selector="TextBlock.time.lowtime">
+            <Setter Property="Foreground" Value="#E53935" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
         <Style Selector="TextBlock.time-label">
             <Setter Property="FontSize" Value="11" />
             <Setter Property="Opacity" Value="0.6" />
@@ -178,6 +183,7 @@
                             <StackPanel Grid.Column="1" Tapped="OnMiddleTimeTapped" Cursor="Hand"
                                         ToolTip.Tip="{x:Static res:Strings.ToggleTimeDisplayTooltip}">
                                 <TextBlock Classes="time" HorizontalAlignment="Center"
+                                           Classes.lowtime="{Binding IsNearEndOfTrack}"
                                            Text="{Binding MiddleTimeText}" />
                                 <TextBlock Classes="time-label hide-compact" Text="{Binding MiddleTimeLabel}" />
                             </StackPanel>
@@ -228,6 +234,12 @@
                                 <ToggleButton Content="{x:Static res:Strings.AutoAdvanceToggleLabel}"
                                               IsChecked="{Binding AutoAdvancePlaylist}" Padding="10,6"
                                               ToolTip.Tip="{x:Static res:Strings.AutoAdvanceToggleTooltip}" />
+                                <ToggleButton Content="{x:Static res:Strings.ShuffleToggleLabel}"
+                                              IsChecked="{Binding ShufflePlaylist}" Padding="10,6"
+                                              ToolTip.Tip="{x:Static res:Strings.ShuffleToggleTooltip}" />
+                                <ToggleButton Content="{x:Static res:Strings.RepeatAllToggleLabel}"
+                                              IsChecked="{Binding RepeatAllPlaylist}" Padding="10,6"
+                                              ToolTip.Tip="{x:Static res:Strings.RepeatAllToggleTooltip}" />
                             </StackPanel>
                         </Grid>
                         <TextBlock Classes="hide-compact" Opacity="0.35" FontSize="10" HorizontalAlignment="Center"

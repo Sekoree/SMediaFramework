@@ -1277,6 +1277,90 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
+    private CueNodeViewModel? _preRollWatchedCue;
+
+    /// <summary>Tracks the selected media cue so that in-place edits to its transport offsets and to
+    /// its audio routes / video placements re-warm standby pre-roll. The add/remove route commands
+    /// already call <see cref="SuggestPreRollRefresh"/>; this covers the property edits that don't.</summary>
+    private void WatchSelectedCueForPreRoll(CueNodeViewModel? value)
+    {
+        var next = value is { Kind: CueNodeKind.Media } ? value : null;
+        if (ReferenceEquals(_preRollWatchedCue, next))
+            return;
+
+        if (_preRollWatchedCue is not null)
+        {
+            _preRollWatchedCue.PropertyChanged -= OnWatchedCuePreRollPropertyChanged;
+            _preRollWatchedCue.AudioRoutes.CollectionChanged -= OnWatchedCueRouteCollectionChanged;
+            _preRollWatchedCue.VideoPlacements.CollectionChanged -= OnWatchedCuePlacementCollectionChanged;
+            foreach (var route in _preRollWatchedCue.AudioRoutes)
+                route.PropertyChanged -= OnWatchedRouteOrPlacementPropertyChanged;
+            foreach (var placement in _preRollWatchedCue.VideoPlacements)
+                placement.PropertyChanged -= OnWatchedRouteOrPlacementPropertyChanged;
+        }
+
+        _preRollWatchedCue = next;
+
+        if (_preRollWatchedCue is not null)
+        {
+            _preRollWatchedCue.PropertyChanged += OnWatchedCuePreRollPropertyChanged;
+            _preRollWatchedCue.AudioRoutes.CollectionChanged += OnWatchedCueRouteCollectionChanged;
+            _preRollWatchedCue.VideoPlacements.CollectionChanged += OnWatchedCuePlacementCollectionChanged;
+            foreach (var route in _preRollWatchedCue.AudioRoutes)
+                route.PropertyChanged += OnWatchedRouteOrPlacementPropertyChanged;
+            foreach (var placement in _preRollWatchedCue.VideoPlacements)
+                placement.PropertyChanged += OnWatchedRouteOrPlacementPropertyChanged;
+        }
+    }
+
+    private void OnWatchedCuePreRollPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(CueNodeViewModel.StartOffsetMs)
+            or nameof(CueNodeViewModel.EndOffsetMs)
+            or nameof(CueNodeViewModel.Loop)
+            or nameof(CueNodeViewModel.EndBehavior))
+            SuggestPreRollRefresh();
+    }
+
+    private void OnWatchedCueRouteCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        RebindItemSubscriptions(e);
+        // Add/Remove route commands already suggest a refresh, but a programmatic edit might not.
+        SuggestPreRollRefresh();
+    }
+
+    private void OnWatchedCuePlacementCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        RebindItemSubscriptions(e);
+        SuggestPreRollRefresh();
+    }
+
+    private void RebindItemSubscriptions(NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+            foreach (var item in e.OldItems.OfType<ObservableObject>())
+                item.PropertyChanged -= OnWatchedRouteOrPlacementPropertyChanged;
+        if (e.NewItems is not null)
+            foreach (var item in e.NewItems.OfType<ObservableObject>())
+                item.PropertyChanged += OnWatchedRouteOrPlacementPropertyChanged;
+    }
+
+    private void OnWatchedRouteOrPlacementPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        // LineRef is a resolved UI reference, not part of the cue's cache key — ignore it so a mere
+        // output-line resolution doesn't churn pre-roll.
+        if (e.PropertyName is nameof(CueAudioRouteViewModel.SourceChannel)
+            or nameof(CueAudioRouteViewModel.OutputLineId)
+            or nameof(CueAudioRouteViewModel.OutputChannel)
+            or nameof(CueAudioRouteViewModel.GainDb)
+            or nameof(CueAudioRouteViewModel.Muted)
+            or nameof(CueVideoPlacementViewModel.CompositionId)
+            or nameof(CueVideoPlacementViewModel.LayerIndex)
+            or nameof(CueVideoPlacementViewModel.Position)
+            or nameof(CueVideoPlacementViewModel.Opacity))
+            SuggestPreRollRefresh();
+    }
+
     private void RefreshVideoFrameRateMismatchWarning()
     {
         OnPropertyChanged(nameof(VideoFrameRateMismatchWarning));
@@ -1332,6 +1416,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         _watchedSelectedCueForProbe = value;
         if (_watchedSelectedCueForProbe is not null)
             _watchedSelectedCueForProbe.PropertyChanged += OnSelectedCueProbeChanged;
+
+        // In-place edits to the selected cue's routes/placements/offsets don't go through the
+        // add/remove commands (those already suggest a refresh), so watch the node directly to keep
+        // its standby pre-roll warm after gain/channel/opacity/offset tweaks. Debounced downstream.
+        WatchSelectedCueForPreRoll(value);
 
         SelectedAudioRoute = value is { Kind: CueNodeKind.Media } media
             ? media.AudioRoutes.FirstOrDefault()
@@ -1421,15 +1510,18 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool _suppressStandbyPreRollRefresh;
 
-    /// <summary>Next <paramref name="maxCount"/> file media cues from standby (or list start).</summary>
-    public IReadOnlyList<(Guid CueId, PlaylistItem Item, int FadeInMs, int FadeOutMs)> GetPreRollTargets(int maxCount)
+    /// <summary>The fireable cue order starting at standby (or list start) — the window each
+    /// pre-roll query pulls its next-N targets from. Callers apply a per-source-type filter and
+    /// cap the count of *matched* targets themselves, so a non-matching cue (e.g. an NDI cue while
+    /// scanning for files) is skipped without consuming the budget.</summary>
+    private IEnumerable<CueNodeViewModel> EnumeratePreRollWindow()
     {
-        if (maxCount <= 0 || SelectedCueList is null)
-            return [];
+        if (SelectedCueList is null)
+            yield break;
 
         var ordered = EnumerateFireableCueOrder().ToList();
         if (ordered.Count == 0)
-            return [];
+            yield break;
 
         var startIdx = 0;
         if (StandbyCueNode is not null)
@@ -1440,10 +1532,21 @@ public partial class CuePlayerViewModel : ViewModelBase
                 startIdx = idx;
         }
 
+        for (var i = startIdx; i < ordered.Count; i++)
+            yield return ordered[i];
+    }
+
+    /// <summary>Next <paramref name="maxCount"/> file media cues from standby (or list start).</summary>
+    public IReadOnlyList<(Guid CueId, PlaylistItem Item, int FadeInMs, int FadeOutMs)> GetPreRollTargets(int maxCount)
+    {
+        if (maxCount <= 0)
+            return [];
+
         var targets = new List<(Guid, PlaylistItem, int, int)>();
-        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        foreach (var cue in EnumeratePreRollWindow())
         {
-            var cue = ordered[i];
+            if (targets.Count >= maxCount)
+                break;
             if (cue.Kind != CueNodeKind.Media
                 || cue.MediaSourceItem is not { } source
                 || !source.SupportsPreRoll())
@@ -1457,26 +1560,14 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Next file media cues from standby for the cue engine's own opened/routed cache.</summary>
     public IReadOnlyList<MediaCueNode> GetPreparedMediaCueTargets(int maxCount)
     {
-        if (maxCount <= 0 || SelectedCueList is null)
+        if (maxCount <= 0)
             return [];
-
-        var ordered = EnumerateFireableCueOrder().ToList();
-        if (ordered.Count == 0)
-            return [];
-
-        var startIdx = 0;
-        if (StandbyCueNode is not null)
-        {
-            var resolved = ResolveFireableCue(StandbyCueNode) ?? StandbyCueNode;
-            var idx = ordered.FindIndex(c => ReferenceEquals(c, resolved));
-            if (idx >= 0)
-                startIdx = idx;
-        }
 
         var targets = new List<MediaCueNode>();
-        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        foreach (var cue in EnumeratePreRollWindow())
         {
-            var cue = ordered[i];
+            if (targets.Count >= maxCount)
+                break;
             if (cue.Kind != CueNodeKind.Media
                 || cue.MediaSourceItem is not FilePlaylistItem
                 || cue.ToModel() is not MediaCueNode media)
@@ -1490,26 +1581,14 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>NDI media cues in the pre-roll window (§6.11).</summary>
     public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNdiPreConnectTargets(int maxCount)
     {
-        if (maxCount <= 0 || SelectedCueList is null)
+        if (maxCount <= 0)
             return [];
-
-        var ordered = EnumerateFireableCueOrder().ToList();
-        if (ordered.Count == 0)
-            return [];
-
-        var startIdx = 0;
-        if (StandbyCueNode is not null)
-        {
-            var resolved = ResolveFireableCue(StandbyCueNode) ?? StandbyCueNode;
-            var idx = ordered.FindIndex(c => ReferenceEquals(c, resolved));
-            if (idx >= 0)
-                startIdx = idx;
-        }
 
         var targets = new List<(Guid, NDIInputPlaylistItem)>();
-        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        foreach (var cue in EnumeratePreRollWindow())
         {
-            var cue = ordered[i];
+            if (targets.Count >= maxCount)
+                break;
             if (cue.Kind != CueNodeKind.Media
                 || cue.MediaSourceItem is not NDIInputPlaylistItem ndi
                 || !ndi.SupportsPreRoll())
@@ -2982,26 +3061,14 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public IReadOnlyList<(Guid CueId, PortAudioInputPlaylistItem Item)> GetPortAudioPreConnectTargets(int maxCount)
     {
-        if (maxCount <= 0 || SelectedCueList is null)
+        if (maxCount <= 0)
             return [];
-
-        var ordered = EnumerateFireableCueOrder().ToList();
-        if (ordered.Count == 0)
-            return [];
-
-        var startIdx = 0;
-        if (StandbyCueNode is not null)
-        {
-            var resolved = ResolveFireableCue(StandbyCueNode) ?? StandbyCueNode;
-            var idx = ordered.FindIndex(c => ReferenceEquals(c, resolved));
-            if (idx >= 0)
-                startIdx = idx;
-        }
 
         var targets = new List<(Guid, PortAudioInputPlaylistItem)>();
-        for (var i = startIdx; i < ordered.Count && targets.Count < maxCount; i++)
+        foreach (var cue in EnumeratePreRollWindow())
         {
-            var cue = ordered[i];
+            if (targets.Count >= maxCount)
+                break;
             if (cue.Kind != CueNodeKind.Media
                 || cue.MediaSourceItem is not PortAudioInputPlaylistItem pa
                 || !pa.SupportsPreRoll())

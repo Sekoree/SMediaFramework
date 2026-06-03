@@ -298,6 +298,31 @@ public partial class MediaPlayerView : UserControl
                     e.Handled = true;
                 }
                 break;
+            case Key.Home:
+                if (vm.SeekToStartCommand.CanExecute(null))
+                {
+                    vm.SeekToStartCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            // `+` / `-` (and numpad) nudge master volume. Arrow keys are intentionally avoided so
+            // they keep navigating the playlist list.
+            case Key.OemPlus:
+            case Key.Add:
+                if (vm.VolumeUpCommand.CanExecute(null))
+                {
+                    vm.VolumeUpCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            case Key.OemMinus:
+            case Key.Subtract:
+                if (vm.VolumeDownCommand.CanExecute(null))
+                {
+                    vm.VolumeDownCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
         }
     }
 }

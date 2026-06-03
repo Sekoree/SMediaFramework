@@ -368,6 +368,10 @@ public static class Strings
     public static string LoopToggleTooltip => Get(nameof(LoopToggleTooltip));
     public static string AutoAdvanceToggleLabel => Get(nameof(AutoAdvanceToggleLabel));
     public static string AutoAdvanceToggleTooltip => Get(nameof(AutoAdvanceToggleTooltip));
+    public static string ShuffleToggleLabel => Get(nameof(ShuffleToggleLabel));
+    public static string ShuffleToggleTooltip => Get(nameof(ShuffleToggleTooltip));
+    public static string RepeatAllToggleLabel => Get(nameof(RepeatAllToggleLabel));
+    public static string RepeatAllToggleTooltip => Get(nameof(RepeatAllToggleTooltip));
     public static string PlaylistCardTooltip => Get(nameof(PlaylistCardTooltip));
     public static string AddPlaylistTabButton => Get(nameof(AddPlaylistTabButton));
     public static string AddPlaylistTabTooltip => Get(nameof(AddPlaylistTabTooltip));

@@ -121,6 +121,14 @@ public sealed record PlaylistConfig
     public bool IsLooping { get; init; }
 
     public bool AutoAdvance { get; init; }
+
+    /// <summary>When auto-advancing, pick the next item in a random (shuffle-bag) order instead of
+    /// sequentially. Default false keeps existing playlists sequential.</summary>
+    public bool Shuffle { get; init; }
+
+    /// <summary>When auto-advancing past the last item, wrap to the first (loop the whole list)
+    /// rather than stopping. Distinct from <see cref="IsLooping"/> which loops the current item.</summary>
+    public bool RepeatAll { get; init; }
 }
 
 public sealed record OutputGainConfig

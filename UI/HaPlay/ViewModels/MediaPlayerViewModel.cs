@@ -992,6 +992,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private bool _autoAdvancePlaylist;
 
+    /// <summary>When true (and auto-advancing), the next item is drawn from a shuffle bag instead of
+    /// sequential order. Mirrors the selected tab's <see cref="PlaylistTabViewModel.Shuffle"/>.</summary>
+    [ObservableProperty]
+    private bool _shufflePlaylist;
+
+    /// <summary>When true, auto-advance wraps from the last item back to the first instead of stopping.
+    /// Distinct from <see cref="IsLooping"/> (loop the current item). Mirrors the selected tab.</summary>
+    [ObservableProperty]
+    private bool _repeatAllPlaylist;
+
     [ObservableProperty]
     private bool _holdFallbackVideo;
 
@@ -1101,6 +1111,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public TimeSpan RemainingTime =>
         Duration > CurrentPosition ? Duration - CurrentPosition : TimeSpan.Zero;
 
+    /// <summary>Operator aid: true when a finite track is playing and within
+    /// <see cref="LowTimeWarningThreshold"/> of its end. Drives the low-time clock highlight; false
+    /// for live sources, idle, and paused playback.</summary>
+    public bool IsNearEndOfTrack =>
+        IsPlaying
+        && _session is { IsLive: false }
+        && Duration > TimeSpan.Zero
+        && RemainingTime <= LowTimeWarningThreshold;
+
+    private static readonly TimeSpan LowTimeWarningThreshold = TimeSpan.FromSeconds(10);
+
     /// <summary>Phase C.5 (§6.5) — true when the loaded source has a finite, seekable duration. Files
     /// with non-zero duration are seekable; live items (PortAudio capture, NDI receiver) are not. The
     /// view hides the seek slider + three-clock readout when this is false.</summary>
@@ -1137,7 +1158,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _preOpenCts?.Dispose();
         _preOpenCts = new CancellationTokenSource();
 
-        var items = PlaylistItems;
+        // Follow the tab that's actually playing (which may not be the selected tab) so auto-advance
+        // finds the next decoder already warm.
+        var items = ActivePlaybackItems();
         var current = _currentPlaylistItem;
         if (current is null || items.Count == 0) return;
 
@@ -1254,6 +1277,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(PlayPauseLabel));
         OnPropertyChanged(nameof(PlaybackStateLabel));
         OnPropertyChanged(nameof(PlaybackStateColor));
+        OnPropertyChanged(nameof(IsNearEndOfTrack));
         NotifyTransportCanExecuteChanged();
         if (value)
             PreOpenAdjacentPlaylistItems();
@@ -1292,6 +1316,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(RemainingTimeText));
         OnPropertyChanged(nameof(DurationText));
         OnPropertyChanged(nameof(IsTransportSeekable));
+        OnPropertyChanged(nameof(IsNearEndOfTrack));
     }
 
     partial void OnIsMediaLoadedChanging(bool value) => _ = value;
@@ -1303,6 +1328,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(RemainingTimeText));
         OnPropertyChanged(nameof(CurrentPositionText));
         OnPropertyChanged(nameof(MiddleTimeText));
+        OnPropertyChanged(nameof(IsNearEndOfTrack));
     }
 
     partial void OnSelectedPlaylistItemChanged(PlaylistItem? value)
@@ -1331,11 +1357,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 : newValue?.Items.FirstOrDefault();
             IsLooping = newValue?.IsLooping ?? false;
             AutoAdvancePlaylist = newValue?.AutoAdvance ?? false;
+            ShufflePlaylist = newValue?.Shuffle ?? false;
+            RepeatAllPlaylist = newValue?.RepeatAll ?? false;
         }
         finally
         {
             _syncingPlaylistTabState = false;
         }
+
+        // The shuffle bag is per playing-tab; switching tabs invalidates it.
+        InvalidateShuffleBag();
 
         OnPropertyChanged(nameof(PlaylistItems));
         OnPlaylistItemsChanged();
@@ -1354,6 +1385,20 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         if (!_syncingPlaylistTabState && SelectedPlaylistTab is not null)
             SelectedPlaylistTab.AutoAdvance = value;
+    }
+
+    partial void OnShufflePlaylistChanged(bool value)
+    {
+        if (!_syncingPlaylistTabState && SelectedPlaylistTab is not null)
+            SelectedPlaylistTab.Shuffle = value;
+        // A toggle change invalidates the current shuffle bag (different traversal).
+        InvalidateShuffleBag();
+    }
+
+    partial void OnRepeatAllPlaylistChanged(bool value)
+    {
+        if (!_syncingPlaylistTabState && SelectedPlaylistTab is not null)
+            SelectedPlaylistTab.RepeatAll = value;
     }
 
     partial void OnMasterVolumeDbChanged(double value)
@@ -3047,7 +3092,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         if (_loopTimer is not null)
             return;
-        _loopTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+        _loopTimer = new DispatcherTimer { Interval = LoopPollRelaxed };
         _loopTimer.Tick += OnLoopTimerTick;
         _loopTimer.Start();
     }
@@ -3096,8 +3141,34 @@ public partial class MediaPlayerViewModel : ViewModelBase
             PollAudioMeters();
         }, DispatcherPriority.Normal);
 
-    private void OnLoopTimerTick(object? sender, EventArgs e) =>
+    // The loop timer also drives natural-end detection for loop wrap + playlist auto-advance, so a
+    // fixed 500 ms poll means a track can run up to ~500 ms past its end before the next one starts.
+    // Near the end of a finite file we tighten the cadence so the boundary fires within ~one fast
+    // tick; live/idle stay relaxed to keep the dispatcher quiet.
+    private static readonly TimeSpan LoopPollRelaxed = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan LoopPollNearEnd = TimeSpan.FromMilliseconds(60);
+    private static readonly TimeSpan LoopPollNearEndWindow = TimeSpan.FromSeconds(1.5);
+
+    private void OnLoopTimerTick(object? sender, EventArgs e)
+    {
+        AdjustLoopTimerCadence();
         _ = ProcessLoopTimerTickAsync();
+    }
+
+    /// <summary>Speeds up the loop poll when a finite file is within <see cref="LoopPollNearEndWindow"/>
+    /// of its end so loop wrap / auto-advance fires promptly; relaxes back otherwise. Runs on the UI
+    /// thread (DispatcherTimer tick).</summary>
+    private void AdjustLoopTimerCadence()
+    {
+        if (_loopTimer is null) return;
+        var nearEnd = IsPlaying
+            && _session is { IsLive: false }
+            && Duration > TimeSpan.Zero
+            && RemainingTime <= LoopPollNearEndWindow;
+        var target = nearEnd ? LoopPollNearEnd : LoopPollRelaxed;
+        if (_loopTimer.Interval != target)
+            _loopTimer.Interval = target;
+    }
 
     private async Task ProcessLoopTimerTickAsync()
     {
@@ -3208,7 +3279,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         {
             if (_session is null || !IsMediaLoaded) return false;
             IsPlaying = false;
-            if (!TryGetNextPlaylistItem(out var nextItem)) return false;
+            if (!TryGetAutoAdvanceItem(out var nextItem)) return false;
             _ = PrepareCurrentItemAsync(nextItem);
             if (_activePlaybackTab is not null)
                 _activePlaybackTab.SelectedItem = nextItem;
@@ -3618,15 +3689,61 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// manual-name NDI item whose source never came online.</summary>
     private bool CanStop() => !_isTransportBusy && ((_session is not null && IsMediaLoaded) || IsWaitingForSource);
 
+    private readonly object _seekGate = new();
+    private double? _pendingSeekValue;
+    private bool _seekArcRunning;
+
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private async Task SeekToSliderAsync()
     {
         if (_session is null || Duration <= TimeSpan.Zero)
             return;
+
+        // Coalesce rapid scrub commits (each pointer release / arrow key-up calls this) to
+        // latest-wins. A seek runs a 3–5 s-bounded teardown+seek+play arc serialized behind
+        // _playbackArc, so without conflation a burst of releases queues N full arcs and the
+        // playhead lags. Record the newest target; if an arc is already running it re-reads the
+        // pending target when it finishes and drops the intermediate ones.
+        lock (_seekGate)
+        {
+            _pendingSeekValue = SeekSliderValue;
+            if (_seekArcRunning)
+                return;
+            _seekArcRunning = true;
+        }
+
+        try
+        {
+            while (true)
+            {
+                double target;
+                lock (_seekGate)
+                {
+                    if (_pendingSeekValue is not { } pending)
+                    {
+                        _seekArcRunning = false; // atomic with the emptiness check — no lost wakeup
+                        return;
+                    }
+                    target = pending;
+                    _pendingSeekValue = null;
+                }
+
+                await SeekToTargetAsync(target).ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            lock (_seekGate) _seekArcRunning = false;
+            throw;
+        }
+    }
+
+    private async Task SeekToTargetAsync(double sliderValue)
+    {
         await WithPlaybackArcAsync(async () =>
         {
-            var (session, playing, holdFb, sliderValue) = await Dispatcher.UIThread.InvokeAsync(() =>
-                (_session, IsPlaying, HoldFallbackVideo, SeekSliderValue));
+            var (session, playing, holdFb) = await Dispatcher.UIThread.InvokeAsync(() =>
+                (_session, IsPlaying, HoldFallbackVideo));
             if (session is null) return;
 
             var t = TimeSpan.FromTicks((long)(sliderValue * Duration.Ticks / 1000.0));
@@ -3665,6 +3782,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private Task JogForwardAsync() => JogByAsync(TimeSpan.FromSeconds(5));
 
+    /// <summary>Keyboard Home — jump to the start of the track.</summary>
+    [RelayCommand(CanExecute = nameof(CanSeek))]
+    private Task SeekToStartAsync()
+    {
+        if (Duration <= TimeSpan.Zero) return Task.CompletedTask;
+        SeekSliderValue = 0;
+        return SeekToSliderCommand.CanExecute(null)
+            ? SeekToSliderCommand.ExecuteAsync(null)
+            : Task.CompletedTask;
+    }
+
     private Task JogByAsync(TimeSpan delta)
     {
         if (Duration <= TimeSpan.Zero) return Task.CompletedTask;
@@ -3676,6 +3804,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
             ? SeekToSliderCommand.ExecuteAsync(null)
             : Task.CompletedTask;
     }
+
+    private const double KeyboardVolumeStepDb = 1.0;
+
+    /// <summary>Keyboard `+` — nudge master volume up, clamped to the volume slider's range.</summary>
+    [RelayCommand]
+    private void VolumeUp() => MasterVolumeDb = Math.Clamp(MasterVolumeDb + KeyboardVolumeStepDb, -60.0, 12.0);
+
+    /// <summary>Keyboard `-` — nudge master volume down.</summary>
+    [RelayCommand]
+    private void VolumeDown() => MasterVolumeDb = Math.Clamp(MasterVolumeDb - KeyboardVolumeStepDb, -60.0, 12.0);
 
     [RelayCommand]
     private Task CloseSessionAsync() => WithPlaybackArcAsync(() => CloseSessionCoreInnerAsync(false));
@@ -3698,6 +3836,98 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private IList<PlaylistItem> ActivePlaybackItems() =>
         _activePlaybackTab?.Items ?? (IList<PlaylistItem>)PlaylistItems;
+
+    // --- Auto-advance ordering (shuffle bag + repeat-all) ----------------------------------------
+    // Shuffle/RepeatAll affect only *unattended* auto-advance; the manual Next/Previous buttons stay
+    // linear so explicit navigation is predictable.
+
+    private readonly List<PlaylistItem> _shuffleBag = new();
+    private int _shuffleBagIndex;
+
+    private void InvalidateShuffleBag()
+    {
+        _shuffleBag.Clear();
+        _shuffleBagIndex = 0;
+    }
+
+    /// <summary>Next item for natural-end auto-advance, honoring the playing tab's Shuffle/RepeatAll.
+    /// Returns false to stop at the end of the list.</summary>
+    private bool TryGetAutoAdvanceItem([NotNullWhen(true)] out PlaylistItem? next)
+    {
+        next = null;
+        var items = ActivePlaybackItems();
+        if (items.Count == 0 || _currentPlaylistItem is null)
+            return false;
+
+        var shuffle = _activePlaybackTab?.Shuffle ?? ShufflePlaylist;
+        var repeatAll = _activePlaybackTab?.RepeatAll ?? RepeatAllPlaylist;
+
+        if (shuffle && items.Count > 1)
+            return TryGetShuffleNext(items, repeatAll, out next);
+
+        var idx = items.IndexOf(_currentPlaylistItem);
+        if (idx < 0)
+            return false;
+        var n = idx + 1;
+        if (n >= items.Count)
+        {
+            if (!repeatAll)
+                return false;
+            n = 0; // repeat-all wraps to the top
+        }
+        next = items[n];
+        return true;
+    }
+
+    private bool TryGetShuffleNext(IList<PlaylistItem> items, bool repeatAll, [NotNullWhen(true)] out PlaylistItem? next)
+    {
+        next = null;
+        if (!ShuffleBagMatches(items))
+            RebuildShuffleBag(items, _currentPlaylistItem);
+
+        // At most two passes: drain the current bag, then (if repeat-all) one reshuffled bag.
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            while (_shuffleBagIndex < _shuffleBag.Count)
+            {
+                var candidate = _shuffleBag[_shuffleBagIndex++];
+                if (items.Contains(candidate) && !ReferenceEquals(candidate, _currentPlaylistItem))
+                {
+                    next = candidate;
+                    return true;
+                }
+            }
+            if (!repeatAll)
+                return false;
+            RebuildShuffleBag(items, _currentPlaylistItem);
+        }
+        return false;
+    }
+
+    private void RebuildShuffleBag(IList<PlaylistItem> items, PlaylistItem? current)
+    {
+        _shuffleBag.Clear();
+        _shuffleBag.AddRange(items);
+        for (var i = _shuffleBag.Count - 1; i > 0; i--) // Fisher–Yates
+        {
+            var j = Random.Shared.Next(i + 1);
+            (_shuffleBag[i], _shuffleBag[j]) = (_shuffleBag[j], _shuffleBag[i]);
+        }
+        // Don't replay the current track first if it shuffled to the front.
+        _shuffleBagIndex = current is not null && _shuffleBag.Count > 0 && ReferenceEquals(_shuffleBag[0], current)
+            ? 1
+            : 0;
+    }
+
+    private bool ShuffleBagMatches(IList<PlaylistItem> items)
+    {
+        if (_shuffleBag.Count != items.Count)
+            return false;
+        foreach (var it in items)
+            if (!_shuffleBag.Contains(it))
+                return false;
+        return true;
+    }
 
     private static Window? TryGetMainWindow()
     {

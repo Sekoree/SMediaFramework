@@ -28,6 +28,12 @@ public sealed partial class PlaylistTabViewModel : ObservableObject
     [ObservableProperty]
     private bool _autoAdvance;
 
+    [ObservableProperty]
+    private bool _shuffle;
+
+    [ObservableProperty]
+    private bool _repeatAll;
+
     public PlaylistConfig ToConfig() => new()
     {
         Schema = "HaPlayPlaylist/v2",
@@ -36,6 +42,8 @@ public sealed partial class PlaylistTabViewModel : ObservableObject
         SelectedItemId = SelectedItem?.Id,
         IsLooping = IsLooping,
         AutoAdvance = AutoAdvance,
+        Shuffle = Shuffle,
+        RepeatAll = RepeatAll,
     };
 
     public static PlaylistTabViewModel FromConfig(PlaylistConfig config)
@@ -44,6 +52,8 @@ public sealed partial class PlaylistTabViewModel : ObservableObject
         {
             IsLooping = config.IsLooping,
             AutoAdvance = config.AutoAdvance,
+            Shuffle = config.Shuffle,
+            RepeatAll = config.RepeatAll,
         };
 
         // v2 path: discriminated items are canonical.

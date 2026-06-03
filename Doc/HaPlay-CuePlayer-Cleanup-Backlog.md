@@ -8,55 +8,75 @@ needed for composition slots.
 
 ## Cleanup Before Larger Feature Work
 
-- [ ] Remove the stale `deferPlay` argument from
-  `CuePlaybackEngine.OpenCueEntryAsync`.
+- [x] Remove the stale `deferPlay` argument from
+  `CuePlaybackEngine.OpenCueEntryAsync`. *(Done — parameter deleted, both call
+  sites updated; `ExecuteCoreAsync` keeps its own `deferPlay`.)*
   - Reason: start behavior is now controlled by route wiring plus paused audio
     sources. The argument no longer carries a meaningful transport decision.
 
-- [ ] Rename `ActiveCue.VideoClockMaster`.
+- [x] Rename `ActiveCue.VideoClockMaster`. *(Done — renamed to
+  `PlaybackClockMaster` with a doc comment explaining it is the audio-runtime
+  clock used as both composition master and `Play(videoOnlyMaster:)`.)*
   - Suggested names: `PlaybackClockMaster`, `AudioClockMaster`, or
     `CompositionClockMaster`.
   - Reason: the value is sourced from the audio runtime playback clock, then used
     as the composition master. The current name reads as if the video path owns
     the clock.
 
-- [ ] Extract the repeated "next cues from standby" traversal in
-  `CuePlayerViewModel`.
+- [x] Extract the repeated "next cues from standby" traversal in
+  `CuePlayerViewModel`. *(Done — new `EnumeratePreRollWindow()` yields the
+  fireable window from standby; the four methods now just apply their filter and
+  cap matched targets.)*
   - Affected methods: `GetPreRollTargets`, `GetPreparedMediaCueTargets`,
     `GetNdiPreConnectTargets`, and `GetPortAudioPreConnectTargets`.
   - Suggested shape: one helper that enumerates the fireable pre-roll window
     from standby, with per-target filters layered on top.
 
-- [ ] Add a short local comment where `PtsRebasingVideoOutput` is wired into
-  `WireVideoPlacements`.
+- [x] Add a short local comment where `PtsRebasingVideoOutput` is wired into
+  `WireVideoPlacements`. *(Done.)*
   - Reason: the class-level comment explains the wrapper, but the call site is
     the important black-screen fix. It should be obvious that cue start offsets
     require source PTS to be converted to cue-relative PTS before composition.
 
 ## Correctness-Adjacent Follow-Ups
 
-- [ ] Debounce and serialize `MainViewModel.RefreshCuePreRollAsync`.
+- [x] Debounce and serialize `MainViewModel.RefreshCuePreRollAsync`. *(Done —
+  latest-request-wins via a swapped `CancellationTokenSource` plus a
+  `SemaphoreSlim(1,1)` serial gate; the token is threaded into
+  `RefreshPreparedCuesAsync` and checked before the NDI/PortAudio pre-connect
+  passes.)*
   - Current behavior: repeated pre-roll suggestions can overlap; failures are
     swallowed because pre-roll must not break transport.
   - Suggested behavior: a latest-request-wins refresh using a cancellation token
     source plus a small serial gate.
 
-- [ ] Trigger pre-roll refresh when existing route or placement properties
-  change.
+- [x] Trigger pre-roll refresh when existing route or placement properties
+  change. *(Done — `WatchSelectedCueForPreRoll` subscribes to the selected media
+  cue's offset/loop/end-behavior changes and to its audio-route / video-placement
+  collection + item property changes, suggesting a refresh on edit-relevant
+  fields. `LineRef` is excluded since it isn't part of the cache key.)*
   - Examples: audio output line, source channel, output channel, gain, video
     composition, layer index, opacity, start offset, and end offset.
   - Current protection: Go rebuilds the route plan and cache key, so playback
     should still recover.
   - Remaining issue: standby may no longer be warm after property edits.
+  - Note: covers in-place edits on the *selected* cue (the only one the inspector
+    exposes for editing); multi-select add already suggested a refresh.
 
-- [ ] Add an integration regression test for "start-offset cue enters
-  composition at cue-relative t=0".
+- [x] Add an integration regression test for "start-offset cue enters
+  composition at cue-relative t=0". *(Done — `CueStartOffsetCompositionTests`
+  drives a source-PTS frame through the real `VideoCompositorSource`
+  master-aligned slot: visible with `RetimingVideoOutput`, withheld (black)
+  without it.)*
   - The current unit-level PTS rebase test is useful, but the black-screen bug
     happened at the `MediaPlayer -> VideoRouter -> CueCompositionRuntime` boundary.
   - Preferred test shape: fake or lightweight video frames submitted through the
     same layer-slot path used by cue playback.
 
-- [ ] Decide and document cue composition timeline semantics.
+- [x] Decide and document cue composition timeline semantics. *(Done — see
+  `Doc/HaPlay-Cue-Composition-Timeline-Semantics.md`: cue layers are cue-relative
+  (t=0 at fire); timeline/show-time placement is recorded as a future opt-in
+  feature, not a default change.)*
   - Current practical behavior: clip video is rebased so each cue starts at
     local t=0 inside the composition.
   - Decision to capture: whether all cue layers are always cue-relative, or
@@ -64,8 +84,12 @@ needed for composition slots.
 
 ## Larger Enhancements
 
-- [ ] Promote `PtsRebasingVideoOutput` or an equivalent retiming wrapper into
-  the reusable media framework.
+- [x] Promote `PtsRebasingVideoOutput` or an equivalent retiming wrapper into
+  the reusable media framework. *(Done — `S.Media.Core.Video.RetimingVideoOutput`
+  (additive PTS offset + optional zero-clamp, zero-copy on hw/dmabuf backings)
+  replaces the HaPlay-internal `PtsRebasingVideoOutput`, which was deleted. Cue
+  wiring now uses `RetimingVideoOutput(layerOutput, -ClipWindow.Start)`. Unit
+  coverage moved to `S.Media.Core.Tests/Video/RetimingVideoOutputTests`.)*
   - Suggested concept: `RetimingVideoOutput`, `VideoPtsOffsetOutput`, or a
     general clip/timeline wrapper in `S.Media.Core.Video`.
   - Reason: retiming is useful for cue players, soundboards with video,
@@ -98,6 +122,88 @@ needed for composition slots.
   - Desired guarantees: non-consuming standby, explicit start barrier,
     coordinated grouped starts, clip-relative audio/video timing, and clear
     output ownership.
+
+## Review Notes On The Cue Items Above
+
+- `deferPlay` removal (item 1): confirmed dead — `OpenCueEntryAsync` never reads the
+  parameter; both call sites pass it through but the body only seeks to
+  `ClipWindow.Start` and wires routes. The transport decision already lives in
+  `ExecuteCoreAsync`. Safe pure-delete.
+- `VideoClockMaster` rename (item 2): the field is assigned from
+  `CueAudioOutputRuntime.PlaybackClock` and is also handed to
+  `MediaPlayer.Play(videoOnlyMaster:)`, not only to the composition. Prefer
+  `PlaybackClockMaster` so it reads correctly at both the audio-source and the
+  `Play(...)` call sites.
+- Pre-roll refresh on property edits (correctness item 2): note that
+  `BuildPreparedCueKey` already hashes gain, channels, opacity, offsets, comp size,
+  and output bindings — so a stale standby entry is correctly *rejected* at Go
+  (key mismatch -> reopen). The only real loss is standby warmth, which matches
+  the backlog's "remaining issue" framing. This is a warmth/UX fix, not a
+  correctness fix.
+
+## Regular Media Player — Fixes & Enhancements
+
+Same desktop app, the non-cue `MediaPlayerViewModel` playout path. These are
+independent of the cue work above.
+
+### Fixes / Correctness-Adjacent
+
+- [ ] Tighten the auto-advance / loop boundary gap.
+  - Current: `OnLoopTimerTick` polls natural completion on a fixed 500 ms
+    `DispatcherTimer`, so a track can run up to ~500 ms past its end before the
+    next item (or loop restart) is triggered.
+  - Suggested: shorten the interval as `CurrentPosition` approaches `Duration`,
+    or drive the boundary from the router's natural-completion signal instead of
+    a poll. Keep the 500 ms poll for the live reconnect/stats path.
+
+- [ ] Warm the next playlist item before auto-advance.
+  - Current: cue mode has pre-roll, but normal playlist advance opens the next
+    file cold inside `PlayPlaylistItemAsync`, adding a decoder-open stall at every
+    boundary.
+  - Suggested: a small "next item" prepared-decoder cache analogous to the cue
+    pre-roll, invalidated on playlist/selection edits.
+
+- [ ] Confirm what `TransitionMode` / `TransitionDurationMs` actually do on a
+  regular playlist advance.
+  - `HaPlayFilePlaybackOptions` feeds these into cue fade timing, but it is not
+    obvious they produce a real cross-fade/dip between two consecutive playlist
+    items in plain player mode.
+  - Decision to capture: either wire an actual transition on auto-advance, or
+    scope the control so it isn't a silent no-op for the regular player.
+
+- [ ] Debounce slider scrubbing.
+  - Current: every `SeekToSliderAsync` commit runs a full
+    seek + prepare-outputs + play arc bounded at 3–5 s, serialized behind
+    `WithPlaybackArcAsync`; fast drags on large files queue behind each other.
+  - Suggested: latest-request-wins debounce, or commit on drag-release with a
+    lightweight position preview while dragging.
+
+### Enhancements
+
+- [ ] Playlist play modes beyond the current two.
+  - Today only loop-current (`IsLooping`) and `AutoAdvance` exist.
+  - Add shuffle and repeat-all-list (distinct from loop-single).
+
+- [ ] End-of-track low-time warning.
+  - `RemainingTime` is already computed; color/flash the remaining readout under a
+    configurable threshold (e.g. last 10 s) as a standard playout operator aid.
+
+- [ ] Structured player load/error state.
+  - Mirror the cue "idle / preparing / ready / failed" suggestion (cue item under
+    "Surface richer prepared-cue state"): replace the transient `StatusMessage`
+    string with a sticky last-error that names the failing file, alongside the
+    existing `IsWaitingForSource` live-retry state.
+
+- [ ] Keyboard transport parity for the focused player.
+  - Jog `,` / `.` exist; add space = play/pause, Home = seek-to-0, and
+    volume up/down, then surface the set in a shortcuts list. (App-level bindings
+    already live in `MainView.axaml`.)
+
+- [ ] Reuse the cue audio downmix presets (see "Add cue audio downmix presets")
+  in the player's audio matrix.
+  - The player already exposes a matrix; expose the same `5.1 -> stereo`,
+    `mono -> stereo`, and LFE-drop presets as quick-apply buttons so operators
+    don't hand-enter cells.
 
 ## Verification To Run After Cleanup Changes
 

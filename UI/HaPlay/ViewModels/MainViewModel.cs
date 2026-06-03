@@ -32,6 +32,12 @@ public partial class MainViewModel : ViewModelBase
     private DispatcherTimer? _endpointHealthTimer;
     private int _endpointHealthRefreshInFlight;
 
+    // Pre-roll refresh is suggested in bursts (standby moves, property edits). Collapse those to a
+    // latest-request-wins refresh: a new request cancels the in-flight one's token, and the serial
+    // gate ensures only one refresh touches the engine/player caches at a time.
+    private CancellationTokenSource? _preRollRefreshCts;
+    private readonly SemaphoreSlim _preRollRefreshGate = new(1, 1);
+
     public MainViewModel()
     {
         OutputManagement = new OutputManagementViewModel();
@@ -721,27 +727,67 @@ public partial class MainViewModel : ViewModelBase
 
     private async Task RefreshCuePreRollAsync()
     {
-        var player = SelectedPlayer;
-        var list = CuePlayer.SelectedCueList;
-        if (list is null)
-            return;
+        // Latest-request-wins: install our own token and cancel whatever was in flight. We only
+        // Cancel the predecessor here (never Dispose) — each invocation disposes its own CTS in its
+        // finally once it's done reading the token, which avoids a use-after-dispose race.
+        var cts = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(ref _preRollRefreshCts, cts);
+        try { previous?.Cancel(); } catch { /* predecessor already finishing */ }
+        var ct = cts.Token;
 
-        var n = list.PreRollCount;
-        var engineTargets = CuePlayer.GetPreparedMediaCueTargets(n);
-        var ndiTargets = CuePlayer.GetNdiPreConnectTargets(n);
-        var paTargets = CuePlayer.GetPortAudioPreConnectTargets(n);
         try
         {
-            player?.InvalidateCuePreRoll();
-            await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets).ConfigureAwait(false);
-            if (player is null)
-                return;
-            await player.RefreshNdiPreConnectAsync(ndiTargets).ConfigureAwait(false);
-            await player.RefreshPortAudioPreConnectAsync(paTargets).ConfigureAwait(false);
+            try
+            {
+                await _preRollRefreshGate.WaitAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return; // superseded before we acquired the gate
+            }
+
+            try
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+
+                var player = SelectedPlayer;
+                var list = CuePlayer.SelectedCueList;
+                if (list is null)
+                    return;
+
+                var n = list.PreRollCount;
+                var engineTargets = CuePlayer.GetPreparedMediaCueTargets(n);
+                var ndiTargets = CuePlayer.GetNdiPreConnectTargets(n);
+                var paTargets = CuePlayer.GetPortAudioPreConnectTargets(n);
+
+                player?.InvalidateCuePreRoll();
+                await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets, ct).ConfigureAwait(false);
+                if (player is null)
+                    return;
+                ct.ThrowIfCancellationRequested();
+                await player.RefreshNdiPreConnectAsync(ndiTargets).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                await player.RefreshPortAudioPreConnectAsync(paTargets).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                /* superseded by a newer refresh */
+            }
+            catch
+            {
+                /* best effort — pre-roll must not break transport */
+            }
+            finally
+            {
+                _preRollRefreshGate.Release();
+            }
         }
-        catch
+        finally
         {
-            /* best effort — pre-roll must not break transport */
+            // Clear our slot if it's still ours, then dispose the CTS we own.
+            Interlocked.CompareExchange(ref _preRollRefreshCts, null, cts);
+            cts.Dispose();
         }
     }
 

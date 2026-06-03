@@ -192,7 +192,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
             await RemovePreparedCueAsync(cue.Id).ConfigureAwait(false);
 
-            var (entry, err) = await OpenCueEntryAsync(cue, list, plan, deferPlay: true, wireRoutes: false, ct)
+            var (entry, err) = await OpenCueEntryAsync(cue, list, plan, wireRoutes: false, ct)
                 .ConfigureAwait(false);
             if (entry is null)
             {
@@ -238,7 +238,7 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             foreach (var entry in group)
             {
-                try { entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster); }
+                try { entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster); }
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.ExecuteGroupAsync: Play failed for {Cue}", entry.Cue.Id); }
             }
 
@@ -301,7 +301,7 @@ public sealed class CuePlaybackEngine : IDisposable
             await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.PlacementsByComp.Keys)
                 .ConfigureAwait(false);
 
-            var result = await OpenCueEntryAsync(cue, list, plan, deferPlay, wireRoutes: true, ct).ConfigureAwait(false);
+            var result = await OpenCueEntryAsync(cue, list, plan, wireRoutes: true, ct).ConfigureAwait(false);
             entry = result.Entry;
             if (entry is null)
                 return result.Error ?? "Failed to open cue media.";
@@ -316,7 +316,7 @@ public sealed class CuePlaybackEngine : IDisposable
             {
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
-                    entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster);
+                    entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster);
                     entry.IsPaused = false;
                     foreach (var source in entry.PausableAudioSources)
                         source.IsPaused = false;
@@ -364,7 +364,6 @@ public sealed class CuePlaybackEngine : IDisposable
         MediaCueNode cue,
         CueList list,
         RoutePlan plan,
-        bool deferPlay,
         bool wireRoutes,
         CancellationToken ct)
     {
@@ -562,7 +561,7 @@ public sealed class CuePlaybackEngine : IDisposable
                 else
                 {
                     await Dispatcher.UIThread.InvokeAsync(() =>
-                        entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster));
+                        entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster));
                 }
             }
             catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
@@ -803,7 +802,7 @@ public sealed class CuePlaybackEngine : IDisposable
             var srcId = runtime.AddSource(pausable, routes, sourceIdHint: $"cue_{entry.Cue.Id:N}_{entry.InstanceId:N}");
             entry.AudioSources.Add((runtime, srcId));
             if (runtime.PlaybackClock is { } playbackClock)
-                entry.VideoClockMaster ??= playbackClock;
+                entry.PlaybackClockMaster ??= playbackClock;
         }
     }
 
@@ -840,7 +839,7 @@ public sealed class CuePlaybackEngine : IDisposable
             // composited frames present at the master's video-tick rate instead of free-running
             // on Stopwatch. Composition keeps only the FIRST master it sees (idempotent), so
             // back-to-back cues with different masters don't fight for the slave clock.
-            if (entry.VideoClockMaster is { } master)
+            if (entry.PlaybackClockMaster is { } master)
                 runtime.SetClockMaster(master);
 
             var slot = runtime.AddLayer(sourceFormat, placement);
@@ -858,8 +857,14 @@ public sealed class CuePlaybackEngine : IDisposable
                 layerOutput = converter;
             }
 
+            // Black-screen fix: a cue with a start offset is seeked to ClipWindow.Start, so its
+            // frames carry source-timeline PTS (e.g. 80 min in). The composition compares layer
+            // frames against the cue-relative master clock that starts at t=0, so without rebasing
+            // these frames look far in the future and never present. RetimingVideoOutput adds a
+            // negative offset (−ClipWindow.Start) to convert source PTS to cue-relative PTS before
+            // the frame reaches the composition slot.
             if (entry.ClipWindow.Start > TimeSpan.Zero)
-                layerOutput = new PtsRebasingVideoOutput(layerOutput, entry.ClipWindow.Start);
+                layerOutput = new RetimingVideoOutput(layerOutput, -entry.ClipWindow.Start);
 
             var outId = router.AddOutput(layerOutput, id: $"cuecomp_{entry.Cue.Id:N}_{entry.InstanceId:N}_{compId:N}",
                 disposeOutputOnRouterDispose: false,
@@ -1006,7 +1011,7 @@ public sealed class CuePlaybackEngine : IDisposable
         if (resume)
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                entry.Player.Play(videoOnlyMaster: entry.VideoClockMaster);
+                entry.Player.Play(videoOnlyMaster: entry.PlaybackClockMaster);
                 entry.IsPaused = false;
                 foreach (var source in entry.PausableAudioSources)
                     source.IsPaused = false;
@@ -1185,7 +1190,13 @@ public sealed class CuePlaybackEngine : IDisposable
         public MediaPlayer Player { get; }
         public CancellationTokenSource Cts { get; }
         public CueClipWindow ClipWindow { get; }
-        public IPlaybackClock? VideoClockMaster { get; set; }
+
+        /// <summary>The cue's audio-runtime playback clock, captured from the first wired
+        /// <see cref="CueAudioOutputRuntime.PlaybackClock"/>. Used as the composition master
+        /// (<see cref="CueCompositionRuntime.SetClockMaster"/>) and passed to
+        /// <c>MediaPlayer.Play(videoOnlyMaster:)</c> so video presents at the audio clock's rate.
+        /// Null for video-only cues, which then free-run on their own clock.</summary>
+        public IPlaybackClock? PlaybackClockMaster { get; set; }
         public bool IsPaused { get; set; }
         public bool RoutesWired { get; set; }
         public List<CueCompositionRuntime.LayerSlot> LayerSlots { get; } = new();
