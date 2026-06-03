@@ -368,6 +368,8 @@ public partial class CuePlayerView : UserControl
                     PreparedCueState.Ready => (Avalonia.Media.Color.FromArgb(220, 80, 170, 255), 2.0),
                     // preparing — amber
                     PreparedCueState.Preparing => (Avalonia.Media.Color.FromArgb(200, 230, 170, 60), 1.5),
+                    // stale — desaturated grey-blue (was ready, cue config changed; re-preparing)
+                    PreparedCueState.Stale => (Avalonia.Media.Color.FromArgb(200, 150, 150, 165), 1.5),
                     // failed — red
                     PreparedCueState.Failed => (Avalonia.Media.Color.FromArgb(230, 229, 57, 53), 2.0),
                     // idle — faint white

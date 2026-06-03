@@ -83,6 +83,7 @@ public partial class MainViewModel : ViewModelBase
         _cuePlaybackEngine.ReleaseConflictingPlayerOutputsAsync = ReleaseMediaPlayerOutputsForCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
+        CuePlayer.CueStandbyInvalidated += (_, cueId) => _cuePlaybackEngine.MarkPreparedCueStale(cueId);
         CuePlayer.RefreshPreviewAudioDevices();
         foreach (var player in Players)
             player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;

@@ -15,6 +15,11 @@ public sealed record CueList
 
     public int PreRollCount { get; init; } = 4;
 
+    /// <summary>Resource cap: maximum standby decoders kept open at once, independent of the pre-roll
+    /// window size. Long H.264 files each hold an opened + seeked decoder, so this bounds memory even
+    /// when a large pre-roll window is configured. Clamped to [1, 16] by the engine; default 6.</summary>
+    public int MaxPreparedDecoders { get; init; } = 6;
+
     /// <summary>Trigger mode applied to cues created via the toolbar (Phase 5.8.2). Default
     /// <see cref="CueTriggerMode.Manual"/> so older lists load unchanged.</summary>
     public CueTriggerMode DefaultTriggerMode { get; init; } = CueTriggerMode.Manual;

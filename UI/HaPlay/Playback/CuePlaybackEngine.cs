@@ -27,9 +27,17 @@ public sealed class CuePlaybackEngine : IDisposable
     private static readonly TimeSpan BoundedPauseTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan BoundedDisposeTimeout = TimeSpan.FromSeconds(5);
 
-    /// <summary>Resource-policy ceiling on concurrently-prepared standby decoders, independent of the
-    /// requested pre-roll window size. Each prepared cue holds an opened + seeked decoder.</summary>
-    private const int MaxPreparedDecoders = 6;
+    /// <summary>Default resource-policy ceiling on concurrently-prepared standby decoders when a list
+    /// doesn't specify its own (<see cref="HaPlay.Models.CueList.MaxPreparedDecoders"/>). Each prepared
+    /// cue holds an opened + seeked decoder, independent of the requested pre-roll window size.</summary>
+    private const int DefaultMaxPreparedDecoders = 6;
+
+    /// <summary>Hard upper bound the per-list configurable cap is clamped to, so a mistyped value can't
+    /// pin a large number of long H.264 decoders open at once.</summary>
+    private const int MaxPreparedDecodersCeiling = 16;
+
+    private static int ResolveStandbyDecoderCap(int configured) =>
+        Math.Clamp(configured > 0 ? configured : DefaultMaxPreparedDecoders, 1, MaxPreparedDecodersCeiling);
 
     private readonly OutputManagementViewModel _outputs;
     private readonly CuePlayerViewModel _cuePlayer;
@@ -103,6 +111,18 @@ public sealed class CuePlaybackEngine : IDisposable
             snapshot = _prepStatus.Values.ToArray();
         try { PreparedCueStatesChanged?.Invoke(snapshot); }
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreparedCueStatesChanged handler"); }
+    }
+
+    /// <summary>Flags a warmed standby cue as <see cref="PreparedCueState.Stale"/> — its config changed,
+    /// so the held decoder may no longer match — until the next pre-roll refresh re-prepares it. No-op
+    /// for a cue that isn't currently held warm; only a prepared (ready) entry can go stale.</summary>
+    public void MarkPreparedCueStale(Guid cueId)
+    {
+        bool isPrepared;
+        lock (_gate)
+            isPrepared = _prepared.ContainsKey(cueId);
+        if (isPrepared)
+            SetPrepStatus(cueId, PreparedCueState.Stale);
     }
 
     /// <summary>Raised on the UI thread when preview playback ends (natural end, operator stop,
@@ -211,6 +231,10 @@ public sealed class CuePlaybackEngine : IDisposable
             return;
         }
 
+        // Per-list resource cap (clamped) on how many standby decoders we hold at once. We stop
+        // preparing once we hit it rather than opening the whole window and evicting the overflow.
+        var cap = ResolveStandbyDecoderCap(list.MaxPreparedDecoders);
+
         var keepIds = new HashSet<Guid>();
         foreach (var cue in cues)
         {
@@ -225,6 +249,9 @@ public sealed class CuePlaybackEngine : IDisposable
             var plan = BuildRoutePlan(cue);
             if (!plan.HasAnyRoute)
                 continue;
+
+            if (keepIds.Count >= cap)
+                break; // standby-decoder cap reached — leave the rest of the window cold
 
             keepIds.Add(cue.Id);
             var cacheKey = BuildPreparedCueKey(cue, list);
@@ -258,10 +285,8 @@ public sealed class CuePlaybackEngine : IDisposable
             SetPrepStatus(cue.Id, PreparedCueState.Ready);
         }
 
-        // Resource policy: never hold more than MaxPreparedDecoders open standby decoders, even if a
-        // very large pre-roll window was requested — long H.264 files each keep an opened+seeked
-        // decoder. The window size (cues.Count) caps it further when smaller.
-        var cap = Math.Clamp(cues.Count, 1, MaxPreparedDecoders);
+        // Resource policy: drop any standby decoder no longer in the kept set, bounded by the same
+        // per-list cap used above (long H.264 files each keep an opened+seeked decoder).
         await EvictPreparedExceptAsync(keepIds, cap).ConfigureAwait(false);
 
         // Reconcile: any cue we still track a status for but is no longer in the warm window
@@ -1287,13 +1312,15 @@ public readonly record struct CuePlaybackProgress(Guid CueId, TimeSpan Position,
 
 /// <summary>Standby preparation lifecycle for one cue. <c>Idle</c> = not in the warm window or not
 /// attempted; <c>Preparing</c> = opening/seeking; <c>Ready</c> = opened, routed, seeked to start;
-/// <c>Failed</c> = open failed (reason in <see cref="CuePreparationStatus.Error"/>). A stale entry
-/// (config changed) is re-prepared, transiting back through <c>Preparing</c>.</summary>
+/// <c>Stale</c> = a previously-ready standby whose cue config changed, awaiting re-preparation by the
+/// next pre-roll refresh; <c>Failed</c> = open failed (reason in
+/// <see cref="CuePreparationStatus.Error"/>).</summary>
 public enum PreparedCueState
 {
     Idle,
     Preparing,
     Ready,
+    Stale,
     Failed,
 }
 

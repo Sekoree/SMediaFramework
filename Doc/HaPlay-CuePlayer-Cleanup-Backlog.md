@@ -108,24 +108,60 @@ needed for composition slots.
   - Goal: avoid keeping trim logic split across HaPlay view models, cue engine
     state, and output wrappers.
 
-- [ ] Add cue audio downmix presets or a per-cue matrix.
+- [x] Add cue audio downmix presets or a per-cue matrix. *(Done for presets —
+  `AudioDownmixPresets` (pass-through, mono→stereo, 5.1→stereo, drop-LFE) ship as a
+  shared authoring quick-apply: the cue route editor buttons expand a preset into
+  discrete `CueAudioRoute`s via `ApplyCueDownmixPreset`, honoring the 0-based source /
+  1-based output channel convention; the same model backs the media-player matrix
+  buttons. A stored per-cue matrix applied at mix time is split out below.)*
   - Useful presets: `5.1 -> stereo`, center-to-left/right, LFE drop or trim,
     duplicate mono to stereo, and direct channel pass-through.
   - Reason: the media player has matrix-style routing, but cue-player operators
     also need predictable channel mapping before playback starts.
 
-- [ ] Surface richer prepared-cue state in the UI.
+- [ ] Stored per-cue downmix matrix (distinct from the authoring quick-apply above).
+  *(Deferred as largely redundant — a cue's `AudioRoutes` already are a stored, sparse
+  per-cue matrix (source→output + gain + mute) persisted on the cue and applied by the
+  mixer at fire time. A parallel matrix representation would mostly duplicate that; revisit
+  only if per-cell trim/level UI beyond the route list is actually wanted.)*
+  - The shipped presets expand to plain routes at edit time; a stored matrix would
+    live on the cue and be (re)applied by the mixer at fire time, surviving manual
+    route edits and exposing per-cue trim/level cells.
+
+- [x] Surface richer prepared-cue state in the UI. *(Done — `PreparedCueState`
+  (Idle/Preparing/Ready/Stale/Failed) is surfaced per row as a color-coded status-dot
+  outline plus a tooltip that includes the failure reason; engine raises
+  `PreparedCueStatesChanged`, mapped onto each `CueNodeViewModel`. Follow-up: added the
+  distinct `Stale` state — an in-place edit to the selected cue's transport / routes /
+  placements flags its warm standby stale via `CuePlayerViewModel.CueStandbyInvalidated`
+  → `CuePlaybackEngine.MarkPreparedCueStale` until the debounced refresh re-prepares it.)*
   - Suggested states: idle, preparing, seeked/ready, stale, failed.
   - Include the last failure reason somewhere operator-visible.
   - Reason: a binary warm marker is not enough for show-control workflows.
 
-- [ ] Add pre-roll resource policy controls.
+- [x] Add pre-roll resource policy controls. *(Done — the engine caps concurrently-held
+  standby decoders and auto-evicts inactive entries (`EvictPreparedExceptAsync`), the
+  per-cue `DisablePreRoll` opt-out is honored across the file-cache and the NDI/PortAudio
+  pre-connect passes, and the cap is now operator-configurable per cue list
+  (`CueList.MaxPreparedDecoders`, default 6, clamped [1,16], in the Cue List Settings
+  dialog) — preparation stops at the cap rather than opening then evicting overflow.
+  Deferred: a memory-estimate eviction policy (fuzzy; folded into the cue/clip API's
+  `ClipStandbyPolicy` below).)*
   - Examples: maximum prepared decoders, maximum memory estimate, auto-evict
     inactive prepared entries, and per-cue opt-out.
   - Reason: keeping several long H.264 files opened and seeked can be expensive.
 
-- [ ] Consider a framework-level cue/clip API that can power HaPlay, soundboards,
-  and cue-player hosts.
+- [x] Consider a framework-level cue/clip API that can power HaPlay, soundboards,
+  and cue-player hosts. *(Design RFC written and phase-1 framework surface implemented —
+  `Doc/MediaFramework-Cue-Clip-API-RFC.md`. Found the framework already carries the cue
+  vocabulary (`CueGraph`/`CueDefinition`/`CueShowFile` with `PreloadKey`/`NotReady`,
+  `Soundboard`/`CueVoice`, `MediaGraph` topologies) and the clip primitives (`ClipWindow`,
+  `RetimingVideoOutput`), but no standby engine — the five guarantees live only in HaPlay's
+  `CuePlaybackEngine`. `S.Media.Playback.ClipStandbyEngine` now provides the
+  UI-agnostic source lifecycle slice (`ClipSpec`, `ClipPreparationState`, `IPreparedClip`,
+  `IArmedClip`, `IClipStandbyEngine`): builder-based open, `ClipWindow.Start` seek,
+  cache-keyed non-consuming standby, decoder cap/window policy, explicit `Start()`, and
+  grouped starts. HaPlay migration and shared output-runtime ownership remain follow-ups.)*
   - Desired guarantees: non-consuming standby, explicit start barrier,
     coordinated grouped starts, clip-relative audio/video timing, and clear
     output ownership.
@@ -168,7 +204,10 @@ independent of the cue work above.
 - [x] Warm the next playlist item before auto-advance. *(Already present —
   `PlaylistDecoderCache` pre-opens the next decoder on play-start, consumed by
   `OpenOrReloadAsync`. Improved: `PreOpenAdjacentPlaylistItems` now follows the
-  active playback tab so auto-advance reliably hits a warm decoder.)*
+  active playback tab so auto-advance reliably hits a warm decoder. Follow-up fix:
+  now shuffle-aware — it warms the bag's actual next track via the non-consuming
+  `PeekAutoAdvanceNext`, so shuffle auto-advance no longer opens a cold decoder; see
+  the follow-up section below.)*
   - Current: cue mode has pre-roll, but normal playlist advance opens the next
     file cold inside `PlayPlaylistItemAsync`, adding a decoder-open stall at every
     boundary.
@@ -233,9 +272,77 @@ independent of the cue work above.
     `mono -> stereo`, and LFE-drop presets as quick-apply buttons so operators
     don't hand-enter cells.
 
+## Follow-Up Review Fixes (2026-06-03)
+
+A second review pass over the completed items above (full build + test suite green)
+found three gaps and one stale checkbox; all are now resolved.
+
+- **Shuffle defeated the warm-decoder pre-open.** `PreOpenAdjacentPlaylistItems`
+  warmed only the *linear* neighbours (`idx ± 1`), but with Shuffle on, auto-advance
+  picks the next track from the shuffle bag — so every shuffle advance opened a cold
+  decoder, defeating the "warm next item" fix whenever the new shuffle mode was on.
+  Fixed: a non-consuming `PeekAutoAdvanceNext` returns the item auto-advance will
+  actually choose (shuffle bag, or linear/repeat-all), and the pre-open warms that plus
+  the linear neighbours for manual Next/Previous (deduped; the cache still caps at
+  `MaxEntries = 3`). The *first* shuffle advance can still be cold because the bag is
+  built lazily on that advance — a deliberate trade so the pre-warm path doesn't commit
+  the random order.
+
+- **`DisablePreRoll` was only half-honored.** The per-cue "Disable pre-roll" checkbox
+  was respected by the engine's file open/seek/route cache
+  (`GetPreparedMediaCueTargets`) but ignored by the NDI and PortAudio pre-connect passes
+  (`GetNdiPreConnectTargets`, `GetPortAudioPreConnectTargets`) — both consumed in
+  production by `MainViewModel.RefreshCuePreRollAsync`. Fixed: both pre-connect filters
+  now skip cues with `DisablePreRoll` set, so the checkbox is a uniform opt-out. (The
+  broader resource-policy item under Larger Enhancements is still open.)
+
+- **Removed orphaned `GetPreRollTargets`.** This `CuePlayerViewModel` method (and its
+  lone test) had no production caller — the engine-side `GetPreparedMediaCueTargets` is
+  the live cue file pre-roll path. Deleted as stale, in keeping with the `deferPlay`
+  cleanup theme.
+
+- **Reconciled the cue-downmix checkbox.** "Add cue audio downmix presets or a per-cue
+  matrix" was left unchecked even though the presets shipped — and the player-side reuse
+  item, which depends on them, was already checked. Marked the presets done and split the
+  still-open *stored per-cue matrix* into its own item.
+
+### Known scope trims (not bugs)
+
+- The end-of-track low-time warning uses a hard-coded 10 s threshold
+  (`LowTimeWarningThreshold`); the original note suggested a configurable threshold.
+- Keyboard transport is surfaced via control tooltips / hint strings rather than a
+  dedicated shortcuts list.
+
+## Larger-Enhancements Pass (2026-06-03)
+
+Worked the remaining Larger Enhancements. Most were already implemented in code with
+stale checkboxes; the genuine gaps were closed and the framework cue/clip item now has
+both an RFC and a phase-1 playback implementation.
+
+- **Richer prepared-cue state — reconciled + `Stale` added.** The state badge
+  (Idle/Preparing/Ready/Failed + failure-reason tooltip) already existed. Added the
+  distinct `Stale` state: an in-place edit to the selected cue marks its warm standby
+  stale (`CuePlayerViewModel.CueStandbyInvalidated` → `CuePlaybackEngine.MarkPreparedCueStale`)
+  until the debounced refresh re-prepares it. New glyph/tooltip/colour for `Stale`.
+- **Pre-roll resource policy — reconciled + configurable cap.** The decoder cap +
+  auto-evict + per-cue opt-out already existed; made the cap operator-configurable per
+  cue list (`CueList.MaxPreparedDecoders`, default 6, clamped [1,16], in the Cue List
+  Settings dialog) and made preparation stop at the cap instead of opening-then-evicting.
+  Memory-estimate eviction deferred.
+- **Stored per-cue downmix matrix — deferred** as largely redundant with existing
+  `AudioRoutes` (see the item note).
+- **Framework cue/clip API — RFC + phase-1 implementation.** RFC at
+  `Doc/MediaFramework-Cue-Clip-API-RFC.md`; implementation in
+  `S.Media.Playback.ClipStandbyEngine` with focused playback tests. HaPlay migration is
+  the next extraction step.
+
+Coverage: added `MaxPreparedDecoders` round-trip/default tests and `Stale`-state
+glyph/tooltip/mapping tests. Full suite green (142 tests).
+Additional phase-1 cue/clip API coverage: `ClipStandbyEngineTests` verifies standby
+reuse, cache-key replacement, failed status reporting, policy caps, and grouped starts.
+
 ## Verification To Run After Cleanup Changes
 
 - `dotnet build MFPlayer.sln -m:1 --no-restore -v:m`
 - `dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-build --logger "console;verbosity=minimal"`
 - `git diff --check`
-

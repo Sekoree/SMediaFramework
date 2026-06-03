@@ -372,6 +372,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
     {
         PreparedCueState.Preparing => "…",
         PreparedCueState.Ready => "●",
+        PreparedCueState.Stale => "◌",
         PreparedCueState.Failed => "!",
         _ => string.Empty,
     };
@@ -380,6 +381,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
     {
         PreparedCueState.Preparing => "Standby: preparing…",
         PreparedCueState.Ready => "Standby: ready (decoder open, seeked to start)",
+        PreparedCueState.Stale => "Standby: stale (cue changed — re-preparing)",
         PreparedCueState.Failed => $"Standby failed: {PreRollError}",
         _ => null,
     };
@@ -826,6 +828,7 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     {
         Name = Name,
         PreRollCount = PreRollCount,
+        MaxPreparedDecoders = MaxPreparedDecoders,
         DefaultTriggerMode = DefaultTriggerMode,
         AutoRenumberOnInsert = AutoRenumberOnInsert,
         Compositions = Compositions.Select(c => c.ToModel()).ToList(),
@@ -835,6 +838,9 @@ public sealed partial class CueListEditorViewModel : ObservableObject
 
     [ObservableProperty]
     private int _preRollCount = 4;
+
+    [ObservableProperty]
+    private int _maxPreparedDecoders = 6;
 
     [ObservableProperty]
     private CueTriggerMode _defaultTriggerMode = CueTriggerMode.Manual;
@@ -848,6 +854,7 @@ public sealed partial class CueListEditorViewModel : ObservableObject
         {
             Path = path,
             PreRollCount = list.PreRollCount > 0 ? list.PreRollCount : 4,
+            MaxPreparedDecoders = list.MaxPreparedDecoders > 0 ? list.MaxPreparedDecoders : 6,
             DefaultTriggerMode = list.DefaultTriggerMode,
             AutoRenumberOnInsert = list.AutoRenumberOnInsert,
         };
@@ -1364,20 +1371,20 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.Loop)
             or nameof(CueNodeViewModel.EndBehavior)
             or nameof(CueNodeViewModel.DisablePreRoll))
-            SuggestPreRollRefresh();
+            OnWatchedCueEdited();
     }
 
     private void OnWatchedCueRouteCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         RebindItemSubscriptions(e);
         // Add/Remove route commands already suggest a refresh, but a programmatic edit might not.
-        SuggestPreRollRefresh();
+        OnWatchedCueEdited();
     }
 
     private void OnWatchedCuePlacementCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         RebindItemSubscriptions(e);
-        SuggestPreRollRefresh();
+        OnWatchedCueEdited();
     }
 
     private void RebindItemSubscriptions(NotifyCollectionChangedEventArgs e)
@@ -1403,8 +1410,22 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.LayerIndex)
             or nameof(CueVideoPlacementViewModel.Position)
             or nameof(CueVideoPlacementViewModel.Opacity))
-            SuggestPreRollRefresh();
+            OnWatchedCueEdited();
     }
+
+    /// <summary>An edit-relevant change to the watched (selected) cue: immediately flag its warm
+    /// standby <see cref="PreparedCueState.Stale"/> so the badge reflects the drift, then request a
+    /// debounced pre-roll refresh that re-prepares it.</summary>
+    private void OnWatchedCueEdited()
+    {
+        if (_preRollWatchedCue is { } cue)
+            CueStandbyInvalidated?.Invoke(this, cue.Id);
+        SuggestPreRollRefresh();
+    }
+
+    /// <summary>Raised with a cue id when an in-place edit drifts that cue's warm standby out of date.
+    /// The host marks the engine's prepared entry stale; the following refresh re-prepares it.</summary>
+    public event EventHandler<Guid>? CueStandbyInvalidated;
 
     private void RefreshVideoFrameRateMismatchWarning()
     {
@@ -1582,27 +1603,6 @@ public partial class CuePlayerViewModel : ViewModelBase
             yield return ordered[i];
     }
 
-    /// <summary>Next <paramref name="maxCount"/> file media cues from standby (or list start).</summary>
-    public IReadOnlyList<(Guid CueId, PlaylistItem Item, int FadeInMs, int FadeOutMs)> GetPreRollTargets(int maxCount)
-    {
-        if (maxCount <= 0)
-            return [];
-
-        var targets = new List<(Guid, PlaylistItem, int, int)>();
-        foreach (var cue in EnumeratePreRollWindow())
-        {
-            if (targets.Count >= maxCount)
-                break;
-            if (cue.Kind != CueNodeKind.Media
-                || cue.MediaSourceItem is not { } source
-                || !source.SupportsPreRoll())
-                continue;
-            targets.Add((cue.Id, source, Math.Max(0, cue.FadeInMs), Math.Max(0, cue.FadeOutMs)));
-        }
-
-        return targets;
-    }
-
     /// <summary>Next file media cues from standby for the cue engine's own opened/routed cache.</summary>
     public IReadOnlyList<MediaCueNode> GetPreparedMediaCueTargets(int maxCount)
     {
@@ -1637,6 +1637,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (targets.Count >= maxCount)
                 break;
             if (cue.Kind != CueNodeKind.Media
+                || cue.DisablePreRoll // per-cue resource opt-out
                 || cue.MediaSourceItem is not NDIInputPlaylistItem ndi
                 || !ndi.SupportsPreRoll())
                 continue;
@@ -2502,6 +2503,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         var dialogVm = new Dialogs.CueListSettingsDialogViewModel(
             SelectedCueList.PreRollCount,
+            SelectedCueList.MaxPreparedDecoders,
             SelectedCueList.DefaultTriggerMode,
             SelectedCueList.AutoRenumberOnInsert);
         var dialog = new Views.Dialogs.CueListSettingsDialog { DataContext = dialogVm };
@@ -2509,9 +2511,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (result is null) return;
 
         SelectedCueList.PreRollCount = Math.Max(0, result.PreRollCount);
+        SelectedCueList.MaxPreparedDecoders = Math.Clamp(result.MaxPreparedDecoders, 1, 16);
         SelectedCueList.DefaultTriggerMode = result.DefaultTriggerMode;
         SelectedCueList.AutoRenumberOnInsert = result.AutoRenumberOnInsert;
         StatusMessage = Strings.CueListSettingsAppliedStatus;
+        SuggestPreRollRefresh();
     }
 
     private bool CanOpenCueListSettings() => SelectedCueList is not null;
@@ -3197,6 +3201,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (targets.Count >= maxCount)
                 break;
             if (cue.Kind != CueNodeKind.Media
+                || cue.DisablePreRoll // per-cue resource opt-out
                 || cue.MediaSourceItem is not PortAudioInputPlaylistItem pa
                 || !pa.SupportsPreRoll())
                 continue;

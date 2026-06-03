@@ -1194,11 +1194,20 @@ public partial class MediaPlayerViewModel : ViewModelBase
         var idx = items.IndexOf(current);
         if (idx < 0) return;
 
-        var paths = new List<string>(2);
-        if (idx + 1 < items.Count && items[idx + 1] is FilePlaylistItem next)
-            paths.Add(next.Path);
-        if (idx - 1 >= 0 && items[idx - 1] is FilePlaylistItem prev)
-            paths.Add(prev.Path);
+        // Warm (the cache caps at MaxEntries): the item auto-advance will *actually* pick next —
+        // shuffle-aware, so shuffle playback no longer advances into a cold decoder — plus the linear
+        // neighbours manual Next/Previous use. Deduped so a non-shuffled next isn't opened twice.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var paths = new List<string>(3);
+        void Add(PlaylistItem? item)
+        {
+            if (item is FilePlaylistItem f && seen.Add(f.Path))
+                paths.Add(f.Path);
+        }
+
+        Add(PeekAutoAdvanceNext(items));                  // unattended auto-advance target
+        if (idx + 1 < items.Count) Add(items[idx + 1]);  // manual Next (linear)
+        if (idx - 1 >= 0) Add(items[idx - 1]);            // manual Previous (linear)
 
         if (paths.Count > 0)
             _decoderCache.PreOpenAsync(paths, _preOpenCts.Token);
@@ -3918,6 +3927,41 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
         next = items[n];
         return true;
+    }
+
+    /// <summary>Peeks the item natural-end auto-advance will pick next, *without* consuming shuffle-bag
+    /// state, so the warm-decoder pre-open targets the real next track in shuffle mode too. Returns null
+    /// when the next track isn't decided yet (the shuffle bag is built lazily on the first advance, and
+    /// an exhausted repeat-all bag reshuffles an unpredictable order) — those fall back to the linear
+    /// neighbours warmed alongside.</summary>
+    private PlaylistItem? PeekAutoAdvanceNext(IList<PlaylistItem> items)
+    {
+        if (items.Count == 0 || _currentPlaylistItem is null)
+            return null;
+
+        var shuffle = _activePlaybackTab?.Shuffle ?? ShufflePlaylist;
+        var repeatAll = _activePlaybackTab?.RepeatAll ?? RepeatAllPlaylist;
+
+        if (shuffle && items.Count > 1)
+        {
+            if (!ShuffleBagMatches(items))
+                return null; // bag not built for this list yet — nothing reliable to warm
+            for (var i = _shuffleBagIndex; i < _shuffleBag.Count; i++)
+            {
+                var candidate = _shuffleBag[i];
+                if (items.Contains(candidate) && !ReferenceEquals(candidate, _currentPlaylistItem))
+                    return candidate;
+            }
+            return null; // end of bag — repeat-all reshuffles at advance time
+        }
+
+        var idx = items.IndexOf(_currentPlaylistItem);
+        if (idx < 0)
+            return null;
+        var n = idx + 1;
+        if (n >= items.Count)
+            return repeatAll ? items[0] : null;
+        return items[n];
     }
 
     private bool TryGetShuffleNext(IList<PlaylistItem> items, bool repeatAll, [NotNullWhen(true)] out PlaylistItem? next)

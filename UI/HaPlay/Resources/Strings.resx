@@ -294,6 +294,12 @@
   <data name="PreRollTooltip" xml:space="preserve">
     <value>File media cues to pre-open ahead of standby (§5.7).</value>
   </data>
+  <data name="MaxStandbyDecodersLabel" xml:space="preserve">
+    <value>Max standby decoders</value>
+  </data>
+  <data name="MaxStandbyDecodersTooltip" xml:space="preserve">
+    <value>Resource cap: how many standby decoders stay open at once, independent of the pre-roll window. Long video files each hold an open decoder, so a lower value trades warmth for memory. Range 1–16.</value>
+  </data>
   <data name="AddGroupButton" xml:space="preserve">
     <value>+ Group</value>
   </data>

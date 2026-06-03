@@ -9,23 +9,28 @@ namespace HaPlay.ViewModels.Dialogs;
 /// part of the project save.</summary>
 public sealed record CueListSettingsDialogResult(
     int PreRollCount,
+    int MaxPreparedDecoders,
     CueTriggerMode DefaultTriggerMode,
     bool AutoRenumberOnInsert);
 
 /// <summary>VM for the cue-list settings dialog (Phase 5.8.2). Moves the inline pre-roll
-/// spinner off the toolbar and surfaces two new per-list knobs: the default trigger mode
-/// applied to new cues and an auto-renumber toggle for insert/reorder.</summary>
+/// spinner off the toolbar and surfaces per-list knobs: the standby-decoder cap, the default
+/// trigger mode applied to new cues, and an auto-renumber toggle for insert/reorder.</summary>
 public sealed partial class CueListSettingsDialogViewModel : ViewModelBase
 {
-    public CueListSettingsDialogViewModel(int preRollCount, CueTriggerMode defaultTriggerMode, bool autoRenumber)
+    public CueListSettingsDialogViewModel(int preRollCount, int maxPreparedDecoders, CueTriggerMode defaultTriggerMode, bool autoRenumber)
     {
         _preRollCount = preRollCount;
+        _maxPreparedDecoders = maxPreparedDecoders;
         _defaultTriggerMode = defaultTriggerMode;
         _autoRenumberOnInsert = autoRenumber;
     }
 
     [ObservableProperty]
     private int _preRollCount;
+
+    [ObservableProperty]
+    private int _maxPreparedDecoders;
 
     [ObservableProperty]
     private CueTriggerMode _defaultTriggerMode;

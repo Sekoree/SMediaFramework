@@ -157,6 +157,8 @@ public static class Strings
     public static string LoadButton => Get(nameof(LoadButton));
     public static string PreRollNLabel => Get(nameof(PreRollNLabel));
     public static string PreRollTooltip => Get(nameof(PreRollTooltip));
+    public static string MaxStandbyDecodersLabel => Get(nameof(MaxStandbyDecodersLabel));
+    public static string MaxStandbyDecodersTooltip => Get(nameof(MaxStandbyDecodersTooltip));
     public static string AddGroupButton => Get(nameof(AddGroupButton));
     public static string AddMediaButton => Get(nameof(AddMediaButton));
     public static string AddActionButton => Get(nameof(AddActionButton));

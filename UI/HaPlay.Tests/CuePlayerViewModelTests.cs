@@ -801,31 +801,6 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void GetPreRollTargets_FromStandby_ReturnsNextFileMediaCues()
-    {
-        var vm = new CuePlayerViewModel();
-        vm.SelectedCueList!.PreRollCount = 2;
-        vm.AddMediaCueCommand.Execute(null);
-        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        first.MediaSourceItem = new FilePlaylistItem("/a.mp4");
-        vm.AddMediaCueCommand.Execute(null);
-        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        second.MediaSourceItem = new FilePlaylistItem("/b.mp4");
-        vm.AddActionCueCommand.Execute(null);
-
-        first.FadeInMs = 500;
-        vm.SelectedCueNode = first;
-        vm.StandbySelectedCommand.Execute(null);
-        var targets = vm.GetPreRollTargets(2);
-
-        Assert.Equal(2, targets.Count);
-        Assert.Equal(first.Id, targets[0].CueId);
-        Assert.Equal("/a.mp4", Assert.IsType<FilePlaylistItem>(targets[0].Item).Path);
-        Assert.Equal(500, targets[0].FadeInMs);
-        Assert.Equal(second.Id, targets[1].CueId);
-    }
-
-    [Fact]
     public void GetPreparedMediaCueTargets_FromStandby_ReturnsFileCueModelsWithTrimAndRoutes()
     {
         var vm = new CuePlayerViewModel();
@@ -1037,6 +1012,59 @@ public sealed class CuePlayerViewModelTests
         Assert.True(cue.IsPreRollWarm);
 
         vm.OnPreRollCacheChanged(Array.Empty<Guid>());
+        Assert.False(cue.IsPreRollWarm);
+    }
+
+    [Fact]
+    public void MaxPreparedDecoders_RoundTripsThroughModel()
+    {
+        // Per-list standby-decoder cap persists through ToModel/FromModel like the other list settings.
+        var vm = new CuePlayerViewModel();
+        vm.SelectedCueList!.MaxPreparedDecoders = 3;
+
+        var snapshot = vm.BuildCueListsSnapshot();
+        Assert.Equal(3, snapshot[0].MaxPreparedDecoders);
+
+        var restored = CueListEditorViewModel.FromModel(snapshot[0]);
+        Assert.Equal(3, restored.MaxPreparedDecoders);
+    }
+
+    [Fact]
+    public void MaxPreparedDecoders_DefaultsToSixWhenModelUnset()
+    {
+        // A legacy list (field absent / zero) falls back to the default rather than capping at zero.
+        var restored = CueListEditorViewModel.FromModel(new CueList { MaxPreparedDecoders = 0 });
+        Assert.Equal(6, restored.MaxPreparedDecoders);
+    }
+
+    [Fact]
+    public void PreRollState_Stale_HasDistinctGlyphTooltipAndIsNotWarm()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        cue.PreRollState = PreparedCueState.Ready;
+        Assert.True(cue.IsPreRollWarm);
+        var readyGlyph = cue.PreRollStateGlyph;
+
+        cue.PreRollState = PreparedCueState.Stale;
+        Assert.False(cue.IsPreRollWarm); // a stale standby no longer counts as warm
+        Assert.False(cue.HasPreRollFailure);
+        Assert.False(string.IsNullOrEmpty(cue.PreRollStateGlyph));
+        Assert.NotEqual(readyGlyph, cue.PreRollStateGlyph);
+        Assert.Contains("stale", cue.PreRollStateTooltip, System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void OnPreparedCueStatesChanged_MapsStaleStateOntoNode()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        vm.OnPreparedCueStatesChanged(new[] { new CuePreparationStatus(cue.Id, PreparedCueState.Stale, null) });
+        Assert.Equal(PreparedCueState.Stale, cue.PreRollState);
         Assert.False(cue.IsPreRollWarm);
     }
 
