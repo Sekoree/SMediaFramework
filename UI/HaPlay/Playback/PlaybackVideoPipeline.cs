@@ -85,7 +85,9 @@ internal static class PlaybackVideoPipeline
     /// Wraps live NDI (and similar) sources so local SDL/Avalonia outputs receive BGRA32, which matches
     /// the idle-preview path and avoids UYVY shader/range pitfalls on some Linux/Wayland stacks.
     /// </summary>
-    public static IVideoSource? WrapLiveVideoForLocalDisplay(IVideoSource? source)
+    public static IVideoSource? WrapLiveVideoForLocalDisplay(
+        IVideoSource? source,
+        bool disposeInnerOnWrapperDispose = false)
     {
         if (source is null || PreferNativePixelFormatForLiveVideo)
             return source;
@@ -97,6 +99,6 @@ internal static class PlaybackVideoPipeline
                 return source;
         }
 
-        return new PixelFormatConvertingVideoSource(source, PixelFormat.Bgra32, disposeInner: false);
+        return new PixelFormatConvertingVideoSource(source, PixelFormat.Bgra32, disposeInner: disposeInnerOnWrapperDispose);
     }
 }

@@ -3,20 +3,23 @@ using HaPlay.Models;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 using S.Media.Core;
+using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Playback;
 using S.Media.Core.Video;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg;
+using S.Media.NDI;
 using S.Media.Playback;
+using S.Media.PortAudio;
 
 namespace HaPlay.Playback;
 
 /// <summary>
 /// Cue-side playback runtime. Manages N concurrent media cues plus two pools of shared resources:
 /// <see cref="CueCompositionRuntime"/> per active composition (shared video mixer + acquired
-/// video outputs) and <see cref="CueAudioOutputRuntime"/> per active audio-capable output line
+/// video outputs) and <see cref="ClipAudioOutputRuntime"/> per active audio-capable output line
 /// (shared audio router so N cues' audio mix into one device). Completely independent of
 /// MediaPlayer tabs — only shares the <see cref="OutputManagementViewModel"/> registry of
 /// physical output lines.
@@ -46,7 +49,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
     private readonly Dictionary<Guid, ActiveCue> _active = new();
     private readonly Dictionary<Guid, CueCompositionRuntime> _compositions = new();
-    private readonly Dictionary<Guid, CueAudioOutputRuntime> _audioOutputs = new();
+    private readonly Dictionary<Guid, ClipAudioOutputRuntime> _audioOutputs = new();
     private readonly object _previewGate = new();
     private CuePreviewSession? _preview;
 
@@ -201,7 +204,7 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            if (cue.Source is not FilePlaylistItem)
+            if (!SupportsCueEngineSource(cue.Source))
                 continue;
 
             if (HasActiveCue(cue.Id))
@@ -269,10 +272,8 @@ public sealed class CuePlaybackEngine : IDisposable
         if (cue.Source is null)
             return "Cue has no source.";
 
-        // The current pipeline supports file sources; live (NDI/PortAudio input) cues fall back
-        // to "not yet wired through the new engine".
-        if (cue.Source is not FilePlaylistItem fileItem)
-            return $"Live input cues aren't routed through the compositor/mixer yet (source: {cue.Source.GetType().Name}).";
+        if (!SupportsCueEngineSource(cue.Source))
+            return $"Unsupported cue source: {cue.Source.GetType().Name}.";
 
         await StopPreviewAsync().ConfigureAwait(false);
 
@@ -283,6 +284,8 @@ public sealed class CuePlaybackEngine : IDisposable
         var plan = BuildRoutePlan(cue);
         if (!plan.HasAnyRoute)
             return "Cue has no audio routes or video placements wired to outputs.";
+        if (!CanSourceSatisfyRoutePlan(cue.Source, plan, out var sourceRouteError))
+            return sourceRouteError;
 
         // If the same cue id is already running, stop its prior instance. A matching prepared
         // standby instance is kept and consumed below.
@@ -345,7 +348,7 @@ public sealed class CuePlaybackEngine : IDisposable
         targets.AddRange(plan.PlacementsByComp.Keys
             .Select(id => list.Compositions.FirstOrDefault(c => c.Id == id)?.Name ?? "")
             .Where(n => n.Length > 0));
-        return $"playing {fileItem.DisplayName} → {string.Join(", ", targets)}";
+        return $"playing {cue.Source.DisplayName} → {string.Join(", ", targets)}";
     }
 
     private static RoutePlan BuildRoutePlan(MediaCueNode cue)
@@ -367,36 +370,21 @@ public sealed class CuePlaybackEngine : IDisposable
 
     private static ClipSpec BuildClipSpec(MediaCueNode cue, CueList list, RoutePlan plan)
     {
-        if (cue.Source is not FilePlaylistItem fileItem)
-            throw new InvalidOperationException("Cue source is not a file.");
+        if (cue.Source is null)
+            throw new InvalidOperationException("Cue source is missing.");
 
-        // Whether to use MediaPlayer's *internal* audio router. We turn it off only when this
-        // cue's audio is being mixed externally via CueAudioOutputRuntime — otherwise we leave
-        // it on so the player consumes (and silently drops) any audio stream in the source.
-        // Skipping consumption back-pressures the demuxer and starves the video pump, which is
-        // what was breaking video playback on a video-with-audio file that had no audio routes
-        // wired (e.g. the operator only set up a video placement on it).
         var hasAudioRoutes = plan.AudioByOutput.Count > 0;
-        var openOptions = new MediaPlayerOpenOptions(
-            TryHardwareAcceleration: true,
-            IncludeAudioRouter: !hasAudioRoutes);
+        var (source, window) = cue.Source switch
+        {
+            FilePlaylistItem fileItem => BuildFileClipSource(cue, fileItem, hasAudioRoutes),
+            NDIInputPlaylistItem ndiItem => BuildNdiClipSource(ndiItem),
+            PortAudioInputPlaylistItem paItem => BuildPortAudioClipSource(paItem),
+            _ => throw new InvalidOperationException($"Unsupported cue source: {cue.Source.GetType().Name}."),
+        };
 
-        var source = ClipMediaSource.FromBuilder(
-            () => MediaPlayer.OpenFile(fileItem.Path)
-                .WithOptions(openOptions)
-                .WithDecoderOwnership(MediaPlayerDecoderOwnership.BundleDisposesDecoder),
-            fileItem.Path);
-
-        var sourceDuration = TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs));
-        var window = CueClipWindow.From(cue, sourceDuration);
         var audioRoutes = plan.AudioByOutput
             .SelectMany(kv => kv.Value)
-            .Select(route => new AudioRouteSpec(
-                route.OutputLineId.ToString("N"),
-                route.SourceChannel,
-                route.OutputChannel,
-                route.GainDb,
-                route.Muted))
+            .Select(ToAudioRouteSpec)
             .ToArray();
         var videoPlacements = plan.PlacementsByComp
             .Select(kv => kv.Value)
@@ -415,6 +403,68 @@ public sealed class CuePlaybackEngine : IDisposable
             audioRoutes,
             videoPlacements);
     }
+
+    private static (IClipMediaSource Source, ClipWindow Window) BuildFileClipSource(
+        MediaCueNode cue,
+        FilePlaylistItem fileItem,
+        bool hasAudioRoutes)
+    {
+        // Whether to use MediaPlayer's *internal* audio router. We turn it off only when this
+        // cue's audio is being mixed externally via ClipAudioOutputRuntime — otherwise we leave
+        // it on so the player consumes (and silently drops) any audio stream in the source.
+        // Skipping consumption back-pressures the demuxer and starves the video pump, which is
+        // what was breaking video playback on a video-with-audio file that had no audio routes
+        // wired (e.g. the operator only set up a video placement on it).
+        var openOptions = new MediaPlayerOpenOptions(
+            TryHardwareAcceleration: true,
+            IncludeAudioRouter: !hasAudioRoutes);
+
+        var source = ClipMediaSource.FromBuilder(
+            () => MediaPlayer.OpenFile(fileItem.Path)
+                .WithOptions(openOptions)
+                .WithDecoderOwnership(MediaPlayerDecoderOwnership.BundleDisposesDecoder),
+            fileItem.Path);
+
+        var sourceDuration = TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs));
+        return (source, CueClipWindow.From(cue, sourceDuration));
+    }
+
+    private static (IClipMediaSource Source, ClipWindow Window) BuildNdiClipSource(NDIInputPlaylistItem item) =>
+        (new HaPlayLiveClipMediaSource(
+            item.DisplayName,
+            () =>
+            {
+                if (!NdiInputConnector.TryConnectLive(item, out var receiver, out _, out _, out var error))
+                    throw new InvalidOperationException(error ?? $"Failed to connect NDI source '{item.SourceName}'.");
+
+                var wantAudio = !item.VideoOnly;
+                var wantVideo = !item.AudioOnly;
+                IAudioSource? audio = wantAudio ? receiver.Audio : null;
+                IVideoSource? video = wantVideo ? receiver.Video : null;
+                if (video is not null)
+                    video = PlaybackVideoPipeline.WrapLiveVideoForLocalDisplay(video, disposeInnerOnWrapperDispose: true);
+                return new LiveClipSources(audio, video);
+            }),
+            ClipWindow.Unbounded);
+
+    private static (IClipMediaSource Source, ClipWindow Window) BuildPortAudioClipSource(PortAudioInputPlaylistItem item) =>
+        (new HaPlayLiveClipMediaSource(
+            item.DisplayName,
+            () =>
+            {
+                if (!PortAudioInputConnector.TryOpen(item, out var input, out _, out var error))
+                    throw new InvalidOperationException(error ?? $"Failed to open PortAudio input '{item.DeviceName}'.");
+                return new LiveClipSources(input, null);
+            }),
+            ClipWindow.Unbounded);
+
+    private static AudioRouteSpec ToAudioRouteSpec(CueAudioRoute route) =>
+        new(
+            route.OutputLineId.ToString("N"),
+            route.SourceChannel,
+            route.OutputChannel,
+            route.GainDb,
+            route.Muted);
 
     private async Task<string?> WireEntryRoutesAsync(ActiveCue entry, CueList list, RoutePlan plan, bool startPaused)
     {
@@ -657,7 +707,7 @@ public sealed class CuePlaybackEngine : IDisposable
     private void ReleaseEmptyRuntimes()
     {
         List<KeyValuePair<Guid, CueCompositionRuntime>> emptyComps;
-        List<KeyValuePair<Guid, CueAudioOutputRuntime>> emptyAudio;
+        List<KeyValuePair<Guid, ClipAudioOutputRuntime>> emptyAudio;
         lock (_gate)
         {
             emptyComps = _compositions.Where(kv => kv.Value.LayerCount == 0).ToList();
@@ -679,18 +729,9 @@ public sealed class CuePlaybackEngine : IDisposable
     {
         if (audioByOutput.Count == 0) return;
 
-        S.Media.Core.Audio.IAudioSource decoderAudio;
-        try
-        {
-            if (!entry.Player.Bundle.Decoder.HasAudio)
-                return;
-            decoderAudio = entry.Player.Bundle.Decoder.Audio;
-        }
-        catch (Exception ex)
-        {
-            Trace.LogWarning(ex, "CuePlaybackEngine.WireAudioRoutes: source has no audio");
+        IAudioSource decoderAudio;
+        if (!TryGetCueAudioSource(entry, out decoderAudio))
             return;
-        }
 
         AudioSourceFanout? fanout = null;
         if (audioByOutput.Count > 1)
@@ -714,10 +755,36 @@ public sealed class CuePlaybackEngine : IDisposable
             entry.PausableAudioSources.Add(pausable);
             entry.AudioDisposables.Add(pausable);
 
-            var srcId = runtime.AddSource(pausable, routes, sourceIdHint: $"cue_{entry.Cue.Id:N}_{entry.InstanceId:N}");
+            var routeSpecs = routes.Select(ToAudioRouteSpec).ToArray();
+            var srcId = runtime.AddSource(pausable, routeSpecs, sourceIdHint: $"cue_{entry.Cue.Id:N}_{entry.InstanceId:N}");
             entry.AudioSources.Add((runtime, srcId));
             if (runtime.PlaybackClock is { } playbackClock)
                 entry.PlaybackClockMaster ??= playbackClock;
+        }
+    }
+
+    private static bool TryGetCueAudioSource(ActiveCue entry, out IAudioSource audioSource)
+    {
+        audioSource = null!;
+        if (entry.ArmedClip.Spec.Source is HaPlayLiveClipMediaSource live)
+        {
+            if (live.AudioSource is not { } liveAudio)
+                return false;
+            audioSource = liveAudio;
+            return true;
+        }
+
+        try
+        {
+            if (!entry.Player.HasContainerDecoder || !entry.Player.Decoder.HasAudio)
+                return false;
+            audioSource = entry.Player.Decoder.Audio;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "CuePlaybackEngine.WireAudioRoutes: source has no audio");
+            return false;
         }
     }
 
@@ -833,7 +900,7 @@ public sealed class CuePlaybackEngine : IDisposable
         return runtime;
     }
 
-    private CueAudioOutputRuntime? GetOrCreateAudioRuntime(Guid outputLineId)
+    private ClipAudioOutputRuntime? GetOrCreateAudioRuntime(Guid outputLineId)
     {
         lock (_gate)
         {
@@ -850,7 +917,13 @@ public sealed class CuePlaybackEngine : IDisposable
 
         try
         {
-            var runtime = new CueAudioOutputRuntime(line, _outputs);
+            var (audioOutput, playbackClock, releaseOutput) = AcquireAudioOutput(line, _outputs);
+            var runtime = new ClipAudioOutputRuntime(
+                outputLineId.ToString("N"),
+                audioOutput,
+                playbackClock,
+                releaseOutput,
+                line.Definition.DisplayName);
             lock (_gate)
             {
                 if (_audioOutputs.TryGetValue(outputLineId, out var existing))
@@ -872,6 +945,68 @@ public sealed class CuePlaybackEngine : IDisposable
     private static bool IsAudioCapableOutput(OutputDefinition definition) =>
         definition is PortAudioOutputDefinition
         || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
+
+    private static bool SupportsCueEngineSource(PlaylistItem? source) =>
+        source is FilePlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
+
+    private static bool CanSourceSatisfyRoutePlan(PlaylistItem? source, RoutePlan plan, out string? error)
+    {
+        error = null;
+        switch (source)
+        {
+            case PortAudioInputPlaylistItem when plan.PlacementsByComp.Count > 0:
+                error = "PortAudio input cues do not provide video for video placements.";
+                return false;
+            case NDIInputPlaylistItem { AudioOnly: true } when plan.PlacementsByComp.Count > 0:
+                error = "This NDI input cue is audio-only and cannot feed video placements.";
+                return false;
+            case NDIInputPlaylistItem { VideoOnly: true } when plan.AudioByOutput.Count > 0:
+                error = "This NDI input cue is video-only and cannot feed audio routes.";
+                return false;
+            default:
+                return true;
+        }
+    }
+
+    private static (IAudioOutput Output, IPlaybackClock? PlaybackClock, Action Release) AcquireAudioOutput(
+        OutputLineViewModel line,
+        OutputManagementViewModel outputs)
+    {
+        switch (line.Definition)
+        {
+            case PortAudioOutputDefinition:
+            {
+                var pa = outputs.TryAcquirePortAudioForPlayback(line)
+                    ?? throw new InvalidOperationException(
+                        $"PortAudio output '{line.Definition.DisplayName}' couldn't be acquired (preview not running or held).");
+                return (pa, pa, () => outputs.ReleasePortAudioForPlayback(line));
+            }
+            case NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly } nd:
+            {
+                var ndi = outputs.TryAcquireNDICarrierForPlayback(line, needsVideo: false, needsAudio: true)
+                    ?? throw new InvalidOperationException(
+                        $"NDI output '{line.Definition.DisplayName}' couldn't be acquired (carrier not running or held).");
+                try
+                {
+                    var channels = Math.Max(1, nd.AudioChannelCount);
+                    var sampleRate = Math.Max(1, nd.AudioSampleRate);
+                    var output = ndi.EnableAudio(new AudioFormat(sampleRate, channels));
+                    return (output, null, () => outputs.ReleaseNDICarrierForPlayback(line, releaseVideo: false, releaseAudio: true));
+                }
+                catch
+                {
+                    outputs.ReleaseNDICarrierForPlayback(line, releaseVideo: false, releaseAudio: true);
+                    throw;
+                }
+            }
+            case NDIOutputDefinition:
+                throw new InvalidOperationException(
+                    $"NDI output '{line.Definition.DisplayName}' is video-only and cannot receive cue audio.");
+            default:
+                throw new InvalidOperationException(
+                    $"Output '{line.Definition.DisplayName}' is not an audio-capable output.");
+        }
+    }
 
     private async Task SeekPreviewAsync(CuePreviewSession preview, TimeSpan position)
     {
@@ -1002,7 +1137,7 @@ public sealed class CuePlaybackEngine : IDisposable
         try { _standby.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { /* best effort */ }
 
         List<CueCompositionRuntime> compsLeft;
-        List<CueAudioOutputRuntime> audioLeft;
+        List<ClipAudioOutputRuntime> audioLeft;
         lock (_gate)
         {
             compsLeft = _compositions.Values.ToList();
@@ -1067,6 +1202,61 @@ public sealed class CuePlaybackEngine : IDisposable
         public bool HasAnyRoute => AudioByOutput.Count > 0 || PlacementsByComp.Count > 0;
     }
 
+    private readonly record struct LiveClipSources(IAudioSource? Audio, IVideoSource? Video);
+
+    private sealed class HaPlayLiveClipMediaSource : IClipMediaSource
+    {
+        private readonly Func<LiveClipSources> _openSources;
+
+        public HaPlayLiveClipMediaSource(string description, Func<LiveClipSources> openSources)
+        {
+            Description = string.IsNullOrWhiteSpace(description) ? "(live input)" : description;
+            _openSources = openSources ?? throw new ArgumentNullException(nameof(openSources));
+        }
+
+        public string Description { get; }
+
+        public IAudioSource? AudioSource { get; private set; }
+
+        public IVideoSource? VideoSource { get; private set; }
+
+        public MediaPlayerOpenBuilder CreateOpenBuilder()
+        {
+            var sources = _openSources();
+            if (sources.Audio is null && sources.Video is null)
+                throw new InvalidOperationException("Live cue source did not provide audio or video.");
+
+            AudioSource = sources.Audio;
+            VideoSource = sources.Video;
+
+            var videoForPlayer = sources.Video ?? (sources.Audio is not null ? new EmptyCueLiveVideoSource() : null);
+            return MediaPlayer.OpenLive(sources.Audio, videoForPlayer)
+                .WithOptions(new MediaPlayerOpenOptions(
+                    IncludeAudioRouter: false,
+                    LiveVideoPresentation: VideoPresentationMode.LatestOnTick))
+                .WithDisposeSourcesOnPlayerDispose(true);
+        }
+    }
+
+    private sealed class EmptyCueLiveVideoSource : IVideoSource
+    {
+        private VideoFormat _format = new(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+
+        public VideoFormat Format => _format;
+
+        public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [PixelFormat.Bgra32];
+
+        public bool IsExhausted => false;
+
+        public void SelectOutputFormat(PixelFormat format) => _format = _format with { PixelFormat = format };
+
+        public bool TryReadNextFrame(out VideoFrame frame)
+        {
+            frame = null!;
+            return false;
+        }
+    }
+
     private sealed class ActiveCue
     {
         public ActiveCue(MediaCueNode cue, IArmedClip armedClip, CancellationTokenSource cts, ClipWindow clipWindow)
@@ -1085,7 +1275,7 @@ public sealed class CuePlaybackEngine : IDisposable
         public ClipWindow ClipWindow { get; }
 
         /// <summary>The cue's audio-runtime playback clock, captured from the first wired
-        /// <see cref="CueAudioOutputRuntime.PlaybackClock"/>. Used as the composition master
+        /// <see cref="ClipAudioOutputRuntime.PlaybackClock"/>. Used as the composition master
         /// (<see cref="CueCompositionRuntime.SetClockMaster"/>) and passed to
         /// <c>MediaPlayer.Play(videoOnlyMaster:)</c> so video presents at the audio clock's rate.
         /// Null for video-only cues, which then free-run on their own clock.</summary>
@@ -1094,7 +1284,7 @@ public sealed class CuePlaybackEngine : IDisposable
         public bool RoutesWired { get; set; }
         public List<CueCompositionRuntime.LayerSlot> LayerSlots { get; } = new();
         public List<BgraConvertingVideoOutput> ConvertingOutputs { get; } = new();
-        public List<(CueAudioOutputRuntime Runtime, string SourceId)> AudioSources { get; } = new();
+        public List<(ClipAudioOutputRuntime Runtime, string SourceId)> AudioSources { get; } = new();
         public List<PausableAudioSource> PausableAudioSources { get; } = new();
         public List<IDisposable> AudioDisposables { get; } = new();
 

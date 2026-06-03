@@ -161,8 +161,9 @@ needed for composition slots.
   UI-agnostic source lifecycle slice (`ClipSpec`, `ClipPreparationState`, `IPreparedClip`,
   `IArmedClip`, `IClipStandbyEngine`): builder-based open, `ClipWindow.Start` seek,
   cache-keyed non-consuming standby, decoder cap/window policy, explicit `Start()`, and
-  grouped starts. HaPlay now delegates the file-cue source lifecycle to the standby
-  engine; shared output-runtime ownership and video-capable soundboard remain follow-ups.)*
+  grouped starts. HaPlay now delegates file and live NDI/PortAudio cue source lifecycle
+  to the standby engine, and shared cue audio/composition runtime primitives now live in
+  `S.Media.Playback`; video-capable soundboard remains a follow-up.)*
   - Desired guarantees: non-consuming standby, explicit start barrier,
     coordinated grouped starts, clip-relative audio/video timing, and clear
     output ownership.
@@ -174,7 +175,7 @@ needed for composition slots.
   `ClipWindow.Start` and wires routes. The transport decision already lives in
   `ExecuteCoreAsync`. Safe pure-delete.
 - `VideoClockMaster` rename (item 2): the field is assigned from
-  `CueAudioOutputRuntime.PlaybackClock` and is also handed to
+  `ClipAudioOutputRuntime.PlaybackClock` and is also handed to
   `MediaPlayer.Play(videoOnlyMaster:)`, not only to the composition. Prefer
   `PlaybackClockMaster` so it reads correctly at both the audio-source and the
   `Play(...)` call sites.
@@ -334,9 +335,10 @@ both an RFC and a phase-1 playback implementation.
   `AudioRoutes` (see the item note).
 - **Framework cue/clip API — RFC + phase-1 implementation.** RFC at
   `Doc/MediaFramework-Cue-Clip-API-RFC.md`; implementation in
-  `S.Media.Playback.ClipStandbyEngine` with focused playback tests. HaPlay file-cue
-  source lifecycle now delegates to the framework standby engine; shared output-runtime
-  ownership and video-capable soundboard are the next extraction steps.
+  `S.Media.Playback.ClipStandbyEngine` with focused playback tests. HaPlay file and live
+  NDI/PortAudio cue source lifecycle now delegates to the framework standby engine;
+  shared cue audio/composition runtime primitives are extracted to `S.Media.Playback`;
+  video-capable soundboard is the next extraction step.
 
 Coverage: added `MaxPreparedDecoders` round-trip/default tests and `Stale`-state
 glyph/tooltip/mapping tests. Full suite green (142 tests).

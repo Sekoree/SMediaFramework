@@ -15,6 +15,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
+        <ProjectReference Include="..\S.Media.Effects\S.Media.Effects.csproj" />
         <ProjectReference Include="..\S.Media.FFmpeg\S.Media.FFmpeg.csproj" />
     </ItemGroup>
 

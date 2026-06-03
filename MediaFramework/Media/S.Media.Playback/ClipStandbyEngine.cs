@@ -332,8 +332,13 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
     private static async Task<PreparedClip> PrepareAsync(ClipSpec spec, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var session = await spec.Source.CreateOpenBuilder()
-            .OpenSessionAsync(cancellationToken)
+        var session = await Task.Run(
+                () =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return spec.Source.CreateOpenBuilder().BuildSession();
+                },
+                cancellationToken)
             .ConfigureAwait(false);
 
         try

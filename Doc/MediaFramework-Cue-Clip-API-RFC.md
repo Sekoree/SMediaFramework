@@ -2,8 +2,8 @@
 
 Created: 2026-06-03
 Status: **Phase 1 implemented** (framework API + default standby engine landed in
-`S.Media.Playback`; HaPlay source-lifecycle migration landed; output-runtime extraction
-remains a follow-up)
+`S.Media.Playback`; shared cue audio/composition runtime primitives landed; HaPlay
+file/live source-lifecycle migration landed; video-capable soundboard remains a follow-up)
 
 Backlog origin: "Consider a framework-level cue/clip API that can power HaPlay,
 soundboards, and cue-player hosts" (see `HaPlay-CuePlayer-Cleanup-Backlog.md`,
@@ -53,14 +53,19 @@ Framework — `S.Media.Playback` (the existing "product" layer):
   opens through existing `MediaPlayerOpenBuilder`s, seeks to `ClipWindow.Start`, holds
   ready clips warm under `ClipStandbyPolicy`, arms without auto-starting, and starts
   groups after every member is armed.
+- `ClipAudioOutputRuntime` / `ClipCompositionRuntime` — shared output-runtime
+  primitives: audio-router ownership per output, compositor/layer/output fan-out per
+  composition, clock-master handoff, and output-pressure/drift signals. Hosts still adapt
+  their concrete devices into framework output leases.
 
 HaPlay — `UI/HaPlay/Playback/` (where the real guarantees live today):
 
-- `CuePlaybackEngine` — orchestrates everything below; holds `_active`, `_prepared`,
-  `_prepStatus`, compositions, audio-output runtimes.
+- `CuePlaybackEngine` — orchestrates cue tree and route planning; delegates standby to
+  `ClipStandbyEngine` and audio/composition runtime ownership to framework primitives.
 - `ActiveCue` — per-cue runtime (player, `ClipWindow`, layer slots, pausable audio
   sources, `PlaybackClockMaster`).
-- `CueAudioOutputRuntime` / `CueCompositionRuntime` — output ownership + clock master.
+- `CueCompositionRuntime` — now a HaPlay adapter that acquires output-line VMs and chooses
+  CPU/OpenGL compositor backend before handing leases to framework `ClipCompositionRuntime`.
 - Pre-roll: `RefreshPreparedCuesAsync`, `BuildPreparedCueKey`, `TryTakePreparedCue`,
   `EvictPreparedExceptAsync`, `CuePreRollCache`, `PreparedCueState`
   (Idle/Preparing/Ready/Stale/Failed).
@@ -73,7 +78,7 @@ HaPlay — `UI/HaPlay/Playback/` (where the real guarantees live today):
 | Explicit start barrier | `IArmedClip.Start()` over a non-started `MediaPlayer` | `deferPlay` + paused audio sources + coordinated unpause |
 | Coordinated grouped starts | `StartGroupAsync` arms all, then starts all | `ExecuteGroupAsync` (parallel open, paused, unpause-all) |
 | Clip-relative A/V timing | `ClipWindow` + `RetimingVideoOutput` (primitives) | wired in `WireVideoPlacements` + seek to `ClipWindow.Start` |
-| Clear output ownership | `MediaGraph` owns a graph | `CueAudioOutputRuntime`/`CueCompositionRuntime` + conflict release |
+| Clear output ownership | `ClipAudioOutputRuntime` / `ClipCompositionRuntime` own shared cue output runtimes; `MediaGraph` remains the graph owner vocabulary | HaPlay output-line adapters + conflict release |
 
 The primitives (clip window, retiming) are already framework-level. The **orchestration
 with guarantees** is the gap.
@@ -142,11 +147,13 @@ so a slow decoder open can't desync the group.
 
 ### 4.3 Output ownership
 
-Reuse `MediaGraph` as the owner of compositor + audio-output runtimes; the standby
-engine borrows output handles from it and is responsible only for source/route
-lifetimes. Conflict release ("a new cue takes an output another cue holds") becomes a
-`MediaGraph` operation rather than a HaPlay callback
-(`ReleaseConflictingPlayerOutputsAsync` today).
+The shared cue-output runtimes now live in `S.Media.Playback`: `ClipAudioOutputRuntime`
+owns one audio router per physical audio output, and `ClipCompositionRuntime` owns one
+compositor/layer/output fan-out per composition. Hosts pass concrete output leases
+(`IAudioOutput` / `IVideoOutput` plus release callbacks) because only the host knows its
+device registry. The remaining extraction is to make conflict release ("a new cue takes
+an output another cue holds") a graph operation rather than HaPlay's
+`ReleaseConflictingPlayerOutputsAsync` callback.
 
 ## 5. The five guarantees, made explicit
 
@@ -171,10 +178,11 @@ lifetimes. Conflict release ("a new cue takes an output another cue holds") beco
 - keeps HaPlay-specific concerns (cue tree, color tags, NDI/PortAudio pre-connect,
   inspector wiring, the `Stale` badge) in the VM layer.
 
-The source-lifecycle part of this migration is implemented: HaPlay now delegates
-file-cue standby, arm, stale invalidation, standby removal, and the first-start barrier to
-`ClipStandbyEngine` while continuing to wire output runtimes host-side between `ArmAsync`
-and `Start()`.
+The source-lifecycle part of this migration is implemented: HaPlay now delegates file-cue
+standby, live NDI/PortAudio pre-open, arm, stale invalidation, standby removal, and the
+first-start barrier to `ClipStandbyEngine`. Output runtime ownership is split: framework
+primitives own the shared routers/compositors, while HaPlay still adapts output-line VMs
+into concrete leases between `ArmAsync` and `Start()`.
 
 `PreparedCueState` ↔ `ClipPreparationState` is a straight rename; the new per-list
 `MaxPreparedDecoders` cap is already shaped like `ClipStandbyPolicy.MaxPreparedDecoders`.
@@ -191,9 +199,9 @@ and `Start()`.
 - **Threading model.** HaPlay's engine marshals through `Dispatcher.UIThread` in places
   (e.g. reading `SelectedCueList`). A framework engine must be UI-agnostic — host supplies
   specs; the engine never reaches into a VM. This is the largest refactor.
-- **Live (NDI/PortAudio) cues.** Today these are pre-*connected* separately from file
-  pre-*roll*. Decide whether the standby engine models both, or only file clips, with
-  live pre-connect staying host-side.
+- **Live reconnect policy.** NDI/PortAudio cues now pre-open through standby so trigger
+  can arm an already-connected receiver/capture stream. Retry/reconnect behavior after a
+  prepared live source disappears remains host policy.
 - **Cache-key ownership.** Keep key computation host-side (HaPlay knows comp size,
   output bindings) and pass it in, rather than the engine guessing identity.
 - **Memory-estimate eviction** (a deferred backlog sub-item) would slot into
@@ -212,9 +220,11 @@ and `Start()`.
 1. **Done:** Land `ClipSpec` / `ClipPreparationState` / `IPreparedClip` types + a
    UI-agnostic `IClipStandbyEngine` with default `ClipStandbyEngine`.
 2. **Done in framework:** Add the start barrier + `StartGroupAsync` to the interface.
-3. **Done in HaPlay:** Reroute file-cue source lifecycle onto it behind the existing
-   public engine surface (no UI change); keep HaPlay's output-runtime wiring between
-   `ArmAsync` and `Start()`.
-4. Build the video-capable soundboard host as the second consumer (validation that the
+3. **Done in HaPlay:** Reroute file-cue and live NDI/PortAudio source lifecycle onto it
+   behind the existing public engine surface (no UI change).
+4. **Done in framework + HaPlay adapter:** Extract shared audio/composition runtime
+   ownership into framework primitives while keeping host-specific device acquisition in
+   HaPlay adapters.
+5. Build the video-capable soundboard host as the second consumer (validation that the
    API is genuinely host-agnostic).
-5. Fold live pre-connect and memory-estimate eviction in, if wanted.
+6. Fold memory-estimate eviction in, if wanted.

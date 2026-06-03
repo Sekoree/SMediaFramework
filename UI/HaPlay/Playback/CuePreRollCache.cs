@@ -164,6 +164,8 @@ internal static class PlaylistItemPreRollExtensions
         item switch
         {
             FilePlaylistItem f => $"file:{f.Path}",
+            NDIInputPlaylistItem ndi => NdiInputPreConnectCache.BuildCacheKey(ndi),
+            PortAudioInputPlaylistItem pa => PortAudioInputPreConnectCache.BuildCacheKey(pa),
             _ => item.GetType().Name,
         };
 
