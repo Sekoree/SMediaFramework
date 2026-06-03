@@ -34,9 +34,10 @@ public enum PlayerLoadState
 public partial class MediaPlayerViewModel : ViewModelBase
 {
     private readonly OutputManagementViewModel _outputs;
-    private readonly Action<MediaPlayerViewModel>? _requestRemove;
+    private readonly Func<MediaPlayerViewModel, Task>? _requestRemove;
     private HaPlayPlaybackSession? _session;
     private readonly PlaybackThroughputDiagnostics _throughputDiagnostics = new();
+    private int _disposeStarted;
 
     /// <summary>
     /// Machine-wide preference (saved in <see cref="AppSettings"/>). When on, live NDI keeps native UYVY
@@ -751,7 +752,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     public MediaPlayerViewModel(OutputManagementViewModel outputs, string name,
-        Action<MediaPlayerViewModel>? requestRemove = null)
+        Func<MediaPlayerViewModel, Task>? requestRemove = null)
     {
         _outputs = outputs;
         _requestRemove = requestRemove;
@@ -777,6 +778,69 @@ public partial class MediaPlayerViewModel : ViewModelBase
         PlaylistTabs.Add(initialTab);
         SelectedPlaylistTab = initialTab;
         Dispatcher.UIThread.Post(() => SyncIdleSlate(), DispatcherPriority.Loaded);
+    }
+
+    public async Task DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposeStarted, 1) != 0)
+            return;
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            _idleSlateSyncTimer.Stop();
+            StopHoldPumpTimer();
+            CancelCueEnvelope();
+            CancelPreOpen();
+            CancelWaveformExtraction();
+            StopIdleSlate();
+            UnsubscribeOutputEvents();
+            DetachPlaylistTabSelection();
+            DetachOutputBindings();
+            UnwatchInputTrimRows();
+        });
+
+        await CloseSessionAsync().ConfigureAwait(false);
+    }
+
+    private void CancelPreOpen()
+    {
+        try { _preOpenCts?.Cancel(); } catch { /* best effort */ }
+        try { _preOpenCts?.Dispose(); } catch { /* best effort */ }
+        _preOpenCts = null;
+    }
+
+    private void CancelWaveformExtraction()
+    {
+        try { _waveformCts?.Cancel(); } catch { /* best effort */ }
+        try { _waveformCts?.Dispose(); } catch { /* best effort */ }
+        _waveformCts = null;
+        IsExtractingWaveform = false;
+    }
+
+    private void UnsubscribeOutputEvents()
+    {
+        _outputs.Outputs.CollectionChanged -= OnSharedOutputsCollectionChanged;
+        _outputs.SharedHeadphonesBusesChanged -= OnSharedHeadphonesBusesChanged;
+        _outputs.RoutingTopologyChanged -= OnRoutingTopologyChanged;
+        _outputs.VirtualAudioChannelMapChanged -= OnVirtualAudioChannelMapChanged;
+        _outputs.OutputLineRemoving -= OnOutputLineRemoving;
+        _outputs.OutputLineReconfiguringAsync -= OnOutputLineReconfiguringAsync;
+        _outputs.OutputLineReconfiguredAsync -= OnOutputLineReconfiguredAsync;
+    }
+
+    private void DetachPlaylistTabSelection()
+    {
+        if (SelectedPlaylistTab is not null)
+            SelectedPlaylistTab.Items.CollectionChanged -= OnSelectedTabItemsCollectionChanged;
+    }
+
+    private void DetachOutputBindings()
+    {
+        foreach (var binding in Outputs)
+        {
+            binding.PropertyChanged -= OnOutputBindingPropertyChanged;
+            UnwatchMatrixCells(binding);
+        }
     }
 
     private void OnPlaylistItemsChanged()
@@ -2098,11 +2162,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     [RelayCommand(CanExecute = nameof(CanRemovePlayer))]
-    private void RemovePlayer()
+    private async Task RemovePlayer()
     {
         if (_requestRemove is null) return;
-        _ = CloseSessionAsync();
-        _requestRemove(this);
+        await _requestRemove(this);
     }
 
     private bool CanRemovePlayer() => _requestRemove is not null;

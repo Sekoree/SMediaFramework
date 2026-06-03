@@ -196,7 +196,6 @@ public sealed partial class AudioRouter : IDisposable
     public string AddSource(IAudioSource source, string? id = null, bool? autoResample = null)
     {
         ArgumentNullException.ThrowIfNull(source);
-        ObjectDisposedException.ThrowIf(_disposed, this);
 
         var resample = autoResample ?? AutoResampleDefault ?? DefaultAutoResample;
         source.Format.Validate(nameof(source));
@@ -232,6 +231,13 @@ public sealed partial class AudioRouter : IDisposable
 
         lock (_gate)
         {
+            if (_disposed)
+            {
+                if (ownedWrapper is not null)
+                    MediaDiagnostics.SwallowDisposeErrors(ownedWrapper.Dispose, "AudioRouter.AddSource: rollback source wrapper after dispose race");
+                throw new ObjectDisposedException(nameof(AudioRouter));
+            }
+
             id ??= $"__auto_src_{++_idCounter}";
             ArgumentException.ThrowIfNullOrEmpty(id);
             if (_state.Sources.ContainsKey(id))
@@ -253,6 +259,7 @@ public sealed partial class AudioRouter : IDisposable
         IDisposable? ownedWrapper;
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_state.Sources.TryGetValue(id, out var entry)) return false;
             ownedWrapper = entry.OwnedWrapper;
             Volatile.Write(ref _state, _state with
@@ -316,6 +323,7 @@ public sealed partial class AudioRouter : IDisposable
             throw new ArgumentOutOfRangeException(nameof(maxRateDeltaHz));
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             _wrapAdaptiveRateOnNonMasterOutputs = true;
             _adaptiveRateMaxDeltaHz = maxRateDeltaHz;
         }
@@ -331,7 +339,6 @@ public sealed partial class AudioRouter : IDisposable
     public string AddOutput(IAudioOutput output, string? id = null, int? pumpCapacityChunks = null)
     {
         ArgumentNullException.ThrowIfNull(output);
-        ObjectDisposedException.ThrowIf(_disposed, this);
 
         output.Format.Validate(nameof(output));
         if (output.Format.SampleRate != _sampleRate)
@@ -344,6 +351,7 @@ public sealed partial class AudioRouter : IDisposable
 
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             id ??= $"__auto_sink_{++_idCounter}";
             ArgumentException.ThrowIfNullOrEmpty(id);
             if (_state.Outputs.ContainsKey(id))
@@ -382,6 +390,7 @@ public sealed partial class AudioRouter : IDisposable
         bool wasRunning;
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_state.Outputs.TryGetValue(id, out var entry)) return false;
             pump = entry.Pump;
             removedOutput = entry.Output;
@@ -489,10 +498,9 @@ public sealed partial class AudioRouter : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
         ArgumentException.ThrowIfNullOrEmpty(outputId);
         ArgumentException.ThrowIfNullOrEmpty(routeId);
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_state.Sources.TryGetValue(sourceId, out var src))
                 throw new ArgumentException($"unknown source ID '{sourceId}'", nameof(sourceId));
             if (!_state.Outputs.TryGetValue(outputId, out var output))
@@ -1142,8 +1150,11 @@ public sealed partial class AudioRouter : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
         Stop();
         lock (_gate)
         {

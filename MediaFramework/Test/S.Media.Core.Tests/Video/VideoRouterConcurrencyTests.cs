@@ -42,6 +42,37 @@ public sealed class VideoRouterConcurrencyTests
     }
 
     [Fact]
+    public void AddOutputAndInput_AfterDispose_ThrowObjectDisposed()
+    {
+        var router = new VideoRouter(null);
+        router.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() =>
+            router.AddOutput(new CountingOutput(PixelFormat.Nv12), "primary", synchronous: true));
+        Assert.Throws<ObjectDisposedException>(() =>
+            router.AddInput("primary", "in"));
+    }
+
+    [Fact]
+    public async Task VideoOutputPump_ConfigureAndDisposeRace_DoesNotUseDisposedStartupState()
+    {
+        var inner = new BlockingConfigureOutput(PixelFormat.Nv12);
+        var pump = new VideoOutputPump(inner, maxQueuedFrames: 2, name: "test-pump");
+        var configureTask = Task.Run(() => pump.Configure(Nv12));
+
+        Assert.True(inner.ConfigureEntered.Wait(TimeSpan.FromSeconds(2)), "Configure should enter inner output");
+        var disposeTask = Task.Run(() => pump.Dispose());
+
+        Assert.NotSame(disposeTask, await Task.WhenAny(disposeTask, Task.Delay(100)));
+        Assert.False(disposeTask.IsCompleted,
+            "Dispose should wait for first Configure startup to leave the lifecycle lock");
+        inner.ReleaseConfigure();
+
+        await Task.WhenAll(configureTask, disposeTask).WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.True(inner.Configured);
+    }
+
+    [Fact]
     public void MultiOutput_BranchConverter_ConcurrentSubmitAndRouteToggle_NeverConvertsAfterDispose()
     {
         var savedFactory = MediaFrameworkPlugins.VideoCpuFrameConverterFactory;
@@ -377,5 +408,32 @@ public sealed class VideoRouterConcurrencyTests
         public VideoFormat Format { get; private set; }
         public void Configure(VideoFormat format) => Format = format;
         public void Submit(VideoFrame frame) => throw new InvalidOperationException("branch boom");
+    }
+
+    private sealed class BlockingConfigureOutput : IVideoOutput
+    {
+        private readonly ManualResetEventSlim _releaseConfigure = new(false);
+        private volatile bool _configured;
+
+        public BlockingConfigureOutput(PixelFormat accepted)
+        {
+            AcceptedPixelFormats = new[] { accepted };
+        }
+
+        public ManualResetEventSlim ConfigureEntered { get; } = new(false);
+        public bool Configured => _configured;
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; }
+        public VideoFormat Format { get; private set; }
+
+        public void Configure(VideoFormat format)
+        {
+            ConfigureEntered.Set();
+            _releaseConfigure.Wait();
+            Format = format;
+            _configured = true;
+        }
+
+        public void Submit(VideoFrame frame) => frame.Dispose();
+        public void ReleaseConfigure() => _releaseConfigure.Set();
     }
 }

@@ -19,6 +19,24 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public async Task SaveAsync_WhenCancelled_PreservesExistingProjectFile()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "haplay-atomic-save-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "show.haplayproj");
+        const string original = """{"sentinel":true}""";
+        await File.WriteAllTextAsync(path, original);
+
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            ProjectIO.SaveAsync(new HaPlayProject(), path, cts.Token));
+
+        Assert.Equal(original, await File.ReadAllTextAsync(path));
+    }
+
+    [Fact]
     public void RoundTrip_ActionEndpoints_PreservesKindsAndFields()
     {
         var oscId = Guid.NewGuid();
@@ -575,11 +593,85 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
-    public void CurrentSchemaVersion_IsOne()
+    public void RoundTrip_ControlGraphs_PreservesNodesConnectionsAndSettings()
     {
-        // §9.4: schemaVersion = 1 on the first ship of the project file format.
+        var midiNodeId = Guid.NewGuid();
+        var mapNodeId = Guid.NewGuid();
+        var x32NodeId = Guid.NewGuid();
+
+        var project = new HaPlayProject
+        {
+            ControlGraphs =
+            [
+                new ControlGraphConfig
+                {
+                    Name = "BCF2000 Layer",
+                    IsEnabled = true,
+                    Nodes =
+                    [
+                        new ControlNodeConfig
+                        {
+                            Id = midiNodeId,
+                            DisplayName = "Fader 1",
+                            Kind = ControlNodeKind.MidiInput,
+                            Settings = new MidiInputControlNodeSettings
+                            {
+                                Channel = 1,
+                                Controller = 0,
+                                HighResolution14Bit = true,
+                            },
+                        },
+                        new ControlNodeConfig
+                        {
+                            Id = mapNodeId,
+                            DisplayName = "Normalize",
+                            Kind = ControlNodeKind.MapRange,
+                            Settings = new MapRangeControlNodeSettings
+                            {
+                                InputMax = 16383,
+                                OutputMax = 1,
+                            },
+                        },
+                        new ControlNodeConfig
+                        {
+                            Id = x32NodeId,
+                            DisplayName = "X32 Ch 1",
+                            Kind = ControlNodeKind.X32ChannelFader,
+                            Settings = new X32ChannelFaderControlNodeSettings
+                            {
+                                Host = "192.168.1.50",
+                                Channel = 1,
+                            },
+                        },
+                    ],
+                    Connections =
+                    [
+                        new ControlConnectionConfig { FromNodeId = midiNodeId, ToNodeId = mapNodeId },
+                        new ControlConnectionConfig { FromNodeId = mapNodeId, ToNodeId = x32NodeId },
+                    ],
+                },
+            ],
+        };
+
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+
+        var graph = Assert.Single(roundTripped.ControlGraphs);
+        Assert.Equal("BCF2000 Layer", graph.Name);
+        Assert.True(graph.IsEnabled);
+        Assert.Equal(3, graph.Nodes.Count);
+        Assert.Equal(2, graph.Connections.Count);
+        var midi = Assert.IsType<MidiInputControlNodeSettings>(graph.Nodes[0].Settings);
+        Assert.True(midi.HighResolution14Bit);
+        var x32 = Assert.IsType<X32ChannelFaderControlNodeSettings>(graph.Nodes[2].Settings);
+        Assert.Equal("192.168.1.50", x32.Host);
+    }
+
+    [Fact]
+    public void CurrentSchemaVersion_IsTwo()
+    {
+        // §9.4: schemaVersion = 2 adds persisted MIDI/OSC control graphs.
         // This test exists so a future schema bump is intentional — bumping requires also adding the
         // migration path; this guard makes sure that decision is conscious.
-        Assert.Equal(1, HaPlayProject.CurrentSchemaVersion);
+        Assert.Equal(2, HaPlayProject.CurrentSchemaVersion);
     }
 }

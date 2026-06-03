@@ -95,6 +95,16 @@ public class AudioRouterTests
     }
 
     [Fact]
+    public void AddSourceAndOutput_AfterDispose_ThrowObjectDisposed()
+    {
+        var r = new AudioRouter(SampleRate);
+        r.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => r.AddSource(new TestSource(Stereo), "src"));
+        Assert.Throws<ObjectDisposedException>(() => r.AddOutput(new TestOutput(Stereo), "out"));
+    }
+
+    [Fact]
     public void AddRoute_UnknownSource_Throws()
     {
         using var r = new AudioRouter(SampleRate);

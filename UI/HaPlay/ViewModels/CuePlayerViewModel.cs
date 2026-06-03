@@ -125,30 +125,6 @@ public sealed partial class CueCompositionViewModel : ObservableObject
     };
 }
 
-/// <summary>Process-wide registry used by route/binding VMs to resolve their <c>OutputLineId</c>
-/// into a live <see cref="OutputLineViewModel"/> for health-dot binding. <see cref="CuePlayerViewModel"/>
-/// keeps it populated whenever the shared output collection changes — this avoids threading a
-/// resolver delegate through every CueAudioRouteViewModel / CueVideoOutputBindingViewModel
-/// instance loaded from disk. Single-process MVVM only; not thread-safe.</summary>
-internal static class OutputLineRegistry
-{
-    private static IReadOnlyDictionary<Guid, OutputLineViewModel> _byId =
-        new Dictionary<Guid, OutputLineViewModel>();
-
-    public static event EventHandler? Changed;
-
-    public static OutputLineViewModel? Resolve(Guid lineId) =>
-        _byId.TryGetValue(lineId, out var line) ? line : null;
-
-    public static void Replace(IEnumerable<OutputLineViewModel> lines)
-    {
-        _byId = lines
-            .GroupBy(l => l.Definition.Id)
-            .ToDictionary(g => g.Key, g => g.First());
-        Changed?.Invoke(null, EventArgs.Empty);
-    }
-}
-
 /// <summary>One swatch in the drawer's color-tag picker (Phase 5.8.1). Plain DTO — the
 /// button command lives on <see cref="CuePlayerViewModel"/>; this VM just supplies the
 /// fill/border colors and the tag index.</summary>
@@ -170,6 +146,8 @@ public sealed class CueColorSwatchViewModel
 
 public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
 {
+    private Func<Guid, OutputLineViewModel?>? _resolveLine;
+
     [ObservableProperty]
     private Guid _id = Guid.NewGuid();
 
@@ -184,7 +162,13 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
     [ObservableProperty]
     private OutputLineViewModel? _lineRef;
 
-    partial void OnOutputLineIdChanged(Guid value) => LineRef = OutputLineRegistry.Resolve(value);
+    partial void OnOutputLineIdChanged(Guid value) => LineRef = _resolveLine?.Invoke(value);
+
+    internal void SetLineResolver(Func<Guid, OutputLineViewModel?> resolveLine)
+    {
+        _resolveLine = resolveLine;
+        LineRef = resolveLine(OutputLineId);
+    }
 
     public CueVideoOutputBinding ToModel() => new()
     {
@@ -193,16 +177,26 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
         CompositionId = CompositionId,
     };
 
-    public static CueVideoOutputBindingViewModel FromModel(CueVideoOutputBinding model) => new()
+    public static CueVideoOutputBindingViewModel FromModel(
+        CueVideoOutputBinding model,
+        Func<Guid, OutputLineViewModel?>? resolveLine = null)
     {
-        Id = model.Id,
-        OutputLineId = model.OutputLineId,
-        CompositionId = model.CompositionId,
-    };
+        var vm = new CueVideoOutputBindingViewModel
+        {
+            Id = model.Id,
+            OutputLineId = model.OutputLineId,
+            CompositionId = model.CompositionId,
+        };
+        if (resolveLine is not null)
+            vm.SetLineResolver(resolveLine);
+        return vm;
+    }
 }
 
 public sealed partial class CueAudioRouteViewModel : ObservableObject
 {
+    private Func<Guid, OutputLineViewModel?>? _resolveLine;
+
     [ObservableProperty]
     private int _sourceChannel;
 
@@ -223,7 +217,13 @@ public sealed partial class CueAudioRouteViewModel : ObservableObject
     [ObservableProperty]
     private OutputLineViewModel? _lineRef;
 
-    partial void OnOutputLineIdChanged(Guid value) => LineRef = OutputLineRegistry.Resolve(value);
+    partial void OnOutputLineIdChanged(Guid value) => LineRef = _resolveLine?.Invoke(value);
+
+    internal void SetLineResolver(Func<Guid, OutputLineViewModel?> resolveLine)
+    {
+        _resolveLine = resolveLine;
+        LineRef = resolveLine(OutputLineId);
+    }
 
     public CueAudioRoute ToModel() => new()
     {
@@ -234,14 +234,22 @@ public sealed partial class CueAudioRouteViewModel : ObservableObject
         Muted = Muted,
     };
 
-    public static CueAudioRouteViewModel FromModel(CueAudioRoute model) => new()
+    public static CueAudioRouteViewModel FromModel(
+        CueAudioRoute model,
+        Func<Guid, OutputLineViewModel?>? resolveLine = null)
     {
-        SourceChannel = model.SourceChannel,
-        OutputLineId = model.OutputLineId,
-        OutputChannel = model.OutputChannel,
-        GainDb = model.GainDb,
-        Muted = model.Muted,
-    };
+        var vm = new CueAudioRouteViewModel
+        {
+            SourceChannel = model.SourceChannel,
+            OutputLineId = model.OutputLineId,
+            OutputChannel = model.OutputChannel,
+            GainDb = model.GainDb,
+            Muted = model.Muted,
+        };
+        if (resolveLine is not null)
+            vm.SetLineResolver(resolveLine);
+        return vm;
+    }
 }
 
 public sealed partial class CueVideoPlacementViewModel : ObservableObject
@@ -645,7 +653,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         }
     }
 
-    public static CueNodeViewModel FromModel(CueNode node)
+    public static CueNodeViewModel FromModel(CueNode node, Func<Guid, OutputLineViewModel?>? resolveLine = null)
     {
         switch (node)
         {
@@ -663,7 +671,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     Extra = g.FireMode.ToString(),
                 };
                 foreach (var c in g.Children)
-                    vm.Children.Add(FromModel(c));
+                    vm.Children.Add(FromModel(c, resolveLine));
                 return vm;
             }
             case MediaCueNode m:
@@ -695,7 +703,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     DisablePreRoll = m.DisablePreRoll,
                 };
                 foreach (var route in m.AudioRoutes)
-                    vm.AudioRoutes.Add(CueAudioRouteViewModel.FromModel(route));
+                    vm.AudioRoutes.Add(CueAudioRouteViewModel.FromModel(route, resolveLine));
                 foreach (var placement in m.VideoPlacements)
                     vm.VideoPlacements.Add(CueVideoPlacementViewModel.FromModel(placement));
                 return vm;
@@ -848,7 +856,10 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     [ObservableProperty]
     private bool _autoRenumberOnInsert;
 
-    public static CueListEditorViewModel FromModel(CueList list, string? path = null)
+    public static CueListEditorViewModel FromModel(
+        CueList list,
+        string? path = null,
+        Func<Guid, OutputLineViewModel?>? resolveLine = null)
     {
         var vm = new CueListEditorViewModel(list.Name)
         {
@@ -861,9 +872,9 @@ public sealed partial class CueListEditorViewModel : ObservableObject
         foreach (var c in list.Compositions)
             vm.Compositions.Add(CueCompositionViewModel.FromModel(c));
         foreach (var o in list.VideoOutputs)
-            vm.VideoOutputs.Add(CueVideoOutputBindingViewModel.FromModel(o));
+            vm.VideoOutputs.Add(CueVideoOutputBindingViewModel.FromModel(o, resolveLine));
         foreach (var node in list.Nodes)
-            vm.Nodes.Add(CueNodeViewModel.FromModel(node));
+            vm.Nodes.Add(CueNodeViewModel.FromModel(node, resolveLine));
         return vm;
     }
 }
@@ -1047,9 +1058,11 @@ public partial class CuePlayerViewModel : ViewModelBase
                     AvailableVideoOutputs.Add(line);
             }
         }
-        OutputLineRegistry.Replace(AvailableOutputs);
         ResolveAllBindingLineRefs();
     }
+
+    private OutputLineViewModel? ResolveOutputLine(Guid lineId) =>
+        AvailableOutputs.FirstOrDefault(l => l.Definition.Id == lineId);
 
     /// <summary>Walks every loaded cue list and refreshes the resolved <c>LineRef</c> on each
     /// audio route + video output binding. Called when the available output set changes (lines
@@ -1059,17 +1072,17 @@ public partial class CuePlayerViewModel : ViewModelBase
         foreach (var list in CueLists)
         {
             foreach (var binding in list.VideoOutputs)
-                binding.LineRef = OutputLineRegistry.Resolve(binding.OutputLineId);
+                binding.SetLineResolver(ResolveOutputLine);
             ResolveLineRefsInNodes(list.Nodes);
         }
     }
 
-    private static void ResolveLineRefsInNodes(IEnumerable<CueNodeViewModel> nodes)
+    private void ResolveLineRefsInNodes(IEnumerable<CueNodeViewModel> nodes)
     {
         foreach (var node in nodes)
         {
             foreach (var route in node.AudioRoutes)
-                route.LineRef = OutputLineRegistry.Resolve(route.OutputLineId);
+                route.SetLineResolver(ResolveOutputLine);
             ResolveLineRefsInNodes(node.Children);
         }
     }
@@ -1999,6 +2012,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             OutputLineId = AvailableVideoOutputs.FirstOrDefault()?.Definition.Id ?? Guid.Empty,
             CompositionId = SelectedCueList.Compositions.FirstOrDefault()?.Id ?? Guid.Empty,
         };
+        binding.SetLineResolver(ResolveOutputLine);
         SelectedCueList.VideoOutputs.Add(binding);
         SelectedVideoOutput = binding;
         SuggestPreRollRefresh();
@@ -2044,6 +2058,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 OutputLineId = firstOutput?.Definition.Id ?? Guid.Empty,
                 OutputChannel = 1 + (media.AudioRoutes.Count % Math.Max(1, channelCount)),
             };
+            route.SetLineResolver(ResolveOutputLine);
             media.AudioRoutes.Add(route);
             if (ReferenceEquals(media, SelectedCueNode))
                 lastOnPrimary = route;
@@ -2125,6 +2140,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 OutputChannel = contrib.OutputChannel + 1, // cue routes are 1-based
                 GainDb = contrib.GainDb,
             };
+            route.SetLineResolver(ResolveOutputLine);
             media.AudioRoutes.Add(route);
             first ??= route;
         }
@@ -2577,7 +2593,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         // cloned snapshot, so no list reference is shared with the original cue.
         var snapshot = SelectedCueNode.ToModel();
         var copy = CloneCueNodeWithNewIds(snapshot);
-        var copyVm = CueNodeViewModel.FromModel(copy);
+        var copyVm = CueNodeViewModel.FromModel(copy, ResolveOutputLine);
 
         var idx = parent.IndexOf(SelectedCueNode);
         parent.Insert(idx + 1, copyVm);
@@ -2845,7 +2861,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         _transportRunCts = new CancellationTokenSource();
         try
         {
-            await RunTriggerPlanAsync(plan, _transportRunCts.Token).ConfigureAwait(false);
+            await RunTriggerPlanAsync(plan, _transportRunCts.Token);
             SuggestPreRollRefresh();
         }
         catch (OperationCanceledException)
@@ -3294,15 +3310,15 @@ public partial class CuePlayerViewModel : ViewModelBase
             try
             {
                 var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
-                StatusMessage = string.IsNullOrWhiteSpace(exec)
+                await SetStatusMessageOnUiAsync(string.IsNullOrWhiteSpace(exec)
                     ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplay(cue))
-                    : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec);
+                    : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec));
             }
             catch (OperationCanceledException) { /* Stop / Panic cancelled the dispatched cue. */ }
             catch (Exception ex)
             {
-                StatusMessage = Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat),
-                    CueDisplay(cue), ex.Message);
+                await SetStatusMessageOnUiAsync(Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat),
+                    CueDisplay(cue), ex.Message));
             }
         }, ct);
     }
@@ -3322,9 +3338,9 @@ public partial class CuePlayerViewModel : ViewModelBase
                 if (mediaCues.Count > 0 && MediaCueGroupExecutor is not null)
                 {
                     var result = await MediaCueGroupExecutor(mediaCues, ct).ConfigureAwait(false);
-                    StatusMessage = string.IsNullOrWhiteSpace(result)
+                    await SetStatusMessageOnUiAsync(string.IsNullOrWhiteSpace(result)
                         ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), $"{mediaCues.Count} cues")
-                        : result;
+                        : result);
                 }
 
                 // Non-media cues in the group still dispatch individually.
@@ -3334,20 +3350,31 @@ public partial class CuePlayerViewModel : ViewModelBase
                     {
                         var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
                         if (!string.IsNullOrWhiteSpace(exec))
-                            StatusMessage = Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec);
+                            await SetStatusMessageOnUiAsync(Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec));
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        StatusMessage = Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), ex.Message);
+                        await SetStatusMessageOnUiAsync(Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), ex.Message));
                     }
                 }
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                StatusMessage = ex.Message;
+                await SetStatusMessageOnUiAsync(ex.Message);
             }
         }, ct);
+    }
+
+    private async Task SetStatusMessageOnUiAsync(string? message)
+    {
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            StatusMessage = message;
+            return;
+        }
+
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => StatusMessage = message);
     }
 
     private async Task<string?> ExecuteCueAsync(CueNodeViewModel cue, CancellationToken ct)
@@ -3433,7 +3460,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         CueLists.Clear();
         foreach (var list in lists)
-            CueLists.Add(CueListEditorViewModel.FromModel(list));
+            CueLists.Add(CueListEditorViewModel.FromModel(list, resolveLine: ResolveOutputLine));
         if (CueLists.Count == 0)
             CueLists.Add(new CueListEditorViewModel(Strings.DefaultCueListName));
         SelectedCueList = CueLists[0];
@@ -3472,7 +3499,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         try
         {
             var list = await CueListIO.LoadAsync(path);
-            var vm = CueListEditorViewModel.FromModel(list, path);
+            var vm = CueListEditorViewModel.FromModel(list, path, ResolveOutputLine);
             CueLists.Add(vm);
             SelectedCueList = vm;
             SelectedCueNode = null;

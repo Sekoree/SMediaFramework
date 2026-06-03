@@ -113,7 +113,6 @@ public sealed class VideoRouter : IDisposable
         VideoOutputPumpAttachOptions? asyncPump = null, bool synchronous = false)
     {
         ArgumentNullException.ThrowIfNull(output);
-        ObjectDisposedException.ThrowIf(_disposed, this);
 
         if (synchronous && asyncPump is not null)
             throw new ArgumentException(
@@ -131,6 +130,7 @@ public sealed class VideoRouter : IDisposable
 
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             id ??= $"vout_{++_idCounter}";
             if (_outputs.ContainsKey(id))
                 throw new ArgumentException($"video output id '{id}' is already registered", nameof(id));
@@ -159,10 +159,10 @@ public sealed class VideoRouter : IDisposable
     public bool RemoveOutput(string outputId)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputId);
-        ObjectDisposedException.ThrowIf(_disposed, this);
         IDisposable? ownedToDispose = null;
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_outputs.TryGetValue(outputId, out var removed)) return false;
 
             foreach (var kv in _inputs.ToArray())
@@ -204,9 +204,9 @@ public sealed class VideoRouter : IDisposable
     public VideoRouterInputRegistration AddInput(string primaryOutputId, string? inputId = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(primaryOutputId);
-        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             inputId ??= $"vin_{++_idCounter}";
             if (_inputs.ContainsKey(inputId))
                 throw new ArgumentException($"video input id '{inputId}' is already registered", nameof(inputId));
@@ -241,9 +241,9 @@ public sealed class VideoRouter : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(inputId);
         ArgumentException.ThrowIfNullOrEmpty(outputId);
         errorMessage = null;
-        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_inputs.TryGetValue(inputId, out var reg))
             {
                 errorMessage = $"unknown video input id '{inputId}'";
@@ -287,9 +287,9 @@ public sealed class VideoRouter : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(inputId);
         ArgumentException.ThrowIfNullOrEmpty(outputId);
         errorMessage = null;
-        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_inputs.TryGetValue(inputId, out var reg))
             {
                 errorMessage = $"unknown video input id '{inputId}'";
@@ -317,9 +317,9 @@ public sealed class VideoRouter : IDisposable
     public bool RemoveInput(string inputId)
     {
         ArgumentException.ThrowIfNullOrEmpty(inputId);
-        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             return RemoveInputLocked(inputId);
         }
     }
@@ -372,11 +372,11 @@ public sealed class VideoRouter : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _pumpPressure = null;
         lock (_gate)
         {
+            if (_disposed) return;
+            _disposed = true;
+            _pumpPressure = null;
             foreach (var reg in _inputs.Values)
             {
                 MediaDiagnostics.SwallowDisposeErrors(() =>

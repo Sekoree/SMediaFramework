@@ -48,8 +48,7 @@ public partial class MainViewModel : ViewModelBase
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
         _cuePlaybackEngine = new Playback.CuePlaybackEngine(OutputManagement, CuePlayer);
-        _cuePlaybackEngine.NaturalEnd += async (_, _) =>
-            await CuePlayer.OnMediaCueNaturallyEndedAsync().ConfigureAwait(false);
+        _cuePlaybackEngine.NaturalEnd += OnCuePlaybackEngineNaturalEndAsync;
         _cuePlaybackEngine.CueStarted += (_, id) => CuePlayer.OnCueStarted(id);
         _cuePlaybackEngine.CueEnded += (_, id) => CuePlayer.OnCueEnded(id);
         _cuePlaybackEngine.CueProgress += (_, p) => CuePlayer.OnCueProgress(p);
@@ -689,10 +688,25 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    private void RemovePlayer(MediaPlayerViewModel player)
+    private async Task OnCuePlaybackEngineNaturalEndAsync()
+    {
+        try
+        {
+            await CuePlayer.OnMediaCueNaturallyEndedAsync();
+        }
+        catch (Exception ex)
+        {
+            CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
+        }
+    }
+
+    private async Task RemovePlayer(MediaPlayerViewModel player)
     {
         var idx = Players.IndexOf(player);
         if (idx < 0) return;
+        player.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
+        player.DetachRequested -= OnPlayerDetachRequested;
+        await player.DisposeAsync();
         Players.RemoveAt(idx);
         if (SelectedPlayer == player)
             SelectedPlayer = Players.Count > 0 ? Players[Math.Min(idx, Players.Count - 1)] : null;
@@ -1056,7 +1070,13 @@ public partial class MainViewModel : ViewModelBase
         while (Players.Count < project.Players.Count)
             Players.Add(new MediaPlayerViewModel(OutputManagement, Strings.Format(nameof(Strings.PlayerNameFormat), _nextPlayerNumber++), RemovePlayer));
         while (Players.Count > project.Players.Count && Players.Count > 1)
+        {
+            var removed = Players[^1];
+            removed.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
+            removed.DetachRequested -= OnPlayerDetachRequested;
             Players.RemoveAt(Players.Count - 1);
+            _ = removed.DisposeAsync();
+        }
 
         for (var i = 0; i < project.Players.Count && i < Players.Count; i++)
             Players[i].ApplyPlayerConfigSnapshot(project.Players[i]);

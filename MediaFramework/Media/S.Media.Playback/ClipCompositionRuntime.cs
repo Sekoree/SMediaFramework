@@ -171,14 +171,23 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     public LayerSlot AddLayer(VideoFormat sourceFormat, VideoPlacementSpec placement)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        var rawSlot = _mixer.AddSlot();
-        if (_master is not null)
-            rawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
-        var layer = new LayerSlot(this, rawSlot, sourceFormat, placement, Interlocked.Increment(ref _nextLayerSequence));
-        layer.ApplyPlacement();
+        LayerSlot layer;
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var rawSlot = _mixer.AddSlot();
+            if (_master is not null)
+                rawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+            layer = new LayerSlot(this, rawSlot, sourceFormat, placement, Interlocked.Increment(ref _nextLayerSequence));
+            try
+            {
+                layer.ApplyPlacement();
+            }
+            catch
+            {
+                _mixer.RemoveSlot(rawSlot.Id);
+                throw;
+            }
             _slots.Add(layer);
             SortLayersLocked();
         }
@@ -190,6 +199,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         lock (_gate)
         {
+            if (_disposed) return;
             _slots.Remove(layer);
             _mixer.RemoveSlot(layer.RawSlot.Id);
             if (_slots.Count > 0)
@@ -424,9 +434,15 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        MediaClock? slaveClock;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            slaveClock = _slaveClock;
+        }
 
-        if (_slaveClock is not null && _disposeCompositorOnDriverThread is not null)
+        if (slaveClock is not null && _disposeCompositorOnDriverThread is not null)
         {
             Interlocked.Exchange(ref _driverDisposeState, 1);
             var deadline = Environment.TickCount64 + 250;
@@ -434,14 +450,13 @@ public sealed class ClipCompositionRuntime : IDisposable
                 Thread.Sleep(1);
         }
 
-        _disposed = true;
-
-        if (_slaveClock is { } sc)
+        if (slaveClock is { } sc)
         {
             try { sc.VideoTick -= OnSlaveVideoTick; } catch { /* best effort */ }
             try { sc.Stop(); } catch { /* best effort */ }
             try { sc.Dispose(); } catch { /* best effort */ }
-            _slaveClock = null;
+            lock (_gate)
+                _slaveClock = null;
         }
 
         lock (_gate)
@@ -517,6 +532,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         internal VideoCompositorSource.Slot RawSlot { get; }
         private readonly VideoFormat _source;
         private readonly VideoPlacementSpec _placement;
+        private int _disposed;
 
         internal LayerSlot(
             ClipCompositionRuntime owner,
@@ -549,7 +565,11 @@ public sealed class ClipCompositionRuntime : IDisposable
             RawSlot.BlendMode = BlendMode.SourceOver;
         }
 
-        public void Dispose() => _owner.RemoveLayer(this);
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                _owner.RemoveLayer(this);
+        }
 
         private static LayerPosition MapPosition(string? placement) =>
             string.Equals(placement, "Letterbox", StringComparison.OrdinalIgnoreCase)

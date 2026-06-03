@@ -114,9 +114,9 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
     public void Configure(VideoFormat format)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_configured)
             {
                 // VideoRouter.ApplyConfigureLocked re-Configures the primary every time a branch route is
@@ -140,17 +140,17 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                 _name, format, _maxQueued, _inner.GetType().Name);
             _inner.Configure(format);
             _configured = true;
-        }
 
-        _cts = new CancellationTokenSource();
-        var token = _cts.Token;
-        _thread = new Thread(() => Run(token))
-        {
-            IsBackground = true,
-            Name = _name,
-            Priority = ThreadPriority.AboveNormal,
-        };
-        _thread.Start();
+            _cts = new CancellationTokenSource();
+            var token = _cts.Token;
+            _thread = new Thread(() => Run(token))
+            {
+                IsBackground = true,
+                Name = _name,
+                Priority = ThreadPriority.AboveNormal,
+            };
+            _thread.Start();
+        }
     }
 
     /// <summary>
@@ -162,9 +162,9 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     /// </summary>
     public void SetBranchConverter(IVideoCpuFrameConverter? converter)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             // A prior staged converter the drain thread never got to adopt would otherwise leak.
             if (_branchConverterPending && !ReferenceEquals(_pendingBranchConverter, converter))
                 _pendingBranchConverter?.Dispose();
@@ -206,15 +206,15 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     public void Submit(VideoFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_configured)
-        {
-            frame.Dispose();
-            throw new InvalidOperationException("VideoOutputPump.Submit called before Configure");
-        }
-
         lock (_gate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_configured)
+            {
+                frame.Dispose();
+                throw new InvalidOperationException("VideoOutputPump.Submit called before Configure");
+            }
+
             while (_queue.Count >= _maxQueued)
             {
                 var victim = _queue.Dequeue();
@@ -225,9 +225,8 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             }
 
             _queue.Enqueue(frame);
+            _pending.Set();
         }
-
-        _pending.Set();
     }
 
     private void RaisePumpPressure(long droppedFramesTotal) =>
@@ -331,16 +330,23 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
-        _pumpPressure = null;
+        Thread? thread;
+        CancellationTokenSource? cts;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _pumpPressure = null;
+            thread = _thread;
+            cts = _cts;
+        }
 
         var threadExited = true;
         MediaDiagnostics.SwallowDisposeErrors(() =>
         {
-            _cts?.Cancel();
+            cts?.Cancel();
             _pending.Set();
-            if (_thread is { } t)
+            if (thread is { } t)
             {
                 // Drainer is parked at most one SDK-paced Submit (typically ≤33 ms at the negotiated frame
                 // rate). A 2 s cap covers slow outputs while keeping Pause / Stop / unload responsive — the
@@ -362,7 +368,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             return;
         }
 
-        _cts?.Dispose();
+        cts?.Dispose();
         _pending.Dispose();
         lock (_gate)
         {

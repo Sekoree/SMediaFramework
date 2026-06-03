@@ -36,6 +36,25 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public void ClipAudioOutputRuntime_AddSource_RollsBackWhenRouteInvalid()
+    {
+        var format = new AudioFormat(48_000, 1);
+        using var runtime = new ClipAudioOutputRuntime(
+            "out-a",
+            new RecordingAudioOutput(format),
+            new FakePlaybackClock(),
+            displayName: "Output A");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => runtime.AddSource(
+            new ConstantAudioSource(format),
+            [new AudioRouteSpec("out-a", SourceChannel: 1, OutputChannel: 1)],
+            "cue-a"));
+
+        Assert.Contains("Failed to route cue source", ex.Message);
+        Assert.Equal(0, runtime.SourceCount);
+    }
+
+    [Fact]
     public void ClipCompositionRuntime_SetMasterAndAddLayer_StartsSinglePumpAndTracksLayer()
     {
         using var runtime = new ClipCompositionRuntime(
@@ -55,6 +74,24 @@ public sealed class ClipOutputRuntimeTests
         {
             Assert.Equal(1, runtime.LayerCount);
         }
+
+        Assert.Equal(0, runtime.LayerCount);
+    }
+
+    [Fact]
+    public void ClipCompositionRuntime_LayerSlotDispose_IsIdempotent()
+    {
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 30, 1),
+            []);
+
+        var layer = runtime.AddLayer(
+            new VideoFormat(160, 90, PixelFormat.Bgra32, new Rational(30, 1)),
+            new VideoPlacementSpec("comp-a", LayerIndex: 1, Opacity: 0.5, Placement: "Letterbox"));
+
+        Assert.Equal(1, runtime.LayerCount);
+        layer.Dispose();
+        layer.Dispose();
 
         Assert.Equal(0, runtime.LayerCount);
     }

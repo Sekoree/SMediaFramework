@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using HaPlay.Models;
 using HaPlay.Resources;
@@ -79,10 +80,57 @@ public sealed class CuePlayerViewInteractionTests
         });
     }
 
+    [Fact]
+    public void Go_DispatchedStatusMessage_IsRaisedOnUiThread()
+    {
+        var seenFinalStatus = new ManualResetEventSlim(false);
+        var statusRaisedOffUiThread = false;
+
+        DispatchUi(() =>
+        {
+            var vm = new CuePlayerViewModel();
+            vm.AddMediaCueCommand.Execute(null);
+            var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            cue.SourceOrAction = "/tmp/test.mp3";
+            vm.MediaCueExecutor = async (_, _) =>
+            {
+                await Task.Run(static () => Thread.Sleep(10));
+                return "done";
+            };
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName != nameof(CuePlayerViewModel.StatusMessage)
+                    || vm.StatusMessage?.Contains("done", StringComparison.Ordinal) != true)
+                    return;
+                statusRaisedOffUiThread = !Dispatcher.UIThread.CheckAccess();
+                seenFinalStatus.Set();
+            };
+
+            vm.StandbySelectedCommand.Execute(null);
+            vm.GoCommand.Execute(null);
+        });
+
+        PumpUntil(() => seenFinalStatus.IsSet, TimeSpan.FromSeconds(2));
+
+        Assert.True(seenFinalStatus.IsSet);
+        Assert.False(statusRaisedOffUiThread);
+    }
+
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CuePlayerViewInteractionTests).Assembly)
             .Dispatch(action, CancellationToken.None);
+
+    private static void PumpUntil(Func<bool> condition, TimeSpan timeout)
+    {
+        var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(CuePlayerViewInteractionTests).Assembly);
+        var deadline = DateTime.UtcNow + timeout;
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            session.Dispatch(static () => Dispatcher.UIThread.RunJobs(), CancellationToken.None);
+            Thread.Sleep(10);
+        }
+    }
 
     private static Window HostInWindow(Control view)
     {

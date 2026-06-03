@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace HaPlay.Models;
 
@@ -31,9 +32,7 @@ public static class ProjectIO
     /// <summary>Writes <paramref name="project"/> to <paramref name="path"/>, replacing any existing file.</summary>
     public static async Task SaveAsync(HaPlayProject project, string path, CancellationToken cancellationToken = default)
     {
-        await using var stream = File.Create(path);
-        await JsonSerializer
-            .SerializeAsync(stream, project, HaPlayProjectJsonContext.Default.HaPlayProject, cancellationToken)
+        await AtomicJsonFile.SaveAsync(project, path, HaPlayProjectJsonContext.Default.HaPlayProject, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -81,9 +80,7 @@ public static class PlaylistIO
 
     public static async Task SaveAsync(PlaylistConfig config, string path, CancellationToken cancellationToken = default)
     {
-        await using var stream = File.Create(path);
-        await JsonSerializer
-            .SerializeAsync(stream, config, MediaPlayerConfigJsonContext.Default.PlaylistConfig, cancellationToken)
+        await AtomicJsonFile.SaveAsync(config, path, MediaPlayerConfigJsonContext.Default.PlaylistConfig, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -119,10 +116,52 @@ public static class CueListIO
 
     public static async Task SaveAsync(CueList config, string path, CancellationToken cancellationToken = default)
     {
-        await using var stream = File.Create(path);
-        await JsonSerializer
-            .SerializeAsync(stream, config, CueListJsonContext.Default.CueList, cancellationToken)
+        await AtomicJsonFile.SaveAsync(config, path, CueListJsonContext.Default.CueList, cancellationToken)
             .ConfigureAwait(false);
+    }
+}
+
+internal static class AtomicJsonFile
+{
+    public static async Task SaveAsync<T>(
+        T value,
+        string path,
+        JsonTypeInfo<T> jsonTypeInfo,
+        CancellationToken cancellationToken = default)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+        else
+            directory = Directory.GetCurrentDirectory();
+
+        var tempPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await using (var stream = new FileStream(
+                             tempPath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             bufferSize: 81920,
+                             FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await JsonSerializer.SerializeAsync(stream, value, jsonTypeInfo, cancellationToken)
+                    .ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            File.Move(tempPath, fullPath, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tempPath); } catch { /* best-effort cleanup */ }
+            throw;
+        }
     }
 }
 

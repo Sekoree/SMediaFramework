@@ -19,6 +19,7 @@
         <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == ''" />
         <PackageReference Include="CommunityToolkit.Mvvm"/>
         <PackageReference Include="Mond" />
+        <PackageReference Include="NodifyM.Avalonia" />
         <PackageReference Include="TreeDataGrid.Avalonia" />
         <PackageReference Include="Xaml.Behaviors.Avalonia" />
     </ItemGroup>

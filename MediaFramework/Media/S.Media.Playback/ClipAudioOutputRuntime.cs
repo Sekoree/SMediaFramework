@@ -80,27 +80,35 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         lock (_gate) _sources.Add(srcId);
 
         var outChannels = _audioOutput.Format.Channels;
-        var idx = 0;
-        foreach (var route in routes)
+        var routePlans = new List<(string RouteId, ChannelMap Map, float Gain)>(routes.Count);
+        for (var i = 0; i < routes.Count; i++)
         {
+            var route = routes[i];
             var span = new int[outChannels];
             Array.Fill(span, -1);
             var outCh = Math.Clamp(route.OutputChannel - 1, 0, outChannels - 1);
             span[outCh] = Math.Max(0, route.SourceChannel);
             var map = new ChannelMap(span);
             var gain = route.Muted ? 0f : DbToLinear(route.GainDb);
-            try
+            routePlans.Add(($"{srcId}_r{i}", map, gain));
+        }
+
+        try
+        {
+            foreach (var (routeId, map, gain) in routePlans)
+                _router.AddRoute(srcId, _routerOutputId, routeId, map, gain);
+        }
+        catch (Exception ex)
+        {
+            try { _router.RemoveSource(srcId); }
+            catch (Exception removeEx)
             {
-                _router.AddRoute(srcId, _routerOutputId, routeId: $"{srcId}_r{idx++}", map, gain);
+                Trace.LogWarning(removeEx, "ClipAudioOutputRuntime: rollback RemoveSource failed for {Src}", srcId);
             }
-            catch (Exception ex)
-            {
-                Trace.LogWarning(
-                    ex,
-                    "ClipAudioOutputRuntime: AddRoute failed for cue source {Src} -> out {Out}",
-                    srcId,
-                    _routerOutputId);
-            }
+            lock (_gate) _sources.Remove(srcId);
+            throw new InvalidOperationException(
+                $"Failed to route cue source '{srcId}' to audio output '{DisplayName}'.",
+                ex);
         }
 
         _router.Play();

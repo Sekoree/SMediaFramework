@@ -33,8 +33,10 @@ public sealed record HaPlayProject
 
     public List<CueList> CueLists { get; init; } = new();
 
+    public List<ControlGraphConfig> ControlGraphs { get; init; } = new();
+
     /// <summary>Constant for callers that want to write SchemaVersion explicitly.</summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 }
 
 [JsonSourceGenerationOptions(
@@ -69,4 +71,15 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
+[JsonSerializable(typeof(ControlGraphConfig))]
+[JsonSerializable(typeof(ControlNodeConfig))]
+[JsonSerializable(typeof(ControlConnectionConfig))]
+[JsonSerializable(typeof(ControlNodeSettings))]
+[JsonSerializable(typeof(PassthroughControlNodeSettings))]
+[JsonSerializable(typeof(MidiInputControlNodeSettings))]
+[JsonSerializable(typeof(MapRangeControlNodeSettings))]
+[JsonSerializable(typeof(OscOutputControlNodeSettings))]
+[JsonSerializable(typeof(X32ChannelFaderControlNodeSettings))]
+[JsonSerializable(typeof(X32CustomLayerConfig))]
+[JsonSerializable(typeof(X32CustomLayerSlotConfig))]
 internal partial class HaPlayProjectJsonContext : JsonSerializerContext;

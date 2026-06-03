@@ -982,13 +982,14 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void OnOutputLineIdChanged_RefreshesLineRefFromRegistry()
+    public void OnOutputLineIdChanged_UsesOwningCuePlayerResolver()
     {
-        // Reassigning OutputLineId should re-resolve LineRef via the static registry that
-        // CuePlayerViewModel keeps populated.
         var vm = new CuePlayerViewModel();
         var first = Line(new PortAudioOutputDefinition(Guid.NewGuid(), "PA-1", 0, "HostApi", 0, "Dev1", 2, 48000));
         var second = Line(new PortAudioOutputDefinition(Guid.NewGuid(), "PA-2", 0, "HostApi", 1, "Dev2", 2, 48000));
+        var otherInstanceLine = Line(new PortAudioOutputDefinition(second.Definition.Id, "Other", 0, "HostApi", 2, "OtherDev", 2, 48000));
+        var otherVm = new CuePlayerViewModel();
+        otherVm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { otherInstanceLine });
         vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { first, second });
         vm.AddMediaCueCommand.Execute(null);
         vm.AddAudioRouteCommand.Execute(null);
@@ -997,6 +998,7 @@ public sealed class CuePlayerViewModelTests
         var route = media.AudioRoutes[0];
         route.OutputLineId = second.Definition.Id;
         Assert.Same(second, route.LineRef);
+        Assert.NotSame(otherInstanceLine, route.LineRef);
     }
 
     [Fact]

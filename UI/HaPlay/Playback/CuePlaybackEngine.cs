@@ -62,7 +62,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
     /// <summary>Raised on the UI thread when a cue's media ends naturally (file reached duration).
     /// The cue VM listens to drive <c>AutoFollow</c> for the most-recently-fired cue.</summary>
-    public event EventHandler? NaturalEnd;
+    public event Func<Task>? NaturalEnd;
 
     /// <summary>Raised on the UI thread immediately after a cue begins playing — VM listens to
     /// mark the row's status indicator as <c>Current</c>. Multiple cues can be active at once
@@ -1117,7 +1117,7 @@ public sealed class CuePlaybackEngine : IDisposable
                     }
 
                     lock (_gate) _active.Remove(entry.Cue.Id);
-                    await Dispatcher.UIThread.InvokeAsync(() => NaturalEnd?.Invoke(this, EventArgs.Empty));
+                    await RaiseNaturalEndAsync().ConfigureAwait(false);
                     await DisposeEntryAsync(entry).ConfigureAwait(false);
                     return;
                 }
@@ -1128,6 +1128,29 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             Trace.LogWarning(ex, "CuePlaybackEngine.WatchNaturalEndAsync");
         }
+    }
+
+    private async Task RaiseNaturalEndAsync()
+    {
+        var handlers = NaturalEnd;
+        if (handlers is null)
+            return;
+
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Dispatcher.UIThread.Post(async () =>
+        {
+            try
+            {
+                foreach (Func<Task> handler in handlers.GetInvocationList())
+                    await handler().ConfigureAwait(true);
+                completion.SetResult();
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+        await completion.Task.ConfigureAwait(false);
     }
 
     public void Dispose()
