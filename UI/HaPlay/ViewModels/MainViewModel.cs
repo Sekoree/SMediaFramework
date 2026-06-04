@@ -42,7 +42,7 @@ public partial class MainViewModel : ViewModelBase
     {
         OutputManagement = new OutputManagementViewModel();
         CuePlayer = new CuePlayerViewModel();
-        ControlGraphs = new ControlGraphWorkspaceViewModel(ActionEndpoints);
+        Control = new ControlWorkspaceViewModel();
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
         // First player can't be removed — there's always at least one in the UI.
@@ -234,7 +234,7 @@ public partial class MainViewModel : ViewModelBase
 
     public OutputManagementViewModel OutputManagement { get; }
     public CuePlayerViewModel CuePlayer { get; }
-    public ControlGraphWorkspaceViewModel ControlGraphs { get; }
+    public ControlWorkspaceViewModel Control { get; }
     public ObservableCollection<MediaPlayerViewModel> Players { get; }
     public ObservableCollection<ActionEndpoint> ActionEndpoints { get; } = new();
 
@@ -1043,7 +1043,7 @@ public partial class MainViewModel : ViewModelBase
         Players = Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList(),
         ActionEndpoints = ActionEndpoints.ToList(),
         CueLists = CuePlayer.BuildCueListsSnapshot(),
-        ControlGraphs = ControlGraphs.BuildSnapshot().ToList(),
+        ControlSystem = Control.BuildSnapshot(),
     };
 
     /// <summary>
@@ -1071,7 +1071,7 @@ public partial class MainViewModel : ViewModelBase
         RebuildEndpointWorkspaceLists();
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         CuePlayer.ApplyCueLists(project.CueLists);
-        ControlGraphs.LoadGraphs(project.ControlGraphs);
+        Control.LoadConfig(project.ControlSystem);
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)
@@ -1098,6 +1098,11 @@ public partial class MainViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(ProjectTitle))]
     [NotifyPropertyChangedFor(nameof(HasOpenProject))]
     private string? _currentProjectPath;
+
+    // Project-relative control scripts resolve against the project folder; keep the Control workspace's
+    // script root in sync with the open project file.
+    partial void OnCurrentProjectPathChanged(string? value) =>
+        Control.SetProjectRoot(string.IsNullOrEmpty(value) ? null : Path.GetDirectoryName(value));
 
     /// <summary>Status banner text for the title bar (e.g. "Loaded. Missing outputs: …").</summary>
     [ObservableProperty]

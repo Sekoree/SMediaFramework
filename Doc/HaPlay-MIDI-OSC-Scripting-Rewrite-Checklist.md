@@ -127,13 +127,13 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add visible history limit setting, default `1000`.
 - [x] Add JSON lines export.
 - [x] Add JSON lines replay/import for tests.
-- [ ] Add UI filters:
+- [~] Add UI filters:
   - [ ] Direction.
   - [ ] Protocol.
   - [ ] Device.
-  - [ ] Text search.
-  - [ ] Errors only.
-- [ ] Add pause/resume and clear.
+  - [x] Text search.
+  - [x] Errors only.
+- [x] Add pause/resume and clear.
 - [ ] Defer high-rate X32 meter coalescing details until real hardware testing.
 
 ## Phase 4: OSC Value Cache
@@ -211,7 +211,12 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 
 ## Phase 6: Script-Centric UI
 
-- [ ] Replace graph-first control workspace with tree/list layout.
+- [~] Replace graph-first control workspace with tree/list layout.
+  - [x] Remove the graph workspace (hard cut) and host a new `ControlWorkspaceView`.
+  - [x] App-shell wiring: live `ControlSystemRuntimeSession` + `ControlMonitorBuffer`,
+    arm/disarm lifecycle, project `ControlSystem` load/save, project-relative script root.
+  - [x] Live monitor view (filter/errors-only/pause/clear) + OSC test-send and manual-run.
+  - [ ] Device/script tree layout.
 - [ ] Device tree:
   - [ ] MIDI devices.
   - [ ] OSC devices.

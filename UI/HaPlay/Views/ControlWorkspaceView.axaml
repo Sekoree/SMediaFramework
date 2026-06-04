@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="680"
+             x:Class="HaPlay.Views.ControlWorkspaceView"
+             x:DataType="vm:ControlWorkspaceViewModel">
+  <UserControl.Styles>
+    <Style Selector="Grid.error TextBlock">
+      <Setter Property="Foreground" Value="#FF6B6B" />
+    </Style>
+    <Style Selector="TextBlock.col">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,12">
+      <TextBlock Text="Control" FontSize="22" FontWeight="SemiBold" />
+      <TextBlock Text="Script-centric MIDI/OSC control. Arm the system to open OSC listeners and run scripts."
+                 Opacity="0.7" TextWrapping="Wrap" />
+    </StackPanel>
+
+    <!-- Arm + summary -->
+    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+      <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
+        <Button Grid.Row="0" Grid.Column="0" Width="100"
+                Content="{Binding ArmButtonText}" Command="{Binding ToggleArmCommand}" />
+        <TextBlock Grid.Row="0" Grid.Column="1" VerticalAlignment="Center"
+                   Text="{Binding StatusMessage}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Spacing="16" Opacity="0.85">
+          <TextBlock Text="{Binding DeviceCount, StringFormat='Devices: {0}'}" />
+          <TextBlock Text="{Binding ListenerCount, StringFormat='Listeners: {0}'}" />
+          <TextBlock Text="{Binding LayerCount, StringFormat='Layers: {0}'}" />
+          <TextBlock Text="{Binding ScriptCount, StringFormat='Scripts: {0}'}" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
+    <!-- Test send -->
+    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+      <StackPanel Spacing="6">
+        <TextBlock Text="Test send" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="Auto,140,Auto,80,Auto,*" ColumnSpacing="6">
+          <TextBlock Grid.Column="0" Text="Host" VerticalAlignment="Center" />
+          <TextBox Grid.Column="1" Text="{Binding TestOscHost}" />
+          <TextBlock Grid.Column="2" Text="Port" VerticalAlignment="Center" />
+          <TextBox Grid.Column="3" Text="{Binding TestOscPort}" />
+          <TextBlock Grid.Column="4" Text="Address" VerticalAlignment="Center" />
+          <TextBox Grid.Column="5" Text="{Binding TestOscAddress}" />
+        </Grid>
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
+          <TextBlock Grid.Column="0" Text="Args" VerticalAlignment="Center" />
+          <TextBox Grid.Column="1" Text="{Binding TestOscArgs}" Watermark="comma-separated, e.g. 0.5, 1, true, name" />
+          <Button Grid.Column="2" Content="Send OSC" Command="{Binding SendTestOscCommand}" />
+          <Button Grid.Column="3" Content="Run manual scripts" Command="{Binding RunManualScriptsCommand}" />
+        </Grid>
+      </StackPanel>
+    </Border>
+
+    <!-- Monitor toolbar -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8" Margin="0,0,0,6">
+      <TextBlock Grid.Column="0" Text="Live monitor" FontWeight="SemiBold" VerticalAlignment="Center" />
+      <TextBox Grid.Column="1" Text="{Binding FilterText}" Watermark="filter: address, device, message…" />
+      <CheckBox Grid.Column="2" Content="Errors only" IsChecked="{Binding ErrorsOnly}" />
+      <CheckBox Grid.Column="3" Content="Pause" IsChecked="{Binding IsPaused}" />
+      <Button Grid.Column="4" Content="Clear" Command="{Binding ClearMonitorCommand}" />
+    </Grid>
+
+    <!-- Monitor list -->
+    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6">
+      <ListBox ItemsSource="{Binding MonitorEntries}" Background="Transparent">
+        <ListBox.ItemTemplate>
+          <DataTemplate DataType="vm:ControlMonitorEntryViewModel">
+            <Grid ColumnDefinitions="90,70,70,70,*" ColumnSpacing="8" Classes.error="{Binding IsError}">
+              <TextBlock Grid.Column="0" Classes="col" Opacity="0.7" Text="{Binding Time}" />
+              <TextBlock Grid.Column="1" Classes="col" Text="{Binding Protocol}" />
+              <TextBlock Grid.Column="2" Classes="col" Opacity="0.85" Text="{Binding Direction}" />
+              <TextBlock Grid.Column="3" Classes="col" Opacity="0.85" Text="{Binding Result}" />
+              <TextBlock Grid.Column="4" Classes="col" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+    </Border>
+  </DockPanel>
+</UserControl>

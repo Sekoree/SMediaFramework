@@ -216,7 +216,7 @@
       <views:MidiDevicesView
           IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsMidiDevicesWorkspaceSelected}" />
 
-      <views:ControlGraphWorkspaceView DataContext="{Binding ControlGraphs}"
+      <views:ControlWorkspaceView DataContext="{Binding Control}"
           IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsControlWorkspaceSelected}" />
 
       <DockPanel Margin="16" IsVisible="{Binding IsProjectWorkspaceSelected}">

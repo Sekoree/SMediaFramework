@@ -488,6 +488,26 @@ the remaining rewrite work is the script-centric UI (Phase 6), wiring
 `ControlSystemRuntimeSession` start/stop and real session health into the app
 shell, endpoint script scope, and a user-facing scripting reference (Phase 7).
 
+Implementation note, 2026-06-04: Phase 6 has started with a hard cut. The old
+graph workspace (`ControlGraphWorkspaceView`/`ViewModel` and its tests) is
+removed and the `Control` workspace (Ctrl+6) now hosts a new
+`ControlWorkspaceView`/`ControlWorkspaceViewModel`. That VM owns the live system:
+on arm it builds a `ControlSystemRuntimeSession` (with a real `UdpControlOscSender`
+OSC transport and a `FileSystemControlScriptSourceProvider` rooted at the project
+folder) plus a `ControlMonitorBuffer`, starts the OSC listeners + tick loop, and
+on disarm tears them down. Arming is the only thing that touches sockets and is
+fully guarded — any failure disarms and shows a status message instead of
+crashing. The project now persists/loads `ControlSystem` (not `ControlGraphs`).
+The first view content is the live monitor (250 ms DispatcherTimer poll of the
+buffer, capped, with text + errors-only filters, pause, and clear) plus a raw OSC
+test-send and a manual-script-run button for verifying output/scripts without
+live MIDI input. Verified by a clean build, the full unit suite, and a headless
+(xvfb) app smoke launch with no XAML/binding errors. Still to do in Phase 6: the
+device/script tree (TreeDataGrid), the embedded AvaloniaEdit script editor,
+context menus, X32 command browser, learn mode, direction/protocol/device monitor
+filters, and the genuinely hardware-risky live MIDI-input PortMidi polling
+(deferred deliberately — OSC + test-send already exercise the pipeline).
+
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.
 `ControlScriptMidiCommandRouter` resolves enabled MIDI devices by instance ID,
