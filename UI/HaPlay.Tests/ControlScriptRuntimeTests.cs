@@ -668,6 +668,98 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void X32_AddressBuildersMatchProfileConventions()
+    {
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "X32 addresses",
+            ScriptPath = "Scripts/main.mnd",
+            Triggers =
+            [
+                new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual, FunctionName = "run" },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig { IsArmed = true, Scripts = [script] },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        osc.send("x32", x32.channelMuteAddress(1), osc.int32(1));
+                        osc.send("x32", x32.channelPanAddress(5), osc.float32(0.5));
+                        osc.send("x32", x32.channelSoloAddress(6), osc.int32(1));
+                        osc.send("x32", x32.dcaFaderAddress(2), osc.float32(0.5));
+                        osc.send("x32", x32.busMuteAddress(3), osc.int32(0));
+                        osc.send("x32", x32.matrixFaderAddress(4), osc.float32(0.5));
+                        osc.send("x32", x32.mainMuteAddress(), osc.int32(1));
+                    }
+                    """,
+            },
+            sink);
+
+        runtime.DispatchManual(script.Id);
+
+        Assert.Collection(
+            sink.OscMessages,
+            m => Assert.Equal("/ch/01/mix/on", m.Address),
+            m => Assert.Equal("/ch/05/mix/pan", m.Address),
+            m => Assert.Equal("/-stat/solosw/06", m.Address),
+            m => Assert.Equal("/dca/2/fader", m.Address),
+            m => Assert.Equal("/bus/03/mix/on", m.Address),
+            m => Assert.Equal("/mtx/04/mix/fader", m.Address),
+            m => Assert.Equal("/main/st/mix/on", m.Address));
+    }
+
+    [Fact]
+    public void Osc_CacheStringReadsStoredValueOrDefault()
+    {
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Cache string",
+            ScriptPath = "Scripts/main.mnd",
+            Triggers =
+            [
+                new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual, FunctionName = "run" },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var cache = new ControlValueCache();
+        cache.SetString("x32", "/ch/01/config/name", "Vocals", ControlValueCacheSource.Incoming);
+        var runtime = new ControlScriptRuntime(
+            new ControlSystemConfig { IsArmed = true, Scripts = [script] },
+            new InMemoryControlScriptSourceProvider(new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        osc.send("x32", "/name", osc.cacheString("x32", "/ch/01/config/name", "?"));
+                        osc.send("x32", "/missing", osc.cacheString("x32", "/nope", "fallback"));
+                    }
+                    """,
+            }),
+            new ControlScriptRuntimeServices(sink, cache));
+
+        runtime.DispatchManual(script.Id);
+
+        Assert.Collection(
+            sink.OscMessages,
+            m =>
+            {
+                Assert.Equal("/name", m.Address);
+                Assert.Equal("Vocals", Assert.Single(m.Arguments).StringValue);
+            },
+            m =>
+            {
+                Assert.Equal("/missing", m.Address);
+                Assert.Equal("fallback", Assert.Single(m.Arguments).StringValue);
+            });
+    }
+
+    [Fact]
     public void Time_NowAndNowIsoReadTheHostClock()
     {
         var fixedTime = DateTimeOffset.Parse("2026-06-04T10:00:00Z");

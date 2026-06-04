@@ -200,11 +200,11 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   enabled MIDI devices and forwards CC/note events to scripts.
 - [x] Add control-system runtime session facade for script ticks, OSC listener
   management, decoded MIDI dispatch, and periodic OSC sends.
-- [~] Add Mond libraries:
+- [x] Add Mond libraries:
   - [x] `HaPlay.Devices`.
-  - [~] `HaPlay.Midi`.
-  - [~] `HaPlay.Osc`.
-  - [~] `HaPlay.X32`.
+  - [x] `HaPlay.Midi`.
+  - [x] `HaPlay.Osc`.
+  - [x] `HaPlay.X32`.
   - [x] `HaPlay.State`.
   - [x] `HaPlay.Monitor`.
   - [x] `HaPlay.Time`.
@@ -273,6 +273,9 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] `HaPlay.Monitor` script logging with script attribution.
   - [x] `HaPlay.Devices` list/get/isEnabled/health inspection.
   - [x] `HaPlay.Time` host clock (`now`/`nowIso`).
+  - [x] `HaPlay.Osc` extended typed args (int64/symbol/nil), request, cache string read.
+  - [x] `HaPlay.X32` address builders and fader conversions.
+  - [x] `HaPlay.Midi` high-resolution CC send.
   - [x] Script compile and import behavior.
   - [x] Starter X-Touch Mini encoder -> X32 fader script execution.
   - [x] Script failure threshold.

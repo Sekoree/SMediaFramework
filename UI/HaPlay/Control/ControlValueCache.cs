@@ -35,6 +35,20 @@ public sealed class ControlValueCache
         return true;
     }
 
+    public string GetStringOrDefault(string deviceKey, string address, string defaultValue, int argumentIndex = 0) =>
+        TryGetString(deviceKey, address, out var value, argumentIndex) ? value : defaultValue;
+
+    public bool TryGetString(string deviceKey, string address, out string value, int argumentIndex = 0)
+    {
+        value = string.Empty;
+        var key = new ControlValueCacheKey(deviceKey, address, argumentIndex);
+        if (!_entries.TryGetValue(key, out var entry) || entry.IsStale || entry.Value.Kind != ControlCachedValueKind.String)
+            return false;
+
+        value = entry.Value.StringValue ?? string.Empty;
+        return true;
+    }
+
     public ControlValueCacheChange? SetString(
         string deviceKey,
         string address,

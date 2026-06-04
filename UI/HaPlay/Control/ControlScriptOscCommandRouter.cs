@@ -162,9 +162,11 @@ public sealed class ControlScriptOscCommandRouter
                     case ControlScriptOscArgumentType.Float32:
                     case ControlScriptOscArgumentType.Double64:
                     case ControlScriptOscArgumentType.Int32:
+                    case ControlScriptOscArgumentType.Int64:
                         _cache.SetNumber(deviceKey, message.Address, argument.NumberValue, ControlValueCacheSource.OptimisticSend, i);
                         break;
                     case ControlScriptOscArgumentType.String:
+                    case ControlScriptOscArgumentType.Symbol:
                         _cache.SetString(deviceKey, message.Address, argument.StringValue ?? string.Empty, ControlValueCacheSource.OptimisticSend, i);
                         break;
                     case ControlScriptOscArgumentType.True:
@@ -223,7 +225,9 @@ public sealed class ControlScriptOscCommandRouter
             ControlScriptOscArgumentType.Float32 => OSCArgument.Float32((float)argument.NumberValue),
             ControlScriptOscArgumentType.Double64 => OSCArgument.Double64(argument.NumberValue),
             ControlScriptOscArgumentType.Int32 => OSCArgument.Int32((int)argument.NumberValue),
+            ControlScriptOscArgumentType.Int64 => OSCArgument.Int64((long)argument.NumberValue),
             ControlScriptOscArgumentType.String => OSCArgument.String(argument.StringValue ?? string.Empty),
+            ControlScriptOscArgumentType.Symbol => OSCArgument.Symbol(argument.StringValue ?? string.Empty),
             ControlScriptOscArgumentType.True => OSCArgument.True(),
             ControlScriptOscArgumentType.False => OSCArgument.False(),
             _ => OSCArgument.Nil(),

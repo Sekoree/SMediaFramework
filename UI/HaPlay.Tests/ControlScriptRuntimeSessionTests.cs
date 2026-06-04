@@ -604,6 +604,116 @@ public sealed class ControlScriptRuntimeSessionTests
         Assert.Equal("/profile/x32", sent[4].Address);
     }
 
+    [Fact]
+    public async Task DispatchManualAsync_RoutesExtendedOscArgumentTypesAndValueRequest()
+    {
+        var x32Id = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(x32Id, "X32", "x32", "192.168.2.76", 10023)],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Args",
+                        ScriptPath = "Scripts/args.mnd",
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual, FunctionName = "run" },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/args.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        osc.send("x32", "/types", osc.int64(42), osc.symbol("sym"), osc.nil());
+                        osc.request("x32", "/ch/01/mix/fader");
+                    }
+                    """,
+            },
+            sender);
+
+        await session.DispatchManualAsync();
+
+        Assert.Collection(
+            sender.Sent,
+            sent =>
+            {
+                Assert.Equal("/types", sent.Address);
+                Assert.Collection(
+                    sent.Arguments,
+                    a =>
+                    {
+                        Assert.Equal(OSCArgumentType.Int64, a.Type);
+                        Assert.Equal(42, a.AsInt64());
+                    },
+                    a =>
+                    {
+                        Assert.Equal(OSCArgumentType.Symbol, a.Type);
+                        Assert.Equal("sym", a.AsString());
+                    },
+                    a => Assert.Equal(OSCArgumentType.Nil, a.Type));
+            },
+            sent =>
+            {
+                Assert.Equal("/ch/01/mix/fader", sent.Address);
+                Assert.Empty(sent.Arguments);
+            });
+    }
+
+    [Fact]
+    public async Task DispatchManualAsync_RoutesHighResolutionCc()
+    {
+        var xtouchId = Guid.NewGuid();
+        var midiSender = new RecordingMidiSender();
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI")],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "HiRes",
+                        ScriptPath = "Scripts/hires.mnd",
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual, FunctionName = "run" },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/hires.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        midi.sendHighResCc("xtouch", 1, 16, 8000);
+                    }
+                    """,
+            },
+            new RecordingOscSender(),
+            midiSender: midiSender);
+
+        var result = await session.DispatchManualAsync();
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var sent = Assert.Single(midiSender.Sent);
+        Assert.Equal(ControlScriptMidiMessageKind.ControlChange, sent.Kind);
+        Assert.True(sent.HighResolution14Bit);
+        Assert.Equal(16, sent.Controller);
+        Assert.Equal(8000, sent.Value);
+    }
+
     private static ControlScriptRuntimeSession CreateSession(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,

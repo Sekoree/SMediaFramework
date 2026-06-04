@@ -471,6 +471,23 @@ custom libraries are done (`State`, `Monitor`, `Devices`, `Time`); only fleshing
 out `HaPlay.Midi`/`HaPlay.Osc`/`HaPlay.X32` from their current ad-hoc surface to
 the full documented libraries remains.
 
+Implementation note, 2026-06-04: `HaPlay.Osc`/`HaPlay.X32`/`HaPlay.Midi` are now
+filled out, so every custom Mond library in the plan is implemented. `osc` gained
+the full typed-argument set (`int64`, `symbol`, `nil` alongside the existing
+`float32`/`double64`/`int32`/`string`/`boolean`) wired end-to-end through the
+command router and monitor, a `request(device, address)` value-query helper
+(an argument-less OSC send), and `cacheString(...)` reading string cache entries
+(backed by new `ControlValueCache.GetStringOrDefault`/`TryGetString`). `x32` now
+exposes the full address-builder set — channel fader/mute/pan/solo, DCA
+fader/mute, bus fader/mute, matrix fader/mute, and main stereo fader/mute — each
+delegating to `X32Presets` so the script library and the device profile/catalog
+share one source of truth, plus `quantizeFader` on top of the existing dB
+conversions. `midi` gained `sendHighResCc` for explicit 14-bit CC sends. The only
+intentionally excluded MIDI feature remains SysEx. With the libraries complete,
+the remaining rewrite work is the script-centric UI (Phase 6), wiring
+`ControlSystemRuntimeSession` start/stop and real session health into the app
+shell, endpoint script scope, and a user-facing scripting reference (Phase 7).
+
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.
 `ControlScriptMidiCommandRouter` resolves enabled MIDI devices by instance ID,

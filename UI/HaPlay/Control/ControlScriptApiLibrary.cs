@@ -79,8 +79,17 @@ public readonly record struct ControlScriptOscArgument(ControlScriptOscArgumentT
     public static ControlScriptOscArgument Int32(int value) =>
         new(ControlScriptOscArgumentType.Int32, value, null, false);
 
+    public static ControlScriptOscArgument Int64(long value) =>
+        new(ControlScriptOscArgumentType.Int64, value, null, false);
+
     public static ControlScriptOscArgument String(string value) =>
         new(ControlScriptOscArgumentType.String, 0, value, false);
+
+    public static ControlScriptOscArgument Symbol(string value) =>
+        new(ControlScriptOscArgumentType.Symbol, 0, value, false);
+
+    public static ControlScriptOscArgument Nil() =>
+        new(ControlScriptOscArgumentType.Nil, 0, null, false);
 
     public static ControlScriptOscArgument Boolean(bool value) =>
         new(value ? ControlScriptOscArgumentType.True : ControlScriptOscArgumentType.False, 0, null, value);
@@ -91,9 +100,12 @@ public enum ControlScriptOscArgumentType
     Float32,
     Double64,
     Int32,
+    Int64,
     String,
+    Symbol,
     True,
     False,
+    Nil,
 }
 
 public sealed record ControlScriptMidiMessage(
@@ -284,16 +296,28 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
             var offset = ArgumentOffset(args);
             return CreateTypedOscArgument(s, "int32", args.Length > offset ? args[offset] : 0.0);
         });
+        osc["int64"] = (MondFunction)((s, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            return CreateTypedOscArgument(s, "int64", args.Length > offset ? args[offset] : 0.0);
+        });
         osc["string"] = (MondFunction)((s, args) =>
         {
             var offset = ArgumentOffset(args);
             return CreateTypedOscArgument(s, "string", args.Length > offset ? args[offset] : string.Empty);
+        });
+        osc["symbol"] = (MondFunction)((s, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            return CreateTypedOscArgument(s, "symbol", args.Length > offset ? args[offset] : string.Empty);
         });
         osc["boolean"] = (MondFunction)((s, args) =>
         {
             var offset = ArgumentOffset(args);
             return CreateTypedOscArgument(s, "boolean", args.Length > offset ? args[offset] : false);
         });
+        osc["nil"] = (MondFunction)((s, _) =>
+            CreateTypedOscArgument(s, "nil", MondValue.Null));
         osc["send"] = (MondFunction)((_, args) =>
         {
             var offset = ArgumentOffset(args);
@@ -307,6 +331,19 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
             _services.CommandSink.SendOsc(message);
             return MondValue.Undefined;
         });
+        osc["request"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 2)
+                throw new MondRuntimeException("osc.request requires device key and address.");
+
+            // A value request is an OSC message with no arguments (e.g. X32 replies with the current value).
+            _services.CommandSink.SendOsc(new ControlScriptOscMessage(
+                (string)args[offset],
+                (string)args[offset + 1],
+                []));
+            return MondValue.Undefined;
+        });
         osc["cacheFloat"] = (MondFunction)((_, args) =>
         {
             var offset = ArgumentOffset(args);
@@ -318,6 +355,18 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
                 : 0.0;
 
             return _services.OscCache.GetNumberOrDefault((string)args[offset], (string)args[offset + 1], defaultValue);
+        });
+        osc["cacheString"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 2)
+                throw new MondRuntimeException("osc.cacheString requires device key and address.");
+
+            var defaultValue = args.Length > offset + 2 && args[offset + 2].Type == MondValueType.String
+                ? (string)args[offset + 2]
+                : string.Empty;
+
+            return _services.OscCache.GetStringOrDefault((string)args[offset], (string)args[offset + 1], defaultValue);
         });
         osc["cacheSet"] = (MondFunction)((_, args) =>
         {
@@ -368,6 +417,21 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
                 Controller: ToInt(args[offset + 2]),
                 Value: ToInt(args[offset + 3]),
                 HighResolution14Bit: args.Length > offset + 4 && ToBool(args[offset + 4])));
+            return MondValue.Undefined;
+        });
+        midi["sendHighResCc"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 4)
+                throw new MondRuntimeException("midi.sendHighResCc requires device key, channel, controller, and 14-bit value.");
+
+            _services.CommandSink.SendMidi(new ControlScriptMidiMessage(
+                (string)args[offset],
+                ControlScriptMidiMessageKind.ControlChange,
+                ToInt(args[offset + 1]),
+                Controller: ToInt(args[offset + 2]),
+                Value: ToInt(args[offset + 3]),
+                HighResolution14Bit: true));
             return MondValue.Undefined;
         });
         midi["sendNoteOn"] = (MondFunction)((_, args) =>
@@ -429,22 +493,25 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
         return midi;
     }
 
+    // Address builders delegate to X32Presets so the script library and the device profile/catalog
+    // share one source of truth for X32 OSC paths; the library validates ranges (throws) to surface
+    // script bugs instead of silently clamping.
     private static MondValue CreateX32Api(MondState state)
     {
         var x32 = MondValue.Object(state);
 
-        x32["channelFaderAddress"] = (MondFunction)((_, args) =>
-        {
-            var offset = ArgumentOffset(args);
-            if (args.Length <= offset)
-                throw new MondRuntimeException("x32.channelFaderAddress requires a channel number.");
-
-            var channel = (int)(double)args[offset];
-            if (channel is < 1 or > 32)
-                throw new MondRuntimeException("X32 channel must be between 1 and 32.");
-
-            return $"/ch/{channel:00}/mix/fader";
-        });
+        x32["channelFaderAddress"] = (MondFunction)((_, args) => X32Presets.ChannelFaderAddress(RequireIndex(args, 1, 32, "channel")));
+        x32["channelMuteAddress"] = (MondFunction)((_, args) => X32Presets.ChannelMuteAddress(RequireIndex(args, 1, 32, "channel")));
+        x32["channelPanAddress"] = (MondFunction)((_, args) => X32Presets.ChannelPanAddress(RequireIndex(args, 1, 32, "channel")));
+        x32["channelSoloAddress"] = (MondFunction)((_, args) => X32Presets.ChannelSoloStatusAddress(RequireIndex(args, 1, 32, "channel")));
+        x32["dcaFaderAddress"] = (MondFunction)((_, args) => X32Presets.DcaFaderAddress(RequireIndex(args, 1, 8, "DCA")));
+        x32["dcaMuteAddress"] = (MondFunction)((_, args) => X32Presets.DcaMuteAddress(RequireIndex(args, 1, 8, "DCA")));
+        x32["busFaderAddress"] = (MondFunction)((_, args) => X32Presets.BusFaderAddress(RequireIndex(args, 1, 16, "bus")));
+        x32["busMuteAddress"] = (MondFunction)((_, args) => X32Presets.BusMuteAddress(RequireIndex(args, 1, 16, "bus")));
+        x32["matrixFaderAddress"] = (MondFunction)((_, args) => X32Presets.MatrixFaderAddress(RequireIndex(args, 1, 6, "matrix")));
+        x32["matrixMuteAddress"] = (MondFunction)((_, args) => X32Presets.MatrixMuteAddress(RequireIndex(args, 1, 6, "matrix")));
+        x32["mainFaderAddress"] = (MondFunction)((_, _) => X32Presets.MainStereoFaderAddress());
+        x32["mainMuteAddress"] = (MondFunction)((_, _) => X32Presets.MainStereoMuteAddress());
         x32["faderToDb"] = (MondFunction)((_, args) =>
         {
             var offset = ArgumentOffset(args);
@@ -455,8 +522,26 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
             var offset = ArgumentOffset(args);
             return args.Length > offset ? X32Fader.ToNormalized((double)args[offset]) : MondValue.Undefined;
         });
+        x32["quantizeFader"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            return args.Length > offset ? X32Fader.ToKnownStep((double)args[offset]) : MondValue.Undefined;
+        });
 
         return x32;
+    }
+
+    private static int RequireIndex(Span<MondValue> args, int min, int max, string label)
+    {
+        var offset = ArgumentOffset(args);
+        if (args.Length <= offset)
+            throw new MondRuntimeException($"x32 {label} address requires a {label} number.");
+
+        var index = (int)(double)args[offset];
+        if (index < min || index > max)
+            throw new MondRuntimeException($"X32 {label} must be between {min} and {max}.");
+
+        return index;
     }
 
     private MondValue CreateStateApi(MondState state)
@@ -599,8 +684,11 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
                 "float32" => ControlScriptOscArgument.Float32((double)argumentValue),
                 "double64" => ControlScriptOscArgument.Double64((double)argumentValue),
                 "int32" => ControlScriptOscArgument.Int32((int)(double)argumentValue),
+                "int64" => ControlScriptOscArgument.Int64((long)(double)argumentValue),
                 "string" => ControlScriptOscArgument.String((string)argumentValue),
+                "symbol" => ControlScriptOscArgument.Symbol((string)argumentValue),
                 "boolean" => ControlScriptOscArgument.Boolean(argumentValue),
+                "nil" => ControlScriptOscArgument.Nil(),
                 _ => ControlScriptOscArgument.String(value.Serialize()),
             };
         }
@@ -611,6 +699,7 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
             MondValueType.String => ControlScriptOscArgument.String((string)value),
             MondValueType.True => ControlScriptOscArgument.Boolean(true),
             MondValueType.False => ControlScriptOscArgument.Boolean(false),
+            MondValueType.Null or MondValueType.Undefined => ControlScriptOscArgument.Nil(),
             _ => ControlScriptOscArgument.String(value.Serialize()),
         };
     }
