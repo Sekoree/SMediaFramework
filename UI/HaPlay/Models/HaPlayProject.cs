@@ -35,8 +35,10 @@ public sealed record HaPlayProject
 
     public List<ControlGraphConfig> ControlGraphs { get; init; } = new();
 
+    public ControlSystemConfig ControlSystem { get; init; } = new();
+
     /// <summary>Constant for callers that want to write SchemaVersion explicitly.</summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 }
 
 [JsonSourceGenerationOptions(
@@ -85,4 +87,14 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(X32ChannelFaderControlNodeSettings))]
 [JsonSerializable(typeof(X32CustomLayerConfig))]
 [JsonSerializable(typeof(X32CustomLayerSlotConfig))]
+[JsonSerializable(typeof(ControlSystemConfig))]
+[JsonSerializable(typeof(ControlMonitorOptions))]
+[JsonSerializable(typeof(ControlDeviceInstanceConfig))]
+[JsonSerializable(typeof(ControlDeviceBindingConfig))]
+[JsonSerializable(typeof(ControlPeriodicOscSendConfig))]
+[JsonSerializable(typeof(ControlOscArgumentConfig))]
+[JsonSerializable(typeof(ControlLayerConfig))]
+[JsonSerializable(typeof(ControlScriptConfig))]
+[JsonSerializable(typeof(ControlScriptFailurePolicy))]
+[JsonSerializable(typeof(ControlScriptTriggerConfig))]
 internal partial class HaPlayProjectJsonContext : JsonSerializerContext;

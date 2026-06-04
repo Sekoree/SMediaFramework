@@ -722,11 +722,235 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
-    public void CurrentSchemaVersion_IsTwo()
+    public void RoundTrip_ControlSystem_PreservesScriptCentricSettings()
     {
-        // §9.4: schemaVersion = 2 adds persisted MIDI/OSC control graphs.
+        var xtouchId = Guid.NewGuid();
+        var x32Id = Guid.NewGuid();
+        var layerId = Guid.NewGuid();
+        var projectScriptId = Guid.NewGuid();
+        var deviceScriptId = Guid.NewGuid();
+        var layerScriptId = Guid.NewGuid();
+        var periodicId = Guid.NewGuid();
+
+        var project = new HaPlayProject
+        {
+            ControlSystem = new ControlSystemConfig
+            {
+                IsArmed = true,
+                OscListenPort = 10020,
+                OscSocketMode = ControlOscSocketMode.SharedAppListener,
+                OscCacheUpdateMode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
+                Monitor = new ControlMonitorOptions
+                {
+                    MaxVisibleMessages = 1000,
+                    CaptureFormat = ControlMonitorCaptureFormat.JsonLines,
+                    IncludeRawBytes = false,
+                },
+                Devices =
+                [
+                    new ControlDeviceInstanceConfig
+                    {
+                        Id = xtouchId,
+                        Name = "X-Touch Mini",
+                        ProfileId = "behringer.xtouch-mini.mc",
+                        Protocol = ControlDeviceProtocol.Midi,
+                        ProfileMode = ControlDeviceProfileMode.Suggestion,
+                        Binding = new ControlDeviceBindingConfig
+                        {
+                            Alias = "xtouch",
+                            MidiInputDeviceId = 3,
+                            MidiInputDeviceName = "X-Touch MINI",
+                            MidiOutputDeviceId = 4,
+                            MidiOutputDeviceName = "X-Touch MINI",
+                        },
+                        ScriptIds = [deviceScriptId],
+                    },
+                    new ControlDeviceInstanceConfig
+                    {
+                        Id = x32Id,
+                        Name = "X32 Emulator",
+                        ProfileId = "behringer.x32.osc",
+                        Protocol = ControlDeviceProtocol.Osc,
+                        Binding = new ControlDeviceBindingConfig
+                        {
+                            Alias = "x32",
+                            OscHost = "192.168.2.76",
+                            OscPort = 10023,
+                        },
+                        PeriodicOscSends =
+                        [
+                            new ControlPeriodicOscSendConfig
+                            {
+                                Id = periodicId,
+                                Name = "X32 xremote",
+                                Address = "/xremote",
+                                IntervalMs = 8000,
+                            },
+                        ],
+                    },
+                ],
+                Layers =
+                [
+                    new ControlLayerConfig
+                    {
+                        Id = layerId,
+                        Name = "Layer A",
+                        IsEnabled = true,
+                        Priority = 10,
+                        ScriptIds = [layerScriptId],
+                    },
+                ],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = projectScriptId,
+                        Name = "Shared X32 helpers",
+                        ScriptPath = "Scripts/x32Common.mnd",
+                        Scope = ControlScriptScope.Project,
+                        Imports = ["Scripts/mathHelpers.mnd"],
+                    },
+                    new ControlScriptConfig
+                    {
+                        Id = deviceScriptId,
+                        Name = "X-Touch to X32",
+                        ScriptPath = "Scripts/xtouch-x32.mnd",
+                        Scope = ControlScriptScope.Device,
+                        DeviceInstanceId = xtouchId,
+                        FailurePolicy = new ControlScriptFailurePolicy
+                        {
+                            Mode = ControlScriptFailureMode.DisableScript,
+                            MaxConsecutiveFailures = 3,
+                        },
+                        Imports = ["Scripts/x32Common.mnd"],
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.MidiControlChange,
+                                FunctionName = "onEncoder1",
+                                DeviceInstanceId = xtouchId,
+                                MidiChannel = 1,
+                                MidiController = 16,
+                            },
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.OscCacheChanged,
+                                FunctionName = "onX32FaderCached",
+                                DeviceInstanceId = x32Id,
+                                OscAddressPattern = "/ch/01/mix/fader",
+                            },
+                        ],
+                    },
+                    new ControlScriptConfig
+                    {
+                        Id = layerScriptId,
+                        Name = "Layer A startup",
+                        ScriptPath = "Scripts/layer-a.mnd",
+                        Scope = ControlScriptScope.Layer,
+                        LayerId = layerId,
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.LayerEnabled,
+                                FunctionName = "onLayerEnabled",
+                                LayerId = layerId,
+                            },
+                        ],
+                    },
+                ],
+            },
+        };
+
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+
+        var control = roundTripped.ControlSystem;
+        Assert.True(control.IsArmed);
+        Assert.Equal(10020, control.OscListenPort);
+        Assert.Equal(ControlOscSocketMode.SharedAppListener, control.OscSocketMode);
+        Assert.Equal(ControlOscCacheUpdateMode.OptimisticSendAndIncoming, control.OscCacheUpdateMode);
+        Assert.Equal(1000, control.Monitor.MaxVisibleMessages);
+        Assert.Equal(ControlMonitorCaptureFormat.JsonLines, control.Monitor.CaptureFormat);
+        Assert.False(control.Monitor.IncludeRawBytes);
+
+        Assert.Equal(2, control.Devices.Count);
+        var xtouch = control.Devices[0];
+        Assert.Equal(xtouchId, xtouch.Id);
+        Assert.Equal("behringer.xtouch-mini.mc", xtouch.ProfileId);
+        Assert.Equal(ControlDeviceProtocol.Midi, xtouch.Protocol);
+        Assert.Equal(ControlDeviceProfileMode.Suggestion, xtouch.ProfileMode);
+        Assert.Equal("xtouch", xtouch.Binding.Alias);
+        Assert.Equal(3, xtouch.Binding.MidiInputDeviceId);
+        Assert.Equal("X-Touch MINI", xtouch.Binding.MidiOutputDeviceName);
+        Assert.Equal(deviceScriptId, Assert.Single(xtouch.ScriptIds));
+
+        var x32 = control.Devices[1];
+        Assert.Equal("192.168.2.76", x32.Binding.OscHost);
+        Assert.Equal(10023, x32.Binding.OscPort);
+        var xremote = Assert.Single(x32.PeriodicOscSends);
+        Assert.Equal(periodicId, xremote.Id);
+        Assert.Equal("/xremote", xremote.Address);
+        Assert.Equal(8000, xremote.IntervalMs);
+
+        var layer = Assert.Single(control.Layers);
+        Assert.Equal(layerId, layer.Id);
+        Assert.Equal("Layer A", layer.Name);
+        Assert.True(layer.IsEnabled);
+        Assert.Equal(10, layer.Priority);
+        Assert.Equal(layerScriptId, Assert.Single(layer.ScriptIds));
+
+        Assert.Equal(3, control.Scripts.Count);
+        Assert.Equal("Scripts/x32Common.mnd", control.Scripts[0].ScriptPath);
+        Assert.Equal("Scripts/mathHelpers.mnd", Assert.Single(control.Scripts[0].Imports));
+        var deviceScript = control.Scripts[1];
+        Assert.Equal(ControlScriptScope.Device, deviceScript.Scope);
+        Assert.Equal(xtouchId, deviceScript.DeviceInstanceId);
+        Assert.Equal(ControlScriptFailureMode.DisableScript, deviceScript.FailurePolicy.Mode);
+        Assert.Equal(3, deviceScript.FailurePolicy.MaxConsecutiveFailures);
+        Assert.Equal(2, deviceScript.Triggers.Count);
+        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, deviceScript.Triggers[0].Kind);
+        Assert.Equal("onEncoder1", deviceScript.Triggers[0].FunctionName);
+        Assert.Equal(16, deviceScript.Triggers[0].MidiController);
+        Assert.Equal(ControlScriptTriggerKind.OscCacheChanged, deviceScript.Triggers[1].Kind);
+        Assert.Equal("/ch/01/mix/fader", deviceScript.Triggers[1].OscAddressPattern);
+
+        var layerScript = control.Scripts[2];
+        Assert.Equal(ControlScriptScope.Layer, layerScript.Scope);
+        Assert.Equal(layerId, layerScript.LayerId);
+        Assert.Equal(ControlScriptTriggerKind.LayerEnabled, Assert.Single(layerScript.Triggers).Kind);
+    }
+
+    [Fact]
+    public void ControlSystem_Defaults_MatchRewriteDecisions()
+    {
+        var control = new HaPlayProject().ControlSystem;
+
+        Assert.False(control.IsArmed);
+        Assert.Equal(10020, control.OscListenPort);
+        Assert.Equal(ControlOscSocketMode.SharedAppListener, control.OscSocketMode);
+        Assert.Equal(ControlOscCacheUpdateMode.IncomingOnly, control.OscCacheUpdateMode);
+        Assert.Equal(1000, control.Monitor.MaxVisibleMessages);
+        Assert.Equal(ControlMonitorCaptureFormat.JsonLines, control.Monitor.CaptureFormat);
+        Assert.True(control.Monitor.IncludeRawBytes);
+
+        var script = new ControlScriptConfig();
+        Assert.Equal(ControlScriptScope.Project, script.Scope);
+        Assert.Equal(ControlScriptFailureMode.DisableScript, script.FailurePolicy.Mode);
+        Assert.Equal(3, script.FailurePolicy.MaxConsecutiveFailures);
+
+        var periodic = new ControlPeriodicOscSendConfig();
+        Assert.Equal("/xremote", periodic.Name);
+        Assert.Equal("/xremote", periodic.Address);
+        Assert.Equal(8000, periodic.IntervalMs);
+    }
+
+    [Fact]
+    public void CurrentSchemaVersion_IsThree()
+    {
+        // §9.4: schemaVersion = 3 adds the script-centric MIDI/OSC control system.
         // This test exists so a future schema bump is intentional — bumping requires also adding the
         // migration path; this guard makes sure that decision is conscious.
-        Assert.Equal(2, HaPlayProject.CurrentSchemaVersion);
+        Assert.Equal(3, HaPlayProject.CurrentSchemaVersion);
     }
 }
