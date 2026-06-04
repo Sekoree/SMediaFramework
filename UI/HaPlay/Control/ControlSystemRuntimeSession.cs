@@ -6,6 +6,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
 {
     private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromMilliseconds(100);
 
+    private readonly IControlMidiDeviceSessionRunner? _midiSessions;
     private readonly TimeSpan _tickInterval;
     private CancellationTokenSource? _tickCts;
     private Task? _tickTask;
@@ -18,12 +19,14 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         IControlMidiSender? midiSender = null,
         IControlMonitorSink? monitor = null,
         int instructionLimit = ControlScriptFileHost.DefaultInstructionLimit,
-        TimeSpan? tickInterval = null)
+        TimeSpan? tickInterval = null,
+        IControlMidiDeviceSessionRunner? midiSessions = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(sourceProvider);
         ArgumentNullException.ThrowIfNull(oscSender);
 
+        _midiSessions = midiSessions;
         _tickInterval = tickInterval is { } interval && interval > TimeSpan.Zero ? interval : DefaultTickInterval;
         Monitor = monitor ?? NullControlMonitorSink.Instance;
         ScriptSession = new ControlScriptRuntimeSession(
@@ -54,13 +57,23 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        await OscListeners.StartAsync(cancellationToken).ConfigureAwait(false);
-        StartTickLoop(cancellationToken);
+        try
+        {
+            await OscListeners.StartAsync(cancellationToken).ConfigureAwait(false);
+            _midiSessions?.Start(MidiDevices, cancellationToken);
+            StartTickLoop(cancellationToken);
+        }
+        catch
+        {
+            await StopAsync(CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
         await StopTickLoopAsync(cancellationToken).ConfigureAwait(false);
+        _midiSessions?.Stop();
         await OscListeners.StopAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -149,6 +162,11 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
 
         _disposed = true;
         await StopTickLoopAsync(CancellationToken.None).ConfigureAwait(false);
+        _midiSessions?.Stop();
+        if (_midiSessions is IAsyncDisposable asyncDisposable)
+            await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+        else if (_midiSessions is IDisposable disposable)
+            disposable.Dispose();
         await OscListeners.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -162,6 +180,9 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         _tickCts?.Dispose();
         _tickCts = null;
         _tickTask = null;
+        _midiSessions?.Stop();
+        if (_midiSessions is IDisposable disposable)
+            disposable.Dispose();
         OscListeners.Dispose();
     }
 }

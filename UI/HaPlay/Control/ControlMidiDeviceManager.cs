@@ -170,6 +170,13 @@ public sealed class ControlMidiDeviceManager
                 .ToArray();
             if (byName.Length > 0)
                 return byName;
+
+            var inputPort = new ControlMidiPortInfo(input.DeviceId ?? -1, input.DeviceName);
+            var byFuzzyName = candidates
+                .Where(d => ControlDeviceMatcher.MatchMidiInput(d, [inputPort]).IsMatched)
+                .ToArray();
+            if (byFuzzyName.Length > 0)
+                return byFuzzyName;
         }
 
         return [];

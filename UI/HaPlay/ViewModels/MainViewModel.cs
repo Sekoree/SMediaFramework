@@ -357,6 +357,8 @@ public partial class MainViewModel : ViewModelBase
 
     public ObservableCollection<MidiOutputOption> MidiOutputOptions { get; } = new();
     public ObservableCollection<MidiInputOption> MidiInputOptions { get; } = new();
+    public ObservableCollection<ProjectMidiInputRowViewModel> ProjectMidiInputRows { get; } = new();
+    public ObservableCollection<ProjectMidiOutputRowViewModel> ProjectMidiOutputRows { get; } = new();
 
     [ObservableProperty]
     private string? _midiDeviceStatus;
@@ -365,7 +367,44 @@ public partial class MainViewModel : ViewModelBase
     private MidiOutputOption? _selectedMidiOutputOption;
 
     [ObservableProperty]
+    private MidiInputOption? _selectedMidiInputOption;
+
+    [ObservableProperty]
+    private ProjectMidiInputRowViewModel? _selectedProjectMidiInputRow;
+
+    [ObservableProperty]
+    private ProjectMidiOutputRowViewModel? _selectedProjectMidiOutputRow;
+
+    [ObservableProperty]
     private string? _endpointTestStatus;
+
+    partial void OnSelectedMidiInputOptionChanged(MidiInputOption? value)
+    {
+        _ = value;
+        AddSelectedMidiInputToControlCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnSelectedMidiOutputOptionChanged(MidiOutputOption? value)
+    {
+        _ = value;
+        UseSelectedMidiOutputCommand.NotifyCanExecuteChanged();
+        AddSelectedMidiOutputToControlCommand.NotifyCanExecuteChanged();
+        AddSelectedMidiOutputEndpointCommand.NotifyCanExecuteChanged();
+        AddSelectedMidiOutputToProjectCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnSelectedProjectMidiInputRowChanged(ProjectMidiInputRowViewModel? value)
+    {
+        _ = value;
+        RemoveSelectedProjectMidiInputCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnSelectedProjectMidiOutputRowChanged(ProjectMidiOutputRowViewModel? value)
+    {
+        _ = value;
+        RemoveSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
+        TestSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
+    }
 
     partial void OnSelectedActionEndpointChanged(ActionEndpoint? value)
     {
@@ -468,11 +507,119 @@ public partial class MainViewModel : ViewModelBase
         }
 
         SyncEndpointRowSelectionFromEndpoint();
+        RebuildProjectMidiDeviceRows();
     }
 
     private ActionEndpointRowViewModel? FindEndpointRow(Guid endpointId) =>
         OscEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId)
         ?? MidiEndpointRows.FirstOrDefault(r => r.Endpoint.Id == endpointId);
+
+    private void RebuildProjectMidiDeviceRows()
+    {
+        var selectedInputKey = SelectedProjectMidiInputRow?.MatchKey;
+        var selectedOutputKey = SelectedProjectMidiOutputRow?.MatchKey;
+
+        ProjectMidiInputRows.Clear();
+        foreach (var row in BuildProjectMidiInputRows(Control.BuildSnapshot()))
+            ProjectMidiInputRows.Add(row);
+
+        ProjectMidiOutputRows.Clear();
+        foreach (var row in BuildProjectMidiOutputRows(Control.BuildSnapshot(), ActionEndpoints))
+            ProjectMidiOutputRows.Add(row);
+
+        SelectedProjectMidiInputRow = selectedInputKey is null
+            ? ProjectMidiInputRows.FirstOrDefault()
+            : ProjectMidiInputRows.FirstOrDefault(r => r.MatchKey == selectedInputKey) ?? ProjectMidiInputRows.FirstOrDefault();
+        SelectedProjectMidiOutputRow = selectedOutputKey is null
+            ? ProjectMidiOutputRows.FirstOrDefault()
+            : ProjectMidiOutputRows.FirstOrDefault(r => r.MatchKey == selectedOutputKey) ?? ProjectMidiOutputRows.FirstOrDefault();
+
+        RemoveSelectedProjectMidiInputCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
+        TestSelectedProjectMidiOutputCommand.NotifyCanExecuteChanged();
+    }
+
+    internal static IReadOnlyList<ProjectMidiInputRowViewModel> BuildProjectMidiInputRows(ControlSystemConfig config) =>
+        config.Devices
+            .Where(d => d.Protocol == ControlDeviceProtocol.Midi)
+            .Where(d => d.Binding.MidiInputDeviceId is not null || !string.IsNullOrWhiteSpace(d.Binding.MidiInputDeviceName))
+            .Select(d => new ProjectMidiInputRowViewModel(
+                d.Id,
+                d.Binding.MidiInputDeviceId,
+                d.Binding.MidiInputDeviceName ?? d.Name))
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    internal static IReadOnlyList<ProjectMidiOutputRowViewModel> BuildProjectMidiOutputRows(
+        ControlSystemConfig config,
+        IEnumerable<ActionEndpoint> endpoints)
+    {
+        var rows = new List<ProjectMidiOutputRowBuilder>();
+
+        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Midi))
+        {
+            var deviceId = device.Binding.MidiOutputDeviceId;
+            var deviceName = device.Binding.MidiOutputDeviceName;
+            if (deviceId is null && string.IsNullOrWhiteSpace(deviceName))
+                continue;
+            deviceName ??= device.Name;
+
+            var row = FindOrAddProjectMidiOutputRow(rows, deviceId, deviceName);
+            row.ControlDeviceId = device.Id;
+            row.DeviceId ??= deviceId;
+            row.DeviceName = PreferMidiDeviceName(row.DeviceName, deviceName);
+        }
+
+        foreach (var endpoint in endpoints.OfType<MidiActionEndpoint>())
+        {
+            var deviceName = endpoint.DeviceName ?? endpoint.Name;
+            if (endpoint.DeviceId is null && string.IsNullOrWhiteSpace(deviceName))
+                continue;
+
+            var row = FindOrAddProjectMidiOutputRow(rows, endpoint.DeviceId, deviceName);
+            row.CueEndpointId = endpoint.Id;
+            row.DeviceId ??= endpoint.DeviceId;
+            row.DeviceName = PreferMidiDeviceName(row.DeviceName, deviceName);
+        }
+
+        return rows
+            .Select(r => r.ToRow())
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static ProjectMidiOutputRowBuilder FindOrAddProjectMidiOutputRow(
+        List<ProjectMidiOutputRowBuilder> rows,
+        int? deviceId,
+        string? deviceName)
+    {
+        var existing = rows.FirstOrDefault(r => MatchesMidiBinding(r.DeviceId, r.DeviceName, deviceId, deviceName));
+        if (existing is not null)
+            return existing;
+
+        var row = new ProjectMidiOutputRowBuilder
+        {
+            DeviceId = deviceId,
+            DeviceName = deviceName,
+        };
+        rows.Add(row);
+        return row;
+    }
+
+    private static bool MatchesMidiBinding(int? firstId, string? firstName, int? secondId, string? secondName)
+    {
+        if (firstId is not null && secondId is not null && firstId == secondId)
+            return true;
+
+        return !string.IsNullOrWhiteSpace(firstName)
+               && !string.IsNullOrWhiteSpace(secondName)
+               && string.Equals(firstName.Trim(), secondName.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? PreferMidiDeviceName(string? existing, string? candidate) =>
+        string.IsNullOrWhiteSpace(existing)
+            ? candidate
+            : existing;
 
     public async Task RefreshAllEndpointHealthAsync()
     {
@@ -558,6 +705,54 @@ public partial class MainViewModel : ViewModelBase
         SelectedActionEndpoint = endpoint;
     }
 
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputEndpoint))]
+    private void AddSelectedMidiOutputEndpoint()
+    {
+        AddSelectedMidiOutputToProject();
+    }
+
+    private bool CanAddSelectedMidiOutputEndpoint() => SelectedMidiOutputOption is not null;
+
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputToProject))]
+    private void AddSelectedMidiOutputToProject()
+    {
+        if (SelectedMidiOutputOption is not { } output)
+            return;
+
+        Control.AddOrUpdateMidiOutputDevice(output.Id, output.Name);
+
+        var existing = FindMidiEndpoint(output.Id, output.Name);
+        if (existing is not null)
+        {
+            SelectedActionEndpoint = existing;
+            EndpointTestStatus = $"Selected existing project MIDI output '{existing.Name}'.";
+        }
+        else
+        {
+            var endpoint = new MidiActionEndpoint
+            {
+                Name = output.Name,
+                DeviceId = output.Id,
+                DeviceName = output.Name,
+                Channel = 0,
+            };
+            ActionEndpoints.Add(endpoint);
+            SelectedActionEndpoint = endpoint;
+            EndpointTestStatus = $"Added project MIDI output '{endpoint.Name}'.";
+        }
+
+        RebuildProjectMidiDeviceRows();
+        SelectedProjectMidiOutputRow = ProjectMidiOutputRows.FirstOrDefault(r =>
+            MatchesMidiBinding(r.DeviceId, r.DeviceName, output.Id, output.Name));
+    }
+
+    private bool CanAddSelectedMidiOutputToProject() => SelectedMidiOutputOption is not null;
+
+    private MidiActionEndpoint? FindMidiEndpoint(int deviceId, string deviceName) =>
+        ActionEndpoints
+            .OfType<MidiActionEndpoint>()
+            .FirstOrDefault(e => MatchesMidiBinding(e.DeviceId, e.DeviceName ?? e.Name, deviceId, deviceName));
+
     [RelayCommand(CanExecute = nameof(CanRemoveActionEndpoint))]
     private void RemoveActionEndpoint()
     {
@@ -623,6 +818,8 @@ public partial class MainViewModel : ViewModelBase
     [RelayCommand]
     private void RefreshMidiDeviceCatalog()
     {
+        var previousInputId = SelectedMidiInputOption?.Id;
+        var previousOutputId = SelectedMidiOutputOption?.Id;
         var initError = EnsureMidiInitialized();
         if (initError is not null)
         {
@@ -640,10 +837,16 @@ public partial class MainViewModel : ViewModelBase
         foreach (var dev in outputs)
             MidiOutputOptions.Add(new MidiOutputOption(dev.Id, dev.Name ?? Strings.Format(nameof(Strings.DeviceWithIdFormat), dev.Id)));
 
+        SelectedMidiInputOption = previousInputId is null
+            ? MidiInputOptions.FirstOrDefault()
+            : MidiInputOptions.FirstOrDefault(o => o.Id == previousInputId) ?? MidiInputOptions.FirstOrDefault();
+        SelectedMidiOutputOption = previousOutputId is null
+            ? MidiOutputOptions.FirstOrDefault()
+            : MidiOutputOptions.FirstOrDefault(o => o.Id == previousOutputId) ?? MidiOutputOptions.FirstOrDefault();
         MidiDeviceStatus = Strings.Format(nameof(Strings.MidiDeviceCatalogStatusFormat), inputs.Count, outputs.Count);
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanUseSelectedMidiOutput))]
     private void UseSelectedMidiOutput()
     {
         if (SelectedMidiOutputOption is null)
@@ -651,6 +854,104 @@ public partial class MainViewModel : ViewModelBase
         MidiEditDeviceId = SelectedMidiOutputOption.Id;
         MidiEditDeviceName = SelectedMidiOutputOption.Name;
     }
+
+    private bool CanUseSelectedMidiOutput() => SelectedMidiOutputOption is not null;
+
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiInputToControl))]
+    private void AddSelectedMidiInputToControl()
+    {
+        if (SelectedMidiInputOption is not { } input)
+            return;
+        Control.AddOrUpdateMidiInputDevice(input.Id, input.Name);
+        RebuildProjectMidiDeviceRows();
+        SelectedProjectMidiInputRow = ProjectMidiInputRows.FirstOrDefault(r =>
+            MatchesMidiBinding(r.DeviceId, r.DeviceName, input.Id, input.Name));
+        MidiDeviceStatus = $"Added project MIDI input '{input.Name}'.";
+    }
+
+    private bool CanAddSelectedMidiInputToControl() => SelectedMidiInputOption is not null;
+
+    [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputToControl))]
+    private void AddSelectedMidiOutputToControl()
+    {
+        if (SelectedMidiOutputOption is not { } output)
+            return;
+        Control.AddOrUpdateMidiOutputDevice(output.Id, output.Name);
+        RebuildProjectMidiDeviceRows();
+        SelectedProjectMidiOutputRow = ProjectMidiOutputRows.FirstOrDefault(r =>
+            MatchesMidiBinding(r.DeviceId, r.DeviceName, output.Id, output.Name));
+        MidiDeviceStatus = $"Added project MIDI output '{output.Name}' to Control.";
+    }
+
+    private bool CanAddSelectedMidiOutputToControl() => SelectedMidiOutputOption is not null;
+
+    [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectMidiInput))]
+    private void RemoveSelectedProjectMidiInput()
+    {
+        var row = SelectedProjectMidiInputRow;
+        if (row is null)
+            return;
+
+        Control.RemoveMidiInputDevice(row.ControlDeviceId);
+        MidiDeviceStatus = $"Removed project MIDI input '{row.Name}'.";
+        RebuildProjectMidiDeviceRows();
+    }
+
+    private bool CanRemoveSelectedProjectMidiInput() => SelectedProjectMidiInputRow is not null;
+
+    [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectMidiOutput))]
+    private void RemoveSelectedProjectMidiOutput()
+    {
+        var row = SelectedProjectMidiOutputRow;
+        if (row is null)
+            return;
+
+        if (row.ControlDeviceId is { } controlDeviceId)
+            Control.RemoveMidiOutputDevice(controlDeviceId);
+
+        if (row.CueEndpointId is { } endpointId)
+        {
+            var endpoint = ActionEndpoints.FirstOrDefault(e => e.Id == endpointId);
+            if (endpoint is not null)
+            {
+                ActionEndpoints.Remove(endpoint);
+                if (ReferenceEquals(SelectedActionEndpoint, endpoint))
+                    SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
+            }
+        }
+
+        MidiDeviceStatus = $"Removed project MIDI output '{row.Name}'.";
+        RebuildProjectMidiDeviceRows();
+    }
+
+    private bool CanRemoveSelectedProjectMidiOutput() => SelectedProjectMidiOutputRow is not null;
+
+    [RelayCommand(CanExecute = nameof(CanTestSelectedProjectMidiOutput))]
+    private async Task TestSelectedProjectMidiOutputAsync()
+    {
+        var row = SelectedProjectMidiOutputRow;
+        if (row is null)
+            return;
+
+        EndpointTestStatus = Strings.TestingMidiStatus;
+        var endpoint = row.CueEndpointId is { } endpointId
+            ? ActionEndpoints.OfType<MidiActionEndpoint>().FirstOrDefault(e => e.Id == endpointId)
+            : null;
+        endpoint ??= new MidiActionEndpoint
+        {
+            Name = row.Name,
+            DeviceId = row.DeviceId,
+            DeviceName = row.DeviceName,
+        };
+
+        var (ok, detail) = await Task.Run(() => ActionEndpointProbe.TryProbeMidi(endpoint, EnsureMidiInitialized))
+            .ConfigureAwait(true);
+        EndpointTestStatus = ok
+            ? Strings.Format(nameof(Strings.MidiTestOkStatusFormat), detail)
+            : Strings.Format(nameof(Strings.MidiTestFailedStatusFormat), detail);
+    }
+
+    private bool CanTestSelectedProjectMidiOutput() => SelectedProjectMidiOutputRow is not null;
 
     [ObservableProperty]
     private MediaPlayerViewModel? _selectedPlayer;
@@ -1072,6 +1373,7 @@ public partial class MainViewModel : ViewModelBase
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         CuePlayer.ApplyCueLists(project.CueLists);
         Control.LoadConfig(project.ControlSystem);
+        RebuildProjectMidiDeviceRows();
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)
@@ -1368,6 +1670,20 @@ public partial class MainViewModel : ViewModelBase
 
     private bool CanTestSelectedMidiEndpoint() => SelectedActionEndpoint is MidiActionEndpoint;
 
+    private sealed class ProjectMidiOutputRowBuilder
+    {
+        public int? DeviceId { get; set; }
+
+        public string? DeviceName { get; set; }
+
+        public Guid? ControlDeviceId { get; set; }
+
+        public Guid? CueEndpointId { get; set; }
+
+        public ProjectMidiOutputRowViewModel ToRow() =>
+            new(ControlDeviceId, CueEndpointId, DeviceId, DeviceName);
+    }
+
     private static Window? TryGetOwnerWindow()
     {
         if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -1438,4 +1754,70 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>Bound from the recent-projects menu items.</summary>
     [RelayCommand]
     private Task OpenRecentAsync(string path) => OpenProjectFromPathAsync(path);
+}
+
+public sealed class ProjectMidiInputRowViewModel
+{
+    public ProjectMidiInputRowViewModel(Guid controlDeviceId, int? deviceId, string? deviceName)
+    {
+        ControlDeviceId = controlDeviceId;
+        DeviceId = deviceId;
+        DeviceName = deviceName?.Trim() ?? string.Empty;
+    }
+
+    public Guid ControlDeviceId { get; }
+
+    public int? DeviceId { get; }
+
+    public string DeviceName { get; }
+
+    public string Name => string.IsNullOrWhiteSpace(DeviceName) ? "(unnamed input)" : DeviceName;
+
+    public string DeviceIdText => DeviceId is { } id ? id.ToString(CultureInfo.InvariantCulture) : "name";
+
+    public string UsageText => "Control input";
+
+    public string MatchKey => MidiRowMatchKey(DeviceId, DeviceName);
+
+    internal static string MidiRowMatchKey(int? deviceId, string? deviceName) =>
+        deviceId is { } id
+            ? $"id:{id.ToString(CultureInfo.InvariantCulture)}"
+            : $"name:{(deviceName ?? string.Empty).Trim().ToUpperInvariant()}";
+}
+
+public sealed class ProjectMidiOutputRowViewModel
+{
+    public ProjectMidiOutputRowViewModel(Guid? controlDeviceId, Guid? cueEndpointId, int? deviceId, string? deviceName)
+    {
+        ControlDeviceId = controlDeviceId;
+        CueEndpointId = cueEndpointId;
+        DeviceId = deviceId;
+        DeviceName = deviceName?.Trim() ?? string.Empty;
+    }
+
+    public Guid? ControlDeviceId { get; }
+
+    public Guid? CueEndpointId { get; }
+
+    public int? DeviceId { get; }
+
+    public string DeviceName { get; }
+
+    public bool UsedByControl => ControlDeviceId is not null;
+
+    public bool UsedByCue => CueEndpointId is not null;
+
+    public string Name => string.IsNullOrWhiteSpace(DeviceName) ? "(unnamed output)" : DeviceName;
+
+    public string DeviceIdText => DeviceId is { } id ? id.ToString(CultureInfo.InvariantCulture) : "name";
+
+    public string UsageText => (UsedByControl, UsedByCue) switch
+    {
+        (true, true) => "Cue + Control output",
+        (true, false) => "Control output",
+        (false, true) => "Cue output",
+        _ => "Unused output",
+    };
+
+    public string MatchKey => ProjectMidiInputRowViewModel.MidiRowMatchKey(DeviceId, DeviceName);
 }

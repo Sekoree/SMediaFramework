@@ -83,6 +83,38 @@ public sealed class ControlMidiDeviceManagerTests
     }
 
     [Fact]
+    public async Task DispatchControlChangeAsync_FallsBackToFuzzyNameWhenRememberedDeviceIdChanged()
+    {
+        var xtouchId = Guid.NewGuid();
+        var x32Id = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 10);
+        var sender = new RecordingOscSender();
+        var config = new ControlSystemConfig
+        {
+            IsArmed = true,
+            Devices =
+            [
+                MidiDevice(xtouchId, "X-Touch Mini", "xtouch", inputId: 4, inputName: "XTouch Mini"),
+                OscDevice(x32Id, "X32", "x32", "127.0.0.1", 10023),
+            ],
+            Scripts = [MidiScript(xtouchId, "Scripts/xtouch.mnd", controller: 16)],
+        };
+        var session = CreateRuntimeSession(config, sender, monitor);
+        var manager = new ControlMidiDeviceManager(config, session, monitor);
+
+        var results = await manager.DispatchControlChangeAsync(
+            new ControlMidiInputIdentity(DeviceId: 9, DeviceName: "X-Touch MINI"),
+            channel: 1,
+            controller: 16,
+            value: 10);
+
+        Assert.Equal(xtouchId, Assert.Single(results).DeviceInstanceId);
+        Assert.Equal("/seen", Assert.Single(sender.Sent).Address);
+        var input = Assert.Single(monitor.Records, r => r.Protocol == ControlMonitorProtocol.Midi && r.Direction == ControlMonitorDirection.Input);
+        Assert.Equal(xtouchId, input.DeviceInstanceId);
+    }
+
+    [Fact]
     public async Task DispatchControlChangeAsync_RecordsDroppedInputWhenNoDeviceMatches()
     {
         var monitor = new ControlMonitorBuffer(maxRecords: 10);

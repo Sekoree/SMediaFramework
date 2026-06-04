@@ -92,15 +92,21 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 
 ## Phase 2: Device Binding And Sessions
 
-- [ ] Add `ControlDeviceMatcher`.
-- [ ] Match MIDI devices by:
-  - [ ] User alias.
-  - [ ] Exact name.
-  - [ ] Fuzzy name.
-  - [ ] Remembered input device ID.
-  - [ ] Remembered output device ID.
+- [x] Add `ControlDeviceMatcher`.
+- [x] Match MIDI devices by:
+  - [x] User alias.
+  - [x] Exact name.
+  - [x] Fuzzy name.
+  - [x] Remembered input device ID.
+  - [x] Remembered output device ID.
 - [ ] Add fallback device selection dialog when matching is ambiguous or missing.
-- [ ] Split MIDI device instances into input/output capabilities.
+- [x] Split MIDI device instances into input/output capabilities.
+- [x] Add script-centric MIDI hardware sessions:
+  - [x] Open enabled MIDI input bindings while the control system is armed.
+  - [x] Route live CC/note input from more than one MIDI device into scripts.
+  - [x] Send script MIDI output through `ControlDeviceInstanceConfig` output bindings.
+  - [x] Share a physical MIDI output handle when more than one device instance uses the same output port.
+  - [x] Reject ambiguous output names until the fallback selection dialog exists.
 - [~] Add app-level OSC listeners:
   - [x] Multiple project-configured local ports.
   - [x] Shared UDP socket per listener where possible.
@@ -116,7 +122,9 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 
 - [x] Add monitor record model.
 - [~] Capture raw and decoded MIDI input.
-- [~] Capture MIDI output attempts and results.
+  - [x] Capture decoded live CC/note input.
+  - [ ] Capture raw MIDI bytes from the PortMidi input path.
+- [x] Capture MIDI output attempts and results.
 - [~] Capture raw and decoded OSC input.
 - [x] Capture OSC output attempts and results.
 - [x] Capture script emissions.
@@ -127,10 +135,10 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add visible history limit setting, default `1000`.
 - [x] Add JSON lines export.
 - [x] Add JSON lines replay/import for tests.
-- [~] Add UI filters:
-  - [ ] Direction.
-  - [ ] Protocol.
-  - [ ] Device.
+- [x] Add UI filters:
+  - [x] Direction.
+  - [x] Protocol.
+  - [x] Device.
   - [x] Text search.
   - [x] Errors only.
 - [x] Add pause/resume and clear.
@@ -215,16 +223,19 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Remove the graph workspace (hard cut) and host a new `ControlWorkspaceView`.
   - [x] App-shell wiring: live `ControlSystemRuntimeSession` + `ControlMonitorBuffer`,
     arm/disarm lifecycle, project `ControlSystem` load/save, project-relative script root.
+  - [x] Live MIDI input/output sessions scoped to the armed control runtime.
+  - [x] MIDI manager screen simplified to detected input/output lists with add actions.
+  - [x] MIDI manager shows project-selected input/output lists shared by Cue outputs and Control devices.
   - [x] Live monitor view (filter/errors-only/pause/clear) + OSC test-send and manual-run.
-  - [ ] Device/script tree layout.
-- [ ] Device tree:
-  - [ ] MIDI devices.
-  - [ ] OSC devices.
+  - [x] Device/script tree layout.
+- [~] Device tree:
+  - [x] MIDI devices.
+  - [x] OSC devices.
   - [ ] X32 endpoint and command browser.
   - [ ] Cache view.
-  - [ ] Layers.
-  - [ ] Scripts.
-  - [ ] Periodic sends.
+  - [x] Layers.
+  - [x] Scripts.
+  - [x] Periodic sends.
 - [ ] Context menus:
   - [ ] Add device script.
   - [ ] Add endpoint script.
@@ -234,13 +245,17 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [ ] Add periodic OSC send.
   - [ ] Test MIDI send.
   - [ ] Test OSC send.
-- [ ] Script editor:
-  - [ ] Script path selector.
+- [~] Script editor:
+  - [x] Script file list.
+  - [x] AvaloniaEdit text editor.
+  - [x] Save project-relative script files.
+  - [x] Script path selector/project-relative path field.
   - [ ] Exported function list.
+  - [x] Trigger summary display.
   - [ ] Trigger editor.
-  - [ ] Scope selector.
-  - [ ] Enable/disable.
-  - [ ] Failure policy editor.
+  - [x] Scope selector.
+  - [x] Enable/disable.
+  - [x] Failure policy editor.
   - [ ] Diagnostics panel.
 - [ ] Learn mode:
   - [ ] Capture selected MIDI control from monitor traffic.
@@ -267,7 +282,8 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [ ] Unit tests:
   - [x] Project JSON round trips.
   - [x] Profile loading and validation.
-  - [ ] Device matching.
+  - [x] Device matching.
+  - [x] Script-centric MIDI live input/output session routing.
   - [x] OSC app listener routing.
   - [x] Monitor JSON lines export/replay.
   - [x] Cache update modes.
@@ -289,6 +305,12 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] X-Touch Mini relative encoder -> X32 fader helper.
   - [x] MIDI command router.
   - [x] MIDI note trigger dispatch.
+  - [x] MIDI catalog input/output registration into control devices.
+  - [x] Shared project MIDI input/output list projection.
+  - [x] Control workspace structure list projection.
+  - [x] Control workspace script editor file load/save.
+  - [x] Control workspace script metadata editor.
+  - [x] Live monitor direction/protocol/device filters.
   - [x] Periodic OSC send manager.
   - [x] Control-system runtime session tick orchestration.
 - [ ] Integration tests:

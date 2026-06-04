@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
              xmlns:vm="using:HaPlay.ViewModels"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="680"
              x:Class="HaPlay.Views.ControlWorkspaceView"
@@ -40,6 +41,41 @@
       </Grid>
     </Border>
 
+    <!-- Project structure -->
+    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Top" Text="Project structure" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <ListBox ItemsSource="{Binding StructureRows}"
+                 MinHeight="120"
+                 MaxHeight="170"
+                 Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:ControlStructureRowViewModel">
+              <Grid ColumnDefinitions="Auto,84,180,*,120" ColumnSpacing="8" Margin="0,2">
+                <Border Grid.Column="0" Width="{Binding IndentWidth}" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding Kind}"
+                           Opacity="0.7"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="2"
+                           Text="{Binding Name}"
+                           FontWeight="SemiBold"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3"
+                           Text="{Binding Detail}"
+                           Opacity="0.72"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="4"
+                           Text="{Binding State}"
+                           Opacity="0.7"
+                           TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+
     <!-- Test send -->
     <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <StackPanel Spacing="6">
@@ -54,20 +90,127 @@
         </Grid>
         <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="6">
           <TextBlock Grid.Column="0" Text="Args" VerticalAlignment="Center" />
-          <TextBox Grid.Column="1" Text="{Binding TestOscArgs}" Watermark="comma-separated, e.g. 0.5, 1, true, name" />
+          <TextBox Grid.Column="1" Text="{Binding TestOscArgs}" PlaceholderText="comma-separated, e.g. 0.5, 1, true, name" />
           <Button Grid.Column="2" Content="Send OSC" Command="{Binding SendTestOscCommand}" />
           <Button Grid.Column="3" Content="Run manual scripts" Command="{Binding RunManualScriptsCommand}" />
         </Grid>
       </StackPanel>
     </Border>
 
+    <!-- Script editor -->
+    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+      <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,220,Auto,Auto" ColumnSpacing="10" RowSpacing="6">
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Scripts" FontWeight="SemiBold" />
+        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ScriptEditorStatus}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+        <ListBox Grid.Row="1"
+                 Grid.RowSpan="3"
+                 Grid.Column="0"
+                 ItemsSource="{Binding ScriptRows}"
+                 SelectedItem="{Binding SelectedScriptRow, Mode=TwoWay}">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:ControlScriptRowViewModel">
+              <StackPanel Spacing="1">
+                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding DisplayScriptPath}" FontSize="12" Opacity="0.72" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding ScopeText}" FontSize="12" Opacity="0.6" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+        <ae:TextEditor x:Name="ScriptEditor"
+                       Grid.Row="1"
+                       Grid.Column="1"
+                       ShowLineNumbers="True"
+                       FontFamily="Cascadia Code, Consolas, monospace"
+                       FontSize="13"
+                       Background="#101010"
+                       Foreground="#EEEEEE" />
+        <Grid Grid.Row="2"
+              Grid.Column="1"
+              ColumnDefinitions="Auto,*,Auto,140,Auto,120"
+              RowDefinitions="Auto,Auto,Auto"
+              ColumnSpacing="8"
+              RowSpacing="6">
+          <CheckBox Grid.Row="0"
+                    Grid.Column="0"
+                    Content="Enabled"
+                    IsChecked="{Binding SelectedScriptRow.IsEnabled, Mode=TwoWay}" />
+          <TextBox Grid.Row="0"
+                   Grid.Column="1"
+                   Text="{Binding SelectedScriptRow.Name, Mode=TwoWay}"
+                   PlaceholderText="script name" />
+          <TextBlock Grid.Row="0" Grid.Column="2" Text="Scope" VerticalAlignment="Center" />
+          <ComboBox Grid.Row="0"
+                    Grid.Column="3"
+                    ItemsSource="{Binding ScriptScopeOptions}"
+                    SelectedItem="{Binding SelectedScriptRow.Scope, Mode=TwoWay}" />
+          <TextBlock Grid.Row="0" Grid.Column="4" Text="Failures" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="0"
+                         Grid.Column="5"
+                         Value="{Binding SelectedScriptRow.MaxConsecutiveFailures, Mode=TwoWay}"
+                         Minimum="1"
+                         Maximum="99"
+                         Increment="1"
+                         FormatString="0" />
+
+          <TextBlock Grid.Row="1" Grid.Column="0" Text="Path" VerticalAlignment="Center" />
+          <TextBox Grid.Row="1"
+                   Grid.Column="1"
+                   Grid.ColumnSpan="3"
+                   Text="{Binding SelectedScriptRow.ScriptPath, Mode=TwoWay}"
+                   PlaceholderText="Scripts/control.mnd" />
+          <ComboBox Grid.Row="1"
+                    Grid.Column="4"
+                    Grid.ColumnSpan="2"
+                    ItemsSource="{Binding ScriptFailureModeOptions}"
+                    SelectedItem="{Binding SelectedScriptRow.FailureMode, Mode=TwoWay}" />
+
+          <TextBlock Grid.Row="2"
+                     Grid.Column="0"
+                     Text="Triggers"
+                     VerticalAlignment="Center" />
+          <TextBlock Grid.Row="2"
+                     Grid.Column="1"
+                     Grid.ColumnSpan="5"
+                     Text="{Binding SelectedScriptRow.TriggerSummary}"
+                     Opacity="0.75"
+                     TextTrimming="CharacterEllipsis" />
+        </Grid>
+        <Button Grid.Row="3"
+                Grid.Column="1"
+                Content="Save Script"
+                HorizontalAlignment="Right"
+                Command="{Binding SaveSelectedScriptCommand}" />
+      </Grid>
+    </Border>
+
     <!-- Monitor toolbar -->
-    <Grid DockPanel.Dock="Top" ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8" Margin="0,0,0,6">
-      <TextBlock Grid.Column="0" Text="Live monitor" FontWeight="SemiBold" VerticalAlignment="Center" />
-      <TextBox Grid.Column="1" Text="{Binding FilterText}" Watermark="filter: address, device, message…" />
-      <CheckBox Grid.Column="2" Content="Errors only" IsChecked="{Binding ErrorsOnly}" />
-      <CheckBox Grid.Column="3" Content="Pause" IsChecked="{Binding IsPaused}" />
-      <Button Grid.Column="4" Content="Clear" Command="{Binding ClearMonitorCommand}" />
+    <Grid DockPanel.Dock="Top"
+          ColumnDefinitions="*,130,130,160,Auto,Auto,Auto"
+          RowDefinitions="Auto,Auto"
+          ColumnSpacing="8"
+          RowSpacing="6"
+          Margin="0,0,0,6">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Live monitor" FontWeight="SemiBold" VerticalAlignment="Center" />
+      <CheckBox Grid.Row="0" Grid.Column="4" Content="Errors only" IsChecked="{Binding ErrorsOnly}" />
+      <CheckBox Grid.Row="0" Grid.Column="5" Content="Pause" IsChecked="{Binding IsPaused}" />
+      <Button Grid.Row="0" Grid.Column="6" Content="Clear" Command="{Binding ClearMonitorCommand}" />
+      <TextBox Grid.Row="1"
+               Grid.Column="0"
+               Text="{Binding FilterText}"
+               PlaceholderText="filter: address, message…" />
+      <ComboBox Grid.Row="1"
+                Grid.Column="1"
+                ItemsSource="{Binding MonitorDirectionOptions}"
+                SelectedItem="{Binding SelectedMonitorDirection, Mode=TwoWay}" />
+      <ComboBox Grid.Row="1"
+                Grid.Column="2"
+                ItemsSource="{Binding MonitorProtocolOptions}"
+                SelectedItem="{Binding SelectedMonitorProtocol, Mode=TwoWay}" />
+      <TextBox Grid.Row="1"
+               Grid.Column="3"
+               Text="{Binding DeviceFilterText}"
+               PlaceholderText="device" />
     </Grid>
 
     <!-- Monitor list -->
