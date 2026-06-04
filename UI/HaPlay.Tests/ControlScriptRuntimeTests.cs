@@ -220,6 +220,51 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void DispatchControlEvent_ExecutesBuiltInXTouchMiniX32MuteScriptThroughTriggerRuntime()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var template = BuiltInControlScriptTemplateRepository.Instance.FindById(
+            BuiltInControlScriptTemplateRepository.XTouchMiniX32MutesTemplateId);
+        Assert.NotNull(template);
+
+        var script = Script(
+            template.SuggestedPath,
+            MidiNoteTrigger(midiDeviceId, "onXTouchMuteButton", midiNote: 89));
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string> { [template.SuggestedPath] = template.Source },
+            sink);
+
+        var first = runtime.DispatchControlEvent(MidiNoteEvent(midiDeviceId, note: 89, velocity: 127, isNoteOn: true));
+        var second = runtime.DispatchControlEvent(MidiNoteEvent(midiDeviceId, note: 89, velocity: 127, isNoteOn: true));
+        var noteOff = runtime.DispatchControlEvent(MidiNoteEvent(midiDeviceId, note: 89, velocity: 0, isNoteOn: false));
+
+        Assert.True(Assert.Single(first.Invocations).Succeeded);
+        Assert.True(Assert.Single(second.Invocations).Succeeded);
+        Assert.True(Assert.Single(noteOff.Invocations).Succeeded);
+        Assert.Collection(
+            sink.OscMessages,
+            message =>
+            {
+                Assert.Equal("x32", message.DeviceKey);
+                Assert.Equal("/ch/01/mix/on", message.Address);
+                Assert.Equal(0, Assert.Single(message.Arguments).NumberValue);
+            },
+            message =>
+            {
+                Assert.Equal("x32", message.DeviceKey);
+                Assert.Equal("/ch/01/mix/on", message.Address);
+                Assert.Equal(1, Assert.Single(message.Arguments).NumberValue);
+            });
+    }
+
+    [Fact]
     public void DispatchControlEvent_UpdatesOscCacheBeforeInvokingOscTrigger()
     {
         var oscDeviceId = Guid.NewGuid();

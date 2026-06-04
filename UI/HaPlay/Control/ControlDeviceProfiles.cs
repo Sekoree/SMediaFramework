@@ -126,6 +126,8 @@ public sealed record ControlDeviceTaskProfile
 
     public string DisplayName { get; init; } = string.Empty;
 
+    public bool IsDefaultEnabled { get; init; }
+
     public ControlDeviceTaskKind Kind { get; init; }
 
     public string Address { get; init; } = string.Empty;
@@ -321,9 +323,37 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
                 {
                     Id = "x32.xremote",
                     DisplayName = "Maintain /xremote",
+                    IsDefaultEnabled = true,
                     Kind = ControlDeviceTaskKind.PeriodicOscSend,
                     Address = "/xremote",
                     IntervalMs = 8000,
+                },
+                new ControlDeviceTaskProfile
+                {
+                    Id = "x32.subscribe.ch01.fader",
+                    DisplayName = "Subscribe Ch 01 fader (optional)",
+                    Kind = ControlDeviceTaskKind.PeriodicOscSend,
+                    Address = "/subscribe",
+                    IntervalMs = 8000,
+                    Arguments =
+                    [
+                        new ControlOscArgumentConfig { Kind = ControlOscArgumentKind.String, StringValue = X32Presets.ChannelFaderAddress(1) },
+                        new ControlOscArgumentConfig { Kind = ControlOscArgumentKind.Int32, IntegerValue = 50 },
+                    ],
+                },
+                new ControlDeviceTaskProfile
+                {
+                    Id = "x32.meters.bank6",
+                    DisplayName = "Subscribe meter bank 6 (optional)",
+                    Kind = ControlDeviceTaskKind.PeriodicOscSend,
+                    Address = "/meters",
+                    IntervalMs = 8000,
+                    Arguments =
+                    [
+                        new ControlOscArgumentConfig { Kind = ControlOscArgumentKind.String, StringValue = "/meters/6" },
+                        new ControlOscArgumentConfig { Kind = ControlOscArgumentKind.Int32, IntegerValue = 16 },
+                        new ControlOscArgumentConfig { Kind = ControlOscArgumentKind.Int32, IntegerValue = 1 },
+                    ],
                 },
             ],
         };

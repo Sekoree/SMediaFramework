@@ -17,6 +17,7 @@ public interface IControlScriptTemplateRepository
 public sealed class BuiltInControlScriptTemplateRepository : IControlScriptTemplateRepository
 {
     public const string XTouchMiniX32FadersTemplateId = "xtouch-mini-x32-faders";
+    public const string XTouchMiniX32MutesTemplateId = "xtouch-mini-x32-mutes";
 
     public static BuiltInControlScriptTemplateRepository Instance { get; } = new();
 
@@ -32,6 +33,12 @@ public sealed class BuiltInControlScriptTemplateRepository : IControlScriptTempl
                 "Scripts/xtouch-mini-x32-faders.mnd",
                 "Maps X-Touch Mini MC-mode encoder CC16..CC23 to X32 channel faders 1..8 using relative speed values.",
                 XTouchMiniX32FadersSource),
+            new ControlScriptTemplate(
+                XTouchMiniX32MutesTemplateId,
+                "X-Touch Mini buttons -> X32 mutes 1-8",
+                "Scripts/xtouch-mini-x32-mutes.mnd",
+                "Maps X-Touch Mini MC-mode buttons 1..8 to X32 channel mute toggles using cached X32 state when available.",
+                XTouchMiniX32MutesSource),
         ];
     }
 
@@ -71,6 +78,43 @@ public sealed class BuiltInControlScriptTemplateRepository : IControlScriptTempl
 
             osc.send("x32", address, osc.float32(next));
             osc.cacheSet("x32", address, next);
+        }
+        """;
+
+    public const string XTouchMiniX32MutesSource =
+        """
+        const defaultOnValue = true;
+
+        fun buttonToChannel(note) {
+            if (note == 89) return 1;
+            if (note == 90) return 2;
+            if (note == 40) return 3;
+            if (note == 41) return 4;
+            if (note == 42) return 5;
+            if (note == 43) return 6;
+            if (note == 44) return 7;
+            if (note == 45) return 8;
+            return 0;
+        }
+
+        fun cachedOnState(deviceKey, address, fallback) {
+            return osc.cacheFloat(deviceKey, address, fallback ? 1 : 0) != 0;
+        }
+
+        export fun onXTouchMuteButton(event, context) {
+            if (!event.midi.isNoteOn || event.midi.velocity == 0)
+                return;
+
+            var channel = buttonToChannel(event.midi.note);
+            if (channel == 0)
+                return;
+
+            var address = x32.channelMuteAddress(channel);
+            var currentOn = cachedOnState("x32", address, defaultOnValue);
+            var nextOn = !currentOn;
+
+            osc.send("x32", address, osc.int32(nextOn ? 1 : 0));
+            osc.cacheSet("x32", address, nextOn ? 1 : 0);
         }
         """;
 }

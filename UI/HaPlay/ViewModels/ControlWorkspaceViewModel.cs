@@ -42,6 +42,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<ControlScriptRowViewModel> ScriptRows { get; } = new();
 
+    public ObservableCollection<ControlScriptDiagnosticRowViewModel> ScriptDiagnostics { get; } = new();
+
     public ObservableCollection<ControlStructureRowViewModel> StructureRows { get; } = new();
 
     public IReadOnlyList<string> MonitorDirectionOptions { get; } =
@@ -104,6 +106,9 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     [ObservableProperty]
     private string _scriptEditorStatus = string.Empty;
 
+    [ObservableProperty]
+    private string _exportedFunctionsSummary = "(no exports)";
+
     partial void OnFilterTextChanged(string value) => _filterDirty = true;
 
     partial void OnErrorsOnlyChanged(bool value) => _filterDirty = true;
@@ -119,6 +124,9 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         LoadSelectedScriptText(value);
         SaveSelectedScriptCommand.NotifyCanExecuteChanged();
     }
+
+    partial void OnSelectedScriptTextChanged(string value) =>
+        RefreshScriptAnalysis(SelectedScriptRow);
 
     public int DeviceCount => _config.Devices.Count;
 
@@ -335,6 +343,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, SelectedScriptText);
         ScriptEditorStatus = $"Saved {SelectedScriptRow.Script.ScriptPath}.";
+        RefreshScriptAnalysis(SelectedScriptRow);
     }
 
     private bool CanSaveSelectedScript() =>
@@ -514,6 +523,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         {
             SelectedScriptText = string.Empty;
             ScriptEditorStatus = "No script selected.";
+            ExportedFunctionsSummary = "(no exports)";
+            ScriptDiagnostics.Clear();
             return;
         }
 
@@ -524,6 +535,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             ScriptEditorStatus = string.IsNullOrWhiteSpace(row.Script.ScriptPath)
                 ? "Script has no file path."
                 : "Open or save the project before editing project-relative scripts.";
+            ExportedFunctionsSummary = "(no exports)";
+            ScriptDiagnostics.Clear();
+            if (string.IsNullOrWhiteSpace(row.Script.ScriptPath))
+                ScriptDiagnostics.Add(new ControlScriptDiagnosticRowViewModel("Compile", "Script path is required.", isError: true));
             return;
         }
 
@@ -531,11 +546,66 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         {
             SelectedScriptText = string.Empty;
             ScriptEditorStatus = $"New file: {row.Script.ScriptPath}.";
+            RefreshScriptAnalysis(row);
             return;
         }
 
         SelectedScriptText = File.ReadAllText(path);
         ScriptEditorStatus = row.Script.ScriptPath;
+        RefreshScriptAnalysis(row);
+    }
+
+    private void RefreshScriptAnalysis(ControlScriptRowViewModel? row)
+    {
+        ScriptDiagnostics.Clear();
+        if (row is null || string.IsNullOrWhiteSpace(row.Script.ScriptPath))
+        {
+            ExportedFunctionsSummary = "(no exports)";
+            return;
+        }
+
+        try
+        {
+            var host = new ControlScriptFileHost(new OverlayControlScriptSourceProvider(
+                CreateSourceProvider(),
+                row.Script.ScriptPath,
+                SelectedScriptText));
+            var module = host.LoadModule(row.Script.ScriptPath);
+            var exports = module.ExportedFunctionNames;
+            ExportedFunctionsSummary = exports.Count == 0
+                ? "(no exports)"
+                : string.Join(", ", exports);
+            ValidateTriggerExports(row.Script, exports);
+        }
+        catch (Exception ex)
+        {
+            ExportedFunctionsSummary = $"scan failed: {ex.Message}";
+            ScriptDiagnostics.Add(new ControlScriptDiagnosticRowViewModel("Compile", ex.Message, isError: true));
+        }
+    }
+
+    private void ValidateTriggerExports(ControlScriptConfig script, IReadOnlyList<string> exports)
+    {
+        var exportedFunctions = exports.ToHashSet(StringComparer.Ordinal);
+        foreach (var trigger in script.Triggers)
+        {
+            if (string.IsNullOrWhiteSpace(trigger.FunctionName))
+            {
+                ScriptDiagnostics.Add(new ControlScriptDiagnosticRowViewModel(
+                    "Compile",
+                    $"{trigger.Kind} trigger has no function name.",
+                    isError: true));
+                continue;
+            }
+
+            if (!exportedFunctions.Contains(trigger.FunctionName))
+            {
+                ScriptDiagnostics.Add(new ControlScriptDiagnosticRowViewModel(
+                    "Compile",
+                    $"{trigger.Kind} trigger references missing export '{trigger.FunctionName}'.",
+                    isError: true));
+            }
+        }
     }
 
     private string? ResolveScriptPath(string scriptPath)
@@ -1106,5 +1176,46 @@ public sealed class ControlScriptRowViewModel : ViewModelBase
         if (trigger.MidiNote is { } note)
             label += $" note{note}";
         return label;
+    }
+}
+
+public sealed class ControlScriptDiagnosticRowViewModel
+{
+    public ControlScriptDiagnosticRowViewModel(string stage, string message, bool isError)
+    {
+        Stage = stage;
+        Message = message;
+        IsError = isError;
+    }
+
+    public string Stage { get; }
+
+    public string Message { get; }
+
+    public bool IsError { get; }
+}
+
+internal sealed class OverlayControlScriptSourceProvider : IControlScriptSourceProvider
+{
+    private readonly IControlScriptSourceProvider _inner;
+    private readonly string _overlayPath;
+    private readonly string _overlaySource;
+
+    public OverlayControlScriptSourceProvider(IControlScriptSourceProvider inner, string overlayPath, string overlaySource)
+    {
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        _overlayPath = ControlScriptPath.Normalize(overlayPath);
+        _overlaySource = overlaySource ?? string.Empty;
+    }
+
+    public bool TryReadScript(string scriptPath, out string source)
+    {
+        if (string.Equals(ControlScriptPath.Normalize(scriptPath), _overlayPath, StringComparison.OrdinalIgnoreCase))
+        {
+            source = _overlaySource;
+            return true;
+        }
+
+        return _inner.TryReadScript(scriptPath, out source);
     }
 }

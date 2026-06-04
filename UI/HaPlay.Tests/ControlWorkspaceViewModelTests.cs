@@ -87,11 +87,63 @@ public sealed class ControlWorkspaceViewModelTests
 
             Assert.Equal("Control", Assert.Single(vm.ScriptRows).Name);
             Assert.Contains("return 1", vm.SelectedScriptText);
+            Assert.Equal("run", vm.ExportedFunctionsSummary);
+            Assert.Empty(vm.ScriptDiagnostics);
 
             vm.SelectedScriptText = "export fun run() { return 2; }";
             vm.SaveSelectedScriptCommand.Execute(null);
 
             Assert.Contains("return 2", await File.ReadAllTextAsync(scriptPath));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ScriptAnalysis_ReportsMissingTriggerExportsFromUnsavedEditorText()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "haplay-script-diagnostics-" + Guid.NewGuid().ToString("N"));
+        var scriptPath = Path.Combine(root, "Scripts", "control.mnd");
+        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
+        await File.WriteAllTextAsync(scriptPath, "export fun run() { return 1; }");
+
+        try
+        {
+            await using var vm = new ControlWorkspaceViewModel();
+            vm.SetProjectRoot(root);
+            vm.LoadConfig(new ControlSystemConfig
+            {
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Name = "Control",
+                        ScriptPath = "Scripts/control.mnd",
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.Manual,
+                                FunctionName = "run",
+                            },
+                        ],
+                    },
+                ],
+            });
+
+            Assert.Equal("run", vm.ExportedFunctionsSummary);
+            Assert.Empty(vm.ScriptDiagnostics);
+
+            vm.SelectedScriptText = "export fun other() { return 2; }";
+
+            Assert.Equal("other", vm.ExportedFunctionsSummary);
+            var diagnostic = Assert.Single(vm.ScriptDiagnostics);
+            Assert.Equal("Compile", diagnostic.Stage);
+            Assert.Contains("missing export 'run'", diagnostic.Message);
+            Assert.True(diagnostic.IsError);
         }
         finally
         {
@@ -162,6 +214,7 @@ public sealed class ControlWorkspaceViewModelTests
 
             var savedPath = Path.Combine(root, "Scripts", "edited.mnd");
             Assert.Contains("return 42", await File.ReadAllTextAsync(savedPath));
+            Assert.Equal("run", vm.ExportedFunctionsSummary);
         }
         finally
         {

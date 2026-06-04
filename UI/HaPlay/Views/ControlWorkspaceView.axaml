@@ -99,11 +99,11 @@
 
     <!-- Script editor -->
     <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
-      <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,220,Auto,Auto" ColumnSpacing="10" RowSpacing="6">
+      <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,220,Auto,90,Auto" ColumnSpacing="10" RowSpacing="6">
         <TextBlock Grid.Row="0" Grid.Column="0" Text="Scripts" FontWeight="SemiBold" />
         <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ScriptEditorStatus}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
         <ListBox Grid.Row="1"
-                 Grid.RowSpan="3"
+                 Grid.RowSpan="4"
                  Grid.Column="0"
                  ItemsSource="{Binding ScriptRows}"
                  SelectedItem="{Binding SelectedScriptRow, Mode=TwoWay}">
@@ -128,7 +128,7 @@
         <Grid Grid.Row="2"
               Grid.Column="1"
               ColumnDefinitions="Auto,*,Auto,140,Auto,120"
-              RowDefinitions="Auto,Auto,Auto"
+              RowDefinitions="Auto,Auto,Auto,Auto"
               ColumnSpacing="8"
               RowSpacing="6">
           <CheckBox Grid.Row="0"
@@ -175,8 +175,38 @@
                      Text="{Binding SelectedScriptRow.TriggerSummary}"
                      Opacity="0.75"
                      TextTrimming="CharacterEllipsis" />
+          <TextBlock Grid.Row="3"
+                     Grid.Column="0"
+                     Text="Exports"
+                     VerticalAlignment="Center" />
+          <TextBlock Grid.Row="3"
+                     Grid.Column="1"
+                     Grid.ColumnSpan="5"
+                     Text="{Binding ExportedFunctionsSummary}"
+                     Opacity="0.75"
+                     TextTrimming="CharacterEllipsis" />
         </Grid>
-        <Button Grid.Row="3"
+        <Border Grid.Row="3"
+                Grid.Column="1"
+                BorderBrush="#22808080"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="6">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="Diagnostics" FontWeight="SemiBold" Margin="0,0,0,4" />
+            <ListBox ItemsSource="{Binding ScriptDiagnostics}" Background="Transparent">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:ControlScriptDiagnosticRowViewModel">
+                  <Grid ColumnDefinitions="80,*" ColumnSpacing="8" Classes.error="{Binding IsError}">
+                    <TextBlock Grid.Column="0" Text="{Binding Stage}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="1" Text="{Binding Message}" TextTrimming="CharacterEllipsis" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+        <Button Grid.Row="4"
                 Grid.Column="1"
                 Content="Save Script"
                 HorizontalAlignment="Right"

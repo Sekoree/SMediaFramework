@@ -88,7 +88,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Main stereo fader/mute commands.
   - [x] X32 fader normalized/db conversions.
   - [x] Default periodic `/xremote` task.
-  - [ ] Optional `/subscribe` and `/meters` task definitions.
+  - [x] Optional `/subscribe` and `/meters` task definitions.
 
 ## Phase 2: Device Binding And Sessions
 
@@ -250,13 +250,13 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] AvaloniaEdit text editor.
   - [x] Save project-relative script files.
   - [x] Script path selector/project-relative path field.
-  - [ ] Exported function list.
+  - [x] Exported function list.
   - [x] Trigger summary display.
   - [ ] Trigger editor.
   - [x] Scope selector.
   - [x] Enable/disable.
   - [x] Failure policy editor.
-  - [ ] Diagnostics panel.
+  - [x] Diagnostics panel.
 - [ ] Learn mode:
   - [ ] Capture selected MIDI control from monitor traffic.
   - [ ] Generate trigger declaration or script snippet.
@@ -273,7 +273,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [ ] Document JSON lines monitor capture/replay.
 - [ ] Add starter scripts:
   - [x] X-Touch Mini encoder -> X32 fader.
-  - [ ] X-Touch Mini button -> X32 mute.
+  - [x] X-Touch Mini button -> X32 mute.
   - [ ] Layer enabled -> X32 initial value requests.
   - [ ] X32 cache update -> MIDI LED/ring feedback.
 
@@ -310,6 +310,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Control workspace structure list projection.
   - [x] Control workspace script editor file load/save.
   - [x] Control workspace script metadata editor.
+  - [x] Control workspace script diagnostics panel.
   - [x] Live monitor direction/protocol/device filters.
   - [x] Periodic OSC send manager.
   - [x] Control-system runtime session tick orchestration.

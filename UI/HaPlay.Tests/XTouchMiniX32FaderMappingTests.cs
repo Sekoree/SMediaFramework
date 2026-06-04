@@ -110,4 +110,18 @@ public sealed class XTouchMiniX32FaderMappingTests
         Assert.Contains("x32.channelFaderAddress(channel)", template.Source);
         Assert.Contains("osc.send(\"x32\", address, osc.float32(next));", template.Source);
     }
+
+    [Fact]
+    public void BuiltInTemplate_ProvidesExportedXTouchMiniX32MuteHandler()
+    {
+        var repository = BuiltInControlScriptTemplateRepository.Instance;
+        var template = repository.FindById(BuiltInControlScriptTemplateRepository.XTouchMiniX32MutesTemplateId);
+
+        Assert.NotNull(template);
+        Assert.Equal("Scripts/xtouch-mini-x32-mutes.mnd", template.SuggestedPath);
+        Assert.Contains("export fun onXTouchMuteButton", template.Source);
+        Assert.Contains("if (note == 89) return 1;", template.Source);
+        Assert.Contains("x32.channelMuteAddress(channel)", template.Source);
+        Assert.Contains("osc.send(\"x32\", address, osc.int32(nextOn ? 1 : 0));", template.Source);
+    }
 }

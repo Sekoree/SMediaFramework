@@ -90,11 +90,25 @@ public sealed class ControlDeviceProfileTests
         Assert.Contains(profile.Commands, c => c.Id == "x32.matrix.06.fader" && c.Address == "/mtx/06/mix/fader");
         Assert.Contains(profile.Commands, c => c.Id == "x32.main.st.fader" && c.Address == "/main/st/mix/fader");
 
-        var task = Assert.Single(profile.Tasks);
-        Assert.Equal("x32.xremote", task.Id);
-        Assert.Equal(ControlDeviceTaskKind.PeriodicOscSend, task.Kind);
-        Assert.Equal("/xremote", task.Address);
-        Assert.Equal(8000, task.IntervalMs);
+        Assert.Equal(3, profile.Tasks.Count);
+        var xremote = Assert.Single(profile.Tasks, t => t.Id == "x32.xremote");
+        Assert.True(xremote.IsDefaultEnabled);
+        Assert.Equal(ControlDeviceTaskKind.PeriodicOscSend, xremote.Kind);
+        Assert.Equal("/xremote", xremote.Address);
+        Assert.Equal(8000, xremote.IntervalMs);
+
+        var subscribe = Assert.Single(profile.Tasks, t => t.Id == "x32.subscribe.ch01.fader");
+        Assert.False(subscribe.IsDefaultEnabled);
+        Assert.Equal("/subscribe", subscribe.Address);
+        Assert.Equal("/ch/01/mix/fader", subscribe.Arguments[0].StringValue);
+        Assert.Equal(50, subscribe.Arguments[1].IntegerValue);
+
+        var meters = Assert.Single(profile.Tasks, t => t.Id == "x32.meters.bank6");
+        Assert.False(meters.IsDefaultEnabled);
+        Assert.Equal("/meters", meters.Address);
+        Assert.Equal("/meters/6", meters.Arguments[0].StringValue);
+        Assert.Equal(16, meters.Arguments[1].IntegerValue);
+        Assert.Equal(1, meters.Arguments[2].IntegerValue);
 
         Assert.Empty(ControlDeviceProfileValidator.Validate(profile));
     }
