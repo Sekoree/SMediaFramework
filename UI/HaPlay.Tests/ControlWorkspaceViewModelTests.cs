@@ -357,6 +357,41 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public void BuildX32CommandRows_ListsProfileCommandsWithCacheValues()
+    {
+        var x32Id = Guid.NewGuid();
+        var config = new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = x32Id,
+                    Name = "X32",
+                    ProfileId = "behringer.x32.osc",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig { Alias = "x32" },
+                },
+            ],
+        };
+        var cache = new ControlValueCache();
+        cache.SetNumber("x32", "/ch/01/mix/fader", 0.5, ControlValueCacheSource.Incoming, timestamp: DateTimeOffset.Parse("2026-06-04T10:00:00Z"));
+
+        var rows = ControlWorkspaceViewModel.BuildX32CommandRows(
+            config,
+            CompositeControlDeviceProfileRepository.ForProject(config),
+            cache);
+
+        Assert.Contains(rows, row =>
+            row.DeviceName == "X32"
+            && row.CommandName == "Ch 01 Fader"
+            && row.Address == "/ch/01/mix/fader"
+            && row.ValueKind == nameof(ControlCommandValueKind.NormalizedFloat)
+            && row.CacheValue.Contains("0.5"));
+        Assert.Contains(rows, row => row.CommandName == "Main Stereo Fader" && row.CacheValue == "(uncached)");
+    }
+
+    [Fact]
     public void ApplyMonitorFilters_FiltersByDirectionProtocolAndDevice()
     {
         var xtouchId = Guid.NewGuid();

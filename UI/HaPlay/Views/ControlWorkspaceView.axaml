@@ -83,6 +83,30 @@
       </DockPanel>
     </Border>
 
+    <!-- X32 command/cache browser -->
+    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+      <DockPanel>
+        <TextBlock DockPanel.Dock="Top" Text="X32 command/cache browser" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <ListBox ItemsSource="{Binding X32CommandRows}"
+                 MinHeight="80"
+                 MaxHeight="150"
+                 Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:ControlX32CommandRowViewModel">
+              <Grid ColumnDefinitions="140,180,*,100,90,150" ColumnSpacing="8" Margin="0,2">
+                <TextBlock Grid.Column="0" Text="{Binding DeviceName}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" Text="{Binding CommandName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="2" Text="{Binding Address}" FontFamily="Cascadia Code, Consolas, monospace" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" Text="{Binding ValueKind}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="4" Text="{Binding Access}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="5" Text="{Binding CacheValue}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Border>
+
     <!-- Test send -->
     <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <StackPanel Spacing="6">

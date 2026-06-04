@@ -52,7 +52,7 @@ public sealed class ControlScriptRuntime
             _ => ControlScriptTriggerKind.Manual,
         };
 
-        var dispatch = Dispatch(kind, evt, evt.OriginId, layerId: null, triggerId: null);
+        var dispatch = Dispatch(kind, evt, evt.OriginId, endpointId: evt.SourceNodeId, layerId: null, triggerId: null);
 
         if (cacheChanges.Count == 0)
             return dispatch with { CacheChanges = cacheChanges };
@@ -66,6 +66,7 @@ public sealed class ControlScriptRuntime
                 ControlScriptTriggerKind.OscCacheChanged,
                 cacheEvent,
                 evt.OriginId,
+                endpointId: evt.SourceNodeId,
                 layerId: null,
                 triggerId: null);
             invocations.AddRange(cacheDispatch.Invocations);
@@ -105,7 +106,7 @@ public sealed class ControlScriptRuntime
             health.State,
             previousState,
             health.Detail);
-        return Dispatch(ControlScriptTriggerKind.DeviceHealthChanged, evt, deviceInstanceId, layerId: null, triggerId: null);
+        return Dispatch(ControlScriptTriggerKind.DeviceHealthChanged, evt, deviceInstanceId, endpointId: null, layerId: null, triggerId: null);
     }
 
     public ControlScriptDispatchResult DispatchLayerEnabled(Guid layerId) =>
@@ -115,21 +116,22 @@ public sealed class ControlScriptRuntime
         DispatchLifecycle(ControlScriptTriggerKind.LayerDisabled, deviceInstanceId: null, layerId);
 
     public ControlScriptDispatchResult DispatchManual(Guid? scriptId = null, Guid? triggerId = null) =>
-        Dispatch(ControlScriptTriggerKind.Manual, evt: null, deviceInstanceId: null, layerId: null, scriptId, triggerId);
+        Dispatch(ControlScriptTriggerKind.Manual, evt: null, deviceInstanceId: null, endpointId: null, layerId: null, scriptId, triggerId);
 
     public ControlScriptDispatchResult DispatchPeriodic(Guid? scriptId = null, Guid? triggerId = null) =>
-        Dispatch(ControlScriptTriggerKind.Periodic, evt: null, deviceInstanceId: null, layerId: null, scriptId, triggerId);
+        Dispatch(ControlScriptTriggerKind.Periodic, evt: null, deviceInstanceId: null, endpointId: null, layerId: null, scriptId, triggerId);
 
     private ControlScriptDispatchResult DispatchLifecycle(
         ControlScriptTriggerKind kind,
         Guid? deviceInstanceId,
         Guid? layerId) =>
-        Dispatch(kind, evt: null, deviceInstanceId, layerId, scriptId: null, triggerId: null);
+        Dispatch(kind, evt: null, deviceInstanceId, endpointId: null, layerId, scriptId: null, triggerId: null);
 
     private ControlScriptDispatchResult Dispatch(
         ControlScriptTriggerKind kind,
         ControlEvent? evt,
         Guid? deviceInstanceId,
+        Guid? endpointId,
         Guid? layerId,
         Guid? scriptId = null,
         Guid? triggerId = null)
@@ -147,10 +149,10 @@ public sealed class ControlScriptRuntime
 
             foreach (var trigger in scriptState.Config.Triggers)
             {
-                if (!TriggerMatches(scriptState.Config, trigger, kind, evt, deviceInstanceId, layerId, triggerId))
+                if (!TriggerMatches(scriptState.Config, trigger, kind, evt, deviceInstanceId, endpointId, layerId, triggerId))
                     continue;
 
-                InvokeTrigger(scriptState, trigger, kind, evt, deviceInstanceId, layerId, invocations);
+                InvokeTrigger(scriptState, trigger, kind, evt, deviceInstanceId, endpointId, layerId, invocations);
             }
         }
 
@@ -272,6 +274,7 @@ public sealed class ControlScriptRuntime
         ControlScriptTriggerKind kind,
         ControlEvent? evt,
         Guid? deviceInstanceId,
+        Guid? endpointId,
         Guid? layerId,
         Guid? requestedTriggerId)
     {
@@ -293,6 +296,16 @@ public sealed class ControlScriptRuntime
         if (effectiveDeviceId.HasValue
             && kind != ControlScriptTriggerKind.DeviceDisabled
             && !IsDeviceEnabled(effectiveDeviceId.Value))
+            return false;
+
+        var effectiveEndpointId = endpointId ?? trigger.EndpointInstanceId ?? script.EndpointInstanceId;
+        if (trigger.EndpointInstanceId.HasValue && endpointId.HasValue && trigger.EndpointInstanceId.Value != endpointId.Value)
+            return false;
+        if (script.EndpointInstanceId.HasValue && endpointId.HasValue && script.EndpointInstanceId.Value != endpointId.Value)
+            return false;
+        if (endpointId is null
+            && effectiveEndpointId.HasValue
+            && kind is not (ControlScriptTriggerKind.Manual or ControlScriptTriggerKind.Periodic))
             return false;
 
         var effectiveLayerId = layerId ?? trigger.LayerId ?? script.LayerId;
@@ -363,6 +376,7 @@ public sealed class ControlScriptRuntime
         ControlScriptTriggerKind kind,
         ControlEvent? evt,
         Guid? deviceInstanceId,
+        Guid? endpointId,
         Guid? layerId,
         List<ControlScriptInvocationRecord> invocations)
     {
@@ -373,7 +387,7 @@ public sealed class ControlScriptRuntime
             var eventObject = evt is not null
                 ? ToMondEvent(scriptState.Module!.State, evt)
                 : ToMondLifecycleEvent(scriptState.Module!.State, kind, deviceInstanceId, layerId);
-            var contextObject = ToMondContext(scriptState.Module.State, script, trigger, deviceInstanceId, layerId);
+            var contextObject = ToMondContext(scriptState.Module.State, script, trigger, deviceInstanceId, endpointId, layerId);
             scriptState.Module.Invoke(trigger.FunctionName, eventObject, contextObject);
             scriptState.ConsecutiveFailures = 0;
             scriptState.LastError = null;
@@ -509,7 +523,7 @@ public sealed class ControlScriptRuntime
     private static OscCacheChangedControlEvent ToCacheChangedEvent(ControlEvent evt, ControlValueCacheChange change) =>
         new(
             change.Timestamp,
-            evt.OriginId,
+            evt.SourceNodeId,
             evt.OriginId,
             change.CorrelationId ?? evt.CorrelationId,
             change.Key.DeviceKey,
@@ -570,6 +584,7 @@ public sealed class ControlScriptRuntime
         ControlScriptConfig script,
         ControlScriptTriggerConfig trigger,
         Guid? deviceInstanceId,
+        Guid? endpointId,
         Guid? layerId)
     {
         var context = MondValue.Object(state);
@@ -580,6 +595,8 @@ public sealed class ControlScriptRuntime
         context["scope"] = script.Scope.ToString();
         if (deviceInstanceId.HasValue)
             context["deviceInstanceId"] = deviceInstanceId.Value.ToString();
+        if (endpointId.HasValue)
+            context["endpointInstanceId"] = endpointId.Value.ToString();
         if (layerId.HasValue)
             context["layerId"] = layerId.Value.ToString();
         return context;

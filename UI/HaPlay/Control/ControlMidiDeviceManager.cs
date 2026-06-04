@@ -25,13 +25,15 @@ public sealed class ControlMidiDeviceManager
         int value,
         bool highResolution14Bit = false,
         DateTimeOffset? receivedAtUtc = null,
+        byte[]? rawBytes = null,
         CancellationToken cancellationToken = default)
     {
         var timestamp = receivedAtUtc ?? DateTimeOffset.UtcNow;
+        var monitorRawBytes = _config.Monitor.IncludeRawBytes ? rawBytes : null;
         var devices = ResolveDevices(input).ToArray();
         if (devices.Length == 0)
         {
-            _monitor.Record(CreateMidiInputRecord(input, device: null, channel, controller, value, highResolution14Bit, ControlMonitorResult.Dropped));
+            _monitor.Record(CreateMidiInputRecord(input, device: null, channel, controller, value, highResolution14Bit, ControlMonitorResult.Dropped, monitorRawBytes));
             return [];
         }
 
@@ -39,7 +41,7 @@ public sealed class ControlMidiDeviceManager
         foreach (var device in devices)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _monitor.Record(CreateMidiInputRecord(input, device, channel, controller, value, highResolution14Bit, ControlMonitorResult.Received));
+            _monitor.Record(CreateMidiInputRecord(input, device, channel, controller, value, highResolution14Bit, ControlMonitorResult.Received, monitorRawBytes));
             var evt = new MidiControlEvent(
                 timestamp,
                 device.Id,
@@ -81,6 +83,7 @@ public sealed class ControlMidiDeviceManager
             value,
             highResolution14Bit,
             receivedAtUtc,
+            rawBytes: null,
             cancellationToken);
 
     public async ValueTask<IReadOnlyList<ControlMidiDeviceDispatchResult>> DispatchNoteAsync(
@@ -90,13 +93,15 @@ public sealed class ControlMidiDeviceManager
         int velocity,
         bool isNoteOn,
         DateTimeOffset? receivedAtUtc = null,
+        byte[]? rawBytes = null,
         CancellationToken cancellationToken = default)
     {
         var timestamp = receivedAtUtc ?? DateTimeOffset.UtcNow;
+        var monitorRawBytes = _config.Monitor.IncludeRawBytes ? rawBytes : null;
         var devices = ResolveDevices(input).ToArray();
         if (devices.Length == 0)
         {
-            _monitor.Record(CreateMidiNoteInputRecord(input, device: null, channel, note, velocity, isNoteOn, ControlMonitorResult.Dropped));
+            _monitor.Record(CreateMidiNoteInputRecord(input, device: null, channel, note, velocity, isNoteOn, ControlMonitorResult.Dropped, monitorRawBytes));
             return [];
         }
 
@@ -104,7 +109,7 @@ public sealed class ControlMidiDeviceManager
         foreach (var device in devices)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _monitor.Record(CreateMidiNoteInputRecord(input, device, channel, note, velocity, isNoteOn, ControlMonitorResult.Received));
+            _monitor.Record(CreateMidiNoteInputRecord(input, device, channel, note, velocity, isNoteOn, ControlMonitorResult.Received, monitorRawBytes));
             var evt = new MidiNoteControlEvent(
                 timestamp,
                 device.Id,
@@ -146,6 +151,7 @@ public sealed class ControlMidiDeviceManager
             velocity,
             isNoteOn,
             receivedAtUtc,
+            rawBytes: null,
             cancellationToken);
 
     private IEnumerable<ControlDeviceInstanceConfig> ResolveDevices(ControlMidiInputIdentity input)
@@ -193,7 +199,8 @@ public sealed class ControlMidiDeviceManager
         int controller,
         int value,
         bool highResolution14Bit,
-        ControlMonitorResult result) =>
+        ControlMonitorResult result,
+        byte[]? rawBytes) =>
         new()
         {
             Direction = result == ControlMonitorResult.Dropped ? ControlMonitorDirection.Dropped : ControlMonitorDirection.Input,
@@ -208,6 +215,7 @@ public sealed class ControlMidiDeviceManager
             MidiValue = value,
             MidiHighResolution14Bit = highResolution14Bit,
             Message = result == ControlMonitorResult.Dropped ? "No matching MIDI device" : nameof(ControlScriptMidiMessageKind.ControlChange),
+            RawBytes = rawBytes,
         };
 
     private static ControlMonitorRecord CreateMidiNoteInputRecord(
@@ -217,7 +225,8 @@ public sealed class ControlMidiDeviceManager
         int note,
         int velocity,
         bool isNoteOn,
-        ControlMonitorResult result) =>
+        ControlMonitorResult result,
+        byte[]? rawBytes) =>
         new()
         {
             Direction = result == ControlMonitorResult.Dropped ? ControlMonitorDirection.Dropped : ControlMonitorDirection.Input,
@@ -233,6 +242,7 @@ public sealed class ControlMidiDeviceManager
             Message = result == ControlMonitorResult.Dropped
                 ? "No matching MIDI device"
                 : isNoteOn ? nameof(ControlScriptMidiMessageKind.NoteOn) : nameof(ControlScriptMidiMessageKind.NoteOff),
+            RawBytes = rawBytes,
         };
 
     private static string? FormatDeviceInput(ControlDeviceBindingConfig binding)

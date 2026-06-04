@@ -311,6 +311,71 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void DispatchControlEvent_EndpointScopeMatchesOscListenerSource()
+    {
+        var firstListenerId = Guid.NewGuid();
+        var secondListenerId = Guid.NewGuid();
+        var oscDeviceId = Guid.NewGuid();
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Endpoint script",
+            ScriptPath = "Scripts/main.mnd",
+            Scope = ControlScriptScope.Endpoint,
+            EndpointInstanceId = firstListenerId,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.OscMessage,
+                    FunctionName = "onOsc",
+                    EndpointInstanceId = firstListenerId,
+                    OscAddressPattern = "/ch/*/mix/fader",
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onOsc(event, context) {
+                        osc.send("x32", "/endpoint/" + context.endpointInstanceId, osc.float32(event.value));
+                    }
+                    """,
+            },
+            sink);
+
+        var first = runtime.DispatchControlEvent(new OscControlEvent(
+            DateTimeOffset.UtcNow,
+            firstListenerId,
+            oscDeviceId,
+            Guid.NewGuid(),
+            "/ch/01/mix/fader",
+            [OSCArgument.Float32(0.6f)]));
+        var second = runtime.DispatchControlEvent(new OscControlEvent(
+            DateTimeOffset.UtcNow,
+            secondListenerId,
+            oscDeviceId,
+            Guid.NewGuid(),
+            "/ch/01/mix/fader",
+            [OSCArgument.Float32(0.7f)]));
+
+        Assert.True(Assert.Single(first.Invocations).Succeeded);
+        Assert.Empty(second.Invocations);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal($"/endpoint/{firstListenerId}", message.Address);
+        Assert.Equal(0.6, Assert.Single(message.Arguments).NumberValue, precision: 6);
+    }
+
+    [Fact]
     public void DispatchControlEvent_FiresOscCacheChangedTriggerOnIncomingValueChange()
     {
         var oscDeviceId = Guid.NewGuid();
@@ -348,6 +413,62 @@ public sealed class ControlScriptRuntimeTests
         Assert.Equal("/ch/01/mix/fader", change.Key.Address);
         var message = Assert.Single(sink.OscMessages);
         Assert.Equal("/feedback/ch/01/mix/fader", message.Address);
+        Assert.Equal(0.6, Assert.Single(message.Arguments).NumberValue, precision: 6);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_EndpointScopedCacheChangedPreservesOriginalSource()
+    {
+        var listenerId = Guid.NewGuid();
+        var oscDeviceId = Guid.NewGuid();
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Endpoint cache",
+            ScriptPath = "Scripts/main.mnd",
+            Scope = ControlScriptScope.Endpoint,
+            EndpointInstanceId = listenerId,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.OscCacheChanged,
+                    FunctionName = "onCache",
+                    EndpointInstanceId = listenerId,
+                    OscAddressPattern = "/ch/*/mix/fader",
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onCache(event, context) {
+                        osc.send("x32", "/cache/" + context.endpointInstanceId, osc.float32(event.value));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(new OscControlEvent(
+            DateTimeOffset.UtcNow,
+            listenerId,
+            oscDeviceId,
+            Guid.NewGuid(),
+            "/ch/01/mix/fader",
+            [OSCArgument.Float32(0.6f)]));
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal($"/cache/{listenerId}", message.Address);
         Assert.Equal(0.6, Assert.Single(message.Arguments).NumberValue, precision: 6);
     }
 
@@ -901,6 +1022,116 @@ public sealed class ControlScriptRuntimeTests
 
         Assert.True(Assert.Single(result.Invocations).Succeeded);
         Assert.Equal("/layer/off", Assert.Single(sink.OscMessages).Address);
+    }
+
+    [Fact]
+    public void DispatchLayerEnabled_ExecutesBuiltInX32InitialRequestTemplate()
+    {
+        var layerId = Guid.NewGuid();
+        var template = BuiltInControlScriptTemplateRepository.Instance.FindById(
+            BuiltInControlScriptTemplateRepository.X32LayerInitialRequestsTemplateId);
+        Assert.NotNull(template);
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Layer startup",
+            ScriptPath = template.SuggestedPath,
+            Scope = ControlScriptScope.Layer,
+            LayerId = layerId,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.LayerEnabled,
+                    FunctionName = "onX32LayerEnabled",
+                    LayerId = layerId,
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Layers = [new ControlLayerConfig { Id = layerId, Name = "A", IsEnabled = true }],
+                Scripts = [script],
+            },
+            new Dictionary<string, string> { [template.SuggestedPath] = template.Source },
+            sink);
+
+        var result = runtime.DispatchLayerEnabled(layerId);
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        Assert.Equal(16, sink.OscMessages.Count);
+        Assert.Collection(
+            sink.OscMessages.Take(4),
+            message => Assert.Equal("/ch/01/mix/fader", message.Address),
+            message => Assert.Equal("/ch/01/mix/on", message.Address),
+            message => Assert.Equal("/ch/02/mix/fader", message.Address),
+            message => Assert.Equal("/ch/02/mix/on", message.Address));
+        Assert.All(sink.OscMessages, message =>
+        {
+            Assert.Equal("x32", message.DeviceKey);
+            Assert.Empty(message.Arguments);
+        });
+    }
+
+    [Fact]
+    public void DispatchControlEvent_ExecutesBuiltInXTouchMiniX32MuteFeedbackTemplate()
+    {
+        var oscDeviceId = Guid.NewGuid();
+        var template = BuiltInControlScriptTemplateRepository.Instance.FindById(
+            BuiltInControlScriptTemplateRepository.XTouchMiniX32MuteFeedbackTemplateId);
+        Assert.NotNull(template);
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Mute feedback",
+            ScriptPath = template.SuggestedPath,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.OscCacheChanged,
+                    FunctionName = "onX32MuteCacheChanged",
+                    DeviceInstanceId = oscDeviceId,
+                    OscAddressPattern = "/ch/*/mix/on",
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string> { [template.SuggestedPath] = template.Source },
+            sink);
+
+        runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/01/mix/on", OSCArgument.Int32(0)));
+        runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/01/mix/on", OSCArgument.Int32(1)));
+        runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/09/mix/on", OSCArgument.Int32(0)));
+
+        Assert.Collection(
+            sink.MidiMessages,
+            message =>
+            {
+                Assert.Equal("xtouch", message.DeviceKey);
+                Assert.Equal(ControlScriptMidiMessageKind.NoteOn, message.Kind);
+                Assert.Equal(1, message.Channel);
+                Assert.Equal(89, message.Note);
+                Assert.Equal(127, message.Velocity);
+            },
+            message =>
+            {
+                Assert.Equal("xtouch", message.DeviceKey);
+                Assert.Equal(ControlScriptMidiMessageKind.NoteOn, message.Kind);
+                Assert.Equal(1, message.Channel);
+                Assert.Equal(89, message.Note);
+                Assert.Equal(0, message.Velocity);
+            });
     }
 
     [Fact]

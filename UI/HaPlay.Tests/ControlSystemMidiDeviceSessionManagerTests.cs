@@ -68,13 +68,15 @@ public sealed class ControlSystemMidiDeviceSessionManagerTests
             && r.Direction == ControlMonitorDirection.Input
             && r.DeviceInstanceId == xtouchId
             && r.MidiController == 16
-            && r.MidiValue == 10);
+            && r.MidiValue == 10
+            && r.RawBytes is [0xB0, 16, 10]);
         Assert.Contains(monitor.Records, r =>
             r.Protocol == ControlMonitorProtocol.Midi
             && r.Direction == ControlMonitorDirection.Input
             && r.DeviceInstanceId == backupId
             && r.MidiNote == 84
-            && r.MidiValue == 127);
+            && r.MidiValue == 127
+            && r.RawBytes is [0x91, 84, 127]);
     }
 
     [Fact]

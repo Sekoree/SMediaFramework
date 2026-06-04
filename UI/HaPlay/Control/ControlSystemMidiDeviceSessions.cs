@@ -363,7 +363,8 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
                     message.Channel + 1,
                     message.Controller,
                     message.Value,
-                    message.IsHighResolution).ConfigureAwait(false);
+                    message.IsHighResolution,
+                    rawBytes: EncodeRawBytes(message)).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -386,7 +387,8 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
                     channel + 1,
                     note,
                     velocity,
-                    isNoteOn).ConfigureAwait(false);
+                    isNoteOn,
+                    rawBytes: EncodeRawBytes(channel, note, velocity, isNoteOn)).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -404,6 +406,23 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
                 Message = "MIDI input dispatch failed.",
                 ErrorMessage = errorMessage,
             });
+
+        private static byte[] EncodeRawBytes(ControlChange message)
+        {
+            var status = (byte)(0xB0 | (message.Channel & 0x0F));
+            if (!message.IsHighResolution)
+                return [status, message.Controller, (byte)(message.Value & 0x7F)];
+
+            var msb = (byte)((message.Value >> 7) & 0x7F);
+            var lsb = (byte)(message.Value & 0x7F);
+            return [status, message.Controller, msb, status, (byte)(message.Controller + 32), lsb];
+        }
+
+        private static byte[] EncodeRawBytes(byte channel, byte note, byte velocity, bool isNoteOn)
+        {
+            var status = (byte)((isNoteOn ? 0x90 : 0x80) | (channel & 0x0F));
+            return [status, note, velocity];
+        }
     }
 }
 

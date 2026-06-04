@@ -46,6 +46,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<ControlStructureRowViewModel> StructureRows { get; } = new();
 
+    public ObservableCollection<ControlX32CommandRowViewModel> X32CommandRows { get; } = new();
+
     public ObservableCollection<string> ProfileWarnings { get; } = new();
 
     public IReadOnlyList<string> MonitorDirectionOptions { get; } =
@@ -158,6 +160,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildScriptRows();
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildX32CommandRows(cache: null);
         _lastRenderedCount = -1;
         StatusMessage = "Disarmed.";
         NotifySummary();
@@ -240,6 +243,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             StatusMessage = "MIDI device updated. Re-arm control to apply device changes.";
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
         NotifySummary();
     }
 
@@ -265,6 +269,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             StatusMessage = "MIDI device updated. Re-arm control to apply device changes.";
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
         NotifySummary();
         return true;
     }
@@ -381,6 +386,46 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             ProfileWarnings.Add(warning);
     }
 
+    private void RebuildX32CommandRows(ControlValueCache? cache)
+    {
+        X32CommandRows.Clear();
+        foreach (var row in BuildX32CommandRows(_config, CompositeControlDeviceProfileRepository.ForProject(_config), cache))
+            X32CommandRows.Add(row);
+    }
+
+    internal static IReadOnlyList<ControlX32CommandRowViewModel> BuildX32CommandRows(
+        ControlSystemConfig config,
+        IControlDeviceProfileRepository repository,
+        ControlValueCache? cache)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(repository);
+
+        var rows = new List<ControlX32CommandRowViewModel>();
+        foreach (var device in config.Devices
+                     .Where(d => d.Protocol == ControlDeviceProtocol.Osc)
+                     .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var profile = repository.FindById(device.ProfileId);
+            if (profile is null || profile.Protocol != ControlDeviceProtocol.Osc || profile.Commands.Count == 0)
+                continue;
+
+            foreach (var command in profile.Commands.OrderBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase))
+            {
+                var cacheText = TryGetCommandCacheText(device, command, cache) ?? "(uncached)";
+                rows.Add(new ControlX32CommandRowViewModel(
+                    DeviceName: string.IsNullOrWhiteSpace(device.Name) ? "(unnamed OSC)" : device.Name,
+                    CommandName: string.IsNullOrWhiteSpace(command.DisplayName) ? command.Id : command.DisplayName,
+                    Address: command.Address,
+                    ValueKind: command.ValueKind.ToString(),
+                    Access: command.Access.ToString(),
+                    CacheValue: cacheText));
+            }
+        }
+
+        return rows;
+    }
+
     internal static IReadOnlyList<string> BuildProfileWarnings(
         ControlSystemConfig config,
         IControlDeviceProfileRepository repository)
@@ -494,6 +539,48 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         }
 
         return rows;
+    }
+
+    private static string? TryGetCommandCacheText(
+        ControlDeviceInstanceConfig device,
+        ControlCommandProfile command,
+        ControlValueCache? cache)
+    {
+        if (cache is null || string.IsNullOrWhiteSpace(command.Address))
+            return null;
+
+        foreach (var key in GetDeviceCacheKeys(device))
+        {
+            if (!cache.TryGet(new ControlValueCacheKey(key, command.Address), out var entry) || entry.IsStale)
+                continue;
+
+            return FormatCachedValue(entry);
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> GetDeviceCacheKeys(ControlDeviceInstanceConfig device)
+    {
+        yield return device.Id.ToString();
+        if (!string.IsNullOrWhiteSpace(device.Name))
+            yield return device.Name;
+        if (!string.IsNullOrWhiteSpace(device.Binding.Alias))
+            yield return device.Binding.Alias;
+        if (!string.IsNullOrWhiteSpace(device.ProfileId))
+            yield return device.ProfileId;
+    }
+
+    private static string FormatCachedValue(ControlValueCacheEntry entry)
+    {
+        var value = entry.Value.Kind switch
+        {
+            ControlCachedValueKind.Number => entry.Value.NumberValue.ToString("0.###", CultureInfo.InvariantCulture),
+            ControlCachedValueKind.String => entry.Value.StringValue ?? string.Empty,
+            ControlCachedValueKind.Boolean => entry.Value.BooleanValue ? "true" : "false",
+            _ => string.Empty,
+        };
+        return $"{value} ({entry.Source}, {entry.Timestamp.ToLocalTime():HH:mm:ss})";
     }
 
     private static void AddGroup(List<ControlStructureRowViewModel> rows, string name, int count) =>
@@ -882,6 +969,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (buffer is null || IsPaused)
             return;
 
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+
         var records = buffer.Records;
         if (records.Count == _lastRenderedCount && !_filterDirty)
             return;
@@ -1090,6 +1179,14 @@ public sealed class ControlStructureRowViewModel
 
     public double IndentWidth => Level * 16;
 }
+
+public sealed record ControlX32CommandRowViewModel(
+    string DeviceName,
+    string CommandName,
+    string Address,
+    string ValueKind,
+    string Access,
+    string CacheValue);
 
 public sealed class ControlScriptRowViewModel : ViewModelBase
 {

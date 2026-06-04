@@ -124,4 +124,31 @@ public sealed class XTouchMiniX32FaderMappingTests
         Assert.Contains("x32.channelMuteAddress(channel)", template.Source);
         Assert.Contains("osc.send(\"x32\", address, osc.int32(nextOn ? 1 : 0));", template.Source);
     }
+
+    [Fact]
+    public void BuiltInTemplate_ProvidesLayerEnabledX32InitialRequests()
+    {
+        var repository = BuiltInControlScriptTemplateRepository.Instance;
+        var template = repository.FindById(BuiltInControlScriptTemplateRepository.X32LayerInitialRequestsTemplateId);
+
+        Assert.NotNull(template);
+        Assert.Equal("Scripts/x32-layer-initial-requests.mnd", template.SuggestedPath);
+        Assert.Contains("export fun onX32LayerEnabled", template.Source);
+        Assert.Contains("osc.request(\"x32\", x32.channelFaderAddress(channel));", template.Source);
+        Assert.Contains("osc.request(\"x32\", x32.channelMuteAddress(channel));", template.Source);
+    }
+
+    [Fact]
+    public void BuiltInTemplate_ProvidesX32CacheToXTouchMiniMuteFeedback()
+    {
+        var repository = BuiltInControlScriptTemplateRepository.Instance;
+        var template = repository.FindById(BuiltInControlScriptTemplateRepository.XTouchMiniX32MuteFeedbackTemplateId);
+
+        Assert.NotNull(template);
+        Assert.Equal("Scripts/xtouch-mini-x32-mute-feedback.mnd", template.SuggestedPath);
+        Assert.Contains("export fun onX32MuteCacheChanged", template.Source);
+        Assert.Contains("if (channel == 1) return 89;", template.Source);
+        Assert.Contains("var ledVelocity = isOn ? 0 : 127;", template.Source);
+        Assert.Contains("midi.sendNoteOn(\"xtouch\", 1, note, ledVelocity);", template.Source);
+    }
 }

@@ -124,7 +124,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add monitor record model.
 - [~] Capture raw and decoded MIDI input.
   - [x] Capture decoded live CC/note input.
-  - [ ] Capture raw MIDI bytes from the PortMidi input path.
+  - [x] Capture raw MIDI bytes from the PortMidi input path.
 - [x] Capture MIDI output attempts and results.
 - [~] Capture raw and decoded OSC input.
 - [x] Capture OSC output attempts and results.
@@ -157,7 +157,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add per-command override support.
 - [x] Mark values stale when a device is disabled.
 - [x] Expose cache lookup to scripts.
-- [ ] Display cache values in the X32 command browser.
+- [x] Display cache values in the X32 command browser.
 
 ## Phase 5: Script Runtime
 
@@ -181,10 +181,10 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Disable failed scripts after configurable threshold.
 - [x] Add compile diagnostics.
 - [x] Add runtime diagnostics.
-- [~] Add script scopes:
+- [x] Add script scopes:
   - [x] Project.
   - [x] Device.
-  - [ ] Endpoint.
+  - [x] Endpoint.
   - [x] Layer.
 - [x] Add host-managed triggers:
   - [x] Device enabled.
@@ -232,8 +232,8 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [~] Device tree:
   - [x] MIDI devices.
   - [x] OSC devices.
-  - [ ] X32 endpoint and command browser.
-  - [ ] Cache view.
+  - [x] X32 endpoint and command browser.
+  - [x] Cache view.
   - [x] Layers.
   - [x] Scripts.
   - [x] Periodic sends.
@@ -265,19 +265,19 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 
 ## Phase 7: Documentation
 
-- [ ] Add user scripting reference.
-- [ ] Document custom Mond libraries and functions.
-- [ ] Document X-Touch Mini MC-mode setup.
-- [ ] Document X32 connection setup.
-- [ ] Document app-level OSC listeners and shared socket behavior.
-- [ ] Document OSC cache modes.
-- [ ] Document JSON lines monitor capture/replay.
+- [x] Add user scripting reference.
+- [x] Document custom Mond libraries and functions.
+- [x] Document X-Touch Mini MC-mode setup.
+- [x] Document X32 connection setup.
+- [x] Document app-level OSC listeners and shared socket behavior.
+- [x] Document OSC cache modes.
+- [x] Document JSON lines monitor capture/replay.
 - [x] Document external device profile JSON import/export.
-- [ ] Add starter scripts:
+- [x] Add starter scripts:
   - [x] X-Touch Mini encoder -> X32 fader.
   - [x] X-Touch Mini button -> X32 mute.
-  - [ ] Layer enabled -> X32 initial value requests.
-  - [ ] X32 cache update -> MIDI LED/ring feedback.
+  - [x] Layer enabled -> X32 initial value requests.
+  - [x] X32 cache update -> MIDI LED/ring feedback.
 
 ## Phase 8: Validation
 
@@ -306,6 +306,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Starter X-Touch Mini encoder -> X32 fader script execution.
   - [x] Script failure threshold.
   - [x] Trigger dispatch.
+  - [x] Endpoint script scope dispatch.
   - [x] Script runtime session bridge.
   - [x] X-Touch Mini relative encoder -> X32 fader helper.
   - [x] MIDI command router.

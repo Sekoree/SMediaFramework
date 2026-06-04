@@ -18,6 +18,8 @@ public sealed class BuiltInControlScriptTemplateRepository : IControlScriptTempl
 {
     public const string XTouchMiniX32FadersTemplateId = "xtouch-mini-x32-faders";
     public const string XTouchMiniX32MutesTemplateId = "xtouch-mini-x32-mutes";
+    public const string X32LayerInitialRequestsTemplateId = "x32-layer-initial-requests";
+    public const string XTouchMiniX32MuteFeedbackTemplateId = "xtouch-mini-x32-mute-feedback";
 
     public static BuiltInControlScriptTemplateRepository Instance { get; } = new();
 
@@ -39,6 +41,18 @@ public sealed class BuiltInControlScriptTemplateRepository : IControlScriptTempl
                 "Scripts/xtouch-mini-x32-mutes.mnd",
                 "Maps X-Touch Mini MC-mode buttons 1..8 to X32 channel mute toggles using cached X32 state when available.",
                 XTouchMiniX32MutesSource),
+            new ControlScriptTemplate(
+                X32LayerInitialRequestsTemplateId,
+                "Layer enabled -> X32 initial value requests",
+                "Scripts/x32-layer-initial-requests.mnd",
+                "Requests X32 channel fader and mute values for channels 1..8 when a HaPlay layer becomes enabled.",
+                X32LayerInitialRequestsSource),
+            new ControlScriptTemplate(
+                XTouchMiniX32MuteFeedbackTemplateId,
+                "X32 mute cache -> X-Touch Mini button LEDs",
+                "Scripts/xtouch-mini-x32-mute-feedback.mnd",
+                "Updates X-Touch Mini MC-mode button LEDs 1..8 from X32 channel mute cache changes.",
+                XTouchMiniX32MuteFeedbackSource),
         ];
     }
 
@@ -115,6 +129,54 @@ public sealed class BuiltInControlScriptTemplateRepository : IControlScriptTempl
 
             osc.send("x32", address, osc.int32(nextOn ? 1 : 0));
             osc.cacheSet("x32", address, nextOn ? 1 : 0);
+        }
+        """;
+
+    public const string X32LayerInitialRequestsSource =
+        """
+        export fun onX32LayerEnabled(event, context) {
+            for (var channel = 1; channel <= 8; channel++) {
+                osc.request("x32", x32.channelFaderAddress(channel));
+                osc.request("x32", x32.channelMuteAddress(channel));
+            }
+        }
+        """;
+
+    public const string XTouchMiniX32MuteFeedbackSource =
+        """
+        fun buttonNoteForChannel(channel) {
+            if (channel == 1) return 89;
+            if (channel == 2) return 90;
+            if (channel == 3) return 40;
+            if (channel == 4) return 41;
+            if (channel == 5) return 42;
+            if (channel == 6) return 43;
+            if (channel == 7) return 44;
+            if (channel == 8) return 45;
+            return 0;
+        }
+
+        fun channelFromMuteAddress(address) {
+            if (address == x32.channelMuteAddress(1)) return 1;
+            if (address == x32.channelMuteAddress(2)) return 2;
+            if (address == x32.channelMuteAddress(3)) return 3;
+            if (address == x32.channelMuteAddress(4)) return 4;
+            if (address == x32.channelMuteAddress(5)) return 5;
+            if (address == x32.channelMuteAddress(6)) return 6;
+            if (address == x32.channelMuteAddress(7)) return 7;
+            if (address == x32.channelMuteAddress(8)) return 8;
+            return 0;
+        }
+
+        export fun onX32MuteCacheChanged(event, context) {
+            var channel = channelFromMuteAddress(event.osc.address);
+            if (channel == 0)
+                return;
+
+            var note = buttonNoteForChannel(channel);
+            var isOn = event.value != 0;
+            var ledVelocity = isOn ? 0 : 127;
+            midi.sendNoteOn("xtouch", 1, note, ledVelocity);
         }
         """;
 }
