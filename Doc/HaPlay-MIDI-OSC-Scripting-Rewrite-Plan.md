@@ -455,8 +455,21 @@ store). `ControlScriptRuntimeSession.ReportDeviceHealthAsync` now uses that
 registry as its single source for transition detection and exposure, so
 `devices.health(...)` reflects the most recent reported session state. Device
 enable/disable from scripts and profile control/command catalog inspection are
-deliberately deferred (mutations and the profile catalog surface). `HaPlay.Time`
-and fleshing out `HaPlay.Midi`/`HaPlay.Osc`/`HaPlay.X32` remain open.
+deliberately deferred (mutations and the profile catalog surface).
+
+Implementation note, 2026-06-04: `HaPlay.Time` is in. The script `time` object
+exposes `now()` (Unix epoch milliseconds) and `nowIso()` (round-trip UTC string),
+both reading an injectable host clock on `ControlScriptRuntimeServices` (default
+`DateTimeOffset.UtcNow`, overridable for deterministic tests). This is the
+time-reading surface for debounce/elapsed/timestamp logic; recurring and delayed
+execution is intentionally NOT a script-spun loop or a programmatic
+`time.every` — it is the existing declarative Periodic trigger (bind an exported
+function to it), which already runs host-driven on the tick loop. That keeps
+scheduling in the host as the plan intends. A programmatic `time.every`
+registration API remains a possible future convenience. With this, four of the
+custom libraries are done (`State`, `Monitor`, `Devices`, `Time`); only fleshing
+out `HaPlay.Midi`/`HaPlay.Osc`/`HaPlay.X32` from their current ad-hoc surface to
+the full documented libraries remains.
 
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.

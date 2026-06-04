@@ -11,7 +11,8 @@ public sealed class ControlScriptRuntimeServices
         ControlScriptStateStore? stateStore = null,
         IControlMonitorSink? monitor = null,
         IReadOnlyList<HaPlay.Models.ControlDeviceInstanceConfig>? devices = null,
-        ControlDeviceHealthRegistry? deviceHealth = null)
+        ControlDeviceHealthRegistry? deviceHealth = null,
+        Func<DateTimeOffset>? clock = null)
     {
         CommandSink = commandSink ?? NullControlScriptCommandSink.Instance;
         OscCache = oscCache ?? new ControlValueCache();
@@ -19,6 +20,7 @@ public sealed class ControlScriptRuntimeServices
         Monitor = monitor ?? NullControlMonitorSink.Instance;
         Devices = devices ?? [];
         DeviceHealth = deviceHealth ?? new ControlDeviceHealthRegistry();
+        Clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
     public IControlScriptCommandSink CommandSink { get; }
@@ -32,6 +34,9 @@ public sealed class ControlScriptRuntimeServices
     public IReadOnlyList<HaPlay.Models.ControlDeviceInstanceConfig> Devices { get; }
 
     public ControlDeviceHealthRegistry DeviceHealth { get; }
+
+    /// <summary>Host clock backing the <c>HaPlay.Time</c> library; injectable so script time is testable.</summary>
+    public Func<DateTimeOffset> Clock { get; }
 }
 
 public interface IControlScriptCommandSink
@@ -128,6 +133,22 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
         yield return new KeyValuePair<string, MondValue>("state", CreateStateApi(state));
         yield return new KeyValuePair<string, MondValue>("monitor", CreateMonitorApi(state));
         yield return new KeyValuePair<string, MondValue>("devices", CreateDevicesApi(state));
+        yield return new KeyValuePair<string, MondValue>("time", CreateTimeApi(state));
+    }
+
+    // Host-controlled clock for scripts. Recurring/delayed execution is provided by the declarative
+    // Periodic trigger (bind an exported function to it) so scripts never spin loops; this library is
+    // the time-reading surface for debounce/elapsed/timestamp logic.
+    private MondValue CreateTimeApi(MondState state)
+    {
+        var time = MondValue.Object(state);
+
+        time["now"] = (MondFunction)((_, _) =>
+            (double)_services.Clock().ToUnixTimeMilliseconds());
+        time["nowIso"] = (MondFunction)((_, _) =>
+            _services.Clock().ToString("O", System.Globalization.CultureInfo.InvariantCulture));
+
+        return time;
     }
 
     private MondValue CreateDevicesApi(MondState state)

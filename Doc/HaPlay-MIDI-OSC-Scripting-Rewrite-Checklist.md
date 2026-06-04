@@ -207,7 +207,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [~] `HaPlay.X32`.
   - [x] `HaPlay.State`.
   - [x] `HaPlay.Monitor`.
-  - [ ] `HaPlay.Time`.
+  - [x] `HaPlay.Time`.
 
 ## Phase 6: Script-Centric UI
 
@@ -272,6 +272,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] `HaPlay.State` project/script/device scope behavior.
   - [x] `HaPlay.Monitor` script logging with script attribution.
   - [x] `HaPlay.Devices` list/get/isEnabled/health inspection.
+  - [x] `HaPlay.Time` host clock (`now`/`nowIso`).
   - [x] Script compile and import behavior.
   - [x] Starter X-Touch Mini encoder -> X32 fader script execution.
   - [x] Script failure threshold.

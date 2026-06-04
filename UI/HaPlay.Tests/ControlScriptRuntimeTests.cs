@@ -668,6 +668,59 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void Time_NowAndNowIsoReadTheHostClock()
+    {
+        var fixedTime = DateTimeOffset.Parse("2026-06-04T10:00:00Z");
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Clock",
+            ScriptPath = "Scripts/main.mnd",
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.Manual,
+                    FunctionName = "run",
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = new ControlScriptRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Scripts = [script],
+            },
+            new InMemoryControlScriptSourceProvider(new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        osc.send("x32", "/now", osc.double64(time.now()));
+                        osc.send("x32", "/iso", time.nowIso());
+                    }
+                    """,
+            }),
+            new ControlScriptRuntimeServices(sink, new ControlValueCache(), clock: () => fixedTime));
+
+        runtime.DispatchManual(script.Id);
+
+        Assert.Collection(
+            sink.OscMessages,
+            message =>
+            {
+                Assert.Equal("/now", message.Address);
+                Assert.Equal((double)fixedTime.ToUnixTimeMilliseconds(), Assert.Single(message.Arguments).NumberValue);
+            },
+            message =>
+            {
+                Assert.Equal("/iso", message.Address);
+                Assert.Equal(fixedTime.ToString("O"), Assert.Single(message.Arguments).StringValue);
+            });
+    }
+
+    [Fact]
     public void DispatchLayerDisabled_RunsLayerScopedDisabledHook()
     {
         var layerId = Guid.NewGuid();
