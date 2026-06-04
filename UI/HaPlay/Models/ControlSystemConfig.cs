@@ -4,9 +4,7 @@ public sealed record ControlSystemConfig
 {
     public bool IsArmed { get; init; }
 
-    public int OscListenPort { get; init; } = 10020;
-
-    public ControlOscSocketMode OscSocketMode { get; init; } = ControlOscSocketMode.SharedAppListener;
+    public List<ControlOscListenerConfig> OscListeners { get; init; } = [new()];
 
     public ControlOscCacheUpdateMode OscCacheUpdateMode { get; init; } = ControlOscCacheUpdateMode.IncomingOnly;
 
@@ -22,6 +20,19 @@ public sealed record ControlSystemConfig
 public enum ControlOscSocketMode
 {
     SharedAppListener,
+}
+
+public sealed record ControlOscListenerConfig
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public string Name { get; init; } = "Main OSC Listener";
+
+    public bool IsEnabled { get; init; } = true;
+
+    public int LocalPort { get; init; } = 10020;
+
+    public ControlOscSocketMode SocketMode { get; init; } = ControlOscSocketMode.SharedAppListener;
 }
 
 public enum ControlOscCacheUpdateMode
@@ -92,6 +103,8 @@ public sealed record ControlDeviceBindingConfig
     public string? OscHost { get; init; }
 
     public int? OscPort { get; init; }
+
+    public Guid? OscListenerId { get; init; }
 }
 
 public sealed record ControlPeriodicOscSendConfig

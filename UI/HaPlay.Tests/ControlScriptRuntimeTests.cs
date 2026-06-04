@@ -1,0 +1,356 @@
+using HaPlay.ControlGraph;
+using HaPlay.Models;
+using OSCLib;
+using Xunit;
+
+namespace HaPlay.Tests;
+
+public sealed class ControlScriptRuntimeTests
+{
+    [Fact]
+    public void DispatchControlEvent_DoesNotRunScriptsWhenControlSystemIsDisarmed()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var trigger = MidiCcTrigger(midiDeviceId, "onMidi", midiController: 16);
+        var script = Script("Scripts/main.mnd", trigger);
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = false,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidi(event, context) {
+                        osc.send("x32", "/should-not-send", osc.float32(1));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 10));
+
+        Assert.Empty(result.Invocations);
+        Assert.Empty(sink.OscMessages);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_InvokesMatchingMidiCcTrigger()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var script = Script("Scripts/main.mnd", MidiCcTrigger(midiDeviceId, "onMidi", midiController: 16));
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidi(event, context) {
+                        osc.send("x32", "/cc", osc.float32(event.midi.value));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 10));
+
+        var invocation = Assert.Single(result.Invocations);
+        Assert.True(invocation.Succeeded);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal("/cc", message.Address);
+        Assert.Equal(10, Assert.Single(message.Arguments).NumberValue);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_DoesNotMatchDifferentMidiDeviceOrController()
+    {
+        var firstDeviceId = Guid.NewGuid();
+        var secondDeviceId = Guid.NewGuid();
+        var script = Script("Scripts/main.mnd", MidiCcTrigger(firstDeviceId, "onMidi", midiController: 16));
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(firstDeviceId, "X-Touch Mini A"), MidiDevice(secondDeviceId, "X-Touch Mini B")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidi(event, context) {
+                        osc.send("x32", "/cc", osc.float32(event.midi.value));
+                    }
+                    """,
+            },
+            sink);
+
+        var wrongDevice = runtime.DispatchControlEvent(MidiCcEvent(secondDeviceId, controller: 16, value: 10));
+        var wrongController = runtime.DispatchControlEvent(MidiCcEvent(firstDeviceId, controller: 17, value: 10));
+
+        Assert.Empty(wrongDevice.Invocations);
+        Assert.Empty(wrongController.Invocations);
+        Assert.Empty(sink.OscMessages);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_ExecutesBuiltInXTouchMiniX32FaderScriptThroughTriggerRuntime()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var template = BuiltInControlScriptTemplateRepository.Instance.FindById(
+            BuiltInControlScriptTemplateRepository.XTouchMiniX32FadersTemplateId);
+        Assert.NotNull(template);
+
+        var script = Script(
+            template.SuggestedPath,
+            MidiCcTrigger(midiDeviceId, "onXTouchFaderEncoder", midiController: 16));
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string> { [template.SuggestedPath] = template.Source },
+            sink);
+
+        var result = runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 10));
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal("x32", message.DeviceKey);
+        Assert.Equal("/ch/01/mix/fader", message.Address);
+        Assert.Equal(0.75 + 10.0 / 1023.0, Assert.Single(message.Arguments).NumberValue, precision: 12);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_UpdatesOscCacheBeforeInvokingOscTrigger()
+    {
+        var oscDeviceId = Guid.NewGuid();
+        var trigger = new ControlScriptTriggerConfig
+        {
+            Kind = ControlScriptTriggerKind.OscMessage,
+            FunctionName = "onOsc",
+            DeviceInstanceId = oscDeviceId,
+            OscAddressPattern = "/ch/*/mix/fader",
+        };
+        var script = Script("Scripts/main.mnd", trigger);
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onOsc(event, context) {
+                        var current = osc.cacheFloat("x32", event.osc.address, 0.0);
+                        osc.send("x32", "/seen", osc.float32(current));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(new OscControlEvent(
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid(),
+            oscDeviceId,
+            Guid.NewGuid(),
+            "/ch/01/mix/fader",
+            [OSCArgument.Float32(0.6f)]));
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal("/seen", message.Address);
+        Assert.Equal(0.6, Assert.Single(message.Arguments).NumberValue, precision: 6);
+    }
+
+    [Fact]
+    public void DispatchLayerDisabled_RunsLayerScopedDisabledHook()
+    {
+        var layerId = Guid.NewGuid();
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Layer off",
+            ScriptPath = "Scripts/main.mnd",
+            Scope = ControlScriptScope.Layer,
+            LayerId = layerId,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.LayerDisabled,
+                    FunctionName = "onLayerDisabled",
+                    LayerId = layerId,
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Layers = [new ControlLayerConfig { Id = layerId, Name = "A", IsEnabled = false }],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onLayerDisabled(event, context) {
+                        osc.send("x32", "/layer/off", osc.float32(1));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchLayerDisabled(layerId);
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        Assert.Equal("/layer/off", Assert.Single(sink.OscMessages).Address);
+    }
+
+    [Fact]
+    public void DispatchManual_DisablesScriptAfterConfiguredConsecutiveFailures()
+    {
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Failing script",
+            ScriptPath = "Scripts/main.mnd",
+            FailurePolicy = new ControlScriptFailurePolicy
+            {
+                Mode = ControlScriptFailureMode.DisableScript,
+                MaxConsecutiveFailures = 3,
+            },
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.Manual,
+                    FunctionName = "fail",
+                },
+            ],
+        };
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun fail(event, context) {
+                        error("boom");
+                    }
+                    """,
+            });
+
+        runtime.DispatchManual(script.Id);
+        runtime.DispatchManual(script.Id);
+        var third = runtime.DispatchManual(script.Id);
+        var fourth = runtime.DispatchManual(script.Id);
+
+        Assert.False(Assert.Single(third.Invocations).Succeeded);
+        Assert.Empty(fourth.Invocations);
+        Assert.Equal(3, runtime.Diagnostics.Count(d => d.Stage == ControlScriptDiagnosticStage.Runtime));
+        var status = Assert.Single(runtime.ScriptStatuses);
+        Assert.True(status.DisabledByFailure);
+        Assert.False(status.IsRunnable);
+        Assert.Equal(3, status.ConsecutiveFailures);
+        Assert.Contains("boom", status.LastError);
+    }
+
+    private static ControlScriptRuntime CreateRuntime(
+        ControlSystemConfig config,
+        IReadOnlyDictionary<string, string> scripts,
+        RecordingControlScriptCommandSink? sink = null) =>
+        new(
+            config,
+            new InMemoryControlScriptSourceProvider(scripts),
+            new ControlScriptRuntimeServices(sink ?? new RecordingControlScriptCommandSink(), new ControlValueCache()));
+
+    private static ControlDeviceInstanceConfig MidiDevice(Guid id, string name) =>
+        new()
+        {
+            Id = id,
+            Name = name,
+            Protocol = ControlDeviceProtocol.Midi,
+            IsEnabled = true,
+        };
+
+    private static ControlDeviceInstanceConfig OscDevice(Guid id, string name) =>
+        new()
+        {
+            Id = id,
+            Name = name,
+            ProfileId = "x32",
+            Protocol = ControlDeviceProtocol.Osc,
+            IsEnabled = true,
+            Binding = new ControlDeviceBindingConfig
+            {
+                Alias = name,
+                OscHost = "192.168.2.76",
+                OscPort = 10023,
+            },
+        };
+
+    private static ControlScriptConfig Script(string scriptPath, ControlScriptTriggerConfig trigger) =>
+        new()
+        {
+            Id = Guid.NewGuid(),
+            Name = "Script",
+            ScriptPath = scriptPath,
+            Triggers = [trigger],
+        };
+
+    private static ControlScriptTriggerConfig MidiCcTrigger(Guid deviceId, string functionName, int midiController) =>
+        new()
+        {
+            Kind = ControlScriptTriggerKind.MidiControlChange,
+            FunctionName = functionName,
+            DeviceInstanceId = deviceId,
+            MidiChannel = 1,
+            MidiController = midiController,
+        };
+
+    private static MidiControlEvent MidiCcEvent(Guid deviceId, int controller, int value) =>
+        new(
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid(),
+            deviceId,
+            Guid.NewGuid(),
+            Channel: 1,
+            Controller: controller,
+            Value: value,
+            HighResolution14Bit: false);
+
+    private sealed class RecordingControlScriptCommandSink : IControlScriptCommandSink
+    {
+        public List<ControlScriptOscMessage> OscMessages { get; } = new();
+
+        public void SendOsc(ControlScriptOscMessage message)
+        {
+            OscMessages.Add(message);
+        }
+    }
+}

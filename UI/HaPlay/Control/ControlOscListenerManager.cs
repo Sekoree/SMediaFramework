@@ -1,0 +1,232 @@
+using System.Net;
+using HaPlay.Models;
+using OSCLib;
+
+namespace HaPlay.ControlGraph;
+
+public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
+{
+    private readonly ControlSystemConfig _config;
+    private readonly ControlScriptRuntimeSession _runtimeSession;
+    private readonly Dictionary<Guid, ListenerRuntimeState> _listeners = new();
+    private bool _disposed;
+
+    public ControlOscListenerManager(
+        ControlSystemConfig config,
+        ControlScriptRuntimeSession runtimeSession)
+    {
+        _config = config ?? throw new ArgumentNullException(nameof(config));
+        _runtimeSession = runtimeSession ?? throw new ArgumentNullException(nameof(runtimeSession));
+
+        foreach (var listener in config.OscListeners)
+        {
+            _listeners[listener.Id] = new ListenerRuntimeState(listener);
+        }
+    }
+
+    public IReadOnlyDictionary<Guid, ControlSessionHealth> ListenerHealth =>
+        _listeners.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Health);
+
+    public async Task StartAsync(CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ThrowIfDuplicateEnabledPorts();
+
+        foreach (var state in _listeners.Values)
+        {
+            if (!state.Config.IsEnabled || state.Server is not null)
+                continue;
+
+            try
+            {
+                state.Health = new ControlSessionHealth(
+                    ControlSessionState.Starting,
+                    $"Listening OSC {state.Config.LocalPort}",
+                    DateTimeOffset.UtcNow);
+
+                var server = new OSCServer(new OSCServerOptions { Port = state.Config.LocalPort });
+                state.Registration = server.RegisterHandler("//", (context, ct) => OnOscMessageAsync(state.Config.Id, context, ct));
+                await server.StartAsync(cancellationToken).ConfigureAwait(false);
+                state.Server = server;
+                state.Health = ControlSessionHealth.Running($"OSC listen {state.Config.LocalPort}");
+            }
+            catch (Exception ex)
+            {
+                state.Health = ControlSessionHealth.Faulted(ex.Message);
+                throw;
+            }
+        }
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var state in _listeners.Values)
+        {
+            state.Registration?.Dispose();
+            state.Registration = null;
+
+            if (state.Server is null)
+                continue;
+
+            await state.Server.StopAsync(cancellationToken).ConfigureAwait(false);
+            state.Server.Dispose();
+            state.Server = null;
+            state.Health = ControlSessionHealth.Stopped();
+        }
+    }
+
+    public async ValueTask<IReadOnlyList<ControlOscListenerDispatchResult>> DispatchMessageAsync(
+        Guid listenerId,
+        OSCMessageContext context,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_listeners.TryGetValue(listenerId, out var listener) || !listener.Config.IsEnabled)
+            return [];
+
+        var devices = ResolveDevices(listenerId, context.RemoteEndPoint).ToArray();
+        if (devices.Length == 0)
+            return [];
+
+        var results = new List<ControlOscListenerDispatchResult>(devices.Length);
+        foreach (var device in devices)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var evt = new OscControlEvent(
+                context.ReceivedAtUtc,
+                listenerId,
+                device.Id,
+                Guid.NewGuid(),
+                context.Message.Address,
+                context.Message.Arguments);
+            var scriptResult = await _runtimeSession.DispatchControlEventAsync(evt, cancellationToken).ConfigureAwait(false);
+            results.Add(new ControlOscListenerDispatchResult(listenerId, device.Id, context.RemoteEndPoint, context.Message.Address, scriptResult));
+        }
+
+        return results;
+    }
+
+    private async ValueTask OnOscMessageAsync(
+        Guid listenerId,
+        OSCMessageContext context,
+        CancellationToken cancellationToken)
+    {
+        await DispatchMessageAsync(listenerId, context, cancellationToken).ConfigureAwait(false);
+    }
+
+    private IEnumerable<ControlDeviceInstanceConfig> ResolveDevices(Guid listenerId, IPEndPoint remoteEndPoint)
+    {
+        var candidates = _config.Devices
+            .Where(d => d.Protocol == ControlDeviceProtocol.Osc && d.IsEnabled && BelongsToListener(d, listenerId))
+            .Where(d => HostMatches(d.Binding.OscHost, remoteEndPoint.Address))
+            .ToArray();
+
+        if (candidates.Length == 0)
+            return [];
+
+        var portMatches = candidates
+            .Where(d => d.Binding.OscPort.HasValue && d.Binding.OscPort.Value == remoteEndPoint.Port)
+            .ToArray();
+
+        return portMatches.Length > 0 ? portMatches : candidates;
+    }
+
+    private bool BelongsToListener(ControlDeviceInstanceConfig device, Guid listenerId)
+    {
+        if (device.Binding.OscListenerId.HasValue)
+            return device.Binding.OscListenerId.Value == listenerId;
+
+        return GetDefaultListenerId() == listenerId;
+    }
+
+    private Guid? GetDefaultListenerId() =>
+        _config.OscListeners.FirstOrDefault(l => l.IsEnabled)?.Id
+        ?? _config.OscListeners.FirstOrDefault()?.Id;
+
+    private static bool HostMatches(string? configuredHost, IPAddress remoteAddress)
+    {
+        if (string.IsNullOrWhiteSpace(configuredHost))
+            return true;
+
+        var host = configuredHost.Trim();
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
+            return IPAddress.IsLoopback(remoteAddress);
+
+        if (IPAddress.TryParse(host, out var parsed))
+            return AddressEquals(parsed, remoteAddress);
+
+        return string.Equals(host, remoteAddress.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool AddressEquals(IPAddress left, IPAddress right)
+    {
+        if (left.Equals(right))
+            return true;
+
+        if (left.IsIPv4MappedToIPv6)
+            left = left.MapToIPv4();
+        if (right.IsIPv4MappedToIPv6)
+            right = right.MapToIPv4();
+
+        return left.Equals(right);
+    }
+
+    private void ThrowIfDuplicateEnabledPorts()
+    {
+        var duplicate = _config.OscListeners
+            .Where(l => l.IsEnabled)
+            .GroupBy(l => l.LocalPort)
+            .FirstOrDefault(g => g.Count() > 1);
+
+        if (duplicate is not null)
+            throw new InvalidOperationException($"Multiple enabled OSC listeners use local port {duplicate.Key}.");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        await StopAsync().ConfigureAwait(false);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        foreach (var state in _listeners.Values)
+        {
+            state.Registration?.Dispose();
+            state.Registration = null;
+            state.Server?.Dispose();
+            state.Server = null;
+            state.Health = ControlSessionHealth.Stopped();
+        }
+    }
+
+    private sealed class ListenerRuntimeState
+    {
+        public ListenerRuntimeState(ControlOscListenerConfig config)
+        {
+            Config = config;
+            Health = ControlSessionHealth.Stopped();
+        }
+
+        public ControlOscListenerConfig Config { get; }
+
+        public OSCServer? Server { get; set; }
+
+        public IDisposable? Registration { get; set; }
+
+        public ControlSessionHealth Health { get; set; }
+    }
+}
+
+public sealed record ControlOscListenerDispatchResult(
+    Guid ListenerId,
+    Guid DeviceInstanceId,
+    IPEndPoint RemoteEndPoint,
+    string Address,
+    ControlScriptRuntimeSessionResult ScriptResult);

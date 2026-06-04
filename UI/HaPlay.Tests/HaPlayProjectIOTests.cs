@@ -725,7 +725,11 @@ public sealed class HaPlayProjectIOTests
     public void RoundTrip_ControlSystem_PreservesScriptCentricSettings()
     {
         var xtouchId = Guid.NewGuid();
+        var backupMidiId = Guid.NewGuid();
         var x32Id = Guid.NewGuid();
+        var lightingOscId = Guid.NewGuid();
+        var mainListenerId = Guid.NewGuid();
+        var auxListenerId = Guid.NewGuid();
         var layerId = Guid.NewGuid();
         var projectScriptId = Guid.NewGuid();
         var deviceScriptId = Guid.NewGuid();
@@ -737,8 +741,23 @@ public sealed class HaPlayProjectIOTests
             ControlSystem = new ControlSystemConfig
             {
                 IsArmed = true,
-                OscListenPort = 10020,
-                OscSocketMode = ControlOscSocketMode.SharedAppListener,
+                OscListeners =
+                [
+                    new ControlOscListenerConfig
+                    {
+                        Id = mainListenerId,
+                        Name = "Main OSC Listener",
+                        LocalPort = 10020,
+                        SocketMode = ControlOscSocketMode.SharedAppListener,
+                    },
+                    new ControlOscListenerConfig
+                    {
+                        Id = auxListenerId,
+                        Name = "Aux OSC Listener",
+                        LocalPort = 10021,
+                        SocketMode = ControlOscSocketMode.SharedAppListener,
+                    },
+                ],
                 OscCacheUpdateMode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
                 Monitor = new ControlMonitorOptions
                 {
@@ -767,6 +786,19 @@ public sealed class HaPlayProjectIOTests
                     },
                     new ControlDeviceInstanceConfig
                     {
+                        Id = backupMidiId,
+                        Name = "Backup MIDI Surface",
+                        ProfileId = "generic.midi.surface",
+                        Protocol = ControlDeviceProtocol.Midi,
+                        Binding = new ControlDeviceBindingConfig
+                        {
+                            Alias = "backup-midi",
+                            MidiInputDeviceName = "Backup MIDI In",
+                            MidiOutputDeviceName = "Backup MIDI Out",
+                        },
+                    },
+                    new ControlDeviceInstanceConfig
+                    {
                         Id = x32Id,
                         Name = "X32 Emulator",
                         ProfileId = "behringer.x32.osc",
@@ -776,6 +808,7 @@ public sealed class HaPlayProjectIOTests
                             Alias = "x32",
                             OscHost = "192.168.2.76",
                             OscPort = 10023,
+                            OscListenerId = mainListenerId,
                         },
                         PeriodicOscSends =
                         [
@@ -787,6 +820,20 @@ public sealed class HaPlayProjectIOTests
                                 IntervalMs = 8000,
                             },
                         ],
+                    },
+                    new ControlDeviceInstanceConfig
+                    {
+                        Id = lightingOscId,
+                        Name = "Lighting OSC",
+                        ProfileId = "generic.osc",
+                        Protocol = ControlDeviceProtocol.Osc,
+                        Binding = new ControlDeviceBindingConfig
+                        {
+                            Alias = "lighting",
+                            OscHost = "192.168.2.90",
+                            OscPort = 9000,
+                            OscListenerId = auxListenerId,
+                        },
                     },
                 ],
                 Layers =
@@ -867,14 +914,20 @@ public sealed class HaPlayProjectIOTests
 
         var control = roundTripped.ControlSystem;
         Assert.True(control.IsArmed);
-        Assert.Equal(10020, control.OscListenPort);
-        Assert.Equal(ControlOscSocketMode.SharedAppListener, control.OscSocketMode);
         Assert.Equal(ControlOscCacheUpdateMode.OptimisticSendAndIncoming, control.OscCacheUpdateMode);
         Assert.Equal(1000, control.Monitor.MaxVisibleMessages);
         Assert.Equal(ControlMonitorCaptureFormat.JsonLines, control.Monitor.CaptureFormat);
         Assert.False(control.Monitor.IncludeRawBytes);
 
-        Assert.Equal(2, control.Devices.Count);
+        Assert.Equal(2, control.OscListeners.Count);
+        Assert.Equal(mainListenerId, control.OscListeners[0].Id);
+        Assert.Equal("Main OSC Listener", control.OscListeners[0].Name);
+        Assert.Equal(10020, control.OscListeners[0].LocalPort);
+        Assert.Equal(ControlOscSocketMode.SharedAppListener, control.OscListeners[0].SocketMode);
+        Assert.Equal(auxListenerId, control.OscListeners[1].Id);
+        Assert.Equal(10021, control.OscListeners[1].LocalPort);
+
+        Assert.Equal(4, control.Devices.Count);
         var xtouch = control.Devices[0];
         Assert.Equal(xtouchId, xtouch.Id);
         Assert.Equal("behringer.xtouch-mini.mc", xtouch.ProfileId);
@@ -885,13 +938,28 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal("X-Touch MINI", xtouch.Binding.MidiOutputDeviceName);
         Assert.Equal(deviceScriptId, Assert.Single(xtouch.ScriptIds));
 
-        var x32 = control.Devices[1];
+        var backupMidi = control.Devices[1];
+        Assert.Equal(backupMidiId, backupMidi.Id);
+        Assert.Equal(ControlDeviceProtocol.Midi, backupMidi.Protocol);
+        Assert.Equal("backup-midi", backupMidi.Binding.Alias);
+        Assert.Equal("Backup MIDI In", backupMidi.Binding.MidiInputDeviceName);
+        Assert.Equal("Backup MIDI Out", backupMidi.Binding.MidiOutputDeviceName);
+
+        var x32 = control.Devices[2];
         Assert.Equal("192.168.2.76", x32.Binding.OscHost);
         Assert.Equal(10023, x32.Binding.OscPort);
+        Assert.Equal(mainListenerId, x32.Binding.OscListenerId);
         var xremote = Assert.Single(x32.PeriodicOscSends);
         Assert.Equal(periodicId, xremote.Id);
         Assert.Equal("/xremote", xremote.Address);
         Assert.Equal(8000, xremote.IntervalMs);
+
+        var lighting = control.Devices[3];
+        Assert.Equal(lightingOscId, lighting.Id);
+        Assert.Equal(ControlDeviceProtocol.Osc, lighting.Protocol);
+        Assert.Equal("192.168.2.90", lighting.Binding.OscHost);
+        Assert.Equal(9000, lighting.Binding.OscPort);
+        Assert.Equal(auxListenerId, lighting.Binding.OscListenerId);
 
         var layer = Assert.Single(control.Layers);
         Assert.Equal(layerId, layer.Id);
@@ -927,8 +995,10 @@ public sealed class HaPlayProjectIOTests
         var control = new HaPlayProject().ControlSystem;
 
         Assert.False(control.IsArmed);
-        Assert.Equal(10020, control.OscListenPort);
-        Assert.Equal(ControlOscSocketMode.SharedAppListener, control.OscSocketMode);
+        var listener = Assert.Single(control.OscListeners);
+        Assert.Equal("Main OSC Listener", listener.Name);
+        Assert.Equal(10020, listener.LocalPort);
+        Assert.Equal(ControlOscSocketMode.SharedAppListener, listener.SocketMode);
         Assert.Equal(ControlOscCacheUpdateMode.IncomingOnly, control.OscCacheUpdateMode);
         Assert.Equal(1000, control.Monitor.MaxVisibleMessages);
         Assert.Equal(ControlMonitorCaptureFormat.JsonLines, control.Monitor.CaptureFormat);

@@ -22,9 +22,9 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Use separate project-side script files instead of storing all source inline
   in the project JSON.
 - [x] Prefer exported Mond functions and importable helper scripts.
-- [x] Default the app-wide OSC listen port to `10020`, stored per project.
-- [x] Use one app-wide OSC listener and share the send/receive socket when
-  possible.
+- [x] Default the project to one app-level OSC listener on `10020`.
+- [x] Support multiple OSC remotes and multiple OSC listeners in one project.
+- [x] Share each OSC listener send/receive socket when possible.
 - [x] Default monitor visible history to 1000 messages.
 - [x] Use JSON lines for monitor capture/replay export.
 - [x] Make OSC cache update behavior configurable: incoming-only or optimistic
@@ -51,8 +51,9 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   starter script files later; do not silently discard graph data.
 - [x] Add defaults:
   - [x] `isArmed = false`.
-  - [x] `oscListenPort = 10020`.
-  - [x] shared OSC socket mode.
+  - [x] one default OSC listener on port `10020`.
+  - [x] multiple OSC listeners.
+  - [x] shared OSC socket mode per listener.
   - [x] monitor max visible messages = 1000.
   - [x] monitor export format = JSON lines.
   - [x] OSC cache mode = incoming-only unless changed by the user.
@@ -60,33 +61,33 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 
 ## Phase 1: Device Profiles And Repository
 
-- [ ] Add built-in profile schema.
-- [ ] Add profile validation.
-- [ ] Add profile loader for built-in app profiles.
+- [x] Add built-in profile schema.
+- [x] Add profile validation.
+- [x] Add profile loader for built-in app profiles.
 - [ ] Add profile loader for user/app-level profiles.
 - [ ] Add project-level profile overrides.
-- [ ] Implement profile suggestion behavior:
+- [~] Implement profile suggestion behavior:
   - [ ] Show profile warnings.
-  - [ ] Allow raw MIDI/OSC scripting when a profile command/control is missing.
-- [ ] Add X-Touch Mini MC-mode profile from `Reference/XTouchMini.txt`:
-  - [ ] Layer A/B buttons: notes 84 and 85.
-  - [ ] Encoder strips 1..8: CC 16..23.
-  - [ ] Encoder push notes: 32..39.
-  - [ ] Encoder increment values: 1..10.
-  - [ ] Encoder decrement values: 65..72.
-  - [ ] Buttons 1..8: notes 89, 90, 40, 41, 42, 43, 44, 45.
-  - [ ] Buttons 9..16: notes 87, 88, 91, 92, 86, 93, 94, 95.
-  - [ ] Master fader: pitch wheel.
-- [ ] Add X32 profile:
-  - [ ] Host preset `192.168.2.76`.
-  - [ ] Port `10023`.
-  - [ ] Channel fader/mute/pan/solo commands.
-  - [ ] DCA fader/mute commands.
-  - [ ] Bus fader/mute commands.
-  - [ ] Matrix fader/mute commands.
-  - [ ] Main stereo fader/mute commands.
-  - [ ] X32 fader normalized/db conversions.
-  - [ ] Default periodic `/xremote` task.
+  - [x] Allow raw MIDI/OSC scripting when a profile command/control is missing.
+- [x] Add X-Touch Mini MC-mode profile from `Reference/XTouchMini.txt`:
+  - [x] Layer A/B buttons: notes 84 and 85.
+  - [x] Encoder strips 1..8: CC 16..23.
+  - [x] Encoder push notes: 32..39.
+  - [x] Encoder increment values: 1..10.
+  - [x] Encoder decrement values: 65..72.
+  - [x] Buttons 1..8: notes 89, 90, 40, 41, 42, 43, 44, 45.
+  - [x] Buttons 9..16: notes 87, 88, 91, 92, 86, 93, 94, 95.
+  - [x] Master fader: pitch wheel.
+- [x] Add X32 profile:
+  - [x] Host preset `192.168.2.76`.
+  - [x] Port `10023`.
+  - [x] Channel fader/mute/pan/solo commands.
+  - [x] DCA fader/mute commands.
+  - [x] Bus fader/mute commands.
+  - [x] Matrix fader/mute commands.
+  - [x] Main stereo fader/mute commands.
+  - [x] X32 fader normalized/db conversions.
+  - [x] Default periodic `/xremote` task.
   - [ ] Optional `/subscribe` and `/meters` task definitions.
 
 ## Phase 2: Device Binding And Sessions
@@ -100,11 +101,11 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [ ] Remembered output device ID.
 - [ ] Add fallback device selection dialog when matching is ambiguous or missing.
 - [ ] Split MIDI device instances into input/output capabilities.
-- [ ] Add app-wide OSC listener:
-  - [ ] Project-configured local port.
-  - [ ] Shared UDP socket where possible.
-  - [ ] Route incoming OSC packets to device instances.
-  - [ ] Preserve remote endpoint details in monitor records.
+- [~] Add app-level OSC listeners:
+  - [x] Multiple project-configured local ports.
+  - [x] Shared UDP socket per listener where possible.
+  - [x] Route incoming OSC packets to device instances.
+  - [~] Preserve remote endpoint details for monitor records.
 - [ ] Add X32 device behavior:
   - [ ] Start configured periodic OSC sends when enabled.
   - [ ] Stop periodic sends when disabled.
@@ -137,53 +138,67 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 
 ## Phase 4: OSC Value Cache
 
-- [ ] Add `ControlValueCache`.
-- [ ] Key cache entries by device instance ID, OSC address, and argument index or
+- [x] Add `ControlValueCache`.
+- [~] Key cache entries by device instance ID, OSC address, and argument index or
   name.
-- [ ] Store typed value, raw OSC argument, timestamp, endpoint, freshness, and
+- [~] Store typed value, raw OSC argument, timestamp, endpoint, freshness, and
   correlation ID.
-- [ ] Implement incoming-only update mode.
-- [ ] Implement optimistic send plus incoming update mode.
+- [x] Implement incoming-only update mode.
+- [x] Implement optimistic send plus incoming update mode.
 - [ ] Add per-command override support.
-- [ ] Mark values stale when a device is disabled.
-- [ ] Expose cache lookup to scripts.
+- [x] Mark values stale when a device is disabled.
+- [x] Expose cache lookup to scripts.
 - [ ] Display cache values in the X32 command browser.
 
 ## Phase 5: Script Runtime
 
-- [ ] Replace per-event ad-hoc script host with compiled script instances.
-- [ ] Resolve script files by project-relative paths.
-- [ ] Add script import support for helper files.
-- [ ] Detect exported handler functions.
-- [ ] Bind triggers to exported functions.
-- [ ] Keep instruction limit enforcement.
-- [ ] Add consecutive failure counters.
-- [ ] Disable failed scripts after configurable threshold.
-- [ ] Add compile diagnostics.
-- [ ] Add runtime diagnostics.
-- [ ] Add script scopes:
-  - [ ] Project.
-  - [ ] Device.
+- [x] Add first starter mapping helper:
+  - [x] X-Touch Mini encoder CC16..CC23 -> X32 channel faders 1..8.
+  - [x] Default uncached fader value `0.75`.
+  - [x] Encoder values `1..10` increase.
+  - [x] Encoder values `65..72` decrease.
+  - [x] Faster encoder values apply larger deltas.
+  - [x] Clamp OSC fader value to `0..1`.
+- [x] Add first starter script template:
+  - [x] `Scripts/xtouch-mini-x32-faders.mnd`.
+  - [x] Exported `onXTouchFaderEncoder` handler.
+- [~] Replace per-event ad-hoc script host with compiled script instances.
+- [x] Resolve script files by project-relative paths.
+- [x] Add script import support for helper files.
+- [x] Detect exported handler functions.
+- [x] Bind triggers to exported functions.
+- [x] Keep instruction limit enforcement.
+- [x] Add consecutive failure counters.
+- [x] Disable failed scripts after configurable threshold.
+- [x] Add compile diagnostics.
+- [x] Add runtime diagnostics.
+- [~] Add script scopes:
+  - [x] Project.
+  - [x] Device.
   - [ ] Endpoint.
-  - [ ] Layer.
-- [ ] Add host-managed triggers:
-  - [ ] Device enabled.
-  - [ ] Device disabled.
+  - [x] Layer.
+- [~] Add host-managed triggers:
+  - [x] Device enabled.
+  - [x] Device disabled.
   - [ ] Device health changed.
-  - [ ] MIDI message.
-  - [ ] MIDI CC.
+  - [x] MIDI message.
+  - [x] MIDI CC.
   - [ ] MIDI note.
-  - [ ] OSC message.
+  - [x] OSC message.
   - [ ] OSC cache changed.
-  - [ ] Layer enabled.
-  - [ ] Layer disabled.
-  - [ ] Periodic timer.
-  - [ ] Manual/test trigger.
+  - [x] Layer enabled.
+  - [x] Layer disabled.
+  - [~] Periodic timer.
+  - [x] Manual/test trigger.
+- [x] Route script OSC sends to configured OSC devices by ID, alias, name, or
+  unambiguous profile ID.
+- [x] Add script runtime session bridge that dispatches triggers and flushes
+  queued OSC commands through the OSC router.
 - [ ] Add Mond libraries:
   - [ ] `HaPlay.Devices`.
   - [ ] `HaPlay.Midi`.
-  - [ ] `HaPlay.Osc`.
-  - [ ] `HaPlay.X32`.
+  - [~] `HaPlay.Osc`.
+  - [~] `HaPlay.X32`.
   - [ ] `HaPlay.State`.
   - [ ] `HaPlay.Monitor`.
   - [ ] `HaPlay.Time`.
@@ -227,11 +242,11 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [ ] Document custom Mond libraries and functions.
 - [ ] Document X-Touch Mini MC-mode setup.
 - [ ] Document X32 connection setup.
-- [ ] Document app-wide OSC listener and shared socket behavior.
+- [ ] Document app-level OSC listeners and shared socket behavior.
 - [ ] Document OSC cache modes.
 - [ ] Document JSON lines monitor capture/replay.
 - [ ] Add starter scripts:
-  - [ ] X-Touch Mini encoder -> X32 fader.
+  - [x] X-Touch Mini encoder -> X32 fader.
   - [ ] X-Touch Mini button -> X32 mute.
   - [ ] Layer enabled -> X32 initial value requests.
   - [ ] X32 cache update -> MIDI LED/ring feedback.
@@ -239,27 +254,31 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 ## Phase 8: Validation
 
 - [ ] Unit tests:
-  - [ ] Project JSON round trips.
-  - [ ] Profile loading and validation.
+  - [x] Project JSON round trips.
+  - [x] Profile loading and validation.
   - [ ] Device matching.
-  - [ ] OSC app listener routing.
+  - [x] OSC app listener routing.
   - [ ] Monitor JSON lines export/replay.
-  - [ ] Cache update modes.
-  - [ ] Script compile and import behavior.
-  - [ ] Script failure threshold.
-  - [ ] Trigger dispatch.
+  - [x] Cache update modes.
+  - [x] Script compile and import behavior.
+  - [x] Starter X-Touch Mini encoder -> X32 fader script execution.
+  - [x] Script failure threshold.
+  - [x] Trigger dispatch.
+  - [x] Script runtime session bridge.
+  - [x] X-Touch Mini relative encoder -> X32 fader helper.
 - [ ] Integration tests:
   - [ ] OSC loopback monitor capture.
   - [ ] Fake MIDI input to script trigger.
-  - [ ] Script output to fake OSC sender.
+  - [x] Script output to fake OSC sender.
   - [ ] Script output to fake MIDI sender.
-  - [ ] X32 `/xremote` periodic sends.
+  - [~] X32 `/xremote` periodic sends.
 - [ ] Manual tests:
   - [ ] X-Touch Mini MIDI input catalog detection.
   - [ ] X-Touch Mini control monitor decode.
   - [ ] X-Touch Mini LED/ring feedback where supported.
   - [ ] X32 emulator at `192.168.2.76:10023`.
-  - [ ] App-wide OSC listener on `10020`.
+  - [ ] Default OSC listener on `10020`.
+  - [ ] Additional OSC listener on another project-configured port.
   - [ ] Shared socket behavior.
   - [ ] `/xremote` periodic send for more than 60 seconds.
   - [ ] Cache update from incoming X32 values.

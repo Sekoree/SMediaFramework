@@ -100,10 +100,14 @@ Control System
     Layers
   OSC: X32
     Endpoint 192.168.2.76:10023
+    Listener Main OSC Listener:10020
     Commands
     Cache
     Scripts
     Periodic Sends
+  OSC: Additional Device
+    Endpoint ...
+    Listener ...
 ```
 
 Use context menus on devices, endpoints, layers, and scripts to add scripts,
@@ -202,10 +206,13 @@ Use device sessions as the runtime boundary:
   device.
 - `MidiDeviceSession`: owns one PortMidi input and/or output for a MIDI device
   instance.
-- `OscAppListener`: owns one app-wide OSC server and routes incoming packets to
-  OSC device instances. This avoids unnecessary X32 `/xremote` consumers because
-  the X32 supports only a small number of connected clients for broadcast update
-  workflows.
+- `OscListenerManager`: owns one or more project-configured app-level OSC
+  listeners and routes incoming packets to OSC device instances. The default
+  project should have one listener on port `10020`, but projects can add more
+  listeners for other OSC devices or network layouts. X32 devices should share a
+  listener/socket where possible to avoid unnecessary `/xremote` consumers
+  because the X32 supports only a small number of connected clients for broadcast
+  update workflows.
 - `OscDeviceSession`: owns remote OSC send clients and app-listener routes for
   an OSC device instance.
 - `X32DeviceBehavior`: attaches to an OSC device profile and owns `/xremote`,
@@ -294,6 +301,38 @@ Use separate script files, referenced by project-relative paths, so users can
 edit scripts with normal tools. Prefer exported handler/helper functions that
 other scripts can import. Trigger configuration should call exported functions
 instead of requiring a graph or mapping template.
+
+Implementation note, 2026-06-04: `ControlScriptFileHost` now provides the first
+rewrite runtime slice. It loads project-relative script files through a host
+source provider, resolves Mond imports with `RequireLibrary`, returns exported
+function names for UI/trigger binding, invokes exported functions by name, and
+keeps the existing instruction-limit timeout behavior. A first host API library
+also exposes the script-facing `osc`, `x32`, and `math` objects needed by the
+starter X-Touch Mini to X32 fader script. These APIs currently queue OSC sends
+to a host command sink and read/write `ControlValueCache`; they are not yet the
+full final `HaPlay.Osc`/`HaPlay.X32` library surface. The legacy inline graph
+script host remains in place until host-managed triggers and the rest of the
+custom HaPlay Mond libraries are connected.
+
+Implementation note, 2026-06-04: `ControlScriptRuntime` now binds configured
+triggers to exported functions, runs only while the control system is armed,
+checks enabled device/layer scopes, updates the OSC cache from incoming OSC
+events before trigger invocation, records compile/runtime diagnostics, and
+disables scripts after the configured consecutive failure threshold. It covers
+device enabled/disabled, layer enabled/disabled, MIDI message/CC, OSC message,
+manual, and explicit periodic dispatch; actual timer scheduling is still a
+device/session-manager task. `ControlScriptOscCommandRouter` routes queued
+script OSC sends to configured OSC devices by ID, alias, name, or unambiguous
+profile ID and applies optimistic cache writes when that cache mode is enabled.
+`ControlScriptRuntimeSession` now bridges these pieces for callers: it owns the
+shared OSC cache, dispatches script triggers, drains queued script OSC messages,
+routes them to the fake or real `IControlOscSender`, and exposes deterministic
+periodic ticks for tests and a future timer loop.
+`ControlOscListenerManager` now owns one OSC server per enabled project listener,
+registers one catch-all handler per listener socket, resolves incoming messages
+to enabled OSC device instances by listener binding and remote host/port, and
+dispatches matched messages into `ControlScriptRuntimeSession`. It exposes the
+remote endpoint in dispatch results so the live monitor can consume it later.
 
 The exact Mond syntax can be refined during implementation, but the default
 shape should be export/import friendly, for example:
@@ -452,6 +491,23 @@ Show:
 - Last run time and error count.
 - Sample scripts for X-Touch Mini and X32.
 
+### First Starter Script
+
+The first built-in starter script should map the X-Touch Mini MC-mode encoder
+strip to the first 8 X32 channel faders:
+
+- Encoder CC16 -> `/ch/01/mix/fader`.
+- Encoder CC17 -> `/ch/02/mix/fader`.
+- Continue through CC23 -> `/ch/08/mix/fader`.
+- Encoder values `1..10` increase the normalized OSC fader value.
+- Encoder values `65..72` decrease the normalized OSC fader value.
+- Larger relative values move the fader faster.
+- Unknown/currently uncached fader values start at `0.75`.
+- Values are clamped to the X32 normalized fader range `0..1`.
+
+The initial implementation uses one X32 fader quantum per relative encoder step:
+`next = clamp(current + deltaSteps * (1 / 1023), 0, 1)`.
+
 ## Persistence
 
 Introduce a new project schema for the rewritten control system, likely
@@ -462,6 +518,7 @@ Suggested top-level model:
 ```csharp
 public sealed record ControlSystemConfig
 {
+    public List<ControlOscListenerConfig> OscListeners { get; init; } = new();
     public List<DeviceInstanceConfig> Devices { get; init; } = new();
     public List<ControlLayerConfig> Layers { get; init; } = new();
     public List<ControlScriptConfig> Scripts { get; init; } = new();
@@ -588,7 +645,7 @@ Manual hardware tests:
   events that can switch HaPlay layers.
 - Match MIDI devices by a combination of alias, name, and ID. If no good match is
   found, ask the user to select the current device.
-- Use one app-wide OSC listener.
+- Default to one app-level OSC listener while allowing additional listeners.
 - Make OSC cache update behavior configurable between incoming-only and
   optimistic send + incoming.
 - Make X32 periodic sends configurable. Default to `/xremote`.
@@ -598,8 +655,9 @@ Manual hardware tests:
   separately.
 - Disable scripts after a configurable number of consecutive failures. Default
   threshold: 3.
-- Store the app-wide OSC listen port per project. Default: `10020`.
-- Share the OSC socket for send/receive when possible.
+- Store OSC listeners per project. Default: one app-level listener on `10020`.
+- Allow multiple OSC remotes and multiple OSC listeners in one project.
+- Share each OSC listener socket for send/receive when possible.
 - Use JSON lines for monitor capture/replay export.
 - Treat high-rate stream coalescing as a hardware-calibration task during real
   X32 testing.
