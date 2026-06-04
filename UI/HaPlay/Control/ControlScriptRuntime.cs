@@ -42,16 +42,37 @@ public sealed class ControlScriptRuntime
     {
         ArgumentNullException.ThrowIfNull(evt);
 
-        UpdateCaches(evt);
+        var cacheChanges = UpdateCaches(evt);
 
         var kind = evt switch
         {
             MidiControlEvent => ControlScriptTriggerKind.MidiControlChange,
+            MidiNoteControlEvent => ControlScriptTriggerKind.MidiNote,
             OscControlEvent => ControlScriptTriggerKind.OscMessage,
             _ => ControlScriptTriggerKind.Manual,
         };
 
-        return Dispatch(kind, evt, evt.OriginId, layerId: null, triggerId: null);
+        var dispatch = Dispatch(kind, evt, evt.OriginId, layerId: null, triggerId: null);
+
+        if (cacheChanges.Count == 0)
+            return dispatch with { CacheChanges = cacheChanges };
+
+        var invocations = new List<ControlScriptInvocationRecord>(dispatch.Invocations);
+        var diagnostics = new List<ControlScriptRuntimeDiagnostic>(dispatch.Diagnostics);
+        foreach (var change in cacheChanges)
+        {
+            var cacheEvent = ToCacheChangedEvent(evt, change);
+            var cacheDispatch = Dispatch(
+                ControlScriptTriggerKind.OscCacheChanged,
+                cacheEvent,
+                evt.OriginId,
+                layerId: null,
+                triggerId: null);
+            invocations.AddRange(cacheDispatch.Invocations);
+            diagnostics.AddRange(cacheDispatch.Diagnostics);
+        }
+
+        return new ControlScriptDispatchResult(invocations, diagnostics) { CacheChanges = cacheChanges };
     }
 
     public ControlScriptDispatchResult DispatchDeviceEnabled(Guid deviceInstanceId) =>
@@ -66,6 +87,25 @@ public sealed class ControlScriptRuntime
         }
 
         return DispatchLifecycle(ControlScriptTriggerKind.DeviceDisabled, deviceInstanceId, layerId: null);
+    }
+
+    public ControlScriptDispatchResult DispatchDeviceHealthChanged(
+        Guid deviceInstanceId,
+        ControlSessionHealth health,
+        ControlSessionState? previousState = null)
+    {
+        ArgumentNullException.ThrowIfNull(health);
+
+        var evt = new DeviceHealthChangedControlEvent(
+            health.UpdatedAtUtc == default ? DateTimeOffset.UtcNow : health.UpdatedAtUtc,
+            deviceInstanceId,
+            deviceInstanceId,
+            Guid.NewGuid(),
+            deviceInstanceId,
+            health.State,
+            previousState,
+            health.Detail);
+        return Dispatch(ControlScriptTriggerKind.DeviceHealthChanged, evt, deviceInstanceId, layerId: null, triggerId: null);
     }
 
     public ControlScriptDispatchResult DispatchLayerEnabled(Guid layerId) =>
@@ -237,10 +277,7 @@ public sealed class ControlScriptRuntime
     {
         if (requestedTriggerId.HasValue && trigger.Id != requestedTriggerId.Value)
             return false;
-        if (trigger.Kind != kind
-            && !(kind == ControlScriptTriggerKind.MidiControlChange
-                && trigger.Kind == ControlScriptTriggerKind.MidiMessage
-                && evt is MidiControlEvent))
+        if (!TriggerKindMatches(trigger.Kind, kind, evt))
         {
             return false;
         }
@@ -271,10 +308,26 @@ public sealed class ControlScriptRuntime
         return evt switch
         {
             MidiControlEvent midi => MidiTriggerMatches(trigger, kind, midi),
+            MidiNoteControlEvent midi => MidiTriggerMatches(trigger, kind, midi),
             OscControlEvent osc => OscTriggerMatches(trigger, osc),
+            OscCacheChangedControlEvent cacheChanged => kind == ControlScriptTriggerKind.OscCacheChanged
+                && OscAddressMatches(trigger.OscAddressPattern, cacheChanged.Address),
+            DeviceHealthChangedControlEvent => kind == ControlScriptTriggerKind.DeviceHealthChanged,
             null => true,
             _ => kind == ControlScriptTriggerKind.Manual,
         };
+    }
+
+    private static bool TriggerKindMatches(
+        ControlScriptTriggerKind triggerKind,
+        ControlScriptTriggerKind eventKind,
+        ControlEvent? evt)
+    {
+        if (triggerKind == eventKind)
+            return true;
+
+        return triggerKind == ControlScriptTriggerKind.MidiMessage
+            && evt is MidiControlEvent or MidiNoteControlEvent;
     }
 
     private static bool MidiTriggerMatches(ControlScriptTriggerConfig trigger, ControlScriptTriggerKind kind, MidiControlEvent midi)
@@ -283,7 +336,19 @@ public sealed class ControlScriptRuntime
             return false;
         if (trigger.MidiChannel.HasValue && trigger.MidiChannel.Value != midi.Channel)
             return false;
-        if (kind == ControlScriptTriggerKind.MidiControlChange && trigger.MidiController.HasValue && trigger.MidiController.Value != midi.Controller)
+        if (trigger.MidiController.HasValue && trigger.MidiController.Value != midi.Controller)
+            return false;
+
+        return true;
+    }
+
+    private static bool MidiTriggerMatches(ControlScriptTriggerConfig trigger, ControlScriptTriggerKind kind, MidiNoteControlEvent midi)
+    {
+        if (kind is not (ControlScriptTriggerKind.MidiNote or ControlScriptTriggerKind.MidiMessage))
+            return false;
+        if (trigger.MidiChannel.HasValue && trigger.MidiChannel.Value != midi.Channel)
+            return false;
+        if (trigger.MidiNote.HasValue && trigger.MidiNote.Value != midi.Note)
             return false;
 
         return true;
@@ -383,44 +448,70 @@ public sealed class ControlScriptRuntime
         }
     }
 
-    private void UpdateCaches(ControlEvent evt)
+    private IReadOnlyList<ControlValueCacheChange> UpdateCaches(ControlEvent evt)
     {
         if (evt is not OscControlEvent osc)
-            return;
+            return [];
+
+        var changes = new List<ControlValueCacheChange>();
+        var deviceKeys = GetDeviceCacheKeys(evt.OriginId).ToArray();
 
         for (var i = 0; i < osc.Arguments.Count; i++)
         {
             var argument = osc.Arguments[i];
-            var source = ControlValueCacheSource.Incoming;
-            foreach (var deviceKey in GetDeviceCacheKeys(evt.OriginId))
+
+            // Each incoming argument is mirrored to every device alias key (id, name,
+            // alias, profile) so scripts can read it by any of them, but a single
+            // logical change should only notify once. Use the canonical id key (first)
+            // for change detection and ignore the duplicate writes to the aliases.
+            ControlValueCacheChange? canonicalChange = null;
+            for (var k = 0; k < deviceKeys.Length; k++)
             {
-                switch (argument.Type)
-                {
-                    case OSCArgumentType.Float32:
-                        RuntimeServices.OscCache.SetNumber(deviceKey, osc.Address, argument.AsFloat32(), source, i, evt.CorrelationId, evt.Timestamp);
-                        break;
-                    case OSCArgumentType.Double64:
-                        RuntimeServices.OscCache.SetNumber(deviceKey, osc.Address, argument.AsDouble64(), source, i, evt.CorrelationId, evt.Timestamp);
-                        break;
-                    case OSCArgumentType.Int32:
-                        RuntimeServices.OscCache.SetNumber(deviceKey, osc.Address, argument.AsInt32(), source, i, evt.CorrelationId, evt.Timestamp);
-                        break;
-                    case OSCArgumentType.Int64:
-                        RuntimeServices.OscCache.SetNumber(deviceKey, osc.Address, argument.AsInt64(), source, i, evt.CorrelationId, evt.Timestamp);
-                        break;
-                    case OSCArgumentType.String or OSCArgumentType.Symbol:
-                        RuntimeServices.OscCache.SetString(deviceKey, osc.Address, argument.AsString(), source, i, evt.CorrelationId, evt.Timestamp);
-                        break;
-                    case OSCArgumentType.True:
-                        RuntimeServices.OscCache.SetBoolean(deviceKey, osc.Address, true, source, i, evt.CorrelationId, evt.Timestamp);
-                        break;
-                    case OSCArgumentType.False:
-                        RuntimeServices.OscCache.SetBoolean(deviceKey, osc.Address, false, source, i, evt.CorrelationId, evt.Timestamp);
-                        break;
-                }
+                var change = SetCacheValue(deviceKeys[k], osc.Address, argument, i, evt);
+                if (k == 0)
+                    canonicalChange = change;
             }
+
+            if (canonicalChange is not null)
+                changes.Add(canonicalChange);
         }
+
+        return changes;
     }
+
+    private ControlValueCacheChange? SetCacheValue(
+        string deviceKey,
+        string address,
+        OSCArgument argument,
+        int argumentIndex,
+        ControlEvent evt)
+    {
+        const ControlValueCacheSource source = ControlValueCacheSource.Incoming;
+        var cache = RuntimeServices.OscCache;
+        return argument.Type switch
+        {
+            OSCArgumentType.Float32 => cache.SetNumber(deviceKey, address, argument.AsFloat32(), source, argumentIndex, evt.CorrelationId, evt.Timestamp),
+            OSCArgumentType.Double64 => cache.SetNumber(deviceKey, address, argument.AsDouble64(), source, argumentIndex, evt.CorrelationId, evt.Timestamp),
+            OSCArgumentType.Int32 => cache.SetNumber(deviceKey, address, argument.AsInt32(), source, argumentIndex, evt.CorrelationId, evt.Timestamp),
+            OSCArgumentType.Int64 => cache.SetNumber(deviceKey, address, argument.AsInt64(), source, argumentIndex, evt.CorrelationId, evt.Timestamp),
+            OSCArgumentType.String or OSCArgumentType.Symbol => cache.SetString(deviceKey, address, argument.AsString(), source, argumentIndex, evt.CorrelationId, evt.Timestamp),
+            OSCArgumentType.True => cache.SetBoolean(deviceKey, address, true, source, argumentIndex, evt.CorrelationId, evt.Timestamp),
+            OSCArgumentType.False => cache.SetBoolean(deviceKey, address, false, source, argumentIndex, evt.CorrelationId, evt.Timestamp),
+            _ => null,
+        };
+    }
+
+    private static OscCacheChangedControlEvent ToCacheChangedEvent(ControlEvent evt, ControlValueCacheChange change) =>
+        new(
+            change.Timestamp,
+            evt.OriginId,
+            evt.OriginId,
+            change.CorrelationId ?? evt.CorrelationId,
+            change.Key.DeviceKey,
+            change.Key.Address,
+            change.Key.ArgumentIndex,
+            change.Value,
+            change.Source);
 
     private IEnumerable<string> GetDeviceCacheKeys(Guid deviceInstanceId)
     {
@@ -502,12 +593,24 @@ public sealed class ControlScriptRuntime
             case MidiControlEvent midi:
                 obj["type"] = "midi";
                 var midiObj = MondValue.Object(state);
+                midiObj["message"] = "controlChange";
                 midiObj["channel"] = midi.Channel;
                 midiObj["controller"] = midi.Controller;
                 midiObj["value"] = midi.Value;
                 midiObj["highResolution14Bit"] = midi.HighResolution14Bit;
                 obj["midi"] = midiObj;
                 obj["value"] = midi.Value;
+                break;
+            case MidiNoteControlEvent midi:
+                obj["type"] = "midi";
+                var midiNoteObj = MondValue.Object(state);
+                midiNoteObj["message"] = midi.IsNoteOn ? "noteOn" : "noteOff";
+                midiNoteObj["channel"] = midi.Channel;
+                midiNoteObj["note"] = midi.Note;
+                midiNoteObj["velocity"] = midi.Velocity;
+                midiNoteObj["isNoteOn"] = midi.IsNoteOn;
+                obj["midi"] = midiNoteObj;
+                obj["value"] = midi.Velocity;
                 break;
             case OscControlEvent osc:
                 obj["type"] = "osc";
@@ -517,6 +620,24 @@ public sealed class ControlScriptRuntime
                 obj["osc"] = oscObj;
                 if (TryGetOscScalar(osc.Arguments.FirstOrDefault(), out var value))
                     obj["value"] = value;
+                break;
+            case OscCacheChangedControlEvent cacheChanged:
+                obj["type"] = "oscCacheChanged";
+                obj["deviceKey"] = cacheChanged.DeviceKey;
+                obj["source"] = cacheChanged.Source.ToString();
+                var cacheObj = MondValue.Object(state);
+                cacheObj["address"] = cacheChanged.Address;
+                cacheObj["argumentIndex"] = cacheChanged.ArgumentIndex;
+                obj["osc"] = cacheObj;
+                obj["value"] = ToMondCachedValue(cacheChanged.Value);
+                break;
+            case DeviceHealthChangedControlEvent health:
+                obj["type"] = "deviceHealthChanged";
+                obj["deviceInstanceId"] = health.DeviceInstanceId.ToString();
+                obj["state"] = health.State.ToString();
+                if (health.PreviousState.HasValue)
+                    obj["previousState"] = health.PreviousState.Value.ToString();
+                obj["detail"] = health.Detail;
                 break;
             case ScalarControlEvent scalar:
                 obj["type"] = "scalar";
@@ -533,6 +654,15 @@ public sealed class ControlScriptRuntime
 
         return obj;
     }
+
+    private static MondValue ToMondCachedValue(ControlCachedValue value) =>
+        value.Kind switch
+        {
+            ControlCachedValueKind.Number => value.NumberValue,
+            ControlCachedValueKind.String => value.StringValue ?? string.Empty,
+            ControlCachedValueKind.Boolean => value.BooleanValue ? MondValue.True : MondValue.False,
+            _ => MondValue.Undefined,
+        };
 
     private static MondValue ToMondOscArgument(OSCArgument argument) =>
         argument.Type switch
@@ -575,22 +705,8 @@ public sealed class ControlScriptRuntime
         }
     }
 
-    private static bool OscAddressMatches(string? pattern, string address)
-    {
-        if (string.IsNullOrWhiteSpace(pattern) || pattern == "*")
-            return true;
-        if (string.Equals(pattern, address, StringComparison.Ordinal))
-            return true;
-
-        var starIndex = pattern.IndexOf('*', StringComparison.Ordinal);
-        if (starIndex < 0)
-            return false;
-
-        var prefix = pattern[..starIndex];
-        var suffix = pattern[(starIndex + 1)..];
-        return address.StartsWith(prefix, StringComparison.Ordinal)
-            && address.EndsWith(suffix, StringComparison.Ordinal);
-    }
+    private static bool OscAddressMatches(string? pattern, string address) =>
+        ControlOscAddressPattern.Matches(pattern, address);
 
     private static string ToTriggerName(ControlScriptTriggerKind kind) =>
         kind.ToString();
@@ -630,7 +746,10 @@ public sealed class ControlScriptRuntime
 
 public sealed record ControlScriptDispatchResult(
     IReadOnlyList<ControlScriptInvocationRecord> Invocations,
-    IReadOnlyList<ControlScriptRuntimeDiagnostic> Diagnostics);
+    IReadOnlyList<ControlScriptRuntimeDiagnostic> Diagnostics)
+{
+    public IReadOnlyList<ControlValueCacheChange> CacheChanges { get; init; } = [];
+}
 
 public sealed record ControlScriptInvocationRecord(
     Guid ScriptId,

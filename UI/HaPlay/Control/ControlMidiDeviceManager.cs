@@ -50,7 +50,16 @@ public sealed class ControlMidiDeviceManager
                 value,
                 highResolution14Bit);
             var scriptResult = await _runtimeSession.DispatchControlEventAsync(evt, cancellationToken).ConfigureAwait(false);
-            results.Add(new ControlMidiDeviceDispatchResult(input, device.Id, channel, controller, value, highResolution14Bit, scriptResult));
+            results.Add(new ControlMidiDeviceDispatchResult(
+                input,
+                device.Id,
+                channel,
+                Controller: controller,
+                Note: null,
+                Value: value,
+                HighResolution14Bit: highResolution14Bit,
+                IsNoteOn: null,
+                scriptResult));
         }
 
         return results;
@@ -71,6 +80,71 @@ public sealed class ControlMidiDeviceManager
             controller,
             value,
             highResolution14Bit,
+            receivedAtUtc,
+            cancellationToken);
+
+    public async ValueTask<IReadOnlyList<ControlMidiDeviceDispatchResult>> DispatchNoteAsync(
+        ControlMidiInputIdentity input,
+        int channel,
+        int note,
+        int velocity,
+        bool isNoteOn,
+        DateTimeOffset? receivedAtUtc = null,
+        CancellationToken cancellationToken = default)
+    {
+        var timestamp = receivedAtUtc ?? DateTimeOffset.UtcNow;
+        var devices = ResolveDevices(input).ToArray();
+        if (devices.Length == 0)
+        {
+            _monitor.Record(CreateMidiNoteInputRecord(input, device: null, channel, note, velocity, isNoteOn, ControlMonitorResult.Dropped));
+            return [];
+        }
+
+        var results = new List<ControlMidiDeviceDispatchResult>(devices.Length);
+        foreach (var device in devices)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _monitor.Record(CreateMidiNoteInputRecord(input, device, channel, note, velocity, isNoteOn, ControlMonitorResult.Received));
+            var evt = new MidiNoteControlEvent(
+                timestamp,
+                device.Id,
+                device.Id,
+                Guid.NewGuid(),
+                channel,
+                note,
+                velocity,
+                isNoteOn);
+            var scriptResult = await _runtimeSession.DispatchControlEventAsync(evt, cancellationToken).ConfigureAwait(false);
+            results.Add(new ControlMidiDeviceDispatchResult(
+                input,
+                device.Id,
+                channel,
+                Controller: null,
+                Note: note,
+                Value: velocity,
+                HighResolution14Bit: false,
+                IsNoteOn: isNoteOn,
+                scriptResult));
+        }
+
+        return results;
+    }
+
+    public ValueTask<IReadOnlyList<ControlMidiDeviceDispatchResult>> DispatchNoteAsync(
+        int? inputDeviceId,
+        string? inputDeviceName,
+        int channel,
+        int note,
+        int velocity,
+        bool isNoteOn,
+        DateTimeOffset? receivedAtUtc = null,
+        CancellationToken cancellationToken = default) =>
+        DispatchNoteAsync(
+            new ControlMidiInputIdentity(inputDeviceId, inputDeviceName),
+            channel,
+            note,
+            velocity,
+            isNoteOn,
             receivedAtUtc,
             cancellationToken);
 
@@ -129,6 +203,31 @@ public sealed class ControlMidiDeviceManager
             Message = result == ControlMonitorResult.Dropped ? "No matching MIDI device" : nameof(ControlScriptMidiMessageKind.ControlChange),
         };
 
+    private static ControlMonitorRecord CreateMidiNoteInputRecord(
+        ControlMidiInputIdentity input,
+        ControlDeviceInstanceConfig? device,
+        int channel,
+        int note,
+        int velocity,
+        bool isNoteOn,
+        ControlMonitorResult result) =>
+        new()
+        {
+            Direction = result == ControlMonitorResult.Dropped ? ControlMonitorDirection.Dropped : ControlMonitorDirection.Input,
+            Protocol = ControlMonitorProtocol.Midi,
+            Result = result,
+            DeviceInstanceId = device?.Id,
+            DeviceKey = device?.Binding.Alias ?? device?.Name,
+            ProfileId = device?.ProfileId,
+            Endpoint = device is null ? FormatInput(input) : FormatDeviceInput(device.Binding),
+            MidiChannel = channel,
+            MidiNote = note,
+            MidiValue = velocity,
+            Message = result == ControlMonitorResult.Dropped
+                ? "No matching MIDI device"
+                : isNoteOn ? nameof(ControlScriptMidiMessageKind.NoteOn) : nameof(ControlScriptMidiMessageKind.NoteOff),
+        };
+
     private static string? FormatDeviceInput(ControlDeviceBindingConfig binding)
     {
         if (!string.IsNullOrWhiteSpace(binding.MidiInputDeviceName))
@@ -150,7 +249,9 @@ public sealed record ControlMidiDeviceDispatchResult(
     ControlMidiInputIdentity Input,
     Guid DeviceInstanceId,
     int Channel,
-    int Controller,
+    int? Controller,
+    int? Note,
     int Value,
     bool HighResolution14Bit,
+    bool? IsNoteOn,
     ControlScriptRuntimeSessionResult ScriptResult);

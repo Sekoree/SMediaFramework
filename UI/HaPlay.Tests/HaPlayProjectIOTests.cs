@@ -759,6 +759,15 @@ public sealed class HaPlayProjectIOTests
                     },
                 ],
                 OscCacheUpdateMode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
+                OscCacheOverrides =
+                [
+                    new ControlOscCacheCommandOverride
+                    {
+                        AddressPattern = "/ch/*/mix/fader",
+                        DeviceInstanceId = x32Id,
+                        Mode = ControlOscCacheUpdateMode.IncomingOnly,
+                    },
+                ],
                 Monitor = new ControlMonitorOptions
                 {
                     MaxVisibleMessages = 1000,
@@ -915,6 +924,10 @@ public sealed class HaPlayProjectIOTests
         var control = roundTripped.ControlSystem;
         Assert.True(control.IsArmed);
         Assert.Equal(ControlOscCacheUpdateMode.OptimisticSendAndIncoming, control.OscCacheUpdateMode);
+        var cacheOverride = Assert.Single(control.OscCacheOverrides);
+        Assert.Equal("/ch/*/mix/fader", cacheOverride.AddressPattern);
+        Assert.Equal(x32Id, cacheOverride.DeviceInstanceId);
+        Assert.Equal(ControlOscCacheUpdateMode.IncomingOnly, cacheOverride.Mode);
         Assert.Equal(1000, control.Monitor.MaxVisibleMessages);
         Assert.Equal(ControlMonitorCaptureFormat.JsonLines, control.Monitor.CaptureFormat);
         Assert.False(control.Monitor.IncludeRawBytes);
@@ -1000,6 +1013,7 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(10020, listener.LocalPort);
         Assert.Equal(ControlOscSocketMode.SharedAppListener, listener.SocketMode);
         Assert.Equal(ControlOscCacheUpdateMode.IncomingOnly, control.OscCacheUpdateMode);
+        Assert.Empty(control.OscCacheOverrides);
         Assert.Equal(1000, control.Monitor.MaxVisibleMessages);
         Assert.Equal(ControlMonitorCaptureFormat.JsonLines, control.Monitor.CaptureFormat);
         Assert.True(control.Monitor.IncludeRawBytes);

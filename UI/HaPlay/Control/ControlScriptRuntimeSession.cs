@@ -11,6 +11,10 @@ public sealed class ControlScriptRuntimeSession
     private readonly ControlScriptMidiCommandRouter _midiRouter;
     private readonly IControlMonitorSink _monitor;
     private readonly Dictionary<Guid, DateTimeOffset> _lastPeriodicDispatch = new();
+    private readonly Dictionary<Guid, ControlSessionState> _lastDeviceHealth = new();
+
+    private static readonly ControlScriptRuntimeSessionResult EmptyResult =
+        new([], [], [], [], []);
 
     public ControlScriptRuntimeSession(
         ControlSystemConfig config,
@@ -70,6 +74,48 @@ public sealed class ControlScriptRuntimeSession
         CancellationToken cancellationToken = default) =>
         CompleteDispatchAsync(_runtime.DispatchManual(scriptId, triggerId), cancellationToken);
 
+    /// <summary>
+    /// Reports a device session's current health. Device-health-changed triggers fire (and a monitor
+    /// row is recorded) only when the session <see cref="ControlSessionState"/> actually transitions, so
+    /// callers can report health on every poll without spamming scripts on detail-only updates.
+    /// </summary>
+    public ValueTask<ControlScriptRuntimeSessionResult> ReportDeviceHealthAsync(
+        Guid deviceInstanceId,
+        ControlSessionHealth health,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(health);
+
+        var hadPrevious = _lastDeviceHealth.TryGetValue(deviceInstanceId, out var previous);
+        if (hadPrevious && previous == health.State)
+            return ValueTask.FromResult(EmptyResult);
+
+        _lastDeviceHealth[deviceInstanceId] = health.State;
+        var previousState = hadPrevious ? previous : (ControlSessionState?)null;
+        RecordDeviceHealth(deviceInstanceId, health, previousState);
+        return CompleteDispatchAsync(
+            _runtime.DispatchDeviceHealthChanged(deviceInstanceId, health, previousState),
+            cancellationToken);
+    }
+
+    private void RecordDeviceHealth(
+        Guid deviceInstanceId,
+        ControlSessionHealth health,
+        ControlSessionState? previousState)
+    {
+        var faulted = health.State == ControlSessionState.Faulted;
+        _monitor.Record(new ControlMonitorRecord
+        {
+            TimestampUtc = health.UpdatedAtUtc == default ? DateTimeOffset.UtcNow : health.UpdatedAtUtc,
+            Direction = faulted ? ControlMonitorDirection.Error : ControlMonitorDirection.Internal,
+            Protocol = ControlMonitorProtocol.Runtime,
+            Result = faulted ? ControlMonitorResult.Failed : ControlMonitorResult.Received,
+            DeviceInstanceId = deviceInstanceId,
+            Message = previousState.HasValue ? $"{previousState} -> {health.State}" : health.State.ToString(),
+            ErrorMessage = faulted && !string.IsNullOrWhiteSpace(health.Detail) ? health.Detail : null,
+        });
+    }
+
     public async ValueTask<ControlScriptRuntimeSessionResult> TickPeriodicAsync(
         DateTimeOffset utcNow,
         CancellationToken cancellationToken = default)
@@ -97,8 +143,8 @@ public sealed class ControlScriptRuntimeSession
 
         var oscRoutes = await FlushScriptOscCommandsAsync(cancellationToken).ConfigureAwait(false);
         var midiRoutes = await FlushScriptMidiCommandsAsync(cancellationToken).ConfigureAwait(false);
-        RecordDispatch(invocations, diagnostics, oscRoutes, midiRoutes);
-        return new ControlScriptRuntimeSessionResult(invocations, diagnostics, oscRoutes, midiRoutes);
+        RecordDispatch(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges: []);
+        return new ControlScriptRuntimeSessionResult(invocations, diagnostics, oscRoutes, midiRoutes, CacheUpdates: []);
     }
 
     private bool IsPeriodicDue(ControlScriptTriggerConfig trigger, DateTimeOffset utcNow)
@@ -114,8 +160,13 @@ public sealed class ControlScriptRuntimeSession
     {
         var oscRoutes = await FlushScriptOscCommandsAsync(cancellationToken).ConfigureAwait(false);
         var midiRoutes = await FlushScriptMidiCommandsAsync(cancellationToken).ConfigureAwait(false);
-        RecordDispatch(dispatch.Invocations, dispatch.Diagnostics, oscRoutes, midiRoutes);
-        return new ControlScriptRuntimeSessionResult(dispatch.Invocations, dispatch.Diagnostics, oscRoutes, midiRoutes);
+        RecordDispatch(dispatch.Invocations, dispatch.Diagnostics, oscRoutes, midiRoutes, dispatch.CacheChanges);
+        return new ControlScriptRuntimeSessionResult(
+            dispatch.Invocations,
+            dispatch.Diagnostics,
+            oscRoutes,
+            midiRoutes,
+            dispatch.CacheChanges);
     }
 
     private ValueTask<IReadOnlyList<ControlScriptOscCommandRouteResult>> FlushScriptOscCommandsAsync(
@@ -140,8 +191,26 @@ public sealed class ControlScriptRuntimeSession
         IReadOnlyList<ControlScriptInvocationRecord> invocations,
         IReadOnlyList<ControlScriptRuntimeDiagnostic> diagnostics,
         IReadOnlyList<ControlScriptOscCommandRouteResult> oscRoutes,
-        IReadOnlyList<ControlScriptMidiCommandRouteResult> midiRoutes)
+        IReadOnlyList<ControlScriptMidiCommandRouteResult> midiRoutes,
+        IReadOnlyList<ControlValueCacheChange> cacheChanges)
     {
+        foreach (var change in cacheChanges)
+        {
+            _monitor.Record(new ControlMonitorRecord
+            {
+                TimestampUtc = change.Timestamp,
+                Direction = ControlMonitorDirection.Internal,
+                Protocol = ControlMonitorProtocol.Cache,
+                Result = ControlMonitorResult.Cached,
+                DeviceInstanceId = Guid.TryParse(change.Key.DeviceKey, out var deviceId) ? deviceId : null,
+                DeviceKey = change.Key.DeviceKey,
+                Address = change.Key.Address,
+                CorrelationId = change.CorrelationId,
+                OscArguments = [ControlMonitorOscArgumentRecord.FromCachedValue(change.Value)],
+                Message = change.Source.ToString(),
+            });
+        }
+
         foreach (var invocation in invocations)
         {
             _monitor.Record(new ControlMonitorRecord
@@ -213,4 +282,5 @@ public sealed record ControlScriptRuntimeSessionResult(
     IReadOnlyList<ControlScriptInvocationRecord> Invocations,
     IReadOnlyList<ControlScriptRuntimeDiagnostic> Diagnostics,
     IReadOnlyList<ControlScriptOscCommandRouteResult> OscRoutes,
-    IReadOnlyList<ControlScriptMidiCommandRouteResult> MidiRoutes);
+    IReadOnlyList<ControlScriptMidiCommandRouteResult> MidiRoutes,
+    IReadOnlyList<ControlValueCacheChange> CacheUpdates);

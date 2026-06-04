@@ -137,6 +137,152 @@ public sealed class ControlScriptOscCommandRouterTests
         Assert.False(cache.TryGetNumber("x32", "/ch/01/mix/fader", out _));
     }
 
+    [Fact]
+    public async Task SendAsync_OverrideForcesIncomingOnlyForMatchingCommandEvenWhenProjectIsOptimistic()
+    {
+        var cache = new ControlValueCache();
+        var sender = new RecordingOscSender();
+        var router = new ControlScriptOscCommandRouter(
+            new ControlSystemConfig
+            {
+                OscCacheUpdateMode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
+                OscCacheOverrides =
+                [
+                    new ControlOscCacheCommandOverride
+                    {
+                        AddressPattern = "/ch/*/mix/fader",
+                        Mode = ControlOscCacheUpdateMode.IncomingOnly,
+                    },
+                ],
+                Devices = [OscDevice(Guid.NewGuid(), "X32", "x32", "192.168.2.76", 10023)],
+            },
+            sender,
+            cache);
+
+        var fader = await router.SendAsync(
+            new ControlScriptOscMessage("x32", "/ch/01/mix/fader", [ControlScriptOscArgument.Float32(0.6)]));
+        var mute = await router.SendAsync(
+            new ControlScriptOscMessage("x32", "/ch/01/mix/on", [ControlScriptOscArgument.Int32(1)]));
+
+        Assert.True(fader.Succeeded);
+        Assert.True(mute.Succeeded);
+        // The overridden fader command must not write optimistically...
+        Assert.False(cache.TryGetNumber("x32", "/ch/01/mix/fader", out _));
+        // ...but other commands still follow the optimistic project default.
+        Assert.True(cache.TryGetNumber("x32", "/ch/01/mix/on", out var muteValue));
+        Assert.Equal(1, muteValue, precision: 12);
+    }
+
+    [Fact]
+    public async Task SendAsync_OverrideEnablesOptimisticForMatchingCommandWhenProjectIsIncomingOnly()
+    {
+        var cache = new ControlValueCache();
+        var sender = new RecordingOscSender();
+        var router = new ControlScriptOscCommandRouter(
+            new ControlSystemConfig
+            {
+                OscCacheUpdateMode = ControlOscCacheUpdateMode.IncomingOnly,
+                OscCacheOverrides =
+                [
+                    new ControlOscCacheCommandOverride
+                    {
+                        AddressPattern = "/ch/01/mix/fader",
+                        Mode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
+                    },
+                ],
+                Devices = [OscDevice(Guid.NewGuid(), "X32", "x32", "192.168.2.76", 10023)],
+            },
+            sender,
+            cache);
+
+        var result = await router.SendAsync(
+            new ControlScriptOscMessage("x32", "/ch/01/mix/fader", [ControlScriptOscArgument.Float32(0.6)]));
+
+        Assert.True(result.Succeeded);
+        Assert.True(cache.TryGetNumber("x32", "/ch/01/mix/fader", out var value));
+        Assert.Equal(0.6, value, precision: 12);
+    }
+
+    [Fact]
+    public async Task SendAsync_DeviceScopedOverrideOnlyAppliesToThatDevice()
+    {
+        var mainId = Guid.NewGuid();
+        var monitorId = Guid.NewGuid();
+        var cache = new ControlValueCache();
+        var sender = new RecordingOscSender();
+        var router = new ControlScriptOscCommandRouter(
+            new ControlSystemConfig
+            {
+                OscCacheUpdateMode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
+                OscCacheOverrides =
+                [
+                    new ControlOscCacheCommandOverride
+                    {
+                        AddressPattern = "/ch/01/mix/fader",
+                        DeviceInstanceId = mainId,
+                        Mode = ControlOscCacheUpdateMode.IncomingOnly,
+                    },
+                ],
+                Devices =
+                [
+                    OscDevice(mainId, "X32 Main", "main", "192.168.2.76", 10023),
+                    OscDevice(monitorId, "X32 Monitor", "monitor", "192.168.2.77", 10023),
+                ],
+            },
+            sender,
+            cache);
+
+        await router.SendAsync(
+            new ControlScriptOscMessage("main", "/ch/01/mix/fader", [ControlScriptOscArgument.Float32(0.6)]));
+        await router.SendAsync(
+            new ControlScriptOscMessage("monitor", "/ch/01/mix/fader", [ControlScriptOscArgument.Float32(0.6)]));
+
+        Assert.False(cache.TryGetNumber("main", "/ch/01/mix/fader", out _));
+        Assert.True(cache.TryGetNumber("monitor", "/ch/01/mix/fader", out var monitorValue));
+        Assert.Equal(0.6, monitorValue, precision: 12);
+    }
+
+    [Fact]
+    public async Task SendAsync_MoreSpecificOverrideWinsOverWildcard()
+    {
+        var x32Id = Guid.NewGuid();
+        var cache = new ControlValueCache();
+        var sender = new RecordingOscSender();
+        var router = new ControlScriptOscCommandRouter(
+            new ControlSystemConfig
+            {
+                OscCacheUpdateMode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
+                OscCacheOverrides =
+                [
+                    new ControlOscCacheCommandOverride
+                    {
+                        AddressPattern = "/ch/*/mix/fader",
+                        Mode = ControlOscCacheUpdateMode.IncomingOnly,
+                    },
+                    new ControlOscCacheCommandOverride
+                    {
+                        AddressPattern = "/ch/01/mix/fader",
+                        DeviceInstanceId = x32Id,
+                        Mode = ControlOscCacheUpdateMode.OptimisticSendAndIncoming,
+                    },
+                ],
+                Devices = [OscDevice(x32Id, "X32", "x32", "192.168.2.76", 10023)],
+            },
+            sender,
+            cache);
+
+        await router.SendAsync(
+            new ControlScriptOscMessage("x32", "/ch/01/mix/fader", [ControlScriptOscArgument.Float32(0.6)]));
+        await router.SendAsync(
+            new ControlScriptOscMessage("x32", "/ch/02/mix/fader", [ControlScriptOscArgument.Float32(0.4)]));
+
+        // Channel 1 matches the exact device-scoped override -> optimistic write wins.
+        Assert.True(cache.TryGetNumber("x32", "/ch/01/mix/fader", out var ch1));
+        Assert.Equal(0.6, ch1, precision: 12);
+        // Channel 2 only matches the wildcard incoming-only override -> no optimistic write.
+        Assert.False(cache.TryGetNumber("x32", "/ch/02/mix/fader", out _));
+    }
+
     private static ControlDeviceInstanceConfig OscDevice(
         Guid id,
         string name,

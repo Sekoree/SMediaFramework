@@ -336,16 +336,73 @@ dispatches matched messages into `ControlScriptRuntimeSession`. It exposes the
 remote endpoint in dispatch results so the live monitor can consume it later.
 `ControlMidiDeviceManager` now provides the matching decoded MIDI input dispatch
 layer for the new control system path: it resolves input device IDs/names to
-enabled MIDI device instances, records decoded CC input/drop monitor rows, and
-dispatches `MidiControlEvent` into the script runtime. It is currently a
-testable dispatch layer, not the final PortMidi hardware session opener.
+enabled MIDI device instances, records decoded CC/note input/drop monitor rows,
+and dispatches `MidiControlEvent`/`MidiNoteControlEvent` into the script
+runtime. It is currently a testable dispatch layer, not the final PortMidi
+hardware session opener.
+`ControlPeriodicOscSendManager` now handles configured periodic OSC sends on a
+deterministic tick: it skips disarmed control systems, sends due tasks for
+enabled OSC devices, supports typed configured OSC arguments, records monitor
+output/error rows, and covers `/xremote` renewals as a normal device task. The
+remaining runtime wiring work is to drive this tick manager from a background
+timer when the app starts the control system.
+`ControlSystemRuntimeSession` now provides the first orchestration facade around
+the new script-centric runtime: it owns the script session, OSC listener manager,
+decoded MIDI dispatcher, and periodic OSC sender, and exposes a deterministic
+tick that runs both script periodic triggers and device periodic OSC sends.
 `ControlMonitorRecord`, `ControlMonitorBuffer`, and `ControlMonitorJsonLines`
 now provide the first live-monitor data layer. The new script runtime path emits
 script invocation/error records, routed OSC and script-originated MIDI output
 success/failure records, and OSC listener input/drop records with remote
 endpoint details. Raw packet bytes, hardware-level MIDI input/output taps,
-cache-change records, UI filtering, and pause/clear controls still need to be
-wired.
+UI filtering, and pause/clear controls still need to be wired.
+
+Implementation note, 2026-06-04: the OSC value cache now reports meaningful
+changes. `ControlValueCache` set operations return a `ControlValueCacheChange`
+when an entry is new, was stale and became fresh again, or holds a different
+typed value, and return null when an already-fresh identical value is rewritten
+(so repeated X32 rebroadcasts of the same value do not spam triggers or the
+monitor). `ControlScriptRuntime.UpdateCaches` collects one canonical change per
+incoming OSC argument (deduplicated across the device id/name/alias/profile
+cache keys) and, after the primary trigger dispatch, raises an
+`OscCacheChangedControlEvent` for each change so `OscCacheChanged` triggers run
+with the same address-pattern and device-scope matching as live OSC messages.
+Cache updates happen even while the control system is disarmed, but the
+cache-changed triggers only run while armed, which keeps the monitor/cache
+useful for diagnostics without firing scripts. `ControlScriptRuntimeSession`
+surfaces these changes as `CacheUpdates` on its result and records one
+`Cache`-protocol monitor row (`Result = Cached`) per change. The X32
+command-browser cache view remains open.
+
+Implementation note, 2026-06-04: per-command OSC cache overrides now exist.
+`ControlSystemConfig.OscCacheOverrides` holds `ControlOscCacheCommandOverride`
+entries (address pattern, optional device instance, and a target cache mode).
+When a script send is routed, `ControlScriptOscCommandRouter` resolves the
+effective cache mode for that (device, address) pair: the most specific matching
+override wins (device-scoped over any-device, exact address over wildcard, with
+declaration order breaking ties), otherwise the project default
+`OscCacheUpdateMode` applies. This lets a project force incoming-only tracking
+for commands where optimistic-send state is misleading, or opt specific commands
+into optimistic tracking under an incoming-only default. Overrides only gate the
+optimistic-send write path; incoming OSC always updates the cache. The shared
+`ControlOscAddressPattern.Matches` helper is now the single source of OSC
+address matching for both script triggers and these overrides.
+
+Implementation note, 2026-06-04: the `DeviceHealthChanged` trigger is now wired.
+`ControlScriptRuntime.DispatchDeviceHealthChanged` raises a
+`DeviceHealthChangedControlEvent` (carrying the new `ControlSessionState`, the
+previous state, and the health detail) and runs matching device-scoped triggers
+with the same arming and device-enabled gating as the other lifecycle triggers;
+the script event exposes `state`, `previousState`, and `detail`.
+`ControlScriptRuntimeSession.ReportDeviceHealthAsync` is the caller-facing entry:
+it remembers the last reported session state per device and only dispatches (and
+records one `Runtime`-protocol monitor row, marked `Error` for faults) when the
+state actually transitions, so a future hardware/listener health poller can
+report on every tick without spamming scripts on detail-only updates. Feeding
+this from real PortMidi/OSC session health remains part of the hardware session
+wiring; today it is driven by the session managers' `ControlSessionHealth`
+transitions and by tests. With this in place every planned host-managed trigger
+except the background-timer-driven periodic task is implemented.
 
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.

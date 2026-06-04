@@ -105,6 +105,90 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void DispatchControlEvent_InvokesMatchingMidiNoteTrigger()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var script = Script("Scripts/main.mnd", MidiNoteTrigger(midiDeviceId, "onMidiNote", midiNote: 84));
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidiNote(event, context) {
+                        osc.send("x32", "/note", osc.int32(event.midi.note), osc.int32(event.midi.velocity));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(MidiNoteEvent(midiDeviceId, note: 84, velocity: 127, isNoteOn: true));
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal("/note", message.Address);
+        Assert.Collection(
+            message.Arguments,
+            arg => Assert.Equal(84, arg.NumberValue),
+            arg => Assert.Equal(127, arg.NumberValue));
+    }
+
+    [Fact]
+    public void DispatchControlEvent_MidiMessageTriggerMatchesCcAndNote()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var script = Script(
+            "Scripts/main.mnd",
+            new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.MidiMessage,
+                FunctionName = "onMidi",
+                DeviceInstanceId = midiDeviceId,
+                MidiChannel = 1,
+            });
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidi(event, context) {
+                        osc.send("x32", "/" + event.midi.message, osc.int32(event.value));
+                    }
+                    """,
+            },
+            sink);
+
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 10));
+        runtime.DispatchControlEvent(MidiNoteEvent(midiDeviceId, note: 84, velocity: 127, isNoteOn: true));
+
+        Assert.Collection(
+            sink.OscMessages,
+            message =>
+            {
+                Assert.Equal("/controlChange", message.Address);
+                Assert.Equal(10, Assert.Single(message.Arguments).NumberValue);
+            },
+            message =>
+            {
+                Assert.Equal("/noteOn", message.Address);
+                Assert.Equal(127, Assert.Single(message.Arguments).NumberValue);
+            });
+    }
+
+    [Fact]
     public void DispatchControlEvent_ExecutesBuiltInXTouchMiniX32FaderScriptThroughTriggerRuntime()
     {
         var midiDeviceId = Guid.NewGuid();
@@ -179,6 +263,251 @@ public sealed class ControlScriptRuntimeTests
         var message = Assert.Single(sink.OscMessages);
         Assert.Equal("/seen", message.Address);
         Assert.Equal(0.6, Assert.Single(message.Arguments).NumberValue, precision: 6);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_FiresOscCacheChangedTriggerOnIncomingValueChange()
+    {
+        var oscDeviceId = Guid.NewGuid();
+        var trigger = new ControlScriptTriggerConfig
+        {
+            Kind = ControlScriptTriggerKind.OscCacheChanged,
+            FunctionName = "onCache",
+            DeviceInstanceId = oscDeviceId,
+            OscAddressPattern = "/ch/*/mix/fader",
+        };
+        var script = Script("Scripts/main.mnd", trigger);
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onCache(event, context) {
+                        osc.send("x32", "/feedback" + event.osc.address, osc.float32(event.value));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/01/mix/fader", OSCArgument.Float32(0.6f)));
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var change = Assert.Single(result.CacheChanges);
+        Assert.Equal("/ch/01/mix/fader", change.Key.Address);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal("/feedback/ch/01/mix/fader", message.Address);
+        Assert.Equal(0.6, Assert.Single(message.Arguments).NumberValue, precision: 6);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_DoesNotFireOscCacheChangedWhenValueIsUnchanged()
+    {
+        var oscDeviceId = Guid.NewGuid();
+        var trigger = new ControlScriptTriggerConfig
+        {
+            Kind = ControlScriptTriggerKind.OscCacheChanged,
+            FunctionName = "onCache",
+            DeviceInstanceId = oscDeviceId,
+            OscAddressPattern = "/ch/*/mix/fader",
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [Script("Scripts/main.mnd", trigger)],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onCache(event, context) {
+                        osc.send("x32", "/feedback", osc.float32(event.value));
+                    }
+                    """,
+            },
+            sink);
+
+        runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/01/mix/fader", OSCArgument.Float32(0.6f)));
+        var second = runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/01/mix/fader", OSCArgument.Float32(0.6f)));
+
+        Assert.Empty(second.CacheChanges);
+        Assert.Empty(second.Invocations);
+        Assert.Single(sink.OscMessages);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_OscCacheChangedRespectsAddressPatternButStillUpdatesCache()
+    {
+        var oscDeviceId = Guid.NewGuid();
+        var trigger = new ControlScriptTriggerConfig
+        {
+            Kind = ControlScriptTriggerKind.OscCacheChanged,
+            FunctionName = "onCache",
+            DeviceInstanceId = oscDeviceId,
+            OscAddressPattern = "/ch/*/mix/fader",
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [Script("Scripts/main.mnd", trigger)],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onCache(event, context) {
+                        osc.send("x32", "/feedback", osc.float32(event.value));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/01/mix/pan", OSCArgument.Float32(0.6f)));
+
+        Assert.Single(result.CacheChanges);
+        Assert.Empty(result.Invocations);
+        Assert.Empty(sink.OscMessages);
+    }
+
+    [Fact]
+    public void DispatchControlEvent_DoesNotFireOscCacheChangedTriggerWhenDisarmedButStillUpdatesCache()
+    {
+        var oscDeviceId = Guid.NewGuid();
+        var trigger = new ControlScriptTriggerConfig
+        {
+            Kind = ControlScriptTriggerKind.OscCacheChanged,
+            FunctionName = "onCache",
+            DeviceInstanceId = oscDeviceId,
+            OscAddressPattern = "/ch/*/mix/fader",
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = false,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+                Scripts = [Script("Scripts/main.mnd", trigger)],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onCache(event, context) {
+                        osc.send("x32", "/feedback", osc.float32(event.value));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(OscEvent(oscDeviceId, "/ch/01/mix/fader", OSCArgument.Float32(0.6f)));
+
+        Assert.Single(result.CacheChanges);
+        Assert.Empty(result.Invocations);
+        Assert.Empty(sink.OscMessages);
+        Assert.True(runtime.RuntimeServices.OscCache.TryGetNumber("x32", "/ch/01/mix/fader", out var cached));
+        Assert.Equal(0.6, cached, precision: 6);
+    }
+
+    [Fact]
+    public void DispatchDeviceHealthChanged_RunsDeviceHealthTriggerWithState()
+    {
+        var deviceId = Guid.NewGuid();
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Health",
+            ScriptPath = "Scripts/main.mnd",
+            Scope = ControlScriptScope.Device,
+            DeviceInstanceId = deviceId,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.DeviceHealthChanged,
+                    FunctionName = "onHealth",
+                    DeviceInstanceId = deviceId,
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(deviceId, "x32")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onHealth(event, context) {
+                        osc.send("x32", "/health/" + event.state, osc.int32(1));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchDeviceHealthChanged(
+            deviceId,
+            ControlSessionHealth.Faulted("boom"),
+            ControlSessionState.Running);
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        Assert.Equal("/health/Faulted", Assert.Single(sink.OscMessages).Address);
+    }
+
+    [Fact]
+    public void DispatchDeviceHealthChanged_DoesNotRunForDifferentDevice()
+    {
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var script = Script(
+            "Scripts/main.mnd",
+            new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.DeviceHealthChanged,
+                FunctionName = "onHealth",
+                DeviceInstanceId = deviceA,
+            });
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(deviceA, "a"), OscDevice(deviceB, "b")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onHealth(event, context) {
+                        osc.send("a", "/health", osc.int32(1));
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchDeviceHealthChanged(
+            deviceB,
+            ControlSessionHealth.Running(),
+            ControlSessionState.Starting);
+
+        Assert.Empty(result.Invocations);
+        Assert.Empty(sink.OscMessages);
     }
 
     [Fact]
@@ -333,6 +662,16 @@ public sealed class ControlScriptRuntimeTests
             MidiController = midiController,
         };
 
+    private static ControlScriptTriggerConfig MidiNoteTrigger(Guid deviceId, string functionName, int midiNote) =>
+        new()
+        {
+            Kind = ControlScriptTriggerKind.MidiNote,
+            FunctionName = functionName,
+            DeviceInstanceId = deviceId,
+            MidiChannel = 1,
+            MidiNote = midiNote,
+        };
+
     private static MidiControlEvent MidiCcEvent(Guid deviceId, int controller, int value) =>
         new(
             DateTimeOffset.UtcNow,
@@ -343,6 +682,26 @@ public sealed class ControlScriptRuntimeTests
             Controller: controller,
             Value: value,
             HighResolution14Bit: false);
+
+    private static MidiNoteControlEvent MidiNoteEvent(Guid deviceId, int note, int velocity, bool isNoteOn) =>
+        new(
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid(),
+            deviceId,
+            Guid.NewGuid(),
+            Channel: 1,
+            Note: note,
+            Velocity: velocity,
+            IsNoteOn: isNoteOn);
+
+    private static OscControlEvent OscEvent(Guid deviceId, string address, params OSCArgument[] arguments) =>
+        new(
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid(),
+            deviceId,
+            Guid.NewGuid(),
+            address,
+            arguments);
 
     private sealed class RecordingControlScriptCommandSink : IControlScriptCommandSink
     {

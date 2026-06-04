@@ -6,7 +6,7 @@ public sealed class ControlValueCache
 
     public IReadOnlyCollection<ControlValueCacheEntry> Entries => _entries.Values;
 
-    public void SetNumber(
+    public ControlValueCacheChange? SetNumber(
         string deviceKey,
         string address,
         double value,
@@ -35,7 +35,7 @@ public sealed class ControlValueCache
         return true;
     }
 
-    public void SetString(
+    public ControlValueCacheChange? SetString(
         string deviceKey,
         string address,
         string value,
@@ -50,7 +50,7 @@ public sealed class ControlValueCache
             correlationId,
             timestamp);
 
-    public void SetBoolean(
+    public ControlValueCacheChange? SetBoolean(
         string deviceKey,
         string address,
         bool value,
@@ -84,22 +84,37 @@ public sealed class ControlValueCache
         }
     }
 
-    private void Set(
+    private ControlValueCacheChange? Set(
         ControlValueCacheKey key,
         ControlCachedValue value,
         ControlValueCacheSource source,
         Guid? correlationId,
         DateTimeOffset? timestamp)
     {
+        var effectiveTimestamp = timestamp ?? DateTimeOffset.UtcNow;
+        var hadFreshValue = _entries.TryGetValue(key, out var previous) && !previous!.IsStale;
+        var changed = !hadFreshValue || previous!.Value != value;
+
         _entries[key] = new ControlValueCacheEntry(
             key,
             value,
-            timestamp ?? DateTimeOffset.UtcNow,
+            effectiveTimestamp,
             source,
             IsStale: false,
             correlationId);
+
+        return changed
+            ? new ControlValueCacheChange(key, value, source, effectiveTimestamp, correlationId)
+            : null;
     }
 }
+
+public sealed record ControlValueCacheChange(
+    ControlValueCacheKey Key,
+    ControlCachedValue Value,
+    ControlValueCacheSource Source,
+    DateTimeOffset Timestamp,
+    Guid? CorrelationId);
 
 public sealed record ControlValueCacheKey(string DeviceKey, string Address, int ArgumentIndex = 0)
 {

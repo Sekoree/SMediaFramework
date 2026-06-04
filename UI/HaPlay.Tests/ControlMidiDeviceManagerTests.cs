@@ -108,6 +108,50 @@ public sealed class ControlMidiDeviceManagerTests
         Assert.Equal("Other MIDI", dropped.Endpoint);
     }
 
+    [Fact]
+    public async Task DispatchNoteAsync_RoutesMatchingMidiInputToNoteScript()
+    {
+        var xtouchId = Guid.NewGuid();
+        var x32Id = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 10);
+        var sender = new RecordingOscSender();
+        var config = new ControlSystemConfig
+        {
+            IsArmed = true,
+            Devices =
+            [
+                MidiDevice(xtouchId, "X-Touch Mini", "xtouch", inputName: "X-Touch MINI"),
+                OscDevice(x32Id, "X32", "x32", "127.0.0.1", 10023),
+            ],
+            Scripts = [MidiNoteScript(xtouchId, "Scripts/layer-button.mnd", note: 84)],
+        };
+        var session = CreateRuntimeSession(config, sender, monitor);
+        var manager = new ControlMidiDeviceManager(config, session, monitor);
+
+        var results = await manager.DispatchNoteAsync(
+            new ControlMidiInputIdentity(DeviceName: "X-Touch MINI"),
+            channel: 1,
+            note: 84,
+            velocity: 127,
+            isNoteOn: true);
+
+        var result = Assert.Single(results);
+        Assert.Equal(xtouchId, result.DeviceInstanceId);
+        Assert.Equal(84, result.Note);
+        Assert.True(result.IsNoteOn);
+        Assert.True(Assert.Single(result.ScriptResult.Invocations).Succeeded);
+        var sent = Assert.Single(sender.Sent);
+        Assert.Equal("/seen", sent.Address);
+        Assert.Equal(127, Assert.Single(sent.Arguments).AsInt32());
+
+        var input = Assert.Single(monitor.Records, r => r.Protocol == ControlMonitorProtocol.Midi && r.Direction == ControlMonitorDirection.Input);
+        Assert.Equal(xtouchId, input.DeviceInstanceId);
+        Assert.Equal("xtouch", input.DeviceKey);
+        Assert.Equal(84, input.MidiNote);
+        Assert.Equal(127, input.MidiValue);
+        Assert.Equal(nameof(ControlScriptMidiMessageKind.NoteOn), input.Message);
+    }
+
     private static ControlScriptRuntimeSession CreateRuntimeSession(
         ControlSystemConfig config,
         RecordingOscSender sender,
@@ -118,7 +162,7 @@ public sealed class ControlMidiDeviceManagerTests
             _ =>
                 """
                 export fun onMidi(event, context) {
-                    osc.send("x32", "/seen", osc.int32(event.midi.value));
+                    osc.send("x32", "/seen", osc.int32(event.value));
                 }
                 """);
         return new ControlScriptRuntimeSession(config, new InMemoryControlScriptSourceProvider(sources), sender, monitor: monitor);
@@ -186,6 +230,30 @@ public sealed class ControlMidiDeviceManagerTests
                     DeviceInstanceId = deviceId,
                     MidiChannel = 1,
                     MidiController = controller,
+                },
+            ],
+        };
+
+    private static ControlScriptConfig MidiNoteScript(
+        Guid deviceId,
+        string scriptPath,
+        int note) =>
+        new()
+        {
+            Id = Guid.NewGuid(),
+            Name = "MIDI note script",
+            ScriptPath = scriptPath,
+            Scope = ControlScriptScope.Device,
+            DeviceInstanceId = deviceId,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.MidiNote,
+                    FunctionName = "onMidi",
+                    DeviceInstanceId = deviceId,
+                    MidiChannel = 1,
+                    MidiNote = note,
                 },
             ],
         };

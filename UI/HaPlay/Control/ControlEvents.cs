@@ -21,6 +21,18 @@ public sealed record MidiControlEvent(
     IReadOnlyList<Guid>? Path = null)
     : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
 
+public sealed record MidiNoteControlEvent(
+    DateTimeOffset Timestamp,
+    Guid SourceNodeId,
+    Guid OriginId,
+    Guid CorrelationId,
+    int Channel,
+    int Note,
+    int Velocity,
+    bool IsNoteOn,
+    IReadOnlyList<Guid>? Path = null)
+    : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
+
 public sealed record OscControlEvent(
     DateTimeOffset Timestamp,
     Guid SourceNodeId,
@@ -28,6 +40,31 @@ public sealed record OscControlEvent(
     Guid CorrelationId,
     string Address,
     IReadOnlyList<OSCArgument> Arguments,
+    IReadOnlyList<Guid>? Path = null)
+    : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
+
+public sealed record DeviceHealthChangedControlEvent(
+    DateTimeOffset Timestamp,
+    Guid SourceNodeId,
+    Guid OriginId,
+    Guid CorrelationId,
+    Guid DeviceInstanceId,
+    ControlSessionState State,
+    ControlSessionState? PreviousState,
+    string Detail,
+    IReadOnlyList<Guid>? Path = null)
+    : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
+
+public sealed record OscCacheChangedControlEvent(
+    DateTimeOffset Timestamp,
+    Guid SourceNodeId,
+    Guid OriginId,
+    Guid CorrelationId,
+    string DeviceKey,
+    string Address,
+    int ArgumentIndex,
+    ControlCachedValue Value,
+    ControlValueCacheSource Source,
     IReadOnlyList<Guid>? Path = null)
     : ControlEvent(Timestamp, SourceNodeId, OriginId, CorrelationId, Path);
 

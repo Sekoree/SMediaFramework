@@ -107,10 +107,10 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Route incoming OSC packets to device instances.
   - [~] Preserve remote endpoint details for monitor records.
 - [ ] Add X32 device behavior:
-  - [ ] Start configured periodic OSC sends when enabled.
+  - [~] Start configured periodic OSC sends when enabled.
   - [ ] Stop periodic sends when disabled.
-  - [ ] Send `/xremote` by default.
-  - [ ] Support user-configured additional periodic OSC commands.
+  - [x] Send configured `/xremote` tasks.
+  - [x] Support user-configured additional periodic OSC commands.
 
 ## Phase 3: Live Monitor
 
@@ -120,7 +120,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [~] Capture raw and decoded OSC input.
 - [x] Capture OSC output attempts and results.
 - [x] Capture script emissions.
-- [ ] Capture cache updates.
+- [x] Capture cache updates.
 - [~] Capture suppression/drop decisions.
 - [x] Capture runtime and script errors.
 - [x] Add bounded in-memory ring buffer.
@@ -145,7 +145,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   correlation ID.
 - [x] Implement incoming-only update mode.
 - [x] Implement optimistic send plus incoming update mode.
-- [ ] Add per-command override support.
+- [x] Add per-command override support.
 - [x] Mark values stale when a device is disabled.
 - [x] Expose cache lookup to scripts.
 - [ ] Display cache values in the X32 command browser.
@@ -180,12 +180,12 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [~] Add host-managed triggers:
   - [x] Device enabled.
   - [x] Device disabled.
-  - [ ] Device health changed.
+  - [x] Device health changed.
   - [x] MIDI message.
   - [x] MIDI CC.
-  - [ ] MIDI note.
+  - [x] MIDI note.
   - [x] OSC message.
-  - [ ] OSC cache changed.
+  - [x] OSC cache changed.
   - [x] Layer enabled.
   - [x] Layer disabled.
   - [~] Periodic timer.
@@ -197,7 +197,9 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add script runtime session bridge that dispatches triggers and flushes
   queued OSC/MIDI commands through their routers.
 - [x] Add decoded MIDI input dispatcher that resolves input device IDs/names to
-  enabled MIDI devices and forwards CC events to scripts.
+  enabled MIDI devices and forwards CC/note events to scripts.
+- [x] Add control-system runtime session facade for script ticks, OSC listener
+  management, decoded MIDI dispatch, and periodic OSC sends.
 - [ ] Add Mond libraries:
   - [ ] `HaPlay.Devices`.
   - [~] `HaPlay.Midi`.
@@ -264,6 +266,9 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] OSC app listener routing.
   - [x] Monitor JSON lines export/replay.
   - [x] Cache update modes.
+  - [x] Cache change detection and `OscCacheChanged` trigger dispatch.
+  - [x] Per-command OSC cache override resolution.
+  - [x] Device health-change trigger dispatch and transition dedup.
   - [x] Script compile and import behavior.
   - [x] Starter X-Touch Mini encoder -> X32 fader script execution.
   - [x] Script failure threshold.
@@ -271,12 +276,15 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Script runtime session bridge.
   - [x] X-Touch Mini relative encoder -> X32 fader helper.
   - [x] MIDI command router.
+  - [x] MIDI note trigger dispatch.
+  - [x] Periodic OSC send manager.
+  - [x] Control-system runtime session tick orchestration.
 - [ ] Integration tests:
   - [ ] OSC loopback monitor capture.
   - [x] Fake MIDI input to script trigger.
   - [x] Script output to fake OSC sender.
   - [x] Script output to fake MIDI sender.
-  - [~] X32 `/xremote` periodic sends.
+  - [x] X32 `/xremote` periodic sends.
 - [ ] Manual tests:
   - [ ] X-Touch Mini MIDI input catalog detection.
   - [ ] X-Touch Mini control monitor decode.

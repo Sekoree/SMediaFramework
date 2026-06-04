@@ -149,7 +149,7 @@ public sealed class ControlScriptOscCommandRouter
 
     private void UpdateOptimisticCache(ControlDeviceInstanceConfig device, ControlScriptOscMessage message)
     {
-        if (_config.OscCacheUpdateMode != ControlOscCacheUpdateMode.OptimisticSendAndIncoming)
+        if (ResolveCacheUpdateMode(device, message.Address) != ControlOscCacheUpdateMode.OptimisticSendAndIncoming)
             return;
 
         for (var i = 0; i < message.Arguments.Count; i++)
@@ -176,6 +176,45 @@ public sealed class ControlScriptOscCommandRouter
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Resolves the effective cache update mode for one OSC send. A per-command override whose
+    /// address pattern matches and whose device scope includes <paramref name="device"/> wins over the
+    /// project default; the most specific override wins (device-scoped over any-device, exact address
+    /// over wildcard), with declaration order breaking ties.
+    /// </summary>
+    private ControlOscCacheUpdateMode ResolveCacheUpdateMode(ControlDeviceInstanceConfig device, string address)
+    {
+        ControlOscCacheCommandOverride? best = null;
+        var bestScore = -1;
+        foreach (var candidate in _config.OscCacheOverrides)
+        {
+            if (candidate.DeviceInstanceId.HasValue && candidate.DeviceInstanceId.Value != device.Id)
+                continue;
+            if (!ControlOscAddressPattern.Matches(candidate.AddressPattern, address))
+                continue;
+
+            var score = OverrideSpecificity(candidate, address);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        return best?.Mode ?? _config.OscCacheUpdateMode;
+    }
+
+    private static int OverrideSpecificity(ControlOscCacheCommandOverride candidate, string address)
+    {
+        var score = 0;
+        if (candidate.DeviceInstanceId.HasValue)
+            score += 2;
+        if (string.Equals(candidate.AddressPattern, address, StringComparison.Ordinal))
+            score += 1;
+
+        return score;
     }
 
     private static OSCArgument ToOscArgument(ControlScriptOscArgument argument) =>

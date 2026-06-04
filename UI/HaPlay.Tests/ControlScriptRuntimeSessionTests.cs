@@ -333,6 +333,144 @@ public sealed class ControlScriptRuntimeSessionTests
         Assert.Contains(midiOutputRecords, r => r.Message == nameof(ControlScriptMidiMessageKind.ControlChange) && r.MidiController == 16);
     }
 
+    [Fact]
+    public async Task DispatchControlEventAsync_RecordsCacheUpdateAndFiresCacheChangedFeedback()
+    {
+        var x32DeviceId = Guid.NewGuid();
+        var xtouchId = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 20);
+        var midiSender = new RecordingMidiSender();
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices =
+                [
+                    OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
+                    MidiDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI"),
+                ],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Fader feedback",
+                        ScriptPath = "Scripts/feedback.mnd",
+                        Scope = ControlScriptScope.Device,
+                        DeviceInstanceId = x32DeviceId,
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.OscCacheChanged,
+                                FunctionName = "onFaderChanged",
+                                DeviceInstanceId = x32DeviceId,
+                                OscAddressPattern = "/ch/01/mix/fader",
+                            },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/feedback.mnd"] =
+                    """
+                    export fun onFaderChanged(event, context) {
+                        midi.sendCc("xtouch", 1, 16, 64);
+                    }
+                    """,
+            },
+            new RecordingOscSender(),
+            monitor,
+            midiSender);
+
+        var result = await session.DispatchControlEventAsync(
+            OscEvent(x32DeviceId, "/ch/01/mix/fader", OSCArgument.Float32(0.5f)));
+
+        var cacheUpdate = Assert.Single(result.CacheUpdates);
+        Assert.Equal("/ch/01/mix/fader", cacheUpdate.Key.Address);
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var midiSent = Assert.Single(midiSender.Sent);
+        Assert.Equal(ControlScriptMidiMessageKind.ControlChange, midiSent.Kind);
+        Assert.Equal(xtouchId, midiSent.EndpointId);
+
+        var cacheRecord = Assert.Single(
+            monitor.Records.Where(r => r.Protocol == ControlMonitorProtocol.Cache));
+        Assert.Equal(ControlMonitorResult.Cached, cacheRecord.Result);
+        Assert.Equal(ControlMonitorDirection.Internal, cacheRecord.Direction);
+        Assert.Equal(x32DeviceId, cacheRecord.DeviceInstanceId);
+        Assert.Equal("/ch/01/mix/fader", cacheRecord.Address);
+    }
+
+    [Fact]
+    public async Task ReportDeviceHealthAsync_FiresOnTransitionRecordsMonitorAndDedupesSameState()
+    {
+        var x32DeviceId = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 20);
+        var sender = new RecordingOscSender();
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023)],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Health log",
+                        ScriptPath = "Scripts/health.mnd",
+                        Scope = ControlScriptScope.Device,
+                        DeviceInstanceId = x32DeviceId,
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.DeviceHealthChanged,
+                                FunctionName = "onHealth",
+                                DeviceInstanceId = x32DeviceId,
+                            },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/health.mnd"] =
+                    """
+                    export fun onHealth(event, context) {
+                        osc.send("x32", "/state/" + event.state, osc.int32(1));
+                    }
+                    """,
+            },
+            sender,
+            monitor);
+
+        var first = await session.ReportDeviceHealthAsync(x32DeviceId, ControlSessionHealth.Running("listening"));
+        var repeat = await session.ReportDeviceHealthAsync(x32DeviceId, ControlSessionHealth.Running("still listening"));
+        var faulted = await session.ReportDeviceHealthAsync(x32DeviceId, ControlSessionHealth.Faulted("socket closed"));
+
+        Assert.True(Assert.Single(first.Invocations).Succeeded);
+        Assert.Empty(repeat.Invocations);
+        Assert.True(Assert.Single(faulted.Invocations).Succeeded);
+
+        Assert.Collection(
+            sender.Sent,
+            sent => Assert.Equal("/state/Running", sent.Address),
+            sent => Assert.Equal("/state/Faulted", sent.Address));
+
+        var healthRows = monitor.Records
+            .Where(r => r.Protocol == ControlMonitorProtocol.Runtime && r.DeviceInstanceId == x32DeviceId)
+            .ToArray();
+        Assert.Equal(2, healthRows.Length);
+        Assert.Contains(healthRows, r => r.Message == "Running" && r.Direction == ControlMonitorDirection.Internal);
+        Assert.Contains(
+            healthRows,
+            r => r.Message == "Running -> Faulted"
+                && r.Direction == ControlMonitorDirection.Error
+                && r.ErrorMessage == "socket closed");
+    }
+
     private static ControlScriptRuntimeSession CreateSession(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,
@@ -390,6 +528,15 @@ public sealed class ControlScriptRuntimeSessionTests
             Controller: controller,
             Value: value,
             HighResolution14Bit: false);
+
+    private static OscControlEvent OscEvent(Guid deviceId, string address, params OSCArgument[] arguments) =>
+        new(
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid(),
+            deviceId,
+            Guid.NewGuid(),
+            address,
+            arguments);
 
     private sealed class RecordingOscSender : IControlOscSender
     {

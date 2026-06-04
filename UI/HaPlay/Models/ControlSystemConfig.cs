@@ -8,6 +8,8 @@ public sealed record ControlSystemConfig
 
     public ControlOscCacheUpdateMode OscCacheUpdateMode { get; init; } = ControlOscCacheUpdateMode.IncomingOnly;
 
+    public List<ControlOscCacheCommandOverride> OscCacheOverrides { get; init; } = new();
+
     public ControlMonitorOptions Monitor { get; init; } = new();
 
     public List<ControlDeviceInstanceConfig> Devices { get; init; } = new();
@@ -39,6 +41,22 @@ public enum ControlOscCacheUpdateMode
 {
     IncomingOnly,
     OptimisticSendAndIncoming,
+}
+
+/// <summary>
+/// Per-command override of <see cref="ControlSystemConfig.OscCacheUpdateMode"/> for OSC sends whose
+/// address matches <see cref="AddressPattern"/> (exact or single-<c>*</c> wildcard). Useful for
+/// commands where optimistic-send state is misleading (force <see cref="ControlOscCacheUpdateMode.IncomingOnly"/>)
+/// or for commands that should track optimistically even when the project default is incoming-only.
+/// </summary>
+public sealed record ControlOscCacheCommandOverride
+{
+    public string AddressPattern { get; init; } = string.Empty;
+
+    /// <summary>Restrict the override to one OSC device instance; null applies to any OSC device.</summary>
+    public Guid? DeviceInstanceId { get; init; }
+
+    public ControlOscCacheUpdateMode Mode { get; init; }
 }
 
 public sealed record ControlMonitorOptions

@@ -150,6 +150,17 @@ public sealed record ControlMonitorOscArgumentRecord
             _ => new() { Kind = argument.Type.ToString() },
         };
 
+    public static ControlMonitorOscArgumentRecord FromCachedValue(ControlCachedValue value) =>
+        value.Kind switch
+        {
+            ControlCachedValueKind.Number => new() { Kind = nameof(OSCArgumentType.Double64), FloatValue = value.NumberValue },
+            ControlCachedValueKind.String => new() { Kind = nameof(OSCArgumentType.String), StringValue = value.StringValue },
+            ControlCachedValueKind.Boolean => value.BooleanValue
+                ? new() { Kind = nameof(OSCArgumentType.True), BoolValue = true }
+                : new() { Kind = nameof(OSCArgumentType.False), BoolValue = false },
+            _ => new() { Kind = value.Kind.ToString() },
+        };
+
     public static ControlMonitorOscArgumentRecord FromScriptArgument(ControlScriptOscArgument argument) =>
         argument.Type switch
         {
