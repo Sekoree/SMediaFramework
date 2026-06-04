@@ -178,9 +178,82 @@ public sealed class ControlSystemRuntimeSessionTests
         Assert.Equal(84, Assert.Single(sent.Arguments).AsInt32());
     }
 
+    [Fact]
+    public async Task StartAsync_DrivesPeriodicOscSendsOnBackgroundTickLoopUntilStopped()
+    {
+        var x32Id = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        var session = new ControlSystemRuntimeSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                // No app listeners: this test exercises the tick loop, not socket binding.
+                OscListeners = [],
+                Devices =
+                [
+                    new ControlDeviceInstanceConfig
+                    {
+                        Id = x32Id,
+                        Name = "X32",
+                        Protocol = ControlDeviceProtocol.Osc,
+                        IsEnabled = true,
+                        Binding = new ControlDeviceBindingConfig
+                        {
+                            Alias = "x32",
+                            OscHost = "192.168.2.76",
+                            OscPort = 10023,
+                        },
+                        PeriodicOscSends =
+                        [
+                            new ControlPeriodicOscSendConfig
+                            {
+                                Name = "/xremote",
+                                Address = "/xremote",
+                                IntervalMs = 8000,
+                            },
+                        ],
+                    },
+                ],
+            },
+            new InMemoryControlScriptSourceProvider(new Dictionary<string, string>()),
+            sender,
+            tickInterval: TimeSpan.FromMilliseconds(5));
+
+        Assert.False(session.IsTicking);
+        await session.StartAsync();
+        Assert.True(session.IsTicking);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (sender.Sent.Count == 0 && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        await session.StopAsync();
+
+        Assert.False(session.IsTicking);
+        Assert.Contains(sender.Sent, s => s.Address == "/xremote");
+
+        // StopAsync awaits the loop, so no further sends can occur after it returns.
+        var countAfterStop = sender.Sent.Count;
+        await Task.Delay(50);
+        Assert.Equal(countAfterStop, sender.Sent.Count);
+    }
+
     private sealed class RecordingOscSender : IControlOscSender
     {
-        public List<SentOscMessage> Sent { get; } = new();
+        private readonly object _gate = new();
+        private readonly List<SentOscMessage> _sent = new();
+
+        // Snapshot under lock: the background tick loop sends from another thread.
+        public IReadOnlyList<SentOscMessage> Sent
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _sent.ToArray();
+                }
+            }
+        }
 
         public ValueTask SendAsync(
             string host,
@@ -189,7 +262,11 @@ public sealed class ControlSystemRuntimeSessionTests
             IReadOnlyList<OSCArgument> arguments,
             CancellationToken cancellationToken = default)
         {
-            Sent.Add(new SentOscMessage(host, port, address, arguments.ToArray()));
+            lock (_gate)
+            {
+                _sent.Add(new SentOscMessage(host, port, address, arguments.ToArray()));
+            }
+
             return ValueTask.CompletedTask;
         }
     }

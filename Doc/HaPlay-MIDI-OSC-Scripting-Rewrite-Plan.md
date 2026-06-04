@@ -404,6 +404,22 @@ wiring; today it is driven by the session managers' `ControlSessionHealth`
 transitions and by tests. With this in place every planned host-managed trigger
 except the background-timer-driven periodic task is implemented.
 
+Implementation note, 2026-06-04: the periodic tick is now self-driving.
+`ControlSystemRuntimeSession.StartAsync` starts the app OSC listeners and then
+launches a background loop (`Task.Run`, following the `X32Session` renew-loop
+convention) that calls the existing deterministic `TickAsync(DateTimeOffset.UtcNow)`
+every `tickInterval` (default 100 ms, injectable for tests). `StopAsync`/dispose
+cancel and await the loop, and a faulted tick is recorded to the monitor without
+killing the loop. Because `TickAsync` defers to `ControlPeriodicOscSendManager`
+and the script periodic dispatch — both of which re-check arming and
+device/send enablement every tick — periodic OSC sends start once the system is
+running and stop on the next tick when a device is disabled or the system is
+disarmed, without needing separate per-device start/stop hooks. This completes
+the host-managed trigger surface, including the periodic timer. Hooking
+`StartAsync`/`StopAsync` into the HaPlay app shell when the control system is
+armed is the remaining wiring step, alongside feeding real session health into
+`ReportDeviceHealthAsync`.
+
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.
 `ControlScriptMidiCommandRouter` resolves enabled MIDI devices by instance ID,

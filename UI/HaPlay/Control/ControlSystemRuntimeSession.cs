@@ -4,6 +4,11 @@ namespace HaPlay.ControlGraph;
 
 public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
 {
+    private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromMilliseconds(100);
+
+    private readonly TimeSpan _tickInterval;
+    private CancellationTokenSource? _tickCts;
+    private Task? _tickTask;
     private bool _disposed;
 
     public ControlSystemRuntimeSession(
@@ -12,12 +17,14 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         IControlOscSender oscSender,
         IControlMidiSender? midiSender = null,
         IControlMonitorSink? monitor = null,
-        int instructionLimit = ControlScriptFileHost.DefaultInstructionLimit)
+        int instructionLimit = ControlScriptFileHost.DefaultInstructionLimit,
+        TimeSpan? tickInterval = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(sourceProvider);
         ArgumentNullException.ThrowIfNull(oscSender);
 
+        _tickInterval = tickInterval is { } interval && interval > TimeSpan.Zero ? interval : DefaultTickInterval;
         Monitor = monitor ?? NullControlMonitorSink.Instance;
         ScriptSession = new ControlScriptRuntimeSession(
             config,
@@ -41,14 +48,21 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
 
     public ControlPeriodicOscSendManager PeriodicOscSends { get; }
 
-    public Task StartAsync(CancellationToken cancellationToken = default)
+    /// <summary>True while the background tick loop is running.</summary>
+    public bool IsTicking => _tickTask is { IsCompleted: false };
+
+    public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        return OscListeners.StartAsync(cancellationToken);
+        await OscListeners.StartAsync(cancellationToken).ConfigureAwait(false);
+        StartTickLoop(cancellationToken);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken = default) =>
-        OscListeners.StopAsync(cancellationToken);
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        await StopTickLoopAsync(cancellationToken).ConfigureAwait(false);
+        await OscListeners.StopAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public async ValueTask<ControlSystemRuntimeTickResult> TickAsync(
         DateTimeOffset utcNow,
@@ -60,12 +74,81 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         return new ControlSystemRuntimeTickResult(scriptResult, periodicOscResults);
     }
 
+    private void StartTickLoop(CancellationToken cancellationToken)
+    {
+        if (IsTicking)
+            return;
+
+        _tickCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _tickTask = Task.Run(() => TickLoopAsync(_tickCts.Token), CancellationToken.None);
+    }
+
+    private async Task TickLoopAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await TickAsync(DateTimeOffset.UtcNow, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                // A faulted tick must not kill the loop; surface it and keep ticking.
+                Monitor.Record(new ControlMonitorRecord
+                {
+                    Direction = ControlMonitorDirection.Error,
+                    Protocol = ControlMonitorProtocol.Runtime,
+                    Result = ControlMonitorResult.Failed,
+                    Message = "Periodic tick failed.",
+                    ErrorMessage = ex.Message,
+                });
+            }
+
+            try
+            {
+                await Task.Delay(_tickInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    private async Task StopTickLoopAsync(CancellationToken cancellationToken)
+    {
+        var task = _tickTask;
+        var cts = _tickCts;
+        if (task is null)
+            return;
+
+        cts?.Cancel();
+        try
+        {
+            await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            cts?.Dispose();
+            _tickCts = null;
+            _tickTask = null;
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
 
         _disposed = true;
+        await StopTickLoopAsync(CancellationToken.None).ConfigureAwait(false);
         await OscListeners.DisposeAsync().ConfigureAwait(false);
     }
 
@@ -75,6 +158,10 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             return;
 
         _disposed = true;
+        _tickCts?.Cancel();
+        _tickCts?.Dispose();
+        _tickCts = null;
+        _tickTask = null;
         OscListeners.Dispose();
     }
 }

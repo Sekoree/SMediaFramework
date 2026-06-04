@@ -107,8 +107,8 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Route incoming OSC packets to device instances.
   - [~] Preserve remote endpoint details for monitor records.
 - [ ] Add X32 device behavior:
-  - [~] Start configured periodic OSC sends when enabled.
-  - [ ] Stop periodic sends when disabled.
+  - [x] Start configured periodic OSC sends when enabled.
+  - [x] Stop periodic sends when disabled.
   - [x] Send configured `/xremote` tasks.
   - [x] Support user-configured additional periodic OSC commands.
 
@@ -177,7 +177,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Device.
   - [ ] Endpoint.
   - [x] Layer.
-- [~] Add host-managed triggers:
+- [x] Add host-managed triggers:
   - [x] Device enabled.
   - [x] Device disabled.
   - [x] Device health changed.
@@ -188,7 +188,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] OSC cache changed.
   - [x] Layer enabled.
   - [x] Layer disabled.
-  - [~] Periodic timer.
+  - [x] Periodic timer.
   - [x] Manual/test trigger.
 - [x] Route script OSC sends to configured OSC devices by ID, alias, name, or
   unambiguous profile ID.
@@ -285,6 +285,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Script output to fake OSC sender.
   - [x] Script output to fake MIDI sender.
   - [x] X32 `/xremote` periodic sends.
+  - [x] Background tick loop drives periodic sends and stops cleanly.
 - [ ] Manual tests:
   - [ ] X-Touch Mini MIDI input catalog detection.
   - [ ] X-Touch Mini control monitor decode.
