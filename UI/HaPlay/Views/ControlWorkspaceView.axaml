@@ -45,6 +45,13 @@
     <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <DockPanel>
         <TextBlock DockPanel.Dock="Top" Text="Project structure" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <ItemsControl DockPanel.Dock="Bottom" ItemsSource="{Binding ProfileWarnings}" Margin="0,8,0,0">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding}" Foreground="#D7A300" TextWrapping="Wrap" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
         <ListBox ItemsSource="{Binding StructureRows}"
                  MinHeight="120"
                  MaxHeight="170"

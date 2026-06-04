@@ -64,10 +64,11 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add built-in profile schema.
 - [x] Add profile validation.
 - [x] Add profile loader for built-in app profiles.
-- [ ] Add profile loader for user/app-level profiles.
-- [ ] Add project-level profile overrides.
-- [~] Implement profile suggestion behavior:
-  - [ ] Show profile warnings.
+- [x] Add profile loader for user/app-level profiles.
+- [x] Add shareable external profile JSON save/export helpers.
+- [x] Add project-level profile overrides.
+- [x] Implement profile suggestion behavior:
+  - [x] Show profile warnings.
   - [x] Allow raw MIDI/OSC scripting when a profile command/control is missing.
 - [x] Add X-Touch Mini MC-mode profile from `Reference/XTouchMini.txt`:
   - [x] Layer A/B buttons: notes 84 and 85.
@@ -111,7 +112,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Multiple project-configured local ports.
   - [x] Shared UDP socket per listener where possible.
   - [x] Route incoming OSC packets to device instances.
-  - [~] Preserve remote endpoint details for monitor records.
+  - [x] Preserve remote endpoint details for monitor records.
 - [ ] Add X32 device behavior:
   - [x] Start configured periodic OSC sends when enabled.
   - [x] Stop periodic sends when disabled.
@@ -271,6 +272,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [ ] Document app-level OSC listeners and shared socket behavior.
 - [ ] Document OSC cache modes.
 - [ ] Document JSON lines monitor capture/replay.
+- [x] Document external device profile JSON import/export.
 - [ ] Add starter scripts:
   - [x] X-Touch Mini encoder -> X32 fader.
   - [x] X-Touch Mini button -> X32 mute.
@@ -282,6 +284,9 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [ ] Unit tests:
   - [x] Project JSON round trips.
   - [x] Profile loading and validation.
+  - [x] User/app-level and project override profile repositories.
+  - [x] Shareable external profile JSON save/export.
+  - [x] Control workspace profile warnings.
   - [x] Device matching.
   - [x] Script-centric MIDI live input/output session routing.
   - [x] OSC app listener routing.
@@ -315,7 +320,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Periodic OSC send manager.
   - [x] Control-system runtime session tick orchestration.
 - [ ] Integration tests:
-  - [ ] OSC loopback monitor capture.
+  - [x] OSC loopback monitor capture.
   - [x] Fake MIDI input to script trigger.
   - [x] Script output to fake OSC sender.
   - [x] Script output to fake MIDI sender.

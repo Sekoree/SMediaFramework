@@ -1,3 +1,4 @@
+using HaPlay.ControlGraph;
 using HaPlay.Models;
 using S.Media.Core.Video;
 using Xunit;
@@ -845,6 +846,36 @@ public sealed class HaPlayProjectIOTests
                         },
                     },
                 ],
+                DeviceProfileOverrides =
+                [
+                    new ControlDeviceProfile
+                    {
+                        Id = "project.custom.osc",
+                        DisplayName = "Project Custom OSC",
+                        Protocol = ControlDeviceProtocol.Osc,
+                        Ports =
+                        [
+                            new ControlDevicePortProfile
+                            {
+                                Id = "osc-remote",
+                                DisplayName = "OSC Remote",
+                                Kind = ControlDevicePortKind.OscRemote,
+                            },
+                        ],
+                        Commands =
+                        [
+                            new ControlCommandProfile
+                            {
+                                Id = "project.custom.fader",
+                                DisplayName = "Custom Fader",
+                                Address = "/custom/fader",
+                                ValueKind = ControlCommandValueKind.NormalizedFloat,
+                                MinValue = 0,
+                                MaxValue = 1,
+                            },
+                        ],
+                    },
+                ],
                 Layers =
                 [
                     new ControlLayerConfig
@@ -973,6 +1004,13 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal("192.168.2.90", lighting.Binding.OscHost);
         Assert.Equal(9000, lighting.Binding.OscPort);
         Assert.Equal(auxListenerId, lighting.Binding.OscListenerId);
+
+        var profileOverride = Assert.Single(control.DeviceProfileOverrides);
+        Assert.Equal("project.custom.osc", profileOverride.Id);
+        Assert.Equal("Project Custom OSC", profileOverride.DisplayName);
+        Assert.Equal(ControlDeviceProtocol.Osc, profileOverride.Protocol);
+        Assert.Equal(ControlDevicePortKind.OscRemote, Assert.Single(profileOverride.Ports).Kind);
+        Assert.Equal("/custom/fader", Assert.Single(profileOverride.Commands).Address);
 
         var layer = Assert.Single(control.Layers);
         Assert.Equal(layerId, layer.Id);

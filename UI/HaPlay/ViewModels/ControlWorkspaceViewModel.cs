@@ -46,6 +46,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<ControlStructureRowViewModel> StructureRows { get; } = new();
 
+    public ObservableCollection<string> ProfileWarnings { get; } = new();
+
     public IReadOnlyList<string> MonitorDirectionOptions { get; } =
     [
         AllFilter,
@@ -155,6 +157,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         MonitorEntries.Clear();
         RebuildScriptRows();
         RebuildStructureRows();
+        RebuildProfileWarnings();
         _lastRenderedCount = -1;
         StatusMessage = "Disarmed.";
         NotifySummary();
@@ -236,6 +239,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (IsArmed)
             StatusMessage = "MIDI device updated. Re-arm control to apply device changes.";
         RebuildStructureRows();
+        RebuildProfileWarnings();
         NotifySummary();
     }
 
@@ -260,6 +264,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (IsArmed)
             StatusMessage = "MIDI device updated. Re-arm control to apply device changes.";
         RebuildStructureRows();
+        RebuildProfileWarnings();
         NotifySummary();
         return true;
     }
@@ -367,6 +372,47 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         StructureRows.Clear();
         foreach (var row in BuildStructureRows(_config))
             StructureRows.Add(row);
+    }
+
+    private void RebuildProfileWarnings()
+    {
+        ProfileWarnings.Clear();
+        foreach (var warning in BuildProfileWarnings(_config, CompositeControlDeviceProfileRepository.ForProject(_config)))
+            ProfileWarnings.Add(warning);
+    }
+
+    internal static IReadOnlyList<string> BuildProfileWarnings(
+        ControlSystemConfig config,
+        IControlDeviceProfileRepository repository)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(repository);
+
+        var warnings = new List<string>();
+        foreach (var device in config.Devices.OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var name = string.IsNullOrWhiteSpace(device.Name) ? "(unnamed device)" : device.Name;
+            if (string.IsNullOrWhiteSpace(device.ProfileId))
+            {
+                if (device.ProfileMode == ControlDeviceProfileMode.Required)
+                    warnings.Add($"{name}: required profile is not set.");
+                continue;
+            }
+
+            var profile = repository.FindById(device.ProfileId);
+            if (profile is null)
+            {
+                warnings.Add($"{name}: profile '{device.ProfileId}' is not installed; raw {device.Protocol} scripting is still available.");
+                continue;
+            }
+
+            if (profile.Protocol != device.Protocol)
+            {
+                warnings.Add($"{name}: profile '{profile.DisplayName}' is {profile.Protocol}, but device is {device.Protocol}.");
+            }
+        }
+
+        return warnings;
     }
 
     internal static IReadOnlyList<ControlStructureRowViewModel> BuildStructureRows(ControlSystemConfig config)

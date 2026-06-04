@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HaPlay.ControlGraph;
 using HaPlay.Models;
 using Xunit;
@@ -139,5 +140,138 @@ public sealed class ControlDeviceProfileTests
         Assert.Contains(issues, issue => issue.Code == "missing-command-address");
         Assert.Contains(issues, issue => issue.Code == "invalid-task-interval");
         Assert.Contains(issues, issue => issue.Code == "missing-task-address");
+    }
+
+    [Fact]
+    public async Task DirectoryRepository_LoadsValidUserProfilesAndReportsInvalidFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "haplay-profiles-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var valid = new ControlDeviceProfile
+        {
+            Id = "user.generic-midi",
+            DisplayName = "User Generic MIDI",
+            Protocol = ControlDeviceProtocol.Midi,
+            Ports =
+            [
+                new ControlDevicePortProfile
+                {
+                    Id = "midi-in",
+                    DisplayName = "MIDI In",
+                    Kind = ControlDevicePortKind.MidiInput,
+                },
+            ],
+        };
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(root, "valid.json"),
+                JsonSerializer.Serialize(valid, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            await File.WriteAllTextAsync(
+                Path.Combine(root, "invalid.json"),
+                JsonSerializer.Serialize(valid with { Id = string.Empty }, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            await File.WriteAllTextAsync(Path.Combine(root, "broken.json"), "{ not json");
+
+            var repository = DirectoryControlDeviceProfileRepository.Load(root);
+
+            var loaded = Assert.Single(repository.Profiles);
+            Assert.Equal("user.generic-midi", loaded.Id);
+            Assert.Equal("User Generic MIDI", repository.FindById("USER.GENERIC-MIDI")?.DisplayName);
+            Assert.Contains(repository.LoadIssues, issue => issue.Source.EndsWith("invalid.json") && issue.Code == "missing-id");
+            Assert.Contains(repository.LoadIssues, issue => issue.Source.EndsWith("broken.json") && issue.Code == "load-failed");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DirectoryRepository_SavesShareableProfileJsonAndReloadsIt()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "haplay-profile-save-" + Guid.NewGuid().ToString("N"));
+        var profile = new ControlDeviceProfile
+        {
+            Id = "learned.xtouch.custom",
+            DisplayName = "Learned X-Touch Custom",
+            Protocol = ControlDeviceProtocol.Midi,
+            Controls =
+            [
+                new ControlControlProfile
+                {
+                    Id = "learned.button.1",
+                    DisplayName = "Learned Button 1",
+                    Kind = ControlProfileControlKind.Button,
+                    MidiNote = 60,
+                    ValueMode = ControlProfileValueMode.NoteMomentary,
+                },
+            ],
+        };
+
+        try
+        {
+            var path = DirectoryControlDeviceProfileRepository.SaveProfile(root, profile);
+            var json = File.ReadAllText(path);
+            var repository = DirectoryControlDeviceProfileRepository.Load(root);
+
+            Assert.Equal("learned.xtouch.custom.json", Path.GetFileName(path));
+            Assert.Contains("\"id\": \"learned.xtouch.custom\"", json);
+            Assert.Empty(repository.LoadIssues);
+            var loaded = Assert.Single(repository.Profiles);
+            Assert.Equal("Learned X-Touch Custom", loaded.DisplayName);
+            Assert.Equal(60, Assert.Single(loaded.Controls).MidiNote);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DirectoryRepository_ExportsBuiltInProfilesAsExternalJsonFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "haplay-profile-export-" + Guid.NewGuid().ToString("N"));
+
+        try
+        {
+            var paths = DirectoryControlDeviceProfileRepository.ExportBuiltInProfiles(root);
+            var repository = DirectoryControlDeviceProfileRepository.Load(root);
+
+            Assert.Contains(paths, path => Path.GetFileName(path) == "behringer.xtouch-mini.mc.json");
+            Assert.Contains(paths, path => Path.GetFileName(path) == "behringer.x32.osc.json");
+            Assert.NotNull(repository.FindById("behringer.xtouch-mini.mc"));
+            Assert.NotNull(repository.FindById("behringer.x32.osc"));
+            Assert.Empty(repository.LoadIssues);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CompositeRepository_ProjectProfilesOverrideAppAndBuiltIns()
+    {
+        var appProfile = new ControlDeviceProfile
+        {
+            Id = "behringer.x32.osc",
+            DisplayName = "App X32 Override",
+            Protocol = ControlDeviceProtocol.Osc,
+        };
+        var projectProfile = appProfile with { DisplayName = "Project X32 Override" };
+        var appRepository = new ProjectControlDeviceProfileRepository([appProfile]);
+        var repository = CompositeControlDeviceProfileRepository.ForProject(
+            new ControlSystemConfig { DeviceProfileOverrides = [projectProfile] },
+            appRepository);
+
+        var x32 = repository.FindById("behringer.x32.osc");
+
+        Assert.NotNull(x32);
+        Assert.Equal("Project X32 Override", x32.DisplayName);
+        Assert.NotNull(repository.FindById("behringer.xtouch-mini.mc"));
     }
 }

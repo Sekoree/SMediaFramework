@@ -320,6 +320,43 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public void BuildProfileWarnings_ReportsMissingAndMismatchedProfilesAsSuggestions()
+    {
+        var config = new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Name = "Known X32",
+                    ProfileId = "behringer.x32.osc",
+                    Protocol = ControlDeviceProtocol.Osc,
+                },
+                new ControlDeviceInstanceConfig
+                {
+                    Name = "Unknown Surface",
+                    ProfileId = "missing.profile",
+                    Protocol = ControlDeviceProtocol.Midi,
+                },
+                new ControlDeviceInstanceConfig
+                {
+                    Name = "Wrong Protocol",
+                    ProfileId = "behringer.x32.osc",
+                    Protocol = ControlDeviceProtocol.Midi,
+                },
+            ],
+        };
+
+        var warnings = ControlWorkspaceViewModel.BuildProfileWarnings(
+            config,
+            CompositeControlDeviceProfileRepository.ForProject(config));
+
+        Assert.DoesNotContain(warnings, warning => warning.Contains("Known X32"));
+        Assert.Contains(warnings, warning => warning.Contains("missing.profile") && warning.Contains("raw Midi scripting"));
+        Assert.Contains(warnings, warning => warning.Contains("Wrong Protocol") && warning.Contains("device is Midi"));
+    }
+
+    [Fact]
     public void ApplyMonitorFilters_FiltersByDirectionProtocolAndDevice()
     {
         var xtouchId = Guid.NewGuid();

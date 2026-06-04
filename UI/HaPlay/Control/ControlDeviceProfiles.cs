@@ -1,3 +1,4 @@
+using System.Text.Json;
 using HaPlay.Models;
 
 namespace HaPlay.ControlGraph;
@@ -144,11 +145,201 @@ public enum ControlDeviceTaskKind
 
 public sealed record ControlDeviceProfileValidationIssue(string Code, string Message);
 
+public sealed record ControlDeviceProfileLoadIssue(string Source, string Code, string Message);
+
 public interface IControlDeviceProfileRepository
 {
     IReadOnlyList<ControlDeviceProfile> Profiles { get; }
 
     ControlDeviceProfile? FindById(string profileId);
+}
+
+public sealed class DirectoryControlDeviceProfileRepository : IControlDeviceProfileRepository
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true,
+    };
+
+    private readonly IReadOnlyList<ControlDeviceProfile> _profiles;
+
+    private DirectoryControlDeviceProfileRepository(
+        IReadOnlyList<ControlDeviceProfile> profiles,
+        IReadOnlyList<ControlDeviceProfileLoadIssue> loadIssues)
+    {
+        _profiles = profiles;
+        LoadIssues = loadIssues;
+    }
+
+    public IReadOnlyList<ControlDeviceProfile> Profiles => _profiles;
+
+    public IReadOnlyList<ControlDeviceProfileLoadIssue> LoadIssues { get; }
+
+    public ControlDeviceProfile? FindById(string profileId) =>
+        _profiles.FirstOrDefault(p => string.Equals(p.Id, profileId, StringComparison.OrdinalIgnoreCase));
+
+    public static DirectoryControlDeviceProfileRepository Load(string directoryPath)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath) || !Directory.Exists(directoryPath))
+            return new DirectoryControlDeviceProfileRepository([], []);
+
+        var profiles = new List<ControlDeviceProfile>();
+        var issues = new List<ControlDeviceProfileLoadIssue>();
+        foreach (var file in Directory.EnumerateFiles(directoryPath, "*.json").Order(StringComparer.OrdinalIgnoreCase))
+            LoadFile(file, profiles, issues);
+
+        return new DirectoryControlDeviceProfileRepository(profiles, issues);
+    }
+
+    public static string SaveProfile(string directoryPath, ControlDeviceProfile profile, bool overwrite = true)
+    {
+        if (string.IsNullOrWhiteSpace(directoryPath))
+            throw new ArgumentException("Profile directory is required.", nameof(directoryPath));
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var validationIssues = ControlDeviceProfileValidator.Validate(profile);
+        if (validationIssues.Count > 0)
+        {
+            var message = string.Join("; ", validationIssues.Select(issue => $"{issue.Code}: {issue.Message}"));
+            throw new InvalidOperationException($"Profile '{profile.Id}' is not valid: {message}");
+        }
+
+        Directory.CreateDirectory(directoryPath);
+        var path = Path.Combine(directoryPath, CreateProfileFileName(profile.Id));
+        if (!overwrite && File.Exists(path))
+            throw new IOException($"Profile file already exists: {path}");
+
+        File.WriteAllText(path, JsonSerializer.Serialize(profile, JsonOptions));
+        return path;
+    }
+
+    public static IReadOnlyList<string> ExportBuiltInProfiles(string directoryPath, bool overwrite = true) =>
+        BuiltInControlDeviceProfileRepository.Instance.Profiles
+            .Select(profile => SaveProfile(directoryPath, profile, overwrite))
+            .ToArray();
+
+    private static void LoadFile(
+        string file,
+        List<ControlDeviceProfile> profiles,
+        List<ControlDeviceProfileLoadIssue> issues)
+    {
+        try
+        {
+            var json = File.ReadAllText(file);
+            var profile = JsonSerializer.Deserialize<ControlDeviceProfile>(json, JsonOptions);
+            if (profile is null)
+            {
+                issues.Add(new ControlDeviceProfileLoadIssue(file, "empty-profile", "Profile file did not contain a profile."));
+                return;
+            }
+
+            var validationIssues = ControlDeviceProfileValidator.Validate(profile);
+            if (validationIssues.Count > 0)
+            {
+                issues.AddRange(validationIssues.Select(issue =>
+                    new ControlDeviceProfileLoadIssue(file, issue.Code, issue.Message)));
+                return;
+            }
+
+            profiles.Add(profile);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            issues.Add(new ControlDeviceProfileLoadIssue(file, "load-failed", ex.Message));
+        }
+    }
+
+    private static string CreateProfileFileName(string profileId)
+    {
+        var safe = new string(profileId
+            .Select(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_' ? char.ToLowerInvariant(c) : '-')
+            .ToArray()).Trim('-', '.');
+        if (string.IsNullOrWhiteSpace(safe))
+            safe = "profile";
+
+        return safe + ".json";
+    }
+}
+
+public sealed class CompositeControlDeviceProfileRepository : IControlDeviceProfileRepository
+{
+    private readonly IReadOnlyList<ControlDeviceProfile> _profiles;
+
+    public CompositeControlDeviceProfileRepository(params IControlDeviceProfileRepository[] repositories)
+        : this((IEnumerable<IControlDeviceProfileRepository>)repositories)
+    {
+    }
+
+    public CompositeControlDeviceProfileRepository(IEnumerable<IControlDeviceProfileRepository> repositories)
+    {
+        ArgumentNullException.ThrowIfNull(repositories);
+
+        var merged = new Dictionary<string, ControlDeviceProfile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var repository in repositories)
+        {
+            if (repository is null)
+                continue;
+
+            foreach (var profile in repository.Profiles)
+            {
+                if (!string.IsNullOrWhiteSpace(profile.Id))
+                    merged[profile.Id] = profile;
+            }
+        }
+
+        _profiles = merged.Values
+            .OrderBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    public IReadOnlyList<ControlDeviceProfile> Profiles => _profiles;
+
+    public ControlDeviceProfile? FindById(string profileId) =>
+        _profiles.FirstOrDefault(p => string.Equals(p.Id, profileId, StringComparison.OrdinalIgnoreCase));
+
+    public static CompositeControlDeviceProfileRepository ForProject(
+        ControlSystemConfig config,
+        IControlDeviceProfileRepository? appRepository = null)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        return new CompositeControlDeviceProfileRepository(
+            BuiltInControlDeviceProfileRepository.Instance,
+            appRepository ?? EmptyControlDeviceProfileRepository.Instance,
+            new ProjectControlDeviceProfileRepository(config.DeviceProfileOverrides));
+    }
+}
+
+public sealed class ProjectControlDeviceProfileRepository : IControlDeviceProfileRepository
+{
+    private readonly IReadOnlyList<ControlDeviceProfile> _profiles;
+
+    public ProjectControlDeviceProfileRepository(IEnumerable<ControlDeviceProfile> profiles)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+        _profiles = profiles
+            .Where(p => !string.IsNullOrWhiteSpace(p.Id))
+            .ToArray();
+    }
+
+    public IReadOnlyList<ControlDeviceProfile> Profiles => _profiles;
+
+    public ControlDeviceProfile? FindById(string profileId) =>
+        _profiles.FirstOrDefault(p => string.Equals(p.Id, profileId, StringComparison.OrdinalIgnoreCase));
+}
+
+public sealed class EmptyControlDeviceProfileRepository : IControlDeviceProfileRepository
+{
+    public static EmptyControlDeviceProfileRepository Instance { get; } = new();
+
+    private EmptyControlDeviceProfileRepository()
+    {
+    }
+
+    public IReadOnlyList<ControlDeviceProfile> Profiles => [];
+
+    public ControlDeviceProfile? FindById(string profileId) => null;
 }
 
 public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfileRepository

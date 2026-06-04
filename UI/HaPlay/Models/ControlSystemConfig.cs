@@ -1,3 +1,5 @@
+using HaPlay.ControlGraph;
+
 namespace HaPlay.Models;
 
 public sealed record ControlSystemConfig
@@ -13,6 +15,8 @@ public sealed record ControlSystemConfig
     public ControlMonitorOptions Monitor { get; init; } = new();
 
     public List<ControlDeviceInstanceConfig> Devices { get; init; } = new();
+
+    public List<ControlDeviceProfile> DeviceProfileOverrides { get; init; } = new();
 
     public List<ControlLayerConfig> Layers { get; init; } = new();
 

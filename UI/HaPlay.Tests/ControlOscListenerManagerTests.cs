@@ -100,13 +100,14 @@ public sealed class ControlOscListenerManagerTests
         var listenerId = Guid.NewGuid();
         var deviceId = Guid.NewGuid();
         var sender = new RecordingOscSender();
+        var monitor = new ControlMonitorBuffer(maxRecords: 20);
         var config = ConfigWithListener(
             listenerId,
             localPort: listenPort,
             devices: [OscDevice(deviceId, "X32", "x32", "127.0.0.1", 10023, listenerId)],
             scripts: [OscScript(deviceId, "Scripts/on-osc.mnd", "onOsc", "/ch/*/mix/fader")]);
-        var session = CreateRuntimeSession(config, sender);
-        await using var manager = new ControlOscListenerManager(config, session);
+        var session = CreateRuntimeSession(config, sender, monitor);
+        await using var manager = new ControlOscListenerManager(config, session, monitor);
         await manager.StartAsync();
         await using var client = await OSCClient.CreateAsync("127.0.0.1", listenPort);
 
@@ -116,6 +117,17 @@ public sealed class ControlOscListenerManagerTests
         Assert.Equal("/seen", sent.Address);
         Assert.Equal(0.75f, Assert.Single(sent.Arguments).AsFloat32());
         Assert.Equal(ControlSessionState.Running, manager.ListenerHealth[listenerId].State);
+        Assert.Contains(
+            monitor.Records,
+            record => record.Direction == ControlMonitorDirection.Input
+                      && record.Protocol == ControlMonitorProtocol.Osc
+                      && record.Result == ControlMonitorResult.Received
+                      && record.ListenerId == listenerId
+                      && record.DeviceInstanceId == deviceId
+                      && record.RemoteHost == "127.0.0.1"
+                      && record.RemotePort > 0
+                      && record.Address == "/ch/01/mix/fader"
+                      && record.OscArguments.Count == 1);
     }
 
     [Fact]
@@ -210,7 +222,8 @@ public sealed class ControlOscListenerManagerTests
 
     private static ControlScriptRuntimeSession CreateRuntimeSession(
         ControlSystemConfig config,
-        RecordingOscSender sender)
+        RecordingOscSender sender,
+        IControlMonitorSink? monitor = null)
     {
         var sources = config.Scripts.ToDictionary(
             s => s.ScriptPath,
@@ -225,7 +238,7 @@ public sealed class ControlOscListenerManagerTests
                 }
                 """;
             });
-        return new ControlScriptRuntimeSession(config, new InMemoryControlScriptSourceProvider(sources), sender);
+        return new ControlScriptRuntimeSession(config, new InMemoryControlScriptSourceProvider(sources), sender, monitor: monitor);
     }
 
     private static OSCMessageContext Context(

@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using HaPlay.ControlGraph;
 
 namespace HaPlay.Models;
 
@@ -88,6 +89,12 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(X32CustomLayerConfig))]
 [JsonSerializable(typeof(X32CustomLayerSlotConfig))]
 [JsonSerializable(typeof(ControlSystemConfig))]
+[JsonSerializable(typeof(ControlDeviceProfile))]
+[JsonSerializable(typeof(ControlDevicePortProfile))]
+[JsonSerializable(typeof(ControlControlProfile))]
+[JsonSerializable(typeof(ControlCommandProfile))]
+[JsonSerializable(typeof(ControlLayerProfile))]
+[JsonSerializable(typeof(ControlDeviceTaskProfile))]
 [JsonSerializable(typeof(ControlOscListenerConfig))]
 [JsonSerializable(typeof(ControlMonitorOptions))]
 [JsonSerializable(typeof(ControlDeviceInstanceConfig))]
