@@ -403,6 +403,29 @@ public sealed class ControlGraphRuntimeTests
             Sent.Add(new SentMidiControlChange(endpointId, channel, controller, value, highResolution14Bit));
             return ValueTask.CompletedTask;
         }
+
+        public ValueTask SendNoteAsync(
+            Guid? endpointId,
+            int channel,
+            int note,
+            int velocity,
+            bool isNoteOn,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask SendProgramChangeAsync(
+            Guid? endpointId,
+            int channel,
+            int program,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask SendPitchBendAsync(
+            Guid? endpointId,
+            int channel,
+            int value,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.CompletedTask;
     }
 
     private sealed record SentMidiControlChange(

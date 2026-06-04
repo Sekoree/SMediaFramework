@@ -6,18 +6,33 @@ namespace HaPlay.ControlGraph;
 public sealed class BufferingControlScriptCommandSink : IControlScriptCommandSink
 {
     private readonly List<ControlScriptOscMessage> _oscMessages = new();
+    private readonly List<ControlScriptMidiMessage> _midiMessages = new();
 
     public IReadOnlyList<ControlScriptOscMessage> OscMessages => _oscMessages;
+
+    public IReadOnlyList<ControlScriptMidiMessage> MidiMessages => _midiMessages;
 
     public void SendOsc(ControlScriptOscMessage message)
     {
         _oscMessages.Add(message);
     }
 
+    public void SendMidi(ControlScriptMidiMessage message)
+    {
+        _midiMessages.Add(message);
+    }
+
     public IReadOnlyList<ControlScriptOscMessage> DrainOscMessages()
     {
         var drained = _oscMessages.ToArray();
         _oscMessages.Clear();
+        return drained;
+    }
+
+    public IReadOnlyList<ControlScriptMidiMessage> DrainMidiMessages()
+    {
+        var drained = _midiMessages.ToArray();
+        _midiMessages.Clear();
         return drained;
     }
 }

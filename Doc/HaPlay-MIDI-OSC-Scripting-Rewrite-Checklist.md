@@ -114,19 +114,19 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 
 ## Phase 3: Live Monitor
 
-- [ ] Add monitor record model.
-- [ ] Capture raw and decoded MIDI input.
-- [ ] Capture MIDI output attempts and results.
-- [ ] Capture raw and decoded OSC input.
-- [ ] Capture OSC output attempts and results.
-- [ ] Capture script emissions.
+- [x] Add monitor record model.
+- [~] Capture raw and decoded MIDI input.
+- [~] Capture MIDI output attempts and results.
+- [~] Capture raw and decoded OSC input.
+- [x] Capture OSC output attempts and results.
+- [x] Capture script emissions.
 - [ ] Capture cache updates.
-- [ ] Capture suppression/drop decisions.
-- [ ] Capture runtime and script errors.
-- [ ] Add bounded in-memory ring buffer.
-- [ ] Add visible history limit setting, default `1000`.
-- [ ] Add JSON lines export.
-- [ ] Add JSON lines replay/import for tests.
+- [~] Capture suppression/drop decisions.
+- [x] Capture runtime and script errors.
+- [x] Add bounded in-memory ring buffer.
+- [x] Add visible history limit setting, default `1000`.
+- [x] Add JSON lines export.
+- [x] Add JSON lines replay/import for tests.
 - [ ] Add UI filters:
   - [ ] Direction.
   - [ ] Protocol.
@@ -192,11 +192,15 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Manual/test trigger.
 - [x] Route script OSC sends to configured OSC devices by ID, alias, name, or
   unambiguous profile ID.
+- [x] Route script MIDI sends to configured MIDI devices by ID, alias, name, or
+  unambiguous profile ID.
 - [x] Add script runtime session bridge that dispatches triggers and flushes
-  queued OSC commands through the OSC router.
+  queued OSC/MIDI commands through their routers.
+- [x] Add decoded MIDI input dispatcher that resolves input device IDs/names to
+  enabled MIDI devices and forwards CC events to scripts.
 - [ ] Add Mond libraries:
   - [ ] `HaPlay.Devices`.
-  - [ ] `HaPlay.Midi`.
+  - [~] `HaPlay.Midi`.
   - [~] `HaPlay.Osc`.
   - [~] `HaPlay.X32`.
   - [ ] `HaPlay.State`.
@@ -258,7 +262,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Profile loading and validation.
   - [ ] Device matching.
   - [x] OSC app listener routing.
-  - [ ] Monitor JSON lines export/replay.
+  - [x] Monitor JSON lines export/replay.
   - [x] Cache update modes.
   - [x] Script compile and import behavior.
   - [x] Starter X-Touch Mini encoder -> X32 fader script execution.
@@ -266,11 +270,12 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Trigger dispatch.
   - [x] Script runtime session bridge.
   - [x] X-Touch Mini relative encoder -> X32 fader helper.
+  - [x] MIDI command router.
 - [ ] Integration tests:
   - [ ] OSC loopback monitor capture.
-  - [ ] Fake MIDI input to script trigger.
+  - [x] Fake MIDI input to script trigger.
   - [x] Script output to fake OSC sender.
-  - [ ] Script output to fake MIDI sender.
+  - [x] Script output to fake MIDI sender.
   - [~] X32 `/xremote` periodic sends.
 - [ ] Manual tests:
   - [ ] X-Touch Mini MIDI input catalog detection.

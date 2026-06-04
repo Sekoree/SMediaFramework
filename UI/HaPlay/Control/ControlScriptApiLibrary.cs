@@ -21,6 +21,8 @@ public sealed class ControlScriptRuntimeServices
 public interface IControlScriptCommandSink
 {
     void SendOsc(ControlScriptOscMessage message);
+
+    void SendMidi(ControlScriptMidiMessage message);
 }
 
 public sealed class NullControlScriptCommandSink : IControlScriptCommandSink
@@ -32,6 +34,10 @@ public sealed class NullControlScriptCommandSink : IControlScriptCommandSink
     }
 
     public void SendOsc(ControlScriptOscMessage message)
+    {
+    }
+
+    public void SendMidi(ControlScriptMidiMessage message)
     {
     }
 }
@@ -69,6 +75,25 @@ public enum ControlScriptOscArgumentType
     False,
 }
 
+public sealed record ControlScriptMidiMessage(
+    string DeviceKey,
+    ControlScriptMidiMessageKind Kind,
+    int Channel,
+    int? Controller = null,
+    int? Note = null,
+    int? Velocity = null,
+    int? Value = null,
+    bool HighResolution14Bit = false);
+
+public enum ControlScriptMidiMessageKind
+{
+    ControlChange,
+    NoteOn,
+    NoteOff,
+    ProgramChange,
+    PitchBend,
+}
+
 public sealed class ControlScriptApiLibrary : IMondLibrary
 {
     private readonly ControlScriptRuntimeServices _services;
@@ -81,6 +106,7 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
     public IEnumerable<KeyValuePair<string, MondValue>> GetDefinitions(MondState state)
     {
         yield return new KeyValuePair<string, MondValue>("osc", CreateOscApi(state));
+        yield return new KeyValuePair<string, MondValue>("midi", CreateMidiApi(state));
         yield return new KeyValuePair<string, MondValue>("x32", CreateX32Api(state));
         yield return new KeyValuePair<string, MondValue>("math", CreateMathApi(state));
     }
@@ -169,6 +195,84 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
         });
 
         return osc;
+    }
+
+    private MondValue CreateMidiApi(MondState state)
+    {
+        var midi = MondValue.Object(state);
+
+        midi["sendCc"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 4)
+                throw new MondRuntimeException("midi.sendCc requires device key, channel, controller, and value.");
+
+            _services.CommandSink.SendMidi(new ControlScriptMidiMessage(
+                (string)args[offset],
+                ControlScriptMidiMessageKind.ControlChange,
+                ToInt(args[offset + 1]),
+                Controller: ToInt(args[offset + 2]),
+                Value: ToInt(args[offset + 3]),
+                HighResolution14Bit: args.Length > offset + 4 && ToBool(args[offset + 4])));
+            return MondValue.Undefined;
+        });
+        midi["sendNoteOn"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 4)
+                throw new MondRuntimeException("midi.sendNoteOn requires device key, channel, note, and velocity.");
+
+            _services.CommandSink.SendMidi(new ControlScriptMidiMessage(
+                (string)args[offset],
+                ControlScriptMidiMessageKind.NoteOn,
+                ToInt(args[offset + 1]),
+                Note: ToInt(args[offset + 2]),
+                Velocity: ToInt(args[offset + 3])));
+            return MondValue.Undefined;
+        });
+        midi["sendNoteOff"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 3)
+                throw new MondRuntimeException("midi.sendNoteOff requires device key, channel, and note.");
+
+            var velocity = args.Length > offset + 3 ? ToInt(args[offset + 3]) : 0;
+            _services.CommandSink.SendMidi(new ControlScriptMidiMessage(
+                (string)args[offset],
+                ControlScriptMidiMessageKind.NoteOff,
+                ToInt(args[offset + 1]),
+                Note: ToInt(args[offset + 2]),
+                Velocity: velocity));
+            return MondValue.Undefined;
+        });
+        midi["sendProgramChange"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 3)
+                throw new MondRuntimeException("midi.sendProgramChange requires device key, channel, and program.");
+
+            _services.CommandSink.SendMidi(new ControlScriptMidiMessage(
+                (string)args[offset],
+                ControlScriptMidiMessageKind.ProgramChange,
+                ToInt(args[offset + 1]),
+                Value: ToInt(args[offset + 2])));
+            return MondValue.Undefined;
+        });
+        midi["sendPitchBend"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 3)
+                throw new MondRuntimeException("midi.sendPitchBend requires device key, channel, and value.");
+
+            _services.CommandSink.SendMidi(new ControlScriptMidiMessage(
+                (string)args[offset],
+                ControlScriptMidiMessageKind.PitchBend,
+                ToInt(args[offset + 1]),
+                Value: ToInt(args[offset + 2])));
+            return MondValue.Undefined;
+        });
+
+        return midi;
     }
 
     private static MondValue CreateX32Api(MondState state)
@@ -270,4 +374,16 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
 
     private static int ArgumentOffset(Span<MondValue> args) =>
         args.Length > 0 && args[0].Type == MondValueType.Object ? 1 : 0;
+
+    private static int ToInt(MondValue value) =>
+        checked((int)(double)value);
+
+    private static bool ToBool(MondValue value) =>
+        value.Type switch
+        {
+            MondValueType.True => true,
+            MondValueType.False => false,
+            MondValueType.Number => Math.Abs((double)value) > double.Epsilon,
+            _ => false,
+        };
 }

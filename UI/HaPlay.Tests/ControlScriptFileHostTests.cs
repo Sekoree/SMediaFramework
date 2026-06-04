@@ -210,9 +210,16 @@ public sealed class ControlScriptFileHostTests
     {
         public List<ControlScriptOscMessage> OscMessages { get; } = new();
 
+        public List<ControlScriptMidiMessage> MidiMessages { get; } = new();
+
         public void SendOsc(ControlScriptOscMessage message)
         {
             OscMessages.Add(message);
+        }
+
+        public void SendMidi(ControlScriptMidiMessage message)
+        {
+            MidiMessages.Add(message);
         }
     }
 }

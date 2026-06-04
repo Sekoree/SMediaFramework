@@ -325,14 +325,36 @@ device/session-manager task. `ControlScriptOscCommandRouter` routes queued
 script OSC sends to configured OSC devices by ID, alias, name, or unambiguous
 profile ID and applies optimistic cache writes when that cache mode is enabled.
 `ControlScriptRuntimeSession` now bridges these pieces for callers: it owns the
-shared OSC cache, dispatches script triggers, drains queued script OSC messages,
-routes them to the fake or real `IControlOscSender`, and exposes deterministic
+shared OSC cache, dispatches script triggers, drains queued script OSC/MIDI
+messages, routes OSC messages to the fake or real `IControlOscSender`, routes
+MIDI messages to a configured `IControlMidiSender`, and exposes deterministic
 periodic ticks for tests and a future timer loop.
 `ControlOscListenerManager` now owns one OSC server per enabled project listener,
 registers one catch-all handler per listener socket, resolves incoming messages
 to enabled OSC device instances by listener binding and remote host/port, and
 dispatches matched messages into `ControlScriptRuntimeSession`. It exposes the
 remote endpoint in dispatch results so the live monitor can consume it later.
+`ControlMidiDeviceManager` now provides the matching decoded MIDI input dispatch
+layer for the new control system path: it resolves input device IDs/names to
+enabled MIDI device instances, records decoded CC input/drop monitor rows, and
+dispatches `MidiControlEvent` into the script runtime. It is currently a
+testable dispatch layer, not the final PortMidi hardware session opener.
+`ControlMonitorRecord`, `ControlMonitorBuffer`, and `ControlMonitorJsonLines`
+now provide the first live-monitor data layer. The new script runtime path emits
+script invocation/error records, routed OSC and script-originated MIDI output
+success/failure records, and OSC listener input/drop records with remote
+endpoint details. Raw packet bytes, hardware-level MIDI input/output taps,
+cache-change records, UI filtering, and pause/clear controls still need to be
+wired.
+
+Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
+high-resolution CC, note on/off, program change, and pitch bend messages.
+`ControlScriptMidiCommandRouter` resolves enabled MIDI devices by instance ID,
+alias, name, or unambiguous profile ID, requires an output binding, routes to an
+`IControlMidiSender`, and returns per-message success/failure results. The
+session bridge records these routed MIDI outputs in the monitor buffer. Real
+hardware control-system session wiring is still separate from the legacy graph
+`ActionEndpoint` session adapter.
 
 The exact Mond syntax can be refined during implementation, but the default
 shape should be export/import friendly, for example:

@@ -88,6 +88,65 @@ public sealed class ControlEndpointSessionManager : IControlOscSender, IControlM
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask SendNoteAsync(
+        Guid? endpointId,
+        int channel,
+        int note,
+        int velocity,
+        bool isNoteOn,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var device = GetMidiOutput(ResolveMidiEndpoint(endpointId));
+        var midiChannel = ToZeroBasedMidiChannel(channel);
+        IMIDIMessage message = isNoteOn
+            ? new NoteOn(midiChannel, checked((byte)note), checked((byte)velocity))
+            : new NoteOff(midiChannel, checked((byte)note), checked((byte)velocity));
+        var err = device.Write(message);
+        if (err != PmError.NoError)
+            throw new InvalidOperationException(PMUtil.GetErrorText(err) ?? err.ToString());
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask SendProgramChangeAsync(
+        Guid? endpointId,
+        int channel,
+        int program,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var device = GetMidiOutput(ResolveMidiEndpoint(endpointId));
+        var message = new ProgramChange(ToZeroBasedMidiChannel(channel), checked((byte)program));
+        var err = device.Write(message);
+        if (err != PmError.NoError)
+            throw new InvalidOperationException(PMUtil.GetErrorText(err) ?? err.ToString());
+
+        return ValueTask.CompletedTask;
+    }
+
+    public ValueTask SendPitchBendAsync(
+        Guid? endpointId,
+        int channel,
+        int value,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var device = GetMidiOutput(ResolveMidiEndpoint(endpointId));
+        var message = new PitchBend(ToZeroBasedMidiChannel(channel), value);
+        var err = device.Write(message);
+        if (err != PmError.NoError)
+            throw new InvalidOperationException(PMUtil.GetErrorText(err) ?? err.ToString());
+
+        return ValueTask.CompletedTask;
+    }
+
     private async ValueTask<OSCClient> GetOscClientAsync(string host, int port, CancellationToken cancellationToken)
     {
         var key = (host, port);
@@ -129,6 +188,16 @@ public sealed class ControlEndpointSessionManager : IControlOscSender, IControlM
         _midiOutputs.Add(endpoint.Id, device);
         Health = ControlSessionHealth.Running($"MIDI {deviceEntry.Name ?? deviceEntry.Id.ToString()}");
         return device;
+    }
+
+    private MidiActionEndpoint ResolveMidiEndpoint(Guid? endpointId)
+    {
+        if (endpointId is not { } id)
+            throw new InvalidOperationException("MIDI output requires an endpoint id for real device output.");
+        if (!_endpoints.TryGetValue(id, out var endpoint) || endpoint is not MidiActionEndpoint midiEndpoint)
+            throw new InvalidOperationException($"MIDI endpoint '{id}' was not found.");
+
+        return midiEndpoint;
     }
 
     private void EnsureMidiInitialized()

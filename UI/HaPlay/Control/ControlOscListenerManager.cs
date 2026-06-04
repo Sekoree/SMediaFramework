@@ -8,15 +8,18 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
 {
     private readonly ControlSystemConfig _config;
     private readonly ControlScriptRuntimeSession _runtimeSession;
+    private readonly IControlMonitorSink _monitor;
     private readonly Dictionary<Guid, ListenerRuntimeState> _listeners = new();
     private bool _disposed;
 
     public ControlOscListenerManager(
         ControlSystemConfig config,
-        ControlScriptRuntimeSession runtimeSession)
+        ControlScriptRuntimeSession runtimeSession,
+        IControlMonitorSink? monitor = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _runtimeSession = runtimeSession ?? throw new ArgumentNullException(nameof(runtimeSession));
+        _monitor = monitor ?? NullControlMonitorSink.Instance;
 
         foreach (var listener in config.OscListeners)
         {
@@ -85,12 +88,16 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
 
         var devices = ResolveDevices(listenerId, context.RemoteEndPoint).ToArray();
         if (devices.Length == 0)
+        {
+            _monitor.Record(CreateOscInputRecord(listenerId, device: null, context, ControlMonitorResult.Dropped));
             return [];
+        }
 
         var results = new List<ControlOscListenerDispatchResult>(devices.Length);
         foreach (var device in devices)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            _monitor.Record(CreateOscInputRecord(listenerId, device, context, ControlMonitorResult.Received));
             var evt = new OscControlEvent(
                 context.ReceivedAtUtc,
                 listenerId,
@@ -104,6 +111,27 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
 
         return results;
     }
+
+    private static ControlMonitorRecord CreateOscInputRecord(
+        Guid listenerId,
+        ControlDeviceInstanceConfig? device,
+        OSCMessageContext context,
+        ControlMonitorResult result) =>
+        new()
+        {
+            Direction = result == ControlMonitorResult.Dropped ? ControlMonitorDirection.Dropped : ControlMonitorDirection.Input,
+            Protocol = ControlMonitorProtocol.Osc,
+            Result = result,
+            ListenerId = listenerId,
+            DeviceInstanceId = device?.Id,
+            DeviceKey = device?.Binding.Alias ?? device?.Name,
+            ProfileId = device?.ProfileId,
+            RemoteHost = context.RemoteEndPoint.Address.ToString(),
+            RemotePort = context.RemoteEndPoint.Port,
+            Address = context.Message.Address,
+            OscArguments = context.Message.Arguments.Select(ControlMonitorOscArgumentRecord.FromOscArgument).ToList(),
+            Message = result == ControlMonitorResult.Dropped ? "No matching OSC device" : null,
+        };
 
     private async ValueTask OnOscMessageAsync(
         Guid listenerId,

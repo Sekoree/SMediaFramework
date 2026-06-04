@@ -259,19 +259,104 @@ public sealed class ControlScriptRuntimeSessionTests
         Assert.Equal(0.42, value, precision: 12);
     }
 
+    [Fact]
+    public async Task DispatchManualAsync_RoutesMidiOutputAndRecordsMonitorEntry()
+    {
+        var xtouchId = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 10);
+        var midiSender = new RecordingMidiSender();
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(xtouchId, "X-Touch Mini", alias: "xtouch", outputName: "X-Touch MINI")],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "MIDI send",
+                        ScriptPath = "Scripts/midi-send.mnd",
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.Manual,
+                                FunctionName = "run",
+                            },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/midi-send.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        midi.sendNoteOn("xtouch", 1, 89, 127);
+                        midi.sendCc("xtouch", 1, 16, 64);
+                    }
+                    """,
+            },
+            new RecordingOscSender(),
+            monitor,
+            midiSender);
+
+        var result = await session.DispatchManualAsync();
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        Assert.Empty(result.OscRoutes);
+        Assert.All(result.MidiRoutes, route => Assert.True(route.Succeeded));
+        Assert.Collection(
+            midiSender.Sent,
+            sent =>
+            {
+                Assert.Equal(ControlScriptMidiMessageKind.NoteOn, sent.Kind);
+                Assert.Equal(xtouchId, sent.EndpointId);
+                Assert.Equal(1, sent.Channel);
+                Assert.Equal(89, sent.Note);
+                Assert.Equal(127, sent.Value);
+            },
+            sent =>
+            {
+                Assert.Equal(ControlScriptMidiMessageKind.ControlChange, sent.Kind);
+                Assert.Equal(xtouchId, sent.EndpointId);
+                Assert.Equal(16, sent.Controller);
+                Assert.Equal(64, sent.Value);
+            });
+
+        var midiOutputRecords = monitor.Records
+            .Where(r => r.Protocol == ControlMonitorProtocol.Midi && r.Direction == ControlMonitorDirection.Output)
+            .ToArray();
+        Assert.Equal(2, midiOutputRecords.Length);
+        Assert.Contains(midiOutputRecords, r => r.Message == nameof(ControlScriptMidiMessageKind.NoteOn) && r.MidiNote == 89);
+        Assert.Contains(midiOutputRecords, r => r.Message == nameof(ControlScriptMidiMessageKind.ControlChange) && r.MidiController == 16);
+    }
+
     private static ControlScriptRuntimeSession CreateSession(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,
-        RecordingOscSender sender) =>
-        new(config, new InMemoryControlScriptSourceProvider(scripts), sender);
+        RecordingOscSender sender,
+        IControlMonitorSink? monitor = null,
+        IControlMidiSender? midiSender = null) =>
+        new(config, new InMemoryControlScriptSourceProvider(scripts), sender, monitor: monitor, midiSender: midiSender);
 
-    private static ControlDeviceInstanceConfig MidiDevice(Guid id, string name) =>
+    private static ControlDeviceInstanceConfig MidiDevice(
+        Guid id,
+        string name,
+        string? alias = null,
+        string? outputName = null) =>
         new()
         {
             Id = id,
             Name = name,
             Protocol = ControlDeviceProtocol.Midi,
             IsEnabled = true,
+            Binding = new ControlDeviceBindingConfig
+            {
+                Alias = alias,
+                MidiOutputDeviceName = outputName,
+            },
         };
 
     private static ControlDeviceInstanceConfig OscDevice(
@@ -327,4 +412,90 @@ public sealed class ControlScriptRuntimeSessionTests
         int Port,
         string Address,
         IReadOnlyList<OSCArgument> Arguments);
+
+    private sealed class RecordingMidiSender : IControlMidiSender
+    {
+        public List<SentMidiMessage> Sent { get; } = new();
+
+        public ValueTask SendControlChangeAsync(
+            Guid? endpointId,
+            int channel,
+            int controller,
+            int value,
+            bool highResolution14Bit,
+            CancellationToken cancellationToken = default)
+        {
+            Sent.Add(new SentMidiMessage(
+                ControlScriptMidiMessageKind.ControlChange,
+                endpointId,
+                channel,
+                Controller: controller,
+                Note: null,
+                Value: value,
+                HighResolution14Bit: highResolution14Bit));
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SendNoteAsync(
+            Guid? endpointId,
+            int channel,
+            int note,
+            int velocity,
+            bool isNoteOn,
+            CancellationToken cancellationToken = default)
+        {
+            Sent.Add(new SentMidiMessage(
+                isNoteOn ? ControlScriptMidiMessageKind.NoteOn : ControlScriptMidiMessageKind.NoteOff,
+                endpointId,
+                channel,
+                Controller: null,
+                Note: note,
+                Value: velocity,
+                HighResolution14Bit: false));
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SendProgramChangeAsync(
+            Guid? endpointId,
+            int channel,
+            int program,
+            CancellationToken cancellationToken = default)
+        {
+            Sent.Add(new SentMidiMessage(
+                ControlScriptMidiMessageKind.ProgramChange,
+                endpointId,
+                channel,
+                Controller: null,
+                Note: null,
+                Value: program,
+                HighResolution14Bit: false));
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask SendPitchBendAsync(
+            Guid? endpointId,
+            int channel,
+            int value,
+            CancellationToken cancellationToken = default)
+        {
+            Sent.Add(new SentMidiMessage(
+                ControlScriptMidiMessageKind.PitchBend,
+                endpointId,
+                channel,
+                Controller: null,
+                Note: null,
+                Value: value,
+                HighResolution14Bit: false));
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed record SentMidiMessage(
+        ControlScriptMidiMessageKind Kind,
+        Guid? EndpointId,
+        int Channel,
+        int? Controller,
+        int? Note,
+        int Value,
+        bool HighResolution14Bit);
 }

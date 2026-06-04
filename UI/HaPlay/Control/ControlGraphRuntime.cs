@@ -17,6 +17,26 @@ public interface IControlMidiSender
         int value,
         bool highResolution14Bit,
         CancellationToken cancellationToken = default);
+
+    ValueTask SendNoteAsync(
+        Guid? endpointId,
+        int channel,
+        int note,
+        int velocity,
+        bool isNoteOn,
+        CancellationToken cancellationToken = default);
+
+    ValueTask SendProgramChangeAsync(
+        Guid? endpointId,
+        int channel,
+        int program,
+        CancellationToken cancellationToken = default);
+
+    ValueTask SendPitchBendAsync(
+        Guid? endpointId,
+        int channel,
+        int value,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record ControlGraphValidationIssue(string Code, string Message, Guid? NodeId = null, Guid? ConnectionId = null);
@@ -430,6 +450,29 @@ internal sealed class NullControlMidiSender : IControlMidiSender
         int controller,
         int value,
         bool highResolution14Bit,
+        CancellationToken cancellationToken = default) =>
+        ValueTask.CompletedTask;
+
+    public ValueTask SendNoteAsync(
+        Guid? endpointId,
+        int channel,
+        int note,
+        int velocity,
+        bool isNoteOn,
+        CancellationToken cancellationToken = default) =>
+        ValueTask.CompletedTask;
+
+    public ValueTask SendProgramChangeAsync(
+        Guid? endpointId,
+        int channel,
+        int program,
+        CancellationToken cancellationToken = default) =>
+        ValueTask.CompletedTask;
+
+    public ValueTask SendPitchBendAsync(
+        Guid? endpointId,
+        int channel,
+        int value,
         CancellationToken cancellationToken = default) =>
         ValueTask.CompletedTask;
 }
