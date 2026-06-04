@@ -471,6 +471,139 @@ public sealed class ControlScriptRuntimeSessionTests
                 && r.ErrorMessage == "socket closed");
     }
 
+    [Fact]
+    public async Task DispatchManualAsync_ScriptLogsToMonitorWithScriptAttribution()
+    {
+        var scriptId = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 20);
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = scriptId,
+                        Name = "Logger",
+                        ScriptPath = "Scripts/log.mnd",
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.Manual,
+                                FunctionName = "run",
+                            },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/log.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        monitor.log("hello from script");
+                        monitor.error("something failed");
+                    }
+                    """,
+            },
+            new RecordingOscSender(),
+            monitor);
+
+        var result = await session.DispatchManualAsync(scriptId);
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+
+        var logRecord = Assert.Single(monitor.Records.Where(r =>
+            r.Protocol == ControlMonitorProtocol.Script && r.Result == ControlMonitorResult.Logged));
+        Assert.Equal(ControlMonitorDirection.Internal, logRecord.Direction);
+        Assert.Equal(scriptId, logRecord.ScriptId);
+        Assert.Equal("hello from script", logRecord.Message);
+
+        var errorRecord = Assert.Single(monitor.Records.Where(r =>
+            r.Protocol == ControlMonitorProtocol.Script
+            && r.Direction == ControlMonitorDirection.Error
+            && r.ErrorMessage == "something failed"));
+        Assert.Equal(scriptId, errorRecord.ScriptId);
+    }
+
+    [Fact]
+    public async Task DispatchManualAsync_DevicesLibraryExposesConfiguredDevicesAndReportedHealth()
+    {
+        var x32Id = Guid.NewGuid();
+        var spareId = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices =
+                [
+                    OscDevice(x32Id, "X32", "x32", "192.168.2.76", 10023),
+                    new ControlDeviceInstanceConfig
+                    {
+                        Id = spareId,
+                        Name = "Spare",
+                        Protocol = ControlDeviceProtocol.Osc,
+                        IsEnabled = false,
+                        Binding = new ControlDeviceBindingConfig
+                        {
+                            Alias = "spare",
+                            OscHost = "192.168.2.99",
+                            OscPort = 10023,
+                        },
+                    },
+                ],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Inspect",
+                        ScriptPath = "Scripts/inspect.mnd",
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.Manual,
+                                FunctionName = "run",
+                            },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/inspect.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        osc.send("x32", "/count", osc.int32(devices.list().length()));
+                        osc.send("x32", "/enabled", osc.int32(devices.isEnabled("x32") ? 1 : 0));
+                        osc.send("x32", "/spareEnabled", osc.int32(devices.isEnabled("spare") ? 1 : 0));
+                        osc.send("x32", "/health/" + devices.health("x32"), osc.int32(1));
+                        osc.send("x32", "/profile/" + devices.get("x32").profileId, osc.int32(1));
+                    }
+                    """,
+            },
+            sender);
+
+        await session.ReportDeviceHealthAsync(x32Id, ControlSessionHealth.Running("listening"));
+        var result = await session.DispatchManualAsync();
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var sent = sender.Sent;
+        Assert.Equal(5, sent.Count);
+        Assert.Equal("/count", sent[0].Address);
+        Assert.Equal(2, Assert.Single(sent[0].Arguments).AsInt32());
+        Assert.Equal("/enabled", sent[1].Address);
+        Assert.Equal(1, Assert.Single(sent[1].Arguments).AsInt32());
+        Assert.Equal("/spareEnabled", sent[2].Address);
+        Assert.Equal(0, Assert.Single(sent[2].Arguments).AsInt32());
+        Assert.Equal("/health/Running", sent[3].Address);
+        Assert.Equal("/profile/x32", sent[4].Address);
+    }
+
     private static ControlScriptRuntimeSession CreateSession(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,

@@ -511,6 +511,163 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void State_ScriptScopedValuePersistsAcrossInvocations()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var script = Script("Scripts/main.mnd", MidiCcTrigger(midiDeviceId, "onMidi", midiController: 16));
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidi(event, context) {
+                        var count = state.get("count", 0) + 1;
+                        state.set("count", count);
+                        osc.send("x32", "/count", osc.int32(count));
+                    }
+                    """,
+            },
+            sink);
+
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 1));
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 1));
+
+        Assert.Collection(
+            sink.OscMessages,
+            message => Assert.Equal(1, Assert.Single(message.Arguments).NumberValue),
+            message => Assert.Equal(2, Assert.Single(message.Arguments).NumberValue));
+    }
+
+    [Fact]
+    public void State_ProjectScopeIsSharedAcrossScripts()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var writer = Script("Scripts/writer.mnd", MidiCcTrigger(midiDeviceId, "onWrite", midiController: 16));
+        var reader = Script("Scripts/reader.mnd", MidiCcTrigger(midiDeviceId, "onRead", midiController: 17));
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [writer, reader],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/writer.mnd"] =
+                    """
+                    export fun onWrite(event, context) {
+                        state.project.set("scene", 7);
+                    }
+                    """,
+                ["Scripts/reader.mnd"] =
+                    """
+                    export fun onRead(event, context) {
+                        osc.send("x32", "/scene", osc.int32(state.project.get("scene", -1)));
+                    }
+                    """,
+            },
+            sink);
+
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 1));
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 17, value: 1));
+
+        Assert.Equal(7, Assert.Single(Assert.Single(sink.OscMessages).Arguments).NumberValue);
+    }
+
+    [Fact]
+    public void State_ScriptScopeIsIsolatedBetweenScripts()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var first = Script("Scripts/first.mnd", MidiCcTrigger(midiDeviceId, "onMidi", midiController: 16));
+        var second = Script("Scripts/second.mnd", MidiCcTrigger(midiDeviceId, "onMidi", midiController: 17));
+        var sink = new RecordingControlScriptCommandSink();
+        const string body =
+            """
+            export fun onMidi(event, context) {
+                var count = state.get("count", 0) + 1;
+                state.set("count", count);
+                osc.send("x32", "/count", osc.int32(count));
+            }
+            """;
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [first, second],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/first.mnd"] = body,
+                ["Scripts/second.mnd"] = body,
+            },
+            sink);
+
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 1));
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 17, value: 1));
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 1));
+
+        Assert.Collection(
+            sink.OscMessages,
+            message => Assert.Equal(1, Assert.Single(message.Arguments).NumberValue),
+            message => Assert.Equal(1, Assert.Single(message.Arguments).NumberValue),
+            message => Assert.Equal(2, Assert.Single(message.Arguments).NumberValue));
+    }
+
+    [Fact]
+    public void State_DeviceScopeIsIsolatedPerDevice()
+    {
+        var deviceA = Guid.NewGuid();
+        var deviceB = Guid.NewGuid();
+        var script = Script(
+            "Scripts/main.mnd",
+            new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.OscMessage,
+                FunctionName = "onOsc",
+                OscAddressPattern = "*",
+            });
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(deviceA, "a"), OscDevice(deviceB, "b")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onOsc(event, context) {
+                        var n = state.device.get("n", 0) + 1;
+                        state.device.set("n", n);
+                        osc.send("out", "/n", osc.int32(n));
+                    }
+                    """,
+            },
+            sink);
+
+        runtime.DispatchControlEvent(OscEvent(deviceA, "/x", OSCArgument.Float32(1f)));
+        runtime.DispatchControlEvent(OscEvent(deviceA, "/x", OSCArgument.Float32(1f)));
+        runtime.DispatchControlEvent(OscEvent(deviceB, "/x", OSCArgument.Float32(1f)));
+
+        Assert.Collection(
+            sink.OscMessages,
+            message => Assert.Equal(1, Assert.Single(message.Arguments).NumberValue),
+            message => Assert.Equal(2, Assert.Single(message.Arguments).NumberValue),
+            message => Assert.Equal(1, Assert.Single(message.Arguments).NumberValue));
+    }
+
+    [Fact]
     public void DispatchLayerDisabled_RunsLayerScopedDisabledHook()
     {
         var layerId = Guid.NewGuid();

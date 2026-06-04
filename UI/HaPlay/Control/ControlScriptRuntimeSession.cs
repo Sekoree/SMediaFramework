@@ -10,8 +10,8 @@ public sealed class ControlScriptRuntimeSession
     private readonly ControlScriptOscCommandRouter _oscRouter;
     private readonly ControlScriptMidiCommandRouter _midiRouter;
     private readonly IControlMonitorSink _monitor;
+    private readonly ControlDeviceHealthRegistry _deviceHealth = new();
     private readonly Dictionary<Guid, DateTimeOffset> _lastPeriodicDispatch = new();
-    private readonly Dictionary<Guid, ControlSessionState> _lastDeviceHealth = new();
 
     private static readonly ControlScriptRuntimeSessionResult EmptyResult =
         new([], [], [], [], []);
@@ -31,13 +31,21 @@ public sealed class ControlScriptRuntimeSession
         _monitor = monitor ?? NullControlMonitorSink.Instance;
         OscCache = new ControlValueCache();
         _commandSink = new BufferingControlScriptCommandSink();
-        var services = new ControlScriptRuntimeServices(_commandSink, OscCache);
+        var services = new ControlScriptRuntimeServices(
+            _commandSink,
+            OscCache,
+            monitor: _monitor,
+            devices: _config.Devices,
+            deviceHealth: _deviceHealth);
         _runtime = new ControlScriptRuntime(_config, sourceProvider, services, instructionLimit);
         _oscRouter = new ControlScriptOscCommandRouter(_config, oscSender, OscCache);
         _midiRouter = new ControlScriptMidiCommandRouter(_config, midiSender);
     }
 
     public ControlValueCache OscCache { get; }
+
+    /// <summary>Latest reported device-session health, also surfaced to scripts via <c>HaPlay.Devices</c>.</summary>
+    public ControlDeviceHealthRegistry DeviceHealth => _deviceHealth;
 
     public IReadOnlyList<ControlScriptRuntimeDiagnostic> Diagnostics => _runtime.Diagnostics;
 
@@ -86,12 +94,11 @@ public sealed class ControlScriptRuntimeSession
     {
         ArgumentNullException.ThrowIfNull(health);
 
-        var hadPrevious = _lastDeviceHealth.TryGetValue(deviceInstanceId, out var previous);
-        if (hadPrevious && previous == health.State)
+        var previousState = _deviceHealth.TryGet(deviceInstanceId)?.State;
+        _deviceHealth.Report(deviceInstanceId, health);
+        if (previousState == health.State)
             return ValueTask.FromResult(EmptyResult);
 
-        _lastDeviceHealth[deviceInstanceId] = health.State;
-        var previousState = hadPrevious ? previous : (ControlSessionState?)null;
         RecordDeviceHealth(deviceInstanceId, health, previousState);
         return CompleteDispatchAsync(
             _runtime.DispatchDeviceHealthChanged(deviceInstanceId, health, previousState),

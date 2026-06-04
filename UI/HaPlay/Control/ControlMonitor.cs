@@ -201,6 +201,7 @@ public enum ControlMonitorResult
     Cached,
     Dropped,
     Suppressed,
+    Logged,
 }
 
 public static class ControlMonitorJsonLines

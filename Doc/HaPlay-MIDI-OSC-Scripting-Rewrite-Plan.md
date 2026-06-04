@@ -420,6 +420,44 @@ the host-managed trigger surface, including the periodic timer. Hooking
 armed is the remaining wiring step, alongside feeding real session health into
 `ReportDeviceHealthAsync`.
 
+Implementation note, 2026-06-04: the first custom Mond library, `HaPlay.State`,
+is in. `ControlScriptStateStore` (held on `ControlScriptRuntimeServices`) keeps
+scoped key/value state across events in three scopes: a project-wide map shared
+by every script, a per-script map, and a per-device map. The script-facing
+`state` object exposes `get`/`set`/`has`/`remove`/`keys`; the top-level methods
+and `state.script` use the current script's private scope, `state.project` the
+shared scope, and `state.device` the current device's scope. `ControlScriptRuntime`
+brackets each trigger invocation with `BeginInvocation(scriptId, deviceId)` /
+`EndInvocation` so those views resolve to the right slot (dispatch is serial, so
+no re-entrancy). Stored values are restricted to number, string, boolean, or
+null. `state.device` throws a clear runtime error when no device is in context.
+The remaining libraries (`HaPlay.Devices`, `HaPlay.Time`, and
+fleshing out `HaPlay.Midi`/`HaPlay.Osc`/`HaPlay.X32`) are still open.
+
+Implementation note, 2026-06-04: `HaPlay.Monitor` is in. The script-facing
+`monitor` object exposes `monitor.log(message)` (an `Internal`/`Logged`,
+`Script`-protocol monitor row) and `monitor.error(message)` (an `Error`/`Failed`
+row). Both are attributed to the emitting script by reading
+`ControlScriptStateStore.CurrentScriptId`, which the runtime already sets around
+each invocation, so logs show up in the live monitor tagged with their script.
+The monitor sink is now carried on `ControlScriptRuntimeServices` (defaulting to
+the null sink) and wired from `ControlScriptRuntimeSession`, so script logs land
+in the same buffer as the dispatch/route/cache rows.
+
+Implementation note, 2026-06-04: `HaPlay.Devices` (read-only) is in. The script
+`devices` object exposes `list()`, `get(key)`, `isEnabled(key)`, and
+`health(key)`; each device object carries `id`/`name`/`alias`/`profileId`/
+`protocol`/`enabled`/`health`. Key resolution is lenient (id, alias, name, or
+profile id; first match), consistent with the profiles-are-suggestions stance.
+To back this, `ControlScriptRuntimeServices` now also carries the configured
+device list and a new `ControlDeviceHealthRegistry` (a thread-safe latest-health
+store). `ControlScriptRuntimeSession.ReportDeviceHealthAsync` now uses that
+registry as its single source for transition detection and exposure, so
+`devices.health(...)` reflects the most recent reported session state. Device
+enable/disable from scripts and profile control/command catalog inspection are
+deliberately deferred (mutations and the profile catalog surface). `HaPlay.Time`
+and fleshing out `HaPlay.Midi`/`HaPlay.Osc`/`HaPlay.X32` remain open.
+
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.
 `ControlScriptMidiCommandRouter` resolves enabled MIDI devices by instance ID,

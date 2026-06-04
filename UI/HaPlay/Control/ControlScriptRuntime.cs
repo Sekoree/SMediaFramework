@@ -367,6 +367,7 @@ public sealed class ControlScriptRuntime
         List<ControlScriptInvocationRecord> invocations)
     {
         var script = scriptState.Config;
+        RuntimeServices.StateStore.BeginInvocation(script.Id, deviceInstanceId ?? script.DeviceInstanceId);
         try
         {
             var eventObject = evt is not null
@@ -389,6 +390,10 @@ public sealed class ControlScriptRuntime
         catch (ControlScriptException ex)
         {
             RecordRuntimeFailure(scriptState, trigger, ex.Message, invocations);
+        }
+        finally
+        {
+            RuntimeServices.StateStore.EndInvocation();
         }
     }
 
