@@ -714,6 +714,59 @@ public sealed class ControlScriptRuntimeSessionTests
         Assert.Equal(8000, sent.Value);
     }
 
+    [Fact]
+    public async Task ScriptLayersActivate_SwitchesLayerAndRunsLayerEnabledHook()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var x32DeviceId = Guid.NewGuid();
+        var layerB = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices =
+                [
+                    MidiDevice(midiDeviceId, "X-Touch Mini"),
+                    OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
+                ],
+                Layers = [new ControlLayerConfig { Id = layerB, Name = "B", IsEnabled = false }],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Switcher",
+                        ScriptPath = "Scripts/switch.mnd",
+                        Scope = ControlScriptScope.Project,
+                        Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.MidiControlChange, FunctionName = "onSwitch", DeviceInstanceId = midiDeviceId }],
+                    },
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "B on",
+                        ScriptPath = "Scripts/b.mnd",
+                        Scope = ControlScriptScope.Layer,
+                        LayerId = layerB,
+                        Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.LayerEnabled, FunctionName = "onOn", LayerId = layerB }],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/switch.mnd"] = """ export fun onSwitch(event, context) { layers.activate("B"); } """,
+                ["Scripts/b.mnd"] = """ export fun onOn(event, context) { osc.send("x32", "/layer/b/on", osc.float32(1)); } """,
+            },
+            sender);
+
+        Assert.Null(session.ActiveLayerId);
+
+        await session.DispatchControlEventAsync(MidiCcEvent(midiDeviceId, controller: 20, value: 5));
+
+        Assert.Equal(layerB, session.ActiveLayerId);
+        Assert.Equal("/layer/b/on", Assert.Single(sender.Sent).Address);
+    }
+
     private static ControlScriptRuntimeSession CreateSession(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,

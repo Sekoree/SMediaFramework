@@ -265,6 +265,91 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void DispatchControlEvent_GettingStartedEncoderArrayScriptRequestsThenMovesFader()
+    {
+        // Mirrors Doc/HaPlay-Control-Getting-Started.md — one handler, a CC-indexed
+        // array of channels, and request-on-miss instead of assuming a value. Keep
+        // this in sync with the doc's script.
+        const string source =
+            """
+            const channels = [1, 2, 3, 4, 5, 6, 7, 8];
+            const faderStep = 1.0 / 1023.0;
+
+            fun encoderDelta(value) {
+                if (value >= 1 && value <= 10)
+                    return value;
+                if (value >= 65 && value <= 72)
+                    return -(value - 64);
+                return 0;
+            }
+
+            export fun onEncoder(event, context) {
+                var index = event.midi.controller - 16;
+                if (index < 0 || index >= channels.length())
+                    return;
+
+                var delta = encoderDelta(event.midi.value);
+                if (delta == 0)
+                    return;
+
+                var channel = channels[index];
+                var address = x32.channelFaderAddress(channel);
+
+                if (!osc.has("x32", address)) {
+                    osc.request("x32", address);
+                    return;
+                }
+
+                var current = osc.cacheFloat("x32", address, 0.0);
+                var next = math.clamp(current + delta * faderStep, 0.0, 1.0);
+
+                osc.send("x32", address, osc.float32(next));
+                osc.cacheSet("x32", address, next);
+            }
+            """;
+
+        var midiDeviceId = Guid.NewGuid();
+        const string path = "Scripts/xtouch-faders.mnd";
+        var script = Script(
+            path,
+            new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.MidiControlChange,
+                FunctionName = "onEncoder",
+                DeviceInstanceId = midiDeviceId,
+            });
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string> { [path] = source },
+            sink);
+
+        // First turn, empty cache (CC18 -> index 2 -> channel 3): the script requests
+        // the current value (an address-only message) and skips the move.
+        var first = runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 18, value: 10));
+        Assert.True(Assert.Single(first.Invocations).Succeeded);
+        var request = Assert.Single(sink.OscMessages);
+        Assert.Equal("/ch/03/mix/fader", request.Address);
+        Assert.Empty(request.Arguments);
+
+        // Simulate the X32's reply landing in the cache, then turn again -> the fader moves.
+        runtime.RuntimeServices.OscCache.SetNumber("x32", "/ch/03/mix/fader", 0.5, ControlValueCacheSource.Incoming);
+        var second = runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 18, value: 10));
+
+        Assert.True(Assert.Single(second.Invocations).Succeeded);
+        Assert.Equal(2, sink.OscMessages.Count);
+        var move = sink.OscMessages[1];
+        Assert.Equal("x32", move.DeviceKey);
+        Assert.Equal("/ch/03/mix/fader", move.Address);
+        Assert.Equal(0.5 + 10.0 / 1023.0, Assert.Single(move.Arguments).NumberValue, precision: 12);
+    }
+
+    [Fact]
     public void DispatchControlEvent_UpdatesOscCacheBeforeInvokingOscTrigger()
     {
         var oscDeviceId = Guid.NewGuid();
@@ -1077,6 +1162,113 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void SetActiveLayer_IsMutuallyExclusiveAndFiresLayerTriggers()
+    {
+        var layerA = Guid.NewGuid();
+        var layerB = Guid.NewGuid();
+        var scriptA = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "A off",
+            ScriptPath = "Scripts/a.mnd",
+            Scope = ControlScriptScope.Layer,
+            LayerId = layerA,
+            Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.LayerDisabled, FunctionName = "onOff", LayerId = layerA }],
+        };
+        var scriptB = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "B on",
+            ScriptPath = "Scripts/b.mnd",
+            Scope = ControlScriptScope.Layer,
+            LayerId = layerB,
+            Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.LayerEnabled, FunctionName = "onOn", LayerId = layerB }],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Layers =
+                [
+                    new ControlLayerConfig { Id = layerA, Name = "A", IsEnabled = true },
+                    new ControlLayerConfig { Id = layerB, Name = "B", IsEnabled = false },
+                ],
+                Scripts = [scriptA, scriptB],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/a.mnd"] = """ export fun onOff(event, context) { osc.send("x32", "/a/off", osc.float32(1)); } """,
+                ["Scripts/b.mnd"] = """ export fun onOn(event, context) { osc.send("x32", "/b/on", osc.float32(1)); } """,
+            },
+            sink);
+
+        Assert.Equal(layerA, runtime.ActiveLayerId); // seeded from the enabled config layer
+
+        var result = runtime.SetActiveLayer(layerB);
+
+        Assert.Equal(layerB, runtime.ActiveLayerId);
+        Assert.Equal(2, result.Invocations.Count(i => i.Succeeded)); // A's LayerDisabled + B's LayerEnabled
+        Assert.Collection(
+            sink.OscMessages.OrderBy(m => m.Address),
+            m => Assert.Equal("/a/off", m.Address),
+            m => Assert.Equal("/b/on", m.Address));
+
+        // Re-activating the same layer is a no-op.
+        Assert.Empty(runtime.SetActiveLayer(layerB).Invocations);
+    }
+
+    [Fact]
+    public void SetActiveLayer_GatesLayerScopedEventScriptsToTheActiveLayer()
+    {
+        var layerA = Guid.NewGuid();
+        var layerB = Guid.NewGuid();
+        var midiDeviceId = Guid.NewGuid();
+        ControlScriptConfig LayerCcScript(Guid layer, string path, string fn) => new()
+        {
+            Id = Guid.NewGuid(),
+            Name = path,
+            ScriptPath = path,
+            Scope = ControlScriptScope.Layer,
+            LayerId = layer,
+            Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.MidiControlChange, FunctionName = fn, DeviceInstanceId = midiDeviceId, LayerId = layer }],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Layers =
+                [
+                    new ControlLayerConfig { Id = layerA, Name = "A", IsEnabled = true },
+                    new ControlLayerConfig { Id = layerB, Name = "B", IsEnabled = false },
+                ],
+                Scripts =
+                [
+                    LayerCcScript(layerA, "Scripts/a.mnd", "onCcA"),
+                    LayerCcScript(layerB, "Scripts/b.mnd", "onCcB"),
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/a.mnd"] = """ export fun onCcA(event, context) { osc.send("x32", "/from/a", osc.float32(1)); } """,
+                ["Scripts/b.mnd"] = """ export fun onCcB(event, context) { osc.send("x32", "/from/b", osc.float32(1)); } """,
+            },
+            sink);
+
+        // With A active, the CC reaches only A's script.
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 5));
+        Assert.Equal("/from/a", Assert.Single(sink.OscMessages).Address);
+
+        // Switch to B; now the same CC reaches only B's script.
+        sink.OscMessages.Clear();
+        runtime.SetActiveLayer(layerB);
+        runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 5));
+        Assert.Equal("/from/b", Assert.Single(sink.OscMessages).Address);
+    }
+
+    [Fact]
     public void DispatchControlEvent_ExecutesBuiltInXTouchMiniX32MuteFeedbackTemplate()
     {
         var oscDeviceId = Guid.NewGuid();
@@ -1287,6 +1479,8 @@ public sealed class ControlScriptRuntimeTests
 
         public List<ControlScriptMidiMessage> MidiMessages { get; } = new();
 
+        public List<string> LayerActivations { get; } = new();
+
         public void SendOsc(ControlScriptOscMessage message)
         {
             OscMessages.Add(message);
@@ -1295,6 +1489,11 @@ public sealed class ControlScriptRuntimeTests
         public void SendMidi(ControlScriptMidiMessage message)
         {
             MidiMessages.Add(message);
+        }
+
+        public void RequestActivateLayer(string layerKey)
+        {
+            LayerActivations.Add(layerKey);
         }
     }
 }

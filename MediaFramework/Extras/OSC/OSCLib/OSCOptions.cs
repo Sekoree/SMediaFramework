@@ -160,6 +160,11 @@ public interface IOSCClient : IAsyncDisposable, IDisposable
     /// Convenience wrapper that builds and sends a single OSC message packet.
     /// </summary>
     ValueTask SendMessageAsync(string address, IReadOnlyList<OSCArgument>? arguments = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers a handler for replies the connected peer sends back to this client (starts the receive loop).
+    /// </summary>
+    IDisposable RegisterHandler(string addressPattern, OSCMessageHandler handler);
 }
 
 /// <summary>

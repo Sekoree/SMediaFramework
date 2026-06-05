@@ -7,6 +7,7 @@ public sealed class BufferingControlScriptCommandSink : IControlScriptCommandSin
 {
     private readonly List<ControlScriptOscMessage> _oscMessages = new();
     private readonly List<ControlScriptMidiMessage> _midiMessages = new();
+    private readonly List<string> _layerActivations = new();
 
     public IReadOnlyList<ControlScriptOscMessage> OscMessages => _oscMessages;
 
@@ -20,6 +21,18 @@ public sealed class BufferingControlScriptCommandSink : IControlScriptCommandSin
     public void SendMidi(ControlScriptMidiMessage message)
     {
         _midiMessages.Add(message);
+    }
+
+    public void RequestActivateLayer(string layerKey)
+    {
+        _layerActivations.Add(layerKey);
+    }
+
+    public IReadOnlyList<string> DrainLayerActivations()
+    {
+        var drained = _layerActivations.ToArray();
+        _layerActivations.Clear();
+        return drained;
     }
 
     public IReadOnlyList<ControlScriptOscMessage> DrainOscMessages()

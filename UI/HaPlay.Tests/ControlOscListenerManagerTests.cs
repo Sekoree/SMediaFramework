@@ -40,6 +40,33 @@ public sealed class ControlOscListenerManagerTests
     }
 
     [Fact]
+    public async Task DispatchMessageAsync_CapturesRawOscBytesInMonitor()
+    {
+        var listenerId = Guid.NewGuid();
+        var x32Id = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        var config = ConfigWithListener(
+            listenerId,
+            devices: [OscDevice(x32Id, "X32", "x32", "127.0.0.1", 10023, listenerId)],
+            scripts: []);
+        var session = CreateRuntimeSession(config, sender);
+        var monitor = new ControlMonitorBuffer(maxRecords: 20);
+        await using var manager = new ControlOscListenerManager(config, session, monitor);
+
+        await manager.DispatchMessageAsync(
+            listenerId,
+            Context("127.0.0.1", 10023, "/ch/01/mix/fader", [OSCArgument.Float32(0.6f)]));
+
+        var input = Assert.Single(
+            monitor.Records,
+            r => r.Direction == ControlMonitorDirection.Input && r.Protocol == ControlMonitorProtocol.Osc);
+        Assert.NotNull(input.RawBytes);
+        Assert.NotEmpty(input.RawBytes!);
+        // OSC wire format leads with the address as a null-padded string, so the bytes contain it verbatim.
+        Assert.Contains("/ch/01/mix/fader", System.Text.Encoding.ASCII.GetString(input.RawBytes!));
+    }
+
+    [Fact]
     public async Task DispatchMessageAsync_RoutesOnlyToMatchingDeviceOnSharedListener()
     {
         var listenerId = Guid.NewGuid();

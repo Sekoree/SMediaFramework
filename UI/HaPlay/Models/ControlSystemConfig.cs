@@ -126,6 +126,10 @@ public sealed record ControlDeviceBindingConfig
 
     public int? OscPort { get; init; }
 
+    /// <summary>Optional fixed local UDP port to bind our client socket to (null/0 = OS-assigned ephemeral).
+    /// The X32 replies to this source port, so a fixed value gives a deterministic receive port.</summary>
+    public int? OscLocalPort { get; init; }
+
     public Guid? OscListenerId { get; init; }
 }
 

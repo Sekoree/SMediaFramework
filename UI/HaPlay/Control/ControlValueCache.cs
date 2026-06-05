@@ -82,6 +82,10 @@ public sealed class ControlValueCache
     public bool TryGet(ControlValueCacheKey key, out ControlValueCacheEntry entry) =>
         _entries.TryGetValue(key, out entry!);
 
+    /// <summary>True when a fresh (non-stale) value of any kind is cached for this device/address/argument.</summary>
+    public bool Has(string deviceKey, string address, int argumentIndex = 0) =>
+        _entries.TryGetValue(new ControlValueCacheKey(deviceKey, address, argumentIndex), out var entry) && !entry.IsStale;
+
     public void MarkDeviceStale(string deviceKey)
     {
         foreach (var entry in _entries.Values.Where(e => string.Equals(e.Key.DeviceKey, deviceKey, StringComparison.OrdinalIgnoreCase)).ToArray())

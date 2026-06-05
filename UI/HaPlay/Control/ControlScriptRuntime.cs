@@ -12,6 +12,7 @@ public sealed class ControlScriptRuntime
     private readonly Dictionary<Guid, ControlLayerConfig> _layers;
     private readonly Dictionary<Guid, ScriptRuntimeState> _scripts;
     private readonly List<ControlScriptRuntimeDiagnostic> _diagnostics = new();
+    private Guid? _activeLayerId;
     private bool _faulted;
 
     public ControlScriptRuntime(
@@ -28,8 +29,20 @@ public sealed class ControlScriptRuntime
         _layers = config.Layers.ToDictionary(l => l.Id);
         _scripts = config.Scripts.ToDictionary(s => s.Id, s => new ScriptRuntimeState(s));
 
+        // Layers are mutually exclusive: at most one active at a time. Seed from the config's enabled
+        // layer (highest priority wins), then SetActiveLayer drives switching at runtime.
+        _activeLayerId = config.Layers
+            .Where(l => l.IsEnabled)
+            .OrderByDescending(l => l.Priority)
+            .Select(l => (Guid?)l.Id)
+            .FirstOrDefault();
+        RuntimeServices.ActiveLayerProvider = () => _activeLayerId;
+
         LoadEnabledScripts();
     }
+
+    /// <summary>The currently active layer (mutually exclusive), or null when none is active.</summary>
+    public Guid? ActiveLayerId => _activeLayerId;
 
     public IReadOnlyList<ControlScriptRuntimeDiagnostic> Diagnostics => _diagnostics;
 
@@ -114,6 +127,46 @@ public sealed class ControlScriptRuntime
 
     public ControlScriptDispatchResult DispatchLayerDisabled(Guid layerId) =>
         DispatchLifecycle(ControlScriptTriggerKind.LayerDisabled, deviceInstanceId: null, layerId);
+
+    /// <summary>
+    /// Switches the active layer (mutually exclusive). Deactivating the previous layer fires its
+    /// <see cref="ControlScriptTriggerKind.LayerDisabled"/> triggers; activating the new one fires its
+    /// <see cref="ControlScriptTriggerKind.LayerEnabled"/> triggers. Pass null to deactivate all layers.
+    /// No-op when the layer is already active or the id is unknown.
+    /// </summary>
+    public ControlScriptDispatchResult SetActiveLayer(Guid? layerId)
+    {
+        if (layerId is { } requested && !_layers.ContainsKey(requested))
+            return CreateResult([], _diagnostics.Count);
+        if (_activeLayerId == layerId)
+            return CreateResult([], _diagnostics.Count);
+
+        var diagnosticsStart = _diagnostics.Count;
+        var previous = _activeLayerId;
+        _activeLayerId = layerId;
+
+        var invocations = new List<ControlScriptInvocationRecord>();
+        var cacheChanges = new List<ControlValueCacheChange>();
+
+        if (previous is { } prev)
+        {
+            var disabled = DispatchLayerDisabled(prev);
+            invocations.AddRange(disabled.Invocations);
+            cacheChanges.AddRange(disabled.CacheChanges);
+        }
+
+        if (layerId is { } next)
+        {
+            var enabled = DispatchLayerEnabled(next);
+            invocations.AddRange(enabled.Invocations);
+            cacheChanges.AddRange(enabled.CacheChanges);
+        }
+
+        return new ControlScriptDispatchResult(invocations, _diagnostics.Skip(diagnosticsStart).ToArray())
+        {
+            CacheChanges = cacheChanges,
+        };
+    }
 
     public ControlScriptDispatchResult DispatchManual(Guid? scriptId = null, Guid? triggerId = null) =>
         Dispatch(ControlScriptTriggerKind.Manual, evt: null, deviceInstanceId: null, endpointId: null, layerId: null, scriptId, triggerId);
@@ -562,7 +615,7 @@ public sealed class ControlScriptRuntime
         _devices.TryGetValue(deviceInstanceId, out var device) && device.IsEnabled;
 
     private bool IsLayerEnabled(Guid layerId) =>
-        _layers.TryGetValue(layerId, out var layer) && layer.IsEnabled;
+        _activeLayerId == layerId;
 
     private void AddDiagnostic(Guid scriptId, Guid? triggerId, ControlScriptDiagnosticStage stage, string message) =>
         _diagnostics.Add(new ControlScriptRuntimeDiagnostic(scriptId, triggerId, stage, message));

@@ -596,9 +596,193 @@ fragile popup ancestor bindings); the row constructor is `internal` so it can ta
 the internal command record while the type stays public for compiled XAML binding.
 Verified by a clean build, the full unit suite (344 tests, 4 new covering device/
 layer script, periodic-send, and helper-file additions plus the per-row capability
-flags), and a headless (xvfb) smoke launch with no binding errors. Endpoint-scope
-scripts are intentionally still excluded (there is no distinct endpoint row in the
-tree yet); that and the learn-from-OSC variant remain the open Phase 6 polish.
+flags), and a headless (xvfb) smoke launch with no binding errors.
+
+Implementation note, 2026-06-05: "Add endpoint script" closes out the context-menu
+set, completing Phase 6. In this model an endpoint is an OSC listener — incoming
+OSC events carry `SourceNodeId = listenerId` (the device id rides in `OriginId`),
+and `ControlScriptRuntime` already matches `ControlScriptScope.Endpoint` /
+`EndpointInstanceId` against that listener source (see
+`DispatchControlEvent_EndpointScopeMatchesOscListenerSource`). So the structure
+tree's "Listen" rows now carry their listener id, expose `CanAddEndpointScript`,
+and offer an "Add endpoint script" menu item that creates an `Endpoint`-scoped
+script bound to that listener via the shared `AddScriptInternal`. Verified by a
+clean build, the full unit suite (345 tests, 1 new asserting the endpoint scope +
+listener id), and a headless (xvfb) smoke launch. With this, Phase 6 (script-centric
+UI) is fully checked off; the only remaining rewrite work is the Phase 8 manual
+hardware tests (X-Touch Mini detection/feedback, the X32 emulator at
+`192.168.2.76:10023`, and live `/xremote`), which need the physical devices.
+
+Implementation note, 2026-06-05: raw OSC input capture now matches the MIDI path,
+completing Phase 3's "capture raw and decoded OSC input". `OSCServer` decodes packets
+before building the `OSCMessageContext`, so the original wire bytes are gone by the
+time `ControlOscListenerManager` records the input row; it now re-encodes the decoded
+message with `OSCPacketCodec.EncodeToRented(OSCPacket.FromMessage(...))` into the
+monitor record's `RawBytes` (a faithful single-message representation, bundle framing
+aside), gated by `ControlMonitorOptions.IncludeRawBytes` exactly like the PortMidi
+input taps, and never throwing. Both the received and dropped input records carry it.
+Verified by a clean build, the full unit suite (346 tests, 1 new asserting the input
+record carries non-empty raw bytes whose ASCII contains the OSC address), and a
+headless (xvfb) smoke launch. Remaining open items are now non-blocking polish:
+the OSC value cache does not yet persist the raw OSC argument / source endpoint
+alongside its typed value (scripts read typed values, so this is low-value), the
+script-runtime has no echo-suppression decisions to record (only drops, which are
+captured) — plus the Phase 8 hardware manual tests.
+
+Implementation note, 2026-06-05: the dead graph-era code is removed. Deleted
+`ControlGraphRuntime` (graph runtime + `ControlMath` + graph validation records),
+`ControlScriptHost` (the per-event ad-hoc host + its execution-result/diagnostic
+records), `ControlGraphSession`, the graph device sessions
+(`ControlEndpointSessionManager`/`ControlOscInputSession`/`ControlMidiInputSession`),
+and the dead graph/layer builders in `ControlPresets` (`CreateDefault*ChannelLayer`,
+`CreateMidiFaderToX32Graph`) — plus their three test files. Several still-live types
+shared the old files and were relocated verbatim into focused homes first, so the
+new runtime keeps compiling: `IControlOscSender`/`IControlMidiSender` →
+`ControlSenders.cs`; `ControlScriptException`/`ControlScriptDiagnosticStage` and the
+`InstructionLimitDebugger` (used by `ControlScriptFileHost`) →
+`ControlScriptDiagnostics.cs`; `ControlSessionState`/`ControlSessionHealth` →
+`ControlSessionHealth.cs`; the ref-counted PortMidi `ControlMidiLibraryLease` →
+`ControlMidiLibraryLease.cs`. The legacy `ControlGraphConfig` project model and its
+`X32CustomLayerConfig` stay (they are persisted migration data on `HaPlayProject`),
+and `X32Presets`/`X32Fader` stay (used by the profile catalog and script libraries).
+With `ControlScriptHost` gone, the compiled `ControlScriptFileHost`/`ControlScriptRuntime`
+is the only script host, so Phase 5's "compiled script instances" item is fully done.
+Verified by a clean HaPlay + Desktop build, the full unit suite (330 tests — 16
+fewer only because the deleted dead-code tests went with their code; the kept shared
+types remain covered by `X32PresetTests`/`ControlScriptRuntimeTests`/`ControlOscListenerManagerTests`),
+a reference sweep showing no dangling uses of any deleted type, and a headless
+(xvfb) smoke launch.
+
+Implementation note, 2026-06-05: OSC devices can now be created/edited/removed from
+the UI — previously the X32 device instance was the one piece of the control system
+that required hand-editing the project JSON. An "Add OSC device…" button in the
+Project-structure header opens `OscDeviceDialog` (name, profile dropdown from the
+OSC profiles in `CompositeControlDeviceProfileRepository.ForProject`, host/port,
+script alias, listener binding, enabled), defaulting to the X32 profile at
+192.168.2.76:10023 with alias `x32`. OSC device structure rows gain "Edit OSC
+device…" and "Remove OSC device" context-menu items; edit preserves the device's
+existing periodic sends and script bindings (it applies the dialog values onto the
+existing record with `with`, rather than replacing it). The dialog display is
+injected (`OscDevicePrompt`) with a real `ShowDialog` default, so the add/edit/remove
+logic is unit-tested without a window. Save is gated on validation (non-empty name,
+valid 1–65535 port). With this, the whole live-show setup — add the X32, add the
+X-Touch Mini input, write a mute/fader script, bind a trigger (or use Learn mode),
+and add a periodic `/xremote` — is achievable without touching JSON. Verified by a
+clean build, the full unit suite (334 tests, 4 new covering add/cancel/edit-preserves-
+periodic/remove), and a headless (xvfb) smoke launch.
+
+Implementation note, 2026-06-05: the script editor moved out of the (cramped,
+easily-off-screen) inline workspace panel into a dedicated pop-out
+`ScriptEditorWindow`. The Control workspace now keeps only the script list (with
+`+`/`–`/`Edit…` and context menus); double-clicking a script — or the `Edit…`
+button — opens a resizable window bound to the same live `ControlWorkspaceViewModel`,
+hosting the AvaloniaEdit code editor (which fills the window), the script metadata,
+the trigger editor, learn mode, and diagnostics, with Save. Because the window
+shares the workspace VM instance, selecting a different script in the workspace
+updates the open editor, and learn-mode capture (driven by the workspace's monitor
+poll) and Save work unchanged. The AvaloniaEdit ↔ `SelectedScriptText` text sync
+moved from the workspace code-behind into the window's, and the window is opened
+non-modally and owned by the main window (so it closes with the app); a single
+instance is reused/activated rather than stacking duplicates. This both fixes the
+"editor is off-screen" report and gives scripts far more editing room. Verified by
+a clean build (compiled XAML type-checks every window binding against the VM), the
+full unit suite (334 tests, VM unchanged), and a headless (xvfb) smoke launch.
+
+Implementation note, 2026-06-05: three follow-ups — Mond syntax highlighting, an
+in-app periodic-send editor, and a getting-started guide. (1) `Assets/Mond.xshd`
+(keywords, literals, the HaPlay API objects, strings, `//`+`/* */` comments,
+numbers) is loaded onto the pop-out editor's AvaloniaEdit via
+`HighlightingLoader.Load` in the window constructor, wrapped in try/catch so a load
+failure degrades to plain text. (2) Periodic OSC sends are now fully editable in
+the UI: a `PeriodicSendDialog` (name/address/interval-ms/enabled) is opened by
+"Add periodic OSC send…" on an OSC device row (seeded `/xremote @ 8000`) and by
+"Edit periodic send…" on a Periodic row; "Remove periodic send" drops it. Periodic
+structure rows now carry their send id, and the device-level row actions
+(add-periodic / edit-device / remove-device / test-OSC / add-device-script) are
+gated to the device row (PeriodicSendId == null) so each row's context menu stays
+coherent. The dialog display is injected (`PeriodicSendPrompt`) for testing. This
+removes the last JSON-only knob (e.g. a 5 s interval is now set in-app).
+(3) `Doc/HaPlay-Control-Getting-Started.md` walks through adding a MIDI in/out, an
+X32 via "Add OSC device…", the periodic `/xremote`, and a single CC-indexed-array
+script mapping the 8 X-Touch encoders to X32 faders 1-8 (no script-per-encoder);
+that exact script is pinned by a runtime test
+(`DispatchControlEvent_GettingStartedEncoderArrayScriptMapsCcToChannelFader`,
+CC18 → `/ch/03/mix/fader`) so the doc can't silently rot. Verified by a clean
+build, the full unit suite (337 tests, 3 new), and a headless (xvfb) smoke launch;
+`Assets/Mond.xshd` confirmed embedded in the assembly.
+
+Implementation note, 2026-06-05: fixed OSC receive — the X32's replies were never
+arriving. The X32 is the OSC *server*; HaPlay is the *client*, and the X32 replies to
+the **source port of our request**, i.e. the connected `OSCClient` socket — not the
+separate `OSCServer` listener on 10020. So receiving is now done on the client:
+`OSCClient` gained a receive loop + `RegisterHandler` (mirroring the server's router/
+bundle handling) on its own connected socket; `UdpControlOscSender` registers a
+catch-all handler per client and surfaces replies via the new `IControlOscReceiver`;
+`ControlSystemRuntimeSession` subscribes and routes each reply into the existing
+dispatch (cache update → `OscCacheChanged` triggers → monitor), resolving the device
+by the host/port we sent to. This makes `osc.request(...)` / `/xremote` actually
+populate the cache. The separate listener/`OSCServer` is no longer needed for X32
+traffic (kept for now as an internal routing scope / direct-to-port use). Per the
+chosen option, the OSC device dialog's listener dropdown was replaced with an optional
+**Local port** (`ControlDeviceBindingConfig.OscLocalPort`): blank = ephemeral, or a
+fixed value binds the client socket (`OSCClient`'s new `localPort` ctor arg, threaded
+through `UdpControlOscSender` from the armed config) so the X32 sees a deterministic
+source/receive port. Verified by a clean OSCLib + HaPlay + Desktop build, the OSCLib
+suite (22 tests, 2 new: a real loopback proving a reply to the client's source port is
+received, and that a fixed local port binds the source port), the HaPlay suite
+(338 tests, +1 for the local-port plumbing), and a headless smoke. The reverted
+dead-end (adding send to `OSCServer` + routing through the listener) was removed.
+
+Implementation note, 2026-06-05: layer switching is now implemented (previously layers
+were modeled + gated but never switchable at runtime). Layers are **mutually
+exclusive**: `ControlScriptRuntime` tracks a single `_activeLayerId` (seeded from the
+config's enabled layer, highest priority), `IsLayerEnabled` reflects it, and
+`SetActiveLayer(id)` switches — firing `LayerDisabled` for the previous layer and
+`LayerEnabled` for the new one (pass null to deactivate all). Three ways to trigger a
+switch: (1) **script** — a new `layers` library (`activate(idOrName)` / `active()` /
+`list()`); `activate` buffers the request on the command sink and the session applies
+it *after* the current handler via a bounded (`MaxLayerSwitchDepth = 8`) flush-and-
+apply loop, so it never re-enters the runtime mid-script and a LayerEnabled handler
+can itself switch again; (2) **session** — `SetActiveLayerAsync`; (3) **UI** — an
+"Activate" button / context item on layer structure rows that updates the config
+mutually-exclusively (so the tree shows active/inactive) and, while armed, drives the
+live session. Scripts react to switches via the existing `LayerEnabled`/`LayerDisabled`
+triggers (e.g. the `x32-layer-initial-requests.mnd` starter). The layer row now shows
+"active/inactive" and the real layer-scoped script count (the vestigial
+`ControlLayerConfig.ScriptIds` is still ignored by the runtime — kept only for project
+round-trip). Verified by a clean build, the full unit suite (342 tests, 4 new: runtime
+mutual-exclusion + trigger firing, layer-scoped event gating follows the active layer,
+the VM mutually-exclusive activate, and an end-to-end `layers.activate` from a script
+switching the layer and running its `LayerEnabled` hook), and a headless smoke.
+
+Implementation note, 2026-06-05: control-workspace UX fixes from live use.
+(1) **The AvaloniaEdit editor rendered blank** because `App.axaml` never registered
+the AvaloniaEdit theme — added
+`avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml` to `Application.Styles`, so
+the code editor (and its highlighting) now shows. (2) The **X32 command/cache
+browser** is now a collapsed `Expander` (it was eating vertical space). (3) **Fewer
+scrollbars**: the structure tree and script list size to content with their inner
+vertical scroll disabled, so the configuration form is a single scroller (the live
+monitor keeps its own, but it's a separate anchored region, not nested) — this fixes
+the "many scrollbars make scrolling tricky" report. (4) **Discoverable periodic-send
+/ device management**: OSC-device and Periodic structure rows now have inline
+**Edit**/**Remove** buttons (in a new actions column) in addition to the context
+menu, so accidental duplicate `/xremote` sends can be removed without hunting through
+a right-click menu. Verified by a clean build, the full unit suite (337 tests,
+unchanged — XAML/theme only), and a headless (xvfb) smoke launch with the new theme
+include resolving cleanly at startup.
+
+Implementation note, 2026-06-05: added `osc.has(deviceKey, address)` (backed by a new
+`ControlValueCache.Has`) so scripts can check whether a fresh value is cached instead
+of assuming a default. The getting-started encoder→fader script now uses request-on-
+miss: on the first nudge of an untouched fader it calls `osc.request` (address-only;
+the X32 replies with the current value, which lands in the cache via the listener)
+and skips that turn, then moves the fader on subsequent turns from the real value —
+no more guessed 0.75. The pinned doc-script test was rewritten to assert exactly that
+(first dispatch → an argument-less request to `/ch/03/mix/fader` and no move; after
+the cache is primed, the next dispatch moves from the cached 0.5). The scripting
+reference documents `osc.has`. Verified by a clean build and the full unit suite
+(337 tests).
 
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.

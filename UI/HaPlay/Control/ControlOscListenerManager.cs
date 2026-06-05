@@ -89,7 +89,7 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
         var devices = ResolveDevices(listenerId, context.RemoteEndPoint).ToArray();
         if (devices.Length == 0)
         {
-            _monitor.Record(CreateOscInputRecord(listenerId, device: null, context, ControlMonitorResult.Dropped));
+            _monitor.Record(CreateOscInputRecord(listenerId, device: null, context, ControlMonitorResult.Dropped, _config.Monitor.IncludeRawBytes));
             return [];
         }
 
@@ -97,7 +97,7 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
         foreach (var device in devices)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            _monitor.Record(CreateOscInputRecord(listenerId, device, context, ControlMonitorResult.Received));
+            _monitor.Record(CreateOscInputRecord(listenerId, device, context, ControlMonitorResult.Received, _config.Monitor.IncludeRawBytes));
             var evt = new OscControlEvent(
                 context.ReceivedAtUtc,
                 listenerId,
@@ -116,7 +116,8 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
         Guid listenerId,
         ControlDeviceInstanceConfig? device,
         OSCMessageContext context,
-        ControlMonitorResult result) =>
+        ControlMonitorResult result,
+        bool includeRawBytes) =>
         new()
         {
             Direction = result == ControlMonitorResult.Dropped ? ControlMonitorDirection.Dropped : ControlMonitorDirection.Input,
@@ -130,8 +131,27 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
             RemotePort = context.RemoteEndPoint.Port,
             Address = context.Message.Address,
             OscArguments = context.Message.Arguments.Select(ControlMonitorOscArgumentRecord.FromOscArgument).ToList(),
+            RawBytes = includeRawBytes ? TryEncodeRawBytes(context.Message) : null,
             Message = result == ControlMonitorResult.Dropped ? "No matching OSC device" : null,
         };
+
+    /// <summary>
+    /// Re-encodes a decoded incoming message to its OSC wire bytes for the monitor's raw view. The server
+    /// decodes packets before building the dispatch context, so the original bytes are no longer available;
+    /// a single-message re-encode is a faithful representation (bundle framing aside) and never throws.
+    /// </summary>
+    private static byte[]? TryEncodeRawBytes(OSCMessage message)
+    {
+        try
+        {
+            using var rented = OSCPacketCodec.EncodeToRented(OSCPacket.FromMessage(message));
+            return rented.Memory.ToArray();
+        }
+        catch
+        {
+            return null;
+        }
+    }
 
     private async ValueTask OnOscMessageAsync(
         Guid listenerId,

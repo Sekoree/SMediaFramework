@@ -221,5 +221,9 @@ public sealed class ControlScriptFileHostTests
         {
             MidiMessages.Add(message);
         }
+
+        public void RequestActivateLayer(string layerKey)
+        {
+        }
     }
 }

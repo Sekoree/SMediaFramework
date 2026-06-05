@@ -2,7 +2,6 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             xmlns:ae="clr-namespace:AvaloniaEdit;assembly=AvaloniaEdit"
              xmlns:vm="using:HaPlay.ViewModels"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="680"
              x:Class="HaPlay.Views.ControlWorkspaceView"
@@ -18,15 +17,19 @@
     </Style>
   </UserControl.Styles>
 
-  <DockPanel Margin="16">
-    <StackPanel DockPanel.Dock="Top" Spacing="4" Margin="0,0,0,12">
+  <Grid Margin="16" RowDefinitions="Auto,2*,Auto,*">
+    <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,12">
       <TextBlock Text="Control" FontSize="22" FontWeight="SemiBold" />
       <TextBlock Text="Script-centric MIDI/OSC control. Arm the system to open OSC listeners and run scripts."
                  Opacity="0.7" TextWrapping="Wrap" />
     </StackPanel>
 
+    <!-- Scrollable configuration form -->
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+      <StackPanel>
+
     <!-- Arm + summary -->
-    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
         <Button Grid.Row="0" Grid.Column="0" Width="100"
                 Content="{Binding ArmButtonText}" Command="{Binding ToggleArmCommand}" />
@@ -42,11 +45,14 @@
     </Border>
 
     <!-- Project structure -->
-    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <DockPanel>
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
           <TextBlock Grid.Column="0" Text="Project structure" FontWeight="SemiBold" VerticalAlignment="Center" />
-          <Button Grid.Column="1" Content="Resolve MIDI…"
+          <Button Grid.Column="1" Content="Add OSC device…"
+                  ToolTip.Tip="Add an OSC device such as an X32"
+                  Command="{Binding AddOscDeviceCommand}" />
+          <Button Grid.Column="2" Content="Resolve MIDI…"
                   ToolTip.Tip="Pick current ports for ambiguous or missing MIDI devices"
                   Command="{Binding ResolveMidiDevicesCommand}" />
         </Grid>
@@ -58,20 +64,25 @@
           </ItemsControl.ItemTemplate>
         </ItemsControl>
         <ListBox ItemsSource="{Binding StructureRows}"
-                 MinHeight="120"
-                 MaxHeight="170"
+                 ScrollViewer.VerticalScrollBarVisibility="Disabled"
                  Background="Transparent">
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:ControlStructureRowViewModel">
-              <Grid ColumnDefinitions="Auto,84,180,*,120" ColumnSpacing="8" Margin="0,2">
+              <Grid ColumnDefinitions="Auto,72,150,*,76,Auto" ColumnSpacing="8" Margin="0,2">
                 <Grid.ContextMenu>
                   <ContextMenu x:DataType="vm:ControlStructureRowViewModel">
                     <MenuItem Header="Add project script" Command="{Binding AddProjectScriptCommand}" />
                     <MenuItem Header="Add imported helper file" Command="{Binding AddHelperFileCommand}" />
                     <MenuItem Header="Add device script" Command="{Binding AddDeviceScriptCommand}" IsVisible="{Binding CanAddDeviceScript}" />
+                    <MenuItem Header="Add endpoint script" Command="{Binding AddEndpointScriptCommand}" IsVisible="{Binding CanAddEndpointScript}" />
                     <MenuItem Header="Add layer script" Command="{Binding AddLayerScriptCommand}" IsVisible="{Binding CanAddLayerScript}" />
-                    <MenuItem Header="Add periodic OSC send" Command="{Binding AddPeriodicSendCommand}" IsVisible="{Binding CanAddPeriodicSend}" />
+                    <MenuItem Header="Activate layer" Command="{Binding ActivateLayerCommand}" IsVisible="{Binding CanActivateLayer}" />
+                    <MenuItem Header="Add periodic OSC send…" Command="{Binding AddPeriodicSendCommand}" IsVisible="{Binding CanAddPeriodicSend}" />
+                    <MenuItem Header="Edit periodic send…" Command="{Binding EditPeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
+                    <MenuItem Header="Remove periodic send" Command="{Binding RemovePeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
                     <Separator IsVisible="{Binding CanAddDeviceScript}" />
+                    <MenuItem Header="Edit OSC device…" Command="{Binding EditOscDeviceCommand}" IsVisible="{Binding CanEditOscDevice}" />
+                    <MenuItem Header="Remove OSC device" Command="{Binding RemoveOscDeviceCommand}" IsVisible="{Binding CanEditOscDevice}" />
                     <MenuItem Header="Test OSC send" Command="{Binding TestOscCommand}" IsVisible="{Binding CanTestOsc}" />
                     <MenuItem Header="Test MIDI send" Command="{Binding TestMidiCommand}" IsVisible="{Binding CanTestMidi}" />
                   </ContextMenu>
@@ -80,19 +91,35 @@
                 <TextBlock Grid.Column="1"
                            Text="{Binding Kind}"
                            Opacity="0.7"
+                           VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
                 <TextBlock Grid.Column="2"
                            Text="{Binding Name}"
                            FontWeight="SemiBold"
+                           VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
                 <TextBlock Grid.Column="3"
                            Text="{Binding Detail}"
                            Opacity="0.72"
+                           VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
                 <TextBlock Grid.Column="4"
                            Text="{Binding State}"
                            Opacity="0.7"
+                           VerticalAlignment="Center"
                            TextTrimming="CharacterEllipsis" />
+                <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
+                  <Button Content="Activate" Padding="8,1" FontSize="11" ToolTip.Tip="Activate this layer (mutually exclusive)"
+                          IsVisible="{Binding CanActivateLayer}" Command="{Binding ActivateLayerCommand}" />
+                  <Button Content="Edit" Padding="8,1" FontSize="11" ToolTip.Tip="Edit OSC device"
+                          IsVisible="{Binding CanEditOscDevice}" Command="{Binding EditOscDeviceCommand}" />
+                  <Button Content="Remove" Padding="8,1" FontSize="11" ToolTip.Tip="Remove OSC device"
+                          IsVisible="{Binding CanEditOscDevice}" Command="{Binding RemoveOscDeviceCommand}" />
+                  <Button Content="Edit" Padding="8,1" FontSize="11" ToolTip.Tip="Edit periodic send"
+                          IsVisible="{Binding CanEditPeriodicSend}" Command="{Binding EditPeriodicSendCommand}" />
+                  <Button Content="Remove" Padding="8,1" FontSize="11" ToolTip.Tip="Remove periodic send"
+                          IsVisible="{Binding CanEditPeriodicSend}" Command="{Binding RemovePeriodicSendCommand}" />
+                </StackPanel>
               </Grid>
             </DataTemplate>
           </ListBox.ItemTemplate>
@@ -100,13 +127,11 @@
       </DockPanel>
     </Border>
 
-    <!-- X32 command/cache browser -->
-    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
-      <DockPanel>
-        <TextBlock DockPanel.Dock="Top" Text="X32 command/cache browser" FontWeight="SemiBold" Margin="0,0,0,8" />
+    <!-- X32 command/cache browser (collapsed by default to save space) -->
+    <Expander Header="X32 command/cache browser" IsExpanded="False" Classes="dense" Margin="0,0,0,10">
         <ListBox ItemsSource="{Binding X32CommandRows}"
-                 MinHeight="80"
-                 MaxHeight="150"
+                 MaxHeight="240"
+                 Margin="0,6,0,0"
                  Background="Transparent">
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:ControlX32CommandRowViewModel">
@@ -121,11 +146,10 @@
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-      </DockPanel>
-    </Border>
+    </Expander>
 
     <!-- Test send -->
-    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <StackPanel Spacing="6">
         <TextBlock Text="Test send" FontWeight="SemiBold" />
         <Grid ColumnDefinitions="Auto,140,Auto,80,Auto,*" ColumnSpacing="6">
@@ -145,20 +169,23 @@
       </StackPanel>
     </Border>
 
-    <!-- Script editor -->
-    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
-      <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,220,Auto,90,Auto" ColumnSpacing="10" RowSpacing="6">
-        <Grid Grid.Row="0" Grid.Column="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
+    <!-- Scripts -->
+    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
+      <DockPanel>
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="4" Margin="0,0,0,8">
           <TextBlock Grid.Column="0" Text="Scripts" FontWeight="SemiBold" VerticalAlignment="Center" />
           <Button Grid.Column="1" Content="+" Padding="8,2" ToolTip.Tip="Add script" Command="{Binding AddScriptCommand}" />
           <Button Grid.Column="2" Content="–" Padding="8,2" ToolTip.Tip="Remove selected script" Command="{Binding RemoveSelectedScriptCommand}" />
+          <Button Grid.Column="3" Content="Edit…" Padding="8,2" Click="OnEditScriptClick"
+                  ToolTip.Tip="Open the selected script in a separate editor window" />
         </Grid>
-        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ScriptEditorStatus}" Opacity="0.75" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-        <ListBox Grid.Row="1"
-                 Grid.RowSpan="4"
-                 Grid.Column="0"
+        <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" Opacity="0.6" FontSize="12" TextWrapping="Wrap"
+                   Text="Double-click a script (or use Edit…) to open it in a separate editor window with the code editor, triggers, and learn mode." />
+        <ListBox x:Name="ScriptList"
+                 ScrollViewer.VerticalScrollBarVisibility="Disabled"
                  ItemsSource="{Binding ScriptRows}"
-                 SelectedItem="{Binding SelectedScriptRow, Mode=TwoWay}">
+                 SelectedItem="{Binding SelectedScriptRow, Mode=TwoWay}"
+                 DoubleTapped="OnScriptListDoubleTapped">
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:ControlScriptRowViewModel">
               <StackPanel Spacing="1">
@@ -169,187 +196,18 @@
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-        <ae:TextEditor x:Name="ScriptEditor"
-                       Grid.Row="1"
-                       Grid.Column="1"
-                       ShowLineNumbers="True"
-                       FontFamily="Cascadia Code, Consolas, monospace"
-                       FontSize="13"
-                       Background="#101010"
-                       Foreground="#EEEEEE" />
-        <Grid Grid.Row="2"
-              Grid.Column="1"
-              ColumnDefinitions="Auto,*,Auto,140,Auto,120"
-              RowDefinitions="Auto,Auto,Auto,Auto"
-              ColumnSpacing="8"
-              RowSpacing="6">
-          <CheckBox Grid.Row="0"
-                    Grid.Column="0"
-                    Content="Enabled"
-                    IsChecked="{Binding SelectedScriptRow.IsEnabled, Mode=TwoWay}" />
-          <TextBox Grid.Row="0"
-                   Grid.Column="1"
-                   Text="{Binding SelectedScriptRow.Name, Mode=TwoWay}"
-                   PlaceholderText="script name" />
-          <TextBlock Grid.Row="0" Grid.Column="2" Text="Scope" VerticalAlignment="Center" />
-          <ComboBox Grid.Row="0"
-                    Grid.Column="3"
-                    ItemsSource="{Binding ScriptScopeOptions}"
-                    SelectedItem="{Binding SelectedScriptRow.Scope, Mode=TwoWay}" />
-          <TextBlock Grid.Row="0" Grid.Column="4" Text="Failures" VerticalAlignment="Center" />
-          <NumericUpDown Grid.Row="0"
-                         Grid.Column="5"
-                         Value="{Binding SelectedScriptRow.MaxConsecutiveFailures, Mode=TwoWay}"
-                         Minimum="1"
-                         Maximum="99"
-                         Increment="1"
-                         FormatString="0" />
-
-          <TextBlock Grid.Row="1" Grid.Column="0" Text="Path" VerticalAlignment="Center" />
-          <TextBox Grid.Row="1"
-                   Grid.Column="1"
-                   Grid.ColumnSpan="3"
-                   Text="{Binding SelectedScriptRow.ScriptPath, Mode=TwoWay}"
-                   PlaceholderText="Scripts/control.mnd" />
-          <ComboBox Grid.Row="1"
-                    Grid.Column="4"
-                    Grid.ColumnSpan="2"
-                    ItemsSource="{Binding ScriptFailureModeOptions}"
-                    SelectedItem="{Binding SelectedScriptRow.FailureMode, Mode=TwoWay}" />
-
-          <TextBlock Grid.Row="2"
-                     Grid.Column="0"
-                     Text="Triggers"
-                     VerticalAlignment="Center" />
-          <TextBlock Grid.Row="2"
-                     Grid.Column="1"
-                     Grid.ColumnSpan="5"
-                     Text="{Binding SelectedScriptRow.TriggerSummary}"
-                     Opacity="0.75"
-                     TextTrimming="CharacterEllipsis" />
-          <TextBlock Grid.Row="3"
-                     Grid.Column="0"
-                     Text="Exports"
-                     VerticalAlignment="Center" />
-          <TextBlock Grid.Row="3"
-                     Grid.Column="1"
-                     Grid.ColumnSpan="5"
-                     Text="{Binding ExportedFunctionsSummary}"
-                     Opacity="0.75"
-                     TextTrimming="CharacterEllipsis" />
-        </Grid>
-        <Border Grid.Row="3"
-                Grid.Column="1"
-                BorderBrush="#22808080"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="6">
-          <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="Diagnostics" FontWeight="SemiBold" Margin="0,0,0,4" />
-            <ListBox ItemsSource="{Binding ScriptDiagnostics}" Background="Transparent">
-              <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:ControlScriptDiagnosticRowViewModel">
-                  <Grid ColumnDefinitions="80,*" ColumnSpacing="8" Classes.error="{Binding IsError}">
-                    <TextBlock Grid.Column="0" Text="{Binding Stage}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Grid.Column="1" Text="{Binding Message}" TextTrimming="CharacterEllipsis" />
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </DockPanel>
-        </Border>
-        <Button Grid.Row="4"
-                Grid.Column="1"
-                Content="Save Script"
-                HorizontalAlignment="Right"
-                Command="{Binding SaveSelectedScriptCommand}" />
-      </Grid>
+      </DockPanel>
     </Border>
-
-    <!-- Learn mode -->
-    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10"
-            IsVisible="{Binding HasSelectedScript}">
-      <StackPanel Spacing="6">
-        <Grid ColumnDefinitions="*,Auto">
-          <StackPanel Grid.Column="0" VerticalAlignment="Center">
-            <TextBlock Text="Learn MIDI" FontWeight="SemiBold" />
-            <TextBlock Text="Arm the system, click Learn, then move a control to capture it as a trigger."
-                       Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
-          </StackPanel>
-          <Button Grid.Column="1" MinWidth="150" VerticalAlignment="Center"
-                  Content="{Binding LearnButtonText}" Command="{Binding ToggleLearnCommand}" />
-        </Grid>
-        <Border IsVisible="{Binding HasLearnCandidate}"
-                BorderBrush="#3360C060" BorderThickness="1" CornerRadius="4" Padding="8">
-          <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
-            <TextBlock Grid.Row="0" Grid.Column="0" Text="Captured" Opacity="0.7" VerticalAlignment="Center" />
-            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding LearnCandidate.Description}"
-                       FontFamily="Cascadia Code, Consolas, monospace" VerticalAlignment="Center" />
-            <CheckBox Grid.Row="0" Grid.Column="2"
-                      Content="Insert handler stub" IsChecked="{Binding LearnCandidate.InsertStub}" />
-            <TextBlock Grid.Row="1" Grid.Column="0" Text="Function" Opacity="0.7" VerticalAlignment="Center" />
-            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding LearnCandidate.FunctionName}" PlaceholderText="handler function" />
-            <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="6">
-              <Button Content="Add trigger" Command="{Binding ConfirmLearnCommand}" />
-              <Button Content="Cancel" Command="{Binding CancelLearnCommand}" />
-            </StackPanel>
-          </Grid>
-        </Border>
       </StackPanel>
-    </Border>
-
-    <!-- Trigger editor -->
-    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10"
-            IsVisible="{Binding HasSelectedScript}">
-      <ContentControl Content="{Binding SelectedScriptRow}">
-        <ContentControl.ContentTemplate>
-          <DataTemplate DataType="vm:ControlScriptRowViewModel">
-            <DockPanel>
-              <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
-                <TextBlock Grid.Column="0" Text="Triggers" FontWeight="SemiBold" VerticalAlignment="Center" />
-                <Button Grid.Column="1" Content="Add trigger" Command="{Binding AddTriggerCommand}" />
-              </Grid>
-              <TextBlock DockPanel.Dock="Bottom"
-                         Text="A trigger binds an exported function to an event. Leave a match field blank to match any value."
-                         Opacity="0.6" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" />
-              <ItemsControl ItemsSource="{Binding Triggers}">
-                <ItemsControl.ItemTemplate>
-                  <DataTemplate DataType="vm:ControlScriptTriggerRowViewModel">
-                    <Grid ColumnDefinitions="160,Auto" ColumnSpacing="6" Margin="0,2">
-                      <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
-                                ItemsSource="{Binding KindOptions}" SelectedItem="{Binding Kind}" />
-                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                        <TextBox Width="160" Text="{Binding FunctionName}" PlaceholderText="exported function" />
-                        <TextBox Width="180" Text="{Binding OscAddressPattern}"
-                                 PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" />
-                        <TextBox Width="64" Text="{Binding MidiChannelText}"
-                                 PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" />
-                        <TextBox Width="64" Text="{Binding MidiControllerText}"
-                                 PlaceholderText="cc" IsVisible="{Binding ShowMidiController}" />
-                        <TextBox Width="64" Text="{Binding MidiNoteText}"
-                                 PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" />
-                        <TextBox Width="90" Text="{Binding IntervalMsText}"
-                                 PlaceholderText="ms" IsVisible="{Binding ShowInterval}" />
-                        <Button Content="✕" Padding="8,2" ToolTip.Tip="Remove trigger"
-                                Command="{Binding RemoveCommand}" />
-                      </StackPanel>
-                    </Grid>
-                  </DataTemplate>
-                </ItemsControl.ItemTemplate>
-              </ItemsControl>
-            </DockPanel>
-          </DataTemplate>
-        </ContentControl.ContentTemplate>
-      </ContentControl>
-    </Border>
+    </ScrollViewer>
 
     <!-- Monitor toolbar -->
-    <Grid DockPanel.Dock="Top"
+    <Grid Grid.Row="2"
           ColumnDefinitions="*,130,130,160,Auto,Auto,Auto"
           RowDefinitions="Auto,Auto"
           ColumnSpacing="8"
           RowSpacing="6"
-          Margin="0,0,0,6">
+          Margin="0,10,0,6">
       <TextBlock Grid.Row="0" Grid.Column="0" Text="Live monitor" FontWeight="SemiBold" VerticalAlignment="Center" />
       <CheckBox Grid.Row="0" Grid.Column="4" Content="Errors only" IsChecked="{Binding ErrorsOnly}" />
       <CheckBox Grid.Row="0" Grid.Column="5" Content="Pause" IsChecked="{Binding IsPaused}" />
@@ -373,7 +231,7 @@
     </Grid>
 
     <!-- Monitor list -->
-    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6">
+    <Border Grid.Row="3" MinHeight="120" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6">
       <ListBox ItemsSource="{Binding MonitorEntries}" Background="Transparent">
         <ListBox.ItemTemplate>
           <DataTemplate DataType="vm:ControlMonitorEntryViewModel">
@@ -388,5 +246,5 @@
         </ListBox.ItemTemplate>
       </ListBox>
     </Border>
-  </DockPanel>
+  </Grid>
 </UserControl>

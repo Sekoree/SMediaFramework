@@ -78,7 +78,11 @@ Message arguments:
 Send/request/cache:
 
 - `osc.send(deviceKey, address, args...)`
-- `osc.request(deviceKey, address)`
+- `osc.request(deviceKey, address)` — sends an argument-less message; many devices
+  (e.g. the X32) reply with the same address and the current value, which lands in
+  the cache.
+- `osc.has(deviceKey, address)` — `true` if a fresh value is cached for that address
+  (use it to decide whether to `request` instead of assuming a default).
 - `osc.cacheFloat(deviceKey, address, defaultValue)`
 - `osc.cacheString(deviceKey, address, defaultValue)`
 - `osc.cacheSet(deviceKey, address, value)`
@@ -119,6 +123,33 @@ Fader helpers:
 - `x32.faderToDb(normalized)`
 - `x32.dbToFader(db)`
 - `x32.quantizeFader(normalized)`
+
+## Layers API
+
+Layers are mutually exclusive — activating one deactivates the others. Switching a
+layer fires `LayerDisabled` triggers for the previous layer and `LayerEnabled`
+triggers for the new one.
+
+- `layers.activate(idOrName)` — switch to a layer (by id or name). The switch is
+  applied after the current handler finishes, so it's safe to call from any handler
+  (e.g. an X-Touch Mini layer A/B button bound to a `MidiNote` trigger).
+- `layers.active()` — the active layer's name, or `null`.
+- `layers.list()` — array of configured layer names.
+
+```text
+export fun onLayerAButton(event, context) {
+    if (event.midi.isNoteOn) layers.activate("A");
+}
+
+export fun onLayerEnabled(event, context) {
+    // bind this to a LayerEnabled trigger to prime feedback when the layer turns on
+    for (var ch = 1; ch <= 8; ch++)
+        osc.request("x32", x32.channelFaderAddress(ch));
+}
+```
+
+A layer-scoped script (`scope = Layer`) only runs while its layer is active (its
+`LayerDisabled` handler still fires as the layer turns off).
 
 ## State API
 

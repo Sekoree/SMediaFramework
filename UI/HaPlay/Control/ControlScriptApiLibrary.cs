@@ -12,7 +12,8 @@ public sealed class ControlScriptRuntimeServices
         IControlMonitorSink? monitor = null,
         IReadOnlyList<HaPlay.Models.ControlDeviceInstanceConfig>? devices = null,
         ControlDeviceHealthRegistry? deviceHealth = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        IReadOnlyList<HaPlay.Models.ControlLayerConfig>? layers = null)
     {
         CommandSink = commandSink ?? NullControlScriptCommandSink.Instance;
         OscCache = oscCache ?? new ControlValueCache();
@@ -21,6 +22,7 @@ public sealed class ControlScriptRuntimeServices
         Devices = devices ?? [];
         DeviceHealth = deviceHealth ?? new ControlDeviceHealthRegistry();
         Clock = clock ?? (() => DateTimeOffset.UtcNow);
+        Layers = layers ?? [];
     }
 
     public IControlScriptCommandSink CommandSink { get; }
@@ -37,6 +39,12 @@ public sealed class ControlScriptRuntimeServices
 
     /// <summary>Host clock backing the <c>HaPlay.Time</c> library; injectable so script time is testable.</summary>
     public Func<DateTimeOffset> Clock { get; }
+
+    /// <summary>Configured layers, surfaced to the script <c>layers</c> library.</summary>
+    public IReadOnlyList<HaPlay.Models.ControlLayerConfig> Layers { get; }
+
+    /// <summary>Returns the currently active layer id; set by the runtime so <c>layers.active()</c> can read it.</summary>
+    public Func<Guid?>? ActiveLayerProvider { get; set; }
 }
 
 public interface IControlScriptCommandSink
@@ -44,6 +52,10 @@ public interface IControlScriptCommandSink
     void SendOsc(ControlScriptOscMessage message);
 
     void SendMidi(ControlScriptMidiMessage message);
+
+    /// <summary>Requests a mutually-exclusive layer switch (by id or name). Applied by the session after the
+    /// current dispatch completes, so it never re-enters the runtime mid-script.</summary>
+    void RequestActivateLayer(string layerKey);
 }
 
 public sealed class NullControlScriptCommandSink : IControlScriptCommandSink
@@ -59,6 +71,10 @@ public sealed class NullControlScriptCommandSink : IControlScriptCommandSink
     }
 
     public void SendMidi(ControlScriptMidiMessage message)
+    {
+    }
+
+    public void RequestActivateLayer(string layerKey)
     {
     }
 }
@@ -146,6 +162,35 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
         yield return new KeyValuePair<string, MondValue>("monitor", CreateMonitorApi(state));
         yield return new KeyValuePair<string, MondValue>("devices", CreateDevicesApi(state));
         yield return new KeyValuePair<string, MondValue>("time", CreateTimeApi(state));
+        yield return new KeyValuePair<string, MondValue>("layers", CreateLayersApi(state));
+    }
+
+    // HaPlay owns mutually-exclusive layers. activate() queues a switch that the host applies after the
+    // current script finishes (so it never re-enters the runtime mid-dispatch); LayerEnabled/LayerDisabled
+    // triggers then fire for the new/previous layer.
+    private MondValue CreateLayersApi(MondState state)
+    {
+        var layers = MondValue.Object(state);
+
+        layers["activate"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length <= offset)
+                throw new MondRuntimeException("layers.activate requires a layer id or name.");
+
+            _services.CommandSink.RequestActivateLayer((string)args[offset]);
+            return MondValue.Undefined;
+        });
+        layers["list"] = (MondFunction)((_, _) =>
+            MondValue.Array(_services.Layers.Select(layer => (MondValue)layer.Name)));
+        layers["active"] = (MondFunction)((_, _) =>
+        {
+            var activeId = _services.ActiveLayerProvider?.Invoke();
+            var layer = activeId is { } id ? _services.Layers.FirstOrDefault(l => l.Id == id) : null;
+            return layer is null ? MondValue.Null : layer.Name;
+        });
+
+        return layers;
     }
 
     // Host-controlled clock for scripts. Recurring/delayed execution is provided by the declarative
@@ -343,6 +388,14 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
                 (string)args[offset + 1],
                 []));
             return MondValue.Undefined;
+        });
+        osc["has"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length < offset + 2)
+                throw new MondRuntimeException("osc.has requires device key and address.");
+
+            return _services.OscCache.Has((string)args[offset], (string)args[offset + 1]);
         });
         osc["cacheFloat"] = (MondFunction)((_, args) =>
         {

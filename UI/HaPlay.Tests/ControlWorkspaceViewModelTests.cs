@@ -408,6 +408,256 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task AddPeriodicSend_AddsSendWithChosenInterval()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var deviceId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = deviceId,
+                    Name = "X32",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
+                },
+            ],
+        });
+
+        vm.PeriodicSendPrompt = dialog =>
+        {
+            Assert.Equal("/xremote", dialog.Address);
+            Assert.Equal("8000", dialog.IntervalMsText);
+            dialog.IntervalMsText = "5000";
+            return Task.FromResult(true);
+        };
+
+        var deviceRow = vm.StructureRows.Single(r => r.Kind == "OSC" && r.DeviceInstanceId == deviceId);
+        deviceRow.AddPeriodicSendCommand!.Execute(null);
+        await Task.Yield();
+
+        var send = Assert.Single(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOscSends);
+        Assert.Equal("/xremote", send.Address);
+        Assert.Equal(5000, send.IntervalMs);
+    }
+
+    [Fact]
+    public async Task EditAndRemovePeriodicSend_UpdateTheDeviceSendList()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var deviceId = Guid.NewGuid();
+        var sendId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = deviceId,
+                    Name = "X32",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
+                    PeriodicOscSends =
+                    [
+                        new ControlPeriodicOscSendConfig { Id = sendId, Name = "/xremote", Address = "/xremote", IntervalMs = 8000 },
+                    ],
+                },
+            ],
+        });
+
+        vm.PeriodicSendPrompt = dialog =>
+        {
+            Assert.Equal(8000.ToString(), dialog.IntervalMsText);
+            dialog.IntervalMsText = "5000";
+            return Task.FromResult(true);
+        };
+
+        var periodicRow = vm.StructureRows.Single(r => r.Kind == "Periodic" && r.PeriodicSendId == sendId);
+        Assert.True(periodicRow.CanEditPeriodicSend);
+        Assert.False(periodicRow.CanEditOscDevice); // periodic rows don't offer device-level actions
+
+        periodicRow.EditPeriodicSendCommand!.Execute(null);
+        await Task.Yield();
+        Assert.Equal(5000, Assert.Single(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOscSends).IntervalMs);
+
+        var refreshedRow = vm.StructureRows.Single(r => r.Kind == "Periodic" && r.PeriodicSendId == sendId);
+        refreshedRow.RemovePeriodicSendCommand!.Execute(null);
+        Assert.Empty(Assert.Single(vm.BuildSnapshot().Devices).PeriodicOscSends);
+    }
+
+    [Fact]
+    public async Task AddOscDevice_CreatesOscDeviceFromDialogValues()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+
+        vm.OscDevicePrompt = dialog =>
+        {
+            // Verify the dialog is seeded with the X32 defaults, then accept.
+            Assert.Equal("X32", dialog.Name);
+            Assert.Equal("192.168.2.76", dialog.Host);
+            Assert.Equal("10023", dialog.PortText);
+            Assert.Equal("x32", dialog.Alias);
+            return Task.FromResult(true);
+        };
+
+        await vm.AddOscDeviceCommand.ExecuteAsync(null);
+
+        var device = Assert.Single(vm.BuildSnapshot().Devices);
+        Assert.Equal(ControlDeviceProtocol.Osc, device.Protocol);
+        Assert.Equal("X32", device.Name);
+        Assert.Equal("behringer.x32.osc", device.ProfileId);
+        Assert.Equal("x32", device.Binding.Alias);
+        Assert.Equal("192.168.2.76", device.Binding.OscHost);
+        Assert.Equal(10023, device.Binding.OscPort);
+        Assert.Null(device.Binding.OscLocalPort); // blank local port = automatic/ephemeral
+        Assert.True(device.IsEnabled);
+    }
+
+    [Fact]
+    public async Task AddOscDevice_SetsFixedLocalPortFromDialog()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+        vm.OscDevicePrompt = dialog =>
+        {
+            dialog.LocalPortText = "10024";
+            Assert.True(dialog.IsValid);
+            return Task.FromResult(true);
+        };
+
+        await vm.AddOscDeviceCommand.ExecuteAsync(null);
+
+        Assert.Equal(10024, Assert.Single(vm.BuildSnapshot().Devices).Binding.OscLocalPort);
+    }
+
+    [Fact]
+    public async Task AddOscDevice_WhenCancelled_AddsNothing()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+        vm.OscDevicePrompt = _ => Task.FromResult(false);
+
+        await vm.AddOscDeviceCommand.ExecuteAsync(null);
+
+        Assert.Empty(vm.BuildSnapshot().Devices);
+    }
+
+    [Fact]
+    public async Task EditOscDevice_UpdatesHostAndPreservesPeriodicSends()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var deviceId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = deviceId,
+                    Name = "X32",
+                    ProfileId = "behringer.x32.osc",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig { Alias = "x32", OscHost = "192.168.2.76", OscPort = 10023 },
+                    PeriodicOscSends = [new ControlPeriodicOscSendConfig()],
+                },
+            ],
+        });
+
+        vm.OscDevicePrompt = dialog =>
+        {
+            Assert.Equal("Edit OSC device", dialog.Title);
+            Assert.Equal("192.168.2.76", dialog.Host);
+            dialog.Host = "10.0.0.5";
+            dialog.PortText = "10024";
+            return Task.FromResult(true);
+        };
+
+        var row = vm.StructureRows.Single(r => r.Kind == "OSC" && r.DeviceInstanceId == deviceId);
+        row.EditOscDeviceCommand!.Execute(null);
+        await Task.Yield();
+
+        var device = Assert.Single(vm.BuildSnapshot().Devices);
+        Assert.Equal("10.0.0.5", device.Binding.OscHost);
+        Assert.Equal(10024, device.Binding.OscPort);
+        Assert.Single(device.PeriodicOscSends); // preserved across edit
+    }
+
+    [Fact]
+    public async Task RemoveOscDevice_DropsTheDevice()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var deviceId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = deviceId,
+                    Name = "X32",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
+                },
+            ],
+        });
+
+        var row = vm.StructureRows.Single(r => r.Kind == "OSC" && r.DeviceInstanceId == deviceId);
+        Assert.True(row.CanEditOscDevice);
+        row.RemoveOscDeviceCommand!.Execute(null);
+
+        Assert.Empty(vm.BuildSnapshot().Devices);
+    }
+
+    [Fact]
+    public async Task ContextMenu_AddEndpointScript_AddsEndpointScopedScriptForListener()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var listenerId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            OscListeners = [new ControlOscListenerConfig { Id = listenerId, Name = "Main", LocalPort = 10020 }],
+        });
+
+        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OscListenerId == listenerId);
+        Assert.True(row.CanAddEndpointScript);
+        Assert.False(row.CanAddDeviceScript);
+
+        row.AddEndpointScriptCommand!.Execute(null);
+
+        var script = Assert.Single(vm.BuildSnapshot().Scripts);
+        Assert.Equal(ControlScriptScope.Endpoint, script.Scope);
+        Assert.Equal(listenerId, script.EndpointInstanceId);
+    }
+
+    [Fact]
+    public async Task ActivateLayer_IsMutuallyExclusiveInConfig()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var a = Guid.NewGuid();
+        var b = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Layers =
+            [
+                new ControlLayerConfig { Id = a, Name = "A", IsEnabled = true },
+                new ControlLayerConfig { Id = b, Name = "B", IsEnabled = false },
+            ],
+        });
+
+        var rowB = vm.StructureRows.Single(r => r.Kind == "Layer" && r.LayerId == b);
+        Assert.True(rowB.CanActivateLayer);
+
+        rowB.ActivateLayerCommand!.Execute(null);
+
+        var layers = vm.BuildSnapshot().Layers;
+        Assert.False(layers.Single(l => l.Id == a).IsEnabled);
+        Assert.True(layers.Single(l => l.Id == b).IsEnabled);
+    }
+
+    [Fact]
     public async Task ContextMenu_AddLayerScript_AddsLayerScopedScript()
     {
         await using var vm = new ControlWorkspaceViewModel();
@@ -451,11 +701,14 @@ public sealed class ControlWorkspaceViewModelTests
         Assert.True(row.CanTestOsc);
         Assert.False(row.CanTestMidi);
 
+        vm.PeriodicSendPrompt = _ => Task.FromResult(true); // accept the dialog defaults (/xremote @ 8000)
         row.AddPeriodicSendCommand!.Execute(null);
+        await Task.Yield();
 
         var device = Assert.Single(vm.BuildSnapshot().Devices);
         var send = Assert.Single(device.PeriodicOscSends);
         Assert.Equal("/xremote", send.Address);
+        Assert.Equal(8000, send.IntervalMs);
     }
 
     [Fact]

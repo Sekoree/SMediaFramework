@@ -1,4 +1,5 @@
 using HaPlay.Models;
+using OSCLib;
 
 namespace HaPlay.ControlGraph;
 
@@ -6,7 +7,9 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
 {
     private static readonly TimeSpan DefaultTickInterval = TimeSpan.FromMilliseconds(100);
 
+    private readonly ControlSystemConfig _config;
     private readonly IControlMidiDeviceSessionRunner? _midiSessions;
+    private readonly IControlOscReceiver? _oscReceiver;
     private readonly TimeSpan _tickInterval;
     private CancellationTokenSource? _tickCts;
     private Task? _tickTask;
@@ -26,6 +29,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         ArgumentNullException.ThrowIfNull(sourceProvider);
         ArgumentNullException.ThrowIfNull(oscSender);
 
+        _config = config;
         _midiSessions = midiSessions;
         _tickInterval = tickInterval is { } interval && interval > TimeSpan.Zero ? interval : DefaultTickInterval;
         Monitor = monitor ?? NullControlMonitorSink.Instance;
@@ -39,6 +43,15 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         OscListeners = new ControlOscListenerManager(config, ScriptSession, Monitor);
         MidiDevices = new ControlMidiDeviceManager(config, ScriptSession, Monitor);
         PeriodicOscSends = new ControlPeriodicOscSendManager(config, oscSender, Monitor);
+
+        // The X32 (OSC server) replies to the source port of our requests — i.e. the OSC client's own
+        // connected socket, not a separate listener. Route those replies into the same dispatch the
+        // listener uses (cache update, triggers, monitor) so requested/streamed values are received.
+        if (oscSender is IControlOscReceiver receiver)
+        {
+            _oscReceiver = receiver;
+            receiver.MessageReceived += OnOscReplyReceived;
+        }
     }
 
     public IControlMonitorSink Monitor { get; }
@@ -85,6 +98,47 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         var scriptResult = await ScriptSession.TickPeriodicAsync(utcNow, cancellationToken).ConfigureAwait(false);
         var periodicOscResults = await PeriodicOscSends.TickAsync(utcNow, cancellationToken).ConfigureAwait(false);
         return new ControlSystemRuntimeTickResult(scriptResult, periodicOscResults);
+    }
+
+    private void OnOscReplyReceived(ControlOscReceivedMessage message)
+    {
+        if (_disposed)
+            return;
+
+        // Resolve which device this reply belongs to (by the host/port we sent to) and route through the
+        // listener that device uses, so the existing device-resolution + monitor recording apply.
+        var device = _config.Devices.FirstOrDefault(d =>
+            d.Protocol == ControlDeviceProtocol.Osc
+            && d.IsEnabled
+            && d.Binding.OscPort == message.Port
+            && string.Equals(d.Binding.OscHost, message.Host, StringComparison.OrdinalIgnoreCase));
+
+        var listenerId = device?.Binding.OscListenerId
+            ?? _config.OscListeners.FirstOrDefault(l => l.IsEnabled)?.Id
+            ?? _config.OscListeners.FirstOrDefault()?.Id;
+        if (listenerId is not { } id)
+            return;
+
+        _ = DispatchReplyAsync(id, message.Context);
+    }
+
+    private async Task DispatchReplyAsync(Guid listenerId, OSCMessageContext context)
+    {
+        try
+        {
+            await OscListeners.DispatchMessageAsync(listenerId, context).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Record(new ControlMonitorRecord
+            {
+                Direction = ControlMonitorDirection.Error,
+                Protocol = ControlMonitorProtocol.Osc,
+                Result = ControlMonitorResult.Failed,
+                Message = "OSC reply dispatch failed.",
+                ErrorMessage = ex.Message,
+            });
+        }
     }
 
     private void StartTickLoop(CancellationToken cancellationToken)
@@ -161,6 +215,8 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             return;
 
         _disposed = true;
+        if (_oscReceiver is not null)
+            _oscReceiver.MessageReceived -= OnOscReplyReceived;
         await StopTickLoopAsync(CancellationToken.None).ConfigureAwait(false);
         _midiSessions?.Stop();
         if (_midiSessions is IAsyncDisposable asyncDisposable)
@@ -176,6 +232,8 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             return;
 
         _disposed = true;
+        if (_oscReceiver is not null)
+            _oscReceiver.MessageReceived -= OnOscReplyReceived;
         _tickCts?.Cancel();
         _tickCts?.Dispose();
         _tickCts = null;

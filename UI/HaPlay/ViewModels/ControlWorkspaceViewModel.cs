@@ -27,6 +27,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 {
     private const int MaxRenderedEntries = 1000;
     private const string AllFilter = "All";
+    private const string DefaultX32ProfileId = "behringer.x32.osc";
 
     private readonly DispatcherTimer _refreshTimer;
     private ControlSystemConfig _config = new();
@@ -407,6 +408,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         ControlScriptScope scope,
         Guid? deviceInstanceId,
         Guid? layerId,
+        Guid? endpointInstanceId = null,
         string namePrefix = "Script",
         string scriptPath = "")
     {
@@ -416,6 +418,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             Scope = scope,
             DeviceInstanceId = deviceInstanceId,
             LayerId = layerId,
+            EndpointInstanceId = endpointInstanceId,
             ScriptPath = scriptPath,
         };
 
@@ -437,40 +440,288 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             AddScriptInternal(ControlScriptScope.Device, deviceId, layerId: null);
     }
 
+    private void AddEndpointScript(ControlStructureRowViewModel row)
+    {
+        if (row.OscListenerId is { } listenerId)
+            AddScriptInternal(ControlScriptScope.Endpoint, deviceInstanceId: null, layerId: null, endpointInstanceId: listenerId);
+    }
+
     private void AddLayerScript(ControlStructureRowViewModel row)
     {
         if (row.LayerId is { } layerId)
             AddScriptInternal(ControlScriptScope.Layer, deviceInstanceId: null, layerId);
     }
 
-    private void AddPeriodicSend(ControlStructureRowViewModel row)
+    // ----- Layer activation -------------------------------------------------------------------
+    // Layers are mutually exclusive: activating one deactivates the rest. The config flag drives the
+    // structure view; the live session also switches so LayerEnabled/LayerDisabled triggers fire.
+
+    private void ActivateLayer(ControlStructureRowViewModel row)
+    {
+        if (row.LayerId is not { } layerId)
+            return;
+
+        _config = _config with
+        {
+            Layers = _config.Layers.Select(l => l with { IsEnabled = l.Id == layerId }).ToList(),
+        };
+        RebuildStructureRows();
+        NotifySummary();
+
+        if (_session is not null)
+        {
+            _ = ActivateLayerLiveAsync(layerId);
+        }
+        else
+        {
+            var layer = _config.Layers.FirstOrDefault(l => l.Id == layerId);
+            StatusMessage = $"Activated layer '{layer?.Name}'. Arm to run its scripts.";
+        }
+    }
+
+    private async Task ActivateLayerLiveAsync(Guid layerId)
+    {
+        var session = _session;
+        if (session is null)
+            return;
+
+        try
+        {
+            await session.ScriptSession.SetActiveLayerAsync(layerId).ConfigureAwait(true);
+            var layer = _config.Layers.FirstOrDefault(l => l.Id == layerId);
+            StatusMessage = $"Activated layer '{layer?.Name}'.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Layer activate error: {ex.Message}";
+        }
+    }
+
+    // ----- Periodic OSC send add/edit/remove --------------------------------------------------
+
+    internal Func<PeriodicSendDialogViewModel, Task<bool>> PeriodicSendPrompt { get; set; } = DefaultPeriodicSendPromptAsync;
+
+    private async Task AddPeriodicSendAsync(ControlStructureRowViewModel row)
     {
         if (row.DeviceInstanceId is not { } deviceId)
             return;
 
+        var dialog = new PeriodicSendDialogViewModel("Add periodic OSC send", "/xremote", "/xremote", 8000, isEnabled: true);
+        if (!await PeriodicSendPrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        if (!TryUpdateDevice(deviceId, device => device with
+        {
+            PeriodicOscSends =
+            [
+                .. device.PeriodicOscSends,
+                new ControlPeriodicOscSendConfig
+                {
+                    Name = values.Name,
+                    Address = values.Address,
+                    IntervalMs = values.IntervalMs,
+                    IsEnabled = values.IsEnabled,
+                },
+            ],
+        }))
+            return;
+
+        StatusMessage = $"Added periodic send '{values.Name}' every {values.IntervalMs} ms." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private async Task EditPeriodicSendAsync(ControlStructureRowViewModel row)
+    {
+        if (row.DeviceInstanceId is not { } deviceId || row.PeriodicSendId is not { } sendId)
+            return;
+
+        var existing = _config.Devices.FirstOrDefault(d => d.Id == deviceId)?
+            .PeriodicOscSends.FirstOrDefault(s => s.Id == sendId);
+        if (existing is null)
+            return;
+
+        var dialog = new PeriodicSendDialogViewModel(
+            "Edit periodic OSC send", existing.Name, existing.Address, existing.IntervalMs, existing.IsEnabled);
+        if (!await PeriodicSendPrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        if (!TryUpdateDevice(deviceId, device => device with
+        {
+            PeriodicOscSends = device.PeriodicOscSends
+                .Select(s => s.Id == sendId
+                    ? s with { Name = values.Name, Address = values.Address, IntervalMs = values.IntervalMs, IsEnabled = values.IsEnabled }
+                    : s)
+                .ToList(),
+        }))
+            return;
+
+        StatusMessage = $"Updated periodic send '{values.Name}' every {values.IntervalMs} ms." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private void RemovePeriodicSend(ControlStructureRowViewModel row)
+    {
+        if (row.DeviceInstanceId is not { } deviceId || row.PeriodicSendId is not { } sendId)
+            return;
+
+        if (TryUpdateDevice(deviceId, device => device with
+        {
+            PeriodicOscSends = device.PeriodicOscSends.Where(s => s.Id != sendId).ToList(),
+        }))
+        {
+            StatusMessage = "Removed periodic send." + (IsArmed ? " Re-arm to apply." : string.Empty);
+        }
+    }
+
+    private bool TryUpdateDevice(Guid deviceId, Func<ControlDeviceInstanceConfig, ControlDeviceInstanceConfig> update)
+    {
         var devices = _config.Devices.ToList();
         var index = devices.FindIndex(d => d.Id == deviceId);
         if (index < 0)
-            return;
+            return false;
 
-        var device = devices[index];
-        devices[index] = device with { PeriodicOscSends = [.. device.PeriodicOscSends, new ControlPeriodicOscSendConfig()] };
+        devices[index] = update(devices[index]);
         _config = _config with { Devices = devices };
-        RebuildStructureRows();
-        NotifySummary();
-        StatusMessage = IsArmed
-            ? "Periodic OSC send added. Re-arm control to apply."
-            : "Periodic OSC send added.";
+        RefreshAfterDeviceChange();
+        return true;
+    }
+
+    private static async Task<bool> DefaultPeriodicSendPromptAsync(PeriodicSendDialogViewModel dialogViewModel)
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return false;
+
+        var dialog = new PeriodicSendDialog { DataContext = dialogViewModel };
+        return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
     }
 
     private ControlStructureRowCommands BuildStructureRowCommands() => new(
         AddScript,
         AddHelperScript,
         AddDeviceScript,
+        AddEndpointScript,
         AddLayerScript,
-        AddPeriodicSend,
+        ActivateLayer,
+        row => _ = AddPeriodicSendAsync(row),
+        row => _ = EditPeriodicSendAsync(row),
+        RemovePeriodicSend,
+        row => _ = EditOscDeviceInternalAsync(FindOscDevice(row)),
+        RemoveOscDevice,
         row => _ = TestOscDeviceAsync(row),
         row => _ = TestMidiDeviceAsync(row));
+
+    // ----- OSC device add/edit/remove ---------------------------------------------------------
+    // The dialog display is injectable so the add/edit logic is unit-testable without a window.
+
+    internal Func<OscDeviceDialogViewModel, Task<bool>> OscDevicePrompt { get; set; } = DefaultOscDevicePromptAsync;
+
+    [RelayCommand]
+    private Task AddOscDeviceAsync() => EditOscDeviceInternalAsync(existing: null);
+
+    private ControlDeviceInstanceConfig? FindOscDevice(ControlStructureRowViewModel row) =>
+        row.DeviceInstanceId is { } id
+            ? _config.Devices.FirstOrDefault(d => d.Id == id && d.Protocol == ControlDeviceProtocol.Osc)
+            : null;
+
+    private async Task EditOscDeviceInternalAsync(ControlDeviceInstanceConfig? existing)
+    {
+        var isAdd = existing is null;
+        var profiles = CompositeControlDeviceProfileRepository.ForProject(_config).Profiles
+            .Where(p => p.Protocol == ControlDeviceProtocol.Osc)
+            .ToList();
+        var defaultProfileId = profiles.Any(p => p.Id == DefaultX32ProfileId)
+            ? DefaultX32ProfileId
+            : profiles.FirstOrDefault()?.Id;
+
+        var dialog = new OscDeviceDialogViewModel(
+            isAdd ? "Add OSC device" : "Edit OSC device",
+            name: existing?.Name ?? "X32",
+            profileId: existing?.ProfileId is { Length: > 0 } pid ? pid : defaultProfileId,
+            host: string.IsNullOrWhiteSpace(existing?.Binding.OscHost) ? "192.168.2.76" : existing!.Binding.OscHost!,
+            port: existing?.Binding.OscPort ?? 10023,
+            alias: existing?.Binding.Alias ?? (isAdd ? "x32" : null),
+            localPort: existing?.Binding.OscLocalPort,
+            isEnabled: existing?.IsEnabled ?? true,
+            oscProfiles: profiles);
+
+        if (!await OscDevicePrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        var devices = _config.Devices.ToList();
+        if (existing is null)
+        {
+            devices.Add(new ControlDeviceInstanceConfig
+            {
+                Name = values.Name,
+                ProfileId = values.ProfileId,
+                Protocol = ControlDeviceProtocol.Osc,
+                IsEnabled = values.IsEnabled,
+                Binding = new ControlDeviceBindingConfig
+                {
+                    Alias = values.Alias,
+                    OscHost = values.Host,
+                    OscPort = values.Port,
+                    OscLocalPort = values.LocalPort,
+                },
+            });
+            StatusMessage = $"Added OSC device '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+        }
+        else
+        {
+            var index = devices.FindIndex(d => d.Id == existing.Id);
+            if (index < 0)
+                return;
+
+            devices[index] = existing with
+            {
+                Name = values.Name,
+                ProfileId = values.ProfileId,
+                IsEnabled = values.IsEnabled,
+                Binding = existing.Binding with
+                {
+                    Alias = values.Alias,
+                    OscHost = values.Host,
+                    OscPort = values.Port,
+                    OscLocalPort = values.LocalPort,
+                },
+            };
+            StatusMessage = $"Updated OSC device '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+        }
+
+        _config = _config with { Devices = devices };
+        RefreshAfterDeviceChange();
+    }
+
+    private void RemoveOscDevice(ControlStructureRowViewModel row)
+    {
+        var device = FindOscDevice(row);
+        if (device is null)
+            return;
+
+        _config = _config with { Devices = _config.Devices.Where(d => d.Id != device.Id).ToList() };
+        RefreshAfterDeviceChange();
+        StatusMessage = $"Removed OSC device '{device.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private void RefreshAfterDeviceChange()
+    {
+        RebuildStructureRows();
+        RebuildProfileWarnings();
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        NotifySummary();
+    }
+
+    private static async Task<bool> DefaultOscDevicePromptAsync(OscDeviceDialogViewModel dialogViewModel)
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return false;
+
+        var dialog = new OscDeviceDialog { DataContext = dialogViewModel };
+        return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
+    }
 
     [RelayCommand(CanExecute = nameof(HasSelectedScript))]
     private void RemoveSelectedScript()
@@ -617,6 +868,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 $"port {listener.LocalPort.ToString(CultureInfo.InvariantCulture)} - {listener.SocketMode}",
                 FormatEnabled(listener.IsEnabled),
                 Level: 1,
+                oscListenerId: listener.Id,
                 commands: commands));
         }
 
@@ -637,11 +889,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         AddGroup(rows, "Layers", config.Layers.Count, commands);
         foreach (var layer in config.Layers.OrderBy(l => l.Priority).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase))
         {
+            var layerScriptCount = config.Scripts.Count(s => s.Scope == ControlScriptScope.Layer && s.LayerId == layer.Id);
             rows.Add(new ControlStructureRowViewModel(
                 "Layer",
                 string.IsNullOrWhiteSpace(layer.Name) ? "(unnamed layer)" : layer.Name,
-                $"priority {layer.Priority.ToString(CultureInfo.InvariantCulture)} - {layer.ScriptIds.Count.ToString(CultureInfo.InvariantCulture)} script(s)",
-                FormatEnabled(layer.IsEnabled),
+                $"priority {layer.Priority.ToString(CultureInfo.InvariantCulture)} - {layerScriptCount.ToString(CultureInfo.InvariantCulture)} script(s)",
+                layer.IsEnabled ? "active" : "inactive",
                 Level: 1,
                 layerId: layer.Id,
                 commands: commands));
@@ -675,6 +928,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 FormatEnabled(item.Send.IsEnabled && item.Device.IsEnabled),
                 Level: 1,
                 deviceInstanceId: item.Device.Id,
+                periodicSendId: item.Send.Id,
                 protocol: ControlDeviceProtocol.Osc,
                 commands: commands));
         }
@@ -1021,7 +1275,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         {
             var armedConfig = _config with { IsArmed = true };
             var monitor = new ControlMonitorBuffer(Math.Max(1, _config.Monitor.MaxVisibleMessages));
-            var osc = new UdpControlOscSender();
+            var osc = new UdpControlOscSender(armedConfig);
             var midi = new ControlSystemMidiDeviceSessionManager(armedConfig, monitor);
             var session = new ControlSystemRuntimeSession(
                 armedConfig,
@@ -1592,8 +1846,14 @@ internal sealed record ControlStructureRowCommands(
     Action AddProjectScript,
     Action AddHelperFile,
     Action<ControlStructureRowViewModel> AddDeviceScript,
+    Action<ControlStructureRowViewModel> AddEndpointScript,
     Action<ControlStructureRowViewModel> AddLayerScript,
+    Action<ControlStructureRowViewModel> ActivateLayer,
     Action<ControlStructureRowViewModel> AddPeriodicSend,
+    Action<ControlStructureRowViewModel> EditPeriodicSend,
+    Action<ControlStructureRowViewModel> RemovePeriodicSend,
+    Action<ControlStructureRowViewModel> EditOscDevice,
+    Action<ControlStructureRowViewModel> RemoveOscDevice,
     Action<ControlStructureRowViewModel> TestOsc,
     Action<ControlStructureRowViewModel> TestMidi);
 
@@ -1608,6 +1868,8 @@ public sealed class ControlStructureRowViewModel
         bool IsGroup = false,
         Guid? deviceInstanceId = null,
         Guid? layerId = null,
+        Guid? oscListenerId = null,
+        Guid? periodicSendId = null,
         ControlDeviceProtocol? protocol = null,
         ControlStructureRowCommands? commands = null)
     {
@@ -1619,6 +1881,8 @@ public sealed class ControlStructureRowViewModel
         this.IsGroup = IsGroup;
         DeviceInstanceId = deviceInstanceId;
         LayerId = layerId;
+        OscListenerId = oscListenerId;
+        PeriodicSendId = periodicSendId;
         Protocol = protocol;
 
         if (commands is not null)
@@ -1626,8 +1890,14 @@ public sealed class ControlStructureRowViewModel
             AddProjectScriptCommand = new RelayCommand(commands.AddProjectScript);
             AddHelperFileCommand = new RelayCommand(commands.AddHelperFile);
             AddDeviceScriptCommand = new RelayCommand(() => commands.AddDeviceScript(this), () => CanAddDeviceScript);
+            AddEndpointScriptCommand = new RelayCommand(() => commands.AddEndpointScript(this), () => CanAddEndpointScript);
             AddLayerScriptCommand = new RelayCommand(() => commands.AddLayerScript(this), () => CanAddLayerScript);
+            ActivateLayerCommand = new RelayCommand(() => commands.ActivateLayer(this), () => CanActivateLayer);
             AddPeriodicSendCommand = new RelayCommand(() => commands.AddPeriodicSend(this), () => CanAddPeriodicSend);
+            EditPeriodicSendCommand = new RelayCommand(() => commands.EditPeriodicSend(this), () => CanEditPeriodicSend);
+            RemovePeriodicSendCommand = new RelayCommand(() => commands.RemovePeriodicSend(this), () => CanEditPeriodicSend);
+            EditOscDeviceCommand = new RelayCommand(() => commands.EditOscDevice(this), () => CanEditOscDevice);
+            RemoveOscDeviceCommand = new RelayCommand(() => commands.RemoveOscDevice(this), () => CanEditOscDevice);
             TestOscCommand = new RelayCommand(() => commands.TestOsc(this), () => CanTestOsc);
             TestMidiCommand = new RelayCommand(() => commands.TestMidi(this), () => CanTestMidi);
         }
@@ -1649,17 +1919,29 @@ public sealed class ControlStructureRowViewModel
 
     public Guid? LayerId { get; }
 
+    public Guid? OscListenerId { get; }
+
+    public Guid? PeriodicSendId { get; }
+
     public ControlDeviceProtocol? Protocol { get; }
 
     public double IndentWidth => Level * 16;
 
-    public bool CanAddDeviceScript => DeviceInstanceId is not null;
+    public bool CanAddDeviceScript => DeviceInstanceId is not null && PeriodicSendId is null;
+
+    public bool CanEditPeriodicSend => PeriodicSendId is not null && DeviceInstanceId is not null;
+
+    public bool CanAddEndpointScript => OscListenerId is not null;
 
     public bool CanAddLayerScript => LayerId is not null;
 
-    public bool CanAddPeriodicSend => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null;
+    public bool CanActivateLayer => LayerId is not null;
 
-    public bool CanTestOsc => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null;
+    public bool CanAddPeriodicSend => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null && PeriodicSendId is null;
+
+    public bool CanEditOscDevice => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null && PeriodicSendId is null;
+
+    public bool CanTestOsc => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null && PeriodicSendId is null;
 
     public bool CanTestMidi => Protocol == ControlDeviceProtocol.Midi && DeviceInstanceId is not null;
 
@@ -1669,9 +1951,21 @@ public sealed class ControlStructureRowViewModel
 
     public ICommand? AddDeviceScriptCommand { get; }
 
+    public ICommand? AddEndpointScriptCommand { get; }
+
     public ICommand? AddLayerScriptCommand { get; }
 
+    public ICommand? ActivateLayerCommand { get; }
+
     public ICommand? AddPeriodicSendCommand { get; }
+
+    public ICommand? EditPeriodicSendCommand { get; }
+
+    public ICommand? RemovePeriodicSendCommand { get; }
+
+    public ICommand? EditOscDeviceCommand { get; }
+
+    public ICommand? RemoveOscDeviceCommand { get; }
 
     public ICommand? TestOscCommand { get; }
 

@@ -36,7 +36,8 @@ public sealed class ControlScriptRuntimeSession
             OscCache,
             monitor: _monitor,
             devices: _config.Devices,
-            deviceHealth: _deviceHealth);
+            deviceHealth: _deviceHealth,
+            layers: _config.Layers);
         _runtime = new ControlScriptRuntime(_config, sourceProvider, services, instructionLimit);
         _oscRouter = new ControlScriptOscCommandRouter(_config, oscSender, OscCache);
         _midiRouter = new ControlScriptMidiCommandRouter(_config, midiSender);
@@ -75,6 +76,18 @@ public sealed class ControlScriptRuntimeSession
         Guid layerId,
         CancellationToken cancellationToken = default) =>
         CompleteDispatchAsync(_runtime.DispatchLayerDisabled(layerId), cancellationToken);
+
+    /// <summary>The currently active layer (mutually exclusive), or null.</summary>
+    public Guid? ActiveLayerId => _runtime.ActiveLayerId;
+
+    /// <summary>
+    /// Switches the active layer (mutually exclusive), firing <c>LayerDisabled</c> for the previous layer
+    /// and <c>LayerEnabled</c> for the new one, then flushing any OSC/MIDI those handlers queued.
+    /// </summary>
+    public ValueTask<ControlScriptRuntimeSessionResult> SetActiveLayerAsync(
+        Guid? layerId,
+        CancellationToken cancellationToken = default) =>
+        CompleteDispatchAsync(_runtime.SetActiveLayer(layerId), cancellationToken);
 
     public ValueTask<ControlScriptRuntimeSessionResult> DispatchManualAsync(
         Guid? scriptId = null,
@@ -129,6 +142,7 @@ public sealed class ControlScriptRuntimeSession
     {
         var invocations = new List<ControlScriptInvocationRecord>();
         var diagnostics = new List<ControlScriptRuntimeDiagnostic>();
+        var cacheChanges = new List<ControlValueCacheChange>();
 
         foreach (var script in _config.Scripts)
         {
@@ -148,10 +162,10 @@ public sealed class ControlScriptRuntimeSession
             }
         }
 
-        var oscRoutes = await FlushScriptOscCommandsAsync(cancellationToken).ConfigureAwait(false);
-        var midiRoutes = await FlushScriptMidiCommandsAsync(cancellationToken).ConfigureAwait(false);
-        RecordDispatch(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges: []);
-        return new ControlScriptRuntimeSessionResult(invocations, diagnostics, oscRoutes, midiRoutes, CacheUpdates: []);
+        var (oscRoutes, midiRoutes) = await FlushAndApplyLayerSwitchesAsync(invocations, diagnostics, cacheChanges, cancellationToken)
+            .ConfigureAwait(false);
+        RecordDispatch(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
+        return new ControlScriptRuntimeSessionResult(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
     }
 
     private bool IsPeriodicDue(ControlScriptTriggerConfig trigger, DateTimeOffset utcNow)
@@ -161,19 +175,80 @@ public sealed class ControlScriptRuntimeSession
             || utcNow - last >= interval;
     }
 
+    /// <summary>Bounds runaway layer switching (e.g. a LayerEnabled handler that activates another layer).</summary>
+    private const int MaxLayerSwitchDepth = 8;
+
     private async ValueTask<ControlScriptRuntimeSessionResult> CompleteDispatchAsync(
         ControlScriptDispatchResult dispatch,
         CancellationToken cancellationToken)
     {
-        var oscRoutes = await FlushScriptOscCommandsAsync(cancellationToken).ConfigureAwait(false);
-        var midiRoutes = await FlushScriptMidiCommandsAsync(cancellationToken).ConfigureAwait(false);
-        RecordDispatch(dispatch.Invocations, dispatch.Diagnostics, oscRoutes, midiRoutes, dispatch.CacheChanges);
-        return new ControlScriptRuntimeSessionResult(
-            dispatch.Invocations,
-            dispatch.Diagnostics,
-            oscRoutes,
-            midiRoutes,
-            dispatch.CacheChanges);
+        var invocations = new List<ControlScriptInvocationRecord>(dispatch.Invocations);
+        var diagnostics = new List<ControlScriptRuntimeDiagnostic>(dispatch.Diagnostics);
+        var cacheChanges = new List<ControlValueCacheChange>(dispatch.CacheChanges);
+
+        var (oscRoutes, midiRoutes) = await FlushAndApplyLayerSwitchesAsync(invocations, diagnostics, cacheChanges, cancellationToken)
+            .ConfigureAwait(false);
+        RecordDispatch(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
+        return new ControlScriptRuntimeSessionResult(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
+    }
+
+    /// <summary>
+    /// Drains and routes queued script OSC/MIDI, then applies any queued layer switches (which fire more
+    /// scripts that may queue more commands), looping until quiet. Mutates the accumulator lists with the
+    /// extra invocations/diagnostics/cache changes the layer switches produce.
+    /// </summary>
+    private async ValueTask<(IReadOnlyList<ControlScriptOscCommandRouteResult> Osc, IReadOnlyList<ControlScriptMidiCommandRouteResult> Midi)>
+        FlushAndApplyLayerSwitchesAsync(
+            List<ControlScriptInvocationRecord> invocations,
+            List<ControlScriptRuntimeDiagnostic> diagnostics,
+            List<ControlValueCacheChange> cacheChanges,
+            CancellationToken cancellationToken)
+    {
+        var oscRoutes = new List<ControlScriptOscCommandRouteResult>();
+        var midiRoutes = new List<ControlScriptMidiCommandRouteResult>();
+
+        for (var depth = 0; ; depth++)
+        {
+            oscRoutes.AddRange(await FlushScriptOscCommandsAsync(cancellationToken).ConfigureAwait(false));
+            midiRoutes.AddRange(await FlushScriptMidiCommandsAsync(cancellationToken).ConfigureAwait(false));
+
+            var requests = _commandSink.DrainLayerActivations();
+            if (requests.Count == 0 || depth >= MaxLayerSwitchDepth)
+                break;
+
+            foreach (var key in requests)
+            {
+                if (!TryResolveLayer(key, out var layerId))
+                    continue;
+
+                var switched = _runtime.SetActiveLayer(layerId);
+                invocations.AddRange(switched.Invocations);
+                diagnostics.AddRange(switched.Diagnostics);
+                cacheChanges.AddRange(switched.CacheChanges);
+            }
+        }
+
+        return (oscRoutes, midiRoutes);
+    }
+
+    private bool TryResolveLayer(string key, out Guid? layerId)
+    {
+        layerId = null;
+        if (string.IsNullOrWhiteSpace(key))
+            return false;
+
+        if (Guid.TryParse(key, out var id) && _config.Layers.Any(l => l.Id == id))
+        {
+            layerId = id;
+            return true;
+        }
+
+        var byName = _config.Layers.FirstOrDefault(l => string.Equals(l.Name, key, StringComparison.OrdinalIgnoreCase));
+        if (byName is null)
+            return false;
+
+        layerId = byName.Id;
+        return true;
     }
 
     private ValueTask<IReadOnlyList<ControlScriptOscCommandRouteResult>> FlushScriptOscCommandsAsync(
