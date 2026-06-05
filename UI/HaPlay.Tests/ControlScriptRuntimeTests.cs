@@ -1269,6 +1269,48 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void LayerScopedScript_WithNoLayerAssigned_StaysInert()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Orphan",
+            ScriptPath = "Scripts/orphan.mnd",
+            Scope = ControlScriptScope.Layer,
+            LayerId = null, // unconfigured layer script must not fire globally
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.MidiControlChange,
+                    FunctionName = "onCc",
+                    DeviceInstanceId = midiDeviceId,
+                },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "X-Touch Mini")],
+                Layers = [new ControlLayerConfig { Id = Guid.NewGuid(), Name = "A", IsEnabled = true }],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/orphan.mnd"] = """ export fun onCc(event, context) { osc.send("x32", "/orphan", osc.float32(1)); } """,
+            },
+            sink);
+
+        var result = runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 5));
+
+        Assert.Empty(result.Invocations);
+        Assert.Empty(sink.OscMessages);
+    }
+
+    [Fact]
     public void DispatchControlEvent_ExecutesBuiltInXTouchMiniX32MuteFeedbackTemplate()
     {
         var oscDeviceId = Guid.NewGuid();

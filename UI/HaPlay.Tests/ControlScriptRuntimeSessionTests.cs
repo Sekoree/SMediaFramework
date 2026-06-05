@@ -118,6 +118,61 @@ public sealed class ControlScriptRuntimeSessionTests
     }
 
     [Fact]
+    public async Task DispatchControlEventAsync_SerializesConcurrentScriptDispatches()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var x32DeviceId = Guid.NewGuid();
+        var sender = new DelayedOscSender(TimeSpan.FromMilliseconds(50));
+        var session = CreateSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices =
+                [
+                    MidiDevice(midiDeviceId, "X-Touch Mini"),
+                    OscDevice(x32DeviceId, "X32", "x32", "192.168.2.76", 10023),
+                ],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Concurrent",
+                        ScriptPath = "Scripts/concurrent.mnd",
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.MidiControlChange,
+                                FunctionName = "onCc",
+                                DeviceInstanceId = midiDeviceId,
+                            },
+                        ],
+                    },
+                ],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/concurrent.mnd"] =
+                    """
+                    export fun onCc(event, context) {
+                        osc.send("x32", "/cc", osc.int32(event.value));
+                    }
+                    """,
+            },
+            sender);
+
+        var first = session.DispatchControlEventAsync(MidiCcEvent(midiDeviceId, controller: 16, value: 1)).AsTask();
+        var second = session.DispatchControlEventAsync(MidiCcEvent(midiDeviceId, controller: 17, value: 2)).AsTask();
+
+        var results = await Task.WhenAll(first, second);
+
+        Assert.All(results, result => Assert.True(Assert.Single(result.Invocations).Succeeded));
+        Assert.Equal(2, sender.Sent.Count);
+        Assert.Equal(1, sender.MaxConcurrentSends);
+    }
+
+    [Fact]
     public async Task DispatchDeviceEnabledAsync_RoutesStartupRequestScript()
     {
         var x32DeviceId = Guid.NewGuid();
@@ -395,7 +450,8 @@ public sealed class ControlScriptRuntimeSessionTests
         Assert.Equal(xtouchId, midiSent.EndpointId);
 
         var cacheRecord = Assert.Single(
-            monitor.Records.Where(r => r.Protocol == ControlMonitorProtocol.Cache));
+            monitor.Records,
+            r => r.Protocol == ControlMonitorProtocol.Cache);
         Assert.Equal(ControlMonitorResult.Cached, cacheRecord.Result);
         Assert.Equal(ControlMonitorDirection.Internal, cacheRecord.Direction);
         Assert.Equal(x32DeviceId, cacheRecord.DeviceInstanceId);
@@ -515,16 +571,18 @@ public sealed class ControlScriptRuntimeSessionTests
 
         Assert.True(Assert.Single(result.Invocations).Succeeded);
 
-        var logRecord = Assert.Single(monitor.Records.Where(r =>
-            r.Protocol == ControlMonitorProtocol.Script && r.Result == ControlMonitorResult.Logged));
+        var logRecord = Assert.Single(
+            monitor.Records,
+            r => r.Protocol == ControlMonitorProtocol.Script && r.Result == ControlMonitorResult.Logged);
         Assert.Equal(ControlMonitorDirection.Internal, logRecord.Direction);
         Assert.Equal(scriptId, logRecord.ScriptId);
         Assert.Equal("hello from script", logRecord.Message);
 
-        var errorRecord = Assert.Single(monitor.Records.Where(r =>
-            r.Protocol == ControlMonitorProtocol.Script
-            && r.Direction == ControlMonitorDirection.Error
-            && r.ErrorMessage == "something failed"));
+        var errorRecord = Assert.Single(
+            monitor.Records,
+            r => r.Protocol == ControlMonitorProtocol.Script
+                && r.Direction == ControlMonitorDirection.Error
+                && r.ErrorMessage == "something failed");
         Assert.Equal(scriptId, errorRecord.ScriptId);
     }
 
@@ -770,7 +828,7 @@ public sealed class ControlScriptRuntimeSessionTests
     private static ControlScriptRuntimeSession CreateSession(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,
-        RecordingOscSender sender,
+        IControlOscSender sender,
         IControlMonitorSink? monitor = null,
         IControlMidiSender? midiSender = null) =>
         new(config, new InMemoryControlScriptSourceProvider(scripts), sender, monitor: monitor, midiSender: midiSender);
@@ -855,6 +913,64 @@ public sealed class ControlScriptRuntimeSessionTests
         int Port,
         string Address,
         IReadOnlyList<OSCArgument> Arguments);
+
+    private sealed class DelayedOscSender : IControlOscSender
+    {
+        private readonly TimeSpan _delay;
+        private readonly object _sentGate = new();
+        private readonly List<SentOscMessage> _sent = new();
+        private int _currentSends;
+        private int _maxConcurrentSends;
+
+        public DelayedOscSender(TimeSpan delay)
+        {
+            _delay = delay;
+        }
+
+        public IReadOnlyList<SentOscMessage> Sent
+        {
+            get
+            {
+                lock (_sentGate)
+                    return _sent.ToArray();
+            }
+        }
+
+        public int MaxConcurrentSends => Volatile.Read(ref _maxConcurrentSends);
+
+        public async ValueTask SendAsync(
+            string host,
+            int port,
+            string address,
+            IReadOnlyList<OSCArgument> arguments,
+            CancellationToken cancellationToken = default)
+        {
+            var current = Interlocked.Increment(ref _currentSends);
+            try
+            {
+                UpdateMaxConcurrentSends(current);
+                await Task.Delay(_delay, cancellationToken).ConfigureAwait(false);
+                lock (_sentGate)
+                    _sent.Add(new SentOscMessage(host, port, address, arguments.ToArray()));
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _currentSends);
+            }
+        }
+
+        private void UpdateMaxConcurrentSends(int current)
+        {
+            while (true)
+            {
+                var max = Volatile.Read(ref _maxConcurrentSends);
+                if (current <= max)
+                    return;
+                if (Interlocked.CompareExchange(ref _maxConcurrentSends, current, max) == max)
+                    return;
+            }
+        }
+    }
 
     private sealed class RecordingMidiSender : IControlMidiSender
     {

@@ -66,6 +66,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add profile loader for built-in app profiles.
 - [x] Add profile loader for user/app-level profiles.
 - [x] Add shareable external profile JSON save/export helpers.
+- [x] Add single-file profile JSON import helper for UI/project override flows.
 - [x] Add project-level profile overrides.
 - [x] Implement profile suggestion behavior:
   - [x] Show profile warnings.
@@ -235,14 +236,20 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] MIDI devices.
   - [x] OSC devices.
   - [x] X32 endpoint and command browser.
+  - [x] X32 command browser filter/grouping and selected command actions.
   - [x] Cache view.
   - [x] Layers.
   - [x] Scripts.
   - [x] Periodic sends.
+- [x] Layer management (create/edit/remove):
+  - [x] "Add layer..." header button + context-menu action (name/priority/active dialog).
+  - [x] Edit layer (rename/priority/active) and remove layer row actions; remove unbinds layer-scoped scripts.
+  - [x] Mutually-exclusive active selection enforced on add/edit.
 - [x] Context menus:
   - [x] Add device script.
   - [x] Add endpoint script.
   - [x] Add layer script.
+  - [x] Add layer / edit layer / remove layer.
   - [x] Add project script.
   - [x] Add imported helper file.
   - [x] Add periodic OSC send.
@@ -258,6 +265,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Trigger editor.
   - [x] Add/remove scripts.
   - [x] Scope selector.
+  - [x] Layer picker for layer-scoped scripts (auto-binds first layer; empty-state hint when no layers).
   - [x] Enable/disable.
   - [x] Failure policy editor.
   - [x] Diagnostics panel.
@@ -290,6 +298,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] User/app-level and project override profile repositories.
   - [x] Shareable external profile JSON save/export.
   - [x] Control workspace profile warnings.
+  - [x] Control workspace profile browser import/export/remove project override flow.
   - [x] Device matching.
   - [x] Script-centric MIDI live input/output session routing.
   - [x] OSC app listener routing.
@@ -317,6 +326,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] MIDI catalog input/output registration into control devices.
   - [x] Shared project MIDI input/output list projection.
   - [x] Control workspace structure list projection.
+  - [x] Control workspace X32 command browser filtering/grouping/action metadata.
   - [x] Control workspace script editor file load/save.
   - [x] Control workspace script metadata editor.
   - [x] Control workspace script add/remove.
@@ -334,6 +344,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Live monitor direction/protocol/device filters.
   - [x] Periodic OSC send manager.
   - [x] Control-system runtime session tick orchestration.
+  - [x] ControlEventQueue FIFO dispatch and live runtime routing.
 - [x] Integration tests:
   - [x] OSC loopback monitor capture.
   - [x] Fake MIDI input to script trigger.
@@ -351,3 +362,23 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [ ] Shared socket behavior.
   - [ ] `/xremote` periodic send for more than 60 seconds.
   - [ ] Cache update from incoming X32 values.
+
+## Post-Review Fixes: 2026-06-05
+
+- [x] Serialize script runtime session dispatch so MIDI, OSC, replies, manual triggers, and periodic ticks cannot enter Mond/script state concurrently.
+- [x] Throttle failed periodic OSC attempts by configured interval instead of retrying every tick.
+- [x] Surface client-side OSCLib oversize send rejection as an exception so HaPlay records failed sends.
+- [x] Clarify OSC client source port vs app-level listener in UI labels and docs.
+- [x] Warn when an OSC device client source port collides with an enabled app listener port.
+- [x] Clarify Cue OSC/MIDI workspace labels and shared Control/Cue MIDI output selection.
+- [x] Move Control workspace manual/test sends into a collapsed diagnostics expander and remove hard-coded test host/port defaults.
+- [x] Remove unused Nodify package/style wiring from the active HaPlay project.
+- [x] Add compact profile summary rows in the Control workspace.
+- [x] Add profile import/export/remove project override controls in the Control workspace.
+- [x] Add X32 command/cache filtering, grouping, selection, request, and test-send actions.
+- [x] Add queued `ControlEventQueue` worker and route the armed runtime through it.
+- [x] Improve script editor failure labels and wrapping trigger layout.
+- [x] Log/stop unexpected PMLib MIDI input read failures and dispose the input wake signal.
+- [x] Follow-up: full profile import/export browser UI.
+- [x] Follow-up: X32 command/cache filtering, grouping, and row actions.
+- [x] Follow-up: queued `ControlEventQueue` worker for live runtime dispatch.

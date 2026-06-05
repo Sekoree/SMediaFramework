@@ -116,6 +116,13 @@ public class MIDIInputDevice : MIDIDevice
         return base.Close();
     }
 
+    protected override void Dispose(bool disposing)
+    {
+        base.Dispose(disposing);
+        if (disposing)
+            _pollWakeSignal.Dispose();
+    }
+
     // ── Stream configuration ──────────────────────────────────────────────────
 
     /// <summary>
@@ -156,6 +163,16 @@ public class MIDIInputDevice : MIDIDevice
             else if (count == (int)PmError.BufferOverflow)
             {
                 Logger.LogWarning("MIDIInputDevice buffer overflow (deviceId={DeviceId}, name={Name})", DeviceId, Name);
+            }
+            else if (count < 0)
+            {
+                Logger.LogWarning(
+                    "MIDIInputDevice read failed: {Error} (deviceId={DeviceId}, name={Name}); stopping input polling",
+                    (PmError)count,
+                    DeviceId,
+                    Name);
+                _polling = false;
+                break;
             }
 
             // Use ManualResetEventSlim instead of Thread.Sleep(1) to avoid

@@ -85,9 +85,9 @@ public sealed class OSCClient : IOSCClient
         if (encoded.Length > Options.MaxPacketBytes)
         {
             _logger.LogWarning(
-                "OSC packet size {Size}B exceeds configured max {Max}B — send aborted.",
+                "OSC packet size {Size}B exceeds configured max {Max}B; send aborted.",
                 encoded.Length, Options.MaxPacketBytes);
-            return; // P3.22: silently drop instead of throwing — consistent with server-side policy.
+            throw new OSCPacketTooLargeException(encoded.Length, Options.MaxPacketBytes);
         }
 
         _logger.LogDebug(

@@ -40,6 +40,12 @@ Use the live monitor to confirm actual incoming CC/note values before relying on
 a profile. Profiles are suggestions; raw MIDI triggers remain available when a
 control is not in the selected profile.
 
+The Control workspace **Profiles** expander shows installed built-in and project
+profiles. Use **Import** to add a shareable profile JSON to the current project,
+**Export selected** to write the selected profile as JSON, **Export built-ins**
+to copy the bundled profiles, and **Remove project** to remove a project-level
+override.
+
 ## X32 / M32 OSC Setup
 
 The built-in X32 profile targets:
@@ -52,8 +58,8 @@ Recommended project setup:
 
 1. Add an OSC control device for the X32.
 2. Set host to the mixer/emulator IP and port to `10023`.
-3. Bind the device to the main app-level OSC listener, usually local port
-   `10020`.
+3. Leave **Client source port** blank unless the network requires a deterministic
+   source port. Do not reuse the app-level listener port `10020`.
 4. Keep the default `/xremote` periodic send enabled so the X32 continues to
    broadcast changes.
 5. Add optional `/subscribe` or `/meters` periodic sends only when a mapping
@@ -67,19 +73,25 @@ Starter scripts cover common workflows:
 - Layer enable requests current fader/mute values for channels 1..8.
 - X32 mute cache changes update X-Touch Mini button LEDs.
 
+The collapsed **X32 command/cache browser** can filter by device, group, command,
+OSC address, value kind, access, or cached value. Select a row and use **Use as
+test** to fill the diagnostics OSC test fields, or **Request** to send an
+address-only request to the selected X32 endpoint while armed.
+
 ## App-Level OSC Listeners
 
-HaPlay stores OSC listeners in the project, separate from OSC devices. The
+HaPlay stores OSC listeners in the project, separate from OSC devices and
+separate from an OSC device's optional client source port. The
 default project has one listener:
 
 - Name: `Main OSC Listener`
 - Local port: `10020`
 - Socket mode: `SharedAppListener`
 
-Multiple OSC devices may share one listener. Incoming OSC packets are routed to
-enabled OSC devices by listener binding plus remote host/port matching. If a
-device has no explicit listener binding, the first enabled listener is used as
-the default.
+Multiple OSC devices may share one listener for independent inbound control
+traffic. X32/M32 replies and `/xremote` updates return to the OSC client's own
+source socket instead; they do not require selecting or binding an app-level
+listener.
 
 Projects can add more listeners for isolated network layouts, but each enabled
 listener must use a unique local port.

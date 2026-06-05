@@ -43,6 +43,23 @@ public enum OSCOversizePolicy
 }
 
 /// <summary>
+/// Thrown when an OSC client refuses to send a packet larger than its configured limit.
+/// </summary>
+public sealed class OSCPacketTooLargeException : InvalidOperationException
+{
+    public OSCPacketTooLargeException(int packetBytes, int maxPacketBytes)
+        : base($"OSC packet size {packetBytes}B exceeds configured max {maxPacketBytes}B.")
+    {
+        PacketBytes = packetBytes;
+        MaxPacketBytes = maxPacketBytes;
+    }
+
+    public int PacketBytes { get; }
+
+    public int MaxPacketBytes { get; }
+}
+
+/// <summary>
 /// OSC/NTP timetag value.
 /// </summary>
 public readonly record struct OSCTimeTag(ulong Value)

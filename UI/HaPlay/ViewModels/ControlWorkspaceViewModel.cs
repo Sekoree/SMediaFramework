@@ -7,6 +7,7 @@ using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -47,11 +48,30 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     internal Func<IReadOnlyList<ControlMidiResolutionRequest>, Task<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>> MidiResolutionPrompt { get; set; } = DefaultPromptAsync;
 
+    /// <summary>
+    /// Ensures the project has been saved to disk (scripts are stored next to the project file, so there's
+    /// no project root until then). Returns true once the project has a location. Wired by the main shell;
+    /// when unset, script saving simply reports that the project must be saved.
+    /// </summary>
+    internal Func<Task<bool>>? EnsureProjectSavedAsync { get; set; }
+
+    internal Func<Task<string?>> ProfileImportPathPrompt { get; set; } = DefaultProfileImportPathPromptAsync;
+
+    internal Func<Task<string?>> ProfileExportDirectoryPrompt { get; set; } = DefaultProfileExportDirectoryPromptAsync;
+
     public ControlWorkspaceViewModel()
     {
         _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _refreshTimer.Tick += (_, _) => RefreshMonitor();
         _refreshTimer.Start();
+
+        // Build the structure for the default (empty) config so the workspace shows its groups — OSC
+        // devices, layers, scripts, periodic sends — before any project is loaded or any MIDI/OSC device
+        // exists. That lets you prepare an OSC-only or scripts/layers-only setup straight away.
+        RebuildScriptRows();
+        RebuildStructureRows();
+        RebuildProfileWarnings();
+        RebuildProfileRows();
     }
 
     public ObservableCollection<ControlMonitorEntryViewModel> MonitorEntries { get; } = new();
@@ -63,6 +83,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public ObservableCollection<ControlStructureRowViewModel> StructureRows { get; } = new();
 
     public ObservableCollection<ControlX32CommandRowViewModel> X32CommandRows { get; } = new();
+
+    public ObservableCollection<ControlProfileRowViewModel> ProfileRows { get; } = new();
 
     public ObservableCollection<string> ProfileWarnings { get; } = new();
 
@@ -139,6 +161,15 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private ControlScriptRowViewModel? _selectedScriptRow;
 
     [ObservableProperty]
+    private ControlProfileRowViewModel? _selectedProfileRow;
+
+    [ObservableProperty]
+    private string _x32CommandFilterText = string.Empty;
+
+    [ObservableProperty]
+    private ControlX32CommandRowViewModel? _selectedX32CommandRow;
+
+    [ObservableProperty]
     private string _selectedScriptText = string.Empty;
 
     [ObservableProperty]
@@ -169,6 +200,33 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public bool HasSelectedScript => SelectedScriptRow is not null;
 
+    partial void OnSelectedProfileRowChanged(ControlProfileRowViewModel? value)
+    {
+        OnPropertyChanged(nameof(HasSelectedProfileRow));
+        OnPropertyChanged(nameof(CanRemoveSelectedProjectProfile));
+        ExportSelectedProfileCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectProfileCommand.NotifyCanExecuteChanged();
+    }
+
+    public bool HasSelectedProfileRow => SelectedProfileRow is not null;
+
+    public bool CanRemoveSelectedProjectProfile => SelectedProfileRow?.IsProjectOverride == true;
+
+    partial void OnX32CommandFilterTextChanged(string value) =>
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+
+    partial void OnSelectedX32CommandRowChanged(ControlX32CommandRowViewModel? value)
+    {
+        OnPropertyChanged(nameof(HasSelectedX32CommandRow));
+        OnPropertyChanged(nameof(CanRequestSelectedX32Command));
+        UseSelectedX32CommandForTestSendCommand.NotifyCanExecuteChanged();
+        RequestSelectedX32CommandCommand.NotifyCanExecuteChanged();
+    }
+
+    public bool HasSelectedX32CommandRow => SelectedX32CommandRow is not null;
+
+    public bool CanRequestSelectedX32Command => SelectedX32CommandRow?.CanRequest == true;
+
     partial void OnSelectedScriptTextChanged(string value) =>
         RefreshScriptAnalysis(SelectedScriptRow);
 
@@ -181,16 +239,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public int LayerCount => _config.Layers.Count;
 
     [ObservableProperty]
-    private string _testOscHost = "192.168.2.76";
+    private string _testOscHost = string.Empty;
 
     [ObservableProperty]
-    private string _testOscPort = "10023";
+    private string _testOscPort = string.Empty;
 
     [ObservableProperty]
-    private string _testOscAddress = "/ch/01/mix/fader";
+    private string _testOscAddress = "/info";
 
     [ObservableProperty]
-    private string _testOscArgs = "0.5";
+    private string _testOscArgs = string.Empty;
 
     public void LoadConfig(ControlSystemConfig config)
     {
@@ -200,6 +258,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildScriptRows();
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildProfileRows();
         RebuildX32CommandRows(cache: null);
         _lastRenderedCount = -1;
         StatusMessage = "Disarmed.";
@@ -283,6 +342,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             StatusMessage = "MIDI device updated. Re-arm control to apply device changes.";
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildProfileRows();
         RebuildX32CommandRows(_session?.ScriptSession.OscCache);
         NotifySummary();
     }
@@ -309,6 +369,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             StatusMessage = "MIDI device updated. Re-arm control to apply device changes.";
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildProfileRows();
         RebuildX32CommandRows(_session?.ScriptSession.OscCache);
         NotifySummary();
         return true;
@@ -378,10 +439,27 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     }
 
     [RelayCommand(CanExecute = nameof(CanSaveSelectedScript))]
-    private void SaveSelectedScript()
+    private async Task SaveSelectedScriptAsync()
     {
         if (SelectedScriptRow is null)
             return;
+
+        // Capture the editor text up front: saving the project sets the project root, which reloads the
+        // selected script from disk (empty for a not-yet-written file) and would otherwise clobber what
+        // the user just typed before we get a chance to write it.
+        var contents = SelectedScriptText;
+
+        // Scripts live next to the project file, so an unsaved project has no place to write them.
+        // Offer to save the project first instead of silently failing.
+        if (string.IsNullOrWhiteSpace(_projectRoot))
+        {
+            var saved = EnsureProjectSavedAsync is not null && await EnsureProjectSavedAsync().ConfigureAwait(true);
+            if (!saved || string.IsNullOrWhiteSpace(_projectRoot))
+            {
+                ScriptEditorStatus = "Save the project first to store scripts.";
+                return;
+            }
+        }
 
         var path = ResolveScriptPath(SelectedScriptRow.Script.ScriptPath);
         if (path is null)
@@ -390,16 +468,23 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, SelectedScriptText);
-        ScriptEditorStatus = $"Saved {SelectedScriptRow.Script.ScriptPath}.";
-        RefreshScriptAnalysis(SelectedScriptRow);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, contents);
+            SelectedScriptText = contents; // restore, in case ensuring the project root reloaded an empty file
+            ScriptEditorStatus = $"Saved {SelectedScriptRow.Script.ScriptPath}.";
+            RefreshScriptAnalysis(SelectedScriptRow);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ScriptEditorStatus = $"Save failed: {ex.Message}";
+        }
     }
 
     private bool CanSaveSelectedScript() =>
         SelectedScriptRow is not null
-        && !string.IsNullOrWhiteSpace(SelectedScriptRow.Script.ScriptPath)
-        && !string.IsNullOrWhiteSpace(_projectRoot);
+        && !string.IsNullOrWhiteSpace(SelectedScriptRow.Script.ScriptPath);
 
     [RelayCommand]
     private void AddScript() => AddScriptInternal(ControlScriptScope.Project, deviceInstanceId: null, layerId: null);
@@ -412,14 +497,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         string namePrefix = "Script",
         string scriptPath = "")
     {
+        var name = $"{namePrefix} {(_config.Scripts.Count + 1).ToString(CultureInfo.InvariantCulture)}";
         var script = new ControlScriptConfig
         {
-            Name = $"{namePrefix} {(_config.Scripts.Count + 1).ToString(CultureInfo.InvariantCulture)}",
+            Name = name,
             Scope = scope,
             DeviceInstanceId = deviceInstanceId,
             LayerId = layerId,
             EndpointInstanceId = endpointInstanceId,
-            ScriptPath = scriptPath,
+            // Seed a sensible project-relative path so Save works immediately (no blank-path dead end).
+            ScriptPath = string.IsNullOrWhiteSpace(scriptPath) ? GenerateDefaultScriptPath(name) : scriptPath,
         };
 
         _config = _config with { Scripts = [.. _config.Scripts, script] };
@@ -429,6 +516,29 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         NotifySummary();
         if (IsArmed)
             StatusMessage = "Script added. Re-arm control to apply script changes.";
+    }
+
+    private string GenerateDefaultScriptPath(string name)
+    {
+        var slug = NormalizeAlias(name);
+        if (string.IsNullOrWhiteSpace(slug))
+            slug = "script";
+
+        var used = _config.Scripts
+            .Select(s => s.ScriptPath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var candidate = $"Scripts/{slug}.mnd";
+        if (!used.Contains(candidate))
+            return candidate;
+
+        for (var i = 2; ; i++)
+        {
+            var next = $"Scripts/{slug}-{i.ToString(CultureInfo.InvariantCulture)}.mnd";
+            if (!used.Contains(next))
+                return next;
+        }
     }
 
     private void AddHelperScript() =>
@@ -487,7 +597,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
         try
         {
-            await session.ScriptSession.SetActiveLayerAsync(layerId).ConfigureAwait(true);
+            await session.EventQueue.SetActiveLayerAsync(layerId).ConfigureAwait(true);
             var layer = _config.Layers.FirstOrDefault(l => l.Id == layerId);
             StatusMessage = $"Activated layer '{layer?.Name}'.";
         }
@@ -495,6 +605,220 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         {
             StatusMessage = $"Layer activate error: {ex.Message}";
         }
+    }
+
+    // ----- Layer add/edit/remove --------------------------------------------------------------
+    // Layers are structural: the live runtime snapshots them at arm time, so add/edit/remove ask for a
+    // re-arm. The dialog display is injectable so the logic is unit-testable without a real window.
+
+    internal Func<LayerDialogViewModel, Task<bool>> LayerPrompt { get; set; } = DefaultLayerPromptAsync;
+
+    [RelayCommand]
+    private async Task AddLayerAsync()
+    {
+        var hasActive = _config.Layers.Any(l => l.IsEnabled);
+        var nextPriority = _config.Layers.Count == 0 ? 0 : _config.Layers.Max(l => l.Priority) + 1;
+        var dialog = new LayerDialogViewModel(
+            "Add layer",
+            name: $"Layer {(_config.Layers.Count + 1).ToString(CultureInfo.InvariantCulture)}",
+            priority: nextPriority,
+            isActive: !hasActive);
+        if (!await LayerPrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        var layer = new ControlLayerConfig
+        {
+            Name = values.Name,
+            Priority = values.Priority,
+            IsEnabled = values.IsActive,
+        };
+
+        var layers = _config.Layers.ToList();
+        layers.Add(layer);
+        if (values.IsActive)
+            layers = ApplyExclusiveActive(layers, layer.Id);
+
+        _config = _config with { Layers = layers };
+        RefreshAfterLayerChange();
+        StatusMessage = $"Added layer '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private async Task EditLayerAsync(ControlStructureRowViewModel row)
+    {
+        if (row.LayerId is not { } layerId)
+            return;
+
+        var existing = _config.Layers.FirstOrDefault(l => l.Id == layerId);
+        if (existing is null)
+            return;
+
+        var dialog = new LayerDialogViewModel("Edit layer", existing.Name, existing.Priority, existing.IsEnabled);
+        if (!await LayerPrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        var layers = _config.Layers
+            .Select(l => l.Id == layerId
+                ? l with { Name = values.Name, Priority = values.Priority, IsEnabled = values.IsActive }
+                : l)
+            .ToList();
+        if (values.IsActive)
+            layers = ApplyExclusiveActive(layers, layerId);
+
+        _config = _config with { Layers = layers };
+        RefreshAfterLayerChange();
+        StatusMessage = $"Updated layer '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private void RemoveLayer(ControlStructureRowViewModel row)
+    {
+        if (row.LayerId is not { } layerId)
+            return;
+
+        var existing = _config.Layers.FirstOrDefault(l => l.Id == layerId);
+        if (existing is null)
+            return;
+
+        var affected = _config.Scripts.Count(s => s.LayerId == layerId);
+        _config = _config with { Layers = _config.Layers.Where(l => l.Id != layerId).ToList() };
+
+        // Clear references on layer-scoped scripts so a dangling layer id doesn't silently disable them.
+        // Going through the row propagates the change back into the config via the row-changed callback.
+        foreach (var scriptRow in ScriptRows.ToList())
+            scriptRow.OnLayerRemoved(layerId);
+
+        RefreshAfterLayerChange();
+        var suffix = affected > 0
+            ? $" {affected.ToString(CultureInfo.InvariantCulture)} script(s) unbound from it."
+            : string.Empty;
+        StatusMessage = $"Removed layer '{existing.Name}'.{suffix}" + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    // Layers are mutually exclusive: exactly the layer with <paramref name="activeId"/> stays enabled.
+    private static List<ControlLayerConfig> ApplyExclusiveActive(IEnumerable<ControlLayerConfig> layers, Guid activeId) =>
+        layers.Select(l => l with { IsEnabled = l.Id == activeId }).ToList();
+
+    private void RefreshAfterLayerChange()
+    {
+        RebuildStructureRows();
+        ApplyLayerOptionsToScriptRows();
+        NotifySummary();
+    }
+
+    private IReadOnlyList<ControlLayerOption> BuildLayerOptions() =>
+        _config.Layers
+            .OrderBy(l => l.Priority)
+            .ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(l => new ControlLayerOption(l.Id, string.IsNullOrWhiteSpace(l.Name) ? "(unnamed layer)" : l.Name))
+            .ToArray();
+
+    private void ApplyLayerOptionsToScriptRows()
+    {
+        var options = BuildLayerOptions();
+        foreach (var row in ScriptRows)
+            row.SetLayerOptions(options);
+    }
+
+    private static async Task<bool> DefaultLayerPromptAsync(LayerDialogViewModel dialogViewModel)
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return false;
+
+        var dialog = new LayerDialog { DataContext = dialogViewModel };
+        return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
+    }
+
+    // ----- OSC listener add/edit/remove -------------------------------------------------------
+    // App-level inbound OSC ports for external control sources (device replies use the client socket and
+    // need none). Structural, so add/edit/remove ask for a re-arm while armed. Display is injectable for tests.
+
+    internal Func<OscListenerDialogViewModel, Task<bool>> OscListenerPrompt { get; set; } = DefaultOscListenerPromptAsync;
+
+    [RelayCommand]
+    private async Task AddOscListenerAsync()
+    {
+        var nextPort = _config.OscListeners.Count == 0 ? 10020 : _config.OscListeners.Max(l => l.LocalPort) + 1;
+        var dialog = new OscListenerDialogViewModel(
+            "Add OSC listener",
+            name: $"OSC Listener {(_config.OscListeners.Count + 1).ToString(CultureInfo.InvariantCulture)}",
+            localPort: nextPort,
+            isEnabled: true);
+        if (!await OscListenerPrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        var listeners = _config.OscListeners.ToList();
+        listeners.Add(new ControlOscListenerConfig
+        {
+            Name = values.Name,
+            LocalPort = values.LocalPort,
+            IsEnabled = values.IsEnabled,
+        });
+        _config = _config with { OscListeners = listeners };
+        RefreshAfterListenerChange();
+        StatusMessage = $"Added OSC listener '{values.Name}' on port {values.LocalPort.ToString(CultureInfo.InvariantCulture)}."
+                        + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private async Task EditOscListenerAsync(ControlStructureRowViewModel row)
+    {
+        if (row.OscListenerId is not { } listenerId)
+            return;
+
+        var existing = _config.OscListeners.FirstOrDefault(l => l.Id == listenerId);
+        if (existing is null)
+            return;
+
+        var dialog = new OscListenerDialogViewModel("Edit OSC listener", existing.Name, existing.LocalPort, existing.IsEnabled);
+        if (!await OscListenerPrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        _config = _config with
+        {
+            OscListeners = _config.OscListeners
+                .Select(l => l.Id == listenerId
+                    ? l with { Name = values.Name, LocalPort = values.LocalPort, IsEnabled = values.IsEnabled }
+                    : l)
+                .ToList(),
+        };
+        RefreshAfterListenerChange();
+        StatusMessage = $"Updated OSC listener '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private void RemoveOscListener(ControlStructureRowViewModel row)
+    {
+        if (row.OscListenerId is not { } listenerId)
+            return;
+
+        var existing = _config.OscListeners.FirstOrDefault(l => l.Id == listenerId);
+        if (existing is null)
+            return;
+
+        // A dangling endpoint id simply makes any endpoint-scoped script inert (no event will match it),
+        // so there's nothing unsafe to clean up here — just drop the listener.
+        _config = _config with { OscListeners = _config.OscListeners.Where(l => l.Id != listenerId).ToList() };
+        RefreshAfterListenerChange();
+        StatusMessage = $"Removed OSC listener '{existing.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private void RefreshAfterListenerChange()
+    {
+        RebuildStructureRows();
+        RebuildProfileWarnings();
+        NotifySummary();
+    }
+
+    private static async Task<bool> DefaultOscListenerPromptAsync(OscListenerDialogViewModel dialogViewModel)
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return false;
+
+        var dialog = new OscListenerDialog { DataContext = dialogViewModel };
+        return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
     }
 
     // ----- Periodic OSC send add/edit/remove --------------------------------------------------
@@ -603,13 +927,19 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         AddEndpointScript,
         AddLayerScript,
         ActivateLayer,
+        () => _ = AddLayerAsync(),
+        row => _ = EditLayerAsync(row),
+        RemoveLayer,
         row => _ = AddPeriodicSendAsync(row),
         row => _ = EditPeriodicSendAsync(row),
         RemovePeriodicSend,
         row => _ = EditOscDeviceInternalAsync(FindOscDevice(row)),
         RemoveOscDevice,
         row => _ = TestOscDeviceAsync(row),
-        row => _ = TestMidiDeviceAsync(row));
+        row => _ = TestMidiDeviceAsync(row),
+        () => _ = AddOscListenerAsync(),
+        row => _ = EditOscListenerAsync(row),
+        RemoveOscListener);
 
     // ----- OSC device add/edit/remove ---------------------------------------------------------
     // The dialog display is injectable so the add/edit logic is unit-testable without a window.
@@ -630,16 +960,15 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         var profiles = CompositeControlDeviceProfileRepository.ForProject(_config).Profiles
             .Where(p => p.Protocol == ControlDeviceProtocol.Osc)
             .ToList();
-        var defaultProfileId = profiles.Any(p => p.Id == DefaultX32ProfileId)
-            ? DefaultX32ProfileId
-            : profiles.FirstOrDefault()?.Id;
+        var defaultProfile = profiles.FirstOrDefault(p => p.Id == DefaultX32ProfileId) ?? profiles.FirstOrDefault();
+        var defaultProfileId = defaultProfile?.Id;
 
         var dialog = new OscDeviceDialogViewModel(
             isAdd ? "Add OSC device" : "Edit OSC device",
             name: existing?.Name ?? "X32",
             profileId: existing?.ProfileId is { Length: > 0 } pid ? pid : defaultProfileId,
             host: string.IsNullOrWhiteSpace(existing?.Binding.OscHost) ? "192.168.2.76" : existing!.Binding.OscHost!,
-            port: existing?.Binding.OscPort ?? 10023,
+            port: existing?.Binding.OscPort ?? defaultProfile?.DefaultOscPort ?? 10023,
             alias: existing?.Binding.Alias ?? (isAdd ? "x32" : null),
             localPort: existing?.Binding.OscLocalPort,
             isEnabled: existing?.IsEnabled ?? true,
@@ -709,9 +1038,123 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     {
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildProfileRows();
         RebuildX32CommandRows(_session?.ScriptSession.OscCache);
         NotifySummary();
     }
+
+    [RelayCommand]
+    private async Task ImportProfileAsync()
+    {
+        var path = await ProfileImportPathPrompt().ConfigureAwait(true);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        try
+        {
+            var profile = ImportProfileFromFile(path);
+            StatusMessage = $"Imported project profile '{FormatProfileName(profile)}'.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            StatusMessage = $"Profile import failed: {ex.Message}";
+        }
+    }
+
+    internal ControlDeviceProfile ImportProfileFromFile(string path)
+    {
+        var profile = DirectoryControlDeviceProfileRepository.LoadProfileFile(path);
+        UpsertProjectProfile(profile);
+        return profile;
+    }
+
+    [RelayCommand(CanExecute = nameof(HasSelectedProfileRow))]
+    private async Task ExportSelectedProfileAsync()
+    {
+        var row = SelectedProfileRow;
+        if (row is null)
+            return;
+
+        var directory = await ProfileExportDirectoryPrompt().ConfigureAwait(true);
+        if (string.IsNullOrWhiteSpace(directory))
+            return;
+
+        try
+        {
+            var path = ExportProfileToDirectory(row, directory);
+            StatusMessage = $"Exported profile '{row.DisplayName}' to {path}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            StatusMessage = $"Profile export failed: {ex.Message}";
+        }
+    }
+
+    internal string ExportProfileToDirectory(ControlProfileRowViewModel row, string directory)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+
+        var repository = CompositeControlDeviceProfileRepository.ForProject(_config);
+        var profile = repository.FindById(row.Id)
+            ?? throw new InvalidOperationException($"Profile '{row.Id}' is not available.");
+        return DirectoryControlDeviceProfileRepository.SaveProfile(directory, profile);
+    }
+
+    [RelayCommand]
+    private async Task ExportBuiltInProfilesAsync()
+    {
+        var directory = await ProfileExportDirectoryPrompt().ConfigureAwait(true);
+        if (string.IsNullOrWhiteSpace(directory))
+            return;
+
+        try
+        {
+            var paths = DirectoryControlDeviceProfileRepository.ExportBuiltInProfiles(directory);
+            StatusMessage = $"Exported {paths.Count.ToString(CultureInfo.InvariantCulture)} built-in profile(s).";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            StatusMessage = $"Profile export failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectProfile))]
+    private void RemoveSelectedProjectProfile()
+    {
+        var row = SelectedProfileRow;
+        if (row is not { IsProjectOverride: true })
+            return;
+
+        _config = _config with
+        {
+            DeviceProfileOverrides = _config.DeviceProfileOverrides
+                .Where(profile => !string.Equals(profile.Id, row.Id, StringComparison.OrdinalIgnoreCase))
+                .ToList(),
+        };
+        RebuildProfileWarnings();
+        RebuildProfileRows();
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        StatusMessage = $"Removed project profile '{row.DisplayName}'.";
+    }
+
+    private void UpsertProjectProfile(ControlDeviceProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var overrides = _config.DeviceProfileOverrides
+            .Where(existing => !string.Equals(existing.Id, profile.Id, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        overrides.Add(profile);
+        _config = _config with { DeviceProfileOverrides = overrides };
+        RebuildProfileWarnings();
+        RebuildProfileRows();
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        SelectedProfileRow = ProfileRows.FirstOrDefault(row =>
+            string.Equals(row.Id, profile.Id, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string FormatProfileName(ControlDeviceProfile profile) =>
+        string.IsNullOrWhiteSpace(profile.DisplayName) ? profile.Id : profile.DisplayName;
 
     private static async Task<bool> DefaultOscDevicePromptAsync(OscDeviceDialogViewModel dialogViewModel)
     {
@@ -747,6 +1190,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         SelectedScriptRow = selectedId is null
             ? ScriptRows.FirstOrDefault()
             : ScriptRows.FirstOrDefault(row => row.Script.Id == selectedId) ?? ScriptRows.FirstOrDefault();
+        ApplyLayerOptionsToScriptRows();
     }
 
     private void RebuildStructureRows()
@@ -763,17 +1207,35 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             ProfileWarnings.Add(warning);
     }
 
+    private void RebuildProfileRows()
+    {
+        var selectedId = SelectedProfileRow?.Id;
+        ProfileRows.Clear();
+        foreach (var row in BuildProfileRows(_config))
+            ProfileRows.Add(row);
+        SelectedProfileRow = !string.IsNullOrWhiteSpace(selectedId)
+            ? ProfileRows.FirstOrDefault(row => string.Equals(row.Id, selectedId, StringComparison.OrdinalIgnoreCase))
+            : SelectedProfileRow;
+    }
+
     private void RebuildX32CommandRows(ControlValueCache? cache)
     {
+        var selected = SelectedX32CommandRow;
         X32CommandRows.Clear();
-        foreach (var row in BuildX32CommandRows(_config, CompositeControlDeviceProfileRepository.ForProject(_config), cache))
+        foreach (var row in BuildX32CommandRows(_config, CompositeControlDeviceProfileRepository.ForProject(_config), cache, X32CommandFilterText))
             X32CommandRows.Add(row);
+        SelectedX32CommandRow = selected is not null
+            ? X32CommandRows.FirstOrDefault(row =>
+                row.DeviceInstanceId == selected.DeviceInstanceId
+                && string.Equals(row.Address, selected.Address, StringComparison.OrdinalIgnoreCase))
+            : null;
     }
 
     internal static IReadOnlyList<ControlX32CommandRowViewModel> BuildX32CommandRows(
         ControlSystemConfig config,
         IControlDeviceProfileRepository repository,
-        ControlValueCache? cache)
+        ControlValueCache? cache,
+        string? filterText = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(repository);
@@ -787,20 +1249,113 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             if (profile is null || profile.Protocol != ControlDeviceProtocol.Osc || profile.Commands.Count == 0)
                 continue;
 
-            foreach (var command in profile.Commands.OrderBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase))
+            foreach (var commandInfo in profile.Commands
+                         .Select(command => new { Command = command, Group = GetX32CommandGroup(command) })
+                         .OrderBy(info => info.Group, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(info => info.Command.DisplayName, StringComparer.OrdinalIgnoreCase))
             {
+                var command = commandInfo.Command;
                 var cacheText = TryGetCommandCacheText(device, command, cache) ?? "(uncached)";
-                rows.Add(new ControlX32CommandRowViewModel(
+                var row = new ControlX32CommandRowViewModel(
+                    DeviceInstanceId: device.Id,
                     DeviceName: string.IsNullOrWhiteSpace(device.Name) ? "(unnamed OSC)" : device.Name,
+                    DeviceKey: GetPreferredDeviceKey(device),
+                    Host: device.Binding.OscHost?.Trim() ?? string.Empty,
+                    Port: device.Binding.OscPort,
+                    Group: commandInfo.Group,
                     CommandName: string.IsNullOrWhiteSpace(command.DisplayName) ? command.Id : command.DisplayName,
                     Address: command.Address,
                     ValueKind: command.ValueKind.ToString(),
                     Access: command.Access.ToString(),
-                    CacheValue: cacheText));
+                    CacheValue: cacheText,
+                    CanRequest: command.Access != ControlCommandAccess.WriteOnly
+                                && !string.IsNullOrWhiteSpace(device.Binding.OscHost)
+                                && device.Binding.OscPort is > 0);
+                if (MatchesX32CommandFilter(row, filterText))
+                    rows.Add(row);
             }
         }
 
         return rows;
+    }
+
+    private static bool MatchesX32CommandFilter(ControlX32CommandRowViewModel row, string? filterText)
+    {
+        if (string.IsNullOrWhiteSpace(filterText))
+            return true;
+
+        var terms = filterText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return terms.All(term =>
+            Contains(row.DeviceName, term)
+            || Contains(row.DeviceKey, term)
+            || Contains(row.Group, term)
+            || Contains(row.CommandName, term)
+            || Contains(row.Address, term)
+            || Contains(row.ValueKind, term)
+            || Contains(row.Access, term)
+            || Contains(row.CacheValue, term));
+    }
+
+    private static string GetX32CommandGroup(ControlCommandProfile command)
+    {
+        if (!string.IsNullOrWhiteSpace(command.Id))
+        {
+            var idParts = command.Id.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (idParts.Length >= 3 && (string.Equals(idParts[0], "x32", StringComparison.OrdinalIgnoreCase)
+                                        || string.Equals(idParts[0], "xair", StringComparison.OrdinalIgnoreCase)))
+                return FormatX32CommandGroup(idParts[1], idParts[2]);
+            if (idParts.Length >= 2)
+                return FormatX32CommandGroup(idParts[0], idParts[1]);
+            if (idParts.Length == 1)
+                return ToDisplayGroup(idParts[0]);
+        }
+
+        var address = command.Address.Trim();
+        var parts = address.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length >= 2 && int.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+            return FormatX32CommandGroup(parts[0], number.ToString(CultureInfo.InvariantCulture));
+
+        if (parts.Length > 0)
+            return ToDisplayGroup(parts[0]);
+
+        return "Other";
+    }
+
+    private static string FormatX32CommandGroup(string group, string? numberText)
+    {
+        if (int.TryParse(numberText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var number))
+        {
+            return group.ToLowerInvariant() switch
+            {
+                "ch" or "channel" => $"Channel {number:00}",
+                "bus" => $"Bus {number:00}",
+                "mtx" or "matrix" => $"Matrix {number:00}",
+                "dca" => $"DCA {number}",
+                "auxin" => $"Aux In {number:00}",
+                _ => ToDisplayGroup(group),
+            };
+        }
+
+        return ToDisplayGroup(group);
+    }
+
+    private static string ToDisplayGroup(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "Other";
+
+        return value.Trim().ToLowerInvariant() switch
+        {
+            "ch" or "channel" => "Channels",
+            "bus" => "Buses",
+            "mtx" or "matrix" => "Matrix",
+            "dca" => "DCA",
+            "main" or "lr" => "Main",
+            "auxin" => "Aux In",
+            "config" => "Config",
+            "meters" or "meter" => "Meters",
+            var text => CultureInfo.CurrentCulture.TextInfo.ToTitleCase(text.Replace('-', ' ').Replace('_', ' ')),
+        };
     }
 
     internal static IReadOnlyList<string> BuildProfileWarnings(
@@ -834,8 +1389,95 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             }
         }
 
+        var listenerPorts = config.OscListeners
+            .Where(l => l.IsEnabled)
+            .Select(l => l.LocalPort)
+            .ToHashSet();
+        foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Osc && d.Binding.OscLocalPort is > 0))
+        {
+            var localPort = device.Binding.OscLocalPort!.Value;
+            if (!listenerPorts.Contains(localPort))
+                continue;
+
+            var name = string.IsNullOrWhiteSpace(device.Name) ? "(unnamed OSC)" : device.Name;
+            warnings.Add($"{name}: client source port {localPort} matches an enabled OSC listener; use blank/automatic or another port.");
+        }
+
         return warnings;
     }
+
+    internal static IReadOnlyList<ControlProfileRowViewModel> BuildProfileRows(
+        IControlDeviceProfileRepository repository)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        return BuildProfileRowsFromProfiles(repository.Profiles.Select(profile =>
+            new ProfileSource(profile, "Installed", IsProjectOverride: false)));
+    }
+
+    internal static IReadOnlyList<ControlProfileRowViewModel> BuildProfileRows(
+        ControlSystemConfig config,
+        IControlDeviceProfileRepository? appRepository = null)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var profiles = new Dictionary<string, ProfileSource>(StringComparer.OrdinalIgnoreCase);
+        foreach (var profile in BuiltInControlDeviceProfileRepository.Instance.Profiles)
+            AddProfileSource(profiles, profile, "Built-in", isProjectOverride: false);
+        if (appRepository is not null)
+        {
+            foreach (var profile in appRepository.Profiles)
+                AddProfileSource(profiles, profile, "App", isProjectOverride: false);
+        }
+
+        foreach (var profile in config.DeviceProfileOverrides)
+            AddProfileSource(profiles, profile, "Project", isProjectOverride: true);
+
+        return BuildProfileRowsFromProfiles(profiles.Values);
+    }
+
+    private static void AddProfileSource(
+        Dictionary<string, ProfileSource> profiles,
+        ControlDeviceProfile profile,
+        string source,
+        bool isProjectOverride)
+    {
+        if (string.IsNullOrWhiteSpace(profile.Id))
+            return;
+
+        profiles[profile.Id] = new ProfileSource(profile, source, isProjectOverride);
+    }
+
+    private static IReadOnlyList<ControlProfileRowViewModel> BuildProfileRowsFromProfiles(
+        IEnumerable<ProfileSource> profiles) =>
+        profiles
+            .OrderBy(p => p.Profile.Protocol)
+            .ThenBy(p => p.Profile.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Select(source =>
+            {
+                var profile = source.Profile;
+                var summary = string.Join(
+                    ", ",
+                    new[]
+                    {
+                        FormatProfileCount(profile.Ports.Count, "port"),
+                        FormatProfileCount(profile.Controls.Count, "control"),
+                        FormatProfileCount(profile.Commands.Count, "command"),
+                        FormatProfileCount(profile.Tasks.Count, "task"),
+                    }.OfType<string>());
+                return new ControlProfileRowViewModel(
+                    string.IsNullOrWhiteSpace(profile.DisplayName) ? profile.Id : profile.DisplayName,
+                    profile.Id,
+                    profile.Protocol.ToString(),
+                    source.Source,
+                    string.IsNullOrWhiteSpace(summary) ? "No mapped controls, commands, or tasks." : summary,
+                    source.IsProjectOverride);
+            })
+            .ToArray();
+
+    private sealed record ProfileSource(ControlDeviceProfile Profile, string Source, bool IsProjectOverride);
+
+    private static string? FormatProfileCount(int count, string label) =>
+        count == 0 ? null : $"{count.ToString(CultureInfo.InvariantCulture)} {label}{(count == 1 ? string.Empty : "s")}";
 
     internal static IReadOnlyList<ControlStructureRowViewModel> BuildStructureRows(
         ControlSystemConfig config,
@@ -964,6 +1606,15 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             yield return device.Binding.Alias;
         if (!string.IsNullOrWhiteSpace(device.ProfileId))
             yield return device.ProfileId;
+    }
+
+    private static string GetPreferredDeviceKey(ControlDeviceInstanceConfig device)
+    {
+        if (!string.IsNullOrWhiteSpace(device.Binding.Alias))
+            return device.Binding.Alias;
+        if (!string.IsNullOrWhiteSpace(device.Name))
+            return device.Name;
+        return device.Id.ToString();
     }
 
     private static string FormatCachedValue(ControlValueCacheEntry entry)
@@ -1222,6 +1873,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         _config = ControlMidiDeviceResolver.ApplySelections(_config, selections);
         RebuildStructureRows();
         RebuildProfileWarnings();
+        RebuildProfileRows();
         RebuildX32CommandRows(_session?.ScriptSession.OscCache);
         NotifySummary();
         return true;
@@ -1256,6 +1908,39 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         };
         return await dialog.ShowDialog<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>(owner)
             .ConfigureAwait(true);
+    }
+
+    private static async Task<string?> DefaultProfileImportPathPromptAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return null;
+
+        var picks = await owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import control profile",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Control profile JSON") { Patterns = ["*.json"] },
+                new FilePickerFileType("All files") { Patterns = ["*"] },
+            ],
+        }).ConfigureAwait(true);
+        return picks.FirstOrDefault()?.TryGetLocalPath();
+    }
+
+    private static async Task<string?> DefaultProfileExportDirectoryPromptAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return null;
+
+        var picks = await owner.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Export control profiles",
+            AllowMultiple = false,
+        }).ConfigureAwait(true);
+        return picks.FirstOrDefault()?.TryGetLocalPath();
     }
 
     private static Window? TryGetOwnerWindow() =>
@@ -1396,6 +2081,20 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return;
         }
 
+        var host = TestOscHost.Trim();
+        var address = TestOscAddress.Trim();
+        if (string.IsNullOrWhiteSpace(host))
+        {
+            StatusMessage = "OSC test host is required.";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            StatusMessage = "OSC test address is required.";
+            return;
+        }
+
         if (!int.TryParse(TestOscPort, NumberStyles.Integer, CultureInfo.InvariantCulture, out var port))
         {
             StatusMessage = "Invalid OSC port.";
@@ -1405,16 +2104,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         var args = ParseOscArgs(TestOscArgs);
         try
         {
-            await osc.SendAsync(TestOscHost, port, TestOscAddress, args).ConfigureAwait(true);
+            await osc.SendAsync(host, port, address, args).ConfigureAwait(true);
             monitor.Record(new ControlMonitorRecord
             {
                 Direction = ControlMonitorDirection.Output,
                 Protocol = ControlMonitorProtocol.Osc,
                 Result = ControlMonitorResult.Sent,
-                RemoteHost = TestOscHost,
+                RemoteHost = host,
                 RemotePort = port,
-                Endpoint = $"{TestOscHost}:{port}",
-                Address = TestOscAddress,
+                Endpoint = $"{host}:{port}",
+                Address = address,
                 OscArguments = args.Select(ControlMonitorOscArgumentRecord.FromOscArgument).ToList(),
                 Message = "test send",
             });
@@ -1426,13 +2125,34 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 Direction = ControlMonitorDirection.Error,
                 Protocol = ControlMonitorProtocol.Osc,
                 Result = ControlMonitorResult.Failed,
-                RemoteHost = TestOscHost,
+                RemoteHost = host,
                 RemotePort = port,
-                Address = TestOscAddress,
+                Address = address,
                 Message = "test send",
                 ErrorMessage = ex.Message,
             });
         }
+    }
+
+    [RelayCommand(CanExecute = nameof(HasSelectedX32CommandRow))]
+    private void UseSelectedX32CommandForTestSend()
+    {
+        var row = SelectedX32CommandRow;
+        if (row is null)
+            return;
+
+        TestOscHost = row.Host;
+        TestOscPort = row.Port?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+        TestOscAddress = row.Address;
+        TestOscArgs = string.Empty;
+        StatusMessage = $"Prepared '{row.CommandName}' for test send.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRequestSelectedX32Command))]
+    private async Task RequestSelectedX32CommandAsync()
+    {
+        UseSelectedX32CommandForTestSend();
+        await SendTestOscAsync().ConfigureAwait(true);
     }
 
     [RelayCommand]
@@ -1447,7 +2167,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
         try
         {
-            await session.ScriptSession.DispatchManualAsync().ConfigureAwait(true);
+            await session.EventQueue.DispatchManualAsync().ConfigureAwait(true);
         }
         catch (Exception ex)
         {
@@ -1849,13 +2569,19 @@ internal sealed record ControlStructureRowCommands(
     Action<ControlStructureRowViewModel> AddEndpointScript,
     Action<ControlStructureRowViewModel> AddLayerScript,
     Action<ControlStructureRowViewModel> ActivateLayer,
+    Action AddLayer,
+    Action<ControlStructureRowViewModel> EditLayer,
+    Action<ControlStructureRowViewModel> RemoveLayer,
     Action<ControlStructureRowViewModel> AddPeriodicSend,
     Action<ControlStructureRowViewModel> EditPeriodicSend,
     Action<ControlStructureRowViewModel> RemovePeriodicSend,
     Action<ControlStructureRowViewModel> EditOscDevice,
     Action<ControlStructureRowViewModel> RemoveOscDevice,
     Action<ControlStructureRowViewModel> TestOsc,
-    Action<ControlStructureRowViewModel> TestMidi);
+    Action<ControlStructureRowViewModel> TestMidi,
+    Action AddOscListener,
+    Action<ControlStructureRowViewModel> EditOscListener,
+    Action<ControlStructureRowViewModel> RemoveOscListener);
 
 public sealed class ControlStructureRowViewModel
 {
@@ -1893,6 +2619,12 @@ public sealed class ControlStructureRowViewModel
             AddEndpointScriptCommand = new RelayCommand(() => commands.AddEndpointScript(this), () => CanAddEndpointScript);
             AddLayerScriptCommand = new RelayCommand(() => commands.AddLayerScript(this), () => CanAddLayerScript);
             ActivateLayerCommand = new RelayCommand(() => commands.ActivateLayer(this), () => CanActivateLayer);
+            AddLayerCommand = new RelayCommand(commands.AddLayer);
+            EditLayerCommand = new RelayCommand(() => commands.EditLayer(this), () => CanEditLayer);
+            RemoveLayerCommand = new RelayCommand(() => commands.RemoveLayer(this), () => CanEditLayer);
+            AddOscListenerCommand = new RelayCommand(commands.AddOscListener);
+            EditOscListenerCommand = new RelayCommand(() => commands.EditOscListener(this), () => CanEditOscListener);
+            RemoveOscListenerCommand = new RelayCommand(() => commands.RemoveOscListener(this), () => CanEditOscListener);
             AddPeriodicSendCommand = new RelayCommand(() => commands.AddPeriodicSend(this), () => CanAddPeriodicSend);
             EditPeriodicSendCommand = new RelayCommand(() => commands.EditPeriodicSend(this), () => CanEditPeriodicSend);
             RemovePeriodicSendCommand = new RelayCommand(() => commands.RemovePeriodicSend(this), () => CanEditPeriodicSend);
@@ -1933,9 +2665,13 @@ public sealed class ControlStructureRowViewModel
 
     public bool CanAddEndpointScript => OscListenerId is not null;
 
+    public bool CanEditOscListener => OscListenerId is not null;
+
     public bool CanAddLayerScript => LayerId is not null;
 
     public bool CanActivateLayer => LayerId is not null;
+
+    public bool CanEditLayer => LayerId is not null;
 
     public bool CanAddPeriodicSend => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null && PeriodicSendId is null;
 
@@ -1957,6 +2693,18 @@ public sealed class ControlStructureRowViewModel
 
     public ICommand? ActivateLayerCommand { get; }
 
+    public ICommand? AddLayerCommand { get; }
+
+    public ICommand? EditLayerCommand { get; }
+
+    public ICommand? RemoveLayerCommand { get; }
+
+    public ICommand? AddOscListenerCommand { get; }
+
+    public ICommand? EditOscListenerCommand { get; }
+
+    public ICommand? RemoveOscListenerCommand { get; }
+
     public ICommand? AddPeriodicSendCommand { get; }
 
     public ICommand? EditPeriodicSendCommand { get; }
@@ -1973,12 +2721,32 @@ public sealed class ControlStructureRowViewModel
 }
 
 public sealed record ControlX32CommandRowViewModel(
+    Guid DeviceInstanceId,
     string DeviceName,
+    string DeviceKey,
+    string Host,
+    int? Port,
+    string Group,
     string CommandName,
     string Address,
     string ValueKind,
     string Access,
-    string CacheValue);
+    string CacheValue,
+    bool CanRequest);
+
+public sealed record ControlProfileRowViewModel(
+    string DisplayName,
+    string Id,
+    string Protocol,
+    string Source,
+    string Summary,
+    bool IsProjectOverride);
+
+/// <summary>A selectable layer in the script editor's layer picker. <see cref="ToString"/> drives display.</summary>
+public sealed record ControlLayerOption(Guid Id, string Name)
+{
+    public override string ToString() => Name;
+}
 
 public sealed partial class ControlScriptRowViewModel : ViewModelBase
 {
@@ -2047,11 +2815,69 @@ public sealed partial class ControlScriptRowViewModel : ViewModelBase
             if (value == _script.Scope)
                 return;
 
-            UpdateScript(_script with { Scope = value }, nameof(Scope), nameof(ScopeText));
+            var next = _script with { Scope = value };
+            // Selecting Layer scope with no layer chosen would silently run the script globally, so bind it
+            // to the first available layer; the picker still lets the user change it.
+            if (value == ControlScriptScope.Layer && next.LayerId is null && LayerOptions.Count > 0)
+                next = next with { LayerId = LayerOptions[0].Id };
+
+            UpdateScript(
+                next,
+                nameof(Scope),
+                nameof(ScopeText),
+                nameof(ShowLayerPicker),
+                nameof(ShowLayerSelector),
+                nameof(ShowLayerHint),
+                nameof(SelectedLayer));
         }
     }
 
     public string ScopeText => _script.Scope.ToString();
+
+    /// <summary>Layer choices for the editor's layer picker. Populated by the owning workspace.</summary>
+    public ObservableCollection<ControlLayerOption> LayerOptions { get; } = new();
+
+    /// <summary>True while this script is layer-scoped and the layer picker (or its empty hint) should show.</summary>
+    public bool ShowLayerPicker => _script.Scope == ControlScriptScope.Layer;
+
+    /// <summary>True when the layer picker should show a selectable list of layers.</summary>
+    public bool ShowLayerSelector => ShowLayerPicker && LayerOptions.Count > 0;
+
+    /// <summary>True when layer scope is selected but no layers exist yet.</summary>
+    public bool ShowLayerHint => ShowLayerPicker && LayerOptions.Count == 0;
+
+    public ControlLayerOption? SelectedLayer
+    {
+        get => LayerOptions.FirstOrDefault(o => o.Id == _script.LayerId);
+        set
+        {
+            if (value?.Id == _script.LayerId)
+                return;
+
+            UpdateScript(_script with { LayerId = value?.Id }, nameof(SelectedLayer));
+        }
+    }
+
+    /// <summary>Replaces the available layer choices (called when project layers change).</summary>
+    public void SetLayerOptions(IReadOnlyList<ControlLayerOption> options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        LayerOptions.Clear();
+        foreach (var option in options)
+            LayerOptions.Add(option);
+
+        OnPropertyChanged(nameof(SelectedLayer));
+        OnPropertyChanged(nameof(ShowLayerSelector));
+        OnPropertyChanged(nameof(ShowLayerHint));
+    }
+
+    /// <summary>Clears this script's layer binding when its layer was removed, keeping config in sync.</summary>
+    public void OnLayerRemoved(Guid removedLayerId)
+    {
+        if (_script.LayerId == removedLayerId)
+            UpdateScript(_script with { LayerId = null }, nameof(SelectedLayer));
+    }
 
     public ControlScriptFailureMode FailureMode
     {

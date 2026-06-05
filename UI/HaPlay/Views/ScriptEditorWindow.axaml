@@ -28,8 +28,8 @@
           <TextBlock Text="{Binding SelectedScriptRow.DisplayName}" FontSize="18" FontWeight="SemiBold" />
           <TextBlock Text="{Binding ScriptEditorStatus}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
         </StackPanel>
-        <Grid ColumnDefinitions="Auto,*,Auto,140,Auto,120"
-              RowDefinitions="Auto,Auto"
+        <Grid ColumnDefinitions="Auto,*,Auto,120,Auto,160"
+              RowDefinitions="Auto,Auto,Auto"
               ColumnSpacing="8" RowSpacing="6">
           <CheckBox Grid.Row="0" Grid.Column="0" Content="Enabled"
                     IsChecked="{Binding SelectedScriptRow.IsEnabled, Mode=TwoWay}" />
@@ -39,17 +39,29 @@
           <ComboBox Grid.Row="0" Grid.Column="3" HorizontalAlignment="Stretch"
                     ItemsSource="{Binding ScriptScopeOptions}"
                     SelectedItem="{Binding SelectedScriptRow.Scope, Mode=TwoWay}" />
-          <TextBlock Grid.Row="0" Grid.Column="4" Text="Failures" VerticalAlignment="Center" />
-          <NumericUpDown Grid.Row="0" Grid.Column="5"
-                         Value="{Binding SelectedScriptRow.MaxConsecutiveFailures, Mode=TwoWay}"
-                         Minimum="1" Maximum="99" Increment="1" FormatString="0" />
           <TextBlock Grid.Row="1" Grid.Column="0" Text="Path" VerticalAlignment="Center" />
-          <TextBox Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3"
+          <TextBox Grid.Row="1" Grid.Column="1"
                    Text="{Binding SelectedScriptRow.ScriptPath, Mode=TwoWay}"
                    PlaceholderText="Scripts/control.mnd" />
-          <ComboBox Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" HorizontalAlignment="Stretch"
+          <TextBlock Grid.Row="1" Grid.Column="2" Text="Failure threshold" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="1" Grid.Column="3"
+                         Value="{Binding SelectedScriptRow.MaxConsecutiveFailures, Mode=TwoWay}"
+                         Minimum="1" Maximum="99" Increment="1" FormatString="0" />
+          <TextBlock Grid.Row="1" Grid.Column="4" Text="Failure action" VerticalAlignment="Center" />
+          <ComboBox Grid.Row="1" Grid.Column="5" HorizontalAlignment="Stretch"
                     ItemsSource="{Binding ScriptFailureModeOptions}"
                     SelectedItem="{Binding SelectedScriptRow.FailureMode, Mode=TwoWay}" />
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="Layer" VerticalAlignment="Center"
+                     IsVisible="{Binding SelectedScriptRow.ShowLayerPicker}" />
+          <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                    IsVisible="{Binding SelectedScriptRow.ShowLayerSelector}"
+                    ItemsSource="{Binding SelectedScriptRow.LayerOptions}"
+                    SelectedItem="{Binding SelectedScriptRow.SelectedLayer, Mode=TwoWay}"
+                    PlaceholderText="select a layer" />
+          <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="5"
+                     Text="No layers yet - add one with 'Add layer...' in the Control workspace."
+                     Opacity="0.6" VerticalAlignment="Center" TextWrapping="Wrap"
+                     IsVisible="{Binding SelectedScriptRow.ShowLayerHint}" />
         </Grid>
       </StackPanel>
 
@@ -86,21 +98,21 @@
                           <Grid ColumnDefinitions="160,Auto" ColumnSpacing="6" Margin="0,2">
                             <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding KindOptions}" SelectedItem="{Binding Kind}" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                              <TextBox Width="160" Text="{Binding FunctionName}" PlaceholderText="exported function" />
+                            <WrapPanel Grid.Column="1" Orientation="Horizontal">
+                              <TextBox Width="160" Margin="0,0,6,6" Text="{Binding FunctionName}" PlaceholderText="exported function" />
                               <TextBox Width="180" Text="{Binding OscAddressPattern}"
-                                       PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" />
+                                       PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" Margin="0,0,6,6" />
                               <TextBox Width="64" Text="{Binding MidiChannelText}"
-                                       PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" />
+                                       PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" Margin="0,0,6,6" />
                               <TextBox Width="64" Text="{Binding MidiControllerText}"
-                                       PlaceholderText="cc" IsVisible="{Binding ShowMidiController}" />
+                                       PlaceholderText="cc" IsVisible="{Binding ShowMidiController}" Margin="0,0,6,6" />
                               <TextBox Width="64" Text="{Binding MidiNoteText}"
-                                       PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" />
+                                       PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" Margin="0,0,6,6" />
                               <TextBox Width="90" Text="{Binding IntervalMsText}"
-                                       PlaceholderText="ms" IsVisible="{Binding ShowInterval}" />
-                              <Button Content="✕" Padding="8,2" ToolTip.Tip="Remove trigger"
+                                       PlaceholderText="ms" IsVisible="{Binding ShowInterval}" Margin="0,0,6,6" />
+                              <Button Content="✕" Padding="8,2" ToolTip.Tip="Remove trigger" Margin="0,0,0,6"
                                       Command="{Binding RemoveCommand}" />
-                            </StackPanel>
+                            </WrapPanel>
                           </Grid>
                         </DataTemplate>
                       </ItemsControl.ItemTemplate>

@@ -121,6 +121,41 @@ public sealed class ControlOscListenerManagerTests
     }
 
     [Fact]
+    public async Task DispatchDeviceMessageAsync_RoutesClientReplyWithNoListenerConfigured()
+    {
+        var deviceId = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        var device = OscDevice(deviceId, "X32", "x32", "127.0.0.1", 10023, listenerId: null);
+        var config = new ControlSystemConfig
+        {
+            IsArmed = true,
+            OscListeners = [], // X32 replies arrive on the client socket; no app listener needed
+            Devices = [device],
+            Scripts = [OscScript(deviceId, "Scripts/on-osc.mnd", "onOsc", "/ch/*/mix/fader")],
+        };
+        var monitor = new ControlMonitorBuffer(maxRecords: 20);
+        var session = CreateRuntimeSession(config, sender, monitor);
+        await using var manager = new ControlOscListenerManager(config, session, monitor);
+
+        var result = await manager.DispatchDeviceMessageAsync(
+            device,
+            Context("127.0.0.1", 10023, "/ch/01/mix/fader", [OSCArgument.Float32(0.42f)]));
+
+        Assert.Equal(deviceId, result.DeviceInstanceId);
+        Assert.True(Assert.Single(result.ScriptResult.Invocations).Succeeded);
+        var sent = Assert.Single(sender.Sent);
+        Assert.Equal("/seen", sent.Address);
+        Assert.Equal(0.42f, Assert.Single(sent.Arguments).AsFloat32());
+        Assert.Contains(
+            monitor.Records,
+            record => record.Direction == ControlMonitorDirection.Input
+                      && record.Protocol == ControlMonitorProtocol.Osc
+                      && record.Result == ControlMonitorResult.Received
+                      && record.DeviceInstanceId == deviceId
+                      && record.Address == "/ch/01/mix/fader");
+    }
+
+    [Fact]
     public async Task StartAsync_ReceivesUdpOscAndRoutesThroughRuntimeSession()
     {
         var listenPort = GetFreeUdpPort();

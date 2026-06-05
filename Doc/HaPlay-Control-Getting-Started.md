@@ -23,12 +23,12 @@ Everything here is done in the app — no project-JSON editing required.
 
 ## Step 1 — Add your MIDI controller (input + output)
 
-1. Open the **MIDI Devices** workspace (`Ctrl+5`).
+1. Open the **MIDI Ports** workspace (`Ctrl+5`).
 2. Click **Refresh** to scan for connected MIDI ports.
 3. Under the detected **inputs**, select your controller (e.g. *X-Touch MINI*) and
-   click **Use Input**. This registers it as a control MIDI device.
+   click **Use for Control**. This registers it as a control MIDI device.
 4. (Optional, for button LEDs / encoder-ring feedback) select the same device under
-   detected **outputs** and click **Use Output**.
+   detected **outputs** and click **Use for Control + Cues**.
 
 The device now appears in the **Control** workspace structure tree under
 *MIDI devices*. If you have several identical or renamed ports and the match is
@@ -47,7 +47,7 @@ ambiguous, use **Resolve MIDI…** (in the Control workspace) to pick the exact 
      browser and address helpers.
    - **Host / Port**: `192.168.2.76` / `10023` (your console's IP and OSC port).
    - **Alias**: `x32` — this is what scripts pass as the `deviceKey`.
-   - **Local port**: leave **blank** for an automatic (ephemeral) source port. The
+   - **Client source port**: leave **blank** for an automatic (ephemeral) source port. The
      X32 replies to whatever port we send from, and HaPlay receives those replies on
      that same client socket — so you don't need to run or pick a listener. Set a
      fixed value only if your network setup needs a known, deterministic source port.
@@ -176,5 +176,11 @@ Still in the Script Editor window, in the **Triggers** section:
   See the built-in `xtouch-mini-x32-mutes.mnd` starter for an 8-button version.
 - **Profile warnings** under the structure tree are advisory — raw scripted OSC/MIDI
   still works even if a profile is missing.
+- **Profiles** and **X32 command/cache browser** are collapsed by default. Use
+  them to import/export profile JSON, filter X32 commands, prepare a test send,
+  or request the selected X32 address while armed.
 - **Full API**: see `Doc/HaPlay-Control-Scripting-Reference.md` for every `osc`,
   `x32`, `midi`, `state`, `devices`, `monitor`, and `time` function.
+- **Next step — layers + LED feedback**: `Doc/HaPlay-Control-X32-XTouch-Layers.md`
+  builds a complete two-layer setup (encoders→faders 1–8 / 9–16, fan-display LED rings,
+  encoder-press reset, mute buttons with LED feedback, Layer A to switch banks).

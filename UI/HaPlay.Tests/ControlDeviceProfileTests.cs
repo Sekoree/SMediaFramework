@@ -8,13 +8,47 @@ namespace HaPlay.Tests;
 public sealed class ControlDeviceProfileTests
 {
     [Fact]
-    public void BuiltInRepository_ContainsXTouchMiniAndX32Profiles()
+    public void BuiltInRepository_ContainsXTouchMiniX32AndXAirProfiles()
     {
         var repository = BuiltInControlDeviceProfileRepository.Instance;
 
         Assert.NotNull(repository.FindById("behringer.xtouch-mini.mc"));
         Assert.NotNull(repository.FindById("behringer.x32.osc"));
+        Assert.NotNull(repository.FindById("behringer.xair.osc"));
         Assert.Null(repository.FindById("missing.profile"));
+    }
+
+    [Fact]
+    public void XAirProfile_UsesXAirAddressingAndDefaultPort()
+    {
+        var profile = BuiltInControlDeviceProfileRepository.CreateXAirProfile();
+
+        Assert.Equal("behringer.xair.osc", profile.Id);
+        Assert.Equal(ControlDeviceProtocol.Osc, profile.Protocol);
+        Assert.Equal(10024, profile.DefaultOscPort);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.OscRemote);
+
+        // Channels share the X32 /ch/NN/mix layout (16 channels for XR16/XR18).
+        var ch1Fader = Assert.Single(profile.Commands, c => c.Id == "xair.ch.01.fader");
+        Assert.Equal("/ch/01/mix/fader", ch1Fader.Address);
+        Assert.Equal(ControlCommandValueKind.NormalizedFloat, ch1Fader.ValueKind);
+        Assert.Contains(profile.Commands, c => c.Id == "xair.ch.16.mute" && c.Address == "/ch/16/mix/on");
+        Assert.DoesNotContain(profile.Commands, c => c.Id == "xair.ch.17.fader");
+
+        // Buses and DCAs are single-digit; the main is /lr.
+        Assert.Contains(profile.Commands, c => c.Id == "xair.bus.1.fader" && c.Address == "/bus/1/mix/fader");
+        Assert.Contains(profile.Commands, c => c.Id == "xair.bus.6.mute" && c.Address == "/bus/6/mix/on");
+        Assert.Contains(profile.Commands, c => c.Id == "xair.dca.1.fader" && c.Address == "/dca/1/fader");
+        Assert.Contains(profile.Commands, c => c.Id == "xair.dca.4.mute" && c.Address == "/dca/4/on");
+        Assert.Contains(profile.Commands, c => c.Id == "xair.lr.fader" && c.Address == "/lr/mix/fader");
+        Assert.Contains(profile.Commands, c => c.Id == "xair.lr.mute" && c.Address == "/lr/mix/on");
+
+        var xremote = Assert.Single(profile.Tasks, t => t.Id == "xair.xremote");
+        Assert.True(xremote.IsDefaultEnabled);
+        Assert.Equal("/xremote", xremote.Address);
+        Assert.Equal(8000, xremote.IntervalMs);
+
+        Assert.Empty(ControlDeviceProfileValidator.Validate(profile));
     }
 
     [Fact]

@@ -37,9 +37,7 @@ public sealed class ControlPeriodicOscSendManager
                     continue;
 
                 var result = await SendAsync(device, send, cancellationToken).ConfigureAwait(false);
-                if (result.Succeeded)
-                    _lastSentUtc[(device.Id, send.Id)] = utcNow;
-
+                _lastSentUtc[(device.Id, send.Id)] = utcNow;
                 Record(result);
                 results.Add(result);
             }

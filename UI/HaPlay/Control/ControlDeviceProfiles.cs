@@ -13,6 +13,9 @@ public sealed record ControlDeviceProfile
 
     public string Version { get; init; } = "1.0";
 
+    /// <summary>Suggested remote port for an OSC device using this profile (e.g. X32 = 10023, X-Air = 10024).</summary>
+    public int? DefaultOscPort { get; init; }
+
     public List<ControlDevicePortProfile> Ports { get; init; } = new();
 
     public List<ControlControlProfile> Controls { get; init; } = new();
@@ -192,6 +195,23 @@ public sealed class DirectoryControlDeviceProfileRepository : IControlDeviceProf
         return new DirectoryControlDeviceProfileRepository(profiles, issues);
     }
 
+    public static ControlDeviceProfile LoadProfileFile(string file)
+    {
+        if (string.IsNullOrWhiteSpace(file))
+            throw new ArgumentException("Profile file is required.", nameof(file));
+
+        var profiles = new List<ControlDeviceProfile>();
+        var issues = new List<ControlDeviceProfileLoadIssue>();
+        LoadFile(file, profiles, issues);
+        if (profiles.Count == 1)
+            return profiles[0];
+
+        var message = issues.Count == 0
+            ? "Profile file did not contain a profile."
+            : string.Join("; ", issues.Select(issue => $"{issue.Code}: {issue.Message}"));
+        throw new InvalidOperationException($"Profile '{file}' is not valid: {message}");
+    }
+
     public static string SaveProfile(string directoryPath, ControlDeviceProfile profile, bool overwrite = true)
     {
         if (string.IsNullOrWhiteSpace(directoryPath))
@@ -350,7 +370,7 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
 
     private BuiltInControlDeviceProfileRepository()
     {
-        _profiles = [CreateXTouchMiniProfile(), CreateX32Profile()];
+        _profiles = [CreateXTouchMiniProfile(), CreateX32Profile(), CreateXAirProfile()];
     }
 
     public IReadOnlyList<ControlDeviceProfile> Profiles => _profiles;
@@ -492,6 +512,7 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
             DisplayName = "Behringer X32 / Midas M32 OSC",
             Protocol = ControlDeviceProtocol.Osc,
             Version = "1.0",
+            DefaultOscPort = X32Presets.DefaultPort,
             Ports =
             [
                 new ControlDevicePortProfile
@@ -545,6 +566,71 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
                         new ControlOscArgumentConfig { Kind = ControlOscArgumentKind.Int32, IntegerValue = 16 },
                         new ControlOscArgumentConfig { Kind = ControlOscArgumentKind.Int32, IntegerValue = 1 },
                     ],
+                },
+            ],
+        };
+    }
+
+    public static ControlDeviceProfile CreateXAirProfile()
+    {
+        var commands = new List<ControlCommandProfile>();
+
+        for (var channel = 1; channel <= XAirPresets.ChannelCount; channel++)
+        {
+            commands.Add(NormalizedCommand($"xair.ch.{channel:00}.fader", $"Ch {channel:00} Fader", XAirPresets.ChannelFaderAddress(channel)));
+            commands.Add(BooleanCommand($"xair.ch.{channel:00}.mute", $"Ch {channel:00} Mute", XAirPresets.ChannelMuteAddress(channel)));
+            commands.Add(NormalizedCommand($"xair.ch.{channel:00}.pan", $"Ch {channel:00} Pan", XAirPresets.ChannelPanAddress(channel)));
+            commands.Add(BooleanCommand($"xair.ch.{channel:00}.solo", $"Ch {channel:00} Solo", XAirPresets.ChannelSoloStatusAddress(channel), ControlCommandAccess.ReadOnly));
+        }
+
+        for (var bus = 1; bus <= XAirPresets.BusCount; bus++)
+        {
+            commands.Add(NormalizedCommand($"xair.bus.{bus}.fader", $"Bus {bus} Fader", XAirPresets.BusFaderAddress(bus)));
+            commands.Add(BooleanCommand($"xair.bus.{bus}.mute", $"Bus {bus} Mute", XAirPresets.BusMuteAddress(bus)));
+        }
+
+        for (var dca = 1; dca <= XAirPresets.DcaCount; dca++)
+        {
+            commands.Add(NormalizedCommand($"xair.dca.{dca}.fader", $"DCA {dca} Fader", XAirPresets.DcaFaderAddress(dca)));
+            commands.Add(BooleanCommand($"xair.dca.{dca}.mute", $"DCA {dca} Mute", XAirPresets.DcaMuteAddress(dca)));
+        }
+
+        commands.Add(NormalizedCommand("xair.lr.fader", "Main LR Fader", XAirPresets.MainLrFaderAddress()));
+        commands.Add(BooleanCommand("xair.lr.mute", "Main LR Mute", XAirPresets.MainLrMuteAddress()));
+
+        return new ControlDeviceProfile
+        {
+            Id = "behringer.xair.osc",
+            DisplayName = "Behringer X-Air / Midas M-Air OSC",
+            Protocol = ControlDeviceProtocol.Osc,
+            Version = "1.0",
+            DefaultOscPort = XAirPresets.DefaultPort,
+            Ports =
+            [
+                new ControlDevicePortProfile
+                {
+                    Id = "osc-remote",
+                    DisplayName = "OSC Remote",
+                    Kind = ControlDevicePortKind.OscRemote,
+                },
+                new ControlDevicePortProfile
+                {
+                    Id = "osc-listener",
+                    DisplayName = "OSC Listener",
+                    Kind = ControlDevicePortKind.OscListener,
+                },
+            ],
+            Commands = commands,
+            Tasks =
+            [
+                new ControlDeviceTaskProfile
+                {
+                    Id = "xair.xremote",
+                    DisplayName = "Maintain /xremote",
+                    IsDefaultEnabled = true,
+                    Kind = ControlDeviceTaskKind.PeriodicOscSend,
+                    Address = "/xremote",
+                    IntervalMs = 8000,
                 },
             ],
         };

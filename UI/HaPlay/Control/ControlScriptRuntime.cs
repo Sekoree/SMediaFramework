@@ -314,9 +314,11 @@ public sealed class ControlScriptRuntime
             ControlScriptScope.Device => !script.DeviceInstanceId.HasValue
                 || kind == ControlScriptTriggerKind.DeviceDisabled
                 || IsDeviceEnabled(script.DeviceInstanceId.Value),
-            ControlScriptScope.Layer => !script.LayerId.HasValue
-                || kind == ControlScriptTriggerKind.LayerDisabled
-                || IsLayerEnabled(script.LayerId.Value),
+            // A layer-scoped script needs a layer to belong to: with no layer assigned it is
+            // unconfigured and stays inert rather than firing globally.
+            ControlScriptScope.Layer => script.LayerId.HasValue
+                && (kind == ControlScriptTriggerKind.LayerDisabled
+                    || IsLayerEnabled(script.LayerId.Value)),
             _ => true,
         };
     }

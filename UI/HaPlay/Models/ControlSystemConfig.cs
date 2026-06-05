@@ -6,7 +6,10 @@ public sealed record ControlSystemConfig
 {
     public bool IsArmed { get; init; }
 
-    public List<ControlOscListenerConfig> OscListeners { get; init; } = [new()];
+    // No app-level OSC listener by default: X32/OSC device replies arrive on the sending client's own
+    // socket (see ControlSystemRuntimeSession reply routing), so a standing inbound UDP port is only
+    // needed for separate external OSC control sources. Add listeners explicitly when that's the case.
+    public List<ControlOscListenerConfig> OscListeners { get; init; } = [];
 
     public ControlOscCacheUpdateMode OscCacheUpdateMode { get; init; } = ControlOscCacheUpdateMode.IncomingOnly;
 

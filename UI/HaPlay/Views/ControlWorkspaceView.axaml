@@ -47,12 +47,18 @@
     <!-- Project structure -->
     <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <DockPanel>
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
           <TextBlock Grid.Column="0" Text="Project structure" FontWeight="SemiBold" VerticalAlignment="Center" />
-          <Button Grid.Column="1" Content="Add OSC device…"
-                  ToolTip.Tip="Add an OSC device such as an X32"
+          <Button Grid.Column="1" Content="Add layer…"
+                  ToolTip.Tip="Add a control layer (mutually-exclusive set of layer-scoped scripts)"
+                  Command="{Binding AddLayerCommand}" />
+          <Button Grid.Column="2" Content="Add OSC device…"
+                  ToolTip.Tip="Add an OSC device such as an X32 or X-Air"
                   Command="{Binding AddOscDeviceCommand}" />
-          <Button Grid.Column="2" Content="Resolve MIDI…"
+          <Button Grid.Column="3" Content="Add OSC listener…"
+                  ToolTip.Tip="Add an inbound OSC listener port for external control sources"
+                  Command="{Binding AddOscListenerCommand}" />
+          <Button Grid.Column="4" Content="Resolve MIDI…"
                   ToolTip.Tip="Pick current ports for ambiguous or missing MIDI devices"
                   Command="{Binding ResolveMidiDevicesCommand}" />
         </Grid>
@@ -75,8 +81,14 @@
                     <MenuItem Header="Add imported helper file" Command="{Binding AddHelperFileCommand}" />
                     <MenuItem Header="Add device script" Command="{Binding AddDeviceScriptCommand}" IsVisible="{Binding CanAddDeviceScript}" />
                     <MenuItem Header="Add endpoint script" Command="{Binding AddEndpointScriptCommand}" IsVisible="{Binding CanAddEndpointScript}" />
+                    <MenuItem Header="Add OSC listener…" Command="{Binding AddOscListenerCommand}" />
+                    <MenuItem Header="Edit OSC listener…" Command="{Binding EditOscListenerCommand}" IsVisible="{Binding CanEditOscListener}" />
+                    <MenuItem Header="Remove OSC listener" Command="{Binding RemoveOscListenerCommand}" IsVisible="{Binding CanEditOscListener}" />
                     <MenuItem Header="Add layer script" Command="{Binding AddLayerScriptCommand}" IsVisible="{Binding CanAddLayerScript}" />
+                    <MenuItem Header="Add layer…" Command="{Binding AddLayerCommand}" />
                     <MenuItem Header="Activate layer" Command="{Binding ActivateLayerCommand}" IsVisible="{Binding CanActivateLayer}" />
+                    <MenuItem Header="Edit layer…" Command="{Binding EditLayerCommand}" IsVisible="{Binding CanEditLayer}" />
+                    <MenuItem Header="Remove layer" Command="{Binding RemoveLayerCommand}" IsVisible="{Binding CanEditLayer}" />
                     <MenuItem Header="Add periodic OSC send…" Command="{Binding AddPeriodicSendCommand}" IsVisible="{Binding CanAddPeriodicSend}" />
                     <MenuItem Header="Edit periodic send…" Command="{Binding EditPeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
                     <MenuItem Header="Remove periodic send" Command="{Binding RemovePeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />
@@ -111,10 +123,18 @@
                 <StackPanel Grid.Column="5" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">
                   <Button Content="Activate" Padding="8,1" FontSize="11" ToolTip.Tip="Activate this layer (mutually exclusive)"
                           IsVisible="{Binding CanActivateLayer}" Command="{Binding ActivateLayerCommand}" />
+                  <Button Content="Edit" Padding="8,1" FontSize="11" ToolTip.Tip="Edit layer"
+                          IsVisible="{Binding CanEditLayer}" Command="{Binding EditLayerCommand}" />
+                  <Button Content="Remove" Padding="8,1" FontSize="11" ToolTip.Tip="Remove layer"
+                          IsVisible="{Binding CanEditLayer}" Command="{Binding RemoveLayerCommand}" />
                   <Button Content="Edit" Padding="8,1" FontSize="11" ToolTip.Tip="Edit OSC device"
                           IsVisible="{Binding CanEditOscDevice}" Command="{Binding EditOscDeviceCommand}" />
                   <Button Content="Remove" Padding="8,1" FontSize="11" ToolTip.Tip="Remove OSC device"
                           IsVisible="{Binding CanEditOscDevice}" Command="{Binding RemoveOscDeviceCommand}" />
+                  <Button Content="Edit" Padding="8,1" FontSize="11" ToolTip.Tip="Edit OSC listener"
+                          IsVisible="{Binding CanEditOscListener}" Command="{Binding EditOscListenerCommand}" />
+                  <Button Content="Remove" Padding="8,1" FontSize="11" ToolTip.Tip="Remove OSC listener"
+                          IsVisible="{Binding CanEditOscListener}" Command="{Binding RemoveOscListenerCommand}" />
                   <Button Content="Edit" Padding="8,1" FontSize="11" ToolTip.Tip="Edit periodic send"
                           IsVisible="{Binding CanEditPeriodicSend}" Command="{Binding EditPeriodicSendCommand}" />
                   <Button Content="Remove" Padding="8,1" FontSize="11" ToolTip.Tip="Remove periodic send"
@@ -127,30 +147,74 @@
       </DockPanel>
     </Border>
 
-    <!-- X32 command/cache browser (collapsed by default to save space) -->
-    <Expander Header="X32 command/cache browser" IsExpanded="False" Classes="dense" Margin="0,0,0,10">
-        <ListBox ItemsSource="{Binding X32CommandRows}"
-                 MaxHeight="240"
-                 Margin="0,6,0,0"
+    <!-- Profiles -->
+    <Expander Header="Profiles" IsExpanded="False" Classes="dense" Margin="0,0,0,10">
+      <StackPanel Spacing="4" Margin="0,6,0,0">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+          <Button Content="Import" Padding="8,2" Command="{Binding ImportProfileCommand}" />
+          <Button Content="Export selected" Padding="8,2" Command="{Binding ExportSelectedProfileCommand}" />
+          <Button Content="Export built-ins" Padding="8,2" Command="{Binding ExportBuiltInProfilesCommand}" />
+          <Button Content="Remove project" Padding="8,2" Command="{Binding RemoveSelectedProjectProfileCommand}" />
+        </StackPanel>
+        <ListBox ItemsSource="{Binding ProfileRows}"
+                 SelectedItem="{Binding SelectedProfileRow}"
+                 MaxHeight="180"
                  Background="Transparent">
           <ListBox.ItemTemplate>
-            <DataTemplate DataType="vm:ControlX32CommandRowViewModel">
-              <Grid ColumnDefinitions="140,180,*,100,90,150" ColumnSpacing="8" Margin="0,2">
-                <TextBlock Grid.Column="0" Text="{Binding DeviceName}" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="1" Text="{Binding CommandName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="2" Text="{Binding Address}" FontFamily="Cascadia Code, Consolas, monospace" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="3" Text="{Binding ValueKind}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="4" Text="{Binding Access}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="5" Text="{Binding CacheValue}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+            <DataTemplate DataType="vm:ControlProfileRowViewModel">
+              <Grid ColumnDefinitions="180,90,90,*" ColumnSpacing="8" Margin="0,2">
+                <TextBlock Grid.Column="0" Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" Text="{Binding Protocol}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="2" Text="{Binding Source}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" Text="{Binding Summary}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
               </Grid>
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
+      </StackPanel>
     </Expander>
 
-    <!-- Test send -->
-    <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
-      <StackPanel Spacing="6">
+    <!-- X32 command/cache browser (collapsed by default to save space) -->
+    <Expander Header="X32 command/cache browser" IsExpanded="False" Classes="dense" Margin="0,0,0,10">
+      <StackPanel Spacing="4" Margin="0,6,0,0">
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+          <TextBox Grid.Column="0" Text="{Binding X32CommandFilterText}" PlaceholderText="Filter device, group, address, cache" />
+          <Button Grid.Column="1" Content="Use as test" Padding="8,2" Command="{Binding UseSelectedX32CommandForTestSendCommand}" />
+          <Button Grid.Column="2" Content="Request" Padding="8,2" Command="{Binding RequestSelectedX32CommandCommand}" />
+        </Grid>
+        <Grid ColumnDefinitions="120,110,180,*,90,80,130" ColumnSpacing="8" Opacity="0.65" Margin="0,2,0,2">
+          <TextBlock Grid.Column="0" Text="Device" />
+          <TextBlock Grid.Column="1" Text="Group" />
+          <TextBlock Grid.Column="2" Text="Command" />
+          <TextBlock Grid.Column="3" Text="Address" />
+          <TextBlock Grid.Column="4" Text="Value" />
+          <TextBlock Grid.Column="5" Text="Access" />
+          <TextBlock Grid.Column="6" Text="Cache" />
+        </Grid>
+        <ListBox ItemsSource="{Binding X32CommandRows}"
+                 SelectedItem="{Binding SelectedX32CommandRow}"
+                 MaxHeight="240"
+                 Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:ControlX32CommandRowViewModel">
+              <Grid ColumnDefinitions="120,110,180,*,90,80,130" ColumnSpacing="8" Margin="0,2">
+                <TextBlock Grid.Column="0" Text="{Binding DeviceName}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" Text="{Binding Group}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="2" Text="{Binding CommandName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" Text="{Binding Address}" FontFamily="Cascadia Code, Consolas, monospace" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="4" Text="{Binding ValueKind}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="5" Text="{Binding Access}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="6" Text="{Binding CacheValue}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </StackPanel>
+    </Expander>
+
+    <!-- Diagnostics / test send -->
+    <Expander Header="Diagnostics and manual sends" IsExpanded="False" Classes="dense" Margin="0,0,0,10">
+      <StackPanel Spacing="6" Margin="0,6,0,0">
         <TextBlock Text="Test send" FontWeight="SemiBold" />
         <Grid ColumnDefinitions="Auto,140,Auto,80,Auto,*" ColumnSpacing="6">
           <TextBlock Grid.Column="0" Text="Host" VerticalAlignment="Center" />
@@ -164,10 +228,10 @@
           <TextBlock Grid.Column="0" Text="Args" VerticalAlignment="Center" />
           <TextBox Grid.Column="1" Text="{Binding TestOscArgs}" PlaceholderText="comma-separated, e.g. 0.5, 1, true, name" />
           <Button Grid.Column="2" Content="Send OSC" Command="{Binding SendTestOscCommand}" />
-          <Button Grid.Column="3" Content="Run manual scripts" Command="{Binding RunManualScriptsCommand}" />
+          <Button Grid.Column="3" Content="Run all manual triggers" Command="{Binding RunManualScriptsCommand}" />
         </Grid>
       </StackPanel>
-    </Border>
+    </Expander>
 
     <!-- Scripts -->
     <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">

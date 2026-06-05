@@ -161,6 +161,29 @@ public sealed class ControlPeriodicOscSendManagerTests
         Assert.Equal("/xremote", error.Address);
     }
 
+    [Fact]
+    public async Task TickAsync_ThrottlesFailedAttemptsByConfiguredInterval()
+    {
+        var sender = new FailingOscSender();
+        var manager = new ControlPeriodicOscSendManager(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(Guid.NewGuid(), "X32", "x32", "192.168.2.76", 10023, Periodic("/xremote", intervalMs: 8000))],
+            },
+            sender);
+        var now = DateTimeOffset.Parse("2026-06-04T10:00:00Z");
+
+        var first = Assert.Single(await manager.TickAsync(now));
+        var tooSoon = await manager.TickAsync(now.AddMilliseconds(100));
+        var second = Assert.Single(await manager.TickAsync(now.AddMilliseconds(8000)));
+
+        Assert.False(first.Succeeded);
+        Assert.Empty(tooSoon);
+        Assert.False(second.Succeeded);
+        Assert.Equal(2, sender.Attempts);
+    }
+
     private static ControlDeviceInstanceConfig OscDevice(
         Guid id,
         string name,
@@ -218,4 +241,20 @@ public sealed class ControlPeriodicOscSendManagerTests
         int Port,
         string Address,
         IReadOnlyList<OSCArgument> Arguments);
+
+    private sealed class FailingOscSender : IControlOscSender
+    {
+        public int Attempts { get; private set; }
+
+        public ValueTask SendAsync(
+            string host,
+            int port,
+            string address,
+            IReadOnlyList<OSCArgument> arguments,
+            CancellationToken cancellationToken = default)
+        {
+            Attempts++;
+            throw new InvalidOperationException("network unavailable");
+        }
+    }
 }

@@ -19,12 +19,16 @@ public sealed record OscDeviceEditValues(
 
 /// <summary>
 /// Add/edit dialog for an OSC device instance (e.g. an X32). Lets the user pick a profile, set the remote
-/// host/port, a script alias, an optional fixed local port, and the enabled state. Replies are received on
-/// the client's own socket, so there is no separate listener to choose. Validation gates Save so the caller
-/// always gets a usable <see cref="OscDeviceEditValues"/>.
+/// host/port, a script alias, an optional fixed client source port, and the enabled state. Replies are
+/// received on the client's own socket, so there is no separate listener to choose. Validation gates Save
+/// so the caller always gets a usable <see cref="OscDeviceEditValues"/>.
 /// </summary>
 public sealed partial class OscDeviceDialogViewModel : ViewModelBase
 {
+    private readonly Dictionary<string, int> _defaultPortsById;
+    private readonly HashSet<string> _knownDefaultPortTexts;
+    private readonly bool _profileChangeArmed;
+
     public OscDeviceDialogViewModel(
         string title,
         string name,
@@ -46,6 +50,14 @@ public sealed partial class OscDeviceDialogViewModel : ViewModelBase
         _localPortText = localPort is { } lp ? lp.ToString(CultureInfo.InvariantCulture) : string.Empty;
         _isEnabled = isEnabled;
 
+        _defaultPortsById = oscProfiles
+            .Where(p => p.DefaultOscPort is > 0)
+            .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().DefaultOscPort!.Value, StringComparer.OrdinalIgnoreCase);
+        _knownDefaultPortTexts = _defaultPortsById.Values
+            .Select(v => v.ToString(CultureInfo.InvariantCulture))
+            .ToHashSet(StringComparer.Ordinal);
+
         ProfileOptions =
         [
             new OscDeviceProfileOption(null, "(raw OSC — no profile)"),
@@ -54,6 +66,22 @@ public sealed partial class OscDeviceDialogViewModel : ViewModelBase
                 .Select(p => new OscDeviceProfileOption(p.Id, $"{p.DisplayName} ({p.Id})")),
         ];
         SelectedProfile = ProfileOptions.FirstOrDefault(o => o.ProfileId == profileId) ?? ProfileOptions[0];
+
+        // Only auto-suggest the port on later user-driven profile changes, never for the initial value
+        // the caller supplied (which may be a deliberately custom port on an existing device).
+        _profileChangeArmed = true;
+    }
+
+    // Picking a different profile suggests that profile's default remote port (X32 = 10023, X-Air = 10024),
+    // unless the field still holds another profile's default or the user has typed a custom port.
+    partial void OnSelectedProfileChanged(OscDeviceProfileOption value)
+    {
+        if (!_profileChangeArmed || value?.ProfileId is not { } id || !_defaultPortsById.TryGetValue(id, out var defaultPort))
+            return;
+
+        var current = PortText?.Trim() ?? string.Empty;
+        if (current.Length == 0 || _knownDefaultPortTexts.Contains(current))
+            PortText = defaultPort.ToString(CultureInfo.InvariantCulture);
     }
 
     public string Title { get; }

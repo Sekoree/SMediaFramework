@@ -76,11 +76,17 @@ public abstract class MIDIDevice : IDisposable
     /// <inheritdoc/>
     public void Dispose()
     {
+        Dispose(disposing: true);
+        GC.SuppressFinalize(this);
+    }
+
+    protected virtual void Dispose(bool disposing)
+    {
         if (!_disposed)
         {
-            Close();
+            if (disposing)
+                Close();
             _disposed = true;
         }
-        GC.SuppressFinalize(this);
     }
 }

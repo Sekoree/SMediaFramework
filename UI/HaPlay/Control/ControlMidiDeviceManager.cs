@@ -5,12 +5,12 @@ namespace HaPlay.ControlGraph;
 public sealed class ControlMidiDeviceManager
 {
     private readonly ControlSystemConfig _config;
-    private readonly ControlScriptRuntimeSession _runtimeSession;
+    private readonly IControlScriptDispatcher _runtimeSession;
     private readonly IControlMonitorSink _monitor;
 
     public ControlMidiDeviceManager(
         ControlSystemConfig config,
-        ControlScriptRuntimeSession runtimeSession,
+        IControlScriptDispatcher runtimeSession,
         IControlMonitorSink? monitor = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));

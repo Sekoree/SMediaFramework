@@ -166,7 +166,7 @@
     <value>Density</value>
   </data>
   <data name="OscConnectionsHeader" xml:space="preserve">
-    <value>OSC Connections</value>
+    <value>Cue OSC Connections</value>
   </data>
   <data name="OscConnectionsHint" xml:space="preserve">
     <value>Named OSC targets for action cues. Cues store endpoint GUIDs, not host/port.</value>
@@ -196,7 +196,7 @@
     <value>Save Endpoint</value>
   </data>
   <data name="MidiHeader" xml:space="preserve">
-    <value>MIDI</value>
+    <value>MIDI Ports</value>
   </data>
   <data name="MidiHint" xml:space="preserve">
     <value>Output endpoints for action cues and the local PortMidi device catalog.</value>
@@ -1373,9 +1373,6 @@
   </data>
   <data name="VideoFrameRateMismatchWarningFormat" xml:space="preserve">
     <value>Source {0} fps → {1} fps canvas '{2}' — visible pulldown judder likely. Consider matching the composition frame rate to the source.</value>
-  </data>
-  <data name="OscLocalhostEndpointName" xml:space="preserve">
-    <value>OSC Localhost</value>
   </data>
   <data name="CueExecuteNoSelectedPlayer" xml:space="preserve">
     <value>no selected player</value>

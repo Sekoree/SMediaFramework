@@ -42,7 +42,10 @@ public partial class MainViewModel : ViewModelBase
     {
         OutputManagement = new OutputManagementViewModel();
         CuePlayer = new CuePlayerViewModel();
-        Control = new ControlWorkspaceViewModel();
+        Control = new ControlWorkspaceViewModel
+        {
+            EnsureProjectSavedAsync = EnsureProjectSavedForScriptsAsync,
+        };
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
         // First player can't be removed — there's always at least one in the UI.
@@ -87,7 +90,6 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.RefreshPreviewAudioDevices();
         foreach (var player in Players)
             player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
-        SeedDefaultActionEndpointsIfEmpty();
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
@@ -135,7 +137,6 @@ public partial class MainViewModel : ViewModelBase
         WorkspaceItem.Players,
         WorkspaceItem.Cues,
         WorkspaceItem.Outputs,
-        WorkspaceItem.OscConnections,
         WorkspaceItem.MidiDevices,
         WorkspaceItem.Control,
         WorkspaceItem.Project,
@@ -153,7 +154,6 @@ public partial class MainViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(IsPlayersWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsCuesWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsOutputsWorkspaceSelected))]
-    [NotifyPropertyChangedFor(nameof(IsOscConnectionsWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsMidiDevicesWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsControlWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsProjectWorkspaceSelected))]
@@ -162,7 +162,6 @@ public partial class MainViewModel : ViewModelBase
     public bool IsPlayersWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Players;
     public bool IsCuesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Cues;
     public bool IsOutputsWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Outputs;
-    public bool IsOscConnectionsWorkspaceSelected => SelectedWorkspace == WorkspaceItem.OscConnections;
     public bool IsMidiDevicesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.MidiDevices;
     public bool IsControlWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Control;
     public bool IsProjectWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Project;
@@ -1041,18 +1040,6 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    private void SeedDefaultActionEndpointsIfEmpty()
-    {
-        if (ActionEndpoints.Count > 0)
-            return;
-        ActionEndpoints.Add(new OscActionEndpoint
-        {
-            Name = Strings.OscLocalhostEndpointName,
-            Host = "127.0.0.1",
-            Port = 9000,
-        });
-    }
-
     private async Task RefreshCuePreRollAsync()
     {
         // Latest-request-wins: install our own token and cancel whatever was in flight. We only
@@ -1368,7 +1355,6 @@ public partial class MainViewModel : ViewModelBase
         ActionEndpoints.Clear();
         foreach (var endpoint in project.ActionEndpoints)
             ActionEndpoints.Add(endpoint);
-        SeedDefaultActionEndpointsIfEmpty();
         RebuildEndpointWorkspaceLists();
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         CuePlayer.ApplyCueLists(project.CueLists);
@@ -1529,6 +1515,20 @@ public partial class MainViewModel : ViewModelBase
     [RelayCommand]
     private Task SaveProjectAsync() =>
         string.IsNullOrEmpty(CurrentProjectPath) ? SaveProjectAsAsync() : SaveProjectToPathAsync(CurrentProjectPath!);
+
+    /// <summary>
+    /// Used by the Control workspace before writing a script file: scripts are stored next to the project,
+    /// so if the project has never been saved we run the Save-As flow first. Returns true once the project
+    /// has a path on disk (which also sets the Control workspace's project root).
+    /// </summary>
+    private async Task<bool> EnsureProjectSavedForScriptsAsync()
+    {
+        if (!string.IsNullOrEmpty(CurrentProjectPath))
+            return true;
+
+        await SaveProjectAsAsync();
+        return !string.IsNullOrEmpty(CurrentProjectPath);
+    }
 
     [RelayCommand]
     private async Task SaveProjectAsAsync()

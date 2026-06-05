@@ -244,6 +244,79 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task NewWorkspace_ShowsStructureGroupsBeforeAnyProjectOrDevice()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+
+        // The structure must be present from construction — no project loaded, no MIDI/OSC device — so an
+        // OSC-only or scripts/layers-only setup can be prepared straight away.
+        Assert.Contains(vm.StructureRows, r => r.IsGroup && r.Name == "MIDI devices");
+        Assert.Contains(vm.StructureRows, r => r.IsGroup && r.Name == "OSC devices");
+        Assert.Contains(vm.StructureRows, r => r.IsGroup && r.Name == "Layers");
+        Assert.Contains(vm.StructureRows, r => r.IsGroup && r.Name == "Scripts");
+    }
+
+    [Fact]
+    public async Task AddScript_SeedsUniqueDefaultScriptPaths()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+
+        vm.AddScriptCommand.Execute(null);
+        Assert.Equal("Scripts/script-1.mnd", vm.SelectedScriptRow!.Script.ScriptPath);
+        Assert.True(vm.SaveSelectedScriptCommand.CanExecute(null)); // a path means Save is reachable
+
+        vm.AddScriptCommand.Execute(null);
+        Assert.Equal("Scripts/script-2.mnd", vm.SelectedScriptRow!.Script.ScriptPath);
+    }
+
+    [Fact]
+    public async Task SaveSelectedScript_WithUnsavedProject_PromptsToSaveThenWritesFile()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "haplay-save-prompt-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            await using var vm = new ControlWorkspaceViewModel();
+            vm.LoadConfig(new ControlSystemConfig()); // unsaved project: no project root
+            vm.AddScriptCommand.Execute(null);
+            vm.SelectedScriptText = "export fun run() { return 1; }";
+
+            var prompted = false;
+            vm.EnsureProjectSavedAsync = () =>
+            {
+                prompted = true;
+                vm.SetProjectRoot(root); // simulate the user completing the Save-As flow
+                return Task.FromResult(true);
+            };
+
+            await vm.SaveSelectedScriptCommand.ExecuteAsync(null);
+
+            Assert.True(prompted);
+            var path = Path.Combine(root, vm.SelectedScriptRow!.Script.ScriptPath);
+            Assert.True(File.Exists(path));
+            Assert.Contains("return 1", await File.ReadAllTextAsync(path));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SaveSelectedScript_WhenProjectSaveDeclined_ReportsStatusAndDoesNotThrow()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+        vm.AddScriptCommand.Execute(null);
+        vm.SelectedScriptText = "export fun run() { return 1; }";
+        vm.EnsureProjectSavedAsync = () => Task.FromResult(false); // user cancels the project Save dialog
+
+        await vm.SaveSelectedScriptCommand.ExecuteAsync(null);
+
+        Assert.Contains("Save the project first", vm.ScriptEditorStatus);
+    }
+
+    [Fact]
     public async Task RemoveSelectedScript_DropsSelectedScript()
     {
         await using var vm = new ControlWorkspaceViewModel();
@@ -546,6 +619,90 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task AddOscListener_CreatesListenerFromDialogValues()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig()); // no listeners by default
+
+        vm.OscListenerPrompt = dialog =>
+        {
+            Assert.Equal("10020", dialog.LocalPortText); // first listener seeds the conventional port
+            dialog.Name = "Lighting in";
+            dialog.LocalPortText = "9100";
+            return Task.FromResult(true);
+        };
+
+        await vm.AddOscListenerCommand.ExecuteAsync(null);
+
+        var listener = Assert.Single(vm.BuildSnapshot().OscListeners);
+        Assert.Equal("Lighting in", listener.Name);
+        Assert.Equal(9100, listener.LocalPort);
+        Assert.True(listener.IsEnabled);
+        Assert.Equal(1, vm.ListenerCount);
+        Assert.Contains(vm.StructureRows, r => r.Kind == "Listen" && r.OscListenerId == listener.Id);
+    }
+
+    [Fact]
+    public async Task AddOscListener_WhenCancelled_AddsNothing()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+        vm.OscListenerPrompt = _ => Task.FromResult(false);
+
+        await vm.AddOscListenerCommand.ExecuteAsync(null);
+
+        Assert.Empty(vm.BuildSnapshot().OscListeners);
+    }
+
+    [Fact]
+    public async Task EditOscListener_UpdatesNamePortAndEnabled()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var listenerId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            OscListeners = [new ControlOscListenerConfig { Id = listenerId, Name = "Old", LocalPort = 10020, IsEnabled = true }],
+        });
+
+        vm.OscListenerPrompt = dialog =>
+        {
+            Assert.Equal("Old", dialog.Name);
+            Assert.Equal("10020", dialog.LocalPortText);
+            dialog.Name = "New";
+            dialog.LocalPortText = "10030";
+            dialog.IsEnabled = false;
+            return Task.FromResult(true);
+        };
+
+        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OscListenerId == listenerId);
+        Assert.True(row.CanEditOscListener);
+        row.EditOscListenerCommand!.Execute(null);
+        await Task.Yield();
+
+        var listener = Assert.Single(vm.BuildSnapshot().OscListeners);
+        Assert.Equal("New", listener.Name);
+        Assert.Equal(10030, listener.LocalPort);
+        Assert.False(listener.IsEnabled);
+    }
+
+    [Fact]
+    public async Task RemoveOscListener_RemovesListener()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var listenerId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            OscListeners = [new ControlOscListenerConfig { Id = listenerId, Name = "Aux", LocalPort = 10021 }],
+        });
+
+        var row = vm.StructureRows.Single(r => r.Kind == "Listen" && r.OscListenerId == listenerId);
+        Assert.True(row.CanEditOscListener);
+        row.RemoveOscListenerCommand!.Execute(null);
+
+        Assert.Empty(vm.BuildSnapshot().OscListeners);
+    }
+
+    [Fact]
     public async Task EditOscDevice_UpdatesHostAndPreservesPeriodicSends()
     {
         await using var vm = new ControlWorkspaceViewModel();
@@ -675,6 +832,183 @@ public sealed class ControlWorkspaceViewModelTests
         var script = Assert.Single(vm.BuildSnapshot().Scripts);
         Assert.Equal(ControlScriptScope.Layer, script.Scope);
         Assert.Equal(layerId, script.LayerId);
+    }
+
+    [Fact]
+    public async Task AddLayer_CreatesActiveLayerFromDialogValues()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+
+        vm.LayerPrompt = dialog =>
+        {
+            // First layer: seeded with "Layer 1", priority 0, and active because nothing else is.
+            Assert.Equal("Layer 1", dialog.Name);
+            Assert.Equal("0", dialog.PriorityText);
+            Assert.True(dialog.IsActive);
+            dialog.Name = "Verse";
+            dialog.PriorityText = "5";
+            return Task.FromResult(true);
+        };
+
+        await vm.AddLayerCommand.ExecuteAsync(null);
+
+        var layer = Assert.Single(vm.BuildSnapshot().Layers);
+        Assert.Equal("Verse", layer.Name);
+        Assert.Equal(5, layer.Priority);
+        Assert.True(layer.IsEnabled);
+        Assert.Equal(1, vm.LayerCount);
+    }
+
+    [Fact]
+    public async Task AddLayer_ActiveSelectionIsMutuallyExclusive()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var existing = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Layers = [new ControlLayerConfig { Id = existing, Name = "A", IsEnabled = true }],
+        });
+
+        vm.LayerPrompt = dialog =>
+        {
+            // A second layer defaults to inactive; force it active to verify exclusivity.
+            Assert.False(dialog.IsActive);
+            dialog.Name = "B";
+            dialog.IsActive = true;
+            return Task.FromResult(true);
+        };
+
+        await vm.AddLayerCommand.ExecuteAsync(null);
+
+        var layers = vm.BuildSnapshot().Layers;
+        Assert.Equal(2, layers.Count);
+        Assert.False(layers.Single(l => l.Id == existing).IsEnabled);
+        Assert.True(layers.Single(l => l.Name == "B").IsEnabled);
+    }
+
+    [Fact]
+    public async Task AddLayer_WhenCancelled_AddsNothing()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+        vm.LayerPrompt = _ => Task.FromResult(false);
+
+        await vm.AddLayerCommand.ExecuteAsync(null);
+
+        Assert.Empty(vm.BuildSnapshot().Layers);
+    }
+
+    [Fact]
+    public async Task EditLayer_UpdatesNamePriorityAndActive()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var layerId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Layers = [new ControlLayerConfig { Id = layerId, Name = "Old", Priority = 1, IsEnabled = false }],
+        });
+
+        vm.LayerPrompt = dialog =>
+        {
+            Assert.Equal("Old", dialog.Name);
+            Assert.Equal("1", dialog.PriorityText);
+            Assert.False(dialog.IsActive);
+            dialog.Name = "New";
+            dialog.PriorityText = "9";
+            dialog.IsActive = true;
+            return Task.FromResult(true);
+        };
+
+        var row = vm.StructureRows.Single(r => r.Kind == "Layer" && r.LayerId == layerId);
+        Assert.True(row.CanEditLayer);
+        row.EditLayerCommand!.Execute(null);
+        await Task.Yield();
+
+        var layer = Assert.Single(vm.BuildSnapshot().Layers);
+        Assert.Equal("New", layer.Name);
+        Assert.Equal(9, layer.Priority);
+        Assert.True(layer.IsEnabled);
+    }
+
+    [Fact]
+    public async Task RemoveLayer_RemovesLayerAndUnbindsScopedScripts()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var layerId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Layers = [new ControlLayerConfig { Id = layerId, Name = "Chorus" }],
+            Scripts =
+            [
+                new ControlScriptConfig
+                {
+                    Name = "Layer script",
+                    Scope = ControlScriptScope.Layer,
+                    LayerId = layerId,
+                },
+            ],
+        });
+
+        var row = vm.StructureRows.Single(r => r.Kind == "Layer" && r.LayerId == layerId);
+        Assert.True(row.CanEditLayer);
+
+        row.RemoveLayerCommand!.Execute(null);
+
+        Assert.Empty(vm.BuildSnapshot().Layers);
+        var script = Assert.Single(vm.BuildSnapshot().Scripts);
+        Assert.Null(script.LayerId); // unbound so a dangling id can't silently disable it
+    }
+
+    [Fact]
+    public async Task ScriptRow_SelectingLayerScope_AutoBindsFirstLayerAndPickerIsSelectable()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Layers =
+            [
+                new ControlLayerConfig { Id = first, Name = "First", Priority = 0 },
+                new ControlLayerConfig { Id = second, Name = "Second", Priority = 1 },
+            ],
+            Scripts = [new ControlScriptConfig { Name = "Script", Scope = ControlScriptScope.Project }],
+        });
+
+        var row = Assert.Single(vm.ScriptRows);
+        Assert.Equal(2, row.LayerOptions.Count);
+        Assert.False(row.ShowLayerPicker);
+
+        row.Scope = ControlScriptScope.Layer;
+
+        Assert.True(row.ShowLayerPicker);
+        Assert.True(row.ShowLayerSelector);
+        Assert.False(row.ShowLayerHint);
+        Assert.Equal(first, row.SelectedLayer?.Id); // lowest-priority layer auto-bound
+        Assert.Equal(first, vm.BuildSnapshot().Scripts.Single().LayerId);
+
+        row.SelectedLayer = row.LayerOptions.Single(o => o.Id == second);
+        Assert.Equal(second, vm.BuildSnapshot().Scripts.Single().LayerId);
+    }
+
+    [Fact]
+    public async Task ScriptRow_LayerScopeWithNoLayers_ShowsHint()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts = [new ControlScriptConfig { Name = "Script", Scope = ControlScriptScope.Project }],
+        });
+
+        var row = Assert.Single(vm.ScriptRows);
+        row.Scope = ControlScriptScope.Layer;
+
+        Assert.True(row.ShowLayerPicker);
+        Assert.False(row.ShowLayerSelector);
+        Assert.True(row.ShowLayerHint);
+        Assert.Null(row.SelectedLayer);
+        Assert.Null(vm.BuildSnapshot().Scripts.Single().LayerId);
     }
 
     [Fact]
@@ -1044,6 +1378,8 @@ public sealed class ControlWorkspaceViewModelTests
     {
         var config = new ControlSystemConfig
         {
+            // An app listener is opt-in now, so add one explicitly to exercise the port-collision warning.
+            OscListeners = [new ControlOscListenerConfig { LocalPort = 10020 }],
             Devices =
             [
                 new ControlDeviceInstanceConfig
@@ -1064,6 +1400,12 @@ public sealed class ControlWorkspaceViewModelTests
                     ProfileId = "behringer.x32.osc",
                     Protocol = ControlDeviceProtocol.Midi,
                 },
+                new ControlDeviceInstanceConfig
+                {
+                    Name = "Colliding OSC",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig { OscLocalPort = 10020 },
+                },
             ],
         };
 
@@ -1074,6 +1416,93 @@ public sealed class ControlWorkspaceViewModelTests
         Assert.DoesNotContain(warnings, warning => warning.Contains("Known X32"));
         Assert.Contains(warnings, warning => warning.Contains("missing.profile") && warning.Contains("raw Midi scripting"));
         Assert.Contains(warnings, warning => warning.Contains("Wrong Protocol") && warning.Contains("device is Midi"));
+        Assert.Contains(warnings, warning => warning.Contains("Colliding OSC") && warning.Contains("client source port 10020"));
+    }
+
+    [Fact]
+    public void BuildProfileRows_ListsInstalledProfilesWithCapabilitySummary()
+    {
+        var rows = ControlWorkspaceViewModel.BuildProfileRows(BuiltInControlDeviceProfileRepository.Instance);
+
+        Assert.Contains(rows, row =>
+            row.Id == "behringer.xtouch-mini.mc"
+            && row.Protocol == nameof(ControlDeviceProtocol.Midi)
+            && row.Summary.Contains("controls"));
+        Assert.Contains(rows, row =>
+            row.Id == "behringer.x32.osc"
+            && row.Protocol == nameof(ControlDeviceProtocol.Osc)
+            && row.Summary.Contains("commands")
+            && row.Summary.Contains("tasks"));
+    }
+
+    [Fact]
+    public void BuildProfileRows_MarksProjectProfileOverrides()
+    {
+        var rows = ControlWorkspaceViewModel.BuildProfileRows(new ControlSystemConfig
+        {
+            DeviceProfileOverrides =
+            [
+                new ControlDeviceProfile
+                {
+                    Id = "custom.osc",
+                    DisplayName = "Custom OSC",
+                    Protocol = ControlDeviceProtocol.Osc,
+                },
+            ],
+        });
+
+        var row = Assert.Single(rows, row => row.Id == "custom.osc");
+        Assert.Equal("Project", row.Source);
+        Assert.True(row.IsProjectOverride);
+    }
+
+    [Fact]
+    public async Task ImportProfileFromFile_AddsProjectOverrideAndCanExportSelectedProfile()
+    {
+        var importRoot = Path.Combine(Path.GetTempPath(), "haplay-profile-import-" + Guid.NewGuid().ToString("N"));
+        var exportRoot = Path.Combine(Path.GetTempPath(), "haplay-profile-export-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var profile = new ControlDeviceProfile
+            {
+                Id = "custom.osc",
+                DisplayName = "Custom OSC",
+                Protocol = ControlDeviceProtocol.Osc,
+                Commands =
+                [
+                    new ControlCommandProfile
+                    {
+                        Id = "custom.fader",
+                        DisplayName = "Custom Fader",
+                        Address = "/custom/fader",
+                        ValueKind = ControlCommandValueKind.NormalizedFloat,
+                    },
+                ],
+            };
+            var sourcePath = DirectoryControlDeviceProfileRepository.SaveProfile(importRoot, profile);
+            await using var vm = new ControlWorkspaceViewModel();
+
+            var imported = vm.ImportProfileFromFile(sourcePath);
+
+            Assert.Equal("custom.osc", imported.Id);
+            Assert.Contains(vm.BuildSnapshot().DeviceProfileOverrides, p => p.Id == "custom.osc");
+            var row = Assert.Single(vm.ProfileRows, row => row.Id == "custom.osc");
+            Assert.Equal("Project", row.Source);
+            Assert.True(row.IsProjectOverride);
+
+            var exportedPath = vm.ExportProfileToDirectory(row, exportRoot);
+            var exported = DirectoryControlDeviceProfileRepository.LoadProfileFile(exportedPath);
+
+            Assert.Equal("custom.osc", exported.Id);
+            Assert.Equal("/custom/fader", Assert.Single(exported.Commands).Address);
+        }
+        finally
+        {
+            if (Directory.Exists(importRoot))
+                Directory.Delete(importRoot, recursive: true);
+            if (Directory.Exists(exportRoot))
+                Directory.Delete(exportRoot, recursive: true);
+        }
     }
 
     [Fact]
@@ -1109,6 +1538,46 @@ public sealed class ControlWorkspaceViewModelTests
             && row.ValueKind == nameof(ControlCommandValueKind.NormalizedFloat)
             && row.CacheValue.Contains("0.5"));
         Assert.Contains(rows, row => row.CommandName == "Main Stereo Fader" && row.CacheValue == "(uncached)");
+    }
+
+    [Fact]
+    public void BuildX32CommandRows_FiltersAndGroupsProfileCommands()
+    {
+        var x32Id = Guid.NewGuid();
+        var config = new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = x32Id,
+                    Name = "X32",
+                    ProfileId = "behringer.x32.osc",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig
+                    {
+                        Alias = "x32",
+                        OscHost = "192.168.2.76",
+                        OscPort = 10023,
+                    },
+                },
+            ],
+        };
+
+        var rows = ControlWorkspaceViewModel.BuildX32CommandRows(
+            config,
+            CompositeControlDeviceProfileRepository.ForProject(config),
+            cache: null,
+            filterText: "channel 01 fader");
+
+        var row = Assert.Single(rows);
+        Assert.Equal(x32Id, row.DeviceInstanceId);
+        Assert.Equal("x32", row.DeviceKey);
+        Assert.Equal("192.168.2.76", row.Host);
+        Assert.Equal(10023, row.Port);
+        Assert.Equal("Channel 01", row.Group);
+        Assert.Equal("Ch 01 Fader", row.CommandName);
+        Assert.True(row.CanRequest);
     }
 
     [Fact]

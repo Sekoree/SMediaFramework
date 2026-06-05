@@ -38,9 +38,9 @@
       <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Alias}"
                PlaceholderText="x32  (the deviceKey scripts use, e.g. osc.send(&quot;x32&quot;, …))" />
 
-      <TextBlock Grid.Row="4" Grid.Column="0" Text="Local port" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="4" Grid.Column="0" Text="Client source port" VerticalAlignment="Center" />
       <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding LocalPortText}"
-               PlaceholderText="blank = automatic; set for a fixed source/receive port" />
+               PlaceholderText="blank = automatic; avoid app listener ports such as 10020" />
 
       <CheckBox Grid.Row="5" Grid.Column="1" Content="Enabled" IsChecked="{Binding IsEnabled}" />
     </Grid>

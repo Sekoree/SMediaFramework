@@ -101,6 +101,48 @@ public static class X32Presets
     }
 }
 
+/// <summary>
+/// OSC address builders for Behringer X-Air / Midas M-Air mixers. Channels share the X32's
+/// <c>/ch/NN/mix/...</c> layout, but buses and DCAs are single-digit, and the main is <c>/lr</c>.
+/// </summary>
+public static class XAirPresets
+{
+    public const int DefaultPort = 10024;
+    public const int ChannelCount = 16; // XR16/XR18 (XR12 uses the first 12)
+    public const int BusCount = 6;
+    public const int DcaCount = 4;
+
+    public static readonly TimeSpan DefaultRenewInterval = TimeSpan.FromSeconds(8);
+
+    public static string ChannelFaderAddress(int channel) =>
+        $"/ch/{Math.Clamp(channel, 1, ChannelCount):00}/mix/fader";
+
+    public static string ChannelMuteAddress(int channel) =>
+        $"/ch/{Math.Clamp(channel, 1, ChannelCount):00}/mix/on";
+
+    public static string ChannelPanAddress(int channel) =>
+        $"/ch/{Math.Clamp(channel, 1, ChannelCount):00}/mix/pan";
+
+    public static string ChannelSoloStatusAddress(int channel) =>
+        $"/-stat/solosw/{Math.Clamp(channel, 1, ChannelCount):00}";
+
+    public static string BusFaderAddress(int bus) =>
+        $"/bus/{Math.Clamp(bus, 1, BusCount)}/mix/fader";
+
+    public static string BusMuteAddress(int bus) =>
+        $"/bus/{Math.Clamp(bus, 1, BusCount)}/mix/on";
+
+    public static string DcaFaderAddress(int dca) =>
+        $"/dca/{Math.Clamp(dca, 1, DcaCount)}/fader";
+
+    public static string DcaMuteAddress(int dca) =>
+        $"/dca/{Math.Clamp(dca, 1, DcaCount)}/on";
+
+    public static string MainLrFaderAddress() => "/lr/mix/fader";
+
+    public static string MainLrMuteAddress() => "/lr/mix/on";
+}
+
 public sealed record X32EndpointPreset(
     string Host,
     int Port,

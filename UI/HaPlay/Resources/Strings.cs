@@ -471,7 +471,6 @@ public static class Strings
     public static string PreviewingCueStatusFormat => Get(nameof(PreviewingCueStatusFormat));
     public static string PreviewStoppedStatus => Get(nameof(PreviewStoppedStatus));
     public static string VideoFrameRateMismatchWarningFormat => Get(nameof(VideoFrameRateMismatchWarningFormat));
-    public static string OscLocalhostEndpointName => Get(nameof(OscLocalhostEndpointName));
     public static string CueExecuteNoSelectedPlayer => Get(nameof(CueExecuteNoSelectedPlayer));
     public static string CueExecuteNoMediaSource => Get(nameof(CueExecuteNoMediaSource));
     public static string CuePreRollResultFormat => Get(nameof(CuePreRollResultFormat));

@@ -7,14 +7,14 @@ namespace HaPlay.ControlGraph;
 public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
 {
     private readonly ControlSystemConfig _config;
-    private readonly ControlScriptRuntimeSession _runtimeSession;
+    private readonly IControlScriptDispatcher _runtimeSession;
     private readonly IControlMonitorSink _monitor;
     private readonly Dictionary<Guid, ListenerRuntimeState> _listeners = new();
     private bool _disposed;
 
     public ControlOscListenerManager(
         ControlSystemConfig config,
-        ControlScriptRuntimeSession runtimeSession,
+        IControlScriptDispatcher runtimeSession,
         IControlMonitorSink? monitor = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -110,6 +110,32 @@ public sealed class ControlOscListenerManager : IAsyncDisposable, IDisposable
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Dispatches an OSC message that arrived on a device's own client socket (e.g. an X32 reply to our
+    /// request, or an <c>/xremote</c> push). The device is already resolved by the caller from the source
+    /// host/port, so this needs no app-level listener — it records the input and routes the same control
+    /// event the listener path uses (cache update, triggers, monitor).
+    /// </summary>
+    public async ValueTask<ControlOscListenerDispatchResult> DispatchDeviceMessageAsync(
+        ControlDeviceInstanceConfig device,
+        OSCMessageContext context,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(device);
+
+        var listenerId = device.Binding.OscListenerId ?? Guid.Empty;
+        _monitor.Record(CreateOscInputRecord(listenerId, device, context, ControlMonitorResult.Received, _config.Monitor.IncludeRawBytes));
+        var evt = new OscControlEvent(
+            context.ReceivedAtUtc,
+            listenerId,
+            device.Id,
+            Guid.NewGuid(),
+            context.Message.Address,
+            context.Message.Arguments);
+        var scriptResult = await _runtimeSession.DispatchControlEventAsync(evt, cancellationToken).ConfigureAwait(false);
+        return new ControlOscListenerDispatchResult(listenerId, device.Id, context.RemoteEndPoint, context.Message.Address, scriptResult);
     }
 
     private static ControlMonitorRecord CreateOscInputRecord(

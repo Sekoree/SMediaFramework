@@ -2,7 +2,7 @@ using HaPlay.Models;
 
 namespace HaPlay.ControlGraph;
 
-public sealed class ControlScriptRuntimeSession
+public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
 {
     private readonly ControlSystemConfig _config;
     private readonly BufferingControlScriptCommandSink _commandSink;
@@ -12,6 +12,7 @@ public sealed class ControlScriptRuntimeSession
     private readonly IControlMonitorSink _monitor;
     private readonly ControlDeviceHealthRegistry _deviceHealth = new();
     private readonly Dictionary<Guid, DateTimeOffset> _lastPeriodicDispatch = new();
+    private readonly SemaphoreSlim _dispatchGate = new(1, 1);
 
     private static readonly ControlScriptRuntimeSessionResult EmptyResult =
         new([], [], [], [], []);
@@ -55,27 +56,27 @@ public sealed class ControlScriptRuntimeSession
     public ValueTask<ControlScriptRuntimeSessionResult> DispatchControlEventAsync(
         ControlEvent evt,
         CancellationToken cancellationToken = default) =>
-        CompleteDispatchAsync(_runtime.DispatchControlEvent(evt), cancellationToken);
+        DispatchSerializedAsync(() => _runtime.DispatchControlEvent(evt), cancellationToken);
 
     public ValueTask<ControlScriptRuntimeSessionResult> DispatchDeviceEnabledAsync(
         Guid deviceInstanceId,
         CancellationToken cancellationToken = default) =>
-        CompleteDispatchAsync(_runtime.DispatchDeviceEnabled(deviceInstanceId), cancellationToken);
+        DispatchSerializedAsync(() => _runtime.DispatchDeviceEnabled(deviceInstanceId), cancellationToken);
 
     public ValueTask<ControlScriptRuntimeSessionResult> DispatchDeviceDisabledAsync(
         Guid deviceInstanceId,
         CancellationToken cancellationToken = default) =>
-        CompleteDispatchAsync(_runtime.DispatchDeviceDisabled(deviceInstanceId), cancellationToken);
+        DispatchSerializedAsync(() => _runtime.DispatchDeviceDisabled(deviceInstanceId), cancellationToken);
 
     public ValueTask<ControlScriptRuntimeSessionResult> DispatchLayerEnabledAsync(
         Guid layerId,
         CancellationToken cancellationToken = default) =>
-        CompleteDispatchAsync(_runtime.DispatchLayerEnabled(layerId), cancellationToken);
+        DispatchSerializedAsync(() => _runtime.DispatchLayerEnabled(layerId), cancellationToken);
 
     public ValueTask<ControlScriptRuntimeSessionResult> DispatchLayerDisabledAsync(
         Guid layerId,
         CancellationToken cancellationToken = default) =>
-        CompleteDispatchAsync(_runtime.DispatchLayerDisabled(layerId), cancellationToken);
+        DispatchSerializedAsync(() => _runtime.DispatchLayerDisabled(layerId), cancellationToken);
 
     /// <summary>The currently active layer (mutually exclusive), or null.</summary>
     public Guid? ActiveLayerId => _runtime.ActiveLayerId;
@@ -87,35 +88,44 @@ public sealed class ControlScriptRuntimeSession
     public ValueTask<ControlScriptRuntimeSessionResult> SetActiveLayerAsync(
         Guid? layerId,
         CancellationToken cancellationToken = default) =>
-        CompleteDispatchAsync(_runtime.SetActiveLayer(layerId), cancellationToken);
+        DispatchSerializedAsync(() => _runtime.SetActiveLayer(layerId), cancellationToken);
 
     public ValueTask<ControlScriptRuntimeSessionResult> DispatchManualAsync(
         Guid? scriptId = null,
         Guid? triggerId = null,
         CancellationToken cancellationToken = default) =>
-        CompleteDispatchAsync(_runtime.DispatchManual(scriptId, triggerId), cancellationToken);
+        DispatchSerializedAsync(() => _runtime.DispatchManual(scriptId, triggerId), cancellationToken);
 
     /// <summary>
     /// Reports a device session's current health. Device-health-changed triggers fire (and a monitor
     /// row is recorded) only when the session <see cref="ControlSessionState"/> actually transitions, so
     /// callers can report health on every poll without spamming scripts on detail-only updates.
     /// </summary>
-    public ValueTask<ControlScriptRuntimeSessionResult> ReportDeviceHealthAsync(
+    public async ValueTask<ControlScriptRuntimeSessionResult> ReportDeviceHealthAsync(
         Guid deviceInstanceId,
         ControlSessionHealth health,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(health);
 
-        var previousState = _deviceHealth.TryGet(deviceInstanceId)?.State;
-        _deviceHealth.Report(deviceInstanceId, health);
-        if (previousState == health.State)
-            return ValueTask.FromResult(EmptyResult);
+        await _dispatchGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var previousState = _deviceHealth.TryGet(deviceInstanceId)?.State;
+            _deviceHealth.Report(deviceInstanceId, health);
+            if (previousState == health.State)
+                return EmptyResult;
 
-        RecordDeviceHealth(deviceInstanceId, health, previousState);
-        return CompleteDispatchAsync(
-            _runtime.DispatchDeviceHealthChanged(deviceInstanceId, health, previousState),
-            cancellationToken);
+            RecordDeviceHealth(deviceInstanceId, health, previousState);
+            return await CompleteDispatchAsync(
+                    _runtime.DispatchDeviceHealthChanged(deviceInstanceId, health, previousState),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _dispatchGate.Release();
+        }
     }
 
     private void RecordDeviceHealth(
@@ -140,32 +150,40 @@ public sealed class ControlScriptRuntimeSession
         DateTimeOffset utcNow,
         CancellationToken cancellationToken = default)
     {
-        var invocations = new List<ControlScriptInvocationRecord>();
-        var diagnostics = new List<ControlScriptRuntimeDiagnostic>();
-        var cacheChanges = new List<ControlValueCacheChange>();
-
-        foreach (var script in _config.Scripts)
+        await _dispatchGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            if (!script.IsEnabled)
-                continue;
+            var invocations = new List<ControlScriptInvocationRecord>();
+            var diagnostics = new List<ControlScriptRuntimeDiagnostic>();
+            var cacheChanges = new List<ControlValueCacheChange>();
 
-            foreach (var trigger in script.Triggers.Where(t => t.Kind == ControlScriptTriggerKind.Periodic))
+            foreach (var script in _config.Scripts)
             {
-                if (!IsPeriodicDue(trigger, utcNow))
+                if (!script.IsEnabled)
                     continue;
 
-                var dispatch = _runtime.DispatchPeriodic(script.Id, trigger.Id);
-                invocations.AddRange(dispatch.Invocations);
-                diagnostics.AddRange(dispatch.Diagnostics);
-                if (dispatch.Invocations.Count > 0)
-                    _lastPeriodicDispatch[trigger.Id] = utcNow;
-            }
-        }
+                foreach (var trigger in script.Triggers.Where(t => t.Kind == ControlScriptTriggerKind.Periodic))
+                {
+                    if (!IsPeriodicDue(trigger, utcNow))
+                        continue;
 
-        var (oscRoutes, midiRoutes) = await FlushAndApplyLayerSwitchesAsync(invocations, diagnostics, cacheChanges, cancellationToken)
-            .ConfigureAwait(false);
-        RecordDispatch(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
-        return new ControlScriptRuntimeSessionResult(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
+                    var dispatch = _runtime.DispatchPeriodic(script.Id, trigger.Id);
+                    invocations.AddRange(dispatch.Invocations);
+                    diagnostics.AddRange(dispatch.Diagnostics);
+                    if (dispatch.Invocations.Count > 0)
+                        _lastPeriodicDispatch[trigger.Id] = utcNow;
+                }
+            }
+
+            var (oscRoutes, midiRoutes) = await FlushAndApplyLayerSwitchesAsync(invocations, diagnostics, cacheChanges, cancellationToken)
+                .ConfigureAwait(false);
+            RecordDispatch(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
+            return new ControlScriptRuntimeSessionResult(invocations, diagnostics, oscRoutes, midiRoutes, cacheChanges);
+        }
+        finally
+        {
+            _dispatchGate.Release();
+        }
     }
 
     private bool IsPeriodicDue(ControlScriptTriggerConfig trigger, DateTimeOffset utcNow)
@@ -177,6 +195,21 @@ public sealed class ControlScriptRuntimeSession
 
     /// <summary>Bounds runaway layer switching (e.g. a LayerEnabled handler that activates another layer).</summary>
     private const int MaxLayerSwitchDepth = 8;
+
+    private async ValueTask<ControlScriptRuntimeSessionResult> DispatchSerializedAsync(
+        Func<ControlScriptDispatchResult> dispatch,
+        CancellationToken cancellationToken)
+    {
+        await _dispatchGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await CompleteDispatchAsync(dispatch(), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _dispatchGate.Release();
+        }
+    }
 
     private async ValueTask<ControlScriptRuntimeSessionResult> CompleteDispatchAsync(
         ControlScriptDispatchResult dispatch,

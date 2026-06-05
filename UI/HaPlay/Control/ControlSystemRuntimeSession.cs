@@ -40,8 +40,9 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             instructionLimit,
             Monitor,
             midiSender);
-        OscListeners = new ControlOscListenerManager(config, ScriptSession, Monitor);
-        MidiDevices = new ControlMidiDeviceManager(config, ScriptSession, Monitor);
+        EventQueue = new ControlEventQueue(ScriptSession, Monitor);
+        OscListeners = new ControlOscListenerManager(config, EventQueue, Monitor);
+        MidiDevices = new ControlMidiDeviceManager(config, EventQueue, Monitor);
         PeriodicOscSends = new ControlPeriodicOscSendManager(config, oscSender, Monitor);
 
         // The X32 (OSC server) replies to the source port of our requests — i.e. the OSC client's own
@@ -57,6 +58,8 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
     public IControlMonitorSink Monitor { get; }
 
     public ControlScriptRuntimeSession ScriptSession { get; }
+
+    public ControlEventQueue EventQueue { get; }
 
     public ControlOscListenerManager OscListeners { get; }
 
@@ -95,7 +98,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var scriptResult = await ScriptSession.TickPeriodicAsync(utcNow, cancellationToken).ConfigureAwait(false);
+        var scriptResult = await EventQueue.TickPeriodicAsync(utcNow, cancellationToken).ConfigureAwait(false);
         var periodicOscResults = await PeriodicOscSends.TickAsync(utcNow, cancellationToken).ConfigureAwait(false);
         return new ControlSystemRuntimeTickResult(scriptResult, periodicOscResults);
     }
@@ -105,28 +108,24 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         if (_disposed)
             return;
 
-        // Resolve which device this reply belongs to (by the host/port we sent to) and route through the
-        // listener that device uses, so the existing device-resolution + monitor recording apply.
+        // Resolve which device this reply belongs to (by the host/port we sent to) and dispatch it
+        // directly — replies arrive on the client's own socket, so no app-level listener is required.
         var device = _config.Devices.FirstOrDefault(d =>
             d.Protocol == ControlDeviceProtocol.Osc
             && d.IsEnabled
             && d.Binding.OscPort == message.Port
             && string.Equals(d.Binding.OscHost, message.Host, StringComparison.OrdinalIgnoreCase));
-
-        var listenerId = device?.Binding.OscListenerId
-            ?? _config.OscListeners.FirstOrDefault(l => l.IsEnabled)?.Id
-            ?? _config.OscListeners.FirstOrDefault()?.Id;
-        if (listenerId is not { } id)
+        if (device is null)
             return;
 
-        _ = DispatchReplyAsync(id, message.Context);
+        _ = DispatchReplyAsync(device, message.Context);
     }
 
-    private async Task DispatchReplyAsync(Guid listenerId, OSCMessageContext context)
+    private async Task DispatchReplyAsync(ControlDeviceInstanceConfig device, OSCMessageContext context)
     {
         try
         {
-            await OscListeners.DispatchMessageAsync(listenerId, context).ConfigureAwait(false);
+            await OscListeners.DispatchDeviceMessageAsync(device, context).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -224,6 +223,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         else if (_midiSessions is IDisposable disposable)
             disposable.Dispose();
         await OscListeners.DisposeAsync().ConfigureAwait(false);
+        await EventQueue.DisposeAsync().ConfigureAwait(false);
     }
 
     public void Dispose()
@@ -242,6 +242,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         if (_midiSessions is IDisposable disposable)
             disposable.Dispose();
         OscListeners.Dispose();
+        EventQueue.Dispose();
     }
 }
 

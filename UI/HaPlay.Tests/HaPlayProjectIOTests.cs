@@ -1046,10 +1046,9 @@ public sealed class HaPlayProjectIOTests
         var control = new HaPlayProject().ControlSystem;
 
         Assert.False(control.IsArmed);
-        var listener = Assert.Single(control.OscListeners);
-        Assert.Equal("Main OSC Listener", listener.Name);
-        Assert.Equal(10020, listener.LocalPort);
-        Assert.Equal(ControlOscSocketMode.SharedAppListener, listener.SocketMode);
+        // No default app-level OSC listener: device replies use the client socket, so a standing inbound
+        // UDP port is opt-in (added only for separate external OSC control sources).
+        Assert.Empty(control.OscListeners);
         Assert.Equal(ControlOscCacheUpdateMode.IncomingOnly, control.OscCacheUpdateMode);
         Assert.Empty(control.OscCacheOverrides);
         Assert.Equal(1000, control.Monitor.MaxVisibleMessages);
