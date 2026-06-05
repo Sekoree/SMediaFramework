@@ -44,7 +44,12 @@
     <!-- Project structure -->
     <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Top" Text="Project structure" FontWeight="SemiBold" Margin="0,0,0,8" />
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+          <TextBlock Grid.Column="0" Text="Project structure" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="Resolve MIDI…"
+                  ToolTip.Tip="Pick current ports for ambiguous or missing MIDI devices"
+                  Command="{Binding ResolveMidiDevicesCommand}" />
+        </Grid>
         <ItemsControl DockPanel.Dock="Bottom" ItemsSource="{Binding ProfileWarnings}" Margin="0,8,0,0">
           <ItemsControl.ItemTemplate>
             <DataTemplate>
@@ -59,6 +64,18 @@
           <ListBox.ItemTemplate>
             <DataTemplate DataType="vm:ControlStructureRowViewModel">
               <Grid ColumnDefinitions="Auto,84,180,*,120" ColumnSpacing="8" Margin="0,2">
+                <Grid.ContextMenu>
+                  <ContextMenu x:DataType="vm:ControlStructureRowViewModel">
+                    <MenuItem Header="Add project script" Command="{Binding AddProjectScriptCommand}" />
+                    <MenuItem Header="Add imported helper file" Command="{Binding AddHelperFileCommand}" />
+                    <MenuItem Header="Add device script" Command="{Binding AddDeviceScriptCommand}" IsVisible="{Binding CanAddDeviceScript}" />
+                    <MenuItem Header="Add layer script" Command="{Binding AddLayerScriptCommand}" IsVisible="{Binding CanAddLayerScript}" />
+                    <MenuItem Header="Add periodic OSC send" Command="{Binding AddPeriodicSendCommand}" IsVisible="{Binding CanAddPeriodicSend}" />
+                    <Separator IsVisible="{Binding CanAddDeviceScript}" />
+                    <MenuItem Header="Test OSC send" Command="{Binding TestOscCommand}" IsVisible="{Binding CanTestOsc}" />
+                    <MenuItem Header="Test MIDI send" Command="{Binding TestMidiCommand}" IsVisible="{Binding CanTestMidi}" />
+                  </ContextMenu>
+                </Grid.ContextMenu>
                 <Border Grid.Column="0" Width="{Binding IndentWidth}" />
                 <TextBlock Grid.Column="1"
                            Text="{Binding Kind}"
@@ -131,8 +148,12 @@
     <!-- Script editor -->
     <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <Grid ColumnDefinitions="240,*" RowDefinitions="Auto,220,Auto,90,Auto" ColumnSpacing="10" RowSpacing="6">
-        <TextBlock Grid.Row="0" Grid.Column="0" Text="Scripts" FontWeight="SemiBold" />
-        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ScriptEditorStatus}" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+        <Grid Grid.Row="0" Grid.Column="0" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="4">
+          <TextBlock Grid.Column="0" Text="Scripts" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="+" Padding="8,2" ToolTip.Tip="Add script" Command="{Binding AddScriptCommand}" />
+          <Button Grid.Column="2" Content="–" Padding="8,2" ToolTip.Tip="Remove selected script" Command="{Binding RemoveSelectedScriptCommand}" />
+        </Grid>
+        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ScriptEditorStatus}" Opacity="0.75" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
         <ListBox Grid.Row="1"
                  Grid.RowSpan="4"
                  Grid.Column="0"
@@ -243,6 +264,83 @@
                 HorizontalAlignment="Right"
                 Command="{Binding SaveSelectedScriptCommand}" />
       </Grid>
+    </Border>
+
+    <!-- Learn mode -->
+    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10"
+            IsVisible="{Binding HasSelectedScript}">
+      <StackPanel Spacing="6">
+        <Grid ColumnDefinitions="*,Auto">
+          <StackPanel Grid.Column="0" VerticalAlignment="Center">
+            <TextBlock Text="Learn MIDI" FontWeight="SemiBold" />
+            <TextBlock Text="Arm the system, click Learn, then move a control to capture it as a trigger."
+                       Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+          </StackPanel>
+          <Button Grid.Column="1" MinWidth="150" VerticalAlignment="Center"
+                  Content="{Binding LearnButtonText}" Command="{Binding ToggleLearnCommand}" />
+        </Grid>
+        <Border IsVisible="{Binding HasLearnCandidate}"
+                BorderBrush="#3360C060" BorderThickness="1" CornerRadius="4" Padding="8">
+          <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Captured" Opacity="0.7" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding LearnCandidate.Description}"
+                       FontFamily="Cascadia Code, Consolas, monospace" VerticalAlignment="Center" />
+            <CheckBox Grid.Row="0" Grid.Column="2"
+                      Content="Insert handler stub" IsChecked="{Binding LearnCandidate.InsertStub}" />
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Function" Opacity="0.7" VerticalAlignment="Center" />
+            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding LearnCandidate.FunctionName}" PlaceholderText="handler function" />
+            <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="6">
+              <Button Content="Add trigger" Command="{Binding ConfirmLearnCommand}" />
+              <Button Content="Cancel" Command="{Binding CancelLearnCommand}" />
+            </StackPanel>
+          </Grid>
+        </Border>
+      </StackPanel>
+    </Border>
+
+    <!-- Trigger editor -->
+    <Border DockPanel.Dock="Top" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10"
+            IsVisible="{Binding HasSelectedScript}">
+      <ContentControl Content="{Binding SelectedScriptRow}">
+        <ContentControl.ContentTemplate>
+          <DataTemplate DataType="vm:ControlScriptRowViewModel">
+            <DockPanel>
+              <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+                <TextBlock Grid.Column="0" Text="Triggers" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="Add trigger" Command="{Binding AddTriggerCommand}" />
+              </Grid>
+              <TextBlock DockPanel.Dock="Bottom"
+                         Text="A trigger binds an exported function to an event. Leave a match field blank to match any value."
+                         Opacity="0.6" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0" />
+              <ItemsControl ItemsSource="{Binding Triggers}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate DataType="vm:ControlScriptTriggerRowViewModel">
+                    <Grid ColumnDefinitions="160,Auto" ColumnSpacing="6" Margin="0,2">
+                      <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
+                                ItemsSource="{Binding KindOptions}" SelectedItem="{Binding Kind}" />
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                        <TextBox Width="160" Text="{Binding FunctionName}" PlaceholderText="exported function" />
+                        <TextBox Width="180" Text="{Binding OscAddressPattern}"
+                                 PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" />
+                        <TextBox Width="64" Text="{Binding MidiChannelText}"
+                                 PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" />
+                        <TextBox Width="64" Text="{Binding MidiControllerText}"
+                                 PlaceholderText="cc" IsVisible="{Binding ShowMidiController}" />
+                        <TextBox Width="64" Text="{Binding MidiNoteText}"
+                                 PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" />
+                        <TextBox Width="90" Text="{Binding IntervalMsText}"
+                                 PlaceholderText="ms" IsVisible="{Binding ShowInterval}" />
+                        <Button Content="✕" Padding="8,2" ToolTip.Tip="Remove trigger"
+                                Command="{Binding RemoveCommand}" />
+                      </StackPanel>
+                    </Grid>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </DockPanel>
+          </DataTemplate>
+        </ContentControl.ContentTemplate>
+      </ContentControl>
     </Border>
 
     <!-- Monitor toolbar -->

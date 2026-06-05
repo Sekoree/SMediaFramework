@@ -224,6 +224,473 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public async Task AddScript_AppendsAndSelectsNewScript()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        Assert.False(vm.HasSelectedScript);
+        Assert.False(vm.RemoveSelectedScriptCommand.CanExecute(null));
+
+        vm.AddScriptCommand.Execute(null);
+
+        Assert.Equal(1, vm.ScriptCount);
+        var row = Assert.Single(vm.ScriptRows);
+        Assert.Same(row, vm.SelectedScriptRow);
+        Assert.True(vm.HasSelectedScript);
+        Assert.True(vm.RemoveSelectedScriptCommand.CanExecute(null));
+
+        vm.AddScriptCommand.Execute(null);
+        Assert.Equal(2, vm.ScriptCount);
+        Assert.Equal(2, vm.BuildSnapshot().Scripts.Count);
+    }
+
+    [Fact]
+    public async Task RemoveSelectedScript_DropsSelectedScript()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts =
+            [
+                new ControlScriptConfig { Name = "Keep" },
+                new ControlScriptConfig { Name = "Drop" },
+            ],
+        });
+
+        vm.SelectedScriptRow = vm.ScriptRows.Single(r => r.Name == "Drop");
+        vm.RemoveSelectedScriptCommand.Execute(null);
+
+        var remaining = Assert.Single(vm.BuildSnapshot().Scripts);
+        Assert.Equal("Keep", remaining.Name);
+        Assert.DoesNotContain(vm.ScriptRows, r => r.Name == "Drop");
+    }
+
+    [Fact]
+    public async Task AddTrigger_AppendsManualTriggerToSelectedScript()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts = [new ControlScriptConfig { Name = "Script" }],
+        });
+
+        var row = Assert.Single(vm.ScriptRows);
+        Assert.Empty(row.Triggers);
+
+        row.AddTriggerCommand.Execute(null);
+
+        var triggerRow = Assert.Single(row.Triggers);
+        Assert.Equal(ControlScriptTriggerKind.Manual, triggerRow.Kind);
+
+        var script = Assert.Single(vm.BuildSnapshot().Scripts);
+        Assert.Single(script.Triggers);
+        Assert.Equal(ControlScriptTriggerKind.Manual, script.Triggers[0].Kind);
+    }
+
+    [Fact]
+    public async Task TriggerRowEdits_FlowIntoScriptSnapshot()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts = [new ControlScriptConfig { Name = "Script" }],
+        });
+
+        var row = Assert.Single(vm.ScriptRows);
+        row.AddTriggerCommand.Execute(null);
+        var triggerRow = Assert.Single(row.Triggers);
+
+        triggerRow.Kind = ControlScriptTriggerKind.MidiControlChange;
+        triggerRow.FunctionName = "  onEncoder  ";
+        triggerRow.MidiChannelText = "1";
+        triggerRow.MidiControllerText = "16";
+
+        Assert.True(triggerRow.ShowMidiController);
+        Assert.False(triggerRow.ShowOscAddress);
+
+        var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
+        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
+        Assert.Equal("onEncoder", trigger.FunctionName);
+        Assert.Equal(1, trigger.MidiChannel);
+        Assert.Equal(16, trigger.MidiController);
+        Assert.Null(trigger.MidiNote);
+        Assert.Contains("onEncoder", row.TriggerSummary);
+    }
+
+    [Fact]
+    public async Task TriggerRow_EmptyMatchFieldClearsToMatchAny()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts =
+            [
+                new ControlScriptConfig
+                {
+                    Name = "Script",
+                    Triggers =
+                    [
+                        new ControlScriptTriggerConfig
+                        {
+                            Kind = ControlScriptTriggerKind.MidiControlChange,
+                            FunctionName = "onEncoder",
+                            MidiController = 16,
+                        },
+                    ],
+                },
+            ],
+        });
+
+        var triggerRow = Assert.Single(Assert.Single(vm.ScriptRows).Triggers);
+        Assert.Equal("16", triggerRow.MidiControllerText);
+
+        triggerRow.MidiControllerText = string.Empty;
+
+        Assert.Null(Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers).MidiController);
+    }
+
+    [Fact]
+    public async Task RemoveTrigger_DropsTriggerFromScript()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts =
+            [
+                new ControlScriptConfig
+                {
+                    Name = "Script",
+                    Triggers =
+                    [
+                        new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual, FunctionName = "run" },
+                    ],
+                },
+            ],
+        });
+
+        var row = Assert.Single(vm.ScriptRows);
+        var triggerRow = Assert.Single(row.Triggers);
+
+        triggerRow.RemoveCommand.Execute(null);
+
+        Assert.Empty(row.Triggers);
+        Assert.Empty(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
+    }
+
+    [Fact]
+    public async Task ContextMenu_AddDeviceScript_AddsDeviceScopedScript()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var deviceId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = deviceId,
+                    Name = "X-Touch MINI",
+                    Protocol = ControlDeviceProtocol.Midi,
+                    Binding = new ControlDeviceBindingConfig { MidiInputDeviceName = "X-Touch MINI" },
+                },
+            ],
+        });
+
+        var row = vm.StructureRows.Single(r => r.Kind == "MIDI" && r.DeviceInstanceId == deviceId);
+        Assert.True(row.CanAddDeviceScript);
+        Assert.True(row.CanTestMidi);
+        Assert.False(row.CanTestOsc);
+
+        row.AddDeviceScriptCommand!.Execute(null);
+
+        var script = Assert.Single(vm.BuildSnapshot().Scripts);
+        Assert.Equal(ControlScriptScope.Device, script.Scope);
+        Assert.Equal(deviceId, script.DeviceInstanceId);
+    }
+
+    [Fact]
+    public async Task ContextMenu_AddLayerScript_AddsLayerScopedScript()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var layerId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Layers = [new ControlLayerConfig { Id = layerId, Name = "Layer A" }],
+        });
+
+        var row = vm.StructureRows.Single(r => r.Kind == "Layer" && r.LayerId == layerId);
+        Assert.True(row.CanAddLayerScript);
+
+        row.AddLayerScriptCommand!.Execute(null);
+
+        var script = Assert.Single(vm.BuildSnapshot().Scripts);
+        Assert.Equal(ControlScriptScope.Layer, script.Scope);
+        Assert.Equal(layerId, script.LayerId);
+    }
+
+    [Fact]
+    public async Task ContextMenu_AddPeriodicSend_AddsSendToOscDevice()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var deviceId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = deviceId,
+                    Name = "X32",
+                    Protocol = ControlDeviceProtocol.Osc,
+                    Binding = new ControlDeviceBindingConfig { OscHost = "192.168.2.76", OscPort = 10023 },
+                },
+            ],
+        });
+
+        var row = vm.StructureRows.Single(r => r.Kind == "OSC" && r.DeviceInstanceId == deviceId);
+        Assert.True(row.CanAddPeriodicSend);
+        Assert.True(row.CanTestOsc);
+        Assert.False(row.CanTestMidi);
+
+        row.AddPeriodicSendCommand!.Execute(null);
+
+        var device = Assert.Single(vm.BuildSnapshot().Devices);
+        var send = Assert.Single(device.PeriodicOscSends);
+        Assert.Equal("/xremote", send.Address);
+    }
+
+    [Fact]
+    public async Task ContextMenu_AddHelperFile_AddsProjectScriptWithPath()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig());
+
+        var row = vm.StructureRows.First(r => r.IsGroup);
+        row.AddHelperFileCommand!.Execute(null);
+
+        var script = Assert.Single(vm.BuildSnapshot().Scripts);
+        Assert.Equal(ControlScriptScope.Project, script.Scope);
+        Assert.Equal("Scripts/helper.mnd", script.ScriptPath);
+    }
+
+    [Fact]
+    public async Task ResolveMidiDevices_AppliesUserSelectionToBinding()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        var deviceId = Guid.NewGuid();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Id = deviceId,
+                    Name = "X-Touch MINI",
+                    Protocol = ControlDeviceProtocol.Midi,
+                    IsEnabled = true,
+                    Binding = new ControlDeviceBindingConfig { MidiInputDeviceName = "X-Touch MINI" },
+                },
+            ],
+        });
+
+        var inputs = new[]
+        {
+            new ControlMidiPortInfo(1, "X-Touch MINI"),
+            new ControlMidiPortInfo(2, "X-Touch MINI"),
+        };
+        vm.MidiCatalogProvider = () => new ControlMidiPortCatalog(inputs, Array.Empty<ControlMidiPortInfo>());
+
+        IReadOnlyList<ControlMidiResolutionRequest>? captured = null;
+        vm.MidiResolutionPrompt = requests =>
+        {
+            captured = requests;
+            var map = new Dictionary<ControlMidiResolutionKey, ControlMidiPortInfo>
+            {
+                [new ControlMidiResolutionKey(deviceId, ControlMidiPortDirection.Input)] = new(2, "X-Touch MINI"),
+            };
+            return Task.FromResult<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>(map);
+        };
+
+        await vm.ResolveMidiDevicesCommand.ExecuteAsync(null);
+
+        Assert.NotNull(captured);
+        Assert.Equal(ControlDeviceMatchStatus.Ambiguous, Assert.Single(captured!).Status);
+        Assert.Equal(2, Assert.Single(vm.BuildSnapshot().Devices).Binding.MidiInputDeviceId);
+    }
+
+    [Fact]
+    public async Task ResolveMidiDevices_WhenAllMatch_DoesNotPrompt()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Devices =
+            [
+                new ControlDeviceInstanceConfig
+                {
+                    Name = "X-Touch MINI",
+                    Protocol = ControlDeviceProtocol.Midi,
+                    IsEnabled = true,
+                    Binding = new ControlDeviceBindingConfig { MidiInputDeviceName = "X-Touch MINI" },
+                },
+            ],
+        });
+        vm.MidiCatalogProvider = () => new ControlMidiPortCatalog(
+            [new ControlMidiPortInfo(1, "X-Touch MINI")],
+            Array.Empty<ControlMidiPortInfo>());
+
+        var prompted = false;
+        vm.MidiResolutionPrompt = _ =>
+        {
+            prompted = true;
+            return Task.FromResult<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>(null);
+        };
+
+        await vm.ResolveMidiDevicesCommand.ExecuteAsync(null);
+
+        Assert.False(prompted);
+        Assert.Contains("resolve to a current port", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void FindLearnCapture_ReturnsFirstMidiInputAfterBaseline()
+    {
+        var since = DateTimeOffset.Parse("2026-06-05T10:00:00Z");
+        var records = new[]
+        {
+            // before baseline — ignored
+            new ControlMonitorRecord
+            {
+                TimestampUtc = since.AddSeconds(-1),
+                Direction = ControlMonitorDirection.Input,
+                Protocol = ControlMonitorProtocol.Midi,
+                MidiChannel = 1,
+                MidiController = 99,
+            },
+            // OSC — ignored
+            new ControlMonitorRecord
+            {
+                TimestampUtc = since.AddSeconds(1),
+                Direction = ControlMonitorDirection.Input,
+                Protocol = ControlMonitorProtocol.Osc,
+                Address = "/ch/01/mix/fader",
+            },
+            // output MIDI — ignored
+            new ControlMonitorRecord
+            {
+                TimestampUtc = since.AddSeconds(2),
+                Direction = ControlMonitorDirection.Output,
+                Protocol = ControlMonitorProtocol.Midi,
+                MidiController = 16,
+            },
+            // first matching input — captured
+            new ControlMonitorRecord
+            {
+                TimestampUtc = since.AddSeconds(3),
+                Direction = ControlMonitorDirection.Input,
+                Protocol = ControlMonitorProtocol.Midi,
+                MidiChannel = 1,
+                MidiController = 16,
+                MidiValue = 5,
+            },
+        };
+
+        var capture = ControlWorkspaceViewModel.FindLearnCapture(records, since);
+
+        Assert.NotNull(capture);
+        Assert.Equal(16, capture!.MidiController);
+        Assert.Equal(5, capture.MidiValue);
+    }
+
+    [Fact]
+    public void BuildLearnedTrigger_MapsCcAndNoteRecords()
+    {
+        var cc = ControlWorkspaceViewModel.BuildLearnedTrigger(
+            new ControlMonitorRecord { MidiChannel = 1, MidiController = 16 },
+            "onCc16");
+        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, cc.Kind);
+        Assert.Equal("onCc16", cc.FunctionName);
+        Assert.Equal(1, cc.MidiChannel);
+        Assert.Equal(16, cc.MidiController);
+        Assert.Null(cc.MidiNote);
+
+        var note = ControlWorkspaceViewModel.BuildLearnedTrigger(
+            new ControlMonitorRecord { MidiChannel = 1, MidiNote = 40 },
+            "onNote40");
+        Assert.Equal(ControlScriptTriggerKind.MidiNote, note.Kind);
+        Assert.Equal(40, note.MidiNote);
+        Assert.Null(note.MidiController);
+    }
+
+    [Fact]
+    public void HasExport_DetectsExistingExportedFunction()
+    {
+        const string script = "export fun onCc16(event, context) { return 1; }";
+        Assert.True(ControlWorkspaceViewModel.HasExport(script, "onCc16"));
+        Assert.False(ControlWorkspaceViewModel.HasExport(script, "onCc17"));
+        Assert.False(ControlWorkspaceViewModel.HasExport(string.Empty, "onCc16"));
+    }
+
+    [Fact]
+    public async Task ConfirmLearn_AddsTriggerAndAppendsStub()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts = [new ControlScriptConfig { Name = "Script" }],
+        });
+        var row = Assert.Single(vm.ScriptRows);
+        vm.SelectedScriptText = "// existing";
+
+        vm.ApplyLearnCapture(new ControlMonitorRecord
+        {
+            Direction = ControlMonitorDirection.Input,
+            Protocol = ControlMonitorProtocol.Midi,
+            MidiChannel = 1,
+            MidiController = 16,
+            MidiValue = 5,
+        });
+
+        Assert.True(vm.HasLearnCandidate);
+        Assert.Equal("onCc16", vm.LearnCandidate!.FunctionName);
+        Assert.True(vm.ConfirmLearnCommand.CanExecute(null));
+
+        vm.ConfirmLearnCommand.Execute(null);
+
+        Assert.False(vm.HasLearnCandidate);
+        var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
+        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
+        Assert.Equal(16, trigger.MidiController);
+        Assert.Equal("onCc16", trigger.FunctionName);
+        Assert.Contains("export fun onCc16", vm.SelectedScriptText);
+        Assert.Contains("onCc16", row.TriggerSummary);
+    }
+
+    [Fact]
+    public async Task ConfirmLearn_DoesNotDuplicateExistingExport()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts = [new ControlScriptConfig { Name = "Script" }],
+        });
+        vm.SelectedScriptText = "export fun onNote40(event, context) { return 1; }";
+
+        vm.ApplyLearnCapture(new ControlMonitorRecord
+        {
+            Direction = ControlMonitorDirection.Input,
+            Protocol = ControlMonitorProtocol.Midi,
+            MidiChannel = 1,
+            MidiNote = 40,
+        });
+        vm.ConfirmLearnCommand.Execute(null);
+
+        // Only the original export should be present (no appended stub).
+        var occurrences = vm.SelectedScriptText.Split("export fun onNote40").Length - 1;
+        Assert.Equal(1, occurrences);
+        Assert.Equal(ControlScriptTriggerKind.MidiNote, Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers).Kind);
+    }
+
+    [Fact]
     public void BuildStructureRows_ListsConfiguredControlItems()
     {
         var midiId = Guid.NewGuid();

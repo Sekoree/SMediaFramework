@@ -2,11 +2,18 @@ using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows.Input;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.ControlGraph;
 using HaPlay.Models;
+using HaPlay.ViewModels.Dialogs;
+using HaPlay.Views.Dialogs;
 using OSCLib;
 
 namespace HaPlay.ViewModels;
@@ -27,9 +34,17 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private ControlMonitorBuffer? _monitorBuffer;
     private ControlSystemRuntimeSession? _session;
     private UdpControlOscSender? _oscSender;
+    private IControlMidiSender? _midiSender;
     private int _lastRenderedCount = -1;
     private bool _filterDirty;
     private bool _busy;
+    private DateTimeOffset _learnSinceUtc;
+
+    // Fallback MIDI device resolution — injectable so unit tests can supply a fake catalog/prompt
+    // without touching PortMidi or showing a real dialog.
+    internal Func<ControlMidiPortCatalog?> MidiCatalogProvider { get; set; } = EnumerateMidiPorts;
+
+    internal Func<IReadOnlyList<ControlMidiResolutionRequest>, Task<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>> MidiResolutionPrompt { get; set; } = DefaultPromptAsync;
 
     public ControlWorkspaceViewModel()
     {
@@ -93,6 +108,24 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private bool _errorsOnly;
 
     [ObservableProperty]
+    private bool _isLearning;
+
+    [ObservableProperty]
+    private ControlLearnCandidateViewModel? _learnCandidate;
+
+    public string LearnButtonText => IsLearning ? "Listening… (cancel)" : "Learn MIDI";
+
+    public bool HasLearnCandidate => LearnCandidate is not null;
+
+    partial void OnIsLearningChanged(bool value) => OnPropertyChanged(nameof(LearnButtonText));
+
+    partial void OnLearnCandidateChanged(ControlLearnCandidateViewModel? value)
+    {
+        OnPropertyChanged(nameof(HasLearnCandidate));
+        ConfirmLearnCommand.NotifyCanExecuteChanged();
+    }
+
+    [ObservableProperty]
     private string _selectedMonitorDirection = AllFilter;
 
     [ObservableProperty]
@@ -127,7 +160,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     {
         LoadSelectedScriptText(value);
         SaveSelectedScriptCommand.NotifyCanExecuteChanged();
+        RemoveSelectedScriptCommand.NotifyCanExecuteChanged();
+        ToggleLearnCommand.NotifyCanExecuteChanged();
+        ConfirmLearnCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(HasSelectedScript));
     }
+
+    public bool HasSelectedScript => SelectedScriptRow is not null;
 
     partial void OnSelectedScriptTextChanged(string value) =>
         RefreshScriptAnalysis(SelectedScriptRow);
@@ -361,6 +400,93 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         && !string.IsNullOrWhiteSpace(SelectedScriptRow.Script.ScriptPath)
         && !string.IsNullOrWhiteSpace(_projectRoot);
 
+    [RelayCommand]
+    private void AddScript() => AddScriptInternal(ControlScriptScope.Project, deviceInstanceId: null, layerId: null);
+
+    private void AddScriptInternal(
+        ControlScriptScope scope,
+        Guid? deviceInstanceId,
+        Guid? layerId,
+        string namePrefix = "Script",
+        string scriptPath = "")
+    {
+        var script = new ControlScriptConfig
+        {
+            Name = $"{namePrefix} {(_config.Scripts.Count + 1).ToString(CultureInfo.InvariantCulture)}",
+            Scope = scope,
+            DeviceInstanceId = deviceInstanceId,
+            LayerId = layerId,
+            ScriptPath = scriptPath,
+        };
+
+        _config = _config with { Scripts = [.. _config.Scripts, script] };
+        RebuildScriptRows();
+        SelectedScriptRow = ScriptRows.FirstOrDefault(row => row.Script.Id == script.Id);
+        RebuildStructureRows();
+        NotifySummary();
+        if (IsArmed)
+            StatusMessage = "Script added. Re-arm control to apply script changes.";
+    }
+
+    private void AddHelperScript() =>
+        AddScriptInternal(ControlScriptScope.Project, deviceInstanceId: null, layerId: null, namePrefix: "Helper", scriptPath: "Scripts/helper.mnd");
+
+    private void AddDeviceScript(ControlStructureRowViewModel row)
+    {
+        if (row.DeviceInstanceId is { } deviceId)
+            AddScriptInternal(ControlScriptScope.Device, deviceId, layerId: null);
+    }
+
+    private void AddLayerScript(ControlStructureRowViewModel row)
+    {
+        if (row.LayerId is { } layerId)
+            AddScriptInternal(ControlScriptScope.Layer, deviceInstanceId: null, layerId);
+    }
+
+    private void AddPeriodicSend(ControlStructureRowViewModel row)
+    {
+        if (row.DeviceInstanceId is not { } deviceId)
+            return;
+
+        var devices = _config.Devices.ToList();
+        var index = devices.FindIndex(d => d.Id == deviceId);
+        if (index < 0)
+            return;
+
+        var device = devices[index];
+        devices[index] = device with { PeriodicOscSends = [.. device.PeriodicOscSends, new ControlPeriodicOscSendConfig()] };
+        _config = _config with { Devices = devices };
+        RebuildStructureRows();
+        NotifySummary();
+        StatusMessage = IsArmed
+            ? "Periodic OSC send added. Re-arm control to apply."
+            : "Periodic OSC send added.";
+    }
+
+    private ControlStructureRowCommands BuildStructureRowCommands() => new(
+        AddScript,
+        AddHelperScript,
+        AddDeviceScript,
+        AddLayerScript,
+        AddPeriodicSend,
+        row => _ = TestOscDeviceAsync(row),
+        row => _ = TestMidiDeviceAsync(row));
+
+    [RelayCommand(CanExecute = nameof(HasSelectedScript))]
+    private void RemoveSelectedScript()
+    {
+        var target = SelectedScriptRow;
+        if (target is null)
+            return;
+
+        _config = _config with { Scripts = _config.Scripts.Where(s => s.Id != target.Script.Id).ToList() };
+        RebuildScriptRows();
+        RebuildStructureRows();
+        NotifySummary();
+        if (IsArmed)
+            StatusMessage = "Script removed. Re-arm control to apply script changes.";
+    }
+
     private void RebuildScriptRows()
     {
         var selectedId = SelectedScriptRow?.Script.Id;
@@ -375,7 +501,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private void RebuildStructureRows()
     {
         StructureRows.Clear();
-        foreach (var row in BuildStructureRows(_config))
+        foreach (var row in BuildStructureRows(_config, BuildStructureRowCommands()))
             StructureRows.Add(row);
     }
 
@@ -460,13 +586,15 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         return warnings;
     }
 
-    internal static IReadOnlyList<ControlStructureRowViewModel> BuildStructureRows(ControlSystemConfig config)
+    internal static IReadOnlyList<ControlStructureRowViewModel> BuildStructureRows(
+        ControlSystemConfig config,
+        ControlStructureRowCommands? commands = null)
     {
         ArgumentNullException.ThrowIfNull(config);
 
         var rows = new List<ControlStructureRowViewModel>();
 
-        AddGroup(rows, "MIDI devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.Midi));
+        AddGroup(rows, "MIDI devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.Midi), commands);
         foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Midi).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
@@ -474,10 +602,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 string.IsNullOrWhiteSpace(device.Name) ? "(unnamed MIDI)" : device.Name,
                 FormatMidiBinding(device.Binding),
                 FormatEnabled(device.IsEnabled),
-                Level: 1));
+                Level: 1,
+                deviceInstanceId: device.Id,
+                protocol: ControlDeviceProtocol.Midi,
+                commands: commands));
         }
 
-        AddGroup(rows, "OSC listeners", config.OscListeners.Count);
+        AddGroup(rows, "OSC listeners", config.OscListeners.Count, commands);
         foreach (var listener in config.OscListeners.OrderBy(l => l.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
@@ -485,10 +616,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 string.IsNullOrWhiteSpace(listener.Name) ? "(unnamed listener)" : listener.Name,
                 $"port {listener.LocalPort.ToString(CultureInfo.InvariantCulture)} - {listener.SocketMode}",
                 FormatEnabled(listener.IsEnabled),
-                Level: 1));
+                Level: 1,
+                commands: commands));
         }
 
-        AddGroup(rows, "OSC devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.Osc));
+        AddGroup(rows, "OSC devices", config.Devices.Count(d => d.Protocol == ControlDeviceProtocol.Osc), commands);
         foreach (var device in config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Osc).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
@@ -496,10 +628,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 string.IsNullOrWhiteSpace(device.Name) ? "(unnamed OSC)" : device.Name,
                 FormatOscBinding(device.Binding),
                 FormatEnabled(device.IsEnabled),
-                Level: 1));
+                Level: 1,
+                deviceInstanceId: device.Id,
+                protocol: ControlDeviceProtocol.Osc,
+                commands: commands));
         }
 
-        AddGroup(rows, "Layers", config.Layers.Count);
+        AddGroup(rows, "Layers", config.Layers.Count, commands);
         foreach (var layer in config.Layers.OrderBy(l => l.Priority).ThenBy(l => l.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
@@ -507,10 +642,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 string.IsNullOrWhiteSpace(layer.Name) ? "(unnamed layer)" : layer.Name,
                 $"priority {layer.Priority.ToString(CultureInfo.InvariantCulture)} - {layer.ScriptIds.Count.ToString(CultureInfo.InvariantCulture)} script(s)",
                 FormatEnabled(layer.IsEnabled),
-                Level: 1));
+                Level: 1,
+                layerId: layer.Id,
+                commands: commands));
         }
 
-        AddGroup(rows, "Scripts", config.Scripts.Count);
+        AddGroup(rows, "Scripts", config.Scripts.Count, commands);
         foreach (var script in config.Scripts.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase))
         {
             rows.Add(new ControlStructureRowViewModel(
@@ -518,7 +655,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 string.IsNullOrWhiteSpace(script.Name) ? "(unnamed script)" : script.Name,
                 $"{script.Scope} - {FormatScriptPath(script.ScriptPath)} - {script.Triggers.Count.ToString(CultureInfo.InvariantCulture)} trigger(s)",
                 FormatEnabled(script.IsEnabled),
-                Level: 1));
+                Level: 1,
+                commands: commands));
         }
 
         var periodic = config.Devices
@@ -527,7 +665,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             .OrderBy(x => x.Device.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(x => x.Send.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        AddGroup(rows, "Periodic sends", periodic.Count);
+        AddGroup(rows, "Periodic sends", periodic.Count, commands);
         foreach (var item in periodic)
         {
             rows.Add(new ControlStructureRowViewModel(
@@ -535,7 +673,10 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                 string.IsNullOrWhiteSpace(item.Send.Name) ? item.Send.Address : item.Send.Name,
                 $"{item.Device.Name}: {item.Send.Address} every {item.Send.IntervalMs.ToString(CultureInfo.InvariantCulture)} ms",
                 FormatEnabled(item.Send.IsEnabled && item.Device.IsEnabled),
-                Level: 1));
+                Level: 1,
+                deviceInstanceId: item.Device.Id,
+                protocol: ControlDeviceProtocol.Osc,
+                commands: commands));
         }
 
         return rows;
@@ -583,14 +724,19 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         return $"{value} ({entry.Source}, {entry.Timestamp.ToLocalTime():HH:mm:ss})";
     }
 
-    private static void AddGroup(List<ControlStructureRowViewModel> rows, string name, int count) =>
+    private static void AddGroup(
+        List<ControlStructureRowViewModel> rows,
+        string name,
+        int count,
+        ControlStructureRowCommands? commands) =>
         rows.Add(new ControlStructureRowViewModel(
             "Group",
             name,
             $"{count.ToString(CultureInfo.InvariantCulture)} configured",
             string.Empty,
             Level: 0,
-            IsGroup: true));
+            IsGroup: true,
+            commands: commands));
 
     private static string FormatMidiBinding(ControlDeviceBindingConfig binding)
     {
@@ -778,8 +924,97 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
+    // ----- Fallback MIDI device resolution ----------------------------------------------------
+    // When a configured MIDI device cannot be confidently matched to a current port (ambiguous or
+    // missing), let the user pick the live port and persist that choice into the device binding.
+
+    [RelayCommand]
+    private async Task ResolveMidiDevicesAsync()
+    {
+        if (await ResolveMidiDevicesCoreAsync(announceWhenResolvedOrEmpty: true).ConfigureAwait(true))
+            StatusMessage = "MIDI device bindings resolved." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    /// <summary>
+    /// Enumerates current MIDI ports, prompts the user to resolve any ambiguous/missing bindings, and writes
+    /// the chosen ports back into the config. Returns true when at least one binding was updated.
+    /// </summary>
+    private async Task<bool> ResolveMidiDevicesCoreAsync(bool announceWhenResolvedOrEmpty)
+    {
+        var catalog = MidiCatalogProvider();
+        if (catalog is null)
+        {
+            if (announceWhenResolvedOrEmpty)
+                StatusMessage = "MIDI device catalog is unavailable.";
+            return false;
+        }
+
+        var requests = ControlMidiDeviceResolver.BuildRequests(_config, catalog.Inputs, catalog.Outputs);
+        if (requests.Count == 0)
+        {
+            if (announceWhenResolvedOrEmpty)
+                StatusMessage = "All enabled MIDI devices resolve to a current port.";
+            return false;
+        }
+
+        var selections = await MidiResolutionPrompt(requests).ConfigureAwait(true);
+        if (selections is null || selections.Count == 0)
+        {
+            if (announceWhenResolvedOrEmpty)
+                StatusMessage = "MIDI device resolution cancelled.";
+            return false;
+        }
+
+        _config = ControlMidiDeviceResolver.ApplySelections(_config, selections);
+        RebuildStructureRows();
+        RebuildProfileWarnings();
+        RebuildX32CommandRows(_session?.ScriptSession.OscCache);
+        NotifySummary();
+        return true;
+    }
+
+    private static ControlMidiPortCatalog? EnumerateMidiPorts()
+    {
+        try
+        {
+            using var lease = ControlMidiLibraryLease.Acquire();
+            var provider = RealControlMidiDeviceProvider.Instance;
+            provider.EnsureInitialized();
+            return new ControlMidiPortCatalog(provider.GetInputDevices(), provider.GetOutputDevices());
+        }
+        catch
+        {
+            // PortMidi unavailable (headless/CI) — skip the fallback flow rather than fault.
+            return null;
+        }
+    }
+
+    private static async Task<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?> DefaultPromptAsync(
+        IReadOnlyList<ControlMidiResolutionRequest> requests)
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return null;
+
+        var dialog = new RebindMissingControlMidiDevicesDialog
+        {
+            DataContext = new RebindMissingControlMidiDevicesDialogViewModel(requests),
+        };
+        return await dialog.ShowDialog<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?>(owner)
+            .ConfigureAwait(true);
+    }
+
+    private static Window? TryGetOwnerWindow() =>
+        Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
+            ? desktop.MainWindow
+            : null;
+
     private async Task ArmInternalAsync()
     {
+        // Give the user a chance to bind ambiguous/missing MIDI devices to live ports before opening
+        // sessions. No-op in tests/headless (no owner window, or no enabled MIDI bindings to resolve).
+        await ResolveMidiDevicesCoreAsync(announceWhenResolvedOrEmpty: false).ConfigureAwait(true);
+
         ControlSystemRuntimeSession? pendingSession = null;
         UdpControlOscSender? pendingOsc = null;
         try
@@ -801,6 +1036,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
             _monitorBuffer = monitor;
             _oscSender = osc;
+            _midiSender = midi;
             _session = session;
             pendingSession = null;
             pendingOsc = null;
@@ -834,6 +1070,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         _session = null;
         _monitorBuffer = null;
         _oscSender = null;
+        _midiSender = null;
 
         if (session is not null)
         {
@@ -858,6 +1095,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         _session = null;
         _monitorBuffer = null;
         _oscSender = null;
+        _midiSender = null;
         if (session is null && osc is null)
             return;
 
@@ -963,6 +1201,196 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         }
     }
 
+    // ----- Context-menu test sends ------------------------------------------------------------
+
+    /// <summary>Prefills the test-send fields from the OSC device endpoint and sends the current test address.</summary>
+    private async Task TestOscDeviceAsync(ControlStructureRowViewModel row)
+    {
+        if (row.DeviceInstanceId is not { } deviceId)
+            return;
+
+        var device = _config.Devices.FirstOrDefault(d => d.Id == deviceId);
+        if (device is null)
+            return;
+
+        if (!string.IsNullOrWhiteSpace(device.Binding.OscHost))
+            TestOscHost = device.Binding.OscHost!;
+        if (device.Binding.OscPort is { } port)
+            TestOscPort = port.ToString(CultureInfo.InvariantCulture);
+
+        await SendTestOscAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>Sends a single recognizable test CC to the selected MIDI device's output.</summary>
+    private async Task TestMidiDeviceAsync(ControlStructureRowViewModel row)
+    {
+        if (row.DeviceInstanceId is not { } deviceId)
+            return;
+
+        var sender = _midiSender;
+        if (sender is null)
+        {
+            StatusMessage = "Arm the control system before sending test MIDI.";
+            return;
+        }
+
+        const int channel = 1;
+        const int controller = 0;
+        const int value = 127;
+        try
+        {
+            await sender.SendControlChangeAsync(deviceId, channel, controller, value, highResolution14Bit: false)
+                .ConfigureAwait(true);
+            _monitorBuffer?.Record(new ControlMonitorRecord
+            {
+                Direction = ControlMonitorDirection.Output,
+                Protocol = ControlMonitorProtocol.Midi,
+                Result = ControlMonitorResult.Sent,
+                DeviceInstanceId = deviceId,
+                MidiChannel = channel,
+                MidiController = controller,
+                MidiValue = value,
+                Message = "test send",
+            });
+            StatusMessage = $"Sent test MIDI cc{controller}={value}.";
+        }
+        catch (Exception ex)
+        {
+            _monitorBuffer?.Record(new ControlMonitorRecord
+            {
+                Direction = ControlMonitorDirection.Error,
+                Protocol = ControlMonitorProtocol.Midi,
+                Result = ControlMonitorResult.Failed,
+                DeviceInstanceId = deviceId,
+                Message = "test send",
+                ErrorMessage = ex.Message,
+            });
+            StatusMessage = $"Test MIDI failed: {ex.Message}";
+        }
+    }
+
+    // ----- Learn mode -------------------------------------------------------------------------
+    // Listen to live MIDI input in the monitor, capture the first control the user moves, and turn
+    // it into a pre-filled trigger (plus an optional handler stub) on the selected script. Capturing
+    // is host-driven from the monitor poll; the generated trigger is only added once the user confirms.
+
+    [RelayCommand(CanExecute = nameof(CanToggleLearn))]
+    private void ToggleLearn()
+    {
+        if (IsLearning)
+        {
+            CancelLearn();
+            return;
+        }
+
+        LearnCandidate = null;
+        _learnSinceUtc = DateTimeOffset.UtcNow;
+        IsLearning = true;
+        StatusMessage = "Learn: move a MIDI control on the device…";
+    }
+
+    private bool CanToggleLearn() => IsArmed && HasSelectedScript;
+
+    [RelayCommand]
+    private void CancelLearn()
+    {
+        var wasActive = IsLearning || HasLearnCandidate;
+        IsLearning = false;
+        LearnCandidate = null;
+        if (wasActive)
+            StatusMessage = "Learn cancelled.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanConfirmLearn))]
+    private void ConfirmLearn()
+    {
+        var candidate = LearnCandidate;
+        var row = SelectedScriptRow;
+        if (candidate is null || row is null)
+            return;
+
+        var functionName = string.IsNullOrWhiteSpace(candidate.FunctionName)
+            ? SuggestLearnFunctionName(candidate.Record)
+            : candidate.FunctionName.Trim();
+
+        row.AddLearnedTrigger(BuildLearnedTrigger(candidate.Record, functionName));
+
+        if (candidate.InsertStub && !HasExport(SelectedScriptText, functionName))
+            SelectedScriptText += BuildLearnedStub(candidate.Record, functionName);
+
+        LearnCandidate = null;
+        StatusMessage = $"Added '{functionName}' trigger. Review and save the script.";
+    }
+
+    private bool CanConfirmLearn() => HasLearnCandidate && HasSelectedScript;
+
+    /// <summary>Promotes a captured monitor record into an editable learn candidate. Internal for tests.</summary>
+    internal void ApplyLearnCapture(ControlMonitorRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        IsLearning = false;
+        LearnCandidate = new ControlLearnCandidateViewModel(record, SuggestLearnFunctionName(record));
+        StatusMessage = $"Learned {LearnCandidate.Description}. Confirm to add a trigger.";
+    }
+
+    private void ResetLearn()
+    {
+        IsLearning = false;
+        LearnCandidate = null;
+    }
+
+    /// <summary>Finds the first decoded MIDI input (CC or note) captured at or after <paramref name="sinceUtc"/>.</summary>
+    internal static ControlMonitorRecord? FindLearnCapture(IEnumerable<ControlMonitorRecord> records, DateTimeOffset sinceUtc)
+    {
+        ArgumentNullException.ThrowIfNull(records);
+        return records.FirstOrDefault(r =>
+            r.TimestampUtc >= sinceUtc
+            && r.Direction == ControlMonitorDirection.Input
+            && r.Protocol == ControlMonitorProtocol.Midi
+            && (r.MidiController is not null || r.MidiNote is not null));
+    }
+
+    internal static string SuggestLearnFunctionName(ControlMonitorRecord record) =>
+        record.MidiController is { } controller
+            ? $"onCc{controller.ToString(CultureInfo.InvariantCulture)}"
+            : $"onNote{(record.MidiNote ?? 0).ToString(CultureInfo.InvariantCulture)}";
+
+    internal static ControlScriptTriggerConfig BuildLearnedTrigger(ControlMonitorRecord record, string functionName)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return record.MidiController is { } controller
+            ? new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.MidiControlChange,
+                FunctionName = functionName,
+                MidiChannel = record.MidiChannel,
+                MidiController = controller,
+            }
+            : new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.MidiNote,
+                FunctionName = functionName,
+                MidiChannel = record.MidiChannel,
+                MidiNote = record.MidiNote,
+            };
+    }
+
+    internal static string BuildLearnedStub(ControlMonitorRecord record, string functionName)
+    {
+        var description = record.MidiController is { } controller
+            ? $"MIDI CC {controller.ToString(CultureInfo.InvariantCulture)} on channel {(record.MidiChannel ?? 0).ToString(CultureInfo.InvariantCulture)}"
+            : $"MIDI note {(record.MidiNote ?? 0).ToString(CultureInfo.InvariantCulture)} on channel {(record.MidiChannel ?? 0).ToString(CultureInfo.InvariantCulture)}";
+        return $"{Environment.NewLine}export fun {functionName}(event, context) {{{Environment.NewLine}"
+            + $"    // TODO: handle {description}{Environment.NewLine}"
+            + $"    // event.value holds the incoming value{Environment.NewLine}"
+            + $"}}{Environment.NewLine}";
+    }
+
+    internal static bool HasExport(string? scriptText, string functionName) =>
+        !string.IsNullOrEmpty(scriptText)
+        && !string.IsNullOrWhiteSpace(functionName)
+        && Regex.IsMatch(scriptText, $@"\bexport\s+fun\s+{Regex.Escape(functionName)}\s*\(");
+
     private void RefreshMonitor()
     {
         var buffer = _monitorBuffer;
@@ -972,6 +1400,14 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildX32CommandRows(_session?.ScriptSession.OscCache);
 
         var records = buffer.Records;
+
+        if (IsLearning)
+        {
+            var capture = FindLearnCapture(records, _learnSinceUtc);
+            if (capture is not null)
+                ApplyLearnCapture(capture);
+        }
+
         if (records.Count == _lastRenderedCount && !_filterDirty)
             return;
 
@@ -1066,8 +1502,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     private void NotifyArmState()
     {
+        if (!IsArmed)
+            ResetLearn();
         OnPropertyChanged(nameof(IsArmed));
         OnPropertyChanged(nameof(ArmButtonText));
+        ToggleLearnCommand.NotifyCanExecuteChanged();
+        ConfirmLearnCommand.NotifyCanExecuteChanged();
     }
 
     public async ValueTask DisposeAsync()
@@ -1147,15 +1587,29 @@ internal sealed record ControlMonitorFilterSettings(
     string Protocol,
     string DeviceText);
 
+/// <summary>Context-menu callbacks shared by every structure row, supplied by the workspace VM.</summary>
+internal sealed record ControlStructureRowCommands(
+    Action AddProjectScript,
+    Action AddHelperFile,
+    Action<ControlStructureRowViewModel> AddDeviceScript,
+    Action<ControlStructureRowViewModel> AddLayerScript,
+    Action<ControlStructureRowViewModel> AddPeriodicSend,
+    Action<ControlStructureRowViewModel> TestOsc,
+    Action<ControlStructureRowViewModel> TestMidi);
+
 public sealed class ControlStructureRowViewModel
 {
-    public ControlStructureRowViewModel(
+    internal ControlStructureRowViewModel(
         string kind,
         string name,
         string detail,
         string state,
         int Level,
-        bool IsGroup = false)
+        bool IsGroup = false,
+        Guid? deviceInstanceId = null,
+        Guid? layerId = null,
+        ControlDeviceProtocol? protocol = null,
+        ControlStructureRowCommands? commands = null)
     {
         Kind = kind;
         Name = name;
@@ -1163,6 +1617,20 @@ public sealed class ControlStructureRowViewModel
         State = state;
         this.Level = Level;
         this.IsGroup = IsGroup;
+        DeviceInstanceId = deviceInstanceId;
+        LayerId = layerId;
+        Protocol = protocol;
+
+        if (commands is not null)
+        {
+            AddProjectScriptCommand = new RelayCommand(commands.AddProjectScript);
+            AddHelperFileCommand = new RelayCommand(commands.AddHelperFile);
+            AddDeviceScriptCommand = new RelayCommand(() => commands.AddDeviceScript(this), () => CanAddDeviceScript);
+            AddLayerScriptCommand = new RelayCommand(() => commands.AddLayerScript(this), () => CanAddLayerScript);
+            AddPeriodicSendCommand = new RelayCommand(() => commands.AddPeriodicSend(this), () => CanAddPeriodicSend);
+            TestOscCommand = new RelayCommand(() => commands.TestOsc(this), () => CanTestOsc);
+            TestMidiCommand = new RelayCommand(() => commands.TestMidi(this), () => CanTestMidi);
+        }
     }
 
     public string Kind { get; }
@@ -1177,7 +1645,37 @@ public sealed class ControlStructureRowViewModel
 
     public bool IsGroup { get; }
 
+    public Guid? DeviceInstanceId { get; }
+
+    public Guid? LayerId { get; }
+
+    public ControlDeviceProtocol? Protocol { get; }
+
     public double IndentWidth => Level * 16;
+
+    public bool CanAddDeviceScript => DeviceInstanceId is not null;
+
+    public bool CanAddLayerScript => LayerId is not null;
+
+    public bool CanAddPeriodicSend => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null;
+
+    public bool CanTestOsc => Protocol == ControlDeviceProtocol.Osc && DeviceInstanceId is not null;
+
+    public bool CanTestMidi => Protocol == ControlDeviceProtocol.Midi && DeviceInstanceId is not null;
+
+    public ICommand? AddProjectScriptCommand { get; }
+
+    public ICommand? AddHelperFileCommand { get; }
+
+    public ICommand? AddDeviceScriptCommand { get; }
+
+    public ICommand? AddLayerScriptCommand { get; }
+
+    public ICommand? AddPeriodicSendCommand { get; }
+
+    public ICommand? TestOscCommand { get; }
+
+    public ICommand? TestMidiCommand { get; }
 }
 
 public sealed record ControlX32CommandRowViewModel(
@@ -1188,7 +1686,7 @@ public sealed record ControlX32CommandRowViewModel(
     string Access,
     string CacheValue);
 
-public sealed class ControlScriptRowViewModel : ViewModelBase
+public sealed partial class ControlScriptRowViewModel : ViewModelBase
 {
     private readonly Action<ControlScriptRowViewModel, ControlScriptConfig>? _onChanged;
     private ControlScriptConfig _script;
@@ -1197,9 +1695,13 @@ public sealed class ControlScriptRowViewModel : ViewModelBase
     {
         _script = script ?? throw new ArgumentNullException(nameof(script));
         _onChanged = onChanged;
+        RebuildTriggerRows();
     }
 
     public ControlScriptConfig Script => _script;
+
+    /// <summary>Editable trigger rows for this script. Edits flow back into <see cref="Script"/> via the row callback.</summary>
+    public ObservableCollection<ControlScriptTriggerRowViewModel> Triggers { get; } = new();
 
     public string Name
     {
@@ -1298,6 +1800,44 @@ public sealed class ControlScriptRowViewModel : ViewModelBase
             ? "(no triggers)"
             : string.Join(", ", _script.Triggers.Select(FormatTrigger));
 
+    [RelayCommand]
+    private void AddTrigger() =>
+        AddLearnedTrigger(new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual });
+
+    /// <summary>Appends a pre-built trigger (e.g. from learn mode) and its editable row.</summary>
+    public void AddLearnedTrigger(ControlScriptTriggerConfig trigger)
+    {
+        ArgumentNullException.ThrowIfNull(trigger);
+        UpdateScript(_script with { Triggers = [.. _script.Triggers, trigger] }, nameof(TriggerSummary));
+        Triggers.Add(new ControlScriptTriggerRowViewModel(trigger, OnTriggerRowChanged, RemoveTriggerRow));
+    }
+
+    private void RemoveTriggerRow(ControlScriptTriggerRowViewModel row)
+    {
+        UpdateScript(
+            _script with { Triggers = _script.Triggers.Where(t => t.Id != row.Trigger.Id).ToList() },
+            nameof(TriggerSummary));
+        Triggers.Remove(row);
+    }
+
+    private void OnTriggerRowChanged(ControlScriptTriggerRowViewModel row, ControlScriptTriggerConfig trigger)
+    {
+        var triggers = _script.Triggers.ToList();
+        var index = triggers.FindIndex(t => t.Id == trigger.Id);
+        if (index < 0)
+            return;
+
+        triggers[index] = trigger;
+        UpdateScript(_script with { Triggers = triggers }, nameof(TriggerSummary));
+    }
+
+    private void RebuildTriggerRows()
+    {
+        Triggers.Clear();
+        foreach (var trigger in _script.Triggers)
+            Triggers.Add(new ControlScriptTriggerRowViewModel(trigger, OnTriggerRowChanged, RemoveTriggerRow));
+    }
+
     private void UpdateScript(ControlScriptConfig script, params string[] changedProperties)
     {
         _script = script;
@@ -1319,6 +1859,195 @@ public sealed class ControlScriptRowViewModel : ViewModelBase
         if (trigger.MidiNote is { } note)
             label += $" note{note}";
         return label;
+    }
+}
+
+/// <summary>
+/// Editable view of a single <see cref="ControlScriptTriggerConfig"/>. Optional MIDI/OSC/interval match
+/// fields are surfaced as text so an empty field means "match any". Edits produce an updated immutable
+/// config and notify the owning <see cref="ControlScriptRowViewModel"/> through the change callback.
+/// </summary>
+public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
+{
+    private readonly Action<ControlScriptTriggerRowViewModel, ControlScriptTriggerConfig>? _onChanged;
+    private readonly Action<ControlScriptTriggerRowViewModel>? _onRemove;
+    private ControlScriptTriggerConfig _trigger;
+
+    public ControlScriptTriggerRowViewModel(
+        ControlScriptTriggerConfig trigger,
+        Action<ControlScriptTriggerRowViewModel, ControlScriptTriggerConfig>? onChanged = null,
+        Action<ControlScriptTriggerRowViewModel>? onRemove = null)
+    {
+        _trigger = trigger ?? throw new ArgumentNullException(nameof(trigger));
+        _onChanged = onChanged;
+        _onRemove = onRemove;
+    }
+
+    public ControlScriptTriggerConfig Trigger => _trigger;
+
+    [RelayCommand]
+    private void Remove() => _onRemove?.Invoke(this);
+
+    public IReadOnlyList<ControlScriptTriggerKind> KindOptions { get; } = Enum.GetValues<ControlScriptTriggerKind>();
+
+    public ControlScriptTriggerKind Kind
+    {
+        get => _trigger.Kind;
+        set
+        {
+            if (value == _trigger.Kind)
+                return;
+
+            Update(
+                _trigger with { Kind = value },
+                nameof(Kind),
+                nameof(ShowOscAddress),
+                nameof(ShowMidiChannel),
+                nameof(ShowMidiController),
+                nameof(ShowMidiNote),
+                nameof(ShowInterval));
+        }
+    }
+
+    public string FunctionName
+    {
+        get => _trigger.FunctionName;
+        set
+        {
+            var next = value?.Trim() ?? string.Empty;
+            if (next == _trigger.FunctionName)
+                return;
+
+            Update(_trigger with { FunctionName = next }, nameof(FunctionName));
+        }
+    }
+
+    public string OscAddressPattern
+    {
+        get => _trigger.OscAddressPattern ?? string.Empty;
+        set
+        {
+            var next = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            if (next == _trigger.OscAddressPattern)
+                return;
+
+            Update(_trigger with { OscAddressPattern = next }, nameof(OscAddressPattern));
+        }
+    }
+
+    public string MidiChannelText
+    {
+        get => FormatOptionalInt(_trigger.MidiChannel);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.MidiChannel)
+                return;
+
+            Update(_trigger with { MidiChannel = next }, nameof(MidiChannelText));
+        }
+    }
+
+    public string MidiControllerText
+    {
+        get => FormatOptionalInt(_trigger.MidiController);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.MidiController)
+                return;
+
+            Update(_trigger with { MidiController = next }, nameof(MidiControllerText));
+        }
+    }
+
+    public string MidiNoteText
+    {
+        get => FormatOptionalInt(_trigger.MidiNote);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.MidiNote)
+                return;
+
+            Update(_trigger with { MidiNote = next }, nameof(MidiNoteText));
+        }
+    }
+
+    public string IntervalMsText
+    {
+        get => FormatOptionalInt(_trigger.IntervalMs);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.IntervalMs)
+                return;
+
+            Update(_trigger with { IntervalMs = next }, nameof(IntervalMsText));
+        }
+    }
+
+    public bool ShowOscAddress => Kind is ControlScriptTriggerKind.OscMessage or ControlScriptTriggerKind.OscCacheChanged;
+
+    public bool ShowMidiChannel => Kind is ControlScriptTriggerKind.MidiMessage
+        or ControlScriptTriggerKind.MidiControlChange
+        or ControlScriptTriggerKind.MidiNote;
+
+    public bool ShowMidiController => Kind is ControlScriptTriggerKind.MidiMessage
+        or ControlScriptTriggerKind.MidiControlChange;
+
+    public bool ShowMidiNote => Kind is ControlScriptTriggerKind.MidiMessage or ControlScriptTriggerKind.MidiNote;
+
+    public bool ShowInterval => Kind is ControlScriptTriggerKind.Periodic;
+
+    private void Update(ControlScriptTriggerConfig trigger, params string[] changedProperties)
+    {
+        _trigger = trigger;
+        foreach (var property in changedProperties)
+            OnPropertyChanged(property);
+        OnPropertyChanged(nameof(Trigger));
+        _onChanged?.Invoke(this, _trigger);
+    }
+
+    private static string FormatOptionalInt(int? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private static int? ParseOptionalInt(string? text) =>
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
+}
+
+/// <summary>
+/// A MIDI control captured by learn mode, awaiting confirmation. Holds the source monitor record plus
+/// the user-editable handler function name and whether to append a handler stub to the script text.
+/// </summary>
+public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
+{
+    public ControlLearnCandidateViewModel(ControlMonitorRecord record, string suggestedFunctionName)
+    {
+        Record = record ?? throw new ArgumentNullException(nameof(record));
+        _functionName = suggestedFunctionName;
+        Description = BuildDescription(record);
+    }
+
+    public ControlMonitorRecord Record { get; }
+
+    public string Description { get; }
+
+    [ObservableProperty]
+    private string _functionName;
+
+    [ObservableProperty]
+    private bool _insertStub = true;
+
+    private static string BuildDescription(ControlMonitorRecord record)
+    {
+        var channel = record.MidiChannel is { } ch ? $" ch {ch.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
+        var value = record.MidiValue is { } v ? $" (value {v.ToString(CultureInfo.InvariantCulture)})" : string.Empty;
+        if (record.MidiController is { } controller)
+            return $"CC {controller.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
+        if (record.MidiNote is { } note)
+            return $"Note {note.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
+        return "MIDI control";
     }
 }
 

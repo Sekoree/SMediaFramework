@@ -100,7 +100,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Fuzzy name.
   - [x] Remembered input device ID.
   - [x] Remembered output device ID.
-- [ ] Add fallback device selection dialog when matching is ambiguous or missing.
+- [x] Add fallback device selection dialog when matching is ambiguous or missing.
 - [x] Split MIDI device instances into input/output capabilities.
 - [x] Add script-centric MIDI hardware sessions:
   - [x] Open enabled MIDI input bindings while the control system is armed.
@@ -237,15 +237,15 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Layers.
   - [x] Scripts.
   - [x] Periodic sends.
-- [ ] Context menus:
-  - [ ] Add device script.
+- [~] Context menus:
+  - [x] Add device script.
   - [ ] Add endpoint script.
-  - [ ] Add layer script.
-  - [ ] Add project script.
-  - [ ] Add imported helper file.
-  - [ ] Add periodic OSC send.
-  - [ ] Test MIDI send.
-  - [ ] Test OSC send.
+  - [x] Add layer script.
+  - [x] Add project script.
+  - [x] Add imported helper file.
+  - [x] Add periodic OSC send.
+  - [x] Test MIDI send.
+  - [x] Test OSC send.
 - [~] Script editor:
   - [x] Script file list.
   - [x] AvaloniaEdit text editor.
@@ -253,15 +253,16 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Script path selector/project-relative path field.
   - [x] Exported function list.
   - [x] Trigger summary display.
-  - [ ] Trigger editor.
+  - [x] Trigger editor.
+  - [x] Add/remove scripts.
   - [x] Scope selector.
   - [x] Enable/disable.
   - [x] Failure policy editor.
   - [x] Diagnostics panel.
-- [ ] Learn mode:
-  - [ ] Capture selected MIDI control from monitor traffic.
-  - [ ] Generate trigger declaration or script snippet.
-  - [ ] Confirm generated trigger before saving.
+- [x] Learn mode:
+  - [x] Capture selected MIDI control from monitor traffic.
+  - [x] Generate trigger declaration or script snippet.
+  - [x] Confirm generated trigger before saving.
 
 ## Phase 7: Documentation
 
@@ -316,6 +317,11 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [x] Control workspace structure list projection.
   - [x] Control workspace script editor file load/save.
   - [x] Control workspace script metadata editor.
+  - [x] Control workspace script add/remove.
+  - [x] Control workspace trigger editor add/edit/remove.
+  - [x] Control workspace learn-mode capture/trigger generation.
+  - [x] MIDI device resolution request building and selection apply.
+  - [x] Control workspace context-menu script/periodic-send additions.
   - [x] Control workspace script diagnostics panel.
   - [x] Live monitor direction/protocol/device filters.
   - [x] Periodic OSC send manager.

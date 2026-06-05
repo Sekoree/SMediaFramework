@@ -508,6 +508,98 @@ context menus, X32 command browser, learn mode, direction/protocol/device monito
 filters, and the genuinely hardware-risky live MIDI-input PortMidi polling
 (deferred deliberately — OSC + test-send already exercise the pipeline).
 
+Implementation note, 2026-06-05: the Phase 6 script editor gained a trigger
+editor and script add/remove, so triggers no longer require hand-editing the
+project JSON. `ControlWorkspaceViewModel` now has `AddScript`/`RemoveSelectedScript`
+commands (Scripts header `+`/`–` buttons; remove gated on a selected script) that
+append/drop project-scoped `ControlScriptConfig` entries and reselect sensibly.
+`ControlScriptRowViewModel` exposes an observable `Triggers` collection of
+`ControlScriptTriggerRowViewModel` plus an `AddTrigger` command; each trigger row
+is editable (kind, exported function name, and the kind-relevant match fields —
+OSC address pattern, MIDI channel/controller/note, periodic interval) and carries
+its own `Remove` command via a parent callback, so the per-row delete needs no
+fragile ancestor binding. Optional MIDI/OSC/interval match fields are surfaced as
+text where blank means "match any", and per-kind `Show*` flags drive which fields
+the row template shows. Edits flow back through the existing
+`OnScriptRowChanged` path into `_config`, refresh the structure tree and trigger
+summary, and (while armed) prompt a re-arm. The trigger editor section is a
+`ContentControl` bound to the selected script row (typed `DataTemplate`) so the
+nested item bindings type-check under compiled bindings. Verified by a clean
+build (compiled XAML), the full unit suite (330 tests, 6 new covering script
+add/remove and trigger add/edit/clear-to-any/remove), and a headless (xvfb) app
+smoke launch with no binding errors. Still open in Phase 6: right-click context
+menus, endpoint/layer/periodic-send add affordances, the X32-driven learn mode,
+and live MIDI-input PortMidi polling.
+
+Implementation note, 2026-06-05: MIDI learn mode landed on top of the trigger
+editor. With a script selected and the system armed, "Learn MIDI"
+(`ToggleLearnCommand`) timestamps a baseline and the existing 250 ms monitor poll
+watches for the first decoded MIDI input row after it
+(`FindLearnCapture` — Input + Midi protocol + a controller or note). The capture
+becomes an editable `ControlLearnCandidateViewModel` (detected control
+description, a suggested handler name — `onCc<n>`/`onNote<n>` — and an
+"insert handler stub" toggle); nothing touches the script until the user confirms.
+`ConfirmLearn` appends a pre-filled trigger (`BuildLearnedTrigger`: MidiControlChange
+with channel+controller, or MidiNote with channel+note — both clearable to
+"match any" in the trigger editor) via the row's `AddLearnedTrigger`, and, unless
+the function is already exported (`HasExport` regex check), appends a commented
+`export fun` stub (`BuildLearnedStub`) to the editor text so the user reviews and
+saves it deliberately. Learn requires armed + a selected script (it needs live
+monitor traffic) and is reset on disarm/project switch. The capture/build/stub
+helpers are pure static methods; verified by a clean build, the full unit suite
+(335 tests, 5 new covering capture selection, CC/note trigger mapping, export
+detection, and the confirm/stub/no-duplicate flow), and a headless (xvfb) smoke
+launch with no binding errors. Source-agnostic by design: it consumes monitor
+MIDI-input rows, so it works with whatever feeds them (today the armed
+`ControlSystemMidiDeviceSessionManager`). Still open in Phase 6: right-click
+context menus and endpoint/layer/periodic-send add affordances.
+
+Implementation note, 2026-06-05: the Phase 2 fallback device-selection dialog is
+in. `ControlMidiDeviceResolver` (pure) turns the existing `ControlDeviceMatcher`
+results into work: `BuildRequests(config, inputs, outputs)` emits one
+`ControlMidiResolutionRequest` per enabled MIDI input/output binding that matches
+ambiguously or not at all (carrying the candidates and the full current-port list
+for the picker), and `ApplySelections(config, selections)` writes the chosen port
+id/name back into the device binding so a later arm matches by RememberedDeviceId.
+`RebindMissingControlMidiDevicesDialog` (a `Window` mirroring the existing
+rebind-missing-outputs/action-endpoints dialogs) lists each unresolved binding with
+a port-picker combo; Skip leaves bindings untouched, Apply returns the selection
+map. `ControlWorkspaceViewModel` exposes a `ResolveMidiDevices` command (a
+"Resolve MIDI…" button in the structure header) and also runs the same resolution
+silently at the start of arm, so ambiguous/missing devices can be bound to live
+ports before sessions open. The PortMidi catalog enumeration and the dialog display
+are injected (`MidiCatalogProvider`/`MidiResolutionPrompt`) with real defaults
+(ref-counted `ControlMidiLibraryLease` + `RealControlMidiDeviceProvider`, and a
+`ShowDialog` against the desktop main window), so the flow is fully unit-testable
+without PortMidi or a window and degrades to a no-op when the catalog/owner is
+unavailable (headless/CI). Verified by a clean build, the full unit suite
+(340 tests, 5 new covering request building, selection apply, the VM resolve flow,
+and the all-match no-prompt path), and a headless (xvfb) smoke launch with no
+binding errors. Still open in Phase 6: right-click context menus and
+endpoint/layer/periodic-send add affordances.
+
+Implementation note, 2026-06-05: structure-tree right-click context menus are in.
+Each `ControlStructureRowViewModel` now carries its device-instance id / layer id /
+protocol and a shared `ControlStructureRowCommands` callback set, exposing per-row
+`ICommand`s gated by `CanAddDeviceScript`/`CanAddLayerScript`/`CanAddPeriodicSend`/
+`CanTestOsc`/`CanTestMidi`. The structure `ListBox` item template hosts a
+`ContextMenu` (typed to the row) with: Add project script, Add imported helper file
+(a project script seeded at `Scripts/helper.mnd`), Add device script (Device scope
+bound to that device), Add layer script (Layer scope bound to that layer), Add
+periodic OSC send (appends a default `/xremote` task to the OSC device), Test OSC
+send (prefills the test-send host/port from the device endpoint and sends), and
+Test MIDI send (a recognizable cc0=127 through the armed `IControlMidiSender`,
+monitor-logged). Script adds funnel through the shared `AddScriptInternal` used by
+the Scripts `+` button, so scope/device/layer wiring stays consistent and the new
+script is auto-selected for editing. The menu commands are plain row callbacks (no
+fragile popup ancestor bindings); the row constructor is `internal` so it can take
+the internal command record while the type stays public for compiled XAML binding.
+Verified by a clean build, the full unit suite (344 tests, 4 new covering device/
+layer script, periodic-send, and helper-file additions plus the per-row capability
+flags), and a headless (xvfb) smoke launch with no binding errors. Endpoint-scope
+scripts are intentionally still excluded (there is no distinct endpoint row in the
+tree yet); that and the learn-from-OSC variant remain the open Phase 6 polish.
+
 Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
 high-resolution CC, note on/off, program change, and pitch bend messages.
 `ControlScriptMidiCommandRouter` resolves enabled MIDI devices by instance ID,
