@@ -3,7 +3,6 @@ using System.Threading;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
-using HaPlay.Models;
 using HaPlay.Playback;
 using HaPlay.ViewModels;
 using HaPlay.Views;

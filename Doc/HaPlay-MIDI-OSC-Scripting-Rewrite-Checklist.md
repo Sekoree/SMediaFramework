@@ -22,7 +22,8 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Use separate project-side script files instead of storing all source inline
   in the project JSON.
 - [x] Prefer exported Mond functions and importable helper scripts.
-- [x] Default the project to one app-level OSC listener on `10020`.
+- [x] Do not create an app-level OSC listener by default; add one explicitly for
+  inbound external OSC control sources.
 - [x] Support multiple OSC remotes and multiple OSC listeners in one project.
 - [x] Share each OSC listener send/receive socket when possible.
 - [x] Default monitor visible history to 1000 messages.
@@ -51,7 +52,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   starter script files later; do not silently discard graph data.
 - [x] Add defaults:
   - [x] `isArmed = false`.
-  - [x] one default OSC listener on port `10020`.
+  - [x] no default OSC listener; the Add OSC listener dialog seeds port `10020`.
   - [x] multiple OSC listeners.
   - [x] shared OSC socket mode per listener.
   - [x] monitor max visible messages = 1000.
@@ -357,7 +358,7 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
   - [ ] X-Touch Mini control monitor decode.
   - [ ] X-Touch Mini LED/ring feedback where supported.
   - [ ] X32 emulator at `192.168.2.76:10023`.
-  - [ ] Default OSC listener on `10020`.
+  - [ ] Explicit OSC listener on `10020`.
   - [ ] Additional OSC listener on another project-configured port.
   - [ ] Shared socket behavior.
   - [ ] `/xremote` periodic send for more than 60 seconds.
@@ -378,6 +379,10 @@ This checklist tracks the script-centric MIDI/OSC control rewrite described in
 - [x] Add X32 command/cache filtering, grouping, selection, request, and test-send actions.
 - [x] Add queued `ControlEventQueue` worker and route the armed runtime through it.
 - [x] Improve script editor failure labels and wrapping trigger layout.
+- [x] Extract control runtime/config/profile/IO code to the framework-side `S.Control` project.
+- [x] Add standalone `.scontrol` control-system document IO.
+- [x] Extend incoming MIDI script triggers to every decoded MIDI type, including program change, pitch bend, aftertouch, system messages, RPN/NRPN, and SysEx.
+- [x] Extend outgoing MIDI script helpers to every decoded MIDI type, including aftertouch, system messages, RPN/NRPN, and SysEx.
 - [x] Log/stop unexpected PMLib MIDI input read failures and dispose the input wake signal.
 - [x] Follow-up: full profile import/export browser UI.
 - [x] Follow-up: X32 command/cache filtering, grouping, and row actions.

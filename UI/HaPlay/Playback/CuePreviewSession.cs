@@ -1,4 +1,3 @@
-using HaPlay.Models;
 using S.Media.Core;
 using S.Media.Core.Clock;
 using S.Media.Playback;

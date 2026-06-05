@@ -1,5 +1,4 @@
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using OSCLib;
 using Xunit;
 
@@ -1047,6 +1046,48 @@ public sealed class ControlScriptRuntimeSessionTests
                 HighResolution14Bit: false));
             return ValueTask.CompletedTask;
         }
+
+        public ValueTask SendMidiMessageAsync(
+            Guid? endpointId,
+            ControlMidiMessagePayload message,
+            CancellationToken cancellationToken = default)
+        {
+            Sent.Add(new SentMidiMessage(
+                ToScriptMessageKind(message.MessageType),
+                endpointId,
+                message.Channel ?? 0,
+                Controller: message.Controller,
+                Note: message.Note,
+                Value: message.Value ?? 0,
+                HighResolution14Bit: message.HighResolution14Bit));
+            return ValueTask.CompletedTask;
+        }
+
+        private static ControlScriptMidiMessageKind ToScriptMessageKind(ControlMidiMessageType messageType) =>
+            messageType switch
+            {
+                ControlMidiMessageType.ControlChange => ControlScriptMidiMessageKind.ControlChange,
+                ControlMidiMessageType.NoteOn => ControlScriptMidiMessageKind.NoteOn,
+                ControlMidiMessageType.NoteOff => ControlScriptMidiMessageKind.NoteOff,
+                ControlMidiMessageType.PolyphonicAftertouch => ControlScriptMidiMessageKind.PolyphonicAftertouch,
+                ControlMidiMessageType.ProgramChange => ControlScriptMidiMessageKind.ProgramChange,
+                ControlMidiMessageType.ChannelAftertouch => ControlScriptMidiMessageKind.ChannelAftertouch,
+                ControlMidiMessageType.PitchBend => ControlScriptMidiMessageKind.PitchBend,
+                ControlMidiMessageType.SysEx => ControlScriptMidiMessageKind.SysEx,
+                ControlMidiMessageType.MIDITimeCode => ControlScriptMidiMessageKind.MIDITimeCode,
+                ControlMidiMessageType.SongPosition => ControlScriptMidiMessageKind.SongPosition,
+                ControlMidiMessageType.SongSelect => ControlScriptMidiMessageKind.SongSelect,
+                ControlMidiMessageType.TuneRequest => ControlScriptMidiMessageKind.TuneRequest,
+                ControlMidiMessageType.TimingClock => ControlScriptMidiMessageKind.TimingClock,
+                ControlMidiMessageType.Start => ControlScriptMidiMessageKind.Start,
+                ControlMidiMessageType.Continue => ControlScriptMidiMessageKind.Continue,
+                ControlMidiMessageType.Stop => ControlScriptMidiMessageKind.Stop,
+                ControlMidiMessageType.ActiveSensing => ControlScriptMidiMessageKind.ActiveSensing,
+                ControlMidiMessageType.Reset => ControlScriptMidiMessageKind.Reset,
+                ControlMidiMessageType.NRPN => ControlScriptMidiMessageKind.NRPN,
+                ControlMidiMessageType.RPN => ControlScriptMidiMessageKind.RPN,
+                _ => throw new InvalidOperationException($"Unexpected MIDI message type '{messageType}'."),
+            };
     }
 
     private sealed record SentMidiMessage(

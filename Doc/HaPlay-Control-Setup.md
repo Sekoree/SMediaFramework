@@ -4,7 +4,7 @@ This guide covers the first script-centric MIDI/OSC control workflow:
 
 - X-Touch Mini in MC mode.
 - X32/M32 OSC endpoint.
-- HaPlay app-level OSC listeners.
+- Optional HaPlay app-level OSC listeners.
 - OSC value cache modes.
 - Live monitor capture/replay.
 
@@ -59,7 +59,8 @@ Recommended project setup:
 1. Add an OSC control device for the X32.
 2. Set host to the mixer/emulator IP and port to `10023`.
 3. Leave **Client source port** blank unless the network requires a deterministic
-   source port. Do not reuse the app-level listener port `10020`.
+   source port. Do not reuse any enabled app-level listener port; the first
+   app-level listener dialog seeds the conventional `10020` port.
 4. Keep the default `/xremote` periodic send enabled so the X32 continues to
    broadcast changes.
 5. Add optional `/subscribe` or `/meters` periodic sends only when a mapping
@@ -81,8 +82,12 @@ address-only request to the selected X32 endpoint while armed.
 ## App-Level OSC Listeners
 
 HaPlay stores OSC listeners in the project, separate from OSC devices and
-separate from an OSC device's optional client source port. The
-default project has one listener:
+separate from an OSC device's optional client source port. New projects do not
+create an app-level listener automatically.
+
+Add an app-level listener only when a separate external OSC source needs to send
+unsolicited messages into HaPlay. The first **Add OSC listener...** dialog seeds
+the conventional values:
 
 - Name: `Main OSC Listener`
 - Local port: `10020`
@@ -95,6 +100,14 @@ listener.
 
 Projects can add more listeners for isolated network layouts, but each enabled
 listener must use a unique local port.
+
+## Standalone Control Files
+
+The MIDI/OSC control runtime and document model live in the framework-side
+`S.Control` library. HaPlay still embeds control data in `.haplayproj`, but the
+same `ControlSystemConfig` can also be saved as a standalone `.scontrol` document
+through `ControlSystemIO`. That format is intended for hosts that want to load
+and execute only a control profile, such as a future CLI runner.
 
 ## OSC Cache Modes
 

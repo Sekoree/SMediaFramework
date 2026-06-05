@@ -1,7 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Threading;
-using HaPlay.Models;
 using HaPlay.ViewModels;
 
 namespace HaPlay.Views;

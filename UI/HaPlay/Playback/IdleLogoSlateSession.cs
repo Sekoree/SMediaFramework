@@ -1,7 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using Avalonia.Threading;
-using HaPlay.Models;
 using HaPlay.ViewModels;
 using S.Media.Core.Video;
 using S.Media.SDL3;

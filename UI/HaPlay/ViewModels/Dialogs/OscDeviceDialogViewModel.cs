@@ -1,6 +1,6 @@
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
-using HaPlay.ControlGraph;
+using S.Control;
 
 namespace HaPlay.ViewModels.Dialogs;
 

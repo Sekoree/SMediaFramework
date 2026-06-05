@@ -1,5 +1,4 @@
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -152,6 +151,57 @@ public sealed class ControlScriptMidiCommandRouterTests
         Assert.Contains("No MIDI sender is configured", result.ErrorMessage);
     }
 
+    [Fact]
+    public async Task SendAllAsync_RoutesExtendedMidiMessagesByAlias()
+    {
+        var deviceId = Guid.NewGuid();
+        var sender = new RecordingMidiSender();
+        var router = new ControlScriptMidiCommandRouter(
+            new ControlSystemConfig
+            {
+                Devices = [MidiDevice(deviceId, "Synth", "synth", "Synth Out")],
+            },
+            sender);
+
+        var results = await router.SendAllAsync(
+        [
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.PolyphonicAftertouch, 1, Note: 60, Value: 70),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.ChannelAftertouch, 1, Value: 71),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.SysEx, Data: [0xF0, 0x7D, 0x01, 0xF7]),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.MIDITimeCode, Value: 0x12),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.SongPosition, Value: 96),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.SongSelect, Value: 3),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.TuneRequest),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.TimingClock),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.Start),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.Continue),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.Stop),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.ActiveSensing),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.Reset),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.NRPN, 1, Parameter: 100, Value: 200),
+            new ControlScriptMidiMessage("synth", ControlScriptMidiMessageKind.RPN, 1, Parameter: 101, Value: 201),
+        ]);
+
+        Assert.All(results, result => Assert.True(result.Succeeded));
+        Assert.Equal(15, sender.Sent.Count);
+        Assert.All(sender.Sent, sent => Assert.Equal(deviceId, sent.EndpointId));
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.PolyphonicAftertouch && sent.Note == 60 && sent.Value == 70);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.ChannelAftertouch && sent.Value == 71);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.SysEx && sent.Data?.SequenceEqual(new byte[] { 0xF0, 0x7D, 0x01, 0xF7 }) == true);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.MIDITimeCode && sent.Value == 0x12);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.SongPosition && sent.Value == 96);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.SongSelect && sent.Value == 3);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.TuneRequest);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.TimingClock);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.Start);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.Continue);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.Stop);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.ActiveSensing);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.Reset);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.NRPN && sent.Parameter == 100 && sent.Value == 200);
+        Assert.Contains(sender.Sent, sent => sent.Kind == ControlScriptMidiMessageKind.RPN && sent.Parameter == 101 && sent.Value == 201);
+    }
+
     private static ControlDeviceInstanceConfig MidiDevice(
         Guid id,
         string name,
@@ -248,6 +298,50 @@ public sealed class ControlScriptMidiCommandRouterTests
                 HighResolution14Bit: false));
             return ValueTask.CompletedTask;
         }
+
+        public ValueTask SendMidiMessageAsync(
+            Guid? endpointId,
+            ControlMidiMessagePayload message,
+            CancellationToken cancellationToken = default)
+        {
+            Sent.Add(new SentMidiMessage(
+                ToScriptMessageKind(message.MessageType),
+                endpointId,
+                message.Channel ?? 0,
+                Controller: message.Controller,
+                Note: message.Note,
+                Value: message.Value ?? 0,
+                HighResolution14Bit: message.HighResolution14Bit,
+                Parameter: message.Parameter,
+                Data: message.Data));
+            return ValueTask.CompletedTask;
+        }
+
+        private static ControlScriptMidiMessageKind ToScriptMessageKind(ControlMidiMessageType messageType) =>
+            messageType switch
+            {
+                ControlMidiMessageType.ControlChange => ControlScriptMidiMessageKind.ControlChange,
+                ControlMidiMessageType.NoteOn => ControlScriptMidiMessageKind.NoteOn,
+                ControlMidiMessageType.NoteOff => ControlScriptMidiMessageKind.NoteOff,
+                ControlMidiMessageType.PolyphonicAftertouch => ControlScriptMidiMessageKind.PolyphonicAftertouch,
+                ControlMidiMessageType.ProgramChange => ControlScriptMidiMessageKind.ProgramChange,
+                ControlMidiMessageType.ChannelAftertouch => ControlScriptMidiMessageKind.ChannelAftertouch,
+                ControlMidiMessageType.PitchBend => ControlScriptMidiMessageKind.PitchBend,
+                ControlMidiMessageType.SysEx => ControlScriptMidiMessageKind.SysEx,
+                ControlMidiMessageType.MIDITimeCode => ControlScriptMidiMessageKind.MIDITimeCode,
+                ControlMidiMessageType.SongPosition => ControlScriptMidiMessageKind.SongPosition,
+                ControlMidiMessageType.SongSelect => ControlScriptMidiMessageKind.SongSelect,
+                ControlMidiMessageType.TuneRequest => ControlScriptMidiMessageKind.TuneRequest,
+                ControlMidiMessageType.TimingClock => ControlScriptMidiMessageKind.TimingClock,
+                ControlMidiMessageType.Start => ControlScriptMidiMessageKind.Start,
+                ControlMidiMessageType.Continue => ControlScriptMidiMessageKind.Continue,
+                ControlMidiMessageType.Stop => ControlScriptMidiMessageKind.Stop,
+                ControlMidiMessageType.ActiveSensing => ControlScriptMidiMessageKind.ActiveSensing,
+                ControlMidiMessageType.Reset => ControlScriptMidiMessageKind.Reset,
+                ControlMidiMessageType.NRPN => ControlScriptMidiMessageKind.NRPN,
+                ControlMidiMessageType.RPN => ControlScriptMidiMessageKind.RPN,
+                _ => throw new InvalidOperationException($"Unexpected MIDI message type '{messageType}'."),
+            };
     }
 
     private sealed record SentMidiMessage(
@@ -257,5 +351,7 @@ public sealed class ControlScriptMidiCommandRouterTests
         int? Controller,
         int? Note,
         int Value,
-        bool HighResolution14Bit);
+        bool HighResolution14Bit,
+        int? Parameter = null,
+        byte[]? Data = null);
 }

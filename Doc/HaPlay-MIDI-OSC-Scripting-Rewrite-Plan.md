@@ -100,7 +100,7 @@ Control System
     Layers
   OSC: X32
     Endpoint 192.168.2.76:10023
-    Listener Main OSC Listener:10020
+    Optional listener Main OSC Listener:10020
     Commands
     Cache
     Scripts
@@ -207,10 +207,10 @@ Use device sessions as the runtime boundary:
 - `MidiDeviceSession`: owns one PortMidi input and/or output for a MIDI device
   instance.
 - `OscListenerManager`: owns one or more project-configured app-level OSC
-  listeners and routes incoming packets to OSC device instances. The default
-  project should have one listener on port `10020`, but projects can add more
-  listeners for other OSC devices or network layouts. X32 devices should share a
-  listener/socket where possible to avoid unnecessary `/xremote` consumers
+  listeners and routes incoming packets to OSC device instances. New projects
+  should not create one by default; add listeners for external inbound OSC
+  sources or isolated network layouts. X32 replies should use the sending
+  client's socket where possible to avoid unnecessary `/xremote` consumers
   because the X32 supports only a small number of connected clients for broadcast
   update workflows.
 - `OscDeviceSession`: owns remote OSC send clients and app-listener routes for
@@ -259,8 +259,9 @@ Suggested built-in libraries:
 
 - `HaPlay.Devices`: list devices, get health, enable/disable, inspect profile
   controls/commands.
-- `HaPlay.Midi`: construct CC, note on/off, program change, pitch bend, and send
-  messages. Exclude SysEx in the first implementation.
+- `HaPlay.Midi`: construct and send every decoded PMLib MIDI message type:
+  CC, high-resolution CC, note on/off, program change, pitch bend, aftertouch,
+  SysEx, system common/realtime messages, RPN, and NRPN.
 - `HaPlay.Osc`: construct OSC messages with typed arguments, send messages,
   request values, and read the OSC cache. This should be the only network access
   scripts receive in phase 1.
@@ -482,8 +483,9 @@ exposes the full address-builder set — channel fader/mute/pan/solo, DCA
 fader/mute, bus fader/mute, matrix fader/mute, and main stereo fader/mute — each
 delegating to `X32Presets` so the script library and the device profile/catalog
 share one source of truth, plus `quantizeFader` on top of the existing dB
-conversions. `midi` gained `sendHighResCc` for explicit 14-bit CC sends. The only
-intentionally excluded MIDI feature remains SysEx. With the libraries complete,
+conversions. `midi` gained `sendHighResCc` for explicit 14-bit CC sends. Incoming
+MIDI script triggers now cover all decoded PMLib message types, including SysEx.
+With the libraries complete,
 the remaining rewrite work is the script-centric UI (Phase 6), wiring
 `ControlSystemRuntimeSession` start/stop and real session health into the app
 shell, endpoint script scope, and a user-facing scripting reference (Phase 7).
@@ -784,14 +786,16 @@ the cache is primed, the next dispatch moves from the cached 0.5). The scripting
 reference documents `osc.has`. Verified by a clean build and the full unit suite
 (337 tests).
 
-Implementation note, 2026-06-04: the script-facing `midi` object now queues CC,
-high-resolution CC, note on/off, program change, and pitch bend messages.
-`ControlScriptMidiCommandRouter` resolves enabled MIDI devices by instance ID,
-alias, name, or unambiguous profile ID, requires an output binding, routes to an
-`IControlMidiSender`, and returns per-message success/failure results. The
-session bridge records these routed MIDI outputs in the monitor buffer. Real
-hardware control-system session wiring is still separate from the legacy graph
-`ActionEndpoint` session adapter.
+Implementation note, 2026-06-04 / 2026-06-05: the script-facing `midi` object
+now queues helpers for all decoded PMLib MIDI message types: CC,
+high-resolution CC, note on/off, program change, pitch bend, aftertouch, SysEx,
+MIDI time code, song position/select, tune request, clock/start/continue/stop,
+active sensing/reset, RPN, and NRPN. `ControlScriptMidiCommandRouter` resolves
+enabled MIDI devices by instance ID, alias, name, or unambiguous profile ID,
+requires an output binding, routes to an `IControlMidiSender`, and returns
+per-message success/failure results. The session bridge records these routed
+MIDI outputs in the monitor buffer. Real hardware control-system session wiring
+is still separate from the legacy graph `ActionEndpoint` session adapter.
 
 The exact Mond syntax can be refined during implementation, but the default
 shape should be export/import friendly, for example:
@@ -821,11 +825,13 @@ Provide structured message builders to scripts and the UI:
 - MIDI note on/off: channel, note, velocity.
 - MIDI program change.
 - MIDI pitch bend.
+- MIDI aftertouch, system common, system real-time, RPN/NRPN, and SysEx
+  receive triggers and send helpers.
 - OSC message: address plus typed arguments: int32, int64, float32, double64,
   string, symbol, bool, nil, blob later if needed.
 
-SysEx should be excluded initially, but the model should leave room for device
-profiles to add safe SysEx templates later.
+SysEx receive triggers are supported. Device profiles should still treat SysEx
+send templates as explicit, device-specific actions.
 
 ## OSC Value Cache
 
@@ -1104,7 +1110,8 @@ Manual hardware tests:
   events that can switch HaPlay layers.
 - Match MIDI devices by a combination of alias, name, and ID. If no good match is
   found, ask the user to select the current device.
-- Default to one app-level OSC listener while allowing additional listeners.
+- Do not create an app-level OSC listener by default; allow users to add one or
+  more listeners for inbound external OSC control sources.
 - Make OSC cache update behavior configurable between incoming-only and
   optimistic send + incoming.
 - Make X32 periodic sends configurable. Default to `/xremote`.
@@ -1114,7 +1121,8 @@ Manual hardware tests:
   separately.
 - Disable scripts after a configurable number of consecutive failures. Default
   threshold: 3.
-- Store OSC listeners per project. Default: one app-level listener on `10020`.
+- Store OSC listeners per project. New projects have none by default; the first
+  listener dialog seeds the conventional `10020` port.
 - Allow multiple OSC remotes and multiple OSC listeners in one project.
 - Share each OSC listener socket for send/receive when possible.
 - Use JSON lines for monitor capture/replay export.

@@ -19,7 +19,6 @@
         <PackageReference Include="Avalonia.Fonts.Inter"/>
         <PackageReference Include="AvaloniaUI.DiagnosticsSupport" Condition="'$(Configuration)' == 'Debug' Or '$(Configuration)' == ''" />
         <PackageReference Include="CommunityToolkit.Mvvm"/>
-        <PackageReference Include="Mond" />
         <PackageReference Include="TreeDataGrid.Avalonia" />
         <PackageReference Include="Xaml.Behaviors.Avalonia" />
     </ItemGroup>
@@ -37,6 +36,7 @@
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.Playback\S.Media.Playback.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.PortAudio\S.Media.PortAudio.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Media\S.Media.SDL3\S.Media.SDL3.csproj" />
+        <ProjectReference Include="..\..\MediaFramework\Control\S.Control\S.Control.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Extras\MIDI\PMLib\PMLib.csproj" />
         <ProjectReference Include="..\..\MediaFramework\Extras\OSC\OSCLib\OSCLib.csproj" />
     </ItemGroup>

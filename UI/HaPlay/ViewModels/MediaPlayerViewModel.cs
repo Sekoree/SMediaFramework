@@ -11,7 +11,6 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using HaPlay.Models;
 using HaPlay.Playback;
 using S.Media.Core;
 using S.Media.Core.Audio;

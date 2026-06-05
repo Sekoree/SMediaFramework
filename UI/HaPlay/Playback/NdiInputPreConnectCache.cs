@@ -1,4 +1,3 @@
-using HaPlay.Models;
 using S.Media.Core.Audio;
 using S.Media.NDI;
 

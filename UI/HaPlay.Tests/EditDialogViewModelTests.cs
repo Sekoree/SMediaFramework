@@ -1,4 +1,3 @@
-using HaPlay.Models;
 using HaPlay.ViewModels.Dialogs;
 using S.Media.Core.Video;
 using Xunit;

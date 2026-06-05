@@ -14,8 +14,10 @@ Everything here is done in the app — no project-JSON editing required.
 
 - The **Control** workspace (sidebar, `Ctrl+6`) owns the live control system.
 - Nothing talks to hardware until you press **Arm** (top of the workspace). Arming
-  opens the OSC listener(s), opens MIDI inputs, starts the periodic-send tick loop,
-  and runs your scripts. **Disarm** tears all of that down.
+  opens configured OSC listener(s), opens MIDI inputs, starts the periodic-send
+  tick loop, and runs your scripts. New projects do not create an app-level OSC
+  listener by default; X32 replies use the OSC device client's own socket.
+  **Disarm** tears all of that down.
 - After changing devices/scripts/sends while armed, **re-arm** to apply the change
   (the status line reminds you).
 - A device **alias** (e.g. `x32`) is the `deviceKey` your scripts use, e.g.

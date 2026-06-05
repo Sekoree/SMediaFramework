@@ -1,5 +1,4 @@
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using Xunit;
 
 namespace HaPlay.Tests;

@@ -1,5 +1,5 @@
 using System.Text.Json.Serialization;
-using HaPlay.ControlGraph;
+using S.Control;
 
 namespace HaPlay.Models;
 

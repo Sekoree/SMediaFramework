@@ -102,12 +102,19 @@
                               <TextBox Width="160" Margin="0,0,6,6" Text="{Binding FunctionName}" PlaceholderText="exported function" />
                               <TextBox Width="180" Text="{Binding OscAddressPattern}"
                                        PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" Margin="0,0,6,6" />
+                              <ComboBox Width="160" ItemsSource="{Binding MidiMessageTypeOptions}"
+                                        SelectedItem="{Binding MidiMessageType}" IsVisible="{Binding ShowMidiMessageType}"
+                                        Margin="0,0,6,6" />
                               <TextBox Width="64" Text="{Binding MidiChannelText}"
                                        PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" Margin="0,0,6,6" />
                               <TextBox Width="64" Text="{Binding MidiControllerText}"
                                        PlaceholderText="cc" IsVisible="{Binding ShowMidiController}" Margin="0,0,6,6" />
                               <TextBox Width="64" Text="{Binding MidiNoteText}"
                                        PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MidiValueText}"
+                                       PlaceholderText="value" IsVisible="{Binding ShowMidiValue}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MidiParameterText}"
+                                       PlaceholderText="param" IsVisible="{Binding ShowMidiParameter}" Margin="0,0,6,6" />
                               <TextBox Width="90" Text="{Binding IntervalMsText}"
                                        PlaceholderText="ms" IsVisible="{Binding ShowInterval}" Margin="0,0,6,6" />
                               <Button Content="✕" Padding="8,2" ToolTip.Tip="Remove trigger" Margin="0,0,0,6"

@@ -1,5 +1,4 @@
 using System.Threading;
-using HaPlay.Models;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;

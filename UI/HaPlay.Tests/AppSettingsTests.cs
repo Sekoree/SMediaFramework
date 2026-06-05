@@ -1,5 +1,4 @@
 using System.Text.Json;
-using HaPlay.Models;
 using Xunit;
 
 namespace HaPlay.Tests;

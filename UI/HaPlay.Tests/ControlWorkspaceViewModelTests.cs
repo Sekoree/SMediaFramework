@@ -1,5 +1,4 @@
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using HaPlay.ViewModels;
 using Xunit;
 
@@ -372,21 +371,34 @@ public sealed class ControlWorkspaceViewModelTests
         row.AddTriggerCommand.Execute(null);
         var triggerRow = Assert.Single(row.Triggers);
 
-        triggerRow.Kind = ControlScriptTriggerKind.MidiControlChange;
-        triggerRow.FunctionName = "  onEncoder  ";
+        triggerRow.Kind = ControlScriptTriggerKind.MidiMessage;
+        triggerRow.FunctionName = "  onProgram  ";
+        triggerRow.MidiControllerText = "7";
+        triggerRow.MidiNoteText = "60";
+        triggerRow.MidiParameterText = "12";
+        triggerRow.MidiMessageType = ControlMidiMessageType.ProgramChange;
         triggerRow.MidiChannelText = "1";
-        triggerRow.MidiControllerText = "16";
+        triggerRow.MidiValueText = "5";
 
-        Assert.True(triggerRow.ShowMidiController);
+        Assert.True(triggerRow.ShowMidiMessageType);
+        Assert.True(triggerRow.ShowMidiChannel);
+        Assert.False(triggerRow.ShowMidiController);
+        Assert.False(triggerRow.ShowMidiNote);
+        Assert.True(triggerRow.ShowMidiValue);
+        Assert.False(triggerRow.ShowMidiParameter);
         Assert.False(triggerRow.ShowOscAddress);
 
         var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
-        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
-        Assert.Equal("onEncoder", trigger.FunctionName);
+        Assert.Equal(ControlScriptTriggerKind.MidiMessage, trigger.Kind);
+        Assert.Equal("onProgram", trigger.FunctionName);
+        Assert.Equal(ControlMidiMessageType.ProgramChange, trigger.MidiMessageType);
         Assert.Equal(1, trigger.MidiChannel);
-        Assert.Equal(16, trigger.MidiController);
+        Assert.Equal(5, trigger.MidiValue);
+        Assert.Null(trigger.MidiController);
         Assert.Null(trigger.MidiNote);
-        Assert.Contains("onEncoder", row.TriggerSummary);
+        Assert.Null(trigger.MidiParameter);
+        Assert.Contains("onProgram", row.TriggerSummary);
+        Assert.Contains(nameof(ControlMidiMessageType.ProgramChange), row.TriggerSummary);
     }
 
     [Fact]
@@ -1197,15 +1209,49 @@ public sealed class ControlWorkspaceViewModelTests
         Assert.Equal(ControlScriptTriggerKind.MidiControlChange, cc.Kind);
         Assert.Equal("onCc16", cc.FunctionName);
         Assert.Equal(1, cc.MidiChannel);
+        Assert.Equal(ControlMidiMessageType.ControlChange, cc.MidiMessageType);
         Assert.Equal(16, cc.MidiController);
         Assert.Null(cc.MidiNote);
 
         var note = ControlWorkspaceViewModel.BuildLearnedTrigger(
-            new ControlMonitorRecord { MidiChannel = 1, MidiNote = 40 },
+            new ControlMonitorRecord { MidiChannel = 1, MidiMessageType = ControlMidiMessageType.NoteOff, MidiNote = 40 },
             "onNote40");
         Assert.Equal(ControlScriptTriggerKind.MidiNote, note.Kind);
+        Assert.Equal(ControlMidiMessageType.NoteOff, note.MidiMessageType);
         Assert.Equal(40, note.MidiNote);
         Assert.Null(note.MidiController);
+    }
+
+    [Fact]
+    public void BuildLearnedTrigger_MapsGenericMidiMessageRecords()
+    {
+        var program = ControlWorkspaceViewModel.BuildLearnedTrigger(
+            new ControlMonitorRecord
+            {
+                MidiChannel = 1,
+                MidiMessageType = ControlMidiMessageType.ProgramChange,
+                MidiValue = 5,
+            },
+            "onProgramChange");
+
+        Assert.Equal(ControlScriptTriggerKind.MidiMessage, program.Kind);
+        Assert.Equal(ControlMidiMessageType.ProgramChange, program.MidiMessageType);
+        Assert.Equal(1, program.MidiChannel);
+        Assert.Equal(5, program.MidiValue);
+
+        var bend = ControlWorkspaceViewModel.BuildLearnedTrigger(
+            new ControlMonitorRecord
+            {
+                MidiChannel = 1,
+                MidiMessageType = ControlMidiMessageType.PitchBend,
+                MidiValue = 128,
+            },
+            "onPitchBend");
+
+        Assert.Equal(ControlScriptTriggerKind.MidiMessage, bend.Kind);
+        Assert.Equal(ControlMidiMessageType.PitchBend, bend.MidiMessageType);
+        Assert.Equal(1, bend.MidiChannel);
+        Assert.Null(bend.MidiValue);
     }
 
     [Fact]

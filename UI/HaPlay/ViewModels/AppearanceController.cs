@@ -1,7 +1,6 @@
 using Avalonia;
 using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
-using HaPlay.Models;
 
 namespace HaPlay.ViewModels;
 

@@ -11,8 +11,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
 using OSCLib;
@@ -1879,21 +1878,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         return true;
     }
 
-    private static ControlMidiPortCatalog? EnumerateMidiPorts()
-    {
-        try
-        {
-            using var lease = ControlMidiLibraryLease.Acquire();
-            var provider = RealControlMidiDeviceProvider.Instance;
-            provider.EnsureInitialized();
-            return new ControlMidiPortCatalog(provider.GetInputDevices(), provider.GetOutputDevices());
-        }
-        catch
-        {
-            // PortMidi unavailable (headless/CI) — skip the fallback flow rather than fault.
-            return null;
-        }
-    }
+    private static ControlMidiPortCatalog? EnumerateMidiPorts() =>
+        ControlMidiPortCatalogProvider.TryEnumerate();
 
     private static async Task<IReadOnlyDictionary<ControlMidiResolutionKey, ControlMidiPortInfo>?> DefaultPromptAsync(
         IReadOnlyList<ControlMidiResolutionRequest> requests)
@@ -2313,7 +2299,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         LearnCandidate = null;
     }
 
-    /// <summary>Finds the first decoded MIDI input (CC or note) captured at or after <paramref name="sinceUtc"/>.</summary>
+    /// <summary>Finds the first decoded MIDI input captured at or after <paramref name="sinceUtc"/>.</summary>
     internal static ControlMonitorRecord? FindLearnCapture(IEnumerable<ControlMonitorRecord> records, DateTimeOffset sinceUtc)
     {
         ArgumentNullException.ThrowIfNull(records);
@@ -2321,43 +2307,109 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             r.TimestampUtc >= sinceUtc
             && r.Direction == ControlMonitorDirection.Input
             && r.Protocol == ControlMonitorProtocol.Midi
-            && (r.MidiController is not null || r.MidiNote is not null));
+            && (r.MidiMessageType is not null
+                || r.MidiController is not null
+                || r.MidiNote is not null
+                || r.MidiValue is not null));
     }
 
     internal static string SuggestLearnFunctionName(ControlMonitorRecord record) =>
         record.MidiController is { } controller
             ? $"onCc{controller.ToString(CultureInfo.InvariantCulture)}"
-            : $"onNote{(record.MidiNote ?? 0).ToString(CultureInfo.InvariantCulture)}";
+            : record.MidiNote is { } note
+                ? $"onNote{note.ToString(CultureInfo.InvariantCulture)}"
+                : $"on{SanitizeFunctionSuffix((record.MidiMessageType ?? ControlMidiMessageType.Unknown).ToString())}";
 
     internal static ControlScriptTriggerConfig BuildLearnedTrigger(ControlMonitorRecord record, string functionName)
     {
         ArgumentNullException.ThrowIfNull(record);
-        return record.MidiController is { } controller
-            ? new ControlScriptTriggerConfig
+        var messageType = InferMidiMessageType(record);
+        if (record.MidiController is { } controller)
+        {
+            return new ControlScriptTriggerConfig
             {
                 Kind = ControlScriptTriggerKind.MidiControlChange,
                 FunctionName = functionName,
+                MidiMessageType = messageType,
                 MidiChannel = record.MidiChannel,
                 MidiController = controller,
-            }
-            : new ControlScriptTriggerConfig
+            };
+        }
+
+        if (record.MidiNote is { } note)
+        {
+            return new ControlScriptTriggerConfig
             {
                 Kind = ControlScriptTriggerKind.MidiNote,
                 FunctionName = functionName,
+                MidiMessageType = messageType is ControlMidiMessageType.NoteOn or ControlMidiMessageType.NoteOff ? messageType : null,
                 MidiChannel = record.MidiChannel,
-                MidiNote = record.MidiNote,
+                MidiNote = note,
             };
+        }
+
+        return new ControlScriptTriggerConfig
+        {
+            Kind = ControlScriptTriggerKind.MidiMessage,
+            FunctionName = functionName,
+            MidiMessageType = messageType == ControlMidiMessageType.Unknown ? null : messageType,
+            MidiChannel = record.MidiChannel,
+            MidiValue = ShouldLearnMidiValue(messageType) ? record.MidiValue : null,
+            MidiParameter = record.MidiParameter,
+        };
     }
 
     internal static string BuildLearnedStub(ControlMonitorRecord record, string functionName)
     {
-        var description = record.MidiController is { } controller
-            ? $"MIDI CC {controller.ToString(CultureInfo.InvariantCulture)} on channel {(record.MidiChannel ?? 0).ToString(CultureInfo.InvariantCulture)}"
-            : $"MIDI note {(record.MidiNote ?? 0).ToString(CultureInfo.InvariantCulture)} on channel {(record.MidiChannel ?? 0).ToString(CultureInfo.InvariantCulture)}";
+        var description = DescribeMidiRecord(record);
         return $"{Environment.NewLine}export fun {functionName}(event, context) {{{Environment.NewLine}"
             + $"    // TODO: handle {description}{Environment.NewLine}"
             + $"    // event.value holds the incoming value{Environment.NewLine}"
             + $"}}{Environment.NewLine}";
+    }
+
+    private static ControlMidiMessageType InferMidiMessageType(ControlMonitorRecord record)
+    {
+        if (record.MidiMessageType is { } messageType)
+            return messageType;
+        if (record.MidiController is not null)
+            return ControlMidiMessageType.ControlChange;
+        if (record.MidiNote is not null)
+            return ControlMidiMessageType.NoteOn;
+        return ControlMidiMessageType.Unknown;
+    }
+
+    private static bool ShouldLearnMidiValue(ControlMidiMessageType messageType) =>
+        messageType is ControlMidiMessageType.ProgramChange
+            or ControlMidiMessageType.SongSelect
+            or ControlMidiMessageType.MIDITimeCode;
+
+    private static string DescribeMidiRecord(ControlMonitorRecord record)
+    {
+        var channel = record.MidiChannel is { } ch ? $" on channel {ch.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
+        var value = record.MidiValue is { } v ? $" value {v.ToString(CultureInfo.InvariantCulture)}" : string.Empty;
+        if (record.MidiController is { } controller)
+            return $"MIDI CC {controller.ToString(CultureInfo.InvariantCulture)}{channel}";
+        if (record.MidiNote is { } note)
+            return $"MIDI note {note.ToString(CultureInfo.InvariantCulture)}{channel}";
+        if (record.MidiParameter is { } parameter)
+            return $"MIDI {(record.MidiMessageType ?? ControlMidiMessageType.Unknown)} parameter {parameter.ToString(CultureInfo.InvariantCulture)}{channel}";
+        return $"MIDI {(record.MidiMessageType ?? ControlMidiMessageType.Unknown)}{channel}{value}";
+    }
+
+    private static string SanitizeFunctionSuffix(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return "Midi";
+
+        var builder = new StringBuilder(text.Length);
+        foreach (var ch in text)
+        {
+            if (char.IsLetterOrDigit(ch))
+                builder.Append(ch);
+        }
+
+        return builder.Length == 0 ? "Midi" : builder.ToString();
     }
 
     internal static bool HasExport(string? scriptText, string functionName) =>
@@ -2974,10 +3026,16 @@ public sealed partial class ControlScriptRowViewModel : ViewModelBase
             label += $":{trigger.FunctionName}";
         if (!string.IsNullOrWhiteSpace(trigger.OscAddressPattern))
             label += $" {trigger.OscAddressPattern}";
+        if (trigger.MidiMessageType is { } messageType)
+            label += $" {messageType}";
         if (trigger.MidiController is { } controller)
             label += $" cc{controller}";
         if (trigger.MidiNote is { } note)
             label += $" note{note}";
+        if (trigger.MidiValue is { } value)
+            label += $" value{value}";
+        if (trigger.MidiParameter is { } parameter)
+            label += $" param{parameter}";
         return label;
     }
 }
@@ -3019,12 +3077,22 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
                 return;
 
             Update(
-                _trigger with { Kind = value },
+                NormalizeMidiTrigger(_trigger with { Kind = value }),
                 nameof(Kind),
+                nameof(MidiMessageType),
+                nameof(MidiMessageTypeOptions),
+                nameof(MidiChannelText),
+                nameof(MidiControllerText),
+                nameof(MidiNoteText),
+                nameof(MidiValueText),
+                nameof(MidiParameterText),
                 nameof(ShowOscAddress),
+                nameof(ShowMidiMessageType),
                 nameof(ShowMidiChannel),
                 nameof(ShowMidiController),
                 nameof(ShowMidiNote),
+                nameof(ShowMidiValue),
+                nameof(ShowMidiParameter),
                 nameof(ShowInterval));
         }
     }
@@ -3052,6 +3120,38 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
                 return;
 
             Update(_trigger with { OscAddressPattern = next }, nameof(OscAddressPattern));
+        }
+    }
+
+    public IReadOnlyList<ControlMidiMessageType?> MidiMessageTypeOptions =>
+        Kind switch
+        {
+            ControlScriptTriggerKind.MidiNote => [null, ControlMidiMessageType.NoteOn, ControlMidiMessageType.NoteOff],
+            ControlScriptTriggerKind.MidiControlChange => [null, ControlMidiMessageType.ControlChange],
+            _ => AllMidiMessageTypeOptions,
+        };
+
+    public ControlMidiMessageType? MidiMessageType
+    {
+        get => _trigger.MidiMessageType;
+        set
+        {
+            if (value == _trigger.MidiMessageType)
+                return;
+
+            Update(
+                NormalizeMidiTrigger(_trigger with { MidiMessageType = value }),
+                nameof(MidiMessageType),
+                nameof(MidiChannelText),
+                nameof(MidiControllerText),
+                nameof(MidiNoteText),
+                nameof(MidiValueText),
+                nameof(MidiParameterText),
+                nameof(ShowMidiChannel),
+                nameof(ShowMidiController),
+                nameof(ShowMidiNote),
+                nameof(ShowMidiValue),
+                nameof(ShowMidiParameter));
         }
     }
 
@@ -3094,6 +3194,32 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
         }
     }
 
+    public string MidiValueText
+    {
+        get => FormatOptionalInt(_trigger.MidiValue);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.MidiValue)
+                return;
+
+            Update(_trigger with { MidiValue = next }, nameof(MidiValueText));
+        }
+    }
+
+    public string MidiParameterText
+    {
+        get => FormatOptionalInt(_trigger.MidiParameter);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.MidiParameter)
+                return;
+
+            Update(_trigger with { MidiParameter = next }, nameof(MidiParameterText));
+        }
+    }
+
     public string IntervalMsText
     {
         get => FormatOptionalInt(_trigger.IntervalMs);
@@ -3109,16 +3235,118 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
 
     public bool ShowOscAddress => Kind is ControlScriptTriggerKind.OscMessage or ControlScriptTriggerKind.OscCacheChanged;
 
-    public bool ShowMidiChannel => Kind is ControlScriptTriggerKind.MidiMessage
+    public bool ShowMidiMessageType => Kind is ControlScriptTriggerKind.MidiMessage or ControlScriptTriggerKind.MidiNote;
+
+    public bool ShowMidiChannel => Kind is ControlScriptTriggerKind.MidiControlChange
+        or ControlScriptTriggerKind.MidiNote
+        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesChannel(_trigger.MidiMessageType));
+
+    public bool ShowMidiController => Kind == ControlScriptTriggerKind.MidiControlChange
+        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesController(_trigger.MidiMessageType));
+
+    public bool ShowMidiNote => Kind == ControlScriptTriggerKind.MidiNote
+        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesNote(_trigger.MidiMessageType));
+
+    public bool ShowMidiValue => Kind is ControlScriptTriggerKind.MidiControlChange
+        or ControlScriptTriggerKind.MidiNote
+        || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesValue(_trigger.MidiMessageType));
+
+    public bool ShowMidiParameter => Kind == ControlScriptTriggerKind.MidiMessage
+        && MidiMessageTypeUsesParameter(_trigger.MidiMessageType);
+
+    public bool ShowInterval => Kind is ControlScriptTriggerKind.Periodic;
+
+    private bool IsMidiKind => Kind is ControlScriptTriggerKind.MidiMessage
         or ControlScriptTriggerKind.MidiControlChange
         or ControlScriptTriggerKind.MidiNote;
 
-    public bool ShowMidiController => Kind is ControlScriptTriggerKind.MidiMessage
-        or ControlScriptTriggerKind.MidiControlChange;
+    private static readonly IReadOnlyList<ControlMidiMessageType?> AllMidiMessageTypeOptions =
+        new ControlMidiMessageType?[] { null }
+            .Concat(Enum.GetValues<ControlMidiMessageType>()
+                .Where(t => t != ControlMidiMessageType.Unknown)
+                .Select(t => (ControlMidiMessageType?)t))
+            .ToArray();
 
-    public bool ShowMidiNote => Kind is ControlScriptTriggerKind.MidiMessage or ControlScriptTriggerKind.MidiNote;
+    private static ControlScriptTriggerConfig NormalizeMidiTrigger(ControlScriptTriggerConfig trigger)
+    {
+        if (trigger.Kind == ControlScriptTriggerKind.MidiControlChange)
+        {
+            return trigger with
+            {
+                MidiMessageType = trigger.MidiMessageType is null or ControlMidiMessageType.ControlChange
+                    ? trigger.MidiMessageType
+                    : null,
+                MidiNote = null,
+                MidiParameter = null,
+            };
+        }
 
-    public bool ShowInterval => Kind is ControlScriptTriggerKind.Periodic;
+        if (trigger.Kind == ControlScriptTriggerKind.MidiNote)
+        {
+            return trigger with
+            {
+                MidiMessageType = trigger.MidiMessageType is null
+                    or ControlMidiMessageType.NoteOn
+                    or ControlMidiMessageType.NoteOff
+                        ? trigger.MidiMessageType
+                        : null,
+                MidiController = null,
+                MidiParameter = null,
+            };
+        }
+
+        if (trigger.Kind != ControlScriptTriggerKind.MidiMessage || trigger.MidiMessageType is not { } messageType)
+            return trigger;
+
+        return trigger with
+        {
+            MidiChannel = MidiMessageTypeUsesChannel(messageType) ? trigger.MidiChannel : null,
+            MidiController = MidiMessageTypeUsesController(messageType) ? trigger.MidiController : null,
+            MidiNote = MidiMessageTypeUsesNote(messageType) ? trigger.MidiNote : null,
+            MidiValue = MidiMessageTypeUsesValue(messageType) ? trigger.MidiValue : null,
+            MidiParameter = MidiMessageTypeUsesParameter(messageType) ? trigger.MidiParameter : null,
+        };
+    }
+
+    private static bool MidiMessageTypeUsesChannel(ControlMidiMessageType? messageType) =>
+        messageType is null
+            or ControlMidiMessageType.NRPN
+            or ControlMidiMessageType.RPN
+            or ControlMidiMessageType.NoteOff
+            or ControlMidiMessageType.NoteOn
+            or ControlMidiMessageType.PolyphonicAftertouch
+            or ControlMidiMessageType.ControlChange
+            or ControlMidiMessageType.ProgramChange
+            or ControlMidiMessageType.ChannelAftertouch
+            or ControlMidiMessageType.PitchBend;
+
+    private static bool MidiMessageTypeUsesController(ControlMidiMessageType? messageType) =>
+        messageType is null or ControlMidiMessageType.ControlChange;
+
+    private static bool MidiMessageTypeUsesNote(ControlMidiMessageType? messageType) =>
+        messageType is null
+            or ControlMidiMessageType.NoteOff
+            or ControlMidiMessageType.NoteOn
+            or ControlMidiMessageType.PolyphonicAftertouch;
+
+    private static bool MidiMessageTypeUsesValue(ControlMidiMessageType? messageType) =>
+        messageType is null
+            or ControlMidiMessageType.NRPN
+            or ControlMidiMessageType.RPN
+            or ControlMidiMessageType.NoteOff
+            or ControlMidiMessageType.NoteOn
+            or ControlMidiMessageType.PolyphonicAftertouch
+            or ControlMidiMessageType.ControlChange
+            or ControlMidiMessageType.ProgramChange
+            or ControlMidiMessageType.ChannelAftertouch
+            or ControlMidiMessageType.PitchBend
+            or ControlMidiMessageType.SysEx
+            or ControlMidiMessageType.MIDITimeCode
+            or ControlMidiMessageType.SongPosition
+            or ControlMidiMessageType.SongSelect;
+
+    private static bool MidiMessageTypeUsesParameter(ControlMidiMessageType? messageType) =>
+        messageType is null or ControlMidiMessageType.NRPN or ControlMidiMessageType.RPN;
 
     private void Update(ControlScriptTriggerConfig trigger, params string[] changedProperties)
     {
@@ -3167,7 +3395,9 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
             return $"CC {controller.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
         if (record.MidiNote is { } note)
             return $"Note {note.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
-        return "MIDI control";
+        if (record.MidiParameter is { } parameter)
+            return $"{(record.MidiMessageType ?? ControlMidiMessageType.Unknown)} param {parameter.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
+        return $"{(record.MidiMessageType ?? ControlMidiMessageType.Unknown)}{channel}{value}";
     }
 }
 

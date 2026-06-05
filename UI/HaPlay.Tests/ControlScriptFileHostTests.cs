@@ -1,4 +1,4 @@
-using HaPlay.ControlGraph;
+using S.Control;
 using Mond;
 using Xunit;
 

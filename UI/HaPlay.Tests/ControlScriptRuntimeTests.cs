@@ -1,5 +1,4 @@
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using OSCLib;
 using Xunit;
 
@@ -186,6 +185,69 @@ public sealed class ControlScriptRuntimeTests
                 Assert.Equal("/noteOn", message.Address);
                 Assert.Equal(127, Assert.Single(message.Arguments).NumberValue);
             });
+    }
+
+    [Fact]
+    public void DispatchControlEvent_MidiMessageTriggerMatchesProgramChangeAndExposesPayload()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var script = Script(
+            "Scripts/main.mnd",
+            new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.MidiMessage,
+                FunctionName = "onMidi",
+                DeviceInstanceId = midiDeviceId,
+                MidiMessageType = ControlMidiMessageType.ProgramChange,
+                MidiChannel = 1,
+                MidiValue = 5,
+            });
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "Program Surface")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidi(event, context) {
+                        osc.send("x32", "/" + event.midi.message, osc.int32(event.midi.program), osc.string(event.midi.messageType));
+                    }
+                    """,
+            },
+            sink);
+
+        var ignored = runtime.DispatchControlEvent(MidiMessageEvent(
+            midiDeviceId,
+            new ControlMidiMessagePayload
+            {
+                MessageType = ControlMidiMessageType.ProgramChange,
+                Channel = 1,
+                Program = 6,
+                Value = 6,
+            }));
+        var result = runtime.DispatchControlEvent(MidiMessageEvent(
+            midiDeviceId,
+            new ControlMidiMessagePayload
+            {
+                MessageType = ControlMidiMessageType.ProgramChange,
+                Channel = 1,
+                Program = 5,
+                Value = 5,
+            }));
+
+        Assert.Empty(ignored.Invocations);
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        var message = Assert.Single(sink.OscMessages);
+        Assert.Equal("/programChange", message.Address);
+        Assert.Collection(
+            message.Arguments,
+            arg => Assert.Equal(5, arg.NumberValue),
+            arg => Assert.Equal("ProgramChange", arg.StringValue));
     }
 
     [Fact]
@@ -1421,6 +1483,77 @@ public sealed class ControlScriptRuntimeTests
         Assert.Contains("boom", status.LastError);
     }
 
+    [Fact]
+    public void DispatchManual_QueuesExtendedMidiHelpers()
+    {
+        var script = new ControlScriptConfig
+        {
+            Id = Guid.NewGuid(),
+            Name = "Extended MIDI",
+            ScriptPath = "Scripts/midi.mnd",
+            Triggers =
+            [
+                new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual, FunctionName = "run" },
+            ],
+        };
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/midi.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        midi.sendPolyphonicAftertouch("synth", 1, 60, 70);
+                        midi.sendPolyAftertouch("synth", 1, 61, 71);
+                        midi.sendChannelAftertouch("synth", 1, 72);
+                        midi.sendSysEx("synth", [125, 1]);
+                        midi.sendMidiTimeCodeQuarterFrame("synth", 1, 2);
+                        midi.sendMidiTimeCode("synth", 19);
+                        midi.sendSongPosition("synth", 96);
+                        midi.sendSongSelect("synth", 3);
+                        midi.sendTuneRequest("synth");
+                        midi.sendClock("synth");
+                        midi.sendTimingClock("synth");
+                        midi.sendStart("synth");
+                        midi.sendContinue("synth");
+                        midi.sendStop("synth");
+                        midi.sendActiveSensing("synth");
+                        midi.sendReset("synth");
+                        midi.sendNrpn("synth", 1, 100, 200);
+                        midi.sendRpn("synth", 1, 101, 201);
+                    }
+                    """,
+            },
+            sink);
+
+        var result = runtime.DispatchManual(script.Id);
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        Assert.Equal(18, sink.MidiMessages.Count);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.PolyphonicAftertouch && message.Note == 60 && message.Value == 70);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.PolyphonicAftertouch && message.Note == 61 && message.Value == 71);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.ChannelAftertouch && message.Value == 72);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.SysEx && message.Data?.SequenceEqual(new byte[] { 0xF0, 0x7D, 0x01, 0xF7 }) == true);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.MIDITimeCode && message.Value == 0x12);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.MIDITimeCode && message.Value == 19);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.SongPosition && message.Value == 96);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.SongSelect && message.Value == 3);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.TuneRequest);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.TimingClock);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.Start);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.Continue);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.Stop);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.ActiveSensing);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.Reset);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.NRPN && message.Parameter == 100 && message.Value == 200);
+        Assert.Contains(sink.MidiMessages, message => message.Kind == ControlScriptMidiMessageKind.RPN && message.Parameter == 101 && message.Value == 201);
+    }
+
     private static ControlScriptRuntime CreateRuntime(
         ControlSystemConfig config,
         IReadOnlyDictionary<string, string> scripts,
@@ -1505,6 +1638,14 @@ public sealed class ControlScriptRuntimeTests
             Note: note,
             Velocity: velocity,
             IsNoteOn: isNoteOn);
+
+    private static MidiMessageControlEvent MidiMessageEvent(Guid deviceId, ControlMidiMessagePayload message) =>
+        new(
+            DateTimeOffset.UtcNow,
+            Guid.NewGuid(),
+            deviceId,
+            Guid.NewGuid(),
+            message);
 
     private static OscControlEvent OscEvent(Guid deviceId, string address, params OSCArgument[] arguments) =>
         new(

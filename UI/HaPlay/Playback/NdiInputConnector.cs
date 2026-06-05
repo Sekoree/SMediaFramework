@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using HaPlay.Models;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Video;

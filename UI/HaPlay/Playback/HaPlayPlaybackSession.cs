@@ -1,6 +1,5 @@
 using System.Threading;
 using System.Diagnostics.CodeAnalysis;
-using HaPlay.Models;
 using HaPlay.ViewModels;
 using Microsoft.Extensions.Logging;
 using NDILib;

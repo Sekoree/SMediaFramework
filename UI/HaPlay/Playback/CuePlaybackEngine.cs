@@ -1,5 +1,4 @@
 using Avalonia.Threading;
-using HaPlay.Models;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 using S.Media.Core;

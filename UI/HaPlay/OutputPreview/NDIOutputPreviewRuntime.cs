@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security;
-using HaPlay.Models;
 using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;

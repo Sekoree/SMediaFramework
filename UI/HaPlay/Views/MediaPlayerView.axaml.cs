@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
-using HaPlay.Models;
 using HaPlay.ViewModels;
 using S.Media.Core;
 

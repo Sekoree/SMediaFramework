@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using HaPlay.Models;
 using HaPlay.Playback;
 using HaPlay.ViewModels;
 using Xunit;

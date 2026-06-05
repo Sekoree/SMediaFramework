@@ -3,7 +3,6 @@ using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
-using HaPlay.Models;
 using HaPlay.Resources;
 using HaPlay.ViewModels;
 using HaPlay.Views;

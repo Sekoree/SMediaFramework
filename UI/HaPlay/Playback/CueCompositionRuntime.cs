@@ -1,4 +1,3 @@
-using HaPlay.Models;
 using HaPlay.ViewModels;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;

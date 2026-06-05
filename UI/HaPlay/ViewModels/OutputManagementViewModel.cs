@@ -8,7 +8,6 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using HaPlay.Models;
 using HaPlay.OutputPreview;
 using HaPlay.Playback;
 using HaPlay.Resources;

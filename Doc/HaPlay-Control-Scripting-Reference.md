@@ -29,13 +29,32 @@ Common event fields:
 
 MIDI events expose:
 
-- `event.midi.message`: `controlChange`, `noteOn`, or `noteOff`.
+- `event.midi.message`: one of `controlChange`, `noteOn`, `noteOff`,
+  `polyphonicAftertouch`, `programChange`, `channelAftertouch`, `pitchBend`,
+  `sysEx`, `midiTimeCode`, `songPosition`, `songSelect`, `tuneRequest`,
+  `timingClock`, `start`, `continue`, `stop`, `activeSensing`, `reset`, `nrpn`,
+  or `rpn`.
+- `event.midi.messageType`: the persisted trigger enum name, e.g.
+  `ProgramChange`.
 - `event.midi.channel`
 - `event.midi.controller`
 - `event.midi.note`
 - `event.midi.value`
 - `event.midi.velocity`
 - `event.midi.isNoteOn`
+- `event.midi.program`
+- `event.midi.pressure`
+- `event.midi.pitchBend`
+- `event.midi.songPosition`
+- `event.midi.song`
+- `event.midi.dataByte`
+- `event.midi.parameter`
+- `event.midi.data`: SysEx bytes as a numeric array.
+- `event.midi.length`: SysEx byte count.
+
+`MidiMessage` triggers can filter by message type, channel, controller, note,
+value, and parameter. `MidiControlChange` and `MidiNote` remain as convenient
+specialized trigger kinds.
 
 OSC events expose:
 
@@ -98,8 +117,28 @@ id.
 - `midi.sendNoteOff(deviceKey, channel, note, velocity)`
 - `midi.sendProgramChange(deviceKey, channel, program)`
 - `midi.sendPitchBend(deviceKey, channel, value)`
+- `midi.sendPolyphonicAftertouch(deviceKey, channel, note, pressure)`
+- `midi.sendPolyAftertouch(deviceKey, channel, note, pressure)` — alias.
+- `midi.sendChannelAftertouch(deviceKey, channel, pressure)`
+- `midi.sendSysEx(deviceKey, bytes)` — `bytes` may be an array or variadic byte
+  arguments; missing `0xF0` / `0xF7` framing bytes are added.
+- `midi.sendMidiTimeCode(deviceKey, dataByte)`
+- `midi.sendMidiTimeCodeQuarterFrame(deviceKey, quarterFrameType, nibble)`
+- `midi.sendSongPosition(deviceKey, beats)`
+- `midi.sendSongSelect(deviceKey, song)`
+- `midi.sendTuneRequest(deviceKey)`
+- `midi.sendTimingClock(deviceKey)`
+- `midi.sendClock(deviceKey)` — alias.
+- `midi.sendStart(deviceKey)`
+- `midi.sendContinue(deviceKey)`
+- `midi.sendStop(deviceKey)`
+- `midi.sendActiveSensing(deviceKey)`
+- `midi.sendReset(deviceKey)`
+- `midi.sendNrpn(deviceKey, channel, parameter, value)`
+- `midi.sendRpn(deviceKey, channel, parameter, value)`
 
-SysEx is intentionally excluded from the first scripting surface.
+Incoming script triggers and outgoing helpers cover all decoded PMLib MIDI
+message types, including SysEx, system common/realtime messages, RPN, and NRPN.
 
 ## X32 API
 

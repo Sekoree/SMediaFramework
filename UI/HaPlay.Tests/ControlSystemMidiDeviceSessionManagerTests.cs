@@ -1,5 +1,4 @@
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using OSCLib;
 using PMLib.MessageTypes;
 using Xunit;
@@ -80,6 +79,68 @@ public sealed class ControlSystemMidiDeviceSessionManagerTests
     }
 
     [Fact]
+    public async Task Start_DispatchesProgramChangeAndSysExInputMessages()
+    {
+        var midiId = Guid.NewGuid();
+        var x32Id = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 50);
+        var oscSender = new RecordingOscSender();
+        var provider = new FakeMidiDeviceProvider
+        {
+            Inputs = [new ControlMidiPortInfo(1, "Program Surface")],
+        };
+        var config = new ControlSystemConfig
+        {
+            IsArmed = true,
+            OscListeners = [],
+            Devices =
+            [
+                MidiDevice(midiId, "Program Surface", "program", inputId: 1, inputName: "Program Surface"),
+                OscDevice(x32Id, "X32", "x32", "127.0.0.1", 10023),
+            ],
+            Scripts =
+            [
+                MidiMessageScript(midiId, "Scripts/program.mnd", ControlMidiMessageType.ProgramChange, "/program", midiValue: 5),
+                MidiMessageScript(midiId, "Scripts/sysex.mnd", ControlMidiMessageType.SysEx, "/sysex"),
+            ],
+        };
+        var runtime = CreateRuntimeSession(config, oscSender, monitor);
+        var manager = new ControlMidiDeviceManager(config, runtime, monitor);
+        using var midi = new ControlSystemMidiDeviceSessionManager(config, monitor, provider);
+
+        midi.Start(manager);
+        provider.Input(1).Raise(new ProgramChange(0, 5));
+        provider.Input(1).Raise(new SysEx([0xF0, 0x7D, 0x01, 0xF7]));
+
+        await WaitUntilAsync(() => oscSender.Sent.Count == 2);
+
+        Assert.Collection(
+            oscSender.Sent,
+            sent =>
+            {
+                Assert.Equal("/program", sent.Address);
+                Assert.Equal(5, Assert.Single(sent.Arguments).AsInt32());
+            },
+            sent =>
+            {
+                Assert.Equal("/sysex", sent.Address);
+                Assert.Equal(4, Assert.Single(sent.Arguments).AsInt32());
+            });
+        Assert.Contains(monitor.Records, r =>
+            r.Protocol == ControlMonitorProtocol.Midi
+            && r.Direction == ControlMonitorDirection.Input
+            && r.MidiMessageType == ControlMidiMessageType.ProgramChange
+            && r.MidiValue == 5
+            && r.RawBytes is [0xC0, 5]);
+        Assert.Contains(monitor.Records, r =>
+            r.Protocol == ControlMonitorProtocol.Midi
+            && r.Direction == ControlMonitorDirection.Input
+            && r.MidiMessageType == ControlMidiMessageType.SysEx
+            && r.MidiValue == 4
+            && r.RawBytes is [0xF0, 0x7D, 0x01, 0xF7]);
+    }
+
+    [Fact]
     public async Task SendAsync_RoutesMidiOutputByControlDeviceInstanceId()
     {
         var xtouchId = Guid.NewGuid();
@@ -129,6 +190,98 @@ public sealed class ControlSystemMidiDeviceSessionManagerTests
                 var bend = Assert.IsType<PitchBend>(message);
                 Assert.Equal(1, bend.Channel);
                 Assert.Equal(1234, bend.Value);
+            });
+    }
+
+    [Fact]
+    public async Task SendMidiMessageAsync_SendsExtendedMessagesToMatchedMidiOutput()
+    {
+        var synthId = Guid.NewGuid();
+        var provider = new FakeMidiDeviceProvider
+        {
+            Outputs = [new ControlMidiPortInfo(9, "Synth Out")],
+        };
+        var config = new ControlSystemConfig
+        {
+            Devices =
+            [
+                MidiDevice(synthId, "Synth", "synth", outputId: 9, outputName: "Synth Out"),
+            ],
+        };
+        using var midi = new ControlSystemMidiDeviceSessionManager(config, new ControlMonitorBuffer(maxRecords: 10), provider);
+
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.PolyphonicAftertouch, Channel = 2, Note = 60, Value = 70 });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.ChannelAftertouch, Channel = 2, Value = 71 });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.SysEx, Data = [0x7D, 0x01] });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.MIDITimeCode, Value = 0x12 });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.SongPosition, Value = 96 });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.SongSelect, Value = 3 });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.TuneRequest });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.TimingClock });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.Start });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.Continue });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.Stop });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.ActiveSensing });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.Reset });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.NRPN, Channel = 2, Parameter = 100, Value = 200 });
+        await midi.SendMidiMessageAsync(synthId, new ControlMidiMessagePayload { MessageType = ControlMidiMessageType.RPN, Channel = 2, Parameter = 101, Value = 201 });
+
+        Assert.Equal([9], provider.OpenedOutputIds);
+        Assert.Collection(
+            provider.Output(9).Messages,
+            message =>
+            {
+                var aftertouch = Assert.IsType<PolyphonicAftertouch>(message);
+                Assert.Equal(1, aftertouch.Channel);
+                Assert.Equal(60, aftertouch.Note);
+                Assert.Equal(70, aftertouch.Pressure);
+            },
+            message =>
+            {
+                var aftertouch = Assert.IsType<ChannelAftertouch>(message);
+                Assert.Equal(1, aftertouch.Channel);
+                Assert.Equal(71, aftertouch.Pressure);
+            },
+            message =>
+            {
+                var sysEx = Assert.IsType<SysEx>(message);
+                Assert.Equal(new byte[] { 0xF0, 0x7D, 0x01, 0xF7 }, sysEx.Data);
+            },
+            message =>
+            {
+                var timeCode = Assert.IsType<MIDITimeCode>(message);
+                Assert.Equal(0x12, timeCode.DataByte);
+            },
+            message =>
+            {
+                var position = Assert.IsType<SongPosition>(message);
+                Assert.Equal(96, position.Beats);
+            },
+            message =>
+            {
+                var select = Assert.IsType<SongSelect>(message);
+                Assert.Equal(3, select.Song);
+            },
+            message => Assert.IsType<TuneRequest>(message),
+            message => Assert.IsType<TimingClock>(message),
+            message => Assert.IsType<MIDIStart>(message),
+            message => Assert.IsType<MIDIContinue>(message),
+            message => Assert.IsType<MIDIStop>(message),
+            message => Assert.IsType<ActiveSensing>(message),
+            message => Assert.IsType<MIDIReset>(message),
+            message =>
+            {
+                var nrpn = Assert.IsType<NRPN>(message);
+                Assert.Equal(1, nrpn.Channel);
+                Assert.Equal(100, nrpn.Parameter);
+                Assert.Equal(200, nrpn.Value);
+            },
+            message =>
+            {
+                var rpn = Assert.IsType<RPN>(message);
+                Assert.Equal(1, rpn.Channel);
+                Assert.Equal(101, rpn.Parameter);
+                Assert.Equal(201, rpn.Value);
             });
     }
 
@@ -286,6 +439,34 @@ public sealed class ControlSystemMidiDeviceSessionManagerTests
                     DeviceInstanceId = deviceId,
                     MidiChannel = 2,
                     MidiNote = note,
+                    OscAddressPattern = address,
+                },
+            ],
+        };
+
+    private static ControlScriptConfig MidiMessageScript(
+        Guid deviceId,
+        string path,
+        ControlMidiMessageType messageType,
+        string address,
+        int? midiValue = null) =>
+        new()
+        {
+            Id = Guid.NewGuid(),
+            Name = "MIDI message script",
+            ScriptPath = path,
+            Scope = ControlScriptScope.Device,
+            DeviceInstanceId = deviceId,
+            Triggers =
+            [
+                new ControlScriptTriggerConfig
+                {
+                    Kind = ControlScriptTriggerKind.MidiMessage,
+                    FunctionName = "onMidi",
+                    DeviceInstanceId = deviceId,
+                    MidiMessageType = messageType,
+                    MidiChannel = messageType == ControlMidiMessageType.SysEx ? null : 1,
+                    MidiValue = midiValue,
                     OscAddressPattern = address,
                 },
             ],

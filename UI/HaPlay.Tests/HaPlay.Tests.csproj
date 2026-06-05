@@ -16,6 +16,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <ProjectReference Include="..\..\MediaFramework\Control\S.Control\S.Control.csproj" />
         <ProjectReference Include="..\HaPlay\HaPlay.csproj" />
     </ItemGroup>
 

@@ -1,5 +1,4 @@
-using HaPlay.ControlGraph;
-using HaPlay.Models;
+using S.Control;
 using S.Media.Core.Video;
 using Xunit;
 
@@ -922,6 +921,15 @@ public sealed class HaPlayProjectIOTests
                             },
                             new ControlScriptTriggerConfig
                             {
+                                Kind = ControlScriptTriggerKind.MidiMessage,
+                                FunctionName = "onProgram",
+                                DeviceInstanceId = xtouchId,
+                                MidiMessageType = ControlMidiMessageType.ProgramChange,
+                                MidiChannel = 1,
+                                MidiValue = 5,
+                            },
+                            new ControlScriptTriggerConfig
+                            {
                                 Kind = ControlScriptTriggerKind.OscCacheChanged,
                                 FunctionName = "onX32FaderCached",
                                 DeviceInstanceId = x32Id,
@@ -1027,12 +1035,15 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal(xtouchId, deviceScript.DeviceInstanceId);
         Assert.Equal(ControlScriptFailureMode.DisableScript, deviceScript.FailurePolicy.Mode);
         Assert.Equal(3, deviceScript.FailurePolicy.MaxConsecutiveFailures);
-        Assert.Equal(2, deviceScript.Triggers.Count);
+        Assert.Equal(3, deviceScript.Triggers.Count);
         Assert.Equal(ControlScriptTriggerKind.MidiControlChange, deviceScript.Triggers[0].Kind);
         Assert.Equal("onEncoder1", deviceScript.Triggers[0].FunctionName);
         Assert.Equal(16, deviceScript.Triggers[0].MidiController);
-        Assert.Equal(ControlScriptTriggerKind.OscCacheChanged, deviceScript.Triggers[1].Kind);
-        Assert.Equal("/ch/01/mix/fader", deviceScript.Triggers[1].OscAddressPattern);
+        Assert.Equal(ControlScriptTriggerKind.MidiMessage, deviceScript.Triggers[1].Kind);
+        Assert.Equal(ControlMidiMessageType.ProgramChange, deviceScript.Triggers[1].MidiMessageType);
+        Assert.Equal(5, deviceScript.Triggers[1].MidiValue);
+        Assert.Equal(ControlScriptTriggerKind.OscCacheChanged, deviceScript.Triggers[2].Kind);
+        Assert.Equal("/ch/01/mix/fader", deviceScript.Triggers[2].OscAddressPattern);
 
         var layerScript = control.Scripts[2];
         Assert.Equal(ControlScriptScope.Layer, layerScript.Scope);

@@ -13,7 +13,23 @@ Reviewed the recent HaPlay MIDI/OSC control rewrite, the adjacent control librar
 
 This was a static review plus focused automated validation. No physical MIDI surface, X32/M32 hardware, or emulator was exercised.
 
-## Validation Run
+## Latest Validation Run
+
+Updated after the `S.Control` extraction, all-MIDI trigger support, and all-MIDI
+outgoing script helpers:
+
+- `dotnet build MediaFramework/Control/S.Control/S.Control.csproj --no-restore -v:m`
+  - Build succeeded with 0 warnings and 0 errors.
+- `dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m`
+  - Passed: 378, Failed: 0, Skipped: 0.
+- `dotnet test MediaFramework/Test/OSCLib.Tests/OSCLib.Tests.csproj --no-restore -v:m`
+  - Passed: 23, Failed: 0, Skipped: 0.
+- `dotnet test MediaFramework/Test/PMLib.Tests/PMLib.Tests.csproj --no-restore -v:m`
+  - Passed: 13, Failed: 0, Skipped: 0.
+- `dotnet build MFPlayer.sln -m:1 --no-restore -v:m`
+  - Build succeeded with 0 warnings and 0 errors.
+
+## Initial Review Validation Run
 
 - `dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m`
   - Passed: 349, Failed: 0, Skipped: 0.
@@ -34,7 +50,7 @@ Updated on 2026-06-05 after the follow-up implementation pass:
 - Fixed finding 4 with clearer `Client source port` labeling, docs cleanup, and a profile warning when a device source port collides with an enabled app listener.
 - Fixed finding 5 with clearer `Cue OSC`, `MIDI Ports`, `Use for Control`, and `Use for Control + Cues` labels.
 - Fixed finding 6 by moving manual test sends into a collapsed diagnostics expander, renaming the manual trigger action, and removing hard-coded OSC test host/port defaults.
-- Partially fixed finding 7 by removing the unused Nodify package/style wiring. The active runtime namespace is still `HaPlay.ControlGraph` for now.
+- Fixed finding 7 by removing unused Nodify package/style wiring and extracting the active control runtime/config/profile/IO surface into the framework-side `S.Control` project.
 - Fixed finding 8 with a compact profile browser that shows source, imports profile JSON into project overrides, exports the selected profile, exports built-ins, and removes project override profiles.
 - Fixed finding 9 with X32 command/cache column headers, filtering, grouping, selection, test-send preparation, and request actions.
 - Fixed finding 10 by clarifying script failure labels and making trigger fields wrap.
@@ -108,20 +124,20 @@ Recommendation:
 
 There are two different local-port concepts:
 
-- App-level OSC listeners live in `ControlSystemConfig.OscListeners` and default to local port `10020` (`UI/HaPlay/Models/ControlSystemConfig.cs:9`, `UI/HaPlay/Models/ControlSystemConfig.cs:31-41`).
+- App-level OSC listeners live in `ControlSystemConfig.OscListeners`. New projects now start with no app-level listener; adding the first listener seeds local port `10020`.
 - An OSC device can optionally bind its outbound client socket via `Binding.OscLocalPort` (`UI/HaPlay/Models/ControlSystemConfig.cs:113-134`). `UdpControlOscSender` uses that value to bind the sending client's socket (`UI/HaPlay/Control/UdpControlOscSender.cs:31-33`, `UI/HaPlay/Control/UdpControlOscSender.cs:62-80`).
 
-The user-facing material is inconsistent:
+At review time, the user-facing material was inconsistent:
 
-- `Doc/HaPlay-Control-Setup.md` says to bind the X32 device to the main app-level listener, usually port `10020` (`Doc/HaPlay-Control-Setup.md:51-56`).
+- `Doc/HaPlay-Control-Setup.md` said to bind the X32 device to the main app-level listener, usually port `10020`.
 - `Doc/HaPlay-Control-Getting-Started.md` says to leave the OSC device local port blank because X32 replies return on the client socket (`Doc/HaPlay-Control-Getting-Started.md:50-53`).
 - The dialog implementation agrees with the client-socket model and says there is no separate listener to choose (`UI/HaPlay/ViewModels/Dialogs/OscDeviceDialogViewModel.cs:20-24`).
-- The dialog label is only `Local port`, with placeholder text saying `blank = automatic; set for a fixed source/receive port` (`UI/HaPlay/Views/Dialogs/OscDeviceDialog.axaml:41-43`).
-- The control structure displays OSC listeners (`UI/HaPlay/ViewModels/ControlWorkspaceViewModel.cs:862-873`), but the visible workspace has no add/edit/remove listener controls; only endpoint scripts can be added from listener rows (`UI/HaPlay/ViewModels/ControlWorkspaceViewModel.cs:443-447`).
+- The dialog label was only `Local port`, with placeholder text saying `blank = automatic; set for a fixed source/receive port` (`UI/HaPlay/Views/Dialogs/OscDeviceDialog.axaml:41-43`).
+- The control structure displayed OSC listeners (`UI/HaPlay/ViewModels/ControlWorkspaceViewModel.cs:862-873`), but the visible workspace had no add/edit/remove listener controls; only endpoint scripts could be added from listener rows (`UI/HaPlay/ViewModels/ControlWorkspaceViewModel.cs:443-447`).
 
 Impact:
 
-- A user may type `10020` into the OSC device's `Local port` field and collide with the default app listener.
+- A user may type `10020` into the OSC device's client source port field and collide with an explicitly enabled app listener.
 - A user may search for a listener binding UI because the setup docs describe one, but the current dialog deliberately hides it.
 
 Recommendation:
@@ -181,9 +197,9 @@ Recommendation:
 
 ### 7. Medium simplification: the graph rewrite left legacy names and Nodify wiring in active code
 
-The hard cut away from the graph workspace is mostly done, but several active artifacts still carry graph terminology or dependencies:
+At review time, the hard cut away from the graph workspace was mostly done, but several active artifacts still carried graph terminology or dependencies:
 
-- All new control runtime classes under `UI/HaPlay/Control` still use namespace `HaPlay.ControlGraph` (`UI/HaPlay/Control/ControlSystemRuntimeSession.cs:4`, `UI/HaPlay/Control/ControlScriptRuntime.cs:5`, `UI/HaPlay/Control/UdpControlOscSender.cs:5`, and the broader search output shows the same namespace across the control folder).
+- Active control runtime classes under `UI/HaPlay/Control` used the old graph-oriented namespace at review time.
 - The app still includes Nodify styles (`UI/HaPlay/App.axaml:19`) and the HaPlay project still references `NodifyM.Avalonia` (`UI/HaPlay/HaPlay.csproj:23`), but current `UI/HaPlay` usage only finds those references and the `Reference` source copy.
 - Legacy `ControlGraphs` are still persisted and source-generated (`UI/HaPlay/Models/HaPlayProject.cs:37`, `UI/HaPlay/Models/HaPlayProject.cs:77-90`), with a round-trip compatibility test (`UI/HaPlay.Tests/HaPlayProjectIOTests.cs:597-723`).
 
@@ -196,7 +212,7 @@ Impact:
 Recommendation:
 
 - Keep `ControlGraphConfig` as a legacy persistence model, but consider renaming it or documenting it as `LegacyControlGraphConfig`.
-- Move active script-centric runtime code to a `HaPlay.Control` namespace when the next breaking cleanup is acceptable.
+- Move active script-centric runtime code to a framework-side control namespace when the next breaking cleanup is acceptable.
 - Remove the Nodify package/style include if no current view needs it. Keep the source copy in `Reference` if it is still useful historically.
 
 ### 8. Medium product gap: profile repository exists, but the UI does not expose a real profile browser/import/export flow
