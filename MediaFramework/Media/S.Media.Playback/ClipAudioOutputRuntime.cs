@@ -19,7 +19,7 @@ public sealed class ClipAudioOutputRuntime : IDisposable
     private readonly Action? _releaseOutput;
     private readonly object _gate = new();
     private readonly HashSet<string> _sources = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<RouteGainTarget>> _sourceRouteGains = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, RouteGainTarget>> _sourceRouteGains = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public ClipAudioOutputRuntime(
@@ -69,7 +69,11 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         get { lock (_gate) return _sources.Count; }
     }
 
-    public string AddSource(IAudioSource source, IReadOnlyList<AudioRouteSpec> routes, string sourceIdHint)
+    public string AddSource(
+        IAudioSource source,
+        IReadOnlyList<AudioRouteSpec> routes,
+        string sourceIdHint,
+        Func<string, int, string>? routeIdFactory = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(source);
@@ -83,14 +87,9 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         var routePlans = new List<(string RouteId, ChannelMap Map, float Gain)>(routes.Count);
         for (var i = 0; i < routes.Count; i++)
         {
-            var route = routes[i];
-            var span = new int[outChannels];
-            Array.Fill(span, -1);
-            var outCh = Math.Clamp(route.OutputChannel - 1, 0, outChannels - 1);
-            span[outCh] = Math.Max(0, route.SourceChannel);
-            var map = new ChannelMap(span);
-            var gain = route.Muted ? 0f : DbToLinear(route.GainDb);
-            routePlans.Add(($"{srcId}_r{i}", map, gain));
+            var (map, gain) = BuildRoutePlan(routes[i], outChannels);
+            var routeId = routeIdFactory?.Invoke(srcId, i);
+            routePlans.Add((string.IsNullOrWhiteSpace(routeId) ? $"{srcId}_r{i}" : routeId, map, gain));
         }
 
         try
@@ -113,9 +112,10 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         lock (_gate)
         {
             _sources.Add(srcId);
-            _sourceRouteGains[srcId] = routePlans
-                .Select(route => new RouteGainTarget(route.RouteId, route.Gain))
-                .ToList();
+            _sourceRouteGains[srcId] = routePlans.ToDictionary(
+                route => route.RouteId,
+                route => new RouteGainTarget(route.RouteId, route.Gain),
+                StringComparer.Ordinal);
         }
 
         _router.Play();
@@ -133,7 +133,7 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         {
             if (!_sourceRouteGains.TryGetValue(sourceId, out var found))
                 return;
-            routes = found.ToList();
+            routes = found.Values.ToList();
         }
 
         if (routes.Count == 0)
@@ -163,6 +163,57 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         }
     }
 
+    public void UpdateRoute(string sourceId, string routeId, AudioRouteSpec route)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrEmpty(sourceId);
+        ArgumentException.ThrowIfNullOrEmpty(routeId);
+        if (!string.Equals(route.OutputId, OutputId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Route targets output '{route.OutputId}', but this runtime owns '{OutputId}'.");
+
+        var (map, gain) = BuildRoutePlan(route, _audioOutput.Format.Channels);
+        _router.AddRoute(sourceId, _routerOutputId, routeId, map, gain);
+        lock (_gate)
+        {
+            if (!_sourceRouteGains.TryGetValue(sourceId, out var routes))
+                _sourceRouteGains[sourceId] = routes = new Dictionary<string, RouteGainTarget>(StringComparer.Ordinal);
+            routes[routeId] = new RouteGainTarget(routeId, gain);
+        }
+    }
+
+    public void SetRouteGain(string sourceId, string routeId, double gainDb, bool muted)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrEmpty(sourceId);
+        ArgumentException.ThrowIfNullOrEmpty(routeId);
+
+        var gain = muted ? 0f : DbToLinear(gainDb);
+        _router.SetRouteGainById(routeId, gain);
+        lock (_gate)
+        {
+            if (!_sourceRouteGains.TryGetValue(sourceId, out var routes))
+                _sourceRouteGains[sourceId] = routes = new Dictionary<string, RouteGainTarget>(StringComparer.Ordinal);
+            routes[routeId] = new RouteGainTarget(routeId, gain);
+        }
+    }
+
+    public bool RemoveRoute(string sourceId, string routeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceId);
+        ArgumentException.ThrowIfNullOrEmpty(routeId);
+
+        var removed = false;
+        try { removed = _router.RemoveRouteById(routeId); }
+        catch (Exception ex) { Trace.LogWarning(ex, "ClipAudioOutputRuntime.RemoveRoute: {Route}", routeId); }
+        lock (_gate)
+        {
+            if (_sourceRouteGains.TryGetValue(sourceId, out var routes))
+                routes.Remove(routeId);
+        }
+        return removed;
+    }
+
     public void RemoveSource(string sourceId)
     {
         try { _router.RemoveSource(sourceId); }
@@ -186,6 +237,17 @@ public sealed class ClipAudioOutputRuntime : IDisposable
     }
 
     private static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);
+
+    private static (ChannelMap Map, float Gain) BuildRoutePlan(AudioRouteSpec route, int outChannels)
+    {
+        var span = new int[outChannels];
+        Array.Fill(span, -1);
+        var outCh = Math.Clamp(route.OutputChannel - 1, 0, outChannels - 1);
+        span[outCh] = Math.Max(0, route.SourceChannel);
+        var map = new ChannelMap(span);
+        var gain = route.Muted ? 0f : DbToLinear(route.GainDb);
+        return (map, gain);
+    }
 
     private sealed record RouteGainTarget(string RouteId, float BaseGain);
 }

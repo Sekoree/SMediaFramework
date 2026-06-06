@@ -309,6 +309,9 @@
   <data name="CueSelectionMenuButton" xml:space="preserve">
     <value>Selected cue…</value>
   </data>
+  <data name="CueOutputSetupButton" xml:space="preserve">
+    <value>Output setup…</value>
+  </data>
   <data name="CueDetailsEmptyHint" xml:space="preserve">
     <value>Select a cue from the list to edit trigger, routing, media, or action settings.</value>
   </data>
@@ -458,6 +461,9 @@
   </data>
   <data name="VideoOutputsHeader" xml:space="preserve">
     <value>Video outputs</value>
+  </data>
+  <data name="CueOutputSetupDialogTitle" xml:space="preserve">
+    <value>Cue output setup</value>
   </data>
   <data name="AddCompositionButton" xml:space="preserve">
     <value>+ Composition</value>

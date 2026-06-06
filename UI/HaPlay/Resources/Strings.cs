@@ -132,6 +132,7 @@ public static class Strings
     public static string ChannelsLabel => Get(nameof(ChannelsLabel));
     public static string CompositionsHeader => Get(nameof(CompositionsHeader));
     public static string VideoOutputsHeader => Get(nameof(VideoOutputsHeader));
+    public static string CueOutputSetupDialogTitle => Get(nameof(CueOutputSetupDialogTitle));
     public static string AddCompositionButton => Get(nameof(AddCompositionButton));
     public static string AddAudioRouteButton => Get(nameof(AddAudioRouteButton));
     public static string AddVideoPlacementButton => Get(nameof(AddVideoPlacementButton));
@@ -166,6 +167,7 @@ public static class Strings
     public static string AddGroupButton => Get(nameof(AddGroupButton));
     public static string AddCueMenuButton => Get(nameof(AddCueMenuButton));
     public static string CueSelectionMenuButton => Get(nameof(CueSelectionMenuButton));
+    public static string CueOutputSetupButton => Get(nameof(CueOutputSetupButton));
     public static string CueDetailsEmptyHint => Get(nameof(CueDetailsEmptyHint));
     public static string AddMediaButton => Get(nameof(AddMediaButton));
     public static string AddActionButton => Get(nameof(AddActionButton));

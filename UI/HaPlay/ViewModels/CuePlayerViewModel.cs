@@ -1686,6 +1686,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         StandbyCueNode = null;
         IsTransportPaused = false;
         RemoveCueListCommand.NotifyCanExecuteChanged();
+        OpenCueOutputSetupCommand.NotifyCanExecuteChanged();
         GoCommand.NotifyCanExecuteChanged();
         BackCommand.NotifyCanExecuteChanged();
         StandbySelectedCommand.NotifyCanExecuteChanged();
@@ -1798,6 +1799,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     private void OnWatchedCueRouteCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
         RebindItemSubscriptions(e);
+        PushActiveAudioRoutesUpdate();
         // Add/Remove route commands already suggest a refresh, but a programmatic edit might not.
         OnWatchedCueEdited();
     }
@@ -1840,6 +1842,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropRight)
             or nameof(CueVideoPlacementViewModel.CropBottom))
         {
+            if (sender is CueAudioRouteViewModel)
+                PushActiveAudioRoutesUpdate();
             if (sender is CueVideoPlacementViewModel placement
                 && IsLiveEditableVideoPlacementProperty(e.PropertyName))
                 PushActiveVideoPlacementUpdate(placement);
@@ -1872,6 +1876,17 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
 
         _ = callback(cue.Id, index, placement.ToModel());
+    }
+
+    private void PushActiveAudioRoutesUpdate()
+    {
+        if (_preRollWatchedCue is not { } cue
+            || UpdateActiveCueAudioRoutesCallback is not { } callback
+            || !_activeCueIds.Contains(cue.Id))
+            return;
+
+        var routes = cue.AudioRoutes.Select(route => route.ToModel()).ToArray();
+        _ = callback(cue.Id, routes);
     }
 
     /// <summary>An edit-relevant change to the watched (selected) cue: immediately flag its warm
@@ -2143,6 +2158,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host callback for mutating a placement's already-running compositor slot while the
     /// selected cue is active. No-op in tests or when the cue is not playing.</summary>
     public Func<Guid, int, CueVideoPlacement, Task>? UpdateActiveCueVideoPlacementCallback { get; set; }
+
+    /// <summary>Host callback for reconciling the selected cue's running audio routes after route
+    /// row edits. No-op in tests or when the cue is not playing.</summary>
+    public Func<Guid, IReadOnlyList<CueAudioRoute>, Task>? UpdateActiveCueAudioRoutesCallback { get; set; }
 
     /// <summary>Engine callback — cue began playing. Marks its row Current and pushes a new
     /// <see cref="ActiveCueViewModel"/> into <see cref="ActiveCues"/>.</summary>
@@ -3146,6 +3165,19 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     private bool CanOpenCueListSettings() => SelectedCueList is not null;
+
+    [RelayCommand(CanExecute = nameof(CanOpenCueOutputSetup))]
+    private async Task OpenCueOutputSetupAsync()
+    {
+        if (SelectedCueList is null) return;
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+
+        var dialog = new Views.Dialogs.CueOutputSetupDialog { DataContext = this };
+        await dialog.ShowDialog(owner);
+    }
+
+    private bool CanOpenCueOutputSetup() => SelectedCueList is not null;
 
     /// <summary>Move the selected cue up one slot within its parent collection. Ctrl+↑ binds
     /// here. No-op at the top of the parent (operator's expected behaviour — they get to feel

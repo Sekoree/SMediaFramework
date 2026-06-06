@@ -79,6 +79,14 @@
           </MenuFlyout>
         </Button.Flyout>
       </Button>
+      <Button DockPanel.Dock="Left"
+              Margin="6,0,0,0"
+              Content="{x:Static res:Strings.RemoveNodeButton}"
+              Command="{Binding RemoveNodeCommand}" />
+      <Button DockPanel.Dock="Left"
+              Margin="6,0,0,0"
+              Content="{x:Static res:Strings.CueOutputSetupButton}"
+              Command="{Binding OpenCueOutputSetupCommand}" />
     </DockPanel>
 
     <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6">
@@ -96,92 +104,6 @@
     </Grid>
 
     <DockPanel LastChildFill="True">
-      <Expander DockPanel.Dock="Top"
-                Classes="dense"
-                Margin="0,0,0,4"
-                IsExpanded="False"
-                Header="{x:Static res:Strings.CompositionsHeader}"
-                HorizontalAlignment="Stretch"
-                HorizontalContentAlignment="Stretch">
-        <StackPanel Margin="4" Spacing="4">
-          <WrapPanel ItemSpacing="6">
-            <Button Content="{x:Static res:Strings.AddCompositionButton}" Command="{Binding AddCompositionCommand}" />
-            <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCompositionCommand}" />
-          </WrapPanel>
-          <ListBox ItemsSource="{Binding VisibleCompositions}"
-                   SelectedItem="{Binding SelectedComposition, Mode=TwoWay}"
-                   MaxHeight="180">
-            <ListBox.ItemTemplate>
-              <DataTemplate DataType="vm:CueCompositionViewModel">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <TextBox Text="{Binding Name, Mode=TwoWay}" MinWidth="160" />
-                  <TextBlock Text="{x:Static res:Strings.WidthLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown Value="{Binding Width, Mode=TwoWay}" Minimum="16" Maximum="7680" />
-                  <TextBlock Text="{x:Static res:Strings.HeightLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown Value="{Binding Height, Mode=TwoWay}" Minimum="16" Maximum="4320" />
-                  <TextBlock Text="{x:Static res:Strings.FrameRateLabel}" VerticalAlignment="Center" />
-                  <NumericUpDown Value="{Binding FrameRateNum, Mode=TwoWay}" Minimum="1" Maximum="240" />
-                </StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </StackPanel>
-      </Expander>
-
-      <Expander DockPanel.Dock="Top"
-                Classes="dense"
-                Margin="0,0,0,4"
-                IsExpanded="False"
-                Header="{x:Static res:Strings.VideoOutputsHeader}"
-                HorizontalAlignment="Stretch"
-                HorizontalContentAlignment="Stretch">
-        <StackPanel Margin="4" Spacing="4">
-          <WrapPanel ItemSpacing="6">
-            <Button Content="{x:Static res:Strings.AddVideoOutputButton}" Command="{Binding AddVideoOutputCommand}" />
-            <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveVideoOutputCommand}" />
-          </WrapPanel>
-          <TextBlock Opacity="0.65"
-                     TextWrapping="Wrap"
-                     Text="{x:Static res:Strings.NoVideoOutputLinesHint}"
-                     IsVisible="{Binding AvailableVideoOutputs.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
-          <ListBox ItemsSource="{Binding VisibleVideoOutputs}"
-                   SelectedItem="{Binding SelectedVideoOutput, Mode=TwoWay}"
-                   MaxHeight="180">
-            <ListBox.ItemTemplate>
-              <DataTemplate DataType="vm:CueVideoOutputBindingViewModel">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                  <Ellipse Width="9" Height="9" VerticalAlignment="Center"
-                           Fill="{Binding LineRef.HealthColor, FallbackValue=#666666}"
-                           ToolTip.Tip="{Binding LineRef.HealthToolTip}" />
-                  <TextBlock Text="{x:Static res:Strings.RouteOutputLabel}" VerticalAlignment="Center" />
-                  <ComboBox SelectedValue="{Binding OutputLineId, Mode=TwoWay}"
-                            SelectedValueBinding="{Binding Definition.Id}"
-                            ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).AvailableVideoOutputs}"
-                            MinWidth="220">
-                    <ComboBox.ItemTemplate>
-                      <DataTemplate DataType="vm:OutputLineViewModel">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                          <Ellipse Width="9" Height="9" VerticalAlignment="Center"
-                                   Fill="{Binding HealthColor}"
-                                   ToolTip.Tip="{Binding HealthToolTip}" />
-                          <TextBlock Text="{Binding Definition.DisplayName}" VerticalAlignment="Center" />
-                        </StackPanel>
-                      </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                  </ComboBox>
-                  <TextBlock Text="{x:Static res:Strings.CompositionLabel}" VerticalAlignment="Center" />
-                  <ComboBox SelectedValue="{Binding CompositionId, Mode=TwoWay}"
-                            SelectedValueBinding="{Binding Id}"
-                            DisplayMemberBinding="{Binding DisplayName}"
-                            ItemsSource="{Binding $parent[UserControl].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
-                            MinWidth="220" />
-                </StackPanel>
-              </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </StackPanel>
-      </Expander>
-
       <Expander DockPanel.Dock="Bottom"
                 Classes="dense"
                 Margin="0,4,0,0"

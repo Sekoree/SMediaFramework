@@ -441,6 +441,38 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void ActiveAudioRouteEdit_PushesLiveAudioRouteSnapshot()
+    {
+        var vm = new CuePlayerViewModel();
+        var outputId = Guid.NewGuid();
+        var calls = new List<(Guid CueId, IReadOnlyList<CueAudioRoute> Routes)>();
+        vm.UpdateActiveCueAudioRoutesCallback = (cueId, routes) =>
+        {
+            calls.Add((cueId, routes.ToArray()));
+            return Task.CompletedTask;
+        };
+
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        var route = new CueAudioRouteViewModel
+        {
+            OutputLineId = outputId,
+            SourceChannel = 0,
+            OutputChannel = 1,
+        };
+        cue.AudioRoutes.Add(route);
+
+        vm.OnCueStarted(cue.Id);
+        route.GainDb = -6;
+
+        var call = Assert.Single(calls);
+        Assert.Equal(cue.Id, call.CueId);
+        var model = Assert.Single(call.Routes);
+        Assert.Equal(outputId, model.OutputLineId);
+        Assert.Equal(-6, model.GainDb);
+    }
+
+    [Fact]
     public void AddTextCue_CreatesMediaCueWithTextSourceAndDefaultDuration()
     {
         var vm = new CuePlayerViewModel();

@@ -36,6 +36,32 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public void ClipAudioOutputRuntime_UpdateAndRemoveRoute_UsesExplicitRouteId()
+    {
+        var format = new AudioFormat(48_000, 2);
+        using var runtime = new ClipAudioOutputRuntime(
+            "out-a",
+            new RecordingAudioOutput(format),
+            new FakePlaybackClock(),
+            displayName: "Output A");
+
+        var sourceId = runtime.AddSource(
+            new ConstantAudioSource(format),
+            [new AudioRouteSpec("out-a", SourceChannel: 0, OutputChannel: 1)],
+            "cue-a",
+            (_, _) => "cue-a_route0");
+
+        runtime.SetRouteGain(sourceId, "cue-a_route0", -6, muted: false);
+        runtime.UpdateRoute(
+            sourceId,
+            "cue-a_route0",
+            new AudioRouteSpec("out-a", SourceChannel: 1, OutputChannel: 2, GainDb: -3));
+
+        Assert.True(runtime.RemoveRoute(sourceId, "cue-a_route0"));
+        Assert.Equal(1, runtime.SourceCount);
+    }
+
+    [Fact]
     public void ClipAudioOutputRuntime_AddSource_RollsBackWhenRouteInvalid()
     {
         var format = new AudioFormat(48_000, 1);

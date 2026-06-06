@@ -58,4 +58,26 @@ public sealed class CuePlaybackEngineTests
         Assert.Equal(new[] { 1, 5 }, plan.Placements.Select(p => p.LayerIndex).ToArray());
         Assert.Equal(new[] { 1, 0 }, plan.PlacementSourceIndices.ToArray());
     }
+
+    [Fact]
+    public void BuildRoutePlan_PreservesAudioRouteSourceIndicesPerOutput()
+    {
+        var outA = Guid.NewGuid();
+        var outB = Guid.NewGuid();
+        var cue = new MediaCueNode
+        {
+            Source = new FilePlaylistItem("/clip.mp4"),
+            AudioRoutes =
+            [
+                new CueAudioRoute { OutputLineId = outA, SourceChannel = 0, OutputChannel = 1 },
+                new CueAudioRoute { OutputLineId = outB, SourceChannel = 1, OutputChannel = 1 },
+                new CueAudioRoute { OutputLineId = outA, SourceChannel = 2, OutputChannel = 2 },
+            ],
+        };
+
+        var plan = CuePlaybackEngine.BuildRoutePlan(cue);
+
+        Assert.Equal(new[] { 0, 2 }, plan.AudioByOutput[outA].Select(r => r.SourceIndex).ToArray());
+        Assert.Equal(new[] { 1 }, plan.AudioByOutput[outB].Select(r => r.SourceIndex).ToArray());
+    }
 }

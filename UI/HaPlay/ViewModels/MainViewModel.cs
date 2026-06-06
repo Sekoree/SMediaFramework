@@ -85,6 +85,7 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
         CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
         CuePlayer.UpdateActiveCueVideoPlacementCallback = _cuePlaybackEngine.UpdateActiveCueVideoPlacementAsync;
+        CuePlayer.UpdateActiveCueAudioRoutesCallback = _cuePlaybackEngine.UpdateActiveCueAudioRoutesAsync;
         _cuePlaybackEngine.ReleaseConflictingPlayerOutputsAsync = ReleaseMediaPlayerOutputsForCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
