@@ -29,7 +29,7 @@
                          Maximum="64"
                          FormatString="0"
                          Value="{Binding AudioMatrixSourceChannels, Mode=TwoWay}"
-                         ToolTip.Tip="Expected source channel count for pre-sizing the matrix before media is opened." />
+                         ToolTip.Tip="Expected source channel count for preparing the matrix before media is opened." />
         </Grid>
 
         <!-- Per-output mix-mode preset row -->
@@ -43,7 +43,13 @@
                   <ComboBox Grid.Column="1" MinWidth="128"
                             ItemsSource="{Binding $parent[Window].((vm:MediaPlayerViewModel)DataContext).MixModes}"
                             SelectedItem="{Binding MixMode}"
-                            ToolTip.Tip="{x:Static res:Strings.MixPresetTooltip}" />
+                            ToolTip.Tip="{x:Static res:Strings.MixPresetTooltip}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
                   <CheckBox Grid.Column="2" Content="{x:Static res:Strings.MuteToggleLabel}"
                             IsChecked="{Binding IsMuted}"
                             ToolTip.Tip="{x:Static res:Strings.DeviceOutputMuteTooltip}" />
@@ -62,10 +68,10 @@
                   <Button Content="Pass-through" Padding="6,2" FontSize="11"
                           Command="{Binding Matrix.ApplyDownmixPresetCommand}"
                           CommandParameter="{x:Static models:AudioDownmixPreset.PassThrough}" />
-                  <Button Content="Mono → St" Padding="6,2" FontSize="11"
+                  <Button Content="Mono to stereo" Padding="6,2" FontSize="11"
                           Command="{Binding Matrix.ApplyDownmixPresetCommand}"
                           CommandParameter="{x:Static models:AudioDownmixPreset.MonoToStereo}" />
-                  <Button Content="5.1 → St" Padding="6,2" FontSize="11"
+                  <Button Content="5.1 to stereo" Padding="6,2" FontSize="11"
                           Command="{Binding Matrix.ApplyDownmixPresetCommand}"
                           CommandParameter="{x:Static models:AudioDownmixPreset.Surround51ToStereo}" />
                   <Button Content="Drop LFE" Padding="6,2" FontSize="11"

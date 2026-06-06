@@ -140,7 +140,13 @@
           <ComboBox Grid.Column="1" Margin="6,0,0,0" Width="120"
                     ItemsSource="{Binding PlayersLayoutChoices}"
                     SelectedItem="{Binding PlayersLayout}"
-                    ToolTip.Tip="{x:Static res:Strings.PlayersLayoutTooltip}" />
+                    ToolTip.Tip="{x:Static res:Strings.PlayersLayoutTooltip}">
+            <ComboBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
           <Button Grid.Column="2" Content="{x:Static res:Strings.AddPlayerButton}"
                   Command="{Binding AddPlayerCommand}"
                   VerticalAlignment="Center" Margin="6,0,0,0" />
@@ -268,12 +274,24 @@
                 <ComboBox Grid.Column="1"
                           ItemsSource="{Binding ThemeChoices}"
                           SelectedItem="{Binding Theme}"
-                          HorizontalAlignment="Stretch" />
+                          HorizontalAlignment="Stretch">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
                 <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
                 <ComboBox Grid.Column="4"
                           ItemsSource="{Binding DensityChoices}"
                           SelectedItem="{Binding Density}"
-                          HorizontalAlignment="Stretch" />
+                          HorizontalAlignment="Stretch">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate>
+                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
               </Grid>
             </StackPanel>
           </Border>

@@ -38,7 +38,13 @@
           <TextBlock Grid.Row="0" Grid.Column="2" Text="Scope" VerticalAlignment="Center" />
           <ComboBox Grid.Row="0" Grid.Column="3" HorizontalAlignment="Stretch"
                     ItemsSource="{Binding ScriptScopeOptions}"
-                    SelectedItem="{Binding SelectedScriptRow.Scope, Mode=TwoWay}" />
+                    SelectedItem="{Binding SelectedScriptRow.Scope, Mode=TwoWay}">
+            <ComboBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
           <TextBlock Grid.Row="1" Grid.Column="0" Text="Path" VerticalAlignment="Center" />
           <TextBox Grid.Row="1" Grid.Column="1"
                    Text="{Binding SelectedScriptRow.ScriptPath, Mode=TwoWay}"
@@ -50,7 +56,13 @@
           <TextBlock Grid.Row="1" Grid.Column="4" Text="Failure action" VerticalAlignment="Center" />
           <ComboBox Grid.Row="1" Grid.Column="5" HorizontalAlignment="Stretch"
                     ItemsSource="{Binding ScriptFailureModeOptions}"
-                    SelectedItem="{Binding SelectedScriptRow.FailureMode, Mode=TwoWay}" />
+                    SelectedItem="{Binding SelectedScriptRow.FailureMode, Mode=TwoWay}">
+            <ComboBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+              </DataTemplate>
+            </ComboBox.ItemTemplate>
+          </ComboBox>
           <TextBlock Grid.Row="2" Grid.Column="0" Text="Layer" VerticalAlignment="Center"
                      IsVisible="{Binding SelectedScriptRow.ShowLayerPicker}" />
           <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
@@ -97,14 +109,26 @@
                         <DataTemplate DataType="vm:ControlScriptTriggerRowViewModel">
                           <Grid ColumnDefinitions="160,Auto" ColumnSpacing="6" Margin="0,2">
                             <ComboBox Grid.Column="0" HorizontalAlignment="Stretch"
-                                      ItemsSource="{Binding KindOptions}" SelectedItem="{Binding Kind}" />
+                                      ItemsSource="{Binding KindOptions}" SelectedItem="{Binding Kind}">
+                              <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                  <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                                </DataTemplate>
+                              </ComboBox.ItemTemplate>
+                            </ComboBox>
                             <WrapPanel Grid.Column="1" Orientation="Horizontal">
                               <TextBox Width="160" Margin="0,0,6,6" Text="{Binding FunctionName}" PlaceholderText="exported function" />
                               <TextBox Width="180" Text="{Binding OscAddressPattern}"
                                        PlaceholderText="/ch/*/mix/fader" IsVisible="{Binding ShowOscAddress}" Margin="0,0,6,6" />
                               <ComboBox Width="160" ItemsSource="{Binding MidiMessageTypeOptions}"
                                         SelectedItem="{Binding MidiMessageType}" IsVisible="{Binding ShowMidiMessageType}"
-                                        Margin="0,0,6,6" />
+                                        Margin="0,0,6,6">
+                                <ComboBox.ItemTemplate>
+                                  <DataTemplate>
+                                    <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                                  </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                              </ComboBox>
                               <TextBox Width="64" Text="{Binding MidiChannelText}"
                                        PlaceholderText="chan" IsVisible="{Binding ShowMidiChannel}" Margin="0,0,6,6" />
                               <TextBox Width="64" Text="{Binding MidiControllerText}"

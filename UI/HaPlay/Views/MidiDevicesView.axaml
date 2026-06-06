@@ -38,7 +38,7 @@
             <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
               <TextBlock Text="{x:Static res:Strings.InputsHeader}" FontWeight="SemiBold" />
               <Button HorizontalAlignment="Right"
-                      Content="Add as Control Input"
+                      Content="Use selected input"
                       Command="{Binding AddSelectedMidiInputToControlCommand}" />
             </StackPanel>
             <ListBox Grid.Row="1"
@@ -62,7 +62,7 @@
             <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
               <TextBlock Text="{x:Static res:Strings.OutputsHeader}" FontWeight="SemiBold" />
               <Button HorizontalAlignment="Right"
-                      Content="Add as Control/Cue Output"
+                      Content="Use selected output"
                       Command="{Binding AddSelectedMidiOutputToProjectCommand}" />
             </StackPanel>
             <ListBox Grid.Row="1"
@@ -92,7 +92,7 @@
                       Command="{Binding RemoveSelectedProjectMidiInputCommand}" />
             </Grid>
             <TextBlock DockPanel.Dock="Bottom"
-                       Text="Select an input above, then add it as a Control input."
+                       Text="Select an input above to make it available to Control scripts."
                        Opacity="0.6"
                        FontSize="12"
                        TextWrapping="Wrap"
@@ -134,7 +134,7 @@
                        TextWrapping="Wrap"
                        Margin="0,8,0,0" />
             <TextBlock DockPanel.Dock="Bottom"
-                       Text="Select an output above to make it available to Control scripts and cue action MIDI targets."
+                       Text="Select an output above to make it available to Control scripts and cue action targets."
                        Opacity="0.6"
                        FontSize="12"
                        TextWrapping="Wrap"
