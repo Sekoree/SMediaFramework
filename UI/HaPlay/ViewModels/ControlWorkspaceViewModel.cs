@@ -71,9 +71,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         RebuildStructureRows();
         RebuildProfileWarnings();
         RebuildProfileRows();
+        MonitorEntries.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoMonitorEntries));
     }
 
     public ObservableCollection<ControlMonitorEntryViewModel> MonitorEntries { get; } = new();
+    public bool HasNoMonitorEntries => MonitorEntries.Count == 0;
 
     public ObservableCollection<ControlScriptRowViewModel> ScriptRows { get; } = new();
 
@@ -86,6 +88,33 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     public ObservableCollection<ControlProfileRowViewModel> ProfileRows { get; } = new();
 
     public ObservableCollection<string> ProfileWarnings { get; } = new();
+
+    [ObservableProperty]
+    private string _profileBuilderDisplayName = "Custom MIDI Surface";
+
+    [ObservableProperty]
+    private string _profileBuilderId = string.Empty;
+
+    [ObservableProperty]
+    private string _profileBuilderControlName = "Fader 1";
+
+    [ObservableProperty]
+    private string _profileBuilderMidiChannelText = "1";
+
+    [ObservableProperty]
+    private string _profileBuilderMidiControllerText = "0";
+
+    [ObservableProperty]
+    private bool _profileBuilderHighResolution14Bit;
+
+    [ObservableProperty]
+    private string _profileBuilderMinValueText = string.Empty;
+
+    [ObservableProperty]
+    private string _profileBuilderMaxValueText = string.Empty;
+
+    [ObservableProperty]
+    private string _profileBuilderStatus = string.Empty;
 
     public IReadOnlyList<string> MonitorDirectionOptions { get; } =
     [
@@ -543,6 +572,9 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private void AddHelperScript() =>
         AddScriptInternal(ControlScriptScope.Project, deviceInstanceId: null, layerId: null, namePrefix: "Helper", scriptPath: "Scripts/helper.mnd");
 
+    [RelayCommand]
+    private void AddHelperFile() => AddHelperScript();
+
     private void AddDeviceScript(ControlStructureRowViewModel row)
     {
         if (row.DeviceInstanceId is { } deviceId)
@@ -938,12 +970,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         row => _ = TestMidiDeviceAsync(row),
         () => _ = AddOscListenerAsync(),
         row => _ = EditOscListenerAsync(row),
-        RemoveOscListener);
+        RemoveOscListener,
+        row => _ = EditMidiDeviceInternalAsync(FindMidiDevice(row)));
 
     // ----- OSC device add/edit/remove ---------------------------------------------------------
     // The dialog display is injectable so the add/edit logic is unit-testable without a window.
 
     internal Func<OscDeviceDialogViewModel, Task<bool>> OscDevicePrompt { get; set; } = DefaultOscDevicePromptAsync;
+
+    // Injectable so the MIDI device alias/profile edit logic is unit-testable without a window.
+    internal Func<MidiDeviceDialogViewModel, Task<bool>> MidiDevicePrompt { get; set; } = DefaultMidiDevicePromptAsync;
 
     [RelayCommand]
     private Task AddOscDeviceAsync() => EditOscDeviceInternalAsync(existing: null);
@@ -1042,6 +1078,63 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         NotifySummary();
     }
 
+    // ----- MIDI device edit (alias + profile) -------------------------------------------------
+    // MIDI ports are bound from the MIDI Devices view; this only edits the script alias, the assigned
+    // profile (e.g. the BCF2000 profile that enables 14-bit CC pairing), and the enabled state.
+
+    private ControlDeviceInstanceConfig? FindMidiDevice(ControlStructureRowViewModel row) =>
+        row.DeviceInstanceId is { } id
+            ? _config.Devices.FirstOrDefault(d => d.Id == id && d.Protocol == ControlDeviceProtocol.Midi)
+            : null;
+
+    private async Task EditMidiDeviceInternalAsync(ControlDeviceInstanceConfig? existing)
+    {
+        if (existing is null)
+            return;
+
+        var midiProfiles = CompositeControlDeviceProfileRepository.ForProject(_config).Profiles
+            .Where(p => p.Protocol == ControlDeviceProtocol.Midi)
+            .ToList();
+
+        var dialog = new MidiDeviceDialogViewModel(
+            "Edit MIDI device",
+            deviceName: existing.Binding.MidiInputDeviceName ?? existing.Binding.MidiOutputDeviceName ?? existing.Name,
+            profileId: existing.ProfileId,
+            alias: existing.Binding.Alias,
+            isEnabled: existing.IsEnabled,
+            midiProfiles: midiProfiles);
+
+        if (!await MidiDevicePrompt(dialog).ConfigureAwait(true))
+            return;
+
+        var values = dialog.BuildValues();
+        var devices = _config.Devices.ToList();
+        var index = devices.FindIndex(d => d.Id == existing.Id);
+        if (index < 0)
+            return;
+
+        devices[index] = existing with
+        {
+            ProfileId = values.ProfileId,
+            IsEnabled = values.IsEnabled,
+            Binding = existing.Binding with { Alias = values.Alias },
+        };
+
+        _config = _config with { Devices = devices };
+        RefreshAfterDeviceChange();
+        StatusMessage = $"Updated MIDI device '{values.Alias ?? existing.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
+    }
+
+    private static async Task<bool> DefaultMidiDevicePromptAsync(MidiDeviceDialogViewModel dialogViewModel)
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return false;
+
+        var dialog = new MidiDeviceDialog { DataContext = dialogViewModel };
+        return await dialog.ShowDialog<bool>(owner).ConfigureAwait(true);
+    }
+
     [RelayCommand]
     private async Task ImportProfileAsync()
     {
@@ -1064,6 +1157,103 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     {
         var profile = DirectoryControlDeviceProfileRepository.LoadProfileFile(path);
         UpsertProjectProfile(profile);
+        return profile;
+    }
+
+    [RelayCommand]
+    private void SaveMidiProfileBuilder()
+    {
+        try
+        {
+            var profile = BuildMidiProfileFromBuilder();
+            UpsertProjectProfile(profile);
+            ProfileBuilderStatus = $"Saved project profile '{FormatProfileName(profile)}'.";
+            StatusMessage = ProfileBuilderStatus;
+        }
+        catch (InvalidOperationException ex)
+        {
+            ProfileBuilderStatus = ex.Message;
+            StatusMessage = $"Profile builder: {ex.Message}";
+        }
+    }
+
+    internal ControlDeviceProfile BuildMidiProfileFromBuilder()
+    {
+        var displayName = ProfileBuilderDisplayName.Trim();
+        if (string.IsNullOrWhiteSpace(displayName))
+            throw new InvalidOperationException("Profile name is required.");
+
+        var profileId = string.IsNullOrWhiteSpace(ProfileBuilderId)
+            ? $"custom.midi.{SanitizeIdPart(displayName)}"
+            : NormalizeProfileId(ProfileBuilderId);
+        if (string.IsNullOrWhiteSpace(profileId))
+            throw new InvalidOperationException("Profile id is required.");
+
+        var controlName = ProfileBuilderControlName.Trim();
+        if (string.IsNullOrWhiteSpace(controlName))
+            throw new InvalidOperationException("Control name is required.");
+
+        var channel = ParseRequiredInt(ProfileBuilderMidiChannelText, "MIDI channel");
+        if (channel is < 1 or > 16)
+            throw new InvalidOperationException("MIDI channel must be between 1 and 16.");
+
+        var controller = ParseRequiredInt(ProfileBuilderMidiControllerText, "CC");
+        if (controller is < 0 or > 127)
+            throw new InvalidOperationException("CC must be between 0 and 127.");
+
+        var minValue = ParseOptionalIntForProfile(ProfileBuilderMinValueText, "Minimum value");
+        var maxValue = ParseOptionalIntForProfile(ProfileBuilderMaxValueText, "Maximum value");
+        if (minValue.HasValue && maxValue.HasValue && minValue.Value > maxValue.Value)
+            throw new InvalidOperationException("Minimum value must be less than or equal to maximum value.");
+
+        var controlId = SanitizeIdPart(controlName);
+        if (string.IsNullOrWhiteSpace(controlId))
+            controlId = $"cc{controller.ToString(CultureInfo.InvariantCulture)}";
+
+        var profile = new ControlDeviceProfile
+        {
+            Id = profileId,
+            DisplayName = displayName,
+            Protocol = ControlDeviceProtocol.Midi,
+            Ports =
+            [
+                new ControlDevicePortProfile
+                {
+                    Id = "midi.in",
+                    DisplayName = "MIDI In",
+                    Kind = ControlDevicePortKind.MidiInput,
+                },
+                new ControlDevicePortProfile
+                {
+                    Id = "midi.out",
+                    DisplayName = "MIDI Out",
+                    Kind = ControlDevicePortKind.MidiOutput,
+                },
+            ],
+            Controls =
+            [
+                new ControlControlProfile
+                {
+                    Id = controlId,
+                    DisplayName = controlName,
+                    Kind = ControlProfileControlKind.Fader,
+                    MidiChannel = channel,
+                    MidiController = controller,
+                    ValueMode = ProfileBuilderHighResolution14Bit
+                        ? ControlProfileValueMode.Absolute14Bit
+                        : ControlProfileValueMode.Absolute7Bit,
+                    MidiHighResolution14Bit = ProfileBuilderHighResolution14Bit,
+                    MidiValueMin = minValue,
+                    MidiValueMax = maxValue,
+                },
+            ],
+        };
+
+        var issues = ControlDeviceProfileValidator.Validate(profile);
+        if (issues.Count > 0)
+            throw new InvalidOperationException(string.Join("; ", issues.Select(issue => issue.Message)));
+
+        ProfileBuilderId = profile.Id;
         return profile;
     }
 
@@ -1154,6 +1344,55 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     private static string FormatProfileName(ControlDeviceProfile profile) =>
         string.IsNullOrWhiteSpace(profile.DisplayName) ? profile.Id : profile.DisplayName;
+
+    private static int ParseRequiredInt(string? text, string label) =>
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : throw new InvalidOperationException($"{label} must be a whole number.");
+
+    private static int? ParseOptionalIntForProfile(string? text, string label)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : throw new InvalidOperationException($"{label} must be a whole number.");
+    }
+
+    private static string NormalizeProfileId(string text)
+    {
+        var parts = text
+            .Trim()
+            .Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(SanitizeIdPart)
+            .Where(part => part.Length > 0);
+        return string.Join('.', parts);
+    }
+
+    private static string SanitizeIdPart(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        var builder = new StringBuilder(text.Length);
+        var previousSeparator = false;
+        foreach (var ch in text.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch))
+            {
+                builder.Append(ch);
+                previousSeparator = false;
+            }
+            else if (!previousSeparator && builder.Length > 0)
+            {
+                builder.Append('-');
+                previousSeparator = true;
+            }
+        }
+
+        return builder.ToString().Trim('-');
+    }
 
     private static async Task<bool> DefaultOscDevicePromptAsync(OscDeviceDialogViewModel dialogViewModel)
     {
@@ -2273,11 +2512,15 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             ? SuggestLearnFunctionName(candidate.Record)
             : candidate.FunctionName.Trim();
 
-        row.AddLearnedTrigger(BuildLearnedTrigger(candidate.Record, functionName));
+        var trigger = BuildLearnedTrigger(candidate.Record, functionName);
+        if (trigger.MidiValue is null && candidate.HasValueRange)
+            trigger = trigger with { MidiValueMin = candidate.MinimumValue, MidiValueMax = candidate.MaximumValue };
+        row.AddLearnedTrigger(trigger);
 
         if (candidate.InsertStub && !HasExport(SelectedScriptText, functionName))
             SelectedScriptText += BuildLearnedStub(candidate.Record, functionName);
 
+        IsLearning = false;
         LearnCandidate = null;
         StatusMessage = $"Added '{functionName}' trigger. Review and save the script.";
     }
@@ -2288,9 +2531,16 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     internal void ApplyLearnCapture(ControlMonitorRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
-        IsLearning = false;
+        if (LearnCandidate is { } candidate && candidate.TryObserve(record))
+        {
+            _learnSinceUtc = record.TimestampUtc.AddTicks(1);
+            StatusMessage = $"Learning {candidate.Description}. Move the control through its range, then confirm.";
+            return;
+        }
+
         LearnCandidate = new ControlLearnCandidateViewModel(record, SuggestLearnFunctionName(record));
-        StatusMessage = $"Learned {LearnCandidate.Description}. Confirm to add a trigger.";
+        _learnSinceUtc = record.TimestampUtc.AddTicks(1);
+        StatusMessage = $"Learned {LearnCandidate.Description}. Move it through min/max, then confirm.";
     }
 
     private void ResetLearn()
@@ -2633,7 +2883,8 @@ internal sealed record ControlStructureRowCommands(
     Action<ControlStructureRowViewModel> TestMidi,
     Action AddOscListener,
     Action<ControlStructureRowViewModel> EditOscListener,
-    Action<ControlStructureRowViewModel> RemoveOscListener);
+    Action<ControlStructureRowViewModel> RemoveOscListener,
+    Action<ControlStructureRowViewModel> EditMidiDevice);
 
 public sealed class ControlStructureRowViewModel
 {
@@ -2684,6 +2935,7 @@ public sealed class ControlStructureRowViewModel
             RemoveOscDeviceCommand = new RelayCommand(() => commands.RemoveOscDevice(this), () => CanEditOscDevice);
             TestOscCommand = new RelayCommand(() => commands.TestOsc(this), () => CanTestOsc);
             TestMidiCommand = new RelayCommand(() => commands.TestMidi(this), () => CanTestMidi);
+            EditMidiDeviceCommand = new RelayCommand(() => commands.EditMidiDevice(this), () => CanEditMidiDevice);
         }
     }
 
@@ -2733,6 +2985,8 @@ public sealed class ControlStructureRowViewModel
 
     public bool CanTestMidi => Protocol == ControlDeviceProtocol.Midi && DeviceInstanceId is not null;
 
+    public bool CanEditMidiDevice => Protocol == ControlDeviceProtocol.Midi && DeviceInstanceId is not null;
+
     public ICommand? AddProjectScriptCommand { get; }
 
     public ICommand? AddHelperFileCommand { get; }
@@ -2770,6 +3024,8 @@ public sealed class ControlStructureRowViewModel
     public ICommand? TestOscCommand { get; }
 
     public ICommand? TestMidiCommand { get; }
+
+    public ICommand? EditMidiDeviceCommand { get; }
 }
 
 public sealed record ControlX32CommandRowViewModel(
@@ -3034,6 +3290,12 @@ public sealed partial class ControlScriptRowViewModel : ViewModelBase
             label += $" note{note}";
         if (trigger.MidiValue is { } value)
             label += $" value{value}";
+        if (trigger.MidiValueMin is not null || trigger.MidiValueMax is not null)
+        {
+            var minText = trigger.MidiValueMin?.ToString(CultureInfo.InvariantCulture) ?? "*";
+            var maxText = trigger.MidiValueMax?.ToString(CultureInfo.InvariantCulture) ?? "*";
+            label += $" range{minText}..{maxText}";
+        }
         if (trigger.MidiParameter is { } parameter)
             label += $" param{parameter}";
         return label;
@@ -3085,6 +3347,8 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
                 nameof(MidiControllerText),
                 nameof(MidiNoteText),
                 nameof(MidiValueText),
+                nameof(MidiValueMinText),
+                nameof(MidiValueMaxText),
                 nameof(MidiParameterText),
                 nameof(ShowOscAddress),
                 nameof(ShowMidiMessageType),
@@ -3092,6 +3356,7 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
                 nameof(ShowMidiController),
                 nameof(ShowMidiNote),
                 nameof(ShowMidiValue),
+                nameof(ShowMidiValueRange),
                 nameof(ShowMidiParameter),
                 nameof(ShowInterval));
         }
@@ -3146,11 +3411,14 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
                 nameof(MidiControllerText),
                 nameof(MidiNoteText),
                 nameof(MidiValueText),
+                nameof(MidiValueMinText),
+                nameof(MidiValueMaxText),
                 nameof(MidiParameterText),
                 nameof(ShowMidiChannel),
                 nameof(ShowMidiController),
                 nameof(ShowMidiNote),
                 nameof(ShowMidiValue),
+                nameof(ShowMidiValueRange),
                 nameof(ShowMidiParameter));
         }
     }
@@ -3207,6 +3475,32 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
         }
     }
 
+    public string MidiValueMinText
+    {
+        get => FormatOptionalInt(_trigger.MidiValueMin);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.MidiValueMin)
+                return;
+
+            Update(_trigger with { MidiValueMin = next }, nameof(MidiValueMinText));
+        }
+    }
+
+    public string MidiValueMaxText
+    {
+        get => FormatOptionalInt(_trigger.MidiValueMax);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _trigger.MidiValueMax)
+                return;
+
+            Update(_trigger with { MidiValueMax = next }, nameof(MidiValueMaxText));
+        }
+    }
+
     public string MidiParameterText
     {
         get => FormatOptionalInt(_trigger.MidiParameter);
@@ -3250,6 +3544,8 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
     public bool ShowMidiValue => Kind is ControlScriptTriggerKind.MidiControlChange
         or ControlScriptTriggerKind.MidiNote
         || (Kind == ControlScriptTriggerKind.MidiMessage && MidiMessageTypeUsesValue(_trigger.MidiMessageType));
+
+    public bool ShowMidiValueRange => ShowMidiValue;
 
     public bool ShowMidiParameter => Kind == ControlScriptTriggerKind.MidiMessage
         && MidiMessageTypeUsesParameter(_trigger.MidiMessageType);
@@ -3304,6 +3600,8 @@ public sealed partial class ControlScriptTriggerRowViewModel : ViewModelBase
             MidiController = MidiMessageTypeUsesController(messageType) ? trigger.MidiController : null,
             MidiNote = MidiMessageTypeUsesNote(messageType) ? trigger.MidiNote : null,
             MidiValue = MidiMessageTypeUsesValue(messageType) ? trigger.MidiValue : null,
+            MidiValueMin = MidiMessageTypeUsesValue(messageType) ? trigger.MidiValueMin : null,
+            MidiValueMax = MidiMessageTypeUsesValue(messageType) ? trigger.MidiValueMax : null,
             MidiParameter = MidiMessageTypeUsesParameter(messageType) ? trigger.MidiParameter : null,
         };
     }
@@ -3375,17 +3673,149 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
         Record = record ?? throw new ArgumentNullException(nameof(record));
         _functionName = suggestedFunctionName;
         Description = BuildDescription(record);
+        var initialRange = BuildInitialRange(record);
+        _minimumValue = initialRange.Min;
+        _maximumValue = initialRange.Max;
+        if (record.MidiValue is { } value)
+            _observedValues.Add(value);
     }
 
     public ControlMonitorRecord Record { get; }
 
     public string Description { get; }
 
+    public bool HasValueRange =>
+        (MinimumValue.HasValue || MaximumValue.HasValue)
+        && (_rangeEdited || _observedValues.Count > 1);
+
+    public int? MinimumValue => _minimumValue;
+
+    public int? MaximumValue => _maximumValue;
+
+    public string MinimumValueText
+    {
+        get => FormatOptionalInt(_minimumValue);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _minimumValue)
+                return;
+
+            _rangeEdited = true;
+            _minimumValue = next;
+            OnRangeChanged();
+        }
+    }
+
+    public string MaximumValueText
+    {
+        get => FormatOptionalInt(_maximumValue);
+        set
+        {
+            var next = ParseOptionalInt(value);
+            if (next == _maximumValue)
+                return;
+
+            _rangeEdited = true;
+            _maximumValue = next;
+            OnRangeChanged();
+        }
+    }
+
+    public string RangeDescription =>
+        HasValueRange
+            ? $"range {FormatRangeValue(_minimumValue)}..{FormatRangeValue(_maximumValue)}"
+            : "no value range";
+
     [ObservableProperty]
     private string _functionName;
 
     [ObservableProperty]
     private bool _insertStub = true;
+
+    private int? _minimumValue;
+    private int? _maximumValue;
+    private bool _rangeEdited;
+    private readonly HashSet<int> _observedValues = new();
+
+    public bool TryObserve(ControlMonitorRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        if (!Matches(record))
+            return false;
+
+        if (record.MidiValue is { } value)
+        {
+            _observedValues.Add(value);
+            _minimumValue = _minimumValue.HasValue ? Math.Min(_minimumValue.Value, value) : value;
+            _maximumValue = _maximumValue.HasValue ? Math.Max(_maximumValue.Value, value) : value;
+            OnRangeChanged();
+        }
+
+        return true;
+    }
+
+    public bool Matches(ControlMonitorRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return InferMessageType(Record) == InferMessageType(record)
+            && SameNullable(Record.MidiChannel, record.MidiChannel)
+            && SameNullable(Record.MidiController, record.MidiController)
+            && SameNullable(Record.MidiNote, record.MidiNote)
+            && SameNullable(Record.MidiParameter, record.MidiParameter)
+            && SameDevice(Record.DeviceInstanceId, record.DeviceInstanceId);
+    }
+
+    private static (int? Min, int? Max) BuildInitialRange(ControlMonitorRecord record)
+    {
+        if (record.MidiValue is not { } value)
+            return (null, null);
+
+        if (record.MidiController is not null)
+            return (0, value);
+        if (record.MidiNote is not null)
+            return (0, 127);
+
+        var messageType = record.MidiMessageType ?? ControlMidiMessageType.Unknown;
+        return messageType switch
+        {
+            ControlMidiMessageType.ControlChange => (0, value),
+            ControlMidiMessageType.NoteOn or ControlMidiMessageType.NoteOff or ControlMidiMessageType.PolyphonicAftertouch => (0, 127),
+            ControlMidiMessageType.ChannelAftertouch => (0, 127),
+            ControlMidiMessageType.PitchBend => (0, Math.Max(value, 16383)),
+            _ => (value, value),
+        };
+    }
+
+    private static bool SameNullable<T>(T? left, T? right) where T : struct =>
+        EqualityComparer<T?>.Default.Equals(left, right);
+
+    private static bool SameNullable(string? left, string? right) =>
+        string.Equals(left ?? string.Empty, right ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+    private static bool SameDevice(Guid? left, Guid? right) =>
+        !left.HasValue || !right.HasValue || left.Value == right.Value;
+
+    private static ControlMidiMessageType InferMessageType(ControlMonitorRecord record)
+    {
+        if (record.MidiMessageType is { } messageType)
+            return messageType;
+        if (record.MidiController is not null)
+            return ControlMidiMessageType.ControlChange;
+        if (record.MidiNote is not null)
+            return ControlMidiMessageType.NoteOn;
+        return ControlMidiMessageType.Unknown;
+    }
+
+    private void OnRangeChanged()
+    {
+        OnPropertyChanged(nameof(MinimumValue));
+        OnPropertyChanged(nameof(MaximumValue));
+        OnPropertyChanged(nameof(MinimumValueText));
+        OnPropertyChanged(nameof(MaximumValueText));
+        OnPropertyChanged(nameof(HasValueRange));
+        OnPropertyChanged(nameof(RangeDescription));
+    }
 
     private static string BuildDescription(ControlMonitorRecord record)
     {
@@ -3399,6 +3829,15 @@ public sealed partial class ControlLearnCandidateViewModel : ViewModelBase
             return $"{(record.MidiMessageType ?? ControlMidiMessageType.Unknown)} param {parameter.ToString(CultureInfo.InvariantCulture)}{channel}{value}";
         return $"{(record.MidiMessageType ?? ControlMidiMessageType.Unknown)}{channel}{value}";
     }
+
+    private static string FormatOptionalInt(int? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private static string FormatRangeValue(int? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? "*";
+
+    private static int? ParseOptionalInt(string? text) =>
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
 }
 
 public sealed class ControlScriptDiagnosticRowViewModel

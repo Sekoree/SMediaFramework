@@ -113,6 +113,10 @@ public static class Strings
     public static string GroupFireModeLabel => Get(nameof(GroupFireModeLabel));
     public static string CommentTextLabel => Get(nameof(CommentTextLabel));
     public static string ActionEndpointLabel => Get(nameof(ActionEndpointLabel));
+    public static string ActionTargetLabel => Get(nameof(ActionTargetLabel));
+    public static string NoActionTargetSelected => Get(nameof(NoActionTargetSelected));
+    public static string ActionTargetMissingFormat => Get(nameof(ActionTargetMissingFormat));
+    public static string SelectedActionTargetFormat => Get(nameof(SelectedActionTargetFormat));
     public static string ActionKindLabel => Get(nameof(ActionKindLabel));
     public static string ActionCommandLabel => Get(nameof(ActionCommandLabel));
     public static string AddNdiInputCueButton => Get(nameof(AddNdiInputCueButton));
@@ -160,6 +164,9 @@ public static class Strings
     public static string MaxStandbyDecodersLabel => Get(nameof(MaxStandbyDecodersLabel));
     public static string MaxStandbyDecodersTooltip => Get(nameof(MaxStandbyDecodersTooltip));
     public static string AddGroupButton => Get(nameof(AddGroupButton));
+    public static string AddCueMenuButton => Get(nameof(AddCueMenuButton));
+    public static string CueSelectionMenuButton => Get(nameof(CueSelectionMenuButton));
+    public static string CueDetailsEmptyHint => Get(nameof(CueDetailsEmptyHint));
     public static string AddMediaButton => Get(nameof(AddMediaButton));
     public static string AddActionButton => Get(nameof(AddActionButton));
     public static string AddCommentButton => Get(nameof(AddCommentButton));
@@ -207,6 +214,8 @@ public static class Strings
     public static string CloseButton => Get(nameof(CloseButton));
     public static string SkipButton => Get(nameof(SkipButton));
     public static string TargetConfigurationTitle => Get(nameof(TargetConfigurationTitle));
+    public static string TargetOscTabHeader => Get(nameof(TargetOscTabHeader));
+    public static string TargetMidiTabHeader => Get(nameof(TargetMidiTabHeader));
     public static string OscTabHeader => Get(nameof(OscTabHeader));
     public static string MidiTabHeader => Get(nameof(MidiTabHeader));
     public static string RebindMissingOutputsTitle => Get(nameof(RebindMissingOutputsTitle));
@@ -322,6 +331,8 @@ public static class Strings
 
     public static string OutputManagementHeader => Get(nameof(OutputManagementHeader));
     public static string OutputManagementHint => Get(nameof(OutputManagementHint));
+    public static string NoOutputsEmptyHint => Get(nameof(NoOutputsEmptyHint));
+    public static string AdvancedRoutingHeader => Get(nameof(AdvancedRoutingHeader));
     public static string AddPortAudioButton => Get(nameof(AddPortAudioButton));
     public static string AddLocalVideoButton => Get(nameof(AddLocalVideoButton));
     public static string AddNdiButton => Get(nameof(AddNdiButton));
@@ -628,8 +639,6 @@ public static class Strings
     public static string CuePausedStatusFormat => Get(nameof(CuePausedStatusFormat));
     public static string CueStoppedStatus => Get(nameof(CueStoppedStatus));
     public static string CuePanicStatus => Get(nameof(CuePanicStatus));
-    public static string OscBuilderDefaultAddress => Get(nameof(OscBuilderDefaultAddress));
-    public static string OscBuilderDefaultArgument => Get(nameof(OscBuilderDefaultArgument));
     public static string CueAutoFollowStatusFormat => Get(nameof(CueAutoFollowStatusFormat));
     public static string CueBrokenEndpointCountStatusFormat => Get(nameof(CueBrokenEndpointCountStatusFormat));
     public static string CueAddedFromDropStatusFormat => Get(nameof(CueAddedFromDropStatusFormat));

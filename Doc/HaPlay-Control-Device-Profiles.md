@@ -7,8 +7,9 @@ incomplete.
 
 Profiles can live in three places:
 
-- Built-in app profiles, currently generated for the X-Touch Mini MC mode and
-  X32/M32 OSC.
+- Built-in app profiles, currently generated for the Behringer X-Touch Mini (MC
+  mode), the Behringer BCF2000 (14-bit motor faders + encoders), the X32/M32 OSC
+  console, and the Behringer X-Air / Midas M-Air OSC console.
 - User/app-level profile JSON files loaded from a profile directory.
 - Project-level profile overrides stored inside the project file.
 

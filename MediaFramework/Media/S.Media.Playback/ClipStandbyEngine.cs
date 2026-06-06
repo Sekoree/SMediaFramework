@@ -134,11 +134,11 @@ public enum ClipPreparationState
 public readonly record struct ClipPreparationStatus(ClipKey Key, ClipPreparationState State, string? Error);
 
 public sealed record ClipStandbyPolicy(
-    int MaxPreparedDecoders = 6,
-    int Window = 4)
+    int MaxPreparedDecoders = 0,
+    int Window = 0)
 {
-    internal int ResolvedMaxPreparedDecoders => Math.Clamp(MaxPreparedDecoders, 1, 64);
-    internal int ResolvedWindow => Math.Clamp(Window, 0, 1024);
+    internal int ResolvedMaxPreparedDecoders => MaxPreparedDecoders <= 0 ? int.MaxValue : Math.Clamp(MaxPreparedDecoders, 1, 4096);
+    internal int ResolvedWindow => Window <= 0 ? int.MaxValue : Math.Clamp(Window, 1, 4096);
 }
 
 public interface IPreparedClip : IAsyncDisposable

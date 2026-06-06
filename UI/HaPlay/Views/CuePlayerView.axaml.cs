@@ -148,6 +148,7 @@ public partial class CuePlayerView : UserControl
         if (_dragStarted || _dragPressedArgs is null) return;
         if (!e.GetCurrentPoint(CueTreeGrid).Properties.IsLeftButtonPressed) return;
         if (DataContext is not CuePlayerViewModel vm) return;
+        if (!vm.IsCueEditMode) return;
         if (vm.SelectedCueNode is null) return;
 
         var pos = e.GetPosition(CueTreeGrid);
@@ -175,7 +176,12 @@ public partial class CuePlayerView : UserControl
         _ = sender;
         if (!IsOverCueTree(e)) return;
         if (e.DataTransfer.Contains(CueNodeDragFormat))
-            e.DragEffects = DragDropEffects.Move;
+        {
+            if (DataContext is CuePlayerViewModel { IsCueEditMode: true })
+                e.DragEffects = DragDropEffects.Move;
+            else
+                e.DragEffects = DragDropEffects.None;
+        }
         else if (e.DataTransfer.Contains(DataFormat.File))
             e.DragEffects = DragDropEffects.Copy;
         else
@@ -195,15 +201,14 @@ public partial class CuePlayerView : UserControl
         var draggedNode = e.DataTransfer.TryGetValue(CueNodeDragFormat);
         if (draggedNode is not null)
         {
-            var targetRow = FindCueNodeAtPosition(e);
-            if (targetRow is not null && !ReferenceEquals(draggedNode, targetRow))
-            {
-                var targetIndex = vm.SelectedCueList?.Nodes is { } nodes
-                    ? IndexOfNodeInParent(nodes, targetRow)
-                    : -1;
-                if (targetIndex >= 0)
-                    vm.ReorderCueNode(draggedNode, targetIndex);
-            }
+            if (!vm.IsCueEditMode)
+                return;
+
+            var target = FindCueNodeDropTarget(e);
+            var placement = target is null
+                ? CueNodeDropPlacement.After
+                : ResolveDropPlacement(e, target.Value.Node, target.Value.Visual);
+            vm.MoveCueNode(draggedNode, target?.Node, placement);
             return;
         }
 
@@ -220,36 +225,31 @@ public partial class CuePlayerView : UserControl
             vm.AddMediaFilesFromDrop(paths);
     }
 
-    private CueNodeViewModel? FindCueNodeAtPosition(DragEventArgs e)
+    private static CueDropTarget? FindCueNodeDropTarget(DragEventArgs e)
     {
         if (e.Source is not Visual visual) return null;
         var current = visual;
         while (current is not null)
         {
             if (current.DataContext is CueNodeViewModel node)
-                return node;
+                return new CueDropTarget(node, current);
             current = current.GetVisualParent();
         }
         return null;
     }
 
-    private static int IndexOfNodeInParent(ICollection<CueNodeViewModel> roots, CueNodeViewModel target)
+    private static CueNodeDropPlacement ResolveDropPlacement(DragEventArgs e, CueNodeViewModel target, Visual visual)
     {
-        if (roots is IList<CueNodeViewModel> list)
-        {
-            var idx = list.IndexOf(target);
-            if (idx >= 0) return idx;
-        }
-        foreach (var n in roots)
-        {
-            if (n.Children is IList<CueNodeViewModel> children)
-            {
-                var idx = children.IndexOf(target);
-                if (idx >= 0) return idx;
-            }
-        }
-        return -1;
+        var height = Math.Max(1, visual.Bounds.Height);
+        var y = e.GetPosition(visual).Y;
+        if (y <= height * 0.33)
+            return CueNodeDropPlacement.Before;
+        if (target.IsGroup && y <= height * 0.67)
+            return CueNodeDropPlacement.Inside;
+        return CueNodeDropPlacement.After;
     }
+
+    private readonly record struct CueDropTarget(CueNodeViewModel Node, Visual Visual);
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
@@ -286,23 +286,23 @@ public partial class CuePlayerView : UserControl
             width: new GridLength(28)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
             Strings.CueTreeNumberColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.Number)), supportsRecycling: true),
+            new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.Number), static r => r.Number), supportsRecycling: true),
             width: new GridLength(80)));
         _source.Columns.Add(new HierarchicalExpanderColumn<CueNodeViewModel>(
             new TemplateColumn<CueNodeViewModel>(
                 Strings.CueTreeNameColumnHeader,
-                new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.Label)), supportsRecycling: true),
+                new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.Label), static r => r.Label), supportsRecycling: true),
                 width: new GridLength(1, GridUnitType.Star)),
             x => x.Children,
             x => x.HasChildren,
             x => x.IsExpanded));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
             Strings.CueTreeDurationColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.DurationDisplay)), supportsRecycling: true),
+            new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.DurationDisplay), static r => r.DurationDisplay), supportsRecycling: true),
             width: new GridLength(96)));
         _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
             Strings.CueTreeKindColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildReadOnlyText(row, nameof(CueNodeViewModel.KindLabel)), supportsRecycling: true),
+            new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.KindLabel), static r => r.KindLabel), supportsRecycling: true),
             width: new GridLength(90)));
 
         if (_source.RowSelection is not null)
@@ -455,15 +455,15 @@ public partial class CuePlayerView : UserControl
     // supportsRecycling=true, and an explicit DataContext sticks past the recycle — the visual
     // ends up bound to the OLD row's properties. Letting DataContext inherit from the grid lets
     // the binding re-resolve against the new row each time the control is reused.
-    private static Control BuildReadOnlyText(CueNodeViewModel row, string propertyName)
+    private static Control BuildReadOnlyText(string propertyName, Func<CueNodeViewModel, string?> getter)
     {
-        _ = row;
         var tb = new TextBlock
         {
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
         };
-        tb.Bind(TextBlock.TextProperty, new Binding(propertyName));
+        // NativeAOT-safe: bind text from the (recycled) DataContext by hand instead of a reflection Binding.
+        AotBinding.OneWayText(tb, propertyName, getter);
         return tb;
     }
 

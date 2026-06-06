@@ -19,6 +19,7 @@ public sealed class ClipAudioOutputRuntime : IDisposable
     private readonly Action? _releaseOutput;
     private readonly object _gate = new();
     private readonly HashSet<string> _sources = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<RouteGainTarget>> _sourceRouteGains = new(StringComparer.Ordinal);
     private bool _disposed;
 
     public ClipAudioOutputRuntime(
@@ -77,7 +78,6 @@ public sealed class ClipAudioOutputRuntime : IDisposable
             throw new ArgumentException("at least one route required", nameof(routes));
 
         var srcId = _router.AddSource(source, id: sourceIdHint, autoResample: true);
-        lock (_gate) _sources.Add(srcId);
 
         var outChannels = _audioOutput.Format.Channels;
         var routePlans = new List<(string RouteId, ChannelMap Map, float Gain)>(routes.Count);
@@ -105,21 +105,73 @@ public sealed class ClipAudioOutputRuntime : IDisposable
             {
                 Trace.LogWarning(removeEx, "ClipAudioOutputRuntime: rollback RemoveSource failed for {Src}", srcId);
             }
-            lock (_gate) _sources.Remove(srcId);
             throw new InvalidOperationException(
                 $"Failed to route cue source '{srcId}' to audio output '{DisplayName}'.",
                 ex);
+        }
+
+        lock (_gate)
+        {
+            _sources.Add(srcId);
+            _sourceRouteGains[srcId] = routePlans
+                .Select(route => new RouteGainTarget(route.RouteId, route.Gain))
+                .ToList();
         }
 
         _router.Play();
         return srcId;
     }
 
+    public async Task FadeOutSourceAsync(string sourceId, TimeSpan duration, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (string.IsNullOrWhiteSpace(sourceId))
+            return;
+
+        List<RouteGainTarget> routes;
+        lock (_gate)
+        {
+            if (!_sourceRouteGains.TryGetValue(sourceId, out var found))
+                return;
+            routes = found.ToList();
+        }
+
+        if (routes.Count == 0)
+            return;
+
+        var steps = Math.Clamp((int)Math.Ceiling(Math.Max(1, duration.TotalMilliseconds) / 33.0), 1, 120);
+        var delay = duration > TimeSpan.Zero
+            ? TimeSpan.FromTicks(Math.Max(1, duration.Ticks / steps))
+            : TimeSpan.Zero;
+
+        for (var step = 1; step <= steps; step++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var scale = Math.Clamp(1f - (float)step / steps, 0f, 1f);
+            SetRouteScale(routes, scale);
+            if (step < steps && delay > TimeSpan.Zero)
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void SetRouteScale(IEnumerable<RouteGainTarget> routes, float scale)
+    {
+        foreach (var route in routes)
+        {
+            try { _router.SetRouteGainById(route.RouteId, route.BaseGain * scale); }
+            catch (Exception ex) { Trace.LogWarning(ex, "ClipAudioOutputRuntime.FadeOutSourceAsync: {Route}", route.RouteId); }
+        }
+    }
+
     public void RemoveSource(string sourceId)
     {
         try { _router.RemoveSource(sourceId); }
         catch (Exception ex) { Trace.LogWarning(ex, "ClipAudioOutputRuntime.RemoveSource: {Src}", sourceId); }
-        lock (_gate) _sources.Remove(sourceId);
+        lock (_gate)
+        {
+            _sources.Remove(sourceId);
+            _sourceRouteGains.Remove(sourceId);
+        }
     }
 
     public void Dispose()
@@ -134,4 +186,6 @@ public sealed class ClipAudioOutputRuntime : IDisposable
     }
 
     private static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);
+
+    private sealed record RouteGainTarget(string RouteId, float BaseGain);
 }

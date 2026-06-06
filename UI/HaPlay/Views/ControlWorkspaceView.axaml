@@ -35,6 +35,10 @@
                 Content="{Binding ArmButtonText}" Command="{Binding ToggleArmCommand}" />
         <TextBlock Grid.Row="0" Grid.Column="1" VerticalAlignment="Center"
                    Text="{Binding StatusMessage}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+        <Button Grid.Row="0" Grid.Column="2"
+                Content="Add script…"
+                ToolTip.Tip="Create a project, device, endpoint, or layer script"
+                Command="{Binding AddScriptCommand}" />
         <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Spacing="16" Opacity="0.85">
           <TextBlock Text="{Binding DeviceCount, StringFormat='Devices: {0}'}" />
           <TextBlock Text="{Binding ListenerCount, StringFormat='Listeners: {0}'}" />
@@ -69,6 +73,12 @@
             </DataTemplate>
           </ItemsControl.ItemTemplate>
         </ItemsControl>
+        <TextBlock DockPanel.Dock="Top"
+                   Text="Scripts can be added from the button above, from the Scripts card, or from a layer/device/endpoint row menu."
+                   FontSize="12"
+                   Opacity="0.6"
+                   TextWrapping="Wrap"
+                   Margin="0,0,0,6" />
         <ListBox ItemsSource="{Binding StructureRows}"
                  ScrollViewer.VerticalScrollBarVisibility="Disabled"
                  Background="Transparent">
@@ -77,8 +87,6 @@
               <Grid ColumnDefinitions="Auto,72,150,*,76,Auto" ColumnSpacing="8" Margin="0,2">
                 <Grid.ContextMenu>
                   <ContextMenu x:DataType="vm:ControlStructureRowViewModel">
-                    <MenuItem Header="Add project script" Command="{Binding AddProjectScriptCommand}" />
-                    <MenuItem Header="Add imported helper file" Command="{Binding AddHelperFileCommand}" />
                     <MenuItem Header="Add device script" Command="{Binding AddDeviceScriptCommand}" IsVisible="{Binding CanAddDeviceScript}" />
                     <MenuItem Header="Add endpoint script" Command="{Binding AddEndpointScriptCommand}" IsVisible="{Binding CanAddEndpointScript}" />
                     <MenuItem Header="Add OSC listener…" Command="{Binding AddOscListenerCommand}" />
@@ -96,6 +104,7 @@
                     <MenuItem Header="Edit OSC device…" Command="{Binding EditOscDeviceCommand}" IsVisible="{Binding CanEditOscDevice}" />
                     <MenuItem Header="Remove OSC device" Command="{Binding RemoveOscDeviceCommand}" IsVisible="{Binding CanEditOscDevice}" />
                     <MenuItem Header="Test OSC send" Command="{Binding TestOscCommand}" IsVisible="{Binding CanTestOsc}" />
+                    <MenuItem Header="Edit MIDI device…" Command="{Binding EditMidiDeviceCommand}" IsVisible="{Binding CanEditMidiDevice}" />
                     <MenuItem Header="Test MIDI send" Command="{Binding TestMidiCommand}" IsVisible="{Binding CanTestMidi}" />
                   </ContextMenu>
                 </Grid.ContextMenu>
@@ -149,13 +158,44 @@
 
     <!-- Profiles -->
     <Expander Header="Profiles" IsExpanded="False" Classes="dense" Margin="0,0,0,10">
-      <StackPanel Spacing="4" Margin="0,6,0,0">
+      <StackPanel Spacing="8" Margin="0,6,0,0">
         <StackPanel Orientation="Horizontal" Spacing="4">
           <Button Content="Import" Padding="8,2" Command="{Binding ImportProfileCommand}" />
           <Button Content="Export selected" Padding="8,2" Command="{Binding ExportSelectedProfileCommand}" />
           <Button Content="Export built-ins" Padding="8,2" Command="{Binding ExportBuiltInProfilesCommand}" />
           <Button Content="Remove project" Padding="8,2" Command="{Binding RemoveSelectedProjectProfileCommand}" />
         </StackPanel>
+        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="4" Padding="8">
+          <StackPanel Spacing="6">
+            <TextBlock Text="MIDI profile builder" FontWeight="SemiBold" />
+            <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="6">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Profile" VerticalAlignment="Center" />
+              <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding ProfileBuilderDisplayName}" PlaceholderText="Custom MIDI Surface" />
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="ID" VerticalAlignment="Center" />
+              <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding ProfileBuilderId}" PlaceholderText="auto" />
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Control" VerticalAlignment="Center" />
+              <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding ProfileBuilderControlName}" PlaceholderText="Fader 1" />
+              <StackPanel Grid.Row="1" Grid.Column="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6">
+                <TextBlock Text="Channel" VerticalAlignment="Center" />
+                <TextBox Width="54" Text="{Binding ProfileBuilderMidiChannelText}" />
+                <TextBlock Text="CC" VerticalAlignment="Center" />
+                <TextBox Width="54" Text="{Binding ProfileBuilderMidiControllerText}" />
+                <CheckBox Content="14-bit CC" IsChecked="{Binding ProfileBuilderHighResolution14Bit}" VerticalAlignment="Center" />
+              </StackPanel>
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="Range" VerticalAlignment="Center" />
+              <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="6">
+                <TextBox Width="80" Text="{Binding ProfileBuilderMinValueText}" PlaceholderText="min" />
+                <TextBox Width="80" Text="{Binding ProfileBuilderMaxValueText}" PlaceholderText="max" />
+                <Button Content="Save project profile" Command="{Binding SaveMidiProfileBuilderCommand}" />
+              </StackPanel>
+              <TextBlock Grid.Row="2" Grid.Column="3"
+                         Text="{Binding ProfileBuilderStatus}"
+                         Opacity="0.7"
+                         VerticalAlignment="Center"
+                         TextTrimming="CharacterEllipsis" />
+            </Grid>
+          </StackPanel>
+        </Border>
         <ListBox ItemsSource="{Binding ProfileRows}"
                  SelectedItem="{Binding SelectedProfileRow}"
                  MaxHeight="180"
@@ -236,11 +276,12 @@
     <!-- Scripts -->
     <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
       <DockPanel>
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="4" Margin="0,0,0,8">
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="4" Margin="0,0,0,8">
           <TextBlock Grid.Column="0" Text="Scripts" FontWeight="SemiBold" VerticalAlignment="Center" />
           <Button Grid.Column="1" Content="+" Padding="8,2" ToolTip.Tip="Add script" Command="{Binding AddScriptCommand}" />
-          <Button Grid.Column="2" Content="–" Padding="8,2" ToolTip.Tip="Remove selected script" Command="{Binding RemoveSelectedScriptCommand}" />
-          <Button Grid.Column="3" Content="Edit…" Padding="8,2" Click="OnEditScriptClick"
+          <Button Grid.Column="2" Content="Add helper" Padding="8,2" ToolTip.Tip="Add imported helper script file" Command="{Binding AddHelperFileCommand}" />
+          <Button Grid.Column="3" Content="–" Padding="8,2" ToolTip.Tip="Remove selected script" Command="{Binding RemoveSelectedScriptCommand}" />
+          <Button Grid.Column="4" Content="Edit…" Padding="8,2" Click="OnEditScriptClick"
                   ToolTip.Tip="Open the selected script in a separate editor window" />
         </Grid>
         <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0" Opacity="0.6" FontSize="12" TextWrapping="Wrap"
@@ -296,19 +337,27 @@
 
     <!-- Monitor list -->
     <Border Grid.Row="3" MinHeight="120" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6">
-      <ListBox ItemsSource="{Binding MonitorEntries}" Background="Transparent">
-        <ListBox.ItemTemplate>
-          <DataTemplate DataType="vm:ControlMonitorEntryViewModel">
-            <Grid ColumnDefinitions="90,70,70,70,*" ColumnSpacing="8" Classes.error="{Binding IsError}">
-              <TextBlock Grid.Column="0" Classes="col" Opacity="0.7" Text="{Binding Time}" />
-              <TextBlock Grid.Column="1" Classes="col" Text="{Binding Protocol}" />
-              <TextBlock Grid.Column="2" Classes="col" Opacity="0.85" Text="{Binding Direction}" />
-              <TextBlock Grid.Column="3" Classes="col" Opacity="0.85" Text="{Binding Result}" />
-              <TextBlock Grid.Column="4" Classes="col" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
-            </Grid>
-          </DataTemplate>
-        </ListBox.ItemTemplate>
-      </ListBox>
+      <Grid>
+        <TextBlock Text="Arm Control to see MIDI, OSC, script, and runtime activity here."
+                   TextWrapping="Wrap"
+                   Opacity="0.55"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   IsVisible="{Binding HasNoMonitorEntries}" />
+        <ListBox ItemsSource="{Binding MonitorEntries}" Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate DataType="vm:ControlMonitorEntryViewModel">
+              <Grid ColumnDefinitions="90,70,70,70,*" ColumnSpacing="8" Classes.error="{Binding IsError}">
+                <TextBlock Grid.Column="0" Classes="col" Opacity="0.7" Text="{Binding Time}" />
+                <TextBlock Grid.Column="1" Classes="col" Text="{Binding Protocol}" />
+                <TextBlock Grid.Column="2" Classes="col" Opacity="0.85" Text="{Binding Direction}" />
+                <TextBlock Grid.Column="3" Classes="col" Opacity="0.85" Text="{Binding Result}" />
+                <TextBlock Grid.Column="4" Classes="col" Text="{Binding Summary}" TextTrimming="CharacterEllipsis" />
+              </Grid>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </Grid>
     </Border>
   </Grid>
 </UserControl>

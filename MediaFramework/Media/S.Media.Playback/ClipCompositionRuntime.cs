@@ -552,6 +552,12 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         public int LayerIndex => _placement.LayerIndex;
 
+        public float Opacity
+        {
+            get => RawSlot.Opacity;
+            set => RawSlot.Opacity = Math.Clamp(value, 0f, 1f);
+        }
+
         public long Sequence { get; }
 
         public void ApplyPlacement()

@@ -19,10 +19,10 @@
     </StackPanel>
 
     <TabControl>
-      <TabItem Header="{x:Static res:Strings.OscTabHeader}">
+      <TabItem Header="{x:Static res:Strings.TargetOscTabHeader}">
         <views:OscConnectionsView DataContext="{Binding}" />
       </TabItem>
-      <TabItem Header="{x:Static res:Strings.MidiTabHeader}">
+      <TabItem Header="{x:Static res:Strings.TargetMidiTabHeader}">
         <views:MidiDevicesView DataContext="{Binding}" />
       </TabItem>
     </TabControl>

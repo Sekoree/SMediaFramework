@@ -113,6 +113,10 @@
                                        PlaceholderText="note" IsVisible="{Binding ShowMidiNote}" Margin="0,0,6,6" />
                               <TextBox Width="70" Text="{Binding MidiValueText}"
                                        PlaceholderText="value" IsVisible="{Binding ShowMidiValue}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MidiValueMinText}"
+                                       PlaceholderText="min" IsVisible="{Binding ShowMidiValueRange}" Margin="0,0,6,6" />
+                              <TextBox Width="70" Text="{Binding MidiValueMaxText}"
+                                       PlaceholderText="max" IsVisible="{Binding ShowMidiValueRange}" Margin="0,0,6,6" />
                               <TextBox Width="70" Text="{Binding MidiParameterText}"
                                        PlaceholderText="param" IsVisible="{Binding ShowMidiParameter}" Margin="0,0,6,6" />
                               <TextBox Width="90" Text="{Binding IntervalMsText}"
@@ -142,7 +146,7 @@
               </Grid>
               <Border IsVisible="{Binding HasLearnCandidate}"
                       BorderBrush="#3360C060" BorderThickness="1" CornerRadius="4" Padding="8">
-                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="Captured" Opacity="0.7" VerticalAlignment="Center" />
                   <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding LearnCandidate.Description}"
                              FontFamily="Cascadia Code, Consolas, monospace" VerticalAlignment="Center" />
@@ -153,6 +157,12 @@
                   <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Spacing="6">
                     <Button Content="Add trigger" Command="{Binding ConfirmLearnCommand}" />
                     <Button Content="Cancel" Command="{Binding CancelLearnCommand}" />
+                  </StackPanel>
+                  <TextBlock Grid.Row="2" Grid.Column="0" Text="Range" Opacity="0.7" VerticalAlignment="Center" />
+                  <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                    <TextBox Width="80" Text="{Binding LearnCandidate.MinimumValueText}" PlaceholderText="min" />
+                    <TextBox Width="80" Text="{Binding LearnCandidate.MaximumValueText}" PlaceholderText="max" />
+                    <TextBlock Text="{Binding LearnCandidate.RangeDescription}" Opacity="0.7" VerticalAlignment="Center" />
                   </StackPanel>
                 </Grid>
               </Border>

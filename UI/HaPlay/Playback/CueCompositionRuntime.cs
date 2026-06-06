@@ -270,6 +270,12 @@ internal sealed class CueCompositionRuntime : IDisposable
 
         public int LayerIndex => _inner.LayerIndex;
 
+        public float Opacity
+        {
+            get => _inner.Opacity;
+            set => _inner.Opacity = value;
+        }
+
         public long Sequence => _inner.Sequence;
 
         public void Dispose() => _inner.Dispose();

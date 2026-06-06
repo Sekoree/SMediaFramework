@@ -237,6 +237,67 @@ public sealed class ControlSystemRuntimeSessionTests
         Assert.Equal(countAfterStop, sender.Sent.Count);
     }
 
+    [Fact]
+    public async Task StartAsync_FiresLayerEnabledForTheInitiallyActiveLayer()
+    {
+        var x32Id = Guid.NewGuid();
+        var layerId = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        await using var session = new ControlSystemRuntimeSession(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Layers = [new ControlLayerConfig { Id = layerId, Name = "Bank", IsEnabled = true, Priority = 0 }],
+                Devices =
+                [
+                    new ControlDeviceInstanceConfig
+                    {
+                        Id = x32Id,
+                        Name = "X32",
+                        Protocol = ControlDeviceProtocol.Osc,
+                        IsEnabled = true,
+                        Binding = new ControlDeviceBindingConfig { Alias = "x32", OscHost = "192.168.2.76", OscPort = 10023 },
+                    },
+                ],
+                Scripts =
+                [
+                    new ControlScriptConfig
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "Bank",
+                        ScriptPath = "Scripts/bank.mnd",
+                        Scope = ControlScriptScope.Layer,
+                        LayerId = layerId,
+                        Triggers =
+                        [
+                            new ControlScriptTriggerConfig
+                            {
+                                Kind = ControlScriptTriggerKind.LayerEnabled,
+                                FunctionName = "onActivate",
+                                LayerId = layerId,
+                            },
+                        ],
+                    },
+                ],
+            },
+            new InMemoryControlScriptSourceProvider(new Dictionary<string, string>
+            {
+                ["Scripts/bank.mnd"] =
+                    """
+                    export fun onActivate(event, context) {
+                        osc.send("x32", "/layer-armed", osc.int32(1));
+                    }
+                    """,
+            }),
+            sender);
+
+        await session.StartAsync();
+        await session.StopAsync();
+
+        // The active layer's LayerEnabled handler must run on arm (no layer switch, no periodic).
+        Assert.Contains(sender.Sent, s => s.Address == "/layer-armed");
+    }
+
     private sealed class RecordingOscSender : IControlOscSender
     {
         private readonly object _gate = new();

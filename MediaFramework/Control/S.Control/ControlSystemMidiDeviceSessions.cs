@@ -74,6 +74,8 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
             return;
         }
 
+        var profileRepository = CompositeControlDeviceProfileRepository.ForProject(_config);
+
         foreach (var device in inputDevices)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -99,7 +101,9 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
             try
             {
                 var input = _provider.OpenInput(port);
-                var session = new LiveInputSession(port, input, deviceManager, _monitor);
+                var session = new LiveInputSession(
+                    port, input, deviceManager, _monitor,
+                    ResolveHighResolution14BitControllers(profileRepository, device));
                 lock (_gate)
                 {
                     if (_inputsByPortId.ContainsKey(port.Id))
@@ -301,6 +305,30 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
         binding.MidiInputDeviceId.HasValue
         || !string.IsNullOrWhiteSpace(binding.MidiInputDeviceName);
 
+    /// <summary>Coarse CC numbers (0–31) the device's profile marks as 14-bit (high-resolution) faders/encoders.
+    /// Empty when the device has no profile or no 14-bit controls — the combiner then passes everything through.</summary>
+    private static IReadOnlyList<int> ResolveHighResolution14BitControllers(
+        IControlDeviceProfileRepository profileRepository,
+        ControlDeviceInstanceConfig device)
+    {
+        if (string.IsNullOrWhiteSpace(device.ProfileId))
+            return [];
+
+        var profile = profileRepository.FindById(device.ProfileId);
+        if (profile is null)
+            return [];
+
+        var controllers = new List<int>();
+        foreach (var control in profile.Controls)
+        {
+            var is14Bit = control.ValueMode == ControlProfileValueMode.Absolute14Bit || control.MidiHighResolution14Bit;
+            if (is14Bit && control.MidiController is int controller && controller is >= 0 and <= 31)
+                controllers.Add(controller);
+        }
+
+        return controllers;
+    }
+
     private static bool HasOutputBinding(ControlDeviceBindingConfig binding) =>
         binding.MidiOutputDeviceId.HasValue
         || !string.IsNullOrWhiteSpace(binding.MidiOutputDeviceName);
@@ -426,18 +454,21 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
         private readonly IControlMidiInputDevice _input;
         private readonly ControlMidiDeviceManager _deviceManager;
         private readonly IControlMonitorSink _monitor;
+        private readonly MidiHighResolution14BitCombiner _highResCombiner;
         private bool _disposed;
 
         public LiveInputSession(
             ControlMidiPortInfo port,
             IControlMidiInputDevice input,
             ControlMidiDeviceManager deviceManager,
-            IControlMonitorSink monitor)
+            IControlMonitorSink monitor,
+            IEnumerable<int>? highResolution14BitControllers = null)
         {
             _port = port;
             _input = input ?? throw new ArgumentNullException(nameof(input));
             _deviceManager = deviceManager ?? throw new ArgumentNullException(nameof(deviceManager));
             _monitor = monitor ?? NullControlMonitorSink.Instance;
+            _highResCombiner = new MidiHighResolution14BitCombiner(highResolution14BitControllers ?? []);
             _input.MessageReceived += OnMessageReceived;
         }
 
@@ -452,7 +483,12 @@ public sealed class ControlSystemMidiDeviceSessionManager : IControlMidiSender, 
 
         private void OnMessageReceived(object? sender, IMIDIMessage message)
         {
-            _ = DispatchMidiMessageAsync(message);
+            // Reassemble 14-bit CC pairs (coarse + fine) into one high-resolution message for the controllers
+            // the device profile marks as 14-bit. A held coarse byte returns null until its fine partner lands.
+            var resolved = _highResCombiner.Process(message);
+            if (resolved is null)
+                return;
+            _ = DispatchMidiMessageAsync(resolved);
         }
 
         private async Task DispatchMidiMessageAsync(IMIDIMessage message)

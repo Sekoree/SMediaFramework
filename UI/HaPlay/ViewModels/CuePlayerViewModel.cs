@@ -31,10 +31,27 @@ public enum CueRowStatus
 
 public enum CueMidiCommandType
 {
-    NoteOn,
+    NRPN,
+    RPN,
     NoteOff,
+    NoteOn,
+    PolyphonicAftertouch,
     ControlChange,
+    HighResolutionControlChange,
     ProgramChange,
+    ChannelAftertouch,
+    PitchBend,
+    SysEx,
+    MIDITimeCode,
+    SongPosition,
+    SongSelect,
+    TuneRequest,
+    TimingClock,
+    Start,
+    Continue,
+    Stop,
+    ActiveSensing,
+    Reset,
 }
 
 public sealed partial class CueCompositionViewModel : ObservableObject
@@ -1025,10 +1042,10 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     };
 
     [ObservableProperty]
-    private int _preRollCount = 4;
+    private int _preRollCount;
 
     [ObservableProperty]
-    private int _maxPreparedDecoders = 6;
+    private int _maxPreparedDecoders;
 
     [ObservableProperty]
     private CueTriggerMode _defaultTriggerMode = CueTriggerMode.Manual;
@@ -1044,8 +1061,8 @@ public sealed partial class CueListEditorViewModel : ObservableObject
         var vm = new CueListEditorViewModel(list.Name)
         {
             Path = path,
-            PreRollCount = list.PreRollCount > 0 ? list.PreRollCount : 4,
-            MaxPreparedDecoders = list.MaxPreparedDecoders > 0 ? list.MaxPreparedDecoders : 6,
+            PreRollCount = Math.Max(0, list.PreRollCount),
+            MaxPreparedDecoders = Math.Max(0, list.MaxPreparedDecoders),
             DefaultTriggerMode = list.DefaultTriggerMode,
             AutoRenumberOnInsert = list.AutoRenumberOnInsert,
         };
@@ -1062,6 +1079,13 @@ public sealed partial class CueListEditorViewModel : ObservableObject
 public sealed record PreviewAudioDeviceOption(int? DeviceIndex, string DisplayName)
 {
     public override string ToString() => DisplayName;
+}
+
+public enum CueNodeDropPlacement
+{
+    Before,
+    Inside,
+    After,
 }
 
 public partial class CuePlayerViewModel : ViewModelBase
@@ -1335,29 +1359,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     private string? _statusMessage;
 
     [ObservableProperty]
-    private CueActionKind _builderActionKind = CueActionKind.OscOut;
-
-    [ObservableProperty]
-    private string _oscBuilderAddress = Strings.OscBuilderDefaultAddress;
-
-    [ObservableProperty]
-    private string _oscBuilderArguments = Strings.OscBuilderDefaultArgument;
-
-    [ObservableProperty]
-    private CueMidiCommandType _midiBuilderCommandType = CueMidiCommandType.NoteOn;
-
-    [ObservableProperty]
-    private int _midiBuilderChannel = 1;
-
-    [ObservableProperty]
-    private int _midiBuilderData1 = 60;
-
-    [ObservableProperty]
-    private int _midiBuilderData2 = 100;
-
-    public bool IsOscBuilderVisible => BuilderActionKind == CueActionKind.OscOut;
-
-    public bool IsMidiBuilderVisible => BuilderActionKind == CueActionKind.MidiOut;
+    private bool _isCueEditMode = true;
 
     public ObservableCollection<CueNodeViewModel> VisibleNodes =>
         SelectedCueList?.Nodes ?? _emptyNodes;
@@ -1454,8 +1456,27 @@ public partial class CuePlayerViewModel : ViewModelBase
         : string.IsNullOrWhiteSpace(SelectedCueNode.Number)
             ? $"{SelectedCueNode.Label} — {SelectedCueNode.KindLabel}"
             : $"{SelectedCueNode.Number} {SelectedCueNode.Label} — {SelectedCueNode.KindLabel}";
-    public IReadOnlyList<CueActionKind> BuilderActionKinds { get; } = Enum.GetValues<CueActionKind>();
-    public IReadOnlyList<CueMidiCommandType> MidiBuilderCommandTypes { get; } = Enum.GetValues<CueMidiCommandType>();
+    public IReadOnlyList<CueActionKind> ActionKinds { get; } = Enum.GetValues<CueActionKind>();
+
+    public string SelectedActionEndpointSummary
+    {
+        get
+        {
+            if (SelectedCueNode?.Kind != CueNodeKind.Action)
+                return string.Empty;
+
+            if (!Guid.TryParse(SelectedCueNode.EndpointIdText, out var endpointId))
+                return Strings.NoActionTargetSelected;
+
+            return SelectedActionEndpoint is null
+                ? Strings.Format(nameof(Strings.ActionTargetMissingFormat), endpointId)
+                : Strings.Format(
+                    nameof(Strings.SelectedActionTargetFormat),
+                    SelectedActionEndpoint.Name,
+                    SelectedActionEndpoint.KindLabel,
+                    SelectedActionEndpoint.Summary);
+        }
+    }
 
     public string TransportState =>
         CurrentCueNode is null
@@ -1727,6 +1748,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSelectedGroupCue));
         OnPropertyChanged(nameof(HasSelectedCue));
         OnPropertyChanged(nameof(SelectedCueDrawerTitle));
+        OnPropertyChanged(nameof(SelectedActionEndpointSummary));
         AddAudioRouteCommand.NotifyCanExecuteChanged();
         RemoveAudioRouteCommand.NotifyCanExecuteChanged();
         ApplyCueDownmixPresetCommand.NotifyCanExecuteChanged();
@@ -1735,7 +1757,6 @@ public partial class CuePlayerViewModel : ViewModelBase
         StandbySelectedCommand.NotifyCanExecuteChanged();
         BrowseMediaSourceCommand.NotifyCanExecuteChanged();
         AssignSelectedActionEndpointCommand.NotifyCanExecuteChanged();
-        ApplyActionBuilderCommand.NotifyCanExecuteChanged();
         EditActionCueCommand.NotifyCanExecuteChanged();
         TogglePreviewCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(IsPreviewingSelectedCue));
@@ -1750,8 +1771,6 @@ public partial class CuePlayerViewModel : ViewModelBase
             SelectedActionEndpoint = ActionEndpoints.FirstOrDefault(e => e.Id == endpointId);
         else
             SelectedActionEndpoint = null;
-
-        SyncActionBuilderFromCue(value);
     }
 
     partial void OnSelectedAudioRouteChanged(CueAudioRouteViewModel? value)
@@ -1773,14 +1792,15 @@ public partial class CuePlayerViewModel : ViewModelBase
     partial void OnSelectedActionEndpointChanged(ActionEndpoint? value)
     {
         _ = value;
+        OnPropertyChanged(nameof(SelectedActionEndpointSummary));
         AssignSelectedActionEndpointCommand.NotifyCanExecuteChanged();
     }
 
-    partial void OnBuilderActionKindChanged(CueActionKind value)
+    partial void OnIsCueEditModeChanged(bool value)
     {
         _ = value;
-        OnPropertyChanged(nameof(IsOscBuilderVisible));
-        OnPropertyChanged(nameof(IsMidiBuilderVisible));
+        MoveSelectedCueUpCommand.NotifyCanExecuteChanged();
+        MoveSelectedCueDownCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnStandbyCueNodeChanged(CueNodeViewModel? value)
@@ -1830,13 +1850,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Next file media cues from standby for the cue engine's own opened/routed cache.</summary>
     public IReadOnlyList<MediaCueNode> GetPreparedMediaCueTargets(int maxCount)
     {
-        if (maxCount <= 0)
-            return [];
+        var effectiveMax = ResolvePreRollTargetLimit(maxCount);
 
         var targets = new List<MediaCueNode>();
         foreach (var cue in EnumeratePreRollWindow())
         {
-            if (targets.Count >= maxCount)
+            if (targets.Count >= effectiveMax)
                 break;
             if (cue.Kind != CueNodeKind.Media
                 || cue.DisablePreRoll // per-cue resource opt-out
@@ -1852,13 +1871,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>NDI media cues in the pre-roll window (§6.11).</summary>
     public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNdiPreConnectTargets(int maxCount)
     {
-        if (maxCount <= 0)
-            return [];
+        var effectiveMax = ResolvePreRollTargetLimit(maxCount);
 
         var targets = new List<(Guid, NDIInputPlaylistItem)>();
         foreach (var cue in EnumeratePreRollWindow())
         {
-            if (targets.Count >= maxCount)
+            if (targets.Count >= effectiveMax)
                 break;
             if (cue.Kind != CueNodeKind.Media
                 || cue.DisablePreRoll // per-cue resource opt-out
@@ -1870,6 +1888,9 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         return targets;
     }
+
+    private static int ResolvePreRollTargetLimit(int maxCount) =>
+        maxCount <= 0 ? int.MaxValue : maxCount;
 
     partial void OnCurrentCueNodeChanged(CueNodeViewModel? value)
     {
@@ -2895,7 +2916,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (result is null) return;
 
         SelectedCueList.PreRollCount = Math.Max(0, result.PreRollCount);
-        SelectedCueList.MaxPreparedDecoders = Math.Clamp(result.MaxPreparedDecoders, 1, 16);
+        SelectedCueList.MaxPreparedDecoders = Math.Max(0, result.MaxPreparedDecoders);
         SelectedCueList.DefaultTriggerMode = result.DefaultTriggerMode;
         SelectedCueList.AutoRenumberOnInsert = result.AutoRenumberOnInsert;
         StatusMessage = Strings.CueListSettingsAppliedStatus;
@@ -2913,7 +2934,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanMoveSelectedCue))]
     private void MoveSelectedCueDown() => MoveSelectedCue(+1);
 
-    private bool CanMoveSelectedCue() => SelectedCueNode is not null && SelectedCueList is not null;
+    private bool CanMoveSelectedCue() => IsCueEditMode && SelectedCueNode is not null && SelectedCueList is not null;
 
     private void MoveSelectedCue(int delta)
     {
@@ -2927,21 +2948,88 @@ public partial class CuePlayerViewModel : ViewModelBase
         parent.RemoveAt(idx);
         parent.Insert(next, node);
         SelectedCueNode = node;
+        MaybeRenumberAfterStructureChange();
+        SuggestPreRollRefresh();
     }
 
-    /// <summary>Move <paramref name="node"/> to <paramref name="targetIndex"/> within the same
-    /// parent collection. Used by drag-reorder in the view.</summary>
-    public void ReorderCueNode(CueNodeViewModel node, int targetIndex)
+    /// <summary>Moves a cue anywhere in the active cue-list tree. Used by drag/drop in the view.
+    /// Dropping <see cref="CueNodeDropPlacement.Inside"/> onto a group appends to that group;
+    /// dropping onto a non-group falls back to after the target.</summary>
+    public bool MoveCueNode(CueNodeViewModel node, CueNodeViewModel? target, CueNodeDropPlacement placement)
     {
-        if (SelectedCueList is null) return;
-        if (FindParentCollection(SelectedCueList.Nodes, node) is not IList<CueNodeViewModel> parent)
-            return;
-        var idx = parent.IndexOf(node);
-        if (idx < 0 || targetIndex < 0 || targetIndex >= parent.Count || idx == targetIndex) return;
-        parent.RemoveAt(idx);
-        if (targetIndex > idx) targetIndex--;
-        parent.Insert(Math.Min(targetIndex, parent.Count), node);
+        ArgumentNullException.ThrowIfNull(node);
+        if (!IsCueEditMode || SelectedCueList is null)
+            return false;
+        if (target is not null && ReferenceEquals(node, target))
+            return false;
+        if (target is not null && ContainsNode(node.Children, target))
+            return false;
+
+        if (FindParentCollection(SelectedCueList.Nodes, node) is not IList<CueNodeViewModel> sourceParent)
+            return false;
+
+        IList<CueNodeViewModel> destinationParent;
+        var destinationIndex = 0;
+        if (target is null)
+        {
+            destinationParent = SelectedCueList.Nodes;
+            destinationIndex = destinationParent.Count;
+        }
+        else if (placement == CueNodeDropPlacement.Inside && target.IsGroup)
+        {
+            destinationParent = target.Children;
+            destinationIndex = destinationParent.Count;
+            target.IsExpanded = true;
+        }
+        else
+        {
+            destinationParent = FindParentCollection(SelectedCueList.Nodes, target) as IList<CueNodeViewModel>
+                ?? SelectedCueList.Nodes;
+            destinationIndex = destinationParent.IndexOf(target);
+            if (destinationIndex < 0)
+                return false;
+            if (placement != CueNodeDropPlacement.Before)
+                destinationIndex++;
+        }
+
+        var sourceIndex = sourceParent.IndexOf(node);
+        if (sourceIndex < 0)
+            return false;
+        if (ReferenceEquals(sourceParent, destinationParent) && destinationIndex > sourceIndex)
+            destinationIndex--;
+        if (ReferenceEquals(sourceParent, destinationParent) && destinationIndex == sourceIndex)
+            return false;
+
+        sourceParent.RemoveAt(sourceIndex);
+        destinationIndex = Math.Clamp(destinationIndex, 0, destinationParent.Count);
+        destinationParent.Insert(destinationIndex, node);
         SelectedCueNode = node;
+        MaybeRenumberAfterStructureChange();
+        SuggestPreRollRefresh();
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = target is null
+            ? "Moved cue to root level."
+            : placement == CueNodeDropPlacement.Inside && target.IsGroup
+                ? $"Moved cue into '{target.Label}'."
+                : $"Moved cue near '{target.Label}'.";
+        return true;
+    }
+
+    private void MaybeRenumberAfterStructureChange()
+    {
+        if (SelectedCueList?.AutoRenumberOnInsert == true)
+            RenumberSubtree(SelectedCueList.Nodes, start: 1, step: 1, recurseIntoGroups: true);
+    }
+
+    private static bool ContainsNode(IEnumerable<CueNodeViewModel> nodes, CueNodeViewModel target)
+    {
+        foreach (var node in nodes)
+        {
+            if (ReferenceEquals(node, target) || ContainsNode(node.Children, target))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>Deep-copy the selected cue with a fresh id and insert immediately after the
@@ -3102,27 +3190,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (SelectedCueNode is not { Kind: CueNodeKind.Action } actionCue || SelectedActionEndpoint is null)
             return;
         actionCue.EndpointIdText = SelectedActionEndpoint.Id.ToString();
+        OnPropertyChanged(nameof(SelectedActionEndpointSummary));
     }
 
     private bool CanAssignSelectedActionEndpoint() =>
         SelectedCueNode?.Kind == CueNodeKind.Action && SelectedActionEndpoint is not null;
-
-    [RelayCommand(CanExecute = nameof(CanApplyActionBuilder))]
-    private void ApplyActionBuilder()
-    {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Action } cue)
-            return;
-
-        if (SelectedActionEndpoint is not null)
-            cue.EndpointIdText = SelectedActionEndpoint.Id.ToString();
-
-        cue.Extra = BuilderActionKind.ToString();
-        cue.SourceOrAction = BuilderActionKind == CueActionKind.OscOut
-            ? BuildOscCommandText()
-            : BuildMidiCommandText();
-    }
-
-    private bool CanApplyActionBuilder() => SelectedCueNode?.Kind == CueNodeKind.Action;
 
     [RelayCommand(CanExecute = nameof(CanEditActionCue))]
     private async Task EditActionCueAsync()
@@ -3152,6 +3224,10 @@ public partial class CuePlayerViewModel : ViewModelBase
             cue.EndpointIdText = string.Empty;
         cue.Extra = result.ActionKind.ToString();
         cue.SourceOrAction = result.CommandText;
+        SelectedActionEndpoint = result.EndpointId is { } resultEndpointId
+            ? ActionEndpoints.FirstOrDefault(e => e.Id == resultEndpointId)
+            : null;
+        OnPropertyChanged(nameof(SelectedActionEndpointSummary));
         StatusMessage = Strings.Format(nameof(Strings.UpdatedActionCueStatusFormat), CueDisplay(cue));
     }
 
@@ -3341,100 +3417,6 @@ public partial class CuePlayerViewModel : ViewModelBase
             ? cue.Label
             : $"{cue.Number} {cue.Label}".Trim();
 
-    private string BuildOscCommandText()
-    {
-        var address = string.IsNullOrWhiteSpace(OscBuilderAddress)
-            ? Strings.OscBuilderDefaultAddress
-            : OscBuilderAddress.Trim();
-        if (!address.StartsWith('/'))
-            address = "/" + address;
-        return string.IsNullOrWhiteSpace(OscBuilderArguments)
-            ? address
-            : $"{address} {OscBuilderArguments.Trim()}";
-    }
-
-    private string BuildMidiCommandText()
-    {
-        var channel = Math.Clamp(MidiBuilderChannel, 1, 16);
-        var d1 = Math.Clamp(MidiBuilderData1, 0, 127);
-        var d2 = Math.Clamp(MidiBuilderData2, 0, 127);
-        return MidiBuilderCommandType switch
-        {
-            CueMidiCommandType.NoteOn => $"ch{channel} noteon {d1} {d2}",
-            CueMidiCommandType.NoteOff => $"ch{channel} noteoff {d1} {d2}",
-            CueMidiCommandType.ControlChange => $"ch{channel} cc {d1} {d2}",
-            CueMidiCommandType.ProgramChange => $"ch{channel} pc {d1}",
-            _ => $"ch{channel} noteon {d1} {d2}",
-        };
-    }
-
-    private void SyncActionBuilderFromCue(CueNodeViewModel? cue)
-    {
-        if (cue?.Kind != CueNodeKind.Action)
-            return;
-
-        BuilderActionKind = Enum.TryParse<CueActionKind>(cue.Extra, out var actionKind)
-            ? actionKind
-            : CueActionKind.OscOut;
-
-        if (BuilderActionKind == CueActionKind.OscOut)
-        {
-            var raw = cue.SourceOrAction?.Trim() ?? string.Empty;
-            if (string.IsNullOrWhiteSpace(raw))
-            {
-                OscBuilderAddress = Strings.OscBuilderDefaultAddress;
-                OscBuilderArguments = Strings.OscBuilderDefaultArgument;
-                return;
-            }
-
-            var split = raw.Split(' ', 2, StringSplitOptions.TrimEntries);
-            OscBuilderAddress = split[0];
-            OscBuilderArguments = split.Length > 1 ? split[1] : string.Empty;
-            return;
-        }
-
-        ParseMidiBuilderFromSource(cue.SourceOrAction);
-    }
-
-    private void ParseMidiBuilderFromSource(string? raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw))
-            return;
-
-        var tokens = raw.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0)
-            return;
-
-        var idx = 0;
-        if (tokens[0].StartsWith("ch", StringComparison.OrdinalIgnoreCase))
-        {
-            var channelToken = tokens[0];
-            var valueText = channelToken.Contains('=')
-                ? channelToken[(channelToken.IndexOf('=') + 1)..]
-                : channelToken[2..];
-            if (int.TryParse(valueText, out var parsedChannel))
-                MidiBuilderChannel = Math.Clamp(parsedChannel, 1, 16);
-            idx++;
-        }
-
-        if (idx >= tokens.Length)
-            return;
-
-        var cmd = tokens[idx++].ToLowerInvariant();
-        MidiBuilderCommandType = cmd switch
-        {
-            "noteoff" => CueMidiCommandType.NoteOff,
-            "cc" => CueMidiCommandType.ControlChange,
-            "pc" or "program" => CueMidiCommandType.ProgramChange,
-            _ => CueMidiCommandType.NoteOn,
-        };
-
-        if (idx < tokens.Length && int.TryParse(tokens[idx], out var d1))
-            MidiBuilderData1 = Math.Clamp(d1, 0, 127);
-        if (idx + 1 < tokens.Length && int.TryParse(tokens[idx + 1], out var d2))
-            MidiBuilderData2 = Math.Clamp(d2, 0, 127);
-    }
-
     private static CueGroupFireMode ParseGroupFireMode(CueNodeViewModel group) =>
         Enum.TryParse<CueGroupFireMode>(group.Extra, out var mode)
             ? mode
@@ -3576,13 +3558,12 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public IReadOnlyList<(Guid CueId, PortAudioInputPlaylistItem Item)> GetPortAudioPreConnectTargets(int maxCount)
     {
-        if (maxCount <= 0)
-            return [];
+        var effectiveMax = ResolvePreRollTargetLimit(maxCount);
 
         var targets = new List<(Guid, PortAudioInputPlaylistItem)>();
         foreach (var cue in EnumeratePreRollWindow())
         {
-            if (targets.Count >= maxCount)
+            if (targets.Count >= effectiveMax)
                 break;
             if (cue.Kind != CueNodeKind.Media
                 || cue.DisablePreRoll // per-cue resource opt-out

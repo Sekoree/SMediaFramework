@@ -48,6 +48,7 @@ public partial class MainViewModel : ViewModelBase
         };
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
+        RecentProjects.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoRecentProjects));
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
@@ -358,6 +359,8 @@ public partial class MainViewModel : ViewModelBase
     public ObservableCollection<MidiInputOption> MidiInputOptions { get; } = new();
     public ObservableCollection<ProjectMidiInputRowViewModel> ProjectMidiInputRows { get; } = new();
     public ObservableCollection<ProjectMidiOutputRowViewModel> ProjectMidiOutputRows { get; } = new();
+    public bool HasNoProjectMidiInputs => ProjectMidiInputRows.Count == 0;
+    public bool HasNoProjectMidiOutputs => ProjectMidiOutputRows.Count == 0;
 
     [ObservableProperty]
     private string? _midiDeviceStatus;
@@ -525,6 +528,8 @@ public partial class MainViewModel : ViewModelBase
         ProjectMidiOutputRows.Clear();
         foreach (var row in BuildProjectMidiOutputRows(Control.BuildSnapshot(), ActionEndpoints))
             ProjectMidiOutputRows.Add(row);
+        OnPropertyChanged(nameof(HasNoProjectMidiInputs));
+        OnPropertyChanged(nameof(HasNoProjectMidiOutputs));
 
         SelectedProjectMidiInputRow = selectedInputKey is null
             ? ProjectMidiInputRows.FirstOrDefault()
@@ -1255,47 +1260,9 @@ public partial class MainViewModel : ViewModelBase
 
     private static MidiSpec ParseMidiSpec(string raw, MidiActionEndpoint? endpoint, int fallbackDeviceId)
     {
-        var tokens = raw
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .ToList();
-        if (tokens.Count == 0)
-            throw new InvalidOperationException(Strings.MidiActionRequiresMessage);
-
-        byte channel = (byte)Math.Clamp(endpoint?.Channel ?? 0, 0, 15);
-        var idx = 0;
-        if (tokens[0].StartsWith("ch", StringComparison.OrdinalIgnoreCase))
-        {
-            var rawCh = tokens[0].AsSpan(tokens[0].Contains('=') ? tokens[0].IndexOf('=') + 1 : 2);
-            if (int.TryParse(rawCh, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
-                channel = (byte)Math.Clamp(parsed - 1, 0, 15);
-            idx++;
-        }
-
-        if (idx >= tokens.Count)
-            throw new InvalidOperationException(Strings.MidiActionCommandMissing);
-
-        var cmd = tokens[idx++].ToLowerInvariant();
-        IMIDIMessage msg = cmd switch
-        {
-            "noteon" => new NoteOn(channel, ParseByte(tokens, idx++, "note"), ParseByte(tokens, idx++, "velocity")),
-            "noteoff" => new NoteOff(channel, ParseByte(tokens, idx++, "note"),
-                idx < tokens.Count ? ParseByte(tokens, idx++, "velocity") : (byte)0),
-            "cc" => new ControlChange(channel, ParseByte(tokens, idx++, "controller"), ParseByte(tokens, idx++, "value")),
-            "pc" or "program" => new ProgramChange(channel, ParseByte(tokens, idx++, "program")),
-            _ => throw new InvalidOperationException(Strings.Format(nameof(Strings.UnsupportedMidiCommandFormat), cmd)),
-        };
-
         var deviceId = endpoint?.DeviceId ?? fallbackDeviceId;
-        return new MidiSpec(deviceId, msg, Strings.Format(nameof(Strings.MidiSpecDescriptionFormat), cmd, channel + 1));
-    }
-
-    private static byte ParseByte(IReadOnlyList<string> tokens, int index, string name)
-    {
-        if (index < 0 || index >= tokens.Count)
-            throw new InvalidOperationException(Strings.Format(nameof(Strings.MidiArgumentMissingFormat), name));
-        if (!int.TryParse(tokens[index], NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
-            throw new InvalidOperationException(Strings.Format(nameof(Strings.MidiArgumentInvalidFormat), name, tokens[index]));
-        return (byte)Math.Clamp(value, 0, 127);
+        var parsed = CueMidiActionMessage.CreateMessage(raw, endpoint?.Channel ?? 0);
+        return new MidiSpec(deviceId, parsed.Message, parsed.Description);
     }
 
     private static OSCArgument ParseOscArgumentToken(string token)
@@ -1397,6 +1364,7 @@ public partial class MainViewModel : ViewModelBase
     private string? _projectStatus;
 
     public ObservableCollection<string> RecentProjects { get; } = new();
+    public bool HasNoRecentProjects => RecentProjects.Count == 0;
 
     public bool HasOpenProject => !string.IsNullOrEmpty(CurrentProjectPath);
 
@@ -1728,7 +1696,7 @@ public partial class MainViewModel : ViewModelBase
             if (!File.Exists(path))
                 return;
             using var stream = File.OpenRead(path);
-            var list = JsonSerializer.Deserialize<List<string>>(stream);
+            var list = JsonSerializer.Deserialize(stream, AppSettingsJsonContext.Default.ListString);
             if (list is null) return;
             RecentProjects.Clear();
             foreach (var p in list.Take(RecentProjectsCap))
@@ -1748,7 +1716,7 @@ public partial class MainViewModel : ViewModelBase
             Directory.CreateDirectory(dir);
 
         using var stream = File.Create(path);
-        JsonSerializer.Serialize(stream, RecentProjects.ToList());
+        JsonSerializer.Serialize(stream, RecentProjects.ToList(), AppSettingsJsonContext.Default.ListString);
     }
 
     /// <summary>Bound from the recent-projects menu items.</summary>

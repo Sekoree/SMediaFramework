@@ -28,18 +28,7 @@ public sealed class CuePlaybackEngine : IDisposable
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.CuePlaybackEngine");
     private static readonly TimeSpan BoundedPauseTimeout = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan BoundedDisposeTimeout = TimeSpan.FromSeconds(5);
-
-    /// <summary>Default resource-policy ceiling on concurrently-prepared standby decoders when a list
-    /// doesn't specify its own (<see cref="HaPlay.Models.CueList.MaxPreparedDecoders"/>). Each prepared
-    /// cue holds an opened + seeked decoder, independent of the requested pre-roll window size.</summary>
-    private const int DefaultMaxPreparedDecoders = 6;
-
-    /// <summary>Hard upper bound the per-list configurable cap is clamped to, so a mistyped value can't
-    /// pin a large number of long H.264 decoders open at once.</summary>
-    private const int MaxPreparedDecodersCeiling = 16;
-
-    private static int ResolveStandbyDecoderCap(int configured) =>
-        Math.Clamp(configured > 0 ? configured : DefaultMaxPreparedDecoders, 1, MaxPreparedDecodersCeiling);
+    private static readonly TimeSpan SoftStopFadeDuration = TimeSpan.FromMilliseconds(750);
 
     private readonly OutputManagementViewModel _outputs;
     private readonly CuePlayerViewModel _cuePlayer;
@@ -195,9 +184,6 @@ public sealed class CuePlaybackEngine : IDisposable
             return;
         }
 
-        // Per-list resource cap (clamped) on how many standby decoders we hold at once.
-        var cap = ResolveStandbyDecoderCap(list.MaxPreparedDecoders);
-
         var specs = new List<ClipSpec>();
         foreach (var cue in cues)
         {
@@ -218,7 +204,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
         await _standby.RefreshStandbyAsync(
                 specs,
-                new ClipStandbyPolicy(MaxPreparedDecoders: cap, Window: specs.Count),
+                new ClipStandbyPolicy(MaxPreparedDecoders: Math.Max(0, list.MaxPreparedDecoders), Window: specs.Count),
                 ct)
             .ConfigureAwait(false);
     }
@@ -569,18 +555,20 @@ public sealed class CuePlaybackEngine : IDisposable
             _active.Clear();
         }
         foreach (var entry in toDispose)
-            await DisposeEntryAsync(entry).ConfigureAwait(false);
+            await DisposeEntryAsync(entry, releaseFade: SoftStopFadeDuration).ConfigureAwait(false);
         await _standby.RefreshStandbyAsync([], new ClipStandbyPolicy()).ConfigureAwait(false);
     }
 
     /// <summary>Stop a specific cue.</summary>
     public async Task StopCueAsync(Guid cueId)
     {
-        await StopActiveCueAsync(cueId).ConfigureAwait(false);
+        await StopActiveCueAsync(cueId, SoftStopFadeDuration).ConfigureAwait(false);
         await _standby.RemoveStandbyAsync(cueId.ToString("N")).ConfigureAwait(false);
     }
 
-    private async Task StopActiveCueAsync(Guid cueId)
+    private Task StopActiveCueAsync(Guid cueId) => StopActiveCueAsync(cueId, releaseFade: TimeSpan.Zero);
+
+    private async Task StopActiveCueAsync(Guid cueId, TimeSpan releaseFade)
     {
         ActiveCue? entry;
         lock (_gate)
@@ -588,7 +576,7 @@ public sealed class CuePlaybackEngine : IDisposable
             if (!_active.Remove(cueId, out entry))
                 return;
         }
-        await DisposeEntryAsync(entry).ConfigureAwait(false);
+        await DisposeEntryAsync(entry, releaseFade: releaseFade).ConfigureAwait(false);
     }
 
     /// <summary>Pause or resume every active cue without tearing down decoders or routes.</summary>
@@ -677,9 +665,13 @@ public sealed class CuePlaybackEngine : IDisposable
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: PreparedCuesChanged handler"); }
     }
 
-    private async Task DisposeEntryAsync(ActiveCue entry, bool notifyEnded = true)
+    private async Task DisposeEntryAsync(ActiveCue entry, bool notifyEnded = true, TimeSpan releaseFade = default)
     {
         try { entry.Cts.Cancel(); } catch { /* best effort */ }
+
+        if (releaseFade > TimeSpan.Zero)
+            await FadeEntryOutputsAsync(entry, releaseFade).ConfigureAwait(false);
+
         try { entry.Cts.Dispose(); } catch { /* best effort */ }
 
         // Detach from shared runtimes on UI thread (lightweight ops).
@@ -735,6 +727,54 @@ public sealed class CuePlaybackEngine : IDisposable
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: CueEnded handler"); }
             }
         });
+    }
+
+    private async Task FadeEntryOutputsAsync(ActiveCue entry, TimeSpan duration)
+    {
+        if (duration <= TimeSpan.Zero)
+            return;
+
+        var audioTasks = entry.AudioSources
+            .Select(source => FadeAudioSourceAsync(source.Runtime, source.SourceId, duration))
+            .ToList();
+        var videoTask = FadeVideoSlotsAsync(entry.LayerSlots, duration);
+
+        try
+        {
+            await Task.WhenAll(audioTasks.Append(videoTask)).WaitAsync(duration + TimeSpan.FromMilliseconds(250)).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            Trace.LogWarning("CuePlaybackEngine.FadeEntryOutputsAsync: fade timed out after {Duration}", duration);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "CuePlaybackEngine.FadeEntryOutputsAsync");
+        }
+    }
+
+    private static async Task FadeAudioSourceAsync(ClipAudioOutputRuntime runtime, string sourceId, TimeSpan duration)
+    {
+        try { await runtime.FadeOutSourceAsync(sourceId, duration).ConfigureAwait(false); }
+        catch { /* runtime may already be disposed or the route may already be gone */ }
+    }
+
+    private static async Task FadeVideoSlotsAsync(IReadOnlyList<CueCompositionRuntime.LayerSlot> slots, TimeSpan duration)
+    {
+        if (slots.Count == 0)
+            return;
+
+        var startOpacities = slots.Select(slot => slot.Opacity).ToArray();
+        var steps = Math.Clamp((int)Math.Ceiling(Math.Max(1, duration.TotalMilliseconds) / 33.0), 1, 120);
+        var delay = TimeSpan.FromTicks(Math.Max(1, duration.Ticks / steps));
+        for (var step = 1; step <= steps; step++)
+        {
+            var scale = Math.Clamp(1f - (float)step / steps, 0f, 1f);
+            for (var i = 0; i < slots.Count; i++)
+                slots[i].Opacity = startOpacities[i] * scale;
+            if (step < steps)
+                await Task.Delay(delay).ConfigureAwait(false);
+        }
     }
 
     private void ReleaseEmptyRuntimes()

@@ -54,18 +54,32 @@ public partial class MainWindow : Window
             return;
         }
 
+        var candidate = new PixelPoint(snap.X, snap.Y);
+        var workingArea = FindWorkingArea(candidate) ?? Screens?.Primary?.WorkingArea;
+
         // Size first — Width/Height on a non-maximized window are the un-maximized values.
         if (snap.Width > 200 && snap.Height > 150)
         {
-            Width = snap.Width;
-            Height = snap.Height;
+            Width = workingArea is { } area
+                ? Math.Clamp(snap.Width, MinWidth, Math.Max(MinWidth, area.Width))
+                : snap.Width;
+            Height = workingArea is { } area2
+                ? Math.Clamp(snap.Height, MinHeight, Math.Max(MinHeight, area2.Height))
+                : snap.Height;
         }
 
         // Position: only honor when the point lands within a visible screen. Otherwise let the platform
         // pick (typically center of primary monitor).
-        var candidate = new PixelPoint(snap.X, snap.Y);
-        if (IsPointOnAnyScreen(candidate))
+        if (FindWorkingArea(candidate) is not null)
+        {
             Position = candidate;
+        }
+        else if (workingArea is { } area)
+        {
+            Position = new PixelPoint(
+                area.X + Math.Max(0, (area.Width - (int)Width) / 2),
+                area.Y + Math.Max(0, (area.Height - (int)Height) / 2));
+        }
 
         if (snap.IsMaximized)
             WindowState = WindowState.Maximized;
@@ -73,15 +87,15 @@ public partial class MainWindow : Window
         CaptureNormalSample();
     }
 
-    private bool IsPointOnAnyScreen(PixelPoint point)
+    private PixelRect? FindWorkingArea(PixelPoint point)
     {
-        if (Screens is null) return false;
+        if (Screens is null) return null;
         foreach (var s in Screens.All)
         {
             if (s.Bounds.Contains(point))
-                return true;
+                return s.WorkingArea;
         }
-        return false;
+        return null;
     }
 
     private void OnGeometryChanged()

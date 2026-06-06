@@ -77,6 +77,15 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             await OscListeners.StartAsync(cancellationToken).ConfigureAwait(false);
             _midiSessions?.Start(MidiDevices, cancellationToken);
             StartTickLoop(cancellationToken);
+
+            // Fire LayerEnabled for the initially-active layer so layer-scoped scripts' LayerEnabled
+            // handlers run on arm. The active layer is seeded in the runtime constructor without an event,
+            // so without this a layer surface couldn't load the console's state until the operator switched
+            // layers — which is why setups previously needed a periodic re-sync. Runs after the OSC/MIDI
+            // sessions are up so the handler can request values and drive feedback. Script faults are
+            // captured in the dispatch result (not thrown), so they won't abort the arm.
+            if (ScriptSession.ActiveLayerId is { } activeLayerId)
+                await EventQueue.DispatchLayerEnabledAsync(activeLayerId, cancellationToken).ConfigureAwait(false);
         }
         catch
         {

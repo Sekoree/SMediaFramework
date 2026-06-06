@@ -59,6 +59,12 @@ public sealed record ControlControlProfile
 
     public ControlProfileValueMode ValueMode { get; init; }
 
+    public bool MidiHighResolution14Bit { get; init; }
+
+    public int? MidiValueMin { get; init; }
+
+    public int? MidiValueMax { get; init; }
+
     public List<int> IncrementValues { get; init; } = new();
 
     public List<int> DecrementValues { get; init; } = new();
@@ -76,6 +82,7 @@ public enum ControlProfileControlKind
 public enum ControlProfileValueMode
 {
     Absolute7Bit,
+    Absolute14Bit,
     RelativeEncoder,
     NoteMomentary,
     PitchWheel,
@@ -158,11 +165,11 @@ public interface IControlDeviceProfileRepository
 
 public sealed class DirectoryControlDeviceProfileRepository : IControlDeviceProfileRepository
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        PropertyNameCaseInsensitive = true,
-        WriteIndented = true,
-    };
+    // External profile JSON uses the same source-generated, NativeAOT-safe contract as the rest of the
+    // control system (camelCase, indented, numeric enums). ControlSystemJsonContext already serializes
+    // ControlDeviceProfile and its whole graph, so reuse it instead of a reflection-based serializer.
+    private static readonly System.Text.Json.Serialization.Metadata.JsonTypeInfo<ControlDeviceProfile> ProfileTypeInfo =
+        ControlSystemJsonContext.Default.ControlDeviceProfile;
 
     private readonly IReadOnlyList<ControlDeviceProfile> _profiles;
 
@@ -229,7 +236,7 @@ public sealed class DirectoryControlDeviceProfileRepository : IControlDeviceProf
         if (!overwrite && File.Exists(path))
             throw new IOException($"Profile file already exists: {path}");
 
-        File.WriteAllText(path, JsonSerializer.Serialize(profile, JsonOptions));
+        File.WriteAllText(path, JsonSerializer.Serialize(profile, ProfileTypeInfo));
         return path;
     }
 
@@ -246,7 +253,7 @@ public sealed class DirectoryControlDeviceProfileRepository : IControlDeviceProf
         try
         {
             var json = File.ReadAllText(file);
-            var profile = JsonSerializer.Deserialize<ControlDeviceProfile>(json, JsonOptions);
+            var profile = JsonSerializer.Deserialize(json, ProfileTypeInfo);
             if (profile is null)
             {
                 issues.Add(new ControlDeviceProfileLoadIssue(file, "empty-profile", "Profile file did not contain a profile."));
@@ -369,7 +376,7 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
 
     private BuiltInControlDeviceProfileRepository()
     {
-        _profiles = [CreateXTouchMiniProfile(), CreateX32Profile(), CreateXAirProfile()];
+        _profiles = [CreateXTouchMiniProfile(), CreateBcf2000Profile(), CreateX32Profile(), CreateXAirProfile()];
     }
 
     public IReadOnlyList<ControlDeviceProfile> Profiles => _profiles;
@@ -470,6 +477,113 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
                 new ControlLayerProfile { Id = "layer.b", DisplayName = "Layer B" },
             ],
         };
+    }
+
+    /// <summary>
+    /// Behringer BCF2000 (8 motor faders + 8 rotary encoders + button banks). Encoders and faders are
+    /// configured for 14-bit (high-resolution) absolute CC — the input combiner pairs each coarse CC with
+    /// its fine partner (controller + 32), and the value range is the full 14-bit span (0–16383). All eight
+    /// faders/encoders and the LED buttons are read/write, so feedback can motorise the faders, position the
+    /// encoder LED rings, and drive the button LEDs. Mirrors <c>Reference/BCF2000.txt</c>.
+    /// </summary>
+    public static ControlDeviceProfile CreateBcf2000Profile()
+    {
+        const int HighResMax = 0x3FFF; // 16383 — the actual highest 14-bit value
+
+        var controls = new List<ControlControlProfile>();
+
+        for (var i = 0; i < 8; i++)
+        {
+            // Motor faders: 14-bit CC 0–7 (fine partners 32–39).
+            controls.Add(new ControlControlProfile
+            {
+                Id = $"bcf.fader.{i + 1}",
+                DisplayName = $"Motor Fader {i + 1}",
+                Kind = ControlProfileControlKind.Fader,
+                MidiController = i,
+                ValueMode = ControlProfileValueMode.Absolute14Bit,
+                MidiHighResolution14Bit = true,
+                MidiValueMin = 0,
+                MidiValueMax = HighResMax,
+            });
+            // Rotary encoders: 14-bit CC 10–17 (fine partners 42–49).
+            controls.Add(new ControlControlProfile
+            {
+                Id = $"bcf.encoder.{i + 1}",
+                DisplayName = $"Encoder {i + 1}",
+                Kind = ControlProfileControlKind.Encoder,
+                MidiController = 10 + i,
+                ValueMode = ControlProfileValueMode.Absolute14Bit,
+                MidiHighResolution14Bit = true,
+                MidiValueMin = 0,
+                MidiValueMax = HighResMax,
+            });
+            // Encoder press: notes 0–7 (momentary).
+            controls.Add(new ControlControlProfile
+            {
+                Id = $"bcf.encoder.{i + 1}.push",
+                DisplayName = $"Encoder {i + 1} Push",
+                Kind = ControlProfileControlKind.EncoderPush,
+                MidiNote = i,
+                ValueMode = ControlProfileValueMode.NoteMomentary,
+            });
+        }
+
+        // Latching, LED-backed button banks (NoteOn velocity 127 = lit). Row 1 + Row 2 are 8-wide;
+        // Groups 3/4/6 are 4-wide. Group 5 (notes 50–51) is momentary with no LED (handled the same here).
+        AddBcfButtons(controls, "row1", "Row 1 Button", baseNote: 10, count: 8);
+        AddBcfButtons(controls, "row2", "Row 2 Button", baseNote: 20, count: 8);
+        AddBcfButtons(controls, "group3", "Group 3 Button", baseNote: 30, count: 4);
+        AddBcfButtons(controls, "group4", "Group 4 Button", baseNote: 40, count: 4);
+        AddBcfButtons(controls, "group5", "Group 5 Button", baseNote: 50, count: 2);
+        AddBcfButtons(controls, "group6", "Group 6 Button", baseNote: 60, count: 4);
+
+        return new ControlDeviceProfile
+        {
+            Id = "behringer.bcf2000",
+            DisplayName = "Behringer BCF2000",
+            Protocol = ControlDeviceProtocol.Midi,
+            Version = "1.0",
+            Ports =
+            [
+                new ControlDevicePortProfile
+                {
+                    Id = "midi-in",
+                    DisplayName = "MIDI Input",
+                    Kind = ControlDevicePortKind.MidiInput,
+                },
+                new ControlDevicePortProfile
+                {
+                    Id = "midi-out",
+                    DisplayName = "MIDI Output",
+                    Kind = ControlDevicePortKind.MidiOutput,
+                },
+            ],
+            Controls = controls,
+            Layers =
+            [
+                new ControlLayerProfile { Id = "layer.1", DisplayName = "Channels 1-8" },
+                new ControlLayerProfile { Id = "layer.2", DisplayName = "Channels 9-16" },
+                new ControlLayerProfile { Id = "layer.3", DisplayName = "Channels 17-24" },
+                new ControlLayerProfile { Id = "layer.4", DisplayName = "Channels 25-32" },
+                new ControlLayerProfile { Id = "layer.5", DisplayName = "Outputs" },
+            ],
+        };
+    }
+
+    private static void AddBcfButtons(List<ControlControlProfile> controls, string idPart, string displayPrefix, int baseNote, int count)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            controls.Add(new ControlControlProfile
+            {
+                Id = $"bcf.button.{idPart}.{i + 1}",
+                DisplayName = $"{displayPrefix} {i + 1}",
+                Kind = ControlProfileControlKind.Button,
+                MidiNote = baseNote + i,
+                ValueMode = ControlProfileValueMode.NoteMomentary,
+            });
+        }
     }
 
     public static ControlDeviceProfile CreateX32Profile()
@@ -686,6 +800,16 @@ public static class ControlDeviceProfileValidator
         {
             if (string.IsNullOrWhiteSpace(command.Address))
                 issues.Add(new ControlDeviceProfileValidationIssue("missing-command-address", $"Command '{command.Id}' has no OSC address."));
+        }
+
+        foreach (var control in profile.Controls)
+        {
+            if (control.MidiValueMin.HasValue
+                && control.MidiValueMax.HasValue
+                && control.MidiValueMin.Value > control.MidiValueMax.Value)
+            {
+                issues.Add(new ControlDeviceProfileValidationIssue("invalid-control-range", $"Control '{control.Id}' has min above max."));
+            }
         }
 
         foreach (var task in profile.Tasks)

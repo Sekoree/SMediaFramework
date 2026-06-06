@@ -265,6 +265,10 @@ public sealed record ControlScriptTriggerConfig
 
     public int? MidiValue { get; init; }
 
+    public int? MidiValueMin { get; init; }
+
+    public int? MidiValueMax { get; init; }
+
     public int? MidiParameter { get; init; }
 
     public int? IntervalMs { get; init; }

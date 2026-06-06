@@ -51,22 +51,37 @@
                  IsVisible="{Binding SelectedCueList.Path, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
     </Grid>
 
-    <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8" ItemSpacing="6" LineSpacing="6">
-      <Button Content="{x:Static res:Strings.AddGroupButton}" Command="{Binding AddGroupCommand}" />
-      <Button Content="{x:Static res:Strings.AddMediaButton}" Command="{Binding AddMediaCueCommand}" />
-      <Button Content="{x:Static res:Strings.AddImageButton}" Command="{Binding AddImageCueCommand}" />
-      <Button Content="{x:Static res:Strings.AddTextButton}" Command="{Binding AddTextCueCommand}" />
-      <Button Content="{x:Static res:Strings.AddNdiInputCueButton}" Command="{Binding AddNdiInputCueCommand}" />
-      <Button Content="{x:Static res:Strings.AddPortAudioInputCueButton}" Command="{Binding AddPortAudioInputCueCommand}" />
-      <Button Content="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />
-      <Button Content="{x:Static res:Strings.AddCommentButton}" Command="{Binding AddCommentCueCommand}" />
-      <Button Content="{x:Static res:Strings.BrowseMediaButton}" Command="{Binding BrowseMediaSourceCommand}" />
-      <Button Content="{x:Static res:Strings.EditActionButton}" Command="{Binding EditActionCueCommand}" />
-      <Button Content="{x:Static res:Strings.RenumberButton}" Command="{Binding RenumberCommand}" />
-      <Button Content="{x:Static res:Strings.RemoveNodeButton}" Command="{Binding RemoveNodeCommand}" />
-    </WrapPanel>
+    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8" LastChildFill="False">
+      <Button DockPanel.Dock="Left" Content="{x:Static res:Strings.AddCueMenuButton}">
+        <Button.Flyout>
+          <MenuFlyout>
+            <MenuItem Header="{x:Static res:Strings.AddGroupButton}" Command="{Binding AddGroupCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddMediaButton}" Command="{Binding AddMediaCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddImageButton}" Command="{Binding AddImageCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddTextButton}" Command="{Binding AddTextCueCommand}" />
+            <Separator />
+            <MenuItem Header="{x:Static res:Strings.AddNdiInputCueButton}" Command="{Binding AddNdiInputCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddPortAudioInputCueButton}" Command="{Binding AddPortAudioInputCueCommand}" />
+            <Separator />
+            <MenuItem Header="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddCommentButton}" Command="{Binding AddCommentCueCommand}" />
+          </MenuFlyout>
+        </Button.Flyout>
+      </Button>
+      <Button DockPanel.Dock="Left" Margin="6,0,0,0" Content="{x:Static res:Strings.CueSelectionMenuButton}">
+        <Button.Flyout>
+          <MenuFlyout>
+            <MenuItem Header="{x:Static res:Strings.BrowseMediaButton}" Command="{Binding BrowseMediaSourceCommand}" />
+            <MenuItem Header="{x:Static res:Strings.EditActionButton}" Command="{Binding EditActionCueCommand}" />
+            <Separator />
+            <MenuItem Header="{x:Static res:Strings.RenumberButton}" Command="{Binding RenumberCommand}" />
+            <MenuItem Header="{x:Static res:Strings.RemoveNodeButton}" Command="{Binding RemoveNodeCommand}" />
+          </MenuFlyout>
+        </Button.Flyout>
+      </Button>
+    </DockPanel>
 
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6">
       <Button Grid.Column="0" Content="{x:Static res:Strings.StandbySelectedButton}" Command="{Binding StandbySelectedCommand}" />
       <Button Grid.Column="1" Content="{x:Static res:Strings.GoButton}" Command="{Binding GoCommand}" />
       <Button Grid.Column="2" Content="{x:Static res:Strings.BackButton}" Command="{Binding BackCommand}" />
@@ -74,6 +89,10 @@
       <Button Grid.Column="4" Content="{x:Static res:Strings.StopButton}" Command="{Binding StopCommand}" />
       <Button Grid.Column="5" Content="{x:Static res:Strings.PanicButton}" Command="{Binding PanicCommand}" />
       <TextBlock Grid.Column="6" Text="{Binding TransportState}" VerticalAlignment="Center" Margin="8,0,0,0" />
+      <ToggleSwitch Grid.Column="8"
+                    Content="Edit mode"
+                    ToolTip.Tip="Enable cue dragging and structural keyboard moves"
+                    IsChecked="{Binding IsCueEditMode, Mode=TwoWay}" />
     </Grid>
 
     <DockPanel LastChildFill="True">
@@ -170,7 +189,14 @@
                 Header="{Binding SelectedCueDrawerTitle}"
                 HorizontalAlignment="Stretch"
                 HorizontalContentAlignment="Stretch">
+        <StackPanel>
+        <TextBlock Margin="6,4,6,8"
+                   Text="{x:Static res:Strings.CueDetailsEmptyHint}"
+                   TextWrapping="Wrap"
+                   Opacity="0.65"
+                   IsVisible="{Binding !HasSelectedCue}" />
         <TabControl Margin="0,4,0,0" MinHeight="220"
+                    IsVisible="{Binding HasSelectedCue}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch">
           <TabItem Header="{x:Static res:Strings.GeneralTabLabel}"
@@ -537,13 +563,13 @@
                                  Value="{Binding SelectedCueNode.TextOutlineWidthPx, Mode=TwoWay}" />
                 </WrapPanel>
                 <WrapPanel ItemSpacing="8" LineSpacing="6">
-                  <TextBlock Text="Align H" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBlock Text="Horizontal align" VerticalAlignment="Center" Opacity="0.7" />
                   <ComboBox MinWidth="92" ItemsSource="{Binding TextHAlignOptions}"
                             SelectedItem="{Binding SelectedCueNode.TextHAlign, Mode=TwoWay}" />
-                  <TextBlock Text="Align V" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBlock Text="Vertical align" VerticalAlignment="Center" Opacity="0.7" />
                   <ComboBox MinWidth="92" ItemsSource="{Binding TextVAlignOptions}"
                             SelectedItem="{Binding SelectedCueNode.TextVAlign, Mode=TwoWay}" />
-                  <TextBlock Text="Wrap" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBlock Text="Wrap width" VerticalAlignment="Center" Opacity="0.7" />
                   <Slider Width="120" Minimum="0" Maximum="1" SmallChange="0.05"
                           Value="{Binding SelectedCueNode.TextWrapWidthFraction, Mode=TwoWay}" />
                 </WrapPanel>
@@ -557,9 +583,17 @@
                    IsVisible="{Binding HasSelectedActionCue}">
             <StackPanel Spacing="8" Margin="6">
               <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionTargetLabel}" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1"
+                           Text="{Binding SelectedActionEndpointSummary}"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Opacity="0.8" />
+              </Grid>
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
                 <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ActionKindLabel}" VerticalAlignment="Center" />
                 <ComboBox Grid.Column="1"
-                          ItemsSource="{Binding BuilderActionKinds}"
+                          ItemsSource="{Binding ActionKinds}"
                           SelectedItem="{Binding SelectedCueNode.ActionKind, Mode=TwoWay}" />
               </Grid>
               <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
@@ -595,6 +629,7 @@
             </StackPanel>
           </TabItem>
         </TabControl>
+        </StackPanel>
       </Expander>
 
       <Grid ColumnDefinitions="*,Auto,260">

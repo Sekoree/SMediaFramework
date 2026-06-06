@@ -5,6 +5,7 @@ using Avalonia.Controls.Templates;
 using Avalonia.Data;
 using Avalonia.Interactivity;
 using HaPlay.ViewModels;
+using HaPlay.Views;
 
 namespace HaPlay.Views.Dialogs;
 
@@ -114,10 +115,9 @@ public partial class AudioMatrixDialog : Window
             Padding = new Thickness(4, 2),
             DataContext = cell,
         };
-        spinner.Bind(NumericUpDown.ValueProperty, new Binding(nameof(AudioMatrixCellViewModel.GainDb))
-        {
-            Mode = BindingMode.TwoWay,
-        });
+        AotBinding.TwoWay(spinner, NumericUpDown.ValueProperty, cell, nameof(AudioMatrixCellViewModel.GainDb),
+            c => (decimal?)c.GainDb,
+            (c, v) => c.GainDb = v is decimal d ? (double)d : 0.0);
 
         var mute = new CheckBox
         {
@@ -128,10 +128,9 @@ public partial class AudioMatrixDialog : Window
             DataContext = cell,
         };
         ToolTip.SetTip(mute, "Mute this cell.");
-        mute.Bind(CheckBox.IsCheckedProperty, new Binding(nameof(AudioMatrixCellViewModel.Muted))
-        {
-            Mode = BindingMode.TwoWay,
-        });
+        AotBinding.TwoWay(mute, CheckBox.IsCheckedProperty, cell, nameof(AudioMatrixCellViewModel.Muted),
+            c => (bool?)c.Muted,
+            (c, v) => c.Muted = v is bool b && b);
 
         var panel = new StackPanel
         {
@@ -157,10 +156,9 @@ public partial class AudioMatrixDialog : Window
             Padding = new Thickness(4, 2),
             DataContext = row,
         };
-        spinner.Bind(NumericUpDown.ValueProperty, new Binding(nameof(AudioMatrixRouteRow.GainDb))
-        {
-            Mode = BindingMode.TwoWay,
-        });
+        AotBinding.TwoWay(spinner, NumericUpDown.ValueProperty, row, nameof(AudioMatrixRouteRow.GainDb),
+            r => (decimal?)r.GainDb,
+            (r, v) => r.GainDb = v is decimal d ? (double)d : 0.0);
         return spinner;
     }
 
@@ -176,10 +174,9 @@ public partial class AudioMatrixDialog : Window
             DataContext = row,
         };
         ToolTip.SetTip(mute, "Mute this route connection.");
-        mute.Bind(CheckBox.IsCheckedProperty, new Binding(nameof(AudioMatrixRouteRow.Muted))
-        {
-            Mode = BindingMode.TwoWay,
-        });
+        AotBinding.TwoWay(mute, CheckBox.IsCheckedProperty, row, nameof(AudioMatrixRouteRow.Muted),
+            r => (bool?)r.Muted,
+            (r, v) => r.Muted = v is bool b && b);
         return mute;
     }
 }

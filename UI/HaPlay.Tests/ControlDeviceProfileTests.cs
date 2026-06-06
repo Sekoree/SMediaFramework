@@ -12,6 +12,7 @@ public sealed class ControlDeviceProfileTests
         var repository = BuiltInControlDeviceProfileRepository.Instance;
 
         Assert.NotNull(repository.FindById("behringer.xtouch-mini.mc"));
+        Assert.NotNull(repository.FindById("behringer.bcf2000"));
         Assert.NotNull(repository.FindById("behringer.x32.osc"));
         Assert.NotNull(repository.FindById("behringer.xair.osc"));
         Assert.Null(repository.FindById("missing.profile"));
@@ -91,6 +92,51 @@ public sealed class ControlDeviceProfileTests
         var master = Assert.Single(profile.Controls, c => c.Id == "xtouch.master-fader");
         Assert.Equal(ControlProfileControlKind.Fader, master.Kind);
         Assert.Equal(ControlProfileValueMode.PitchWheel, master.ValueMode);
+
+        Assert.Empty(ControlDeviceProfileValidator.Validate(profile));
+    }
+
+    [Fact]
+    public void Bcf2000Profile_Uses14BitFadersEncodersAndButtonBanks()
+    {
+        var profile = BuiltInControlDeviceProfileRepository.CreateBcf2000Profile();
+
+        Assert.Equal("behringer.bcf2000", profile.Id);
+        Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MidiInput);
+        Assert.Contains(profile.Ports, p => p.Kind == ControlDevicePortKind.MidiOutput);
+
+        // Motor faders: 14-bit absolute CC 0..7 across the full 14-bit range.
+        var fader1 = Assert.Single(profile.Controls, c => c.Id == "bcf.fader.1");
+        Assert.Equal(ControlProfileControlKind.Fader, fader1.Kind);
+        Assert.Equal(0, fader1.MidiController);
+        Assert.Equal(ControlProfileValueMode.Absolute14Bit, fader1.ValueMode);
+        Assert.True(fader1.MidiHighResolution14Bit);
+        Assert.Equal(0, fader1.MidiValueMin);
+        Assert.Equal(16383, fader1.MidiValueMax);
+        Assert.Equal(7, Assert.Single(profile.Controls, c => c.Id == "bcf.fader.8").MidiController);
+
+        // Rotary encoders: 14-bit absolute CC 10..17.
+        var enc1 = Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.1");
+        Assert.Equal(ControlProfileControlKind.Encoder, enc1.Kind);
+        Assert.Equal(10, enc1.MidiController);
+        Assert.True(enc1.MidiHighResolution14Bit);
+        Assert.Equal(16383, enc1.MidiValueMax);
+        Assert.Equal(17, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.8").MidiController);
+
+        // Encoder press: notes 0..7.
+        Assert.Equal(0, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.1.push").MidiNote);
+        Assert.Equal(7, Assert.Single(profile.Controls, c => c.Id == "bcf.encoder.8.push").MidiNote);
+
+        // Button banks: Row 1 notes 10..17, Row 2 20..27, Group 6 up to 63.
+        Assert.Equal(10, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row1.1").MidiNote);
+        Assert.Equal(17, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row1.8").MidiNote);
+        Assert.Equal(20, Assert.Single(profile.Controls, c => c.Id == "bcf.button.row2.1").MidiNote);
+        Assert.Equal(63, Assert.Single(profile.Controls, c => c.Id == "bcf.button.group6.4").MidiNote);
+
+        // 8 faders + 8 encoders + 8 pushes + (8+8+4+4+2+4) buttons = 54.
+        Assert.Equal(54, profile.Controls.Count);
+        Assert.Equal(5, profile.Layers.Count);
 
         Assert.Empty(ControlDeviceProfileValidator.Validate(profile));
     }
@@ -236,9 +282,13 @@ public sealed class ControlDeviceProfileTests
                 {
                     Id = "learned.button.1",
                     DisplayName = "Learned Button 1",
-                    Kind = ControlProfileControlKind.Button,
-                    MidiNote = 60,
-                    ValueMode = ControlProfileValueMode.NoteMomentary,
+                    Kind = ControlProfileControlKind.Fader,
+                    MidiChannel = 1,
+                    MidiController = 16,
+                    MidiHighResolution14Bit = true,
+                    MidiValueMin = 0,
+                    MidiValueMax = 10000,
+                    ValueMode = ControlProfileValueMode.Absolute14Bit,
                 },
             ],
         };
@@ -254,7 +304,12 @@ public sealed class ControlDeviceProfileTests
             Assert.Empty(repository.LoadIssues);
             var loaded = Assert.Single(repository.Profiles);
             Assert.Equal("Learned X-Touch Custom", loaded.DisplayName);
-            Assert.Equal(60, Assert.Single(loaded.Controls).MidiNote);
+            var control = Assert.Single(loaded.Controls);
+            Assert.Equal(ControlProfileValueMode.Absolute14Bit, control.ValueMode);
+            Assert.True(control.MidiHighResolution14Bit);
+            Assert.Equal(16, control.MidiController);
+            Assert.Equal(0, control.MidiValueMin);
+            Assert.Equal(10000, control.MidiValueMax);
         }
         finally
         {

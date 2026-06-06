@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace S.Media.Playback;
 
@@ -45,6 +46,11 @@ public sealed record CueShowFile(
     IReadOnlyList<OutputPatchRoute> Outputs,
     IReadOnlyList<OutputPatchRoute> Routes,
     IReadOnlyList<string> Devices);
+
+// Source-generated, NativeAOT-safe contract for the cue show file (default PascalCase naming, indented).
+[JsonSourceGenerationOptions(WriteIndented = true)]
+[JsonSerializable(typeof(CueShowFile))]
+internal partial class CueShowFileJsonContext : JsonSerializerContext;
 
 public sealed record CueExecutionLogEntry(
     string CueId,
@@ -180,10 +186,10 @@ public sealed class CueGraph
         new(1, Cues, (outputs ?? []).ToArray(), (routes ?? []).ToArray(), (devices ?? []).ToArray());
 
     public string SerializeShowFile(CueShowFile? showFile = null) =>
-        JsonSerializer.Serialize(showFile ?? ToShowFile(), new JsonSerializerOptions { WriteIndented = true });
+        JsonSerializer.Serialize(showFile ?? ToShowFile(), CueShowFileJsonContext.Default.CueShowFile);
 
     public static CueShowFile DeserializeShowFile(string json) =>
-        JsonSerializer.Deserialize<CueShowFile>(json)
+        JsonSerializer.Deserialize(json, CueShowFileJsonContext.Default.CueShowFile)
         ?? throw new InvalidOperationException("show file JSON did not contain a valid cue show.");
 
     private async ValueTask<CueExecutionStatus> FireEntryAsync(CueEntry entry, CancellationToken cancellationToken)

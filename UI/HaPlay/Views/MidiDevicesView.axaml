@@ -34,14 +34,17 @@
     <Grid RowDefinitions="*,Auto" RowSpacing="10">
       <Grid Grid.Row="0" ColumnDefinitions="*,*" ColumnSpacing="10">
         <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
-          <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.InputsHeader}" FontWeight="SemiBold" Margin="0,0,0,8" />
-            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" Margin="0,8,0,0">
-	              <Button Content="Use for Control" Command="{Binding AddSelectedMidiInputToControlCommand}" />
+          <Grid RowDefinitions="Auto,*">
+            <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
+              <TextBlock Text="{x:Static res:Strings.InputsHeader}" FontWeight="SemiBold" />
+              <Button HorizontalAlignment="Right"
+                      Content="Add as Control Input"
+                      Command="{Binding AddSelectedMidiInputToControlCommand}" />
             </StackPanel>
-            <ListBox ItemsSource="{Binding MidiInputOptions}"
+            <ListBox Grid.Row="1"
+                     ItemsSource="{Binding MidiInputOptions}"
                      SelectedItem="{Binding SelectedMidiInputOption, Mode=TwoWay}"
-                     MinHeight="220">
+                     MinHeight="160">
               <ListBox.ItemTemplate>
                 <DataTemplate>
                   <Grid ColumnDefinitions="54,*" ColumnSpacing="8" Margin="0,2">
@@ -51,18 +54,21 @@
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>
-          </DockPanel>
+          </Grid>
         </Border>
 
         <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
-          <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.OutputsHeader}" FontWeight="SemiBold" Margin="0,0,0,8" />
-            <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" Spacing="6" HorizontalAlignment="Right" Margin="0,8,0,0">
-	              <Button Content="Use for Control + Cues" Command="{Binding AddSelectedMidiOutputToProjectCommand}" />
+          <Grid RowDefinitions="Auto,*">
+            <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
+              <TextBlock Text="{x:Static res:Strings.OutputsHeader}" FontWeight="SemiBold" />
+              <Button HorizontalAlignment="Right"
+                      Content="Add as Control/Cue Output"
+                      Command="{Binding AddSelectedMidiOutputToProjectCommand}" />
             </StackPanel>
-            <ListBox ItemsSource="{Binding MidiOutputOptions}"
+            <ListBox Grid.Row="1"
+                     ItemsSource="{Binding MidiOutputOptions}"
                      SelectedItem="{Binding SelectedMidiOutputOption, Mode=TwoWay}"
-                     MinHeight="220">
+                     MinHeight="160">
               <ListBox.ItemTemplate>
                 <DataTemplate>
                   <Grid ColumnDefinitions="54,*" ColumnSpacing="8" Margin="0,2">
@@ -72,7 +78,7 @@
                 </DataTemplate>
               </ListBox.ItemTemplate>
             </ListBox>
-          </DockPanel>
+          </Grid>
         </Border>
       </Grid>
 
@@ -85,6 +91,13 @@
                       Content="{x:Static res:Strings.RemoveButton}"
                       Command="{Binding RemoveSelectedProjectMidiInputCommand}" />
             </Grid>
+            <TextBlock DockPanel.Dock="Bottom"
+                       Text="Select an input above, then add it as a Control input."
+                       Opacity="0.6"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0"
+                       IsVisible="{Binding HasNoProjectMidiInputs}" />
             <ListBox ItemsSource="{Binding ProjectMidiInputRows}"
                      SelectedItem="{Binding SelectedProjectMidiInputRow, Mode=TwoWay}"
                      MinHeight="140">
@@ -120,6 +133,13 @@
                        FontSize="12"
                        TextWrapping="Wrap"
                        Margin="0,8,0,0" />
+            <TextBlock DockPanel.Dock="Bottom"
+                       Text="Select an output above to make it available to Control scripts and cue action MIDI targets."
+                       Opacity="0.6"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0"
+                       IsVisible="{Binding HasNoProjectMidiOutputs}" />
             <ListBox ItemsSource="{Binding ProjectMidiOutputRows}"
                      SelectedItem="{Binding SelectedProjectMidiOutputRow, Mode=TwoWay}"
                      MinHeight="140">

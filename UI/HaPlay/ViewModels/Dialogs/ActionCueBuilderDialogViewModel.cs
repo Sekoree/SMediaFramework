@@ -7,6 +7,8 @@ namespace HaPlay.ViewModels.Dialogs;
 
 public partial class ActionCueBuilderDialogViewModel : ViewModelBase
 {
+    private readonly List<ActionEndpoint> _allEndpoints = new();
+
     public string DialogTitle { get; private set; } = Strings.EditActionCueDialogTitle;
 
     [ObservableProperty]
@@ -34,21 +36,60 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
     private int _midiData2 = 100;
 
     [ObservableProperty]
+    private string _midiDataText = CueMidiActionMessage.DefaultSysExDataText;
+
+    [ObservableProperty]
     private string? _validationMessage;
 
     public bool IsOscVisible => ActionKind == CueActionKind.OscOut;
     public bool IsMidiVisible => ActionKind == CueActionKind.MidiOut;
 
     public IReadOnlyList<CueActionKind> ActionKinds { get; } = Enum.GetValues<CueActionKind>();
-    public IReadOnlyList<CueMidiCommandType> MidiCommandTypes { get; } = Enum.GetValues<CueMidiCommandType>();
+    public IReadOnlyList<CueMidiCommandType> MidiCommandTypes { get; } = CueMidiActionMessage.CommandTypes;
 
     public ObservableCollection<ActionEndpoint> Endpoints { get; } = new();
+
+    public bool IsMidiChannelVisible => CueMidiActionMessage.UsesChannel(MidiCommandType);
+    public bool IsMidiData1Visible => CueMidiActionMessage.UsesData1(MidiCommandType);
+    public bool IsMidiData2Visible => CueMidiActionMessage.UsesData2(MidiCommandType);
+    public bool IsMidiDataTextVisible => CueMidiActionMessage.UsesDataText(MidiCommandType);
+    public string MidiData1Label => CueMidiActionMessage.Data1Label(MidiCommandType);
+    public string MidiData2Label => CueMidiActionMessage.Data2Label(MidiCommandType);
+    public int MidiData1Minimum => CueMidiActionMessage.Data1Minimum(MidiCommandType);
+    public int MidiData1Maximum => CueMidiActionMessage.Data1Maximum(MidiCommandType);
+    public int MidiData2Minimum => CueMidiActionMessage.Data2Minimum(MidiCommandType);
+    public int MidiData2Maximum => CueMidiActionMessage.Data2Maximum(MidiCommandType);
 
     partial void OnActionKindChanged(CueActionKind value)
     {
         _ = value;
         OnPropertyChanged(nameof(IsOscVisible));
         OnPropertyChanged(nameof(IsMidiVisible));
+        RefreshEndpointChoices(SelectedEndpoint?.Id, selectFirstWhenMissing: true);
+    }
+
+    partial void OnMidiCommandTypeChanged(CueMidiCommandType value)
+    {
+        var defaults = CueMidiActionMessage.Defaults(value);
+        MidiData1 = Math.Clamp(MidiData1, CueMidiActionMessage.Data1Minimum(value), CueMidiActionMessage.Data1Maximum(value));
+        MidiData2 = Math.Clamp(MidiData2, CueMidiActionMessage.Data2Minimum(value), CueMidiActionMessage.Data2Maximum(value));
+        if (!CueMidiActionMessage.UsesData1(value))
+            MidiData1 = defaults.Data1;
+        if (!CueMidiActionMessage.UsesData2(value))
+            MidiData2 = defaults.Data2;
+        if (CueMidiActionMessage.UsesDataText(value) && string.IsNullOrWhiteSpace(MidiDataText))
+            MidiDataText = defaults.DataText;
+
+        OnPropertyChanged(nameof(IsMidiChannelVisible));
+        OnPropertyChanged(nameof(IsMidiData1Visible));
+        OnPropertyChanged(nameof(IsMidiData2Visible));
+        OnPropertyChanged(nameof(IsMidiDataTextVisible));
+        OnPropertyChanged(nameof(MidiData1Label));
+        OnPropertyChanged(nameof(MidiData2Label));
+        OnPropertyChanged(nameof(MidiData1Minimum));
+        OnPropertyChanged(nameof(MidiData1Maximum));
+        OnPropertyChanged(nameof(MidiData2Minimum));
+        OnPropertyChanged(nameof(MidiData2Maximum));
     }
 
     public void Load(
@@ -63,14 +104,11 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
             : string.Format(System.Globalization.CultureInfo.CurrentUICulture, Strings.EditActionCueDialogTitleWithLabel, cueLabel.Trim());
         OnPropertyChanged(nameof(DialogTitle));
 
-        Endpoints.Clear();
-        foreach (var endpoint in endpoints.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase))
-            Endpoints.Add(endpoint);
+        _allEndpoints.Clear();
+        _allEndpoints.AddRange(endpoints.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase));
 
         ActionKind = actionKind;
-        SelectedEndpoint = endpointId is { } id
-            ? Endpoints.FirstOrDefault(e => e.Id == id)
-            : Endpoints.FirstOrDefault();
+        RefreshEndpointChoices(endpointId, selectFirstWhenMissing: true);
 
         if (actionKind == CueActionKind.OscOut)
             LoadOsc(addressOrMessage);
@@ -97,20 +135,37 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
             return true;
         }
 
-        var channel = Math.Clamp(MidiChannel, 1, 16);
-        var d1 = Math.Clamp(MidiData1, 0, 127);
-        var d2 = Math.Clamp(MidiData2, 0, 127);
-        commandText = MidiCommandType switch
-        {
-            CueMidiCommandType.NoteOn => $"ch{channel} noteon {d1} {d2}",
-            CueMidiCommandType.NoteOff => $"ch{channel} noteoff {d1} {d2}",
-            CueMidiCommandType.ControlChange => $"ch{channel} cc {d1} {d2}",
-            CueMidiCommandType.ProgramChange => $"ch{channel} pc {d1}",
-            _ => $"ch{channel} noteon {d1} {d2}",
-        };
+        commandText = CueMidiActionMessage.BuildCommandText(
+            MidiCommandType,
+            MidiChannel,
+            MidiData1,
+            MidiData2,
+            MidiDataText);
         ValidationMessage = null;
         return true;
     }
+
+    private void RefreshEndpointChoices(Guid? preferredEndpointId, bool selectFirstWhenMissing)
+    {
+        var currentId = preferredEndpointId ?? SelectedEndpoint?.Id;
+        Endpoints.Clear();
+        foreach (var endpoint in _allEndpoints.Where(MatchesActionKind))
+            Endpoints.Add(endpoint);
+
+        SelectedEndpoint = currentId is { } id
+            ? Endpoints.FirstOrDefault(e => e.Id == id)
+            : null;
+        if (SelectedEndpoint is null && selectFirstWhenMissing)
+            SelectedEndpoint = Endpoints.FirstOrDefault();
+    }
+
+    private bool MatchesActionKind(ActionEndpoint endpoint) =>
+        ActionKind switch
+        {
+            CueActionKind.OscOut => endpoint is OscActionEndpoint,
+            CueActionKind.MidiOut => endpoint is MidiActionEndpoint,
+            _ => false,
+        };
 
     private void LoadOsc(string? raw)
     {
@@ -129,42 +184,11 @@ public partial class ActionCueBuilderDialogViewModel : ViewModelBase
 
     private void LoadMidi(string? raw)
     {
-        if (string.IsNullOrWhiteSpace(raw))
-            return;
-
-        var tokens = raw.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (tokens.Length == 0)
-            return;
-
-        var idx = 0;
-        if (tokens[idx].StartsWith("ch", StringComparison.OrdinalIgnoreCase))
-        {
-            var chText = tokens[idx][2..].TrimStart('=');
-            if (int.TryParse(chText, out var ch))
-                MidiChannel = Math.Clamp(ch, 1, 16);
-            idx++;
-        }
-
-        if (idx >= tokens.Length)
-            return;
-
-        var cmd = tokens[idx++].ToLowerInvariant();
-        MidiCommandType = cmd switch
-        {
-            "noteon" or "on" => CueMidiCommandType.NoteOn,
-            "noteoff" or "off" => CueMidiCommandType.NoteOff,
-            "cc" or "controlchange" => CueMidiCommandType.ControlChange,
-            "pc" or "programchange" => CueMidiCommandType.ProgramChange,
-            _ => CueMidiCommandType.NoteOn,
-        };
-
-        if (idx < tokens.Length && int.TryParse(tokens[idx], out var d1))
-        {
-            MidiData1 = Math.Clamp(d1, 0, 127);
-            idx++;
-        }
-
-        if (idx < tokens.Length && int.TryParse(tokens[idx], out var d2))
-            MidiData2 = Math.Clamp(d2, 0, 127);
+        var state = CueMidiActionMessage.ParseEditorState(raw);
+        MidiCommandType = state.CommandType;
+        MidiChannel = state.Channel;
+        MidiData1 = state.Data1;
+        MidiData2 = state.Data2;
+        MidiDataText = state.DataText;
     }
 }

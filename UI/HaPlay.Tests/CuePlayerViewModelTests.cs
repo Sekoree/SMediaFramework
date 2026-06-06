@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using HaPlay.Playback;
 using HaPlay.ViewModels;
+using HaPlay.ViewModels.Dialogs;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -622,6 +623,35 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void MoveCueNode_MovesIntoAndOutOfGroupWhenEditModeEnabled()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddGroupCommand.Execute(null);
+        var group = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        Assert.True(vm.MoveCueNode(cue, group, CueNodeDropPlacement.Inside));
+        Assert.Same(cue, Assert.Single(group.Children));
+        var nestedSnapshot = vm.BuildCueListsSnapshot();
+        var nestedGroup = Assert.IsType<CueGroupNode>(Assert.Single(nestedSnapshot[0].Nodes));
+        Assert.IsType<MediaCueNode>(Assert.Single(nestedGroup.Children));
+
+        vm.IsCueEditMode = false;
+        Assert.False(vm.MoveCueNode(cue, group, CueNodeDropPlacement.After));
+        Assert.Same(cue, Assert.Single(group.Children));
+
+        vm.IsCueEditMode = true;
+        Assert.True(vm.MoveCueNode(cue, group, CueNodeDropPlacement.After));
+        Assert.Empty(group.Children);
+        Assert.Equal(new[] { group, cue }, vm.VisibleNodes.ToArray());
+
+        var snapshot = vm.BuildCueListsSnapshot();
+        Assert.IsType<CueGroupNode>(snapshot[0].Nodes[0]);
+        Assert.IsType<MediaCueNode>(snapshot[0].Nodes[1]);
+    }
+
+    [Fact]
     public void DuplicateSelectedCue_InsertsCopyAfterOriginalWithFreshId()
     {
         var vm = new CuePlayerViewModel();
@@ -909,23 +939,20 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void ApplyActionBuilder_Osc_ComposesCommandAndEndpoint()
+    public void ActionCueBuilderDialogViewModel_Osc_ComposesCommandAndEndpoint()
     {
-        var vm = new CuePlayerViewModel();
+        var vm = new ActionCueBuilderDialogViewModel();
         var endpoint = new OscActionEndpoint { Name = "OSC A", Host = "127.0.0.1", Port = 9000 };
-        vm.SetActionEndpoints([endpoint]);
-        vm.AddActionCueCommand.Execute(null);
-        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.SelectedActionEndpoint = endpoint;
-        vm.BuilderActionKind = CueActionKind.OscOut;
-        vm.OscBuilderAddress = "/lights/go";
-        vm.OscBuilderArguments = "1 true";
+        vm.Load("Action", CueActionKind.OscOut, null, endpoint.Id, [endpoint]);
+        vm.OscAddress = "/lights/go";
+        vm.OscArguments = "1 true";
 
-        vm.ApplyActionBuilderCommand.Execute(null);
+        Assert.True(vm.TryBuild(out var endpointId, out var actionKind, out var commandText, out var error));
 
-        Assert.Equal(endpoint.Id.ToString(), cue.EndpointIdText);
-        Assert.Equal(CueActionKind.OscOut.ToString(), cue.Extra);
-        Assert.Equal("/lights/go 1 true", cue.SourceOrAction);
+        Assert.Null(error);
+        Assert.Equal(endpoint.Id, endpointId);
+        Assert.Equal(CueActionKind.OscOut, actionKind);
+        Assert.Equal("/lights/go 1 true", commandText);
     }
 
     [Fact]
@@ -1222,11 +1249,11 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void MaxPreparedDecoders_DefaultsToSixWhenModelUnset()
+    public void MaxPreparedDecoders_ZeroMeansNoSeparateCap()
     {
-        // A legacy list (field absent / zero) falls back to the default rather than capping at zero.
+        // Zero is the project-file sentinel for no separate standby-decoder cap.
         var restored = CueListEditorViewModel.FromModel(new CueList { MaxPreparedDecoders = 0 });
-        Assert.Equal(6, restored.MaxPreparedDecoders);
+        Assert.Equal(0, restored.MaxPreparedDecoders);
     }
 
     [Fact]
@@ -1364,20 +1391,21 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void ApplyActionBuilder_Midi_ComposesCommand()
+    public void ActionCueBuilderDialogViewModel_Midi_ComposesCommand()
     {
-        var vm = new CuePlayerViewModel();
-        vm.AddActionCueCommand.Execute(null);
-        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
-        vm.BuilderActionKind = CueActionKind.MidiOut;
-        vm.MidiBuilderCommandType = CueMidiCommandType.ControlChange;
-        vm.MidiBuilderChannel = 2;
-        vm.MidiBuilderData1 = 7;
-        vm.MidiBuilderData2 = 110;
+        var vm = new ActionCueBuilderDialogViewModel();
+        var endpoint = new MidiActionEndpoint { Name = "MIDI A" };
+        vm.Load("Action", CueActionKind.MidiOut, null, endpoint.Id, [endpoint]);
+        vm.MidiCommandType = CueMidiCommandType.ControlChange;
+        vm.MidiChannel = 2;
+        vm.MidiData1 = 7;
+        vm.MidiData2 = 110;
 
-        vm.ApplyActionBuilderCommand.Execute(null);
+        Assert.True(vm.TryBuild(out var endpointId, out var actionKind, out var commandText, out var error));
 
-        Assert.Equal(CueActionKind.MidiOut.ToString(), cue.Extra);
-        Assert.Equal("ch2 cc 7 110", cue.SourceOrAction);
+        Assert.Null(error);
+        Assert.Equal(endpoint.Id, endpointId);
+        Assert.Equal(CueActionKind.MidiOut, actionKind);
+        Assert.Equal("ch2 cc 7 110", commandText);
     }
 }

@@ -204,12 +204,12 @@
       <views:OutputManagementView DataContext="{Binding OutputManagement}"
                                   IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsOutputsWorkspaceSelected}" />
 
-      <!-- Cues workspace: the cue player. OSC/MIDI action targets open in the Target Configuration
+      <!-- Cues workspace: the cue player. OSC/MIDI action targets open in the Action Targets
            dialog (button below or the app menu) rather than taking permanent space here. -->
       <DockPanel Margin="8"
                  IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsCuesWorkspaceSelected}">
         <Button DockPanel.Dock="Top" HorizontalAlignment="Right" Margin="0,0,0,6"
-                Content="OSC Targets…"
+                Content="Action Targets…"
                 ToolTip.Tip="Configure named OSC/MIDI targets for action cues"
                 Command="{Binding OpenTargetConfigurationCommand}" />
         <views:CuePlayerView DataContext="{Binding CuePlayer}" />
@@ -234,47 +234,50 @@
           <Button Content="{x:Static res:Strings.SaveButton}" Command="{Binding SaveProjectCommand}" />
           <Button Content="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveProjectAsCommand}" />
         </StackPanel>
-        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8" Margin="0,0,0,12">
-          <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.RecentProjectsSectionHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
-            <TextBlock DockPanel.Dock="Top"
-                       Text="{x:Static res:Strings.RecentProjectsEmptyHint}"
-                       Opacity="0.55" FontSize="12"
-                       IsVisible="{Binding RecentProjects.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
-            <ItemsControl ItemsSource="{Binding RecentProjects}">
-              <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                  <Button Classes="sidebar"
-                          Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).OpenRecentCommand}"
-                          CommandParameter="{Binding}">
-                    <TextBlock Text="{Binding}" />
-                  </Button>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </DockPanel>
-        </Border>
+        <Grid ColumnDefinitions="1.05*,1.8*" ColumnSpacing="10">
+          <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.RecentProjectsSectionHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
+              <TextBlock DockPanel.Dock="Top"
+                         Text="{x:Static res:Strings.RecentProjectsEmptyHint}"
+                         Opacity="0.55" FontSize="12"
+                         TextWrapping="Wrap"
+                         IsVisible="{Binding HasNoRecentProjects}" />
+              <ItemsControl ItemsSource="{Binding RecentProjects}">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate>
+                    <Button Classes="sidebar"
+                            Command="{Binding $parent[ItemsControl].((vm:MainViewModel)DataContext).OpenRecentCommand}"
+                            CommandParameter="{Binding}">
+                      <TextBlock Text="{Binding}" />
+                    </Button>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
+            </DockPanel>
+          </Border>
 
-        <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
-        <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
-          <StackPanel Spacing="6">
-            <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
-            <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
-                       Text="{x:Static res:Strings.DisplaySettingsHint}" />
-            <Grid ColumnDefinitions="120,*,16,120,*" RowDefinitions="Auto" Margin="0,4,0,0">
-              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ThemeLabel}" VerticalAlignment="Center" />
-              <ComboBox Grid.Column="1"
-                        ItemsSource="{Binding ThemeChoices}"
-                        SelectedItem="{Binding Theme}"
-                        HorizontalAlignment="Stretch" />
-              <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
-              <ComboBox Grid.Column="4"
-                        ItemsSource="{Binding DensityChoices}"
-                        SelectedItem="{Binding Density}"
-                        HorizontalAlignment="Stretch" />
-            </Grid>
-          </StackPanel>
-        </Border>
+          <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
+          <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+            <StackPanel Spacing="6">
+              <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
+              <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
+                         Text="{x:Static res:Strings.DisplaySettingsHint}" />
+              <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto" Margin="0,4,0,0">
+                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ThemeLabel}" VerticalAlignment="Center" />
+                <ComboBox Grid.Column="1"
+                          ItemsSource="{Binding ThemeChoices}"
+                          SelectedItem="{Binding Theme}"
+                          HorizontalAlignment="Stretch" />
+                <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
+                <ComboBox Grid.Column="4"
+                          ItemsSource="{Binding DensityChoices}"
+                          SelectedItem="{Binding Density}"
+                          HorizontalAlignment="Stretch" />
+              </Grid>
+            </StackPanel>
+          </Border>
+        </Grid>
       </DockPanel>
     </Grid>
   </DockPanel>

@@ -147,4 +147,5 @@ public enum PlayersLayoutMode
 [JsonSerializable(typeof(AppSettings))]
 [JsonSerializable(typeof(WindowStateSnapshot))]
 [JsonSerializable(typeof(DialogSizeSnapshot))]
+[JsonSerializable(typeof(List<string>))]
 internal partial class AppSettingsJsonContext : JsonSerializerContext;

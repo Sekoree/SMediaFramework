@@ -423,7 +423,7 @@ public sealed class ControlScriptRuntime
             return false;
         if (trigger.MidiController.HasValue && trigger.MidiController.Value != midi.Controller)
             return false;
-        if (trigger.MidiValue.HasValue && trigger.MidiValue.Value != midi.Value)
+        if (!MidiValueMatches(trigger, midi.Value))
             return false;
         if (trigger.MidiParameter.HasValue)
             return false;
@@ -445,7 +445,7 @@ public sealed class ControlScriptRuntime
             return false;
         if (trigger.MidiNote.HasValue && trigger.MidiNote.Value != midi.Note)
             return false;
-        if (trigger.MidiValue.HasValue && trigger.MidiValue.Value != midi.Velocity)
+        if (!MidiValueMatches(trigger, midi.Velocity))
             return false;
         if (trigger.MidiParameter.HasValue)
             return false;
@@ -476,11 +476,22 @@ public sealed class ControlScriptRuntime
             return false;
         if (trigger.MidiNote.HasValue && trigger.MidiNote.Value != midi.Note)
             return false;
-        if (trigger.MidiValue.HasValue && trigger.MidiValue.Value != midi.Value)
+        if (!MidiValueMatches(trigger, midi.Value))
             return false;
         if (trigger.MidiParameter.HasValue && trigger.MidiParameter.Value != midi.Parameter)
             return false;
 
+        return true;
+    }
+
+    private static bool MidiValueMatches(ControlScriptTriggerConfig trigger, int? value)
+    {
+        if (trigger.MidiValue.HasValue)
+            return value.HasValue && trigger.MidiValue.Value == value.Value;
+        if (trigger.MidiValueMin.HasValue && (!value.HasValue || value.Value < trigger.MidiValueMin.Value))
+            return false;
+        if (trigger.MidiValueMax.HasValue && (!value.HasValue || value.Value > trigger.MidiValueMax.Value))
+            return false;
         return true;
     }
 

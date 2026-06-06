@@ -212,17 +212,17 @@ public enum ControlMonitorResult
 
 public static class ControlMonitorJsonLines
 {
-    private static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
-    {
-        Converters = { new JsonStringEnumConverter() },
-    };
+    // Source-generated, NativeAOT-safe contract. UseStringEnumConverter keeps enums as strings (matching the
+    // previous reflection-based JsonStringEnumConverter) without runtime reflection/codegen.
+    private static readonly System.Text.Json.Serialization.Metadata.JsonTypeInfo<ControlMonitorRecord> RecordTypeInfo =
+        ControlMonitorJsonContext.Default.ControlMonitorRecord;
 
     public static string Write(IReadOnlyList<ControlMonitorRecord> records)
     {
         ArgumentNullException.ThrowIfNull(records);
         return string.Join(
             Environment.NewLine,
-            records.Select(record => JsonSerializer.Serialize(record, Options)));
+            records.Select(record => JsonSerializer.Serialize(record, RecordTypeInfo)));
     }
 
     public static IReadOnlyList<ControlMonitorRecord> Read(string jsonLines)
@@ -236,7 +236,7 @@ public static class ControlMonitorJsonLines
             if (string.IsNullOrWhiteSpace(line))
                 continue;
 
-            var record = JsonSerializer.Deserialize<ControlMonitorRecord>(line, Options)
+            var record = JsonSerializer.Deserialize(line, RecordTypeInfo)
                 ?? throw new JsonException("Monitor record line deserialized to null.");
             records.Add(record);
         }
@@ -244,3 +244,7 @@ public static class ControlMonitorJsonLines
         return records;
     }
 }
+
+[JsonSourceGenerationOptions(JsonSerializerDefaults.Web, UseStringEnumConverter = true)]
+[JsonSerializable(typeof(ControlMonitorRecord))]
+internal partial class ControlMonitorJsonContext : JsonSerializerContext;

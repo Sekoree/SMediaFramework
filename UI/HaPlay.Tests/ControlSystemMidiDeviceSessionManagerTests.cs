@@ -79,6 +79,65 @@ public sealed class ControlSystemMidiDeviceSessionManagerTests
     }
 
     [Fact]
+    public async Task Start_Combines14BitCcPairsForProfileControls()
+    {
+        var faderId = Guid.NewGuid();
+        var x32Id = Guid.NewGuid();
+        var monitor = new ControlMonitorBuffer(maxRecords: 50);
+        var oscSender = new RecordingOscSender();
+        var provider = new FakeMidiDeviceProvider
+        {
+            Inputs = [new ControlMidiPortInfo(1, "Fader Surface")],
+        };
+        var profile = new ControlDeviceProfile
+        {
+            Id = "test.14bit",
+            DisplayName = "14-bit Fader Surface",
+            Protocol = ControlDeviceProtocol.Midi,
+            Controls =
+            [
+                new ControlControlProfile
+                {
+                    Id = "fader.1",
+                    DisplayName = "Fader 1",
+                    Kind = ControlProfileControlKind.Fader,
+                    MidiController = 0,
+                    ValueMode = ControlProfileValueMode.Absolute14Bit,
+                },
+            ],
+        };
+        var config = new ControlSystemConfig
+        {
+            IsArmed = true,
+            OscListeners = [],
+            DeviceProfileOverrides = [profile],
+            Devices =
+            [
+                MidiDevice(faderId, "Fader Surface", "faders", inputId: 1, inputName: "Fader Surface") with { ProfileId = "test.14bit" },
+                OscDevice(x32Id, "X32", "x32", "127.0.0.1", 10023),
+            ],
+            Scripts =
+            [
+                MidiControlScript(faderId, "Scripts/fader.mnd", controller: 0, address: "/ch/01/mix/fader"),
+            ],
+        };
+        var runtime = CreateRuntimeSession(config, oscSender, monitor);
+        var manager = new ControlMidiDeviceManager(config, runtime, monitor);
+        using var midi = new ControlSystemMidiDeviceSessionManager(config, monitor, provider);
+
+        midi.Start(manager);
+        provider.Input(1).Raise(new ControlChange(0, 0, 100));  // coarse (MSB) — held back
+        provider.Input(1).Raise(new ControlChange(0, 32, 50));  // fine (LSB) — emits the combined value
+
+        await WaitUntilAsync(() => oscSender.Sent.Count >= 1);
+        await Task.Delay(30); // a broken combiner would leak a second (coarse) send — give it time to land
+
+        var sent = Assert.Single(oscSender.Sent);
+        Assert.Equal("/ch/01/mix/fader", sent.Address);
+        Assert.Equal((100 << 7) | 50, Assert.Single(sent.Arguments).AsInt32()); // 12850 — full 14-bit value
+    }
+
+    [Fact]
     public async Task Start_DispatchesProgramChangeAndSysExInputMessages()
     {
         var midiId = Guid.NewGuid();

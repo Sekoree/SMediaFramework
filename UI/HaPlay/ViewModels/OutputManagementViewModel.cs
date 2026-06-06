@@ -109,6 +109,9 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     /// <summary>True when any line is below healthy — drives the colour of the summary chip.</summary>
     public bool HasAggregateIssues => AggregateWarningCount + AggregateErrorCount > 0;
+    public bool HasOutputs => Outputs.Count > 0;
+    public bool HasNoOutputs => Outputs.Count == 0;
+    public bool HasAdvancedRoutingConfiguration => Outputs.Count > 0 || SharedHeadphonesBuses.Count > 0;
 
     /// <summary>One-line summary: "5 active · 1 warning · 0 errors" — bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
@@ -142,7 +145,13 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             IsEnabled = true,
         };
-        Outputs.CollectionChanged += (_, _) => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
+        Outputs.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasOutputs));
+            OnPropertyChanged(nameof(HasNoOutputs));
+            OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
+            RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
+        };
         Outputs.CollectionChanged += (_, _) => RebuildVirtualAudioChannelAssignments();
         // §8.2 — a removed PA output may have been a bus's target; raise the event so player VMs
         // can re-resolve and mark buses without a backing PA output as broken.
@@ -167,6 +176,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             foreach (var added in e.NewItems.OfType<SharedHeadphonesBusViewModel>())
                 added.PropertyChanged += OnSharedHeadphonesBusPropertyChanged;
         RaiseSharedHeadphonesBusesChanged();
+        OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
     }
 
     private void OnSharedHeadphonesBusPropertyChanged(object? sender, PropertyChangedEventArgs e)

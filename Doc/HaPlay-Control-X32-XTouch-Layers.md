@@ -225,15 +225,15 @@ export fun handleFeedback(event, base) {
     }
 }
 
-// Sync this bank's rings + mute LEDs to the console.
+// Sync this bank's rings + mute LEDs to the console. Bound to LayerEnabled (onActivate), which fires
+// on Arm and on every switch into the bank.
 //
 // IMPORTANT: OSC replies are asynchronous. If you request a value and read the cache on
 // the next line it is NOT there yet, so you'd paint the fallback default (0.0 -> lowest
 // ring, 1.0 -> "unmuted") — that's why everything looked wrong at arm. Instead: only paint
-// values we actually HAVE, and request the ones we don't. Replies arrive a moment later
-// and are painted by handleFeedback (instant) and/or the next onSync tick. Because onSync
-// calls this repeatedly, a lost/slow reply is simply re-requested until the bank is
-// populated, then it just keeps the LEDs in sync.
+// values we actually HAVE, and request the ones we don't. The replies arrive a moment later and
+// are painted by handleFeedback, so the bank converges to the console's real state without ever
+// painting a guess.
 export fun refreshBank(base) {
     for (var slot = 0; slot < 8; slot++) {
         var ch = base + slot + 1;
@@ -277,20 +277,16 @@ export fun onEncoder(event, context)  { Surface.handleEncoder(event, BASE); }
 export fun onNote(event, context)     { Surface.handleNote(event, BASE); }
 export fun onFeedback(event, context) { Surface.handleFeedback(event, BASE); }
 
-// Repaint when this bank becomes active (every switch into it).
+// Load this bank when it becomes active. LayerEnabled fires both on Arm and on every switch into
+// the bank, so the rings + mute LEDs sync to the console's state at those moments — no periodic needed.
 export fun onActivate(event, context) { Surface.refreshBank(BASE); }
-
-// Periodic sync: paints cached values and re-requests any still missing, so the bank
-// converges to the console's real state after Arm (LayerEnabled doesn't fire on arm) and
-// self-heals any lost OSC reply. Safe to run every tick — it never paints a guess.
-export fun onSync(event, context) { Surface.refreshBank(BASE); }
 ```
 
 Then set its **Scope** and **Layer**, and add its triggers:
 
 1. In the editor header set **Scope = `Layer`**. The **Layer** picker appears — choose
    **`Bank 1-8`**.
-2. In **Triggers**, add these five (leave match fields blank unless noted):
+2. In **Triggers**, add these four (leave match fields blank unless noted):
 
    | Kind | Function | Match |
    | --- | --- | --- |
@@ -298,7 +294,6 @@ Then set its **Scope** and **Layer**, and add its triggers:
    | `MidiNote` | `onNote` | — (any note) |
    | `OscCacheChanged` | `onFeedback` | — (blank) or `/ch/*` |
    | `LayerEnabled` | `onActivate` | — |
-   | `Periodic` | `onSync` | interval **1000** ms |
 
    > **Address match gotcha:** the matcher only honours one `*` (prefix + suffix around
    > the first star). Use **blank** or **`/ch/*`** here — **not** `/ch/*/mix/*`, which
@@ -320,15 +315,14 @@ export fun onEncoder(event, context)  { Surface.handleEncoder(event, BASE); }
 export fun onNote(event, context)     { Surface.handleNote(event, BASE); }
 export fun onFeedback(event, context) { Surface.handleFeedback(event, BASE); }
 export fun onActivate(event, context) { Surface.refreshBank(BASE); }
-export fun onSync(event, context)     { Surface.refreshBank(BASE); }
 ```
 
-Set **Scope = `Layer`**, **Layer = `Bank 9-16`**, and add the **same five triggers** as
+Set **Scope = `Layer`**, **Layer = `Bank 9-16`**, and add the **same four triggers** as
 `bank_1.mnd`. **Save Script.**
 
 > Because these are *layer-scoped*, `bank_1`’s handlers only run while `Bank 1-8` is
 > active and `bank_2`’s only while `Bank 9-16` is active — so the encoders/buttons always
-> drive the right 8 channels, and only the active bank’s `Periodic`/feedback runs.
+> drive the right 8 channels, and only the active bank’s feedback runs.
 
 ---
 
@@ -371,8 +365,8 @@ handler returns, firing `LayerDisabled` on the old bank and `LayerEnabled` on th
 Press **Arm** at the top of the Control workspace.
 
 - Over the first second or two the rings + mute LEDs for **Bank 1-8** converge to the
-  console’s current state: `onSync` requests any value it doesn’t have yet, and each value
-  is painted as its reply lands (it deliberately never paints a guessed default, so you
+  console’s current state: on Arm, `onActivate` requests any value it doesn’t have yet, and each
+  value is painted as its reply lands (it deliberately never paints a guessed default, so you
   won’t see a wrong value flash first).
 - **Turn an encoder** → its X32 fader moves and the ring tracks it.
 - **Push an encoder** → that fader jumps to `0.75` (which is **0 dB** on the X32 fader
@@ -405,13 +399,13 @@ out, and script runs. Use **Errors only** if something misbehaves.
   `Scripts/x32_surface.mnd` (same casing) and saved to disk.
 - **Rings jump in coarse steps.** That’s expected: the MC “fan” display only has 11 steps
   (values 33–43). Encoder motion is still full-resolution on the X32 fader itself.
-- **Switch doesn’t reload LEDs.** Ensure each bank script has the `LayerEnabled →
-  onActivate` trigger. The `Periodic → onSync` trigger covers the initial paint after Arm
-  and keeps things in sync.
+- **Switch doesn’t reload LEDs, or nothing loads at Arm.** Ensure each bank script has the
+  `LayerEnabled → onActivate` trigger — it fires on every switch into the bank **and** on Arm, so
+  it covers both the initial load and later switches.
 - **At arm all rings sit at minimum and all mute LEDs are on, ignoring real state.** This
   is the classic “painted a default before the reply arrived” bug. Make sure `refreshBank`
-  uses the `osc.has(...)` guard (paint only what’s cached, request the rest) and that
-  `onSync` calls it **every** tick (no one-shot `painted` flag). Also check the
+  uses the `osc.has(...)` guard (paint only what’s cached, request the rest) and that the
+  `LayerEnabled → onActivate` trigger is present (it requests the values on Arm). Also check the
   `OscCacheChanged → onFeedback` trigger uses a match of **blank** or **`/ch/*`** — a
   pattern like `/ch/*/mix/*` never matches, so live corrections never fire.
 

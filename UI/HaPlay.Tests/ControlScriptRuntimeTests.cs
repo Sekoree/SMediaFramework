@@ -71,6 +71,48 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void DispatchControlEvent_MidiCcTriggerRespectsValueRange()
+    {
+        var midiDeviceId = Guid.NewGuid();
+        var script = Script(
+            "Scripts/main.mnd",
+            new ControlScriptTriggerConfig
+            {
+                Kind = ControlScriptTriggerKind.MidiControlChange,
+                FunctionName = "onMidi",
+                DeviceInstanceId = midiDeviceId,
+                MidiController = 16,
+                MidiValueMin = 100,
+                MidiValueMax = 200,
+            });
+        var sink = new RecordingControlScriptCommandSink();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [MidiDevice(midiDeviceId, "Fader")],
+                Scripts = [script],
+            },
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun onMidi(event, context) {
+                        osc.send("x32", "/cc", osc.float32(event.midi.value));
+                    }
+                    """,
+            },
+            sink);
+
+        Assert.Empty(runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 99)).Invocations);
+        Assert.Empty(runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 201)).Invocations);
+        var result = runtime.DispatchControlEvent(MidiCcEvent(midiDeviceId, controller: 16, value: 150));
+
+        Assert.True(Assert.Single(result.Invocations).Succeeded);
+        Assert.Equal(150, Assert.Single(Assert.Single(sink.OscMessages).Arguments).NumberValue);
+    }
+
+    [Fact]
     public void DispatchControlEvent_DoesNotMatchDifferentMidiDeviceOrController()
     {
         var firstDeviceId = Guid.NewGuid();

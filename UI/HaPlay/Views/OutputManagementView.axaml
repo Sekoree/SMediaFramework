@@ -26,7 +26,7 @@
 
   <!-- Rows: header / outputs (fills) / shared-headphones / virtual-channels. Previously a DockPanel,
        which docked these cards Left as columns and squeezed the outputs list — a Grid stacks them. -->
-  <Grid Margin="16" RowDefinitions="Auto,*,Auto,Auto" RowSpacing="10">
+  <Grid Margin="16" RowDefinitions="Auto,*,Auto" RowSpacing="10">
     <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto">
       <StackPanel Grid.Column="0" Spacing="2">
         <TextBlock Text="{x:Static res:Strings.OutputManagementHeader}" FontSize="22" FontWeight="SemiBold" />
@@ -49,138 +49,154 @@
     </Grid>
 
     <Border Grid.Row="1" Classes="card">
-      <ListBox ItemsSource="{Binding Outputs}" Background="Transparent">
-        <ListBox.ItemTemplate>
-          <DataTemplate x:DataType="vm:OutputLineViewModel">
-            <Grid ColumnDefinitions="*,Auto" Margin="{Binding IndentMargin}">
-              <Grid.ContextFlyout>
-                <MenuFlyout>
-                  <MenuItem Header="{x:Static res:Strings.NoPreviewActionsMenuHeader}"
-                            IsVisible="{Binding IsNotLocalVideo}"
-                            IsEnabled="False" />
-                  <!-- The output window opens when the output is added and closes when it's removed, so a
-                       manual open/close ("start/stop preview") was removed. Fullscreen / Windowed remain. -->
-                  <MenuItem Header="{x:Static res:Strings.FullscreenPreviewMenuHeader}"
-                            Command="{Binding FullscreenPreviewCommand}"
-                            IsVisible="{Binding IsLocalVideo}" />
-                  <MenuItem Header="{x:Static res:Strings.WindowedPreviewMenuHeader}"
-                            Command="{Binding WindowedPreviewCommand}"
-                            IsVisible="{Binding IsLocalVideo}" />
-                </MenuFlyout>
-              </Grid.ContextFlyout>
-              <StackPanel Grid.Column="0" Spacing="4">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                  <Ellipse Width="10" Height="10"
-                           VerticalAlignment="Center"
-                           Fill="{Binding HealthColor}"
-                           ToolTip.Tip="{Binding HealthToolTip}" />
-                  <Border IsVisible="{Binding IsNdiRecording}"
-                          Background="#CCB00020"
-                          BorderBrush="#FFDF4A4A"
-                          BorderThickness="1"
-                          CornerRadius="3"
-                          Padding="4,1">
-                    <TextBlock Text="{x:Static res:Strings.RecBadgeLabel}" FontSize="10" FontWeight="SemiBold" Foreground="#FFF5D4D4" />
-                  </Border>
-                  <TextBlock Text="{x:Static res:Strings.CloneOutputGlyph}" Opacity="0.6" IsVisible="{Binding IsClone}" />
-                  <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold"
-                             ToolTip.Tip="{Binding KindTechnicalLabel}" />
-                  <TextBlock Text="{x:Static res:Strings.EmDash}" Opacity="0.5" />
-                  <TextBlock Text="{Binding Definition.DisplayName}" FontWeight="SemiBold" />
-                  <TextBlock Text="{Binding CloneParentLabel}"
-                             Opacity="0.55" FontSize="12" VerticalAlignment="Center"
-                             IsVisible="{Binding IsClone}" />
+      <Grid>
+        <TextBlock Text="{x:Static res:Strings.NoOutputsEmptyHint}"
+                   TextWrapping="Wrap"
+                   Opacity="0.65"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   IsVisible="{Binding HasNoOutputs}" />
+        <ListBox ItemsSource="{Binding Outputs}" Background="Transparent">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:OutputLineViewModel">
+              <Grid ColumnDefinitions="*,Auto" Margin="{Binding IndentMargin}">
+                <Grid.ContextFlyout>
+                  <MenuFlyout>
+                    <MenuItem Header="{x:Static res:Strings.NoPreviewActionsMenuHeader}"
+                              IsVisible="{Binding IsNotLocalVideo}"
+                              IsEnabled="False" />
+                    <!-- The output window opens when the output is added and closes when it's removed, so a
+                         manual open/close ("start/stop preview") was removed. Fullscreen / Windowed remain. -->
+                    <MenuItem Header="{x:Static res:Strings.FullscreenPreviewMenuHeader}"
+                              Command="{Binding FullscreenPreviewCommand}"
+                              IsVisible="{Binding IsLocalVideo}" />
+                    <MenuItem Header="{x:Static res:Strings.WindowedPreviewMenuHeader}"
+                              Command="{Binding WindowedPreviewCommand}"
+                              IsVisible="{Binding IsLocalVideo}" />
+                  </MenuFlyout>
+                </Grid.ContextFlyout>
+                <StackPanel Grid.Column="0" Spacing="4">
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Ellipse Width="10" Height="10"
+                             VerticalAlignment="Center"
+                             Fill="{Binding HealthColor}"
+                             ToolTip.Tip="{Binding HealthToolTip}" />
+                    <Border IsVisible="{Binding IsNdiRecording}"
+                            Background="#CCB00020"
+                            BorderBrush="#FFDF4A4A"
+                            BorderThickness="1"
+                            CornerRadius="3"
+                            Padding="4,1">
+                      <TextBlock Text="{x:Static res:Strings.RecBadgeLabel}" FontSize="10" FontWeight="SemiBold" Foreground="#FFF5D4D4" />
+                    </Border>
+                    <TextBlock Text="{x:Static res:Strings.CloneOutputGlyph}" Opacity="0.6" IsVisible="{Binding IsClone}" />
+                    <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold"
+                               ToolTip.Tip="{Binding KindTechnicalLabel}" />
+                    <TextBlock Text="{x:Static res:Strings.EmDash}" Opacity="0.5" />
+                    <TextBlock Text="{Binding Definition.DisplayName}" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding CloneParentLabel}"
+                               Opacity="0.55" FontSize="12" VerticalAlignment="Center"
+                               IsVisible="{Binding IsClone}" />
+                  </StackPanel>
+                  <TextBlock Classes="hint" Text="{Binding Summary}" />
                 </StackPanel>
-                <TextBlock Classes="hint" Text="{Binding Summary}" />
-              </StackPanel>
-              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                <!-- §8.1 inline sparkline — frames+chunks per second over last 60 s. -->
-                <ctrls:SparklineControl Width="120" Height="22"
-                                        Samples="{Binding SparklineSamples}"
-                                        PeakSample="{Binding SparklinePeakSample}"
-                                        Revision="{Binding SparklineRevision}"
-                                        Stroke="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.Instance}}"
-                                        AreaFill="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.AreaInstance}}"
-                                        ToolTip.Tip="{x:Static res:Strings.OutputThroughputTooltip}" />
-                <Button Content="{Binding NdiRecordingButtonText}"
-                        Command="{Binding ToggleNdiRecordingCommand}"
-                        IsVisible="{Binding IsNdi}" />
-                <Button Content="{x:Static res:Strings.EditButton}" Command="{Binding EditCommand}" />
-                <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCommand}" />
-              </StackPanel>
-            </Grid>
-          </DataTemplate>
-        </ListBox.ItemTemplate>
-      </ListBox>
-    </Border>
-
-    <Border Grid.Row="2" Classes="card">
-      <DockPanel>
-        <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.SharedHeadphonesBusesLabel}" FontWeight="SemiBold" Margin="0,0,0,6" />
-        <TextBlock DockPanel.Dock="Top" Classes="hint"
-                   Text="{x:Static res:Strings.SharedHeadphonesBusesHint}" />
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
-          <Button Content="{x:Static res:Strings.AddBusButton}" Command="{Binding AddSharedHeadphonesBusCommand}" />
-        </StackPanel>
-        <ListBox ItemsSource="{Binding SharedHeadphonesBuses}" Background="Transparent" Margin="0,6,0,0" MaxHeight="180">
-          <ListBox.ItemTemplate>
-            <DataTemplate x:DataType="vm:SharedHeadphonesBusViewModel">
-              <Grid ColumnDefinitions="220,*,Auto" ColumnSpacing="8" Margin="0,2">
-                <TextBox Grid.Column="0" Text="{Binding Label, Mode=TwoWay}" />
-                <ComboBox Grid.Column="1"
-                          ItemsSource="{Binding $parent[UserControl].((vm:OutputManagementViewModel)DataContext).PortAudioOutputLines}"
-                          SelectedValueBinding="{Binding Definition.Id}"
-                          SelectedValue="{Binding PortAudioOutputId, Mode=TwoWay}">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:OutputLineViewModel">
-                      <TextBlock Text="{Binding Definition.DisplayName}" />
-                    </DataTemplate>
-                  </ComboBox.ItemTemplate>
-                </ComboBox>
-                <Button Grid.Column="2" Content="{x:Static res:Strings.RemoveButton}"
-                        Command="{Binding $parent[UserControl].((vm:OutputManagementViewModel)DataContext).RemoveSharedHeadphonesBusCommand}"
-                        CommandParameter="{Binding}" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <!-- §8.1 inline sparkline — frames+chunks per second over last 60 s. -->
+                  <ctrls:SparklineControl Width="120" Height="22"
+                                          Samples="{Binding SparklineSamples}"
+                                          PeakSample="{Binding SparklinePeakSample}"
+                                          Revision="{Binding SparklineRevision}"
+                                          Stroke="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.Instance}}"
+                                          AreaFill="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.AreaInstance}}"
+                                          ToolTip.Tip="{x:Static res:Strings.OutputThroughputTooltip}" />
+                  <Button Content="{Binding NdiRecordingButtonText}"
+                          Command="{Binding ToggleNdiRecordingCommand}"
+                          IsVisible="{Binding IsNdi}" />
+                  <Button Content="{x:Static res:Strings.EditButton}" Command="{Binding EditCommand}" />
+                  <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCommand}" />
+                </StackPanel>
               </Grid>
             </DataTemplate>
           </ListBox.ItemTemplate>
         </ListBox>
-      </DockPanel>
+      </Grid>
     </Border>
 
-    <Border Grid.Row="3" Classes="card">
-      <DockPanel>
-        <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.VirtualAudioChannelsHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
-        <TextBlock DockPanel.Dock="Top" Classes="hint"
-                   Text="{x:Static res:Strings.VirtualAudioChannelsHint}" />
-        <Border DockPanel.Dock="Top"
-                IsVisible="{Binding HasVirtualChannelCollisions}"
-                Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
-                CornerRadius="4" Padding="8,4" Margin="0,6,0,0">
-          <TextBlock Text="{Binding VirtualChannelCollisionMessage}" Foreground="#FFE6E6" />
+    <Expander Grid.Row="2"
+              Header="{x:Static res:Strings.AdvancedRoutingHeader}"
+              Classes="dense"
+              IsExpanded="False"
+              IsVisible="{Binding HasAdvancedRoutingConfiguration}">
+      <StackPanel Spacing="10" Margin="0,8,0,0">
+        <Border Classes="card">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.SharedHeadphonesBusesLabel}" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock DockPanel.Dock="Top" Classes="hint"
+                       Text="{x:Static res:Strings.SharedHeadphonesBusesHint}" />
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+              <Button Content="{x:Static res:Strings.AddBusButton}" Command="{Binding AddSharedHeadphonesBusCommand}" />
+            </StackPanel>
+            <ListBox ItemsSource="{Binding SharedHeadphonesBuses}" Background="Transparent" Margin="0,6,0,0" MaxHeight="180">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:SharedHeadphonesBusViewModel">
+                  <Grid ColumnDefinitions="220,*,Auto" ColumnSpacing="8" Margin="0,2">
+                    <TextBox Grid.Column="0" Text="{Binding Label, Mode=TwoWay}" />
+                    <ComboBox Grid.Column="1"
+                              ItemsSource="{Binding $parent[UserControl].((vm:OutputManagementViewModel)DataContext).PortAudioOutputLines}"
+                              SelectedValueBinding="{Binding Definition.Id}"
+                              SelectedValue="{Binding PortAudioOutputId, Mode=TwoWay}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:OutputLineViewModel">
+                          <TextBlock Text="{Binding Definition.DisplayName}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Grid.Column="2" Content="{x:Static res:Strings.RemoveButton}"
+                            Command="{Binding $parent[UserControl].((vm:OutputManagementViewModel)DataContext).RemoveSharedHeadphonesBusCommand}"
+                            CommandParameter="{Binding}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
         </Border>
-        <ListBox ItemsSource="{Binding VirtualAudioChannelAssignments}" Background="Transparent" Margin="0,6,0,0" MaxHeight="200">
-          <ListBox.ItemTemplate>
-            <DataTemplate x:DataType="vm:OutputVirtualChannelAssignmentViewModel">
-              <Grid ColumnDefinitions="220,90,100,90,*" ColumnSpacing="8" Margin="0,2">
-                <TextBlock Grid.Column="0" Text="{Binding OutputDisplayName}" VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1" Text="{Binding OutputChannelLabel}" VerticalAlignment="Center" />
-                <NumericUpDown Grid.Column="2"
-                               Minimum="1"
-                               Maximum="512"
-                               ShowButtonSpinner="False"
-                               Value="{Binding VirtualOutputChannel, Mode=TwoWay}" />
-                <TextBlock Grid.Column="3"
-                           IsVisible="{Binding IsDuplicate}"
-                           Text="{x:Static res:Strings.DuplicateLabel}"
-                           Foreground="#FFCC6666"
-                           VerticalAlignment="Center" />
-                <TextBlock Grid.Column="4" Text="{Binding VirtualOutputChannel, StringFormat='VOut {0}'}"
-                           VerticalAlignment="Center" Opacity="0.75" />
-              </Grid>
-            </DataTemplate>
-          </ListBox.ItemTemplate>
-        </ListBox>
-      </DockPanel>
-    </Border>
+
+        <Border Classes="card">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.VirtualAudioChannelsHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock DockPanel.Dock="Top" Classes="hint"
+                       Text="{x:Static res:Strings.VirtualAudioChannelsHint}" />
+            <Border DockPanel.Dock="Top"
+                    IsVisible="{Binding HasVirtualChannelCollisions}"
+                    Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
+                    CornerRadius="4" Padding="8,4" Margin="0,6,0,0">
+              <TextBlock Text="{Binding VirtualChannelCollisionMessage}" Foreground="#FFE6E6" />
+            </Border>
+            <ListBox ItemsSource="{Binding VirtualAudioChannelAssignments}" Background="Transparent" Margin="0,6,0,0" MaxHeight="200">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:OutputVirtualChannelAssignmentViewModel">
+                  <Grid ColumnDefinitions="220,90,100,90,*" ColumnSpacing="8" Margin="0,2">
+                    <TextBlock Grid.Column="0" Text="{Binding OutputDisplayName}" VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="1" Text="{Binding OutputChannelLabel}" VerticalAlignment="Center" />
+                    <NumericUpDown Grid.Column="2"
+                                   Minimum="1"
+                                   Maximum="512"
+                                   ShowButtonSpinner="False"
+                                   Value="{Binding VirtualOutputChannel, Mode=TwoWay}" />
+                    <TextBlock Grid.Column="3"
+                               IsVisible="{Binding IsDuplicate}"
+                               Text="{x:Static res:Strings.DuplicateLabel}"
+                               Foreground="#FFCC6666"
+                               VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="4" Text="{Binding VirtualOutputChannel, StringFormat='VOut {0}'}"
+                               VerticalAlignment="Center" Opacity="0.75" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+      </StackPanel>
+    </Expander>
   </Grid>
 </UserControl>

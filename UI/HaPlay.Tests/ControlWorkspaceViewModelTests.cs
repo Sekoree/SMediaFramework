@@ -1293,6 +1293,8 @@ public sealed class ControlWorkspaceViewModelTests
         var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
         Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
         Assert.Equal(16, trigger.MidiController);
+        Assert.Null(trigger.MidiValueMin);
+        Assert.Null(trigger.MidiValueMax);
         Assert.Equal("onCc16", trigger.FunctionName);
         Assert.Contains("export fun onCc16", vm.SelectedScriptText);
         Assert.Contains("onCc16", row.TriggerSummary);
@@ -1321,6 +1323,55 @@ public sealed class ControlWorkspaceViewModelTests
         var occurrences = vm.SelectedScriptText.Split("export fun onNote40").Length - 1;
         Assert.Equal(1, occurrences);
         Assert.Equal(ControlScriptTriggerKind.MidiNote, Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers).Kind);
+    }
+
+    [Fact]
+    public async Task ConfirmLearn_PreservesObservedHighResolutionCcRange()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.LoadConfig(new ControlSystemConfig
+        {
+            Scripts = [new ControlScriptConfig { Name = "Script" }],
+        });
+
+        var deviceId = Guid.NewGuid();
+        vm.ApplyLearnCapture(new ControlMonitorRecord
+        {
+            TimestampUtc = DateTimeOffset.UtcNow,
+            Direction = ControlMonitorDirection.Input,
+            Protocol = ControlMonitorProtocol.Midi,
+            DeviceInstanceId = deviceId,
+            MidiMessageType = ControlMidiMessageType.ControlChange,
+            MidiChannel = 1,
+            MidiController = 16,
+            MidiValue = 0,
+            MidiHighResolution14Bit = true,
+        });
+        vm.ApplyLearnCapture(new ControlMonitorRecord
+        {
+            TimestampUtc = DateTimeOffset.UtcNow.AddMilliseconds(10),
+            Direction = ControlMonitorDirection.Input,
+            Protocol = ControlMonitorProtocol.Midi,
+            DeviceInstanceId = deviceId,
+            MidiMessageType = ControlMidiMessageType.ControlChange,
+            MidiChannel = 1,
+            MidiController = 16,
+            MidiValue = 10000,
+            MidiHighResolution14Bit = true,
+        });
+
+        Assert.True(vm.HasLearnCandidate);
+        Assert.Equal(0, vm.LearnCandidate!.MinimumValue);
+        Assert.Equal(10000, vm.LearnCandidate.MaximumValue);
+
+        vm.ConfirmLearnCommand.Execute(null);
+
+        var trigger = Assert.Single(Assert.Single(vm.BuildSnapshot().Scripts).Triggers);
+        Assert.Equal(ControlScriptTriggerKind.MidiControlChange, trigger.Kind);
+        Assert.Equal(16, trigger.MidiController);
+        Assert.Null(trigger.MidiValue);
+        Assert.Equal(0, trigger.MidiValueMin);
+        Assert.Equal(10000, trigger.MidiValueMax);
     }
 
     [Fact]
@@ -1500,6 +1551,35 @@ public sealed class ControlWorkspaceViewModelTests
         var row = Assert.Single(rows, row => row.Id == "custom.osc");
         Assert.Equal("Project", row.Source);
         Assert.True(row.IsProjectOverride);
+    }
+
+    [Fact]
+    public async Task SaveMidiProfileBuilder_CreatesProjectMidiProfileWithCcRange()
+    {
+        await using var vm = new ControlWorkspaceViewModel
+        {
+            ProfileBuilderDisplayName = "Motor Fader",
+            ProfileBuilderControlName = "Main Fader",
+            ProfileBuilderMidiChannelText = "1",
+            ProfileBuilderMidiControllerText = "16",
+            ProfileBuilderHighResolution14Bit = true,
+            ProfileBuilderMinValueText = "0",
+            ProfileBuilderMaxValueText = "10000",
+        };
+
+        vm.SaveMidiProfileBuilderCommand.Execute(null);
+
+        var profile = Assert.Single(vm.BuildSnapshot().DeviceProfileOverrides);
+        Assert.Equal("custom.midi.motor-fader", profile.Id);
+        Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
+        Assert.Equal(2, profile.Ports.Count);
+        var control = Assert.Single(profile.Controls);
+        Assert.Equal(ControlProfileValueMode.Absolute14Bit, control.ValueMode);
+        Assert.True(control.MidiHighResolution14Bit);
+        Assert.Equal(16, control.MidiController);
+        Assert.Equal(0, control.MidiValueMin);
+        Assert.Equal(10000, control.MidiValueMax);
+        Assert.Contains(vm.ProfileRows, row => row.Id == profile.Id && row.Source == "Project");
     }
 
     [Fact]

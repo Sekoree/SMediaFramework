@@ -13,12 +13,13 @@ public sealed record CueList
 
     public string Name { get; init; } = "Cue List";
 
-    public int PreRollCount { get; init; } = 4;
+    /// <summary>Number of upcoming cues to standby. <c>0</c> means the full upcoming cue window.</summary>
+    public int PreRollCount { get; init; }
 
     /// <summary>Resource cap: maximum standby decoders kept open at once, independent of the pre-roll
-    /// window size. Long H.264 files each hold an opened + seeked decoder, so this bounds memory even
-    /// when a large pre-roll window is configured. Clamped to [1, 16] by the engine; default 6.</summary>
-    public int MaxPreparedDecoders { get; init; } = 6;
+    /// window size. <c>0</c> means no separate decoder cap; the pre-roll window decides how many cues
+    /// are prepared. Positive values are honored for projects that need an explicit memory cap.</summary>
+    public int MaxPreparedDecoders { get; init; }
 
     /// <summary>Trigger mode applied to cues created via the toolbar (Phase 5.8.2). Default
     /// <see cref="CueTriggerMode.Manual"/> so older lists load unchanged.</summary>

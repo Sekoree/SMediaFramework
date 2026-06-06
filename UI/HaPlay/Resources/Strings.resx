@@ -79,7 +79,7 @@
     <value>Shared Headphones Buses</value>
   </data>
   <data name="SharedHeadphonesBusesHint" xml:space="preserve">
-    <value>§8.2 — Named monitor buses backed by a PortAudio output. Multiple players can route their cue send into the same bus.</value>
+    <value>Named monitor buses backed by a PortAudio output. Multiple players can route their cue send into the same bus.</value>
   </data>
   <data name="AddBusButton" xml:space="preserve">
     <value>+ Add bus</value>
@@ -112,7 +112,7 @@
     <value>_Toggle Sidebar</value>
   </data>
   <data name="MenuTargetConfigurationHeader" xml:space="preserve">
-    <value>_Target Configuration…</value>
+    <value>_Action Targets…</value>
   </data>
   <data name="TooltipToggleSidebar" xml:space="preserve">
     <value>Toggle sidebar (Ctrl+B)</value>
@@ -166,7 +166,7 @@
     <value>Density</value>
   </data>
   <data name="OscConnectionsHeader" xml:space="preserve">
-    <value>Cue OSC Connections</value>
+    <value>OSC Targets</value>
   </data>
   <data name="OscConnectionsHint" xml:space="preserve">
     <value>Named OSC targets for action cues. Cues store endpoint GUIDs, not host/port.</value>
@@ -292,16 +292,25 @@
     <value>Pre-roll N</value>
   </data>
   <data name="PreRollTooltip" xml:space="preserve">
-    <value>File media cues to pre-open ahead of standby (§5.7).</value>
+    <value>Upcoming media cues to pre-open ahead of standby. 0 means all upcoming cues.</value>
   </data>
   <data name="MaxStandbyDecodersLabel" xml:space="preserve">
     <value>Max standby decoders</value>
   </data>
   <data name="MaxStandbyDecodersTooltip" xml:space="preserve">
-    <value>Resource cap: how many standby decoders stay open at once, independent of the pre-roll window. Long video files each hold an open decoder, so a lower value trades warmth for memory. Range 1–16.</value>
+    <value>Resource cap: how many standby decoders stay open at once, independent of the pre-roll window. 0 means no separate decoder cap.</value>
   </data>
   <data name="AddGroupButton" xml:space="preserve">
     <value>+ Group</value>
+  </data>
+  <data name="AddCueMenuButton" xml:space="preserve">
+    <value>+ Add cue</value>
+  </data>
+  <data name="CueSelectionMenuButton" xml:space="preserve">
+    <value>Selected cue…</value>
+  </data>
+  <data name="CueDetailsEmptyHint" xml:space="preserve">
+    <value>Select a cue from the list to edit trigger, routing, media, or action settings.</value>
   </data>
   <data name="AddMediaButton" xml:space="preserve">
     <value>+ Media</value>
@@ -404,6 +413,18 @@
   </data>
   <data name="ActionEndpointLabel" xml:space="preserve">
     <value>Endpoint</value>
+  </data>
+  <data name="ActionTargetLabel" xml:space="preserve">
+    <value>Target</value>
+  </data>
+  <data name="NoActionTargetSelected" xml:space="preserve">
+    <value>(no target selected)</value>
+  </data>
+  <data name="ActionTargetMissingFormat" xml:space="preserve">
+    <value>Missing target {0}</value>
+  </data>
+  <data name="SelectedActionTargetFormat" xml:space="preserve">
+    <value>{0} ({1} - {2})</value>
   </data>
   <data name="ActionKindLabel" xml:space="preserve">
     <value>Kind</value>
@@ -628,7 +649,13 @@
     <value>Skip</value>
   </data>
   <data name="TargetConfigurationTitle" xml:space="preserve">
-    <value>Target Configuration</value>
+    <value>Action Targets</value>
+  </data>
+  <data name="TargetOscTabHeader" xml:space="preserve">
+    <value>OSC Targets</value>
+  </data>
+  <data name="TargetMidiTabHeader" xml:space="preserve">
+    <value>MIDI Targets</value>
   </data>
   <data name="OscTabHeader" xml:space="preserve">
     <value>OSC</value>
@@ -941,6 +968,12 @@
   </data>
   <data name="OutputManagementHint" xml:space="preserve">
     <value>Configured audio / video destinations. Right-click a local-video row for preview controls.</value>
+  </data>
+  <data name="NoOutputsEmptyHint" xml:space="preserve">
+    <value>No outputs yet. Add a local video, PortAudio, or NDI output to make routing targets available.</value>
+  </data>
+  <data name="AdvancedRoutingHeader" xml:space="preserve">
+    <value>Advanced routing</value>
   </data>
   <data name="AddPortAudioButton" xml:space="preserve">
     <value>Add PortAudio…</value>
@@ -1495,13 +1528,13 @@
     <value>MIDI {0}</value>
   </data>
   <data name="MidiActionRequiresMessage" xml:space="preserve">
-    <value>MIDI action requires a message (e.g. 'noteon 60 100').</value>
+    <value>MIDI action requires a message (e.g. 'noteon 60 100', 'pitchbend 0', or 'sysex F0 7D 00 F7').</value>
   </data>
   <data name="MidiActionCommandMissing" xml:space="preserve">
     <value>MIDI action command missing.</value>
   </data>
   <data name="UnsupportedMidiCommandFormat" xml:space="preserve">
-    <value>Unsupported MIDI command '{0}'. Use noteon/noteoff/cc/pc.</value>
+    <value>Unsupported MIDI command '{0}'. Use noteon/noteoff/cc/cc14/pc/polyaftertouch/aftertouch/pitchbend/sysex/mtc/songpos/songselect/tunerequest/clock/start/continue/stop/activesensing/reset/nrpn/rpn.</value>
   </data>
   <data name="MidiSpecDescriptionFormat" xml:space="preserve">
     <value>{0} ch{1}</value>
@@ -1792,10 +1825,10 @@
     <value>Images</value>
   </data>
   <data name="AddImageButton" xml:space="preserve">
-    <value>Image</value>
+    <value>+ Image</value>
   </data>
   <data name="AddTextButton" xml:space="preserve">
-    <value>Text</value>
+    <value>+ Text</value>
   </data>
   <data name="CueNodeDefaultActionLabel" xml:space="preserve">
     <value>Action cue</value>
@@ -1829,12 +1862,6 @@
   </data>
   <data name="CuePanicStatus" xml:space="preserve">
     <value>Panic stop: all cue transport state cleared.</value>
-  </data>
-  <data name="OscBuilderDefaultAddress" xml:space="preserve">
-    <value>/address</value>
-  </data>
-  <data name="OscBuilderDefaultArgument" xml:space="preserve">
-    <value>1</value>
   </data>
   <data name="CueAutoFollowStatusFormat" xml:space="preserve">
     <value>Auto-follow → {0}</value>

@@ -176,10 +176,6 @@
                                ToolTip.Tip="{Binding CurrentMediaDisplay}" />
 
                     <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
-                        <Button Classes="hide-compact" Padding="6,4"
-                                Content="{x:Static res:Strings.AudioMatrixButton}"
-                                Command="{Binding OpenAudioMatrixCommand}"
-                                ToolTip.Tip="{x:Static res:Strings.AudioMatrixButtonTooltip}" />
                         <!-- Single overflow menu (gear icon). Player Settings lives inside it, so there is
                              no second "Settings" button competing with it. -->
                         <Button Padding="8,4" Content="&#x2699;"
