@@ -177,7 +177,7 @@ internal sealed unsafe class FfmpegAudioEncoder : IAudioOutput, IDisposable
 
         av_channel_layout_default(&_codec->ch_layout, _format.Channels);
         _codec->sample_rate = _format.SampleRate;
-        _codec->sample_fmt = PickSampleFormat(codec);
+        _codec->sample_fmt = PickSampleFormat(_codec, codec);
         _codec->time_base = new AVRational { num = 1, den = _format.SampleRate };
         if (_options.Bitrate > 0)
             _codec->bit_rate = _options.Bitrate;
@@ -218,17 +218,30 @@ internal sealed unsafe class FfmpegAudioEncoder : IAudioOutput, IDisposable
         FFmpegException.ThrowIfError(ret, nameof(swr_init));
     }
 
-    private static AVSampleFormat PickSampleFormat(AVCodec* codec)
+    private static AVSampleFormat PickSampleFormat(AVCodecContext* codecContext, AVCodec* codec)
     {
-        if (codec->sample_fmts is null)
+        void* configs = null;
+        var count = 0;
+        var ret = avcodec_get_supported_config(
+            codecContext,
+            codec,
+            AVCodecConfig.AV_CODEC_CONFIG_SAMPLE_FORMAT,
+            0,
+            &configs,
+            &count);
+        FFmpegException.ThrowIfError(ret, nameof(avcodec_get_supported_config));
+
+        if (configs is null || count <= 0)
             return AVSampleFormat.AV_SAMPLE_FMT_FLTP;
-        for (var p = codec->sample_fmts; *p != AVSampleFormat.AV_SAMPLE_FMT_NONE; p++)
+
+        var formats = (AVSampleFormat*)configs;
+        for (var i = 0; i < count && formats[i] != AVSampleFormat.AV_SAMPLE_FMT_NONE; i++)
         {
-            if (*p == AVSampleFormat.AV_SAMPLE_FMT_FLTP)
+            if (formats[i] == AVSampleFormat.AV_SAMPLE_FMT_FLTP)
                 return AVSampleFormat.AV_SAMPLE_FMT_FLTP;
         }
 
-        return codec->sample_fmts[0];
+        return formats[0];
     }
 
     public void Dispose()
