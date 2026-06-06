@@ -75,7 +75,11 @@ public class MIDIOutputDevice : MIDIDevice
     public PmError Write(IMIDIMessage message, int timestamp = 0)
     {
         if (!IsOpen) return PmError.BadPtr;
-        return message.WriteTo(Stream, timestamp);
+        var err = message.WriteTo(Stream, timestamp);
+        if (err != PmError.NoError && Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("MIDIOutputDevice.Write failed: {Detail} (deviceId={DeviceId}, name={Name})",
+                PMUtil.DescribeError(err, Stream), DeviceId, Name);
+        return err;
     }
 
     /// <summary>
@@ -85,7 +89,11 @@ public class MIDIOutputDevice : MIDIDevice
     public PmError Write(ReadOnlySpan<PmEvent> events)
     {
         if (!IsOpen) return PmError.BadPtr;
-        return Native.Pm_Write(Stream, events, events.Length);
+        var err = Native.Pm_Write(Stream, events, events.Length);
+        if (err != PmError.NoError && Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("MIDIOutputDevice.Write(batch) failed: {Detail} (deviceId={DeviceId}, name={Name})",
+                PMUtil.DescribeError(err, Stream), DeviceId, Name);
+        return err;
     }
 
     /// <summary>Writes a packed short MIDI message directly.</summary>
@@ -94,7 +102,11 @@ public class MIDIOutputDevice : MIDIDevice
     public PmError WriteShort(uint message, int timestamp = 0)
     {
         if (!IsOpen) return PmError.BadPtr;
-        return Native.Pm_WriteShort(Stream, timestamp, message);
+        var err = Native.Pm_WriteShort(Stream, timestamp, message);
+        if (err != PmError.NoError && Logger.IsEnabled(LogLevel.Debug))
+            Logger.LogDebug("MIDIOutputDevice.WriteShort failed: {Detail} (deviceId={DeviceId}, name={Name})",
+                PMUtil.DescribeError(err, Stream), DeviceId, Name);
+        return err;
     }
 
     /// <summary>

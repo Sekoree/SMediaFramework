@@ -103,7 +103,26 @@ public partial class ScriptEditorWindow : Window
         }
 
         if (ScriptEditor.Document?.Text != text)
-            SetDocumentText(ScriptEditor.Document!, text);
+        {
+            var document = ScriptEditor.Document!;
+            if (text.StartsWith(document.Text, StringComparison.Ordinal)
+                && text.Length > document.TextLength)
+            {
+                _updatingEditor = true;
+                try
+                {
+                    document.Insert(document.TextLength, text[document.TextLength..]);
+                }
+                finally
+                {
+                    _updatingEditor = false;
+                }
+            }
+            else
+            {
+                SetDocumentText(document, text);
+            }
+        }
     }
 
     private TextDocument GetOrCreateDocument(string scriptPath, string text)

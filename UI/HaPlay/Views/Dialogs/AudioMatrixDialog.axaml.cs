@@ -77,7 +77,7 @@ public partial class AudioMatrixDialog : Window
             var header = inputCount == 2 ? $"In {(inputChannel == 0 ? "L" : "R")}" : $"In {inputChannel + 1}";
             source.Columns.Add(new TemplateColumn<AudioMatrixRow>(
                 header,
-                new FuncDataTemplate<AudioMatrixRow>((row, _) => BuildCellEditor(row, inputChannel), supportsRecycling: false),
+                new FuncDataTemplate<AudioMatrixRow>((_, _) => BuildCellEditor(inputChannel), supportsRecycling: true),
                 width: new GridLength(110)));
         }
 
@@ -100,21 +100,25 @@ public partial class AudioMatrixDialog : Window
         source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("Input", x => x.InputLabel, width: new GridLength(88)));
         source.Columns.Add(new TemplateColumn<AudioMatrixRouteRow>(
             "Gain dB",
-            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteGainEditor(row), supportsRecycling: false),
+            new FuncDataTemplate<AudioMatrixRouteRow>((_, _) => BuildRouteGainEditor(), supportsRecycling: true),
             width: new GridLength(104)));
         source.Columns.Add(new TemplateColumn<AudioMatrixRouteRow>(
             "Mute",
-            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteMuteEditor(row), supportsRecycling: false),
+            new FuncDataTemplate<AudioMatrixRouteRow>((_, _) => BuildRouteMuteEditor(), supportsRecycling: true),
             width: new GridLength(72)));
         source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("Effective", x => x.EffectiveGainText, width: new GridLength(96)));
         MatrixRoutesTreeGrid.Source = source;
     }
 
-    private static Control BuildCellEditor(AudioMatrixRow row, int inputChannel)
+    private static Control BuildCellEditor(int inputChannel)
     {
-        var cell = row.GetCell(inputChannel);
-        if (cell is null)
-            return new TextBlock { Text = "—", Opacity = 0.45 };
+        var panel = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            Spacing = 4,
+        };
+
+        var placeholder = new TextBlock { Text = "—", Opacity = 0.45 };
 
         var spinner = new NumericUpDown
         {
@@ -126,9 +130,12 @@ public partial class AudioMatrixDialog : Window
             ClipValueToMinMax = true,
             Width = 78,
             Padding = new Thickness(4, 2),
-            DataContext = cell,
         };
-        AotBinding.TwoWay(spinner, NumericUpDown.ValueProperty, cell, nameof(AudioMatrixCellViewModel.GainDb),
+        AotBinding.TwoWayFromDataContext<AudioMatrixRow, AudioMatrixCellViewModel>(
+            spinner,
+            NumericUpDown.ValueProperty,
+            row => row?.GetCell(inputChannel),
+            nameof(AudioMatrixCellViewModel.GainDb),
             c => (decimal?)c.GainDb,
             (c, v) => c.GainDb = v is decimal d ? (double)d : 0.0);
 
@@ -138,24 +145,34 @@ public partial class AudioMatrixDialog : Window
             FontSize = 10,
             Padding = new Thickness(2, 0),
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            DataContext = cell,
         };
         ToolTip.SetTip(mute, "Mute this cell.");
-        AotBinding.TwoWay(mute, CheckBox.IsCheckedProperty, cell, nameof(AudioMatrixCellViewModel.Muted),
+        AotBinding.TwoWayFromDataContext<AudioMatrixRow, AudioMatrixCellViewModel>(
+            mute,
+            CheckBox.IsCheckedProperty,
+            row => row?.GetCell(inputChannel),
+            nameof(AudioMatrixCellViewModel.Muted),
             c => (bool?)c.Muted,
             (c, v) => c.Muted = v is bool b && b);
 
-        var panel = new StackPanel
+        void SyncVisibility()
         {
-            Orientation = Avalonia.Layout.Orientation.Horizontal,
-            Spacing = 4,
-        };
+            var row = panel.DataContext as AudioMatrixRow;
+            var hasCell = row?.GetCell(inputChannel) is not null;
+            placeholder.IsVisible = !hasCell;
+            spinner.IsVisible = hasCell;
+            mute.IsVisible = hasCell;
+        }
+
+        panel.DataContextChanged += (_, _) => SyncVisibility();
+        panel.Children.Add(placeholder);
         panel.Children.Add(spinner);
         panel.Children.Add(mute);
+        SyncVisibility();
         return panel;
     }
 
-    private static Control BuildRouteGainEditor(AudioMatrixRouteRow row)
+    private static Control BuildRouteGainEditor()
     {
         var spinner = new NumericUpDown
         {
@@ -167,15 +184,18 @@ public partial class AudioMatrixDialog : Window
             ClipValueToMinMax = true,
             Width = 82,
             Padding = new Thickness(4, 2),
-            DataContext = row,
         };
-        AotBinding.TwoWay(spinner, NumericUpDown.ValueProperty, row, nameof(AudioMatrixRouteRow.GainDb),
+        AotBinding.TwoWayFromDataContext<AudioMatrixRouteRow, AudioMatrixRouteRow>(
+            spinner,
+            NumericUpDown.ValueProperty,
+            row => row,
+            nameof(AudioMatrixRouteRow.GainDb),
             r => (decimal?)r.GainDb,
             (r, v) => r.GainDb = v is decimal d ? (double)d : 0.0);
         return spinner;
     }
 
-    private static Control BuildRouteMuteEditor(AudioMatrixRouteRow row)
+    private static Control BuildRouteMuteEditor()
     {
         var mute = new CheckBox
         {
@@ -184,10 +204,13 @@ public partial class AudioMatrixDialog : Window
             Padding = new Thickness(2, 0),
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            DataContext = row,
         };
         ToolTip.SetTip(mute, "Mute this route connection.");
-        AotBinding.TwoWay(mute, CheckBox.IsCheckedProperty, row, nameof(AudioMatrixRouteRow.Muted),
+        AotBinding.TwoWayFromDataContext<AudioMatrixRouteRow, AudioMatrixRouteRow>(
+            mute,
+            CheckBox.IsCheckedProperty,
+            row => row,
+            nameof(AudioMatrixRouteRow.Muted),
             r => (bool?)r.Muted,
             (r, v) => r.Muted = v is bool b && b);
         return mute;

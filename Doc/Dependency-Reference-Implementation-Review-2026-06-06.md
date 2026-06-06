@@ -22,6 +22,30 @@ This pass focused on places where dependency behavior or helper APIs make the
 current implementation riskier, more complex, or less efficient than it needs
 to be. It is a static review; I did not run the full test suite in this pass.
 
+## Resolution Pass - 2026-06-06 (follow-up)
+
+Most highest-priority findings were already addressed in the codebase before this
+follow-up pass. Additional fixes landed in the same session:
+
+| Finding | Status |
+| --- | --- |
+| PortAudio callback uses `Pa_GetStreamTime` | **Resolved** — callback seeds smooth clock from `PaStreamCallbackTimeInfo.currentTime` |
+| PortMidi not serialized | **Resolved** — `PmNativeGate` wraps all `Native.Pm_*` entry points |
+| FFmpeg mux packets before header | **Resolved** — `WritePacket` throws when header not written; regression test exists |
+| TreeDataGrid matrix editors recycle stale rows | **Resolved** — `AotBinding.TwoWayFromDataContext` + recycled matrix templates |
+| Mond instruction limit lifetime-based | **Resolved** — `ResetBudget()` before each `ControlScriptModule.Invoke`; regression test added |
+| Cue tree manual drag/drop | **Resolved** — `AutoDragDropRows` + `RowDragStarted` / `RowDrop` |
+| AvaloniaEdit full-text reset | **Resolved** — per-script `TextDocument` cache; append-only VM updates preserve caret |
+| SDL3 global `SDL_Quit` | **Resolved** — `SDL3Runtime.Release` calls `SDL_QuitSubSystem(Video)` only |
+| NDI disabled-stream capture | **Resolved** — `NDIReceiver.Capture` passes null pointers when stream type disabled |
+| NDI async flush sync point | **Resolved** — `SynchronizeAsyncVideo()` uses documented sync-null send |
+| Audio matrix dialog VM leak | **Resolved** — `OnClosed` unsubscribes and clears TreeDataGrid sources |
+| PortMidi host error detail | **Resolved** — `PMUtil.DescribeError` + enriched input/output logging |
+| X32 meter blobs in cache | **Resolved** — profile-gated `X32MeterCacheDecoder` in `ControlScriptRuntime` |
+
+Still open (lower urgency): cue-tree stock `TextColumn` vs explicit AOT templates (documented
+intentional), X32 protocol-aware periodic task routing refinements, NDI bandwidth defaults.
+
 ## Verification Pass - 2026-06-06
 
 I rechecked each finding against the current source tree and the referenced

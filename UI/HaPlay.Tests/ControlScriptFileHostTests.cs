@@ -112,6 +112,28 @@ public sealed class ControlScriptFileHostTests
     }
 
     [Fact]
+    public void Invoke_ResetsInstructionBudgetBetweenCalls()
+    {
+        var host = CreateHost(
+            new Dictionary<string, string>
+            {
+                ["Scripts/main.mnd"] =
+                    """
+                    export fun tick() {
+                        var n = 0;
+                        while (n < 50) { n = n + 1; }
+                        return n;
+                    }
+                    """,
+            },
+            instructionLimit: 200);
+
+        var module = host.LoadModule("Scripts/main.mnd");
+        for (var i = 0; i < 20; i++)
+            Assert.Equal(50, module.Invoke("tick"));
+    }
+
+    [Fact]
     public void BuiltInXTouchMiniX32FaderTemplate_CompilesAsExportedScriptModule()
     {
         var template = BuiltInControlScriptTemplateRepository.Instance.FindById(

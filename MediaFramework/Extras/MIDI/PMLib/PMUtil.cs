@@ -152,6 +152,30 @@ public static class PMUtil
         => Marshal.PtrToStringUTF8(Native.Pm_GetErrorText(error));
 
     /// <summary>
+    /// Returns a human-readable description of <paramref name="error"/>, including host-level detail
+    /// when <paramref name="error"/> is <see cref="PmError.HostError"/>.
+    /// </summary>
+    public static string DescribeError(PmError error) => DescribeError(error, nint.Zero);
+
+    /// <summary>
+    /// Returns a human-readable description of <paramref name="error"/>, including host-level detail
+    /// when <paramref name="error"/> is <see cref="PmError.HostError"/> or the stream reports
+    /// <see cref="Native.Pm_HasHostError"/>.
+    /// </summary>
+    public static string DescribeError(PmError error, nint stream)
+    {
+        if (error == PmError.HostError || (stream != nint.Zero && Native.Pm_HasHostError(stream) != 0))
+        {
+            var host = GetHostErrorText();
+            if (!string.IsNullOrWhiteSpace(host))
+                return $"{error}: {host}";
+        }
+
+        var text = GetErrorText(error);
+        return string.IsNullOrWhiteSpace(text) ? error.ToString() : text;
+    }
+
+    /// <summary>
     /// Returns and clears the pending host-level error as a managed <see cref="string"/>.
     /// Returns an empty string if there is no pending error.
     /// </summary>

@@ -20,6 +20,77 @@ namespace HaPlay.Views;
 internal static class AotBinding
 {
     /// <summary>
+    /// Two-way bind <paramref name="control"/> on <paramref name="target"/> to a nested object
+    /// selected from the control's <c>DataContext</c>. Rebinds when the parent context or selected
+    /// source changes — safe for recycled TreeDataGrid template cells.
+    /// </summary>
+    public static void TwoWayFromDataContext<TParent, TSource>(
+        Control control,
+        AvaloniaProperty target,
+        Func<TParent?, TSource?> selectSource,
+        string propertyName,
+        Func<TSource, object?> get,
+        Action<TSource, object?> set)
+        where TParent : class
+        where TSource : class
+    {
+        TSource? source = null;
+        var syncing = false;
+
+        void PushToControl()
+        {
+            if (syncing || source is null)
+                return;
+
+            syncing = true;
+            try { control.SetValue(target, get(source)); }
+            finally { syncing = false; }
+        }
+
+        void OnSourceChanged(object? _, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == propertyName || string.IsNullOrEmpty(e.PropertyName))
+                PushToControl();
+        }
+
+        void OnControlChanged(object? _, AvaloniaPropertyChangedEventArgs e)
+        {
+            if (e.Property != target || syncing || source is null)
+                return;
+
+            syncing = true;
+            try { set(source, e.NewValue); }
+            finally { syncing = false; }
+        }
+
+        void UnbindSource()
+        {
+            if (source is INotifyPropertyChanged inpc)
+                inpc.PropertyChanged -= OnSourceChanged;
+            source = null;
+        }
+
+        void RebindParent()
+        {
+            UnbindSource();
+            var parent = control.DataContext as TParent;
+            source = selectSource(parent);
+            if (source is INotifyPropertyChanged inpc)
+                inpc.PropertyChanged += OnSourceChanged;
+            PushToControl();
+        }
+
+        control.DataContextChanged += (_, _) => RebindParent();
+        control.PropertyChanged += OnControlChanged;
+        control.DetachedFromVisualTree += (_, _) =>
+        {
+            UnbindSource();
+            control.PropertyChanged -= OnControlChanged;
+        };
+        RebindParent();
+    }
+
+    /// <summary>
     /// Two-way bind <paramref name="target"/> on <paramref name="control"/> to a fixed
     /// <paramref name="source"/> object's property. <paramref name="get"/>/<paramref name="set"/> convert
     /// to/from the Avalonia property's value type (e.g. <c>double</c> ↔ <c>decimal?</c>).
