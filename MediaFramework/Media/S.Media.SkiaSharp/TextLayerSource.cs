@@ -200,41 +200,50 @@ public sealed class TextLayerSource : IVideoSource, IDisposable
     private FrameBuffer Rasterise()
     {
         var buffer = ArrayPool<byte>.Shared.Rent(_pixelByteCount);
-        var info = new SKImageInfo(_format.Width, _format.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
-        unsafe
+        try
         {
-            fixed (byte* p = buffer)
+            var info = new SKImageInfo(_format.Width, _format.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
+            unsafe
             {
-                using var surface = SKSurface.Create(info, (IntPtr)p, _stride);
-                var canvas = surface.Canvas;
-                canvas.Clear(new SKColor(_backgroundArgb));
-
-                using var typeface = SKTypeface.FromFamilyName(_fontFamily) ?? SKTypeface.Default;
-                using var font = new SKFont(typeface, _fontSize);
-                using var paint = new SKPaint
+                fixed (byte* p = buffer)
                 {
-                    Color = new SKColor(_argbColor),
-                    IsAntialias = true,
-                };
+                    using var surface = SKSurface.Create(info, (IntPtr)p, _stride)
+                        ?? throw new InvalidOperationException("SKSurface.Create returned null.");
+                    var canvas = surface.Canvas;
+                    canvas.Clear(new SKColor(_backgroundArgb));
 
-                font.MeasureText(_text, out var bounds);
-                var textWidth = bounds.Width;
-                var x = _alignment switch
-                {
-                    TextAlignment.Left => 0f - bounds.Left,
-                    TextAlignment.Right => _format.Width - textWidth - bounds.Left,
-                    _ => (_format.Width - textWidth) * 0.5f - bounds.Left,
-                };
-                var metrics = font.Metrics;
-                var lineHeight = metrics.Descent - metrics.Ascent;
-                var y = (_format.Height + lineHeight) * 0.5f - metrics.Descent;
+                    using var typeface = SKTypeface.FromFamilyName(_fontFamily) ?? SKTypeface.Default;
+                    using var font = new SKFont(typeface, _fontSize);
+                    using var paint = new SKPaint
+                    {
+                        Color = new SKColor(_argbColor),
+                        IsAntialias = true,
+                    };
 
-                canvas.DrawText(_text, x, y, SKTextAlign.Left, font, paint);
-                canvas.Flush();
+                    font.MeasureText(_text, out var bounds);
+                    var textWidth = bounds.Width;
+                    var x = _alignment switch
+                    {
+                        TextAlignment.Left => 0f - bounds.Left,
+                        TextAlignment.Right => _format.Width - textWidth - bounds.Left,
+                        _ => (_format.Width - textWidth) * 0.5f - bounds.Left,
+                    };
+                    var metrics = font.Metrics;
+                    var lineHeight = metrics.Descent - metrics.Ascent;
+                    var y = (_format.Height + lineHeight) * 0.5f - metrics.Descent;
+
+                    canvas.DrawText(_text, x, y, SKTextAlign.Left, font, paint);
+                    canvas.Flush();
+                }
             }
-        }
 
-        return new FrameBuffer(buffer, initialRefs: 1);
+            return new FrameBuffer(buffer, initialRefs: 1);
+        }
+        catch
+        {
+            ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
+            throw;
+        }
     }
 
     public void Dispose()

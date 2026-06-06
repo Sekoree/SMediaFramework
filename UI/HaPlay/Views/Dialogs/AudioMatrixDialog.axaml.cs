@@ -41,6 +41,19 @@ public partial class AudioMatrixDialog : Window
             RebuildAudioRouteSource();
         });
 
+    protected override void OnClosed(EventArgs e)
+    {
+        if (_subscribedVm is not null)
+        {
+            _subscribedVm.AudioMatrixLayoutChanged -= OnAudioMatrixLayoutChanged;
+            _subscribedVm = null;
+        }
+
+        MatrixTreeGrid?.Source = null;
+        MatrixRoutesTreeGrid?.Source = null;
+        base.OnClosed(e);
+    }
+
     private void RebuildAudioMatrixSource()
     {
         if (DataContext is not MediaPlayerViewModel vm) return;
@@ -64,7 +77,7 @@ public partial class AudioMatrixDialog : Window
             var header = inputCount == 2 ? $"In {(inputChannel == 0 ? "L" : "R")}" : $"In {inputChannel + 1}";
             source.Columns.Add(new TemplateColumn<AudioMatrixRow>(
                 header,
-                new FuncDataTemplate<AudioMatrixRow>((row, _) => BuildCellEditor(row, inputChannel), supportsRecycling: true),
+                new FuncDataTemplate<AudioMatrixRow>((row, _) => BuildCellEditor(row, inputChannel), supportsRecycling: false),
                 width: new GridLength(110)));
         }
 
@@ -87,11 +100,11 @@ public partial class AudioMatrixDialog : Window
         source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("Input", x => x.InputLabel, width: new GridLength(88)));
         source.Columns.Add(new TemplateColumn<AudioMatrixRouteRow>(
             "Gain dB",
-            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteGainEditor(row), supportsRecycling: true),
+            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteGainEditor(row), supportsRecycling: false),
             width: new GridLength(104)));
         source.Columns.Add(new TemplateColumn<AudioMatrixRouteRow>(
             "Mute",
-            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteMuteEditor(row), supportsRecycling: true),
+            new FuncDataTemplate<AudioMatrixRouteRow>((row, _) => BuildRouteMuteEditor(row), supportsRecycling: false),
             width: new GridLength(72)));
         source.Columns.Add(new TextColumn<AudioMatrixRouteRow, string>("Effective", x => x.EffectiveGainText, width: new GridLength(96)));
         MatrixRoutesTreeGrid.Source = source;

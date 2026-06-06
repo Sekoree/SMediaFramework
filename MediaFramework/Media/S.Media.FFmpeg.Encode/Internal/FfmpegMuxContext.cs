@@ -88,6 +88,11 @@ internal sealed unsafe class FfmpegMuxContext : IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_headerWritten)
                 TryWriteHeaderLocked();
+            if (!_headerWritten)
+            {
+                throw new InvalidOperationException(
+                    "All expected streams must be configured before submitting packets.");
+            }
             pkt->stream_index = streamIndex;
             var ret = av_interleaved_write_frame(_fmt, pkt);
             FFmpegException.ThrowIfError(ret, nameof(av_interleaved_write_frame));

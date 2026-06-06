@@ -134,7 +134,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             {
                 ReceiverName = options.ReceiverName,
                 ColorFormat = options.ColorFormat,
-                Bandwidth = options.Bandwidth,
+                Bandwidth = ResolveBandwidth(options),
             };
             rc = NDIReceiver.Create(out var recv, settings);
             if (rc != 0 || recv is null)
@@ -336,6 +336,17 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         }
     }
 
+    private static NDIRecvBandwidth ResolveBandwidth(NDISourceOptions options)
+    {
+        if (options.Bandwidth != NDIRecvBandwidth.Highest)
+            return options.Bandwidth;
+        if (!options.ReceiveVideo && options.ReceiveAudio)
+            return NDIRecvBandwidth.AudioOnly;
+        if (options.ReceiveVideo && !options.ReceiveAudio)
+            return NDIRecvBandwidth.Lowest;
+        return options.Bandwidth;
+    }
+
     private int ReadAudioInto(Span<float> dst)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -407,7 +418,13 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         {
             while (!token.IsCancellationRequested)
             {
-                var frameType = _receiver.Capture(out var video, out var audio, out var metadata, timeoutMs: 100);
+                var frameType = _receiver.Capture(
+                    out var video,
+                    out var audio,
+                    out var metadata,
+                    timeoutMs: 100,
+                    receiveVideo: _receiveVideo,
+                    receiveAudio: _receiveAudio);
                 switch (frameType)
                 {
                     case NDIFrameType.Audio:

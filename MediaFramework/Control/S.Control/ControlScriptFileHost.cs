@@ -204,6 +204,9 @@ public sealed class ControlScriptModule
         if (!TryGetExportedFunction(exportedFunctionName, out var function))
             throw new ControlScriptException($"Script '{ScriptPath}' does not export function '{exportedFunctionName}'.");
 
+        if (State.Debugger is InstructionLimitDebugger instructionLimitDebugger)
+            instructionLimitDebugger.ResetBudget();
+
         return State.Call(function, arguments ?? []);
     }
 }

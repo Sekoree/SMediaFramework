@@ -283,6 +283,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
         try
         {
             SDL3Runtime.Acquire();
+            SDL3Runtime.RegisterAutoThreadOutput($"SDL3VideoOutput '{_title}'");
             try
             {
                 InitGraphics();
@@ -312,6 +313,7 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
             finally
             {
                 TeardownGraphics();
+                SDL3Runtime.UnregisterAutoThreadOutput();
                 SDL3Runtime.Release();
             }
         }

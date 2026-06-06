@@ -1,7 +1,9 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Xml;
 using Avalonia.Controls;
 using Avalonia.Platform;
+using AvaloniaEdit.Document;
 using AvaloniaEdit.Highlighting;
 using AvaloniaEdit.Highlighting.Xshd;
 using HaPlay.ViewModels;
@@ -17,12 +19,15 @@ public partial class ScriptEditorWindow : Window
 {
     private ControlWorkspaceViewModel? _viewModel;
     private bool _updatingEditor;
+    private string? _activeScriptPath;
+    private readonly Dictionary<string, TextDocument> _documents = new(StringComparer.Ordinal);
 
     public ScriptEditorWindow()
     {
         InitializeComponent();
         ApplyMondSyntaxHighlighting();
-        ScriptEditor.TextChanged += OnScriptEditorTextChanged;
+        ScriptEditor.Document = new TextDocument();
+        ScriptEditor.Document.TextChanged += OnEditorDocumentTextChanged;
         DataContextChanged += OnDataContextChanged;
         BindViewModel(DataContext as ControlWorkspaceViewModel);
     }
@@ -56,36 +61,84 @@ public partial class ScriptEditorWindow : Window
         if (_viewModel is not null)
         {
             _viewModel.PropertyChanged += OnViewModelPropertyChanged;
-            SetEditorText(_viewModel.SelectedScriptText);
+            BindSelectedScriptDocument();
         }
         else
         {
-            SetEditorText(string.Empty);
+            BindDocument(null, string.Empty);
         }
     }
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(ControlWorkspaceViewModel.SelectedScriptText))
-            SetEditorText(_viewModel?.SelectedScriptText ?? string.Empty);
+        if (e.PropertyName == nameof(ControlWorkspaceViewModel.SelectedScriptText)
+            || e.PropertyName == nameof(ControlWorkspaceViewModel.SelectedScriptRow))
+        {
+            BindSelectedScriptDocument();
+        }
     }
 
-    private void OnScriptEditorTextChanged(object? sender, EventArgs e)
+    private void BindSelectedScriptDocument()
     {
-        if (_updatingEditor || _viewModel is null)
+        var path = _viewModel?.SelectedScriptRow?.ScriptPath?.Trim() ?? string.Empty;
+        var text = _viewModel?.SelectedScriptText ?? string.Empty;
+        BindDocument(string.IsNullOrEmpty(path) ? null : path, text);
+    }
+
+    private void BindDocument(string? scriptPath, string text)
+    {
+        if (scriptPath is null)
+        {
+            _activeScriptPath = null;
+            SetDocumentText(ScriptEditor.Document ?? new TextDocument(), string.Empty);
             return;
-        _viewModel.SelectedScriptText = ScriptEditor.Text;
+        }
+
+        if (!ReferenceEquals(_activeScriptPath, scriptPath) || !ReferenceEquals(ScriptEditor.Document, _documents.GetValueOrDefault(scriptPath)))
+        {
+            _activeScriptPath = scriptPath;
+            var document = GetOrCreateDocument(scriptPath, text);
+            ScriptEditor.Document = document;
+            return;
+        }
+
+        if (ScriptEditor.Document?.Text != text)
+            SetDocumentText(ScriptEditor.Document!, text);
     }
 
-    private void SetEditorText(string text)
+    private TextDocument GetOrCreateDocument(string scriptPath, string text)
     {
-        if (ScriptEditor.Text == text)
+        if (_documents.TryGetValue(scriptPath, out var existing))
+        {
+            if (existing.Text != text)
+                SetDocumentText(existing, text);
+            return existing;
+        }
+
+        var document = new TextDocument(text);
+        _documents[scriptPath] = document;
+        return document;
+    }
+
+    private void OnEditorDocumentTextChanged(object? sender, EventArgs e)
+    {
+        if (_updatingEditor || _viewModel is null || _activeScriptPath is null)
+            return;
+
+        var text = ScriptEditor.Document?.Text ?? string.Empty;
+        if (_viewModel.SelectedScriptText != text)
+            _viewModel.SelectedScriptText = text;
+    }
+
+    private void SetDocumentText(TextDocument document, string text)
+    {
+        if (document.Text == text)
             return;
 
         _updatingEditor = true;
         try
         {
-            ScriptEditor.Text = text;
+            document.Text = text;
         }
         finally
         {
@@ -96,9 +149,12 @@ public partial class ScriptEditorWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         base.OnClosed(e);
-        ScriptEditor.TextChanged -= OnScriptEditorTextChanged;
+        if (ScriptEditor.Document is not null)
+            ScriptEditor.Document.TextChanged -= OnEditorDocumentTextChanged;
         if (_viewModel is not null)
             _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         _viewModel = null;
+        _activeScriptPath = null;
+        _documents.Clear();
     }
 }

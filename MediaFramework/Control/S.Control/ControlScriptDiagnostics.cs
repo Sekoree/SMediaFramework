@@ -36,6 +36,9 @@ internal sealed class InstructionLimitDebugger : MondDebugger
     protected override bool ShouldBreak(MondProgram program, int address) =>
         ++_count >= _instructionLimit;
 
+    /// <summary>Resets the per-invocation instruction budget.</summary>
+    internal void ResetBudget() => _count = 0;
+
     protected override MondDebugAction OnBreak(MondDebugContext context, int address) =>
         throw new MondRuntimeException("Script execution timed out.");
 }

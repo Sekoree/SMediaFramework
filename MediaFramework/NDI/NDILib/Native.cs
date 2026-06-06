@@ -67,6 +67,14 @@ internal static partial class Native
         out NDIMetadataFrame p_metadata,
         uint timeout_in_ms);
 
+    [LibraryImport(LibraryName, EntryPoint = "NDIlib_recv_capture_v3")]
+    internal static partial NDIFrameType NDIlib_recv_capture_v3_ptrs(
+        nint p_instance,
+        nint p_video_data,
+        nint p_audio_data,
+        nint p_metadata,
+        uint timeout_in_ms);
+
     [LibraryImport(LibraryName)]
     internal static partial void NDIlib_recv_free_video_v2(nint p_instance, in NDIVideoFrameV2 p_video_data);
 
@@ -127,6 +135,10 @@ internal static partial class Native
 
     [LibraryImport(LibraryName)]
     internal static partial void NDIlib_send_send_video_v2(nint p_instance, in NDIVideoFrameV2 p_video_data);
+
+    /// <summary>Documented async-video sync point: synchronous send with null video data.</summary>
+    [LibraryImport(LibraryName, EntryPoint = "NDIlib_send_send_video_v2")]
+    internal static partial void NDIlib_send_send_video_v2_null(nint p_instance, nint p_video_data);
 
     [LibraryImport(LibraryName)]
     internal static partial void NDIlib_send_send_video_async_v2(nint p_instance, in NDIVideoFrameV2 p_video_data);

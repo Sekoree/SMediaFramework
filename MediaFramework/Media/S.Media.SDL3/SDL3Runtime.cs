@@ -1,3 +1,5 @@
+using S.Media.Core.Diagnostics;
+
 namespace S.Media.SDL3;
 
 /// <summary>
@@ -17,6 +19,7 @@ public static class SDL3Runtime
 {
     private static readonly Lock Gate = new();
     private static int _refCount;
+    private static int _autoThreadOutputCount;
 
     /// <summary>Initialise the SDL video subsystem (idempotent, ref-counted).</summary>
     public static void Acquire()
@@ -35,14 +38,50 @@ public static class SDL3Runtime
         }
     }
 
-    /// <summary>Release one ref; tear down SDL when the count hits zero.</summary>
+    /// <summary>
+    /// Tracks an auto-thread SDL output that pumps events from a dedicated render thread.
+    /// Logs when multiple outputs poll concurrently or when video is initialized off the main thread on macOS.
+    /// </summary>
+    public static void RegisterAutoThreadOutput(string ownerDescription)
+    {
+        lock (Gate)
+        {
+            _autoThreadOutputCount++;
+            if (OperatingSystem.IsMacOS())
+            {
+                MediaDiagnostics.LogWarning(
+                    "SDL3Runtime: {Owner} initializes SDL video on a background thread; macOS requires a main-thread harness.",
+                    ownerDescription);
+            }
+
+            if (_autoThreadOutputCount > 1)
+            {
+                MediaDiagnostics.LogWarning(
+                    "SDL3Runtime: {Count} auto-thread SDL outputs are active; concurrent event polling can be fragile.",
+                    _autoThreadOutputCount);
+            }
+        }
+    }
+
+    /// <summary>Releases one auto-thread output registration from <see cref="RegisterAutoThreadOutput"/>.</summary>
+    public static void UnregisterAutoThreadOutput()
+    {
+        lock (Gate)
+        {
+            if (_autoThreadOutputCount > 0)
+                _autoThreadOutputCount--;
+        }
+    }
+
+    /// <summary>Release one ref; tear down the video subsystem when the count hits zero.</summary>
     public static void Release()
     {
         lock (Gate)
         {
             if (_refCount == 0) return;
             _refCount--;
-            if (_refCount == 0) SDL.Quit();
+            if (_refCount == 0)
+                SDL.QuitSubSystem(SDL.InitFlags.Video);
         }
     }
 }

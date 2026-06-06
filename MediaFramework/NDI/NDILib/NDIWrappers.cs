@@ -229,15 +229,35 @@ public sealed class NDIReceiver : IDisposable
         out NDIVideoFrameV2  video,
         out NDIAudioFrameV3  audio,
         out NDIMetadataFrame metadata,
-        uint                 timeoutMs)
+        uint                 timeoutMs,
+        bool                 receiveVideo = true,
+        bool                 receiveAudio = true,
+        bool                 receiveMetadata = true)
     {
-        var frameType = Native.NDIlib_recv_capture_v3(_instance, out video, out audio, out metadata, timeoutMs);
+        video = default;
+        audio = default;
+        metadata = default;
 
-        if (frameType == NDIFrameType.Error && Logger.IsEnabled(LogLevel.Debug))
-            Logger.LogDebug("NDIReceiver capture returned Error (ptr={Ptr}) — possible stream disconnect",
-                NDILibLogging.PtrMeta(_instance));
+        unsafe
+        {
+            fixed (NDIVideoFrameV2* pVideo = &video)
+            fixed (NDIAudioFrameV3* pAudio = &audio)
+            fixed (NDIMetadataFrame* pMeta = &metadata)
+            {
+                var frameType = Native.NDIlib_recv_capture_v3_ptrs(
+                    _instance,
+                    receiveVideo ? (nint)pVideo : nint.Zero,
+                    receiveAudio ? (nint)pAudio : nint.Zero,
+                    receiveMetadata ? (nint)pMeta : nint.Zero,
+                    timeoutMs);
 
-        return frameType;
+                if (frameType == NDIFrameType.Error && Logger.IsEnabled(LogLevel.Debug))
+                    Logger.LogDebug("NDIReceiver capture returned Error (ptr={Ptr}) — possible stream disconnect",
+                        NDILibLogging.PtrMeta(_instance));
+
+                return frameType;
+            }
+        }
     }
 
     /// <summary>
@@ -585,8 +605,14 @@ public sealed class NDISender : IDisposable
     public void SendVideoAsync(in NDIVideoFrameV2 frame)
         => Native.NDIlib_send_send_video_async_v2(_instance, frame);
 
+    /// <summary>
+    /// Synchronizes a pending asynchronous video send using the documented sync point:
+    /// synchronous <c>NDIlib_send_send_video_v2</c> with null video data.
+    /// </summary>
+    public void SynchronizeAsyncVideo() => Native.NDIlib_send_send_video_v2_null(_instance, nint.Zero);
+
     /// <summary>Flushes any pending asynchronous video frame submitted via <see cref="SendVideoAsync"/>.</summary>
-    public void FlushAsync() => Native.NDIlib_send_flush_async(_instance, nint.Zero);
+    public void FlushAsync() => SynchronizeAsyncVideo();
 
     // ------------------------------------------------------------------
     // Send — audio / metadata

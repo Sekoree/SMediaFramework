@@ -506,9 +506,12 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                     Interlocked.Add(ref self._underrunSamples, underrunFrames);
             }
 
-            if (Volatile.Read(ref self._streamSmoothCalibrated) == 0)
+            if (Volatile.Read(ref self._streamSmoothCalibrated) == 0 && timeInfo != nint.Zero)
             {
-                var st = Native.Pa_GetStreamTime(self._stream);
+                // PortAudio forbids Pa_GetStreamTime inside the stream callback; timeInfo is
+                // synchronized with that clock (see portaudio.h PaStreamCallbackTimeInfo).
+                var ti = *(PaStreamCallbackTimeInfo*)timeInfo;
+                var st = ti.currentTime;
                 if (double.IsFinite(st))
                 {
                     var playedNow = Volatile.Read(ref self._playedSamples);

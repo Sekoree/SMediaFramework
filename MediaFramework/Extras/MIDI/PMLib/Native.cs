@@ -18,6 +18,18 @@ internal static partial class Native
     // P4.17: late-bound logger so PMLibLogging.Configure() is always honoured.
     private static ILogger Logger => PMLibLogging.GetLogger("PMLib.Native");
 
+    private static T Gate<T>(Func<T> action)
+    {
+        lock (PmNativeGate.SyncRoot)
+            return action();
+    }
+
+    private static void Gate(Action action)
+    {
+        lock (PmNativeGate.SyncRoot)
+            action();
+    }
+
     // ── Initialisation ──────────────────────────────────────────────────────────
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_Initialize")]
@@ -28,8 +40,12 @@ internal static partial class Native
     /// </summary>
     internal static PmError Pm_Initialize()
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_Initialize));
-        return Pm_Initialize_Import();
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_Initialize));
+            return Pm_Initialize_Import();
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_Terminate")]
@@ -37,8 +53,12 @@ internal static partial class Native
     /// <summary>Terminates the PortMidi library. Call when you are finished with PortMidi.</summary>
     internal static PmError Pm_Terminate()
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_Terminate));
-        return Pm_Terminate_Import();
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_Terminate));
+            return Pm_Terminate_Import();
+        });
+
     }
 
     // ── Error handling ──────────────────────────────────────────────────────────
@@ -50,8 +70,12 @@ internal static partial class Native
     /// </summary>
     internal static int Pm_HasHostError(nint stream)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_HasHostError), PMLibLogging.PtrMeta(stream));
-        return Pm_HasHostError_Import(stream);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_HasHostError), PMLibLogging.PtrMeta(stream));
+            return Pm_HasHostError_Import(stream);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_GetErrorText")]
@@ -62,8 +86,12 @@ internal static partial class Native
     /// </summary>
     internal static nint Pm_GetErrorText(PmError errnum)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Error})", nameof(Pm_GetErrorText), errnum);
-        return Pm_GetErrorText_Import(errnum);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Error})", nameof(Pm_GetErrorText), errnum);
+            return Pm_GetErrorText_Import(errnum);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_GetHostErrorText")]
@@ -73,8 +101,11 @@ internal static partial class Native
     /// </summary>
     internal static void Pm_GetHostErrorText(Span<byte> msg, uint len)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}(len={Len})", nameof(Pm_GetHostErrorText), len);
-        Pm_GetHostErrorText_Import(msg, len);
+        lock (PmNativeGate.SyncRoot)
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}(len={Len})", nameof(Pm_GetHostErrorText), len);
+            Pm_GetHostErrorText_Import(msg, len);
+        }
     }
 
     // ── Device enumeration ──────────────────────────────────────────────────────
@@ -84,8 +115,12 @@ internal static partial class Native
     /// <summary>Returns the total number of MIDI devices.</summary>
     internal static int Pm_CountDevices()
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_CountDevices));
-        return Pm_CountDevices_Import();
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_CountDevices));
+            return Pm_CountDevices_Import();
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_GetDefaultInputDeviceID")]
@@ -93,8 +128,12 @@ internal static partial class Native
     /// <summary>Returns the default input device ID, or <c>-1</c> if none exists.</summary>
     internal static int Pm_GetDefaultInputDeviceID()
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_GetDefaultInputDeviceID));
-        return Pm_GetDefaultInputDeviceID_Import();
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_GetDefaultInputDeviceID));
+            return Pm_GetDefaultInputDeviceID_Import();
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_GetDefaultOutputDeviceID")]
@@ -102,8 +141,12 @@ internal static partial class Native
     /// <summary>Returns the default output device ID, or <c>-1</c> if none exists.</summary>
     internal static int Pm_GetDefaultOutputDeviceID()
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_GetDefaultOutputDeviceID));
-        return Pm_GetDefaultOutputDeviceID_Import();
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}()", nameof(Pm_GetDefaultOutputDeviceID));
+            return Pm_GetDefaultOutputDeviceID_Import();
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_FindDevice", StringMarshalling = StringMarshalling.Utf8)]
@@ -113,8 +156,12 @@ internal static partial class Native
     /// </summary>
     internal static int Pm_FindDevice(string pattern, int isInput)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Pattern}, {IsInput})", nameof(Pm_FindDevice), pattern, isInput);
-        return Pm_FindDevice_Import(pattern, isInput);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Pattern}, {IsInput})", nameof(Pm_FindDevice), pattern, isInput);
+            return Pm_FindDevice_Import(pattern, isInput);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_GetDeviceInfo")]
@@ -124,8 +171,12 @@ internal static partial class Native
     /// </summary>
     internal static nint Pm_GetDeviceInfo(int id)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Id})", nameof(Pm_GetDeviceInfo), id);
-        return Pm_GetDeviceInfo_Import(id);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Id})", nameof(Pm_GetDeviceInfo), id);
+            return Pm_GetDeviceInfo_Import(id);
+        });
+
     }
 
     // ── Opening and closing streams ─────────────────────────────────────────────
@@ -162,24 +213,36 @@ internal static partial class Native
     private static partial PmError Pm_CreateVirtualInput_Import(string name, string? interf, nint sysDepInfo);
     internal static PmError Pm_CreateVirtualInput(string name, string? interf, nint sysDepInfo)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Name}, {Interf})", nameof(Pm_CreateVirtualInput), name, interf);
-        return Pm_CreateVirtualInput_Import(name, interf, sysDepInfo);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Name}, {Interf})", nameof(Pm_CreateVirtualInput), name, interf);
+            return Pm_CreateVirtualInput_Import(name, interf, sysDepInfo);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_CreateVirtualOutput", StringMarshalling = StringMarshalling.Utf8)]
     private static partial PmError Pm_CreateVirtualOutput_Import(string name, string? interf, nint sysDepInfo);
     internal static PmError Pm_CreateVirtualOutput(string name, string? interf, nint sysDepInfo)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Name}, {Interf})", nameof(Pm_CreateVirtualOutput), name, interf);
-        return Pm_CreateVirtualOutput_Import(name, interf, sysDepInfo);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Name}, {Interf})", nameof(Pm_CreateVirtualOutput), name, interf);
+            return Pm_CreateVirtualOutput_Import(name, interf, sysDepInfo);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_DeleteVirtualDevice")]
     private static partial PmError Pm_DeleteVirtualDevice_Import(int device);
     internal static PmError Pm_DeleteVirtualDevice(int device)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Device})", nameof(Pm_DeleteVirtualDevice), device);
-        return Pm_DeleteVirtualDevice_Import(device);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Device})", nameof(Pm_DeleteVirtualDevice), device);
+            return Pm_DeleteVirtualDevice_Import(device);
+        });
+
     }
 
     // ── Stream configuration ────────────────────────────────────────────────────
@@ -188,40 +251,60 @@ internal static partial class Native
     private static partial PmError Pm_SetFilter_Import(nint stream, PmFilter filters);
     internal static PmError Pm_SetFilter(nint stream, PmFilter filters)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, {Filters})", nameof(Pm_SetFilter), PMLibLogging.PtrMeta(stream), filters);
-        return Pm_SetFilter_Import(stream, filters);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, {Filters})", nameof(Pm_SetFilter), PMLibLogging.PtrMeta(stream), filters);
+            return Pm_SetFilter_Import(stream, filters);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_SetChannelMask")]
     private static partial PmError Pm_SetChannelMask_Import(nint stream, int mask);
     internal static PmError Pm_SetChannelMask(nint stream, int mask)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, mask=0x{Mask:X4})", nameof(Pm_SetChannelMask), PMLibLogging.PtrMeta(stream), mask);
-        return Pm_SetChannelMask_Import(stream, mask);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, mask=0x{Mask:X4})", nameof(Pm_SetChannelMask), PMLibLogging.PtrMeta(stream), mask);
+            return Pm_SetChannelMask_Import(stream, mask);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_Abort")]
     private static partial PmError Pm_Abort_Import(nint stream);
     internal static PmError Pm_Abort(nint stream)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Abort), PMLibLogging.PtrMeta(stream));
-        return Pm_Abort_Import(stream);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Abort), PMLibLogging.PtrMeta(stream));
+            return Pm_Abort_Import(stream);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_Close")]
     private static partial PmError Pm_Close_Import(nint stream);
     internal static PmError Pm_Close(nint stream)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Close), PMLibLogging.PtrMeta(stream));
-        return Pm_Close_Import(stream);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Close), PMLibLogging.PtrMeta(stream));
+            return Pm_Close_Import(stream);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_Synchronize")]
     private static partial PmError Pm_Synchronize_Import(nint stream);
     internal static PmError Pm_Synchronize(nint stream)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Synchronize), PMLibLogging.PtrMeta(stream));
-        return Pm_Synchronize_Import(stream);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Synchronize), PMLibLogging.PtrMeta(stream));
+            return Pm_Synchronize_Import(stream);
+        });
+
     }
 
     // ── Reading ─────────────────────────────────────────────────────────────────
@@ -231,17 +314,24 @@ internal static partial class Native
     /// <summary>Reads up to <paramref name="length"/> MIDI events from an input stream.</summary>
     internal static int Pm_Read(nint stream, Span<PmEvent> buffer, int length)
     {
-        // Note: Pm_Read is hot-path — only log at Trace level with guard.
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, length={Length})", nameof(Pm_Read), PMLibLogging.PtrMeta(stream), length);
-        return Pm_Read_Import(stream, buffer, length);
+        lock (PmNativeGate.SyncRoot)
+        {
+            // Note: Pm_Read is hot-path — only log at Trace level with guard.
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, length={Length})", nameof(Pm_Read), PMLibLogging.PtrMeta(stream), length);
+            return Pm_Read_Import(stream, buffer, length);
+        }
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_Poll")]
     private static partial PmError Pm_Poll_Import(nint stream);
     internal static PmError Pm_Poll(nint stream)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Poll), PMLibLogging.PtrMeta(stream));
-        return Pm_Poll_Import(stream);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream})", nameof(Pm_Poll), PMLibLogging.PtrMeta(stream));
+            return Pm_Poll_Import(stream);
+        });
+
     }
 
     // ── Writing ─────────────────────────────────────────────────────────────────
@@ -250,24 +340,34 @@ internal static partial class Native
     private static partial PmError Pm_Write_Import(nint stream, ReadOnlySpan<PmEvent> buffer, int length);
     internal static PmError Pm_Write(nint stream, ReadOnlySpan<PmEvent> buffer, int length)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, length={Length})", nameof(Pm_Write), PMLibLogging.PtrMeta(stream), length);
-        return Pm_Write_Import(stream, buffer, length);
+        lock (PmNativeGate.SyncRoot)
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, length={Length})", nameof(Pm_Write), PMLibLogging.PtrMeta(stream), length);
+            return Pm_Write_Import(stream, buffer, length);
+        }
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_WriteShort")]
     private static partial PmError Pm_WriteShort_Import(nint stream, int when, uint msg);
     internal static PmError Pm_WriteShort(nint stream, int when, uint msg)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, when={When}, msg=0x{Msg:X8})", nameof(Pm_WriteShort), PMLibLogging.PtrMeta(stream), when, msg);
-        return Pm_WriteShort_Import(stream, when, msg);
+        return Gate(() =>
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, when={When}, msg=0x{Msg:X8})", nameof(Pm_WriteShort), PMLibLogging.PtrMeta(stream), when, msg);
+            return Pm_WriteShort_Import(stream, when, msg);
+        });
+
     }
 
     [LibraryImport(LibraryName, EntryPoint = "Pm_WriteSysEx")]
     private static partial PmError Pm_WriteSysEx_Import(nint stream, int when, ReadOnlySpan<byte> msg);
     internal static PmError Pm_WriteSysEx(nint stream, int when, ReadOnlySpan<byte> msg)
     {
-        if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, when={When}, msgLen={Len})", nameof(Pm_WriteSysEx), PMLibLogging.PtrMeta(stream), when, msg.Length);
-        return Pm_WriteSysEx_Import(stream, when, msg);
+        lock (PmNativeGate.SyncRoot)
+        {
+            if (Logger.IsEnabled(LogLevel.Trace)) Logger.LogTrace("{Method}({Stream}, when={When}, msgLen={Len})", nameof(Pm_WriteSysEx), PMLibLogging.PtrMeta(stream), when, msg.Length);
+            return Pm_WriteSysEx_Import(stream, when, msg);
+        }
     }
 
     // ── Lock-free queue — pmutil ─────────────────────────────────────────────────

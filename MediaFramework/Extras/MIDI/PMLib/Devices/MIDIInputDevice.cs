@@ -166,9 +166,14 @@ public class MIDIInputDevice : MIDIDevice
             }
             else if (count < 0)
             {
+                var err = (PmError)count;
+                var detail = err == PmError.HostError
+                    ? PMUtil.GetHostErrorText()
+                    : PMUtil.GetErrorText(err);
                 Logger.LogWarning(
-                    "MIDIInputDevice read failed: {Error} (deviceId={DeviceId}, name={Name}); stopping input polling",
-                    (PmError)count,
+                    "MIDIInputDevice read failed: {Error} ({Detail}) (deviceId={DeviceId}, name={Name}); stopping input polling",
+                    err,
+                    string.IsNullOrEmpty(detail) ? "(no detail)" : detail,
                     DeviceId,
                     Name);
                 _polling = false;

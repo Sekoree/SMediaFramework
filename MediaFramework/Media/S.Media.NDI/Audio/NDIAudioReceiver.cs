@@ -255,7 +255,13 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                var frameType = _receiver.Capture(out var video, out var audio, out var metadata, timeoutMs: 100);
+                var frameType = _receiver.Capture(
+                    out var video,
+                    out var audio,
+                    out var metadata,
+                    timeoutMs: 100,
+                    receiveVideo: false,
+                    receiveAudio: true);
 
                 if (frameType == NDIFrameType.Audio)
                 {

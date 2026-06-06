@@ -519,7 +519,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
         // staging buffer before we free it.
         if (_hasInFlight)
         {
-            MediaDiagnostics.SwallowDisposeErrors(_sender.FlushAsync, "NDIVideoSender.Dispose: FlushAsync");
+            MediaDiagnostics.SwallowDisposeErrors(_sender.SynchronizeAsyncVideo, "NDIVideoSender.Dispose: SynchronizeAsyncVideo");
             _hasInFlight = false;
         }
         for (var i = 0; i < _staging.Length; i++)

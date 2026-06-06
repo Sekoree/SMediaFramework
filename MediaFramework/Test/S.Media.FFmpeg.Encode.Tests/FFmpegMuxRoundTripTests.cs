@@ -68,6 +68,37 @@ public sealed class FFmpegMuxRoundTripTests : IDisposable
     }
 
     [Fact]
+    public void Video_submit_before_audio_configure_throws_when_audio_expected()
+    {
+        var outPath = Path.Combine(Path.GetTempPath(), $"mf_enc_av_order_{Guid.NewGuid():N}.mp4");
+        _tempPaths.Add(outPath);
+        var released = 0;
+        using var mux = FFmpegMuxFileOutput.Open(outPath, new FFmpegMuxFileOutputOptions
+        {
+            IncludeAudio = true,
+            IncludeVideo = true,
+            Video = new FFmpegVideoFileOutputOptions { Codec = FFmpegVideoCodec.H264, GopSize = 1 },
+        });
+        mux.Video!.Configure(new VideoFormat(16, 16, PixelFormat.I420, new Rational(30, 1)));
+
+        InvalidOperationException? caught = null;
+        for (var i = 0; i < 30 && caught is null; i++)
+        {
+            try
+            {
+                mux.Video.Submit(MakeI420Frame(16, 16, DisposableRelease.Wrap(() => Interlocked.Increment(ref released))));
+            }
+            catch (InvalidOperationException ex)
+            {
+                caught = ex;
+            }
+        }
+
+        Assert.NotNull(caught);
+        Assert.Contains("configured", caught.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Video_submit_before_configure_disposes_input_frame()
     {
         var outPath = Path.Combine(Path.GetTempPath(), $"mf_enc_unconfigured_{Guid.NewGuid():N}.mp4");

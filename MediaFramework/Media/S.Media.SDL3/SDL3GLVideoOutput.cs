@@ -487,6 +487,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         try
         {
             SDL3Runtime.Acquire();
+            SDL3Runtime.RegisterAutoThreadOutput($"SDL3GLVideoOutput '{_title}'");
             try
             {
                 InitGraphics();
@@ -522,6 +523,7 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             finally
             {
                 TeardownGraphics();
+                SDL3Runtime.UnregisterAutoThreadOutput();
                 SDL3Runtime.Release();
             }
         }

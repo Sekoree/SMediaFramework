@@ -214,7 +214,13 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
     {
         while (!token.IsCancellationRequested)
         {
-            var frameType = _receiver.Capture(out var video, out var audio, out var metadata, timeoutMs: 100);
+            var frameType = _receiver.Capture(
+                out var video,
+                out var audio,
+                out var metadata,
+                timeoutMs: 100,
+                receiveVideo: true,
+                receiveAudio: false);
 
             if (frameType == NDIFrameType.Video)
             {

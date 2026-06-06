@@ -686,7 +686,7 @@ void main()
     {
         _gl.ActiveTexture(GlTextureUnit.Texture0);
         _gl.BindTexture(GlTextureTarget.Texture2D, texId);
-        SetUnpackRowLength(srcRowPitch, planeW);
+        SetUnpackRowLength(srcRowPitch, planeW, bytesPerPixel: 1);
         _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
         _gl.TexSubImage2D(GlTextureTarget.Texture2D, 0, 0, 0, (uint)planeW, (uint)planeH, GlPixelFormat.Red, GlPixelType.UnsignedByte, src);
         ClearUnpackState();
@@ -696,26 +696,17 @@ void main()
     {
         _gl.ActiveTexture(GlTextureUnit.Texture1);
         _gl.BindTexture(GlTextureTarget.Texture2D, texId);
-        SetUnpackRowLength(srcRowPitch, planeW * 2);
+        SetUnpackRowLength(srcRowPitch, planeW, bytesPerPixel: 2);
         var align = srcRowPitch % 4 == 0 ? 4 : 1;
         _gl.PixelStore(PixelStoreParameter.UnpackAlignment, align);
         _gl.TexSubImage2D(GlTextureTarget.Texture2D, 0, 0, 0, (uint)planeW, (uint)planeH, GlPixelFormat.RG, GlPixelType.UnsignedByte, src);
         ClearUnpackState();
     }
 
-    private void SetUnpackRowLength(int rowPitchBytes, int logicalRowBytes)
+    private void SetUnpackRowLength(int rowPitchBytes, int visiblePixelsPerRow, int bytesPerPixel)
     {
-        if (rowPitchBytes == logicalRowBytes)
-        {
-            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
-            return;
-        }
-
-        if (rowPitchBytes % logicalRowBytes != 0)
-            throw new InvalidOperationException("D3D11 NV12 row pitch is not a multiple of the visible row width.");
-
-        var rowLengthComponents = rowPitchBytes / logicalRowBytes;
-        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, rowLengthComponents);
+        var value = OpenGlUnpackRowLength.Compute(rowPitchBytes, visiblePixelsPerRow, bytesPerPixel);
+        _gl.PixelStore(PixelStoreParameter.UnpackRowLength, value);
     }
 
     private void ClearUnpackState()
