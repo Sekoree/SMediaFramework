@@ -2,6 +2,8 @@ using System;
 using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Models.TreeDataGrid;
+using Avalonia.Controls.Templates;
 
 namespace HaPlay.Views;
 
@@ -12,7 +14,7 @@ namespace HaPlay.Views;
 /// (<see cref="AvaloniaObject.PropertyChanged"/> + <see cref="INotifyPropertyChanged.PropertyChanged"/>).
 /// No reflection, no dynamic code. Subscriptions are released on <c>DetachedFromVisualTree</c>.
 /// <para>
-/// Cue tree read-only text columns intentionally use <see cref="OneWayText"/> inside recycled
+/// Cue tree read-only text columns use <see cref="ReadOnlyTextColumn{T}"/> inside recycled
 /// <c>TemplateColumn</c> cells instead of stock <c>TextColumn</c> until NativeAOT validation confirms
 /// TreeDataGrid's expression-based text columns are safe in published builds.
 /// </para>
@@ -139,6 +141,34 @@ internal static class AotBinding
             if (inpc is not null) inpc.PropertyChanged -= OnSourceChanged;
             control.PropertyChanged -= OnControlChanged;
         };
+    }
+
+    /// <summary>
+    /// One-way bind a <see cref="TextBlock"/>'s text to a property of its (possibly recycled)
+    /// <c>DataContext</c>. Re-resolves the source on every <c>DataContextChanged</c>, so it is safe for
+    /// virtualized/recycled grid cells.
+    /// </summary>
+    public static TemplateColumn<T> ReadOnlyTextColumn<T>(
+        string header,
+        string propertyName,
+        Func<T, string?> getter,
+        GridLength width,
+        bool supportsRecycling = true)
+        where T : class, INotifyPropertyChanged
+    {
+        return new TemplateColumn<T>(
+            header,
+            new FuncDataTemplate<T>((_, _) =>
+            {
+                var textBlock = new TextBlock
+                {
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
+                };
+                OneWayText(textBlock, propertyName, getter);
+                return textBlock;
+            }, supportsRecycling),
+            width: width);
     }
 
     /// <summary>

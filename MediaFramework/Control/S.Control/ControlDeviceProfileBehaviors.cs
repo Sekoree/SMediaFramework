@@ -53,6 +53,17 @@ public static class ControlProfileProtocolBehavior
     public static bool SupportsMeterBlobDecoding(ControlDeviceProfile? profile) =>
         string.Equals(profile?.Behaviors?.MeterBlobDecoder, "x32", StringComparison.OrdinalIgnoreCase);
 
+    public static int ResolveProtocolRenewIntervalMs(
+        ControlDeviceProfile? profile,
+        IEnumerable<ControlPeriodicOscSendConfig> sends)
+    {
+        var fromProfile = profile?.Behaviors?.ProtocolMaintenance?.RenewIntervalMs;
+        if (fromProfile is > 0)
+            return fromProfile.Value;
+
+        return sends.Select(send => send.IntervalMs).DefaultIfEmpty(8000).Max();
+    }
+
     public static bool IsMaintenanceAddress(ControlDeviceProfile? profile, string? address)
     {
         if (string.IsNullOrWhiteSpace(address))

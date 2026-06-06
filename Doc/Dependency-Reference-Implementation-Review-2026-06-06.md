@@ -42,9 +42,11 @@ follow-up pass. Additional fixes landed in the same session:
 | Audio matrix dialog VM leak | **Resolved** — `OnClosed` unsubscribes and clears TreeDataGrid sources |
 | PortMidi host error detail | **Resolved** — `PMUtil.DescribeError` + enriched input/output logging |
 | X32 meter blobs in cache | **Resolved** — profile-gated `X32MeterCacheDecoder` in `ControlScriptRuntime` |
+| Cue tree AOT text columns | **Resolved** — `AotBinding.ReadOnlyTextColumn` helper (NativeAOT-safe, recycled cells) |
+| X32 periodic send timing | **Resolved** — maintenance uses profile `renewIntervalMs`; generic sends advance success clock only, 2 s fail retry |
+| NDI bandwidth defaults | **Resolved** — `NDIReceiveBandwidthPolicy` + audio-only/video-only receiver defaults |
 
-Still open (lower urgency): cue-tree stock `TextColumn` vs explicit AOT templates (documented
-intentional), X32 protocol-aware periodic task routing refinements, NDI bandwidth defaults.
+Still open (lower urgency): none — remaining review items were addressed in the 2026-06-06 follow-up passes.
 
 ## Verification Pass - 2026-06-06
 

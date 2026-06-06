@@ -134,7 +134,10 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             {
                 ReceiverName = options.ReceiverName,
                 ColorFormat = options.ColorFormat,
-                Bandwidth = ResolveBandwidth(options),
+                Bandwidth = NDIReceiveBandwidthPolicy.Resolve(
+                    options.ReceiveAudio,
+                    options.ReceiveVideo,
+                    options.Bandwidth),
             };
             rc = NDIReceiver.Create(out var recv, settings);
             if (rc != 0 || recv is null)
@@ -146,7 +149,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             {
                 Trace.LogInformation(
                     "NDISource: connected source='{Source}' colorFormat={ColorFormat} bandwidth={Bandwidth}",
-                    source.Name, options.ColorFormat, options.Bandwidth);
+                    source.Name, settings.ColorFormat, settings.Bandwidth);
             }
         }
         catch (Exception ex)
@@ -336,16 +339,8 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         }
     }
 
-    private static NDIRecvBandwidth ResolveBandwidth(NDISourceOptions options)
-    {
-        if (options.Bandwidth != NDIRecvBandwidth.Highest)
-            return options.Bandwidth;
-        if (!options.ReceiveVideo && options.ReceiveAudio)
-            return NDIRecvBandwidth.AudioOnly;
-        if (options.ReceiveVideo && !options.ReceiveAudio)
-            return NDIRecvBandwidth.Lowest;
-        return options.Bandwidth;
-    }
+    private static NDIRecvBandwidth ResolveBandwidth(NDISourceOptions options) =>
+        NDIReceiveBandwidthPolicy.Resolve(options.ReceiveAudio, options.ReceiveVideo, options.Bandwidth);
 
     private int ReadAudioInto(Span<float> dst)
     {

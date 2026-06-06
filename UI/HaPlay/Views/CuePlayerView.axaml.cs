@@ -250,26 +250,30 @@ public partial class CuePlayerView : UserControl
             Strings.CueTreeStatusColumnHeader,
             new FuncDataTemplate<CueNodeViewModel>((row, _) => BuildStatusBadge(row), supportsRecycling: true),
             width: new GridLength(28)));
-        _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
+        _source.Columns.Add(AotBinding.ReadOnlyTextColumn<CueNodeViewModel>(
             Strings.CueTreeNumberColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.Number), static r => r.Number), supportsRecycling: true),
-            width: new GridLength(80)));
+            nameof(CueNodeViewModel.Number),
+            static row => row.Number,
+            new GridLength(80)));
         _source.Columns.Add(new HierarchicalExpanderColumn<CueNodeViewModel>(
-            new TemplateColumn<CueNodeViewModel>(
+            AotBinding.ReadOnlyTextColumn<CueNodeViewModel>(
                 Strings.CueTreeNameColumnHeader,
-                new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.Label), static r => r.Label), supportsRecycling: true),
-                width: new GridLength(1, GridUnitType.Star)),
+                nameof(CueNodeViewModel.Label),
+                static row => row.Label,
+                new GridLength(1, GridUnitType.Star)),
             x => x.Children,
             x => x.HasChildren,
             x => x.IsExpanded));
-        _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
+        _source.Columns.Add(AotBinding.ReadOnlyTextColumn<CueNodeViewModel>(
             Strings.CueTreeDurationColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.DurationDisplay), static r => r.DurationDisplay), supportsRecycling: true),
-            width: new GridLength(96)));
-        _source.Columns.Add(new TemplateColumn<CueNodeViewModel>(
+            nameof(CueNodeViewModel.DurationDisplay),
+            static row => row.DurationDisplay,
+            new GridLength(96)));
+        _source.Columns.Add(AotBinding.ReadOnlyTextColumn<CueNodeViewModel>(
             Strings.CueTreeKindColumnHeader,
-            new FuncDataTemplate<CueNodeViewModel>((_, _) => BuildReadOnlyText(nameof(CueNodeViewModel.KindLabel), static r => r.KindLabel), supportsRecycling: true),
-            width: new GridLength(90)));
+            nameof(CueNodeViewModel.KindLabel),
+            static row => row.KindLabel,
+            new GridLength(90)));
 
         if (_source.RowSelection is not null)
         {
@@ -417,21 +421,4 @@ public partial class CuePlayerView : UserControl
         Rebind(rect.DataContext as CueNodeViewModel);
         return rect;
     }
-
-    // NOTE: do NOT set DataContext on these controls. TreeDataGrid recycles cell controls when
-    // supportsRecycling=true, and an explicit DataContext sticks past the recycle — the visual
-    // ends up bound to the OLD row's properties. Letting DataContext inherit from the grid lets
-    // the binding re-resolve against the new row each time the control is reused.
-    private static Control BuildReadOnlyText(string propertyName, Func<CueNodeViewModel, string?> getter)
-    {
-        var tb = new TextBlock
-        {
-            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
-            TextTrimming = Avalonia.Media.TextTrimming.CharacterEllipsis,
-        };
-        // NativeAOT-safe: bind text from the (recycled) DataContext by hand instead of a reflection Binding.
-        AotBinding.OneWayText(tb, propertyName, getter);
-        return tb;
-    }
-
 }

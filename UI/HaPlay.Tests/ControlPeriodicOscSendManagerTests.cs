@@ -161,7 +161,7 @@ public sealed class ControlPeriodicOscSendManagerTests
     }
 
     [Fact]
-    public async Task TickAsync_ThrottlesFailedAttemptsByConfiguredInterval()
+    public async Task TickAsync_RetriesFailedAttemptsEveryTwoSeconds()
     {
         var sender = new FailingOscSender();
         var manager = new ControlPeriodicOscSendManager(
@@ -174,8 +174,8 @@ public sealed class ControlPeriodicOscSendManagerTests
         var now = DateTimeOffset.Parse("2026-06-04T10:00:00Z");
 
         var first = Assert.Single(await manager.TickAsync(now));
-        var tooSoon = await manager.TickAsync(now.AddMilliseconds(100));
-        var second = Assert.Single(await manager.TickAsync(now.AddMilliseconds(8000)));
+        var tooSoon = await manager.TickAsync(now.AddMilliseconds(500));
+        var second = Assert.Single(await manager.TickAsync(now.AddSeconds(2)));
 
         Assert.False(first.Succeeded);
         Assert.Empty(tooSoon);

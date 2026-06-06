@@ -75,6 +75,33 @@ public sealed class ControlX32ProtocolMaintenanceManagerTests
     }
 
     [Fact]
+    public async Task TickAsync_UsesProfileRenewIntervalFromBehaviors()
+    {
+        var deviceId = Guid.NewGuid();
+        var sender = new RecordingOscSender();
+        var profile = BuiltInControlDeviceProfileFactory.CreateX32Profile();
+        var repository = new FixedProfileRepository(profile);
+        var manager = new ControlX32ProtocolMaintenanceManager(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(deviceId, Periodic("/xremote", intervalMs: 1000))],
+            },
+            sender,
+            profiles: repository);
+        var now = DateTimeOffset.Parse("2026-06-04T10:00:00Z");
+
+        var first = await manager.TickAsync(now);
+        var tooSoon = await manager.TickAsync(now.AddMilliseconds(7999));
+        var second = await manager.TickAsync(now.AddMilliseconds(8000));
+
+        Assert.True(Assert.Single(first).Succeeded);
+        Assert.Empty(tooSoon);
+        Assert.True(Assert.Single(second).Succeeded);
+        Assert.Equal(2, sender.Sent.Count);
+    }
+
+    [Fact]
     public async Task TickAsync_RetriesFailedRenewEveryTwoSecondsWithoutAdvancingSuccessClock()
     {
         var sender = new FailingOscSender();
@@ -156,6 +183,14 @@ public sealed class ControlX32ProtocolMaintenanceManagerTests
             IntervalMs = intervalMs,
             Arguments = arguments ?? [],
         };
+
+    private sealed class FixedProfileRepository(ControlDeviceProfile profile) : IControlDeviceProfileRepository
+    {
+        public IReadOnlyList<ControlDeviceProfile> Profiles => [profile];
+
+        public ControlDeviceProfile? FindById(string profileId) =>
+            string.Equals(profile.Id, profileId, StringComparison.OrdinalIgnoreCase) ? profile : null;
+    }
 
     private sealed class RecordingOscSender : IControlOscSender
     {

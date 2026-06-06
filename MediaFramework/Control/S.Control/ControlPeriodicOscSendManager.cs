@@ -4,11 +4,14 @@ namespace S.Control;
 
 public sealed class ControlPeriodicOscSendManager
 {
+    private static readonly TimeSpan FailedRetryInterval = TimeSpan.FromSeconds(2);
+
     private readonly ControlSystemConfig _config;
     private readonly IControlDeviceProfileRepository _profiles;
     private readonly IControlOscSender _sender;
     private readonly IControlMonitorSink _monitor;
-    private readonly Dictionary<(Guid DeviceId, Guid SendId), DateTimeOffset> _lastSentUtc = new();
+    private readonly Dictionary<(Guid DeviceId, Guid SendId), DateTimeOffset> _lastSuccessfulUtc = new();
+    private readonly Dictionary<(Guid DeviceId, Guid SendId), DateTimeOffset> _lastFailedAttemptUtc = new();
 
     public ControlPeriodicOscSendManager(
         ControlSystemConfig config,
@@ -43,7 +46,16 @@ public sealed class ControlPeriodicOscSendManager
                     continue;
 
                 var result = await SendAsync(device, send, cancellationToken).ConfigureAwait(false);
-                _lastSentUtc[(device.Id, send.Id)] = utcNow;
+                if (result.Succeeded)
+                {
+                    _lastSuccessfulUtc[(device.Id, send.Id)] = utcNow;
+                    _lastFailedAttemptUtc.Remove((device.Id, send.Id));
+                }
+                else
+                {
+                    _lastFailedAttemptUtc[(device.Id, send.Id)] = utcNow;
+                }
+
                 Record(result);
                 results.Add(result);
             }
@@ -54,16 +66,23 @@ public sealed class ControlPeriodicOscSendManager
 
     public void Reset()
     {
-        _lastSentUtc.Clear();
+        _lastSuccessfulUtc.Clear();
+        _lastFailedAttemptUtc.Clear();
     }
 
     private bool IsDue(Guid deviceId, ControlPeriodicOscSendConfig send, DateTimeOffset utcNow)
     {
-        if (!_lastSentUtc.TryGetValue((deviceId, send.Id), out var last))
+        var key = (deviceId, send.Id);
+        var interval = TimeSpan.FromMilliseconds(Math.Max(1, send.IntervalMs));
+
+        if (_lastSuccessfulUtc.TryGetValue(key, out var lastSuccess))
+            return utcNow - lastSuccess >= interval;
+
+        if (!_lastFailedAttemptUtc.ContainsKey(key))
             return true;
 
-        var interval = TimeSpan.FromMilliseconds(Math.Max(1, send.IntervalMs));
-        return utcNow - last >= interval;
+        return _lastFailedAttemptUtc.TryGetValue(key, out var lastFail)
+            && utcNow - lastFail >= FailedRetryInterval;
     }
 
     private async ValueTask<ControlPeriodicOscSendResult> SendAsync(

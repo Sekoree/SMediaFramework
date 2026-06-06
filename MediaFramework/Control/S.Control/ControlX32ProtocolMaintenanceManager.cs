@@ -51,7 +51,7 @@ public sealed class ControlX32ProtocolMaintenanceManager
                 continue;
 
             cancellationToken.ThrowIfCancellationRequested();
-            if (!IsDue(device.Id, sends, utcNow))
+            if (!IsDue(device.Id, sends, profile, utcNow))
                 continue;
 
             var renewResults = await RenewDeviceAsync(device, sends, cancellationToken).ConfigureAwait(false);
@@ -77,9 +77,14 @@ public sealed class ControlX32ProtocolMaintenanceManager
         _lastFailedAttemptUtc.Clear();
     }
 
-    private bool IsDue(Guid deviceId, ControlPeriodicOscSendConfig[] sends, DateTimeOffset utcNow)
+    private bool IsDue(
+        Guid deviceId,
+        ControlPeriodicOscSendConfig[] sends,
+        ControlDeviceProfile? profile,
+        DateTimeOffset utcNow)
     {
-        var interval = TimeSpan.FromMilliseconds(Math.Max(1, sends.Max(s => s.IntervalMs)));
+        var interval = TimeSpan.FromMilliseconds(
+            Math.Max(1, ControlProfileProtocolBehavior.ResolveProtocolRenewIntervalMs(profile, sends)));
         if (_lastSuccessfulRenewUtc.TryGetValue(deviceId, out var lastSuccess))
         {
             if (utcNow - lastSuccess >= interval)

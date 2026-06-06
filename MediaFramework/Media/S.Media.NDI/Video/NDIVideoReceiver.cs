@@ -129,6 +129,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             {
                 ReceiverName = receiverName,
                 ColorFormat = NDIRecvColorFormat.UyvyBgra,
+                Bandwidth = NDIRecvBandwidth.Lowest,
             };
             rc = NDIReceiver.Create(out var recv, settings);
             if (rc != 0 || recv is null)

@@ -91,9 +91,10 @@ internal static class NdiInputConnector
 
     private static NDIRecvBandwidth ResolveBandwidth(bool wantAudio, bool wantVideo, bool lowBandwidth)
     {
-        if (wantAudio && !wantVideo)
-            return NDIRecvBandwidth.AudioOnly;
-        return lowBandwidth ? NDIRecvBandwidth.Lowest : NDIRecvBandwidth.Highest;
+        if (lowBandwidth)
+            return NDIRecvBandwidth.Lowest;
+
+        return NDIReceiveBandwidthPolicy.Resolve(wantAudio, wantVideo);
     }
 
     private static void CleanupReceiver(NDISource? receiver)

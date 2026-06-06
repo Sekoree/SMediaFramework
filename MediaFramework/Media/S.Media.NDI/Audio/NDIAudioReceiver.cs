@@ -184,7 +184,11 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 
         try
         {
-            var settings = new NDIReceiverSettings { ReceiverName = receiverName };
+            var settings = new NDIReceiverSettings
+            {
+                ReceiverName = receiverName,
+                Bandwidth = NDIRecvBandwidth.AudioOnly,
+            };
             rc = NDIReceiver.Create(out var recv, settings);
             if (rc != 0 || recv is null)
                 throw new NDIException(rc, "NDIReceiver.Create");
