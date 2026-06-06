@@ -29,8 +29,12 @@ public partial class CuePlayerView : UserControl
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
         DragDrop.SetAllowDrop(this, true);
-        AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Tunnel, handledEventsToo: true);
-        AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Tunnel, handledEventsToo: true);
+        // DragDrop.DragOver/Drop are Bubble-only routed events (no tunnel route). Registering them as
+        // Tunnel meant the handlers never fired, so DragEffects was never set and every drop — internal
+        // cue reorder AND external file drop — was rejected. Bubble + handledEventsToo catches the drop as
+        // it bubbles up from the row/cell under the pointer.
+        AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Bubble, handledEventsToo: true);
         CueTreeGrid.AddHandler(PointerPressedEvent, OnCueTreePointerPressed, RoutingStrategies.Tunnel);
         CueTreeGrid.AddHandler(PointerMovedEvent, OnCueTreePointerMoved, RoutingStrategies.Tunnel);
         // Phase 5.2 — F2 on the tree opens the rename popup. Phase 5.6 added Del / Ctrl+D /

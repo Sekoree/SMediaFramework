@@ -54,6 +54,70 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void LiveInputMediaSource_SeedsCueTabCapabilityMetadata()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var media = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        media.MediaSourceItem = new PortAudioInputPlaylistItem("Scarlett") { Channels = 4 };
+        Assert.True(vm.HasSelectedMediaCueWithAudio);
+        Assert.False(vm.HasSelectedMediaCueWithVideo);
+        Assert.True(media.SourceHasAudio);
+        Assert.Equal(4, media.SourceAudioChannels);
+
+        media.MediaSourceItem = new NDIInputPlaylistItem("Studio NDI");
+        Assert.True(vm.HasSelectedMediaCueWithAudio);
+        Assert.True(vm.HasSelectedMediaCueWithVideo);
+        Assert.True(media.SourceHasAudio);
+        Assert.True(media.SourceHasVideo);
+
+        media.MediaSourceItem = new NDIInputPlaylistItem("Studio NDI") { AudioOnly = true };
+        Assert.True(vm.HasSelectedMediaCueWithAudio);
+        Assert.False(vm.HasSelectedMediaCueWithVideo);
+
+        media.MediaSourceItem = new NDIInputPlaylistItem("Studio NDI") { VideoOnly = true };
+        Assert.False(vm.HasSelectedMediaCueWithAudio);
+        Assert.True(vm.HasSelectedMediaCueWithVideo);
+        Assert.Equal(0, media.SourceAudioChannels);
+    }
+
+    [Fact]
+    public void ApplyCueLists_LegacyLiveInputsInferCueTabCapabilities()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists(
+        [
+            new CueList
+            {
+                Nodes =
+                [
+                    new MediaCueNode
+                    {
+                        Label = "Mic",
+                        Source = new PortAudioInputPlaylistItem("Scarlett") { Channels = 2 },
+                    },
+                    new MediaCueNode
+                    {
+                        Label = "NDI",
+                        Source = new NDIInputPlaylistItem("Studio NDI"),
+                    },
+                ],
+            },
+        ]);
+
+        var mic = Assert.IsType<CueNodeViewModel>(vm.VisibleNodes[0]);
+        vm.SelectedCueNode = mic;
+        Assert.True(vm.HasSelectedMediaCueWithAudio);
+        Assert.False(vm.HasSelectedMediaCueWithVideo);
+
+        var ndi = Assert.IsType<CueNodeViewModel>(vm.VisibleNodes[1]);
+        vm.SelectedCueNode = ndi;
+        Assert.True(vm.HasSelectedMediaCueWithAudio);
+        Assert.True(vm.HasSelectedMediaCueWithVideo);
+    }
+
+    [Fact]
     public void AddGroupThenMedia_AddsMediaAsGroupChild()
     {
         var vm = new CuePlayerViewModel();
@@ -307,6 +371,25 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void PlacementDestinationNumericEdits_StayInsideCanvas()
+    {
+        var p = new CueVideoPlacementViewModel();
+        p.SetDestRect(0.9, 0.8, 0.5, 0.4);
+
+        Assert.Equal(0.5, p.DestX, 5);
+        Assert.Equal(0.6, p.DestY, 5);
+        Assert.Equal(0.5, p.DestWidth, 5);
+        Assert.Equal(0.4, p.DestHeight, 5);
+
+        p.DestWidth = 0.001;
+        p.DestHeight = 2.0;
+
+        Assert.Equal(0.02, p.DestWidth, 5);
+        Assert.Equal(1.0, p.DestHeight, 5);
+        Assert.Equal(0.0, p.DestY, 5);
+    }
+
+    [Fact]
     public void LayoutAndCropPresets_UpdateSelectedPlacement()
     {
         var vm = new CuePlayerViewModel();
@@ -326,6 +409,35 @@ public sealed class CuePlayerViewModelTests
         Assert.Equal(0.25, placement.CropRight, 5);
         Assert.Equal(0.0, placement.CropTop, 5);
         Assert.Equal(0.0, placement.CropBottom, 5);
+    }
+
+    [Fact]
+    public void ActivePlacementEdit_PushesLiveVideoPlacementUpdate()
+    {
+        var vm = new CuePlayerViewModel();
+        var calls = new List<(Guid CueId, int PlacementIndex, CueVideoPlacement Placement)>();
+        vm.UpdateActiveCueVideoPlacementCallback = (cueId, placementIndex, placement) =>
+        {
+            calls.Add((cueId, placementIndex, placement));
+            return Task.CompletedTask;
+        };
+
+        vm.AddCompositionCommand.Execute(null);
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddVideoPlacementCommand.Execute(null);
+        var placement = vm.SelectedVideoPlacement;
+        Assert.NotNull(placement);
+        placement!.SetDestRect(0, 0, 0.5, 1);
+
+        vm.OnCueStarted(cue.Id);
+        placement.DestX = 0.25;
+
+        var call = Assert.Single(calls);
+        Assert.Equal(cue.Id, call.CueId);
+        Assert.Equal(0, call.PlacementIndex);
+        Assert.Equal(0.25, call.Placement.DestX, 5);
+        Assert.Equal(0.5, call.Placement.DestWidth, 5);
     }
 
     [Fact]
@@ -1121,6 +1233,27 @@ public sealed class CuePlayerViewModelTests
         Assert.Equal(150_000, cue.EndOffsetMs);
         Assert.Equal(new TimeSpan(1, 20, 30), cue.StartOffsetTime);
         Assert.Equal(TimeSpan.FromMinutes(2.5), cue.EndOffsetTime);
+    }
+
+    [Fact]
+    public void MediaCue_TimeCodeText_MapsToPersistedMilliseconds()
+    {
+        var cue = new CueNodeViewModel(CueNodeKind.Media);
+
+        cue.StartOffsetTimeText = "01:20:30.123";
+        cue.EndOffsetTimeText = "02:30.500";
+        cue.DurationTimeText = "90061007";
+
+        Assert.Equal(4_830_123, cue.StartOffsetMs);
+        Assert.Equal(150_500, cue.EndOffsetMs);
+        Assert.Equal(90_061_007, cue.DurationMs);
+        Assert.Equal("25:01:01.007", cue.DurationTimeText);
+
+        cue.DurationTimeText = "5000ms";
+        Assert.Equal(5_000, cue.DurationMs);
+
+        cue.DurationTimeText = "not a time";
+        Assert.Equal(5_000, cue.DurationMs);
     }
 
     [Fact]

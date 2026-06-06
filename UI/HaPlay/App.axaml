@@ -26,6 +26,10 @@
     <Style Selector="NumericUpDown">
       <Setter Property="MinWidth" Value="120"/>
     </Style>
+    <Style Selector="ComboBox">
+      <Setter Property="MinHeight" Value="32"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
     <Style Selector="Expander.dense /template/ ToggleButton#ExpanderHeader">
       <Setter Property="MinHeight" Value="24"/>
       <Setter Property="Padding" Value="6,2"/>

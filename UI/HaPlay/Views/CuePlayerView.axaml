@@ -195,7 +195,9 @@
                    TextWrapping="Wrap"
                    Opacity="0.65"
                    IsVisible="{Binding !HasSelectedCue}" />
-        <TabControl Margin="0,4,0,0" MinHeight="220"
+        <!-- MaxHeight caps the bottom drawer so a tall tab (e.g. several video placements) can't push it
+             out of the window; each tab's content is in a ScrollViewer, which then scrolls within the cap. -->
+        <TabControl Margin="0,4,0,0" MinHeight="220" MaxHeight="440"
                     IsVisible="{Binding HasSelectedCue}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch">
@@ -242,27 +244,25 @@
                       ColumnSpacing="8"
                       IsVisible="{Binding HasSelectedMediaCue}">
                   <TextBlock Grid.Column="0" Text="{x:Static res:Strings.StartMsLabel}" VerticalAlignment="Center" />
-                  <TimePicker Grid.Column="1"
-                              ClockIdentifier="24HourClock"
-                              UseSeconds="True"
-                              MinuteIncrement="1"
-                              SecondIncrement="1"
-                              SelectedTime="{Binding SelectedCueNode.StartOffsetTime, Mode=TwoWay}" />
+                  <TextBox Grid.Column="1"
+                           Text="{Binding SelectedCueNode.StartOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="00:00:00.000"
+                           TextAlignment="Right" />
                   <TextBlock Grid.Column="2" Text="{x:Static res:Strings.EndTrimMsLabel}" VerticalAlignment="Center" />
-                  <TimePicker Grid.Column="3"
-                              ClockIdentifier="24HourClock"
-                              UseSeconds="True"
-                              MinuteIncrement="1"
-                              SecondIncrement="1"
-                              SelectedTime="{Binding SelectedCueNode.EndOffsetTime, Mode=TwoWay}" />
+                  <TextBox Grid.Column="3"
+                           Text="{Binding SelectedCueNode.EndOffsetTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="00:00:00.000"
+                           TextAlignment="Right" />
                 </Grid>
                 <Grid ColumnDefinitions="Auto,160,Auto" ColumnSpacing="8"
                       IsVisible="{Binding HasSelectedStaticCue}">
-                  <TextBlock Grid.Column="0" Text="Duration (ms)" VerticalAlignment="Center" />
-                  <NumericUpDown Grid.Column="1" Minimum="100" Maximum="3600000" Increment="500" FormatString="0"
-                                 Value="{Binding SelectedCueNode.DurationMs, Mode=TwoWay}" />
+                  <TextBlock Grid.Column="0" Text="Duration" VerticalAlignment="Center" />
+                  <TextBox Grid.Column="1"
+                           Text="{Binding SelectedCueNode.DurationTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                           PlaceholderText="00:00:05.000"
+                           TextAlignment="Right" />
                   <TextBlock Grid.Column="2" VerticalAlignment="Center" Opacity="0.55" FontSize="11"
-                             Text="How long this image/text stays on screen." />
+                             Text="hh:mm:ss.fff or ms" />
                 </Grid>
                 <Grid ColumnDefinitions="Auto,Auto,*"
                       ColumnSpacing="8"
@@ -481,6 +481,23 @@
                 <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap"
                            Text="Drag a layer to move it, the bottom-right handle to resize (aspect locked — hold Shift to resize freely), click to select." />
 
+                <WrapPanel ItemSpacing="6" LineSpacing="4"
+                           IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <TextBlock Text="Destination" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBlock Text="X" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.DestX, Mode=TwoWay}" />
+                  <TextBlock Text="Y" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0" Maximum="1" Increment="0.01" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.DestY, Mode=TwoWay}" />
+                  <TextBlock Text="W" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.DestWidth, Mode=TwoWay}" />
+                  <TextBlock Text="H" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.DestHeight, Mode=TwoWay}" />
+                </WrapPanel>
+
                 <!-- Crop presets + fine crop / fit for the selected placement -->
                 <WrapPanel ItemSpacing="4" LineSpacing="4">
                   <TextBlock Text="Crop:" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,4,0" />
@@ -504,7 +521,8 @@
                   <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.CropBottom, Mode=TwoWay}" />
                   <TextBlock Text="Fit" VerticalAlignment="Center" Opacity="0.7" Margin="6,0,0,0" />
-                  <ComboBox MinWidth="120" SelectedItem="{Binding SelectedVideoPlacement.Position, Mode=TwoWay}"
+                  <ComboBox MinWidth="120"
+                            SelectedItem="{Binding SelectedVideoPlacement.Position, Mode=TwoWay}"
                             ItemsSource="{Binding LayerPositions}" />
                 </WrapPanel>
 
@@ -527,6 +545,7 @@
                                   MinWidth="120" />
                         <TextBlock Text="{x:Static res:Strings.OpacityLabel}" VerticalAlignment="Center" />
                         <Slider Minimum="0" Maximum="1" SmallChange="0.05"
+                                VerticalAlignment="Center"
                                 Value="{Binding Opacity, Mode=TwoWay}" Width="120" />
                       </StackPanel>
                     </DataTemplate>
@@ -633,7 +652,7 @@
       </Expander>
 
       <Grid ColumnDefinitions="*,Auto,260">
-        <TreeDataGrid Grid.Column="0" Name="CueTreeGrid" />
+        <TreeDataGrid Grid.Column="0" Name="CueTreeGrid" DragDrop.AllowDrop="True"/>
         <GridSplitter Grid.Column="1" Width="3" Background="#22000000" ResizeDirection="Columns" />
 
         <!-- Phase 5.3 — Now Playing panel: active cues (with progress + per-cue ✕) and the

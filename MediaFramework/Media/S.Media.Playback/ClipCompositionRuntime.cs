@@ -531,7 +531,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         private readonly ClipCompositionRuntime _owner;
         internal VideoCompositorSource.Slot RawSlot { get; }
         private readonly VideoFormat _source;
-        private readonly VideoPlacementSpec _placement;
+        private VideoPlacementSpec _placement;
         private int _disposed;
 
         internal LayerSlot(
@@ -559,6 +559,23 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         public long Sequence { get; }
+
+        public void UpdatePlacement(VideoPlacementSpec placement)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            ArgumentNullException.ThrowIfNull(placement);
+
+            var resort = false;
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                resort = placement.LayerIndex != _placement.LayerIndex;
+                _placement = placement;
+                ApplyPlacement();
+                if (resort)
+                    _owner.SortLayersLocked();
+            }
+        }
 
         public void ApplyPlacement()
         {

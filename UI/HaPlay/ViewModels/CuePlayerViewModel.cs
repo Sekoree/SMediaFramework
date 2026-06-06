@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading;
 using Avalonia;
@@ -270,6 +271,8 @@ public sealed partial class CueAudioRouteViewModel : ObservableObject
 
 public sealed partial class CueVideoPlacementViewModel : ObservableObject
 {
+    private bool _normalizingDestinationRect;
+
     [ObservableProperty]
     private Guid _compositionId;
 
@@ -313,11 +316,59 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     {
         width = Math.Clamp(width, 0.02, 1.0);
         height = Math.Clamp(height, 0.02, 1.0);
-        DestX = Math.Clamp(x, 0.0, 1.0 - width);
-        DestY = Math.Clamp(y, 0.0, 1.0 - height);
-        DestWidth = width;
-        DestHeight = height;
+        _normalizingDestinationRect = true;
+        try
+        {
+            DestX = Math.Clamp(x, 0.0, 1.0 - width);
+            DestY = Math.Clamp(y, 0.0, 1.0 - height);
+            DestWidth = width;
+            DestHeight = height;
+        }
+        finally
+        {
+            _normalizingDestinationRect = false;
+        }
     }
+
+    partial void OnDestXChanged(double value) => NormalizeDestinationRect();
+    partial void OnDestYChanged(double value) => NormalizeDestinationRect();
+    partial void OnDestWidthChanged(double value) => NormalizeDestinationRect();
+    partial void OnDestHeightChanged(double value) => NormalizeDestinationRect();
+
+    private void NormalizeDestinationRect()
+    {
+        if (_normalizingDestinationRect)
+            return;
+
+        var width = Math.Clamp(DestWidth, 0.02, 1.0);
+        var height = Math.Clamp(DestHeight, 0.02, 1.0);
+        var x = Math.Clamp(DestX, 0.0, 1.0 - width);
+        var y = Math.Clamp(DestY, 0.0, 1.0 - height);
+
+        if (NearlyEqual(DestX, x)
+            && NearlyEqual(DestY, y)
+            && NearlyEqual(DestWidth, width)
+            && NearlyEqual(DestHeight, height))
+        {
+            return;
+        }
+
+        _normalizingDestinationRect = true;
+        try
+        {
+            DestWidth = width;
+            DestHeight = height;
+            DestX = x;
+            DestY = y;
+        }
+        finally
+        {
+            _normalizingDestinationRect = false;
+        }
+    }
+
+    private static bool NearlyEqual(double left, double right) =>
+        Math.Abs(left - right) < 0.000001;
 
     public CueVideoPlacement ToModel() => new()
     {
@@ -335,25 +386,32 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         CropBottom = Math.Clamp(CropBottom, 0.0, 0.99),
     };
 
-    public static CueVideoPlacementViewModel FromModel(CueVideoPlacement model) => new()
+    public static CueVideoPlacementViewModel FromModel(CueVideoPlacement model)
     {
-        CompositionId = model.CompositionId,
-        LayerIndex = model.LayerIndex,
-        Position = model.Position,
-        Opacity = model.Opacity,
-        DestX = model.DestX,
-        DestY = model.DestY,
-        DestWidth = model.DestWidth <= 0 ? 1.0 : model.DestWidth,
-        DestHeight = model.DestHeight <= 0 ? 1.0 : model.DestHeight,
-        CropLeft = model.CropLeft,
-        CropTop = model.CropTop,
-        CropRight = model.CropRight,
-        CropBottom = model.CropBottom,
-    };
+        var vm = new CueVideoPlacementViewModel
+        {
+            CompositionId = model.CompositionId,
+            LayerIndex = model.LayerIndex,
+            Position = model.Position,
+            Opacity = model.Opacity,
+            CropLeft = model.CropLeft,
+            CropTop = model.CropTop,
+            CropRight = model.CropRight,
+            CropBottom = model.CropBottom,
+        };
+        vm.SetDestRect(
+            model.DestX,
+            model.DestY,
+            model.DestWidth <= 0 ? 1.0 : model.DestWidth,
+            model.DestHeight <= 0 ? 1.0 : model.DestHeight);
+        return vm;
+    }
 }
 
 public sealed partial class CueNodeViewModel : ObservableObject
 {
+    private const int DefaultNdiInputAudioChannels = 2;
+
     public CueNodeViewModel(CueNodeKind kind)
     {
         Kind = kind;
@@ -420,7 +478,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     partial void OnMediaSourceItemChanged(PlaylistItem? value)
     {
-        _ = value;
+        ApplyLiveSourceDefaults(value);
         OnPropertyChanged(nameof(IsTextCue));
         OnPropertyChanged(nameof(IsImageCue));
         OnPropertyChanged(nameof(TextContent));
@@ -435,6 +493,38 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(TextHAlign));
         OnPropertyChanged(nameof(TextVAlign));
         OnPropertyChanged(nameof(TextWrapWidthFraction));
+    }
+
+    private void ApplyLiveSourceDefaults(PlaylistItem? source)
+    {
+        switch (source)
+        {
+            case PortAudioInputPlaylistItem pa:
+                SourceHasAudio = true;
+                SourceAudioChannels = Math.Max(1, pa.Channels);
+                SourceHasVideo = false;
+                SourceVideoIsAttachedPicture = false;
+                SourceFrameRateNum = 0;
+                SourceFrameRateDen = 0;
+                SourceVideoWidth = 0;
+                SourceVideoHeight = 0;
+                break;
+            case NDIInputPlaylistItem ndi:
+                SourceHasAudio = !ndi.VideoOnly;
+                SourceAudioChannels = ndi.VideoOnly
+                    ? 0
+                    : Math.Max(SourceAudioChannels, DefaultNdiInputAudioChannels);
+                SourceHasVideo = !ndi.AudioOnly;
+                SourceVideoIsAttachedPicture = false;
+                if (ndi.AudioOnly)
+                {
+                    SourceFrameRateNum = 0;
+                    SourceFrameRateDen = 0;
+                    SourceVideoWidth = 0;
+                    SourceVideoHeight = 0;
+                }
+                break;
+        }
     }
 
     public string TextContent
@@ -626,6 +716,36 @@ public sealed partial class CueNodeViewModel : ObservableObject
         set => EndOffsetMs = ToOffsetMilliseconds(value);
     }
 
+    public string StartOffsetTimeText
+    {
+        get => FormatTimeCodeMs(StartOffsetMs);
+        set
+        {
+            if (TryParseTimeCodeMilliseconds(value, out var ms))
+                StartOffsetMs = ms;
+        }
+    }
+
+    public string EndOffsetTimeText
+    {
+        get => FormatTimeCodeMs(EndOffsetMs);
+        set
+        {
+            if (TryParseTimeCodeMilliseconds(value, out var ms))
+                EndOffsetMs = ms;
+        }
+    }
+
+    public string DurationTimeText
+    {
+        get => FormatTimeCodeMs(DurationMs);
+        set
+        {
+            if (TryParseTimeCodeMilliseconds(value, out var ms))
+                DurationMs = ms;
+        }
+    }
+
     [ObservableProperty]
     private bool _loop;
 
@@ -764,12 +884,70 @@ public sealed partial class CueNodeViewModel : ObservableObject
             : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
     }
 
+    private static string FormatTimeCodeMs(int ms)
+    {
+        var ts = TimeSpan.FromMilliseconds(Math.Max(0, ms));
+        return $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}.{ts.Milliseconds:D3}";
+    }
+
+    private static bool TryParseTimeCodeMilliseconds(string? value, out int ms)
+    {
+        ms = 0;
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        var text = value.Trim();
+        if (text.EndsWith("ms", StringComparison.OrdinalIgnoreCase))
+            text = text[..^2].Trim();
+        text = text.Replace(',', '.');
+
+        if (!text.Contains(':'))
+        {
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var plainMs))
+                return false;
+            ms = ClampMilliseconds(plainMs);
+            return true;
+        }
+
+        var parts = text.Split(':', StringSplitOptions.TrimEntries);
+        if (parts.Length is < 2 or > 3)
+            return false;
+
+        var hours = 0;
+        var minutesIndex = 0;
+        if (parts.Length == 3)
+        {
+            if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out hours) || hours < 0)
+                return false;
+            minutesIndex = 1;
+        }
+
+        if (!int.TryParse(parts[minutesIndex], NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) || minutes < 0)
+            return false;
+        if (!double.TryParse(parts[minutesIndex + 1], NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) || seconds < 0)
+            return false;
+        if (parts.Length == 3 && (minutes >= 60 || seconds >= 60))
+            return false;
+
+        var totalMs = (hours * 3_600_000d) + (minutes * 60_000d) + (seconds * 1_000d);
+        ms = ClampMilliseconds(totalMs);
+        return true;
+    }
+
+    private static int ClampMilliseconds(double ms)
+    {
+        if (double.IsNaN(ms) || double.IsInfinity(ms) || ms <= 0)
+            return 0;
+        return (int)Math.Min(int.MaxValue, Math.Round(ms, MidpointRounding.AwayFromZero));
+    }
+
     partial void OnDurationMsChanged(int value)
     {
         _ = value;
         OnPropertyChanged(nameof(DurationDisplay));
         OnPropertyChanged(nameof(RolledDurationMs));
         OnPropertyChanged(nameof(EffectiveDurationMs));
+        OnPropertyChanged(nameof(DurationTimeText));
     }
 
     partial void OnStartOffsetMsChanged(int value)
@@ -779,6 +957,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(RolledDurationMs));
         OnPropertyChanged(nameof(EffectiveDurationMs));
         OnPropertyChanged(nameof(StartOffsetTime));
+        OnPropertyChanged(nameof(StartOffsetTimeText));
     }
 
     partial void OnEndOffsetMsChanged(int value)
@@ -788,6 +967,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(RolledDurationMs));
         OnPropertyChanged(nameof(EffectiveDurationMs));
         OnPropertyChanged(nameof(EndOffsetTime));
+        OnPropertyChanged(nameof(EndOffsetTimeText));
     }
 
     private static int ToOffsetMilliseconds(TimeSpan? value)
@@ -878,7 +1058,6 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     PreWaitMs = m.PreWaitMs,
                     Notes = m.Notes,
                     ColorTag = m.ColorTag,
-                    MediaSourceItem = m.Source,
                     SourceOrAction = m.Source?.DisplayName ?? string.Empty,
                     FadeInMs = m.FadeInMs,
                     FadeOutMs = m.FadeOutMs,
@@ -891,6 +1070,7 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceFrameRateDen = m.SourceFrameRateDen,
                     SourceVideoWidth = m.SourceVideoWidth,
                     SourceVideoHeight = m.SourceVideoHeight,
+                    MediaSourceItem = m.Source,
                     StartOffsetMs = m.StartOffsetMs,
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
@@ -1542,7 +1722,8 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private void OnSelectedCueProbeChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(CueNodeViewModel.SourceHasVideo)
+        if (e.PropertyName is nameof(CueNodeViewModel.MediaSourceItem)
+            or nameof(CueNodeViewModel.SourceHasVideo)
             or nameof(CueNodeViewModel.SourceHasAudio)
             or nameof(CueNodeViewModel.SourceAudioChannels)
             or nameof(CueNodeViewModel.SourceVideoIsAttachedPicture)
@@ -1550,8 +1731,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.SourceFrameRateDen))
         {
             OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
-        OnPropertyChanged(nameof(HasSelectedTextCue));
-        OnPropertyChanged(nameof(HasSelectedStaticCue));
+            OnPropertyChanged(nameof(HasSelectedTextCue));
+            OnPropertyChanged(nameof(HasSelectedStaticCue));
             OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
             OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
             OnPropertyChanged(nameof(IsPreviewingSelectedCue));
@@ -1649,8 +1830,48 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CompositionId)
             or nameof(CueVideoPlacementViewModel.LayerIndex)
             or nameof(CueVideoPlacementViewModel.Position)
-            or nameof(CueVideoPlacementViewModel.Opacity))
+            or nameof(CueVideoPlacementViewModel.Opacity)
+            or nameof(CueVideoPlacementViewModel.DestX)
+            or nameof(CueVideoPlacementViewModel.DestY)
+            or nameof(CueVideoPlacementViewModel.DestWidth)
+            or nameof(CueVideoPlacementViewModel.DestHeight)
+            or nameof(CueVideoPlacementViewModel.CropLeft)
+            or nameof(CueVideoPlacementViewModel.CropTop)
+            or nameof(CueVideoPlacementViewModel.CropRight)
+            or nameof(CueVideoPlacementViewModel.CropBottom))
+        {
+            if (sender is CueVideoPlacementViewModel placement
+                && IsLiveEditableVideoPlacementProperty(e.PropertyName))
+                PushActiveVideoPlacementUpdate(placement);
             OnWatchedCueEdited();
+        }
+    }
+
+    private static bool IsLiveEditableVideoPlacementProperty(string? propertyName) =>
+        propertyName is nameof(CueVideoPlacementViewModel.LayerIndex)
+            or nameof(CueVideoPlacementViewModel.Position)
+            or nameof(CueVideoPlacementViewModel.Opacity)
+            or nameof(CueVideoPlacementViewModel.DestX)
+            or nameof(CueVideoPlacementViewModel.DestY)
+            or nameof(CueVideoPlacementViewModel.DestWidth)
+            or nameof(CueVideoPlacementViewModel.DestHeight)
+            or nameof(CueVideoPlacementViewModel.CropLeft)
+            or nameof(CueVideoPlacementViewModel.CropTop)
+            or nameof(CueVideoPlacementViewModel.CropRight)
+            or nameof(CueVideoPlacementViewModel.CropBottom);
+
+    private void PushActiveVideoPlacementUpdate(CueVideoPlacementViewModel placement)
+    {
+        if (_preRollWatchedCue is not { } cue
+            || UpdateActiveCueVideoPlacementCallback is not { } callback
+            || !_activeCueIds.Contains(cue.Id))
+            return;
+
+        var index = cue.VideoPlacements.IndexOf(placement);
+        if (index < 0)
+            return;
+
+        _ = callback(cue.Id, index, placement.ToModel());
     }
 
     /// <summary>An edit-relevant change to the watched (selected) cue: immediately flag its warm
@@ -1918,6 +2139,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host-provided per-cue stop callback (engine.StopCueAsync). The Now Playing
     /// panel's per-row ✕ button forwards through this; null in tests.</summary>
     public Func<Guid, Task>? CancelCueCallback { get; set; }
+
+    /// <summary>Host callback for mutating a placement's already-running compositor slot while the
+    /// selected cue is active. No-op in tests or when the cue is not playing.</summary>
+    public Func<Guid, int, CueVideoPlacement, Task>? UpdateActiveCueVideoPlacementCallback { get; set; }
 
     /// <summary>Engine callback — cue began playing. Marks its row Current and pushes a new
     /// <see cref="ActiveCueViewModel"/> into <see cref="ActiveCues"/>.</summary>
@@ -2409,11 +2634,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             {
                 CompositionId = firstComp?.Id ?? Guid.Empty,
                 LayerIndex = media.VideoPlacements.Count,
-                DestX = fx,
-                DestY = fy,
-                DestWidth = fw,
-                DestHeight = fh,
             };
+            placement.SetDestRect(fx, fy, fw, fh);
             media.VideoPlacements.Add(placement);
             if (ReferenceEquals(media, SelectedCueNode))
                 lastOnPrimary = placement;

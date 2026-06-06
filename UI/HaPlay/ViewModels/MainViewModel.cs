@@ -84,6 +84,7 @@ public partial class MainViewModel : ViewModelBase
         };
         CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
         CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
+        CuePlayer.UpdateActiveCueVideoPlacementCallback = _cuePlaybackEngine.UpdateActiveCueVideoPlacementAsync;
         _cuePlaybackEngine.ReleaseConflictingPlayerOutputsAsync = ReleaseMediaPlayerOutputsForCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
@@ -1719,9 +1720,17 @@ public partial class MainViewModel : ViewModelBase
         JsonSerializer.Serialize(stream, RecentProjects.ToList(), AppSettingsJsonContext.Default.ListString);
     }
 
-    /// <summary>Bound from the recent-projects menu items.</summary>
+    /// <summary>Bound from the recent-projects menu items. The parameter is <see cref="object"/>, not
+    /// <see cref="string"/>: the recent-projects submenu binds this command via an item Style that also
+    /// matches the submenu's header MenuItem (whose DataContext is this view-model). A string-typed
+    /// RelayCommand casts the CommandParameter in CanExecute, so that header would throw
+    /// InvalidCastException when the menu renders — making the whole File menu fail to open. Accepting
+    /// <c>object?</c> and guarding on the actual path avoids the cast and is harmless for the header.</summary>
     [RelayCommand]
-    private Task OpenRecentAsync(string path) => OpenProjectFromPathAsync(path);
+    private Task OpenRecentAsync(object? path) =>
+        path is string p && !string.IsNullOrWhiteSpace(p)
+            ? OpenProjectFromPathAsync(p)
+            : Task.CompletedTask;
 }
 
 public sealed class ProjectMidiInputRowViewModel

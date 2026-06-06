@@ -78,6 +78,44 @@ public sealed class CuePlaybackEngine : IDisposable
     /// for a cue that isn't currently held warm; only a prepared (ready) entry can go stale.</summary>
     public void MarkPreparedCueStale(Guid cueId) => _standby.MarkStandbyStale(cueId.ToString("N"));
 
+    public async Task UpdateActiveCueVideoPlacementAsync(Guid cueId, int placementIndex, CueVideoPlacement placement)
+    {
+        if (placementIndex < 0)
+            return;
+
+        CueCompositionRuntime.LayerSlot? slot;
+        lock (_gate)
+        {
+            if (!_active.TryGetValue(cueId, out var entry) || entry.Cts.IsCancellationRequested)
+                return;
+            entry.LayerSlotsByPlacementIndex.TryGetValue(placementIndex, out slot);
+        }
+
+        if (slot is null)
+            return;
+
+        void Apply()
+        {
+            try
+            {
+                slot.UpdatePlacement(placement);
+            }
+            catch (ObjectDisposedException)
+            {
+                // Cue stopped while a UI edit was in flight.
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "CuePlaybackEngine.UpdateActiveCueVideoPlacementAsync: live placement update failed");
+            }
+        }
+
+        if (Dispatcher.UIThread.CheckAccess())
+            Apply();
+        else
+            await Dispatcher.UIThread.InvokeAsync(Apply);
+    }
+
     /// <summary>Raised on the UI thread when preview playback ends (natural end, operator stop,
     /// or preview window closed).</summary>
     public event EventHandler<Guid>? PreviewEnded;
@@ -278,7 +316,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
         var spec = BuildClipSpec(cue, list, plan);
 
-        await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.PlacementsByComp.Keys)
+        await ReleaseConflictingOutputsAsync(list, plan.AudioByOutput.Keys, plan.Placements.Select(p => p.CompositionId).Distinct())
             .ConfigureAwait(false);
 
         IArmedClip armed;
@@ -336,13 +374,13 @@ public sealed class CuePlaybackEngine : IDisposable
         targets.AddRange(plan.AudioByOutput.Keys
             .Select(id => _outputs.Outputs.FirstOrDefault(l => l.Definition.Id == id)?.Definition.DisplayName ?? "")
             .Where(n => n.Length > 0));
-        targets.AddRange(plan.PlacementsByComp.Keys
+        targets.AddRange(plan.Placements.Select(p => p.CompositionId).Distinct()
             .Select(id => list.Compositions.FirstOrDefault(c => c.Id == id)?.Name ?? "")
             .Where(n => n.Length > 0));
         return $"playing {cue.Source.DisplayName} → {string.Join(", ", targets)}";
     }
 
-    private static RoutePlan BuildRoutePlan(MediaCueNode cue)
+    internal static RoutePlan BuildRoutePlan(MediaCueNode cue)
     {
         // Group audio routes by target output line — each group becomes one shared-runtime source.
         var audioByOutput = cue.AudioRoutes
@@ -350,13 +388,22 @@ public sealed class CuePlaybackEngine : IDisposable
             .GroupBy(r => r.OutputLineId)
             .ToDictionary(g => g.Key, g => g.ToList());
 
-        // Group video placements by composition — one placement per composition per cue.
-        var placementsByComp = cue.VideoPlacements
-            .Where(p => p.CompositionId != Guid.Empty)
-            .GroupBy(p => p.CompositionId)
-            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.LayerIndex).First());
+        // Every video placement that targets a composition, ordered by layer index. A cue may place the
+        // SAME source multiple times on one composition (e.g. picture-in-picture, or the same feed in two
+        // regions) — each placement becomes its own composition layer fed by the cue's video router.
+        var placementRoutes = cue.VideoPlacements
+            .Select((placement, sourceIndex) => (Placement: placement, SourceIndex: sourceIndex))
+            .Where(route => route.Placement.CompositionId != Guid.Empty)
+            .OrderBy(route => route.Placement.LayerIndex)
+            .ToList();
+        var placements = placementRoutes
+            .Select(route => route.Placement)
+            .ToList();
+        var placementSourceIndices = placementRoutes
+            .Select(route => route.SourceIndex)
+            .ToList();
 
-        return new RoutePlan(audioByOutput, placementsByComp);
+        return new RoutePlan(audioByOutput, placements, placementSourceIndices);
     }
 
     private static ClipSpec BuildClipSpec(MediaCueNode cue, CueList list, RoutePlan plan)
@@ -379,13 +426,20 @@ public sealed class CuePlaybackEngine : IDisposable
             .SelectMany(kv => kv.Value)
             .Select(ToAudioRouteSpec)
             .ToArray();
-        var videoPlacements = plan.PlacementsByComp
-            .Select(kv => kv.Value)
+        var videoPlacements = plan.Placements
             .Select(placement => new VideoPlacementSpec(
                 placement.CompositionId.ToString("N"),
                 placement.LayerIndex,
                 placement.Opacity,
-                placement.Position.ToString()))
+                placement.Position.ToString(),
+                placement.DestX,
+                placement.DestY,
+                placement.DestWidth,
+                placement.DestHeight,
+                placement.CropLeft,
+                placement.CropTop,
+                placement.CropRight,
+                placement.CropBottom))
             .ToArray();
 
         return new ClipSpec(
@@ -507,7 +561,7 @@ public sealed class CuePlaybackEngine : IDisposable
             {
                 entry.IsPaused = startPaused;
                 WireAudioRoutes(entry, plan.AudioByOutput);
-                WireVideoPlacements(entry, list, plan.PlacementsByComp);
+                WireVideoPlacements(entry, list, plan);
                 entry.RoutesWired = true;
             });
             return null;
@@ -864,9 +918,10 @@ public sealed class CuePlaybackEngine : IDisposable
     private void WireVideoPlacements(
         ActiveCue entry,
         CueList list,
-        Dictionary<Guid, CueVideoPlacement> placementsByComp)
+        RoutePlan plan)
     {
-        if (placementsByComp.Count == 0) return;
+        var placements = plan.Placements;
+        if (placements.Count == 0) return;
 
         S.Media.Core.Video.VideoFormat sourceFormat;
         try
@@ -885,8 +940,10 @@ public sealed class CuePlaybackEngine : IDisposable
         var router = entry.Player.VideoRouter;
         var inputId = entry.Player.VideoRouterInputId;
 
-        foreach (var (compId, placement) in placementsByComp)
+        for (var i = 0; i < placements.Count; i++)
         {
+            var placement = placements[i];
+            var compId = placement.CompositionId;
             var runtime = GetOrCreateComposition(list, compId);
             if (runtime is null) continue;
 
@@ -899,6 +956,8 @@ public sealed class CuePlaybackEngine : IDisposable
 
             var slot = runtime.AddLayer(sourceFormat, placement);
             entry.LayerSlots.Add(slot);
+            if (i < plan.PlacementSourceIndices.Count)
+                entry.LayerSlotsByPlacementIndex[plan.PlacementSourceIndices[i]] = slot;
 
             IVideoOutput layerOutput = slot.Output;
             if (runtime.RequiresBgraLayerConversion)
@@ -921,7 +980,9 @@ public sealed class CuePlaybackEngine : IDisposable
             if (entry.ClipWindow.Start > TimeSpan.Zero)
                 layerOutput = new RetimingVideoOutput(layerOutput, -entry.ClipWindow.Start);
 
-            var outId = router.AddOutput(layerOutput, id: $"cuecomp_{entry.Cue.Id:N}_{entry.InstanceId:N}_{compId:N}",
+            // The index keeps the id unique when the same source is placed more than once on one
+            // composition (same compId), so the router accepts every layer's output.
+            var outId = router.AddOutput(layerOutput, id: $"cuecomp_{entry.Cue.Id:N}_{entry.InstanceId:N}_{compId:N}_{i}",
                 disposeOutputOnRouterDispose: false,
                 synchronous: true);
             if (!router.TryAddRoute(inputId, outId, out var routeErr))
@@ -1027,10 +1088,10 @@ public sealed class CuePlaybackEngine : IDisposable
         error = null;
         switch (source)
         {
-            case PortAudioInputPlaylistItem when plan.PlacementsByComp.Count > 0:
+            case PortAudioInputPlaylistItem when plan.Placements.Count > 0:
                 error = "PortAudio input cues do not provide video for video placements.";
                 return false;
-            case NDIInputPlaylistItem { AudioOnly: true } when plan.PlacementsByComp.Count > 0:
+            case NDIInputPlaylistItem { AudioOnly: true } when plan.Placements.Count > 0:
                 error = "This NDI input cue is audio-only and cannot feed video placements.";
                 return false;
             case NDIInputPlaylistItem { VideoOnly: true } when plan.AudioByOutput.Count > 0:
@@ -1265,7 +1326,15 @@ public sealed class CuePlaybackEngine : IDisposable
                 p.CompositionId.ToString("N"),
                 p.LayerIndex,
                 p.Position,
-                p.Opacity.ToString("R", System.Globalization.CultureInfo.InvariantCulture))));
+                p.Opacity.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.DestX.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.DestY.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.DestWidth.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.DestHeight.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.CropLeft.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.CropTop.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.CropRight.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.CropBottom.ToString("R", System.Globalization.CultureInfo.InvariantCulture))));
         var compositions = string.Join(";", list.Compositions
             .OrderBy(c => c.Id)
             .Select(c => string.Join(",",
@@ -1291,11 +1360,12 @@ public sealed class CuePlaybackEngine : IDisposable
             $"outputs:{videoOutputs}");
     }
 
-    private sealed record RoutePlan(
+    internal sealed record RoutePlan(
         Dictionary<Guid, List<CueAudioRoute>> AudioByOutput,
-        Dictionary<Guid, CueVideoPlacement> PlacementsByComp)
+        IReadOnlyList<CueVideoPlacement> Placements,
+        IReadOnlyList<int> PlacementSourceIndices)
     {
-        public bool HasAnyRoute => AudioByOutput.Count > 0 || PlacementsByComp.Count > 0;
+        public bool HasAnyRoute => AudioByOutput.Count > 0 || Placements.Count > 0;
     }
 
     private readonly record struct LiveClipSources(IAudioSource? Audio, IVideoSource? Video);
@@ -1379,6 +1449,7 @@ public sealed class CuePlaybackEngine : IDisposable
         public bool IsPaused { get; set; }
         public bool RoutesWired { get; set; }
         public List<CueCompositionRuntime.LayerSlot> LayerSlots { get; } = new();
+        public Dictionary<int, CueCompositionRuntime.LayerSlot> LayerSlotsByPlacementIndex { get; } = new();
         public List<BgraConvertingVideoOutput> ConvertingOutputs { get; } = new();
         public List<(ClipAudioOutputRuntime Runtime, string SourceId)> AudioSources { get; } = new();
         public List<PausableAudioSource> PausableAudioSources { get; } = new();
