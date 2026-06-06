@@ -171,7 +171,8 @@ triggers for the new one.
 
 - `layers.activate(idOrName)` — switch to a layer (by id or name). The switch is
   applied after the current handler finishes, so it's safe to call from any handler
-  (e.g. an X-Touch Mini layer A/B button bound to a `MidiNote` trigger).
+  (e.g. an X-Touch Mini layer A/B button bound to a `MidiNote` trigger). While the
+  control system is armed, the project structure view follows the runtime active layer.
 - `layers.active()` — the active layer's name, or `null`.
 - `layers.list()` — array of configured layer names.
 

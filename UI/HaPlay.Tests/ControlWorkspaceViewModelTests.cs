@@ -802,6 +802,40 @@ public sealed class ControlWorkspaceViewModelTests
     }
 
     [Fact]
+    public void WithActiveLayer_IsMutuallyExclusiveAndIdempotent()
+    {
+        var a = Guid.NewGuid();
+        var b = Guid.NewGuid();
+        var config = new ControlSystemConfig
+        {
+            Layers =
+            [
+                new ControlLayerConfig { Id = a, Name = "A", IsEnabled = true },
+                new ControlLayerConfig { Id = b, Name = "B", IsEnabled = false },
+            ],
+        };
+
+        var switched = ControlWorkspaceViewModel.WithActiveLayer(config, b);
+        Assert.False(switched.Layers.Single(l => l.Id == a).IsEnabled);
+        Assert.True(switched.Layers.Single(l => l.Id == b).IsEnabled);
+        Assert.Same(switched, ControlWorkspaceViewModel.WithActiveLayer(switched, b));
+        Assert.Same(config, ControlWorkspaceViewModel.WithActiveLayer(config, a));
+    }
+
+    [Fact]
+    public void WithActiveLayer_CanDeactivateAllLayers()
+    {
+        var layerId = Guid.NewGuid();
+        var config = new ControlSystemConfig
+        {
+            Layers = [new ControlLayerConfig { Id = layerId, Name = "A", IsEnabled = true }],
+        };
+
+        var cleared = ControlWorkspaceViewModel.WithActiveLayer(config, activeLayerId: null);
+        Assert.All(cleared.Layers, layer => Assert.False(layer.IsEnabled));
+    }
+
+    [Fact]
     public async Task ActivateLayer_IsMutuallyExclusiveInConfig()
     {
         await using var vm = new ControlWorkspaceViewModel();

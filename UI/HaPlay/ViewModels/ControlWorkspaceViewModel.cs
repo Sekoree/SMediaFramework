@@ -602,10 +602,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         if (row.LayerId is not { } layerId)
             return;
 
-        _config = _config with
-        {
-            Layers = _config.Layers.Select(l => l with { IsEnabled = l.Id == layerId }).ToList(),
-        };
+        _config = WithActiveLayer(_config, layerId);
         RebuildStructureRows();
         NotifySummary();
 
@@ -729,6 +726,49 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     // Layers are mutually exclusive: exactly the layer with <paramref name="activeId"/> stays enabled.
     private static List<ControlLayerConfig> ApplyExclusiveActive(IEnumerable<ControlLayerConfig> layers, Guid activeId) =>
         layers.Select(l => l with { IsEnabled = l.Id == activeId }).ToList();
+
+    /// <summary>
+    /// Returns a config copy whose layer <see cref="ControlLayerConfig.IsEnabled"/> flags reflect the
+    /// active layer. Returns <paramref name="config"/> unchanged when already in sync.
+    /// </summary>
+    internal static ControlSystemConfig WithActiveLayer(ControlSystemConfig config, Guid? activeLayerId)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var currentActiveId = config.Layers.FirstOrDefault(l => l.IsEnabled)?.Id;
+        if (activeLayerId == currentActiveId)
+            return config;
+
+        if (activeLayerId is null)
+        {
+            if (config.Layers.All(l => !l.IsEnabled))
+                return config;
+
+            return config with
+            {
+                Layers = config.Layers.Select(l => l with { IsEnabled = false }).ToList(),
+            };
+        }
+
+        return config with { Layers = ApplyExclusiveActive(config.Layers, activeLayerId.Value) };
+    }
+
+    /// <summary>
+    /// Keeps structure-view layer state aligned with the live runtime when scripts or devices switch layers.
+    /// </summary>
+    private void SyncActiveLayerFromSession()
+    {
+        var session = _session;
+        if (session is null)
+            return;
+
+        var updated = WithActiveLayer(_config, session.ScriptSession.ActiveLayerId);
+        if (ReferenceEquals(updated, _config))
+            return;
+
+        _config = updated;
+        RebuildStructureRows();
+    }
 
     private void RefreshAfterLayerChange()
     {
@@ -2672,6 +2712,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     private void RefreshMonitor()
     {
+        SyncActiveLayerFromSession();
+
         var buffer = _monitorBuffer;
         if (buffer is null || IsPaused)
             return;
