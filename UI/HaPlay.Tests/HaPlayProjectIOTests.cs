@@ -514,6 +514,42 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public async Task CueListsIO_SaveLoad_RoundTripsMultipleLists()
+    {
+        var lists = new List<CueList>
+        {
+            new()
+            {
+                Name = "Act 1",
+                Nodes = { new MediaCueNode { Number = "1", Label = "Opener" } },
+            },
+            new()
+            {
+                Name = "Act 2",
+                PreRollCount = 2,
+                Nodes = { new CommentCueNode { Number = "2", Text = "Intermission" } },
+            },
+        };
+
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListsIO.FileExtension);
+        try
+        {
+            await CueListsIO.SaveAsync(lists, tmp, "HaPlay.Tests");
+            var loaded = await CueListsIO.LoadAsync(tmp);
+            Assert.Equal(2, loaded.Count);
+            Assert.Equal("Act 1", loaded[0].Name);
+            Assert.Equal("Act 2", loaded[1].Name);
+            Assert.Equal(2, loaded[1].PreRollCount);
+            Assert.IsType<CommentCueNode>(Assert.Single(loaded[1].Nodes));
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
+        }
+    }
+
+    [Fact]
     public async Task CueListIO_SaveLoad_RoundTripsImageAndTextSources()
     {
         var cueList = new CueList

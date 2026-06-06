@@ -2,6 +2,18 @@ using System.Text.Json.Serialization;
 
 namespace HaPlay.Models;
 
+/// <summary>Bundle of every cue list in the cue player workspace, persisted in <c>.haplaycuelists</c> files.</summary>
+public sealed record CueListsCollectionDocument
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+
+    public string? Generator { get; init; }
+
+    public List<CueList> CueLists { get; init; } = [];
+}
+
 /// <summary>
 /// Cue-list root persisted in <c>.haplaycues</c> files. A cue list is a tree of groups and cues
 /// plus its own list of compositions and outputs — the Cue Player is a self-contained playback
@@ -280,4 +292,6 @@ public enum CueActionKind
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
 [JsonSerializable(typeof(ImagePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
+[JsonSerializable(typeof(CueListsCollectionDocument))]
+[JsonSerializable(typeof(List<CueList>))]
 internal partial class CueListJsonContext : JsonSerializerContext;

@@ -1,3 +1,4 @@
+using System.IO;
 using S.Control;
 using HaPlay.ViewModels;
 using Xunit;
@@ -1826,5 +1827,31 @@ public sealed class ControlWorkspaceViewModelTests
 
         var record = Assert.Single(filtered);
         Assert.Equal("timeout", record.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task SaveAndLoadControlConfigFromPath_RoundTripsSnapshot()
+    {
+        await using var vm = new ControlWorkspaceViewModel();
+        vm.AddOrUpdateMidiInputDevice(1, "X-Touch MINI");
+
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + ControlSystemIO.FileExtension);
+        try
+        {
+            await vm.SaveControlConfigToPathAsync(path);
+            Assert.Equal(path, vm.ConfigFilePath);
+
+            await using var reloaded = new ControlWorkspaceViewModel();
+            await reloaded.LoadControlConfigFromPathAsync(path);
+
+            var device = Assert.Single(reloaded.BuildSnapshot().Devices);
+            Assert.Equal("X-Touch MINI", device.Name);
+            Assert.Equal(path, reloaded.ConfigFilePath);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 }

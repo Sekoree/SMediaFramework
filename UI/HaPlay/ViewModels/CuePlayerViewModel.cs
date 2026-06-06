@@ -1200,6 +1200,12 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     [ObservableProperty]
     private string _name;
 
+    partial void OnNameChanged(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            Name = Strings.CueListFileNameFallback;
+    }
+
     [ObservableProperty]
     private string? _path;
 
@@ -4057,10 +4063,19 @@ public partial class CuePlayerViewModel : ViewModelBase
         RefreshBrokenEndpointFlags();
     }
 
+    private string? _cueListsCollectionPath;
+
+    public string? CueListsCollectionPath => _cueListsCollectionPath;
+
+    public string? DisplayedCueFilePath => _cueListsCollectionPath ?? SelectedCueList?.Path;
+
     public List<CueList> BuildCueListsSnapshot() => CueLists.Select(c => c.ToModel()).ToList();
 
-    public void ApplyCueLists(IReadOnlyList<CueList> lists)
+    public void ApplyCueLists(IReadOnlyList<CueList> lists, string? collectionPath = null)
     {
+        _cueListsCollectionPath = collectionPath;
+        OnPropertyChanged(nameof(CueListsCollectionPath));
+        OnPropertyChanged(nameof(DisplayedCueFilePath));
         CueLists.Clear();
         foreach (var list in lists)
             CueLists.Add(CueListEditorViewModel.FromModel(list, resolveLine: ResolveOutputLine));
@@ -4073,6 +4088,16 @@ public partial class CuePlayerViewModel : ViewModelBase
         CurrentCueNode = null;
         StandbyCueNode = null;
         IsTransportPaused = false;
+    }
+
+    private void ClearCueListsCollectionPath()
+    {
+        if (_cueListsCollectionPath is null)
+            return;
+
+        _cueListsCollectionPath = null;
+        OnPropertyChanged(nameof(CueListsCollectionPath));
+        OnPropertyChanged(nameof(DisplayedCueFilePath));
     }
 
     [RelayCommand]
@@ -4103,6 +4128,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             var list = await CueListIO.LoadAsync(path);
             var vm = CueListEditorViewModel.FromModel(list, path, ResolveOutputLine);
+            ClearCueListsCollectionPath();
             CueLists.Add(vm);
             SelectedCueList = vm;
             SelectedCueNode = null;
@@ -4151,11 +4177,114 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             await CueListIO.SaveAsync(SelectedCueList.ToModel(), path);
             SelectedCueList.Path = path;
+            OnPropertyChanged(nameof(DisplayedCueFilePath));
             StatusMessage = Strings.Format(nameof(Strings.SavedCueListStatusFormat), Path.GetFileName(path));
         }
         catch (Exception ex)
         {
             StatusMessage = Strings.Format(nameof(Strings.CueListSaveFailedStatusFormat), ex.Message);
+        }
+    }
+
+    [RelayCommand]
+    private async Task LoadAllCueListsAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null)
+            return;
+
+        var opts = new FilePickerOpenOptions
+        {
+            Title = Strings.OpenAllCueListsDialogTitle,
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType(Strings.HaPlayCueListsFileTypeLabel)
+                {
+                    Patterns = ["*." + CueListsIO.FileExtension],
+                },
+                new FilePickerFileType(Strings.JsonFileTypeLabel) { Patterns = ["*.json"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
+            ],
+        };
+
+        var picks = await owner.StorageProvider.OpenFilePickerAsync(opts);
+        var picked = picks.FirstOrDefault();
+        if (picked is null)
+            return;
+
+        var path = picked.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        try
+        {
+            var lists = await CueListsIO.LoadAsync(path);
+            ApplyCueLists(lists, path);
+            StatusMessage = Strings.Format(nameof(Strings.LoadedAllCueListsStatusFormat), Path.GetFileName(path));
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = Strings.Format(nameof(Strings.AllCueListsLoadFailedStatusFormat), ex.Message);
+        }
+    }
+
+    [RelayCommand]
+    private Task SaveAllCueListsAsync() =>
+        !string.IsNullOrEmpty(_cueListsCollectionPath)
+            ? SaveAllCueListsToPathAsync(_cueListsCollectionPath)
+            : SaveAllCueListsAsAsync();
+
+    [RelayCommand]
+    private async Task SaveAllCueListsAsAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null)
+            return;
+
+        var opts = new FilePickerSaveOptions
+        {
+            Title = Strings.SaveAllCueListsDialogTitle,
+            DefaultExtension = CueListsIO.FileExtension,
+            SuggestedFileName = string.IsNullOrEmpty(_cueListsCollectionPath)
+                ? Strings.Format(
+                    nameof(Strings.CueListsCollectionDefaultFileNameFormat),
+                    Strings.CueListsCollectionFileNameFallback,
+                    CueListsIO.FileExtension)
+                : Path.GetFileName(_cueListsCollectionPath),
+            FileTypeChoices =
+            [
+                new FilePickerFileType(Strings.HaPlayCueListsFileTypeLabel)
+                {
+                    Patterns = ["*." + CueListsIO.FileExtension],
+                },
+            ],
+        };
+
+        var picked = await owner.StorageProvider.SaveFilePickerAsync(opts);
+        if (picked is null)
+            return;
+
+        var path = picked.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        await SaveAllCueListsToPathAsync(path);
+    }
+
+    private async Task SaveAllCueListsToPathAsync(string path)
+    {
+        try
+        {
+            await CueListsIO.SaveAsync(BuildCueListsSnapshot(), path, "HaPlay");
+            _cueListsCollectionPath = path;
+            OnPropertyChanged(nameof(CueListsCollectionPath));
+            OnPropertyChanged(nameof(DisplayedCueFilePath));
+            StatusMessage = Strings.Format(nameof(Strings.SavedAllCueListsStatusFormat), Path.GetFileName(path));
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = Strings.Format(nameof(Strings.AllCueListsSaveFailedStatusFormat), ex.Message);
         }
     }
 

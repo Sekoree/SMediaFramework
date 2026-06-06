@@ -94,6 +94,11 @@ public static class Strings
     public static string OutputsHeader => Get(nameof(OutputsHeader));
 
     public static string CueListLabel => Get(nameof(CueListLabel));
+    public static string CueListNameWatermark => Get(nameof(CueListNameWatermark));
+    public static string CueListNameTooltip => Get(nameof(CueListNameTooltip));
+    public static string LoadCueListTooltip => Get(nameof(LoadCueListTooltip));
+    public static string SaveCueListTooltip => Get(nameof(SaveCueListTooltip));
+    public static string CueListFilesMenuTooltip => Get(nameof(CueListFilesMenuTooltip));
     public static string CueTreeCueColumnHeader => Get(nameof(CueTreeCueColumnHeader));
     public static string CueTreeNumberColumnHeader => Get(nameof(CueTreeNumberColumnHeader));
     public static string CueTreeKindColumnHeader => Get(nameof(CueTreeKindColumnHeader));
@@ -660,6 +665,18 @@ public static class Strings
     public static string CueListDefaultFileNameFormat => Get(nameof(CueListDefaultFileNameFormat));
     public static string SavedCueListStatusFormat => Get(nameof(SavedCueListStatusFormat));
     public static string CueListSaveFailedStatusFormat => Get(nameof(CueListSaveFailedStatusFormat));
+    public static string LoadAllCueListsMenuHeader => Get(nameof(LoadAllCueListsMenuHeader));
+    public static string SaveAllCueListsMenuHeader => Get(nameof(SaveAllCueListsMenuHeader));
+    public static string SaveAllCueListsAsMenuHeader => Get(nameof(SaveAllCueListsAsMenuHeader));
+    public static string OpenAllCueListsDialogTitle => Get(nameof(OpenAllCueListsDialogTitle));
+    public static string SaveAllCueListsDialogTitle => Get(nameof(SaveAllCueListsDialogTitle));
+    public static string HaPlayCueListsFileTypeLabel => Get(nameof(HaPlayCueListsFileTypeLabel));
+    public static string LoadedAllCueListsStatusFormat => Get(nameof(LoadedAllCueListsStatusFormat));
+    public static string AllCueListsLoadFailedStatusFormat => Get(nameof(AllCueListsLoadFailedStatusFormat));
+    public static string SavedAllCueListsStatusFormat => Get(nameof(SavedAllCueListsStatusFormat));
+    public static string AllCueListsSaveFailedStatusFormat => Get(nameof(AllCueListsSaveFailedStatusFormat));
+    public static string CueListsCollectionDefaultFileNameFormat => Get(nameof(CueListsCollectionDefaultFileNameFormat));
+    public static string CueListsCollectionFileNameFallback => Get(nameof(CueListsCollectionFileNameFallback));
     public static string CueListFileNameFallback => Get(nameof(CueListFileNameFallback));
     public static string PlayerSettingsDialogTitle => Get(nameof(PlayerSettingsDialogTitle));
     public static string PlayerSettingsButton => Get(nameof(PlayerSettingsButton));
@@ -705,4 +722,19 @@ public static class Strings
     public static string AlwaysOnTopHint => Get(nameof(AlwaysOnTopHint));
     public static string ClearButton => Get(nameof(ClearButton));
     public static string ImageFilesFilterLabel => Get(nameof(ImageFilesFilterLabel));
+    public static string LoadControlConfigMenuHeader => Get(nameof(LoadControlConfigMenuHeader));
+    public static string SaveControlConfigMenuHeader => Get(nameof(SaveControlConfigMenuHeader));
+    public static string SaveControlConfigAsMenuHeader => Get(nameof(SaveControlConfigAsMenuHeader));
+    public static string LoadControlConfigTooltip => Get(nameof(LoadControlConfigTooltip));
+    public static string SaveControlConfigTooltip => Get(nameof(SaveControlConfigTooltip));
+    public static string ControlFilesMenuTooltip => Get(nameof(ControlFilesMenuTooltip));
+    public static string OpenControlConfigDialogTitle => Get(nameof(OpenControlConfigDialogTitle));
+    public static string SaveControlConfigDialogTitle => Get(nameof(SaveControlConfigDialogTitle));
+    public static string HaPlayControlFileTypeLabel => Get(nameof(HaPlayControlFileTypeLabel));
+    public static string LoadedControlConfigStatusFormat => Get(nameof(LoadedControlConfigStatusFormat));
+    public static string ControlConfigLoadFailedStatusFormat => Get(nameof(ControlConfigLoadFailedStatusFormat));
+    public static string SavedControlConfigStatusFormat => Get(nameof(SavedControlConfigStatusFormat));
+    public static string ControlConfigSaveFailedStatusFormat => Get(nameof(ControlConfigSaveFailedStatusFormat));
+    public static string ControlConfigDefaultFileNameFormat => Get(nameof(ControlConfigDefaultFileNameFormat));
+    public static string ControlConfigFileNameFallback => Get(nameof(ControlConfigFileNameFallback));
 }

@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using S.Control;
+using HaPlay.Resources;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
 using OSCLib;
@@ -32,6 +33,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private readonly DispatcherTimer _refreshTimer;
     private ControlSystemConfig _config = new();
     private string? _projectRoot;
+    private string? _configFilePath;
     private ControlMonitorBuffer? _monitorBuffer;
     private ControlSystemRuntimeSession? _session;
     private UdpControlOscSender? _oscSender;
@@ -278,10 +280,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     [ObservableProperty]
     private string _testOscArgs = string.Empty;
 
-    public void LoadConfig(ControlSystemConfig config)
+    public void LoadConfig(ControlSystemConfig config, string? configFilePath = null)
     {
         StopSessionFireAndForget();
         _config = config ?? new ControlSystemConfig();
+        _configFilePath = configFilePath;
         MonitorEntries.Clear();
         RebuildScriptRows();
         RebuildStructureRows();
@@ -303,6 +306,137 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     }
 
     public ControlSystemConfig BuildSnapshot() => _config with { IsArmed = false };
+
+    public string? ConfigFilePath => _configFilePath;
+
+    [RelayCommand]
+    private async Task LoadControlConfigAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+
+        var opts = new FilePickerOpenOptions
+        {
+            Title = Strings.OpenControlConfigDialogTitle,
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType(Strings.HaPlayControlFileTypeLabel)
+                {
+                    Patterns = ["*." + ControlSystemIO.FileExtension],
+                },
+                new FilePickerFileType(Strings.JsonFileTypeLabel) { Patterns = ["*.json"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
+            ],
+        };
+
+        var picks = await owner.StorageProvider.OpenFilePickerAsync(opts).ConfigureAwait(true);
+        var picked = picks.FirstOrDefault();
+        if (picked is null)
+            return;
+
+        var path = picked.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        await LoadControlConfigFromPathAsync(path).ConfigureAwait(true);
+    }
+
+    [RelayCommand]
+    private Task SaveControlConfigAsync() =>
+        !string.IsNullOrEmpty(_configFilePath)
+            ? SaveControlConfigToPathAsync(_configFilePath)
+            : SaveControlConfigAsAsync();
+
+    [RelayCommand]
+    private async Task SaveControlConfigAsAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null)
+            return;
+
+        var opts = new FilePickerSaveOptions
+        {
+            Title = Strings.SaveControlConfigDialogTitle,
+            DefaultExtension = ControlSystemIO.FileExtension,
+            SuggestedFileName = string.IsNullOrEmpty(_configFilePath)
+                ? Strings.Format(
+                    nameof(Strings.ControlConfigDefaultFileNameFormat),
+                    SanitizeControlConfigFileName(Strings.ControlConfigFileNameFallback),
+                    ControlSystemIO.FileExtension)
+                : Path.GetFileName(_configFilePath),
+            FileTypeChoices =
+            [
+                new FilePickerFileType(Strings.HaPlayControlFileTypeLabel)
+                {
+                    Patterns = ["*." + ControlSystemIO.FileExtension],
+                },
+            ],
+        };
+
+        var picked = await owner.StorageProvider.SaveFilePickerAsync(opts).ConfigureAwait(true);
+        if (picked is null)
+            return;
+
+        var path = picked.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path))
+            return;
+
+        await SaveControlConfigToPathAsync(path).ConfigureAwait(true);
+    }
+
+    internal async Task LoadControlConfigFromPathAsync(string path)
+    {
+        try
+        {
+            var config = await ControlSystemIO.LoadConfigAsync(path).ConfigureAwait(false);
+            await RunOnUiThreadAsync(() =>
+            {
+                SetProjectRoot(Path.GetDirectoryName(path));
+                LoadConfig(config, path);
+                StatusMessage = Strings.Format(nameof(Strings.LoadedControlConfigStatusFormat), Path.GetFileName(path));
+            }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await RunOnUiThreadAsync(() =>
+                StatusMessage = Strings.Format(nameof(Strings.ControlConfigLoadFailedStatusFormat), ex.Message))
+                .ConfigureAwait(false);
+        }
+    }
+
+    internal async Task SaveControlConfigToPathAsync(string path)
+    {
+        try
+        {
+            if (IsArmed)
+                await DisarmInternalAsync().ConfigureAwait(true);
+
+            await ControlSystemIO.SaveConfigAsync(BuildSnapshot(), path, "HaPlay").ConfigureAwait(false);
+            await RunOnUiThreadAsync(() =>
+            {
+                _configFilePath = path;
+                OnPropertyChanged(nameof(ConfigFilePath));
+                StatusMessage = Strings.Format(nameof(Strings.SavedControlConfigStatusFormat), Path.GetFileName(path));
+            }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await RunOnUiThreadAsync(() =>
+                StatusMessage = Strings.Format(nameof(Strings.ControlConfigSaveFailedStatusFormat), ex.Message))
+                .ConfigureAwait(false);
+        }
+    }
+
+    private static string SanitizeControlConfigFileName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return Strings.ControlConfigFileNameFallback;
+
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(name.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+    }
 
     public IReadOnlyList<ControlDeviceInstanceConfig> GetMidiInputDevices() =>
         _config.Devices
@@ -2215,6 +2349,17 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
         Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop
             ? desktop.MainWindow
             : null;
+
+    private static async Task RunOnUiThreadAsync(Action action)
+    {
+        if (Application.Current?.ApplicationLifetime is null || Dispatcher.UIThread.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(action);
+    }
 
     private async Task ArmInternalAsync()
     {

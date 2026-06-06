@@ -240,6 +240,21 @@
   <data name="CueListLabel" xml:space="preserve">
     <value>Cue list</value>
   </data>
+  <data name="CueListNameWatermark" xml:space="preserve">
+    <value>List name</value>
+  </data>
+  <data name="CueListNameTooltip" xml:space="preserve">
+    <value>Edit the selected cue list name.</value>
+  </data>
+  <data name="LoadCueListTooltip" xml:space="preserve">
+    <value>Load a cue list from a .haplaycues file (adds to the workspace).</value>
+  </data>
+  <data name="SaveCueListTooltip" xml:space="preserve">
+    <value>Save the selected cue list to its file, or choose a path with Save As.</value>
+  </data>
+  <data name="CueListFilesMenuTooltip" xml:space="preserve">
+    <value>Load or save individual cue lists (.haplaycues) or all lists at once (.haplaycuelists) without saving the full project.</value>
+  </data>
   <data name="CueTreeCueColumnHeader" xml:space="preserve">
     <value>Cue</value>
   </data>
@@ -1051,7 +1066,7 @@
     <value>⚙ Settings</value>
   </data>
   <data name="MediaPlayerSettingsTooltip" xml:space="preserve">
-    <value>Save / load this player's configuration, or remove the player.</value>
+    <value>Save or load this player's configuration (.haplay.json), playlists, or remove the player.</value>
   </data>
   <data name="SavePlayerConfigMenuHeader" xml:space="preserve">
     <value>Save player config…</value>
@@ -1926,6 +1941,42 @@
   <data name="CueListSaveFailedStatusFormat" xml:space="preserve">
     <value>Cue list save failed: {0}</value>
   </data>
+  <data name="LoadAllCueListsMenuHeader" xml:space="preserve">
+    <value>Load all cue lists…</value>
+  </data>
+  <data name="SaveAllCueListsMenuHeader" xml:space="preserve">
+    <value>Save all cue lists</value>
+  </data>
+  <data name="SaveAllCueListsAsMenuHeader" xml:space="preserve">
+    <value>Save all cue lists as…</value>
+  </data>
+  <data name="OpenAllCueListsDialogTitle" xml:space="preserve">
+    <value>Open all cue lists</value>
+  </data>
+  <data name="SaveAllCueListsDialogTitle" xml:space="preserve">
+    <value>Save all cue lists</value>
+  </data>
+  <data name="HaPlayCueListsFileTypeLabel" xml:space="preserve">
+    <value>HaPlay cue lists</value>
+  </data>
+  <data name="LoadedAllCueListsStatusFormat" xml:space="preserve">
+    <value>Loaded all cue lists from '{0}'.</value>
+  </data>
+  <data name="AllCueListsLoadFailedStatusFormat" xml:space="preserve">
+    <value>All cue lists load failed: {0}</value>
+  </data>
+  <data name="SavedAllCueListsStatusFormat" xml:space="preserve">
+    <value>Saved all cue lists to '{0}'.</value>
+  </data>
+  <data name="AllCueListsSaveFailedStatusFormat" xml:space="preserve">
+    <value>All cue lists save failed: {0}</value>
+  </data>
+  <data name="CueListsCollectionDefaultFileNameFormat" xml:space="preserve">
+    <value>{0}.{1}</value>
+  </data>
+  <data name="CueListsCollectionFileNameFallback" xml:space="preserve">
+    <value>cue-lists</value>
+  </data>
   <data name="CueListFileNameFallback" xml:space="preserve">
     <value>cue-list</value>
   </data>
@@ -2060,5 +2111,50 @@
   </data>
   <data name="ImageFilesFilterLabel" xml:space="preserve">
     <value>Image files</value>
+  </data>
+  <data name="LoadControlConfigMenuHeader" xml:space="preserve">
+    <value>Load control system…</value>
+  </data>
+  <data name="SaveControlConfigMenuHeader" xml:space="preserve">
+    <value>Save control system</value>
+  </data>
+  <data name="SaveControlConfigAsMenuHeader" xml:space="preserve">
+    <value>Save control system as…</value>
+  </data>
+  <data name="LoadControlConfigTooltip" xml:space="preserve">
+    <value>Load a control system from a .scontrol file (devices, layers, scripts, listeners).</value>
+  </data>
+  <data name="SaveControlConfigTooltip" xml:space="preserve">
+    <value>Save the control system to its file, or choose a path with Save As.</value>
+  </data>
+  <data name="ControlFilesMenuTooltip" xml:space="preserve">
+    <value>Load or save the control workspace (.scontrol) without saving the full project.</value>
+  </data>
+  <data name="OpenControlConfigDialogTitle" xml:space="preserve">
+    <value>Open control system</value>
+  </data>
+  <data name="SaveControlConfigDialogTitle" xml:space="preserve">
+    <value>Save control system</value>
+  </data>
+  <data name="HaPlayControlFileTypeLabel" xml:space="preserve">
+    <value>HaPlay control system</value>
+  </data>
+  <data name="LoadedControlConfigStatusFormat" xml:space="preserve">
+    <value>Loaded control system '{0}'.</value>
+  </data>
+  <data name="ControlConfigLoadFailedStatusFormat" xml:space="preserve">
+    <value>Control system load failed: {0}</value>
+  </data>
+  <data name="SavedControlConfigStatusFormat" xml:space="preserve">
+    <value>Saved control system '{0}'.</value>
+  </data>
+  <data name="ControlConfigSaveFailedStatusFormat" xml:space="preserve">
+    <value>Control system save failed: {0}</value>
+  </data>
+  <data name="ControlConfigDefaultFileNameFormat" xml:space="preserve">
+    <value>{0}.{1}</value>
+  </data>
+  <data name="ControlConfigFileNameFallback" xml:space="preserve">
+    <value>control-system</value>
   </data>
 </root>

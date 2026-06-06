@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:res="using:HaPlay.Resources"
              mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="680"
              x:Class="HaPlay.Views.ControlWorkspaceView"
              x:DataType="vm:ControlWorkspaceViewModel">
@@ -30,21 +31,47 @@
 
     <!-- Arm + summary -->
     <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10" Margin="0,0,0,10">
-      <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="6">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
         <Button Grid.Row="0" Grid.Column="0" Width="100"
                 Content="{Binding ArmButtonText}" Command="{Binding ToggleArmCommand}" />
         <TextBlock Grid.Row="0" Grid.Column="1" VerticalAlignment="Center"
                    Text="{Binding StatusMessage}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
         <Button Grid.Row="0" Grid.Column="2"
+                Content="Load…"
+                ToolTip.Tip="{x:Static res:Strings.LoadControlConfigTooltip}"
+                Command="{Binding LoadControlConfigCommand}" />
+        <Button Grid.Row="0" Grid.Column="3"
+                Content="Save"
+                ToolTip.Tip="{x:Static res:Strings.SaveControlConfigTooltip}"
+                Command="{Binding SaveControlConfigCommand}" />
+        <Menu Grid.Row="0" Grid.Column="4" VerticalAlignment="Center" Padding="0">
+          <MenuItem Header="{x:Static res:Strings.FilesMenuLabel}"
+                    ToolTip.Tip="{x:Static res:Strings.ControlFilesMenuTooltip}">
+            <MenuItem Header="{x:Static res:Strings.LoadControlConfigMenuHeader}"
+                      Command="{Binding LoadControlConfigCommand}" />
+            <MenuItem Header="{x:Static res:Strings.SaveControlConfigMenuHeader}"
+                      Command="{Binding SaveControlConfigCommand}" />
+            <MenuItem Header="{x:Static res:Strings.SaveControlConfigAsMenuHeader}"
+                      Command="{Binding SaveControlConfigAsCommand}" />
+          </MenuItem>
+        </Menu>
+        <Button Grid.Row="0" Grid.Column="5"
                 Content="Add script…"
                 ToolTip.Tip="Create a project, device, endpoint, or layer script"
                 Command="{Binding AddScriptCommand}" />
-        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Orientation="Horizontal" Spacing="16" Opacity="0.85">
+        <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="16" Opacity="0.85">
           <TextBlock Text="{Binding DeviceCount, StringFormat='Devices: {0}'}" />
           <TextBlock Text="{Binding ListenerCount, StringFormat='Listeners: {0}'}" />
           <TextBlock Text="{Binding LayerCount, StringFormat='Layers: {0}'}" />
           <TextBlock Text="{Binding ScriptCount, StringFormat='Scripts: {0}'}" />
         </StackPanel>
+        <TextBlock Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2"
+                   Text="{Binding ConfigFilePath}"
+                   VerticalAlignment="Center"
+                   Foreground="#888888"
+                   TextTrimming="CharacterEllipsis"
+                   ToolTip.Tip="{Binding ConfigFilePath}"
+                   IsVisible="{Binding ConfigFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       </Grid>
     </Border>
 

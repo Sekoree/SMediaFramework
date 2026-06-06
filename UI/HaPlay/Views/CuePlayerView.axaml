@@ -17,38 +17,61 @@
       <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
     </Border>
 
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,220,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,160,*,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
       <TextBlock Grid.Column="0" Text="{x:Static res:Strings.CueListLabel}" VerticalAlignment="Center" />
       <ComboBox Grid.Column="1"
                 ItemsSource="{Binding CueLists}"
                 SelectedItem="{Binding SelectedCueList, Mode=TwoWay}"
-                MinWidth="180">
+                MinWidth="140">
         <ComboBox.ItemTemplate>
           <DataTemplate DataType="vm:CueListEditorViewModel">
             <TextBlock Text="{Binding Name}" />
           </DataTemplate>
         </ComboBox.ItemTemplate>
       </ComboBox>
-      <Button Grid.Column="2" Content="{x:Static res:Strings.AddListButton}" Command="{Binding AddCueListCommand}" />
-      <Button Grid.Column="3" Content="{x:Static res:Strings.RemoveListButton}" Command="{Binding RemoveCueListCommand}" />
-      <Menu Grid.Column="4" VerticalAlignment="Center" Padding="0">
-        <MenuItem Header="{x:Static res:Strings.FilesMenuLabel}">
+      <TextBox Grid.Column="2"
+               MinWidth="120"
+               Margin="4,0,0,0"
+               Text="{Binding SelectedCueList.Name, Mode=TwoWay}"
+               Watermark="{x:Static res:Strings.CueListNameWatermark}"
+               ToolTip.Tip="{x:Static res:Strings.CueListNameTooltip}"
+               IsEnabled="{Binding SelectedCueList, Converter={x:Static ObjectConverters.IsNotNull}}" />
+      <Button Grid.Column="3" Content="{x:Static res:Strings.AddListButton}" Command="{Binding AddCueListCommand}" />
+      <Button Grid.Column="4" Content="{x:Static res:Strings.RemoveListButton}" Command="{Binding RemoveCueListCommand}" />
+      <Button Grid.Column="5"
+              Content="{x:Static res:Strings.LoadButton}"
+              ToolTip.Tip="{x:Static res:Strings.LoadCueListTooltip}"
+              Command="{Binding LoadCueListCommand}" />
+      <Button Grid.Column="6"
+              Content="{x:Static res:Strings.SaveButton}"
+              ToolTip.Tip="{x:Static res:Strings.SaveCueListTooltip}"
+              Command="{Binding SaveCueListCommand}" />
+      <Menu Grid.Column="7" VerticalAlignment="Center" Padding="0">
+        <MenuItem Header="{x:Static res:Strings.FilesMenuLabel}"
+                  ToolTip.Tip="{x:Static res:Strings.CueListFilesMenuTooltip}">
           <MenuItem Header="{x:Static res:Strings.LoadButton}" Command="{Binding LoadCueListCommand}" />
           <MenuItem Header="{x:Static res:Strings.SaveButton}" Command="{Binding SaveCueListCommand}" />
           <MenuItem Header="{x:Static res:Strings.SaveAsButton}" Command="{Binding SaveCueListAsCommand}" />
+          <Separator />
+          <MenuItem Header="{x:Static res:Strings.LoadAllCueListsMenuHeader}"
+                    Command="{Binding LoadAllCueListsCommand}" />
+          <MenuItem Header="{x:Static res:Strings.SaveAllCueListsMenuHeader}"
+                    Command="{Binding SaveAllCueListsCommand}" />
+          <MenuItem Header="{x:Static res:Strings.SaveAllCueListsAsMenuHeader}"
+                    Command="{Binding SaveAllCueListsAsCommand}" />
         </MenuItem>
       </Menu>
-      <Button Grid.Column="5"
+      <Button Grid.Column="8"
               Content="{x:Static res:Strings.CueListSettingsButton}"
               ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
               Command="{Binding OpenCueListSettingsCommand}" />
-      <TextBlock Grid.Column="6"
-                 Text="{Binding SelectedCueList.Path}"
+      <TextBlock Grid.Column="9"
+                 Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
                  Foreground="#888888"
                  TextTrimming="CharacterEllipsis"
-                 ToolTip.Tip="{Binding SelectedCueList.Path}"
-                 IsVisible="{Binding SelectedCueList.Path, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                 ToolTip.Tip="{Binding DisplayedCueFilePath}"
+                 IsVisible="{Binding DisplayedCueFilePath, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
     </Grid>
 
     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8" LastChildFill="False">

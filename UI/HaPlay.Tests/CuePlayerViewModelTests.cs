@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using HaPlay.Playback;
+using HaPlay.Resources;
 using HaPlay.ViewModels;
 using HaPlay.ViewModels.Dialogs;
 using Xunit;
@@ -154,6 +155,19 @@ public sealed class CuePlayerViewModelTests
         Assert.Single(vm.CueLists);
         Assert.Equal("Cue List 1", selected.Name);
         Assert.Empty(selected.Nodes);
+    }
+
+    [Fact]
+    public void ApplyCueLists_WithCollectionPath_TracksBundleFile()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists(
+            [new CueList { Name = "Show A" }, new CueList { Name = "Show B" }],
+            "/tmp/show.cuelists");
+
+        Assert.Equal(2, vm.CueLists.Count);
+        Assert.Equal("/tmp/show.cuelists", vm.CueListsCollectionPath);
+        Assert.Equal("/tmp/show.cuelists", vm.DisplayedCueFilePath);
     }
 
     [Fact]
@@ -1411,6 +1425,14 @@ public sealed class CuePlayerViewModelTests
 
         var restored = CueListEditorViewModel.FromModel(snapshot[0]);
         Assert.Equal(3, restored.MaxPreparedDecoders);
+    }
+
+    [Fact]
+    public void CueListEditorViewModel_EmptyNameFallsBackToDefaultFileName()
+    {
+        var vm = new CueListEditorViewModel("Show A");
+        vm.Name = "   ";
+        Assert.Equal(Strings.CueListFileNameFallback, vm.Name);
     }
 
     [Fact]

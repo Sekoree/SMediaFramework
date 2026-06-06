@@ -121,6 +121,70 @@ public static class CueListIO
     }
 }
 
+public static class CueListsIO
+{
+    public const string FileExtension = "haplaycuelists";
+
+    public static async Task<CueListsCollectionDocument> LoadDocumentAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        await using var stream = File.OpenRead(path);
+        var document = await JsonSerializer
+            .DeserializeAsync(stream, CueListJsonContext.Default.CueListsCollectionDocument, cancellationToken)
+            .ConfigureAwait(false);
+        if (document is null)
+            throw new InvalidDataException($"Cue lists file '{path}' contains no JSON object.");
+        if (document.SchemaVersion is < 1 or > CueListsCollectionDocument.CurrentSchemaVersion)
+            throw new UnsupportedCueListsSchemaVersionException(
+                document.SchemaVersion,
+                CueListsCollectionDocument.CurrentSchemaVersion);
+        return document;
+    }
+
+    public static async Task<IReadOnlyList<CueList>> LoadAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        (await LoadDocumentAsync(path, cancellationToken).ConfigureAwait(false)).CueLists;
+
+    public static async Task SaveDocumentAsync(
+        CueListsCollectionDocument document,
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        await AtomicJsonFile.SaveAsync(
+                document,
+                path,
+                CueListJsonContext.Default.CueListsCollectionDocument,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public static Task SaveAsync(
+        IReadOnlyList<CueList> cueLists,
+        string path,
+        string? generator = null,
+        CancellationToken cancellationToken = default) =>
+        SaveDocumentAsync(
+            new CueListsCollectionDocument { Generator = generator, CueLists = cueLists.ToList() },
+            path,
+            cancellationToken);
+}
+
+public sealed class UnsupportedCueListsSchemaVersionException : Exception
+{
+    public UnsupportedCueListsSchemaVersionException(int fileVersion, int supportedVersion)
+        : base($"Cue lists schema version {fileVersion} is not supported by this build (max supported: {supportedVersion}).")
+    {
+        FileVersion = fileVersion;
+        SupportedVersion = supportedVersion;
+    }
+
+    public int FileVersion { get; }
+    public int SupportedVersion { get; }
+}
+
 internal static class AtomicJsonFile
 {
     public static async Task SaveAsync<T>(
