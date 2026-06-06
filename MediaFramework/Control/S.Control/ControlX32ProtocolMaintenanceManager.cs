@@ -11,6 +11,7 @@ public sealed class ControlX32ProtocolMaintenanceManager
     private static readonly TimeSpan FailedRetryInterval = TimeSpan.FromSeconds(2);
 
     private readonly ControlSystemConfig _config;
+    private readonly IControlDeviceProfileRepository _profiles;
     private readonly IControlOscSender _sender;
     private readonly IControlMonitorSink _monitor;
     private readonly Dictionary<Guid, DateTimeOffset> _lastSuccessfulRenewUtc = new();
@@ -19,9 +20,11 @@ public sealed class ControlX32ProtocolMaintenanceManager
     public ControlX32ProtocolMaintenanceManager(
         ControlSystemConfig config,
         IControlOscSender sender,
-        IControlMonitorSink? monitor = null)
+        IControlMonitorSink? monitor = null,
+        IControlDeviceProfileRepository? profiles = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
+        _profiles = profiles ?? CompositeControlDeviceProfileRepository.ForProject(config);
         _sender = sender ?? throw new ArgumentNullException(nameof(sender));
         _monitor = monitor ?? NullControlMonitorSink.Instance;
     }
@@ -36,8 +39,12 @@ public sealed class ControlX32ProtocolMaintenanceManager
         var results = new List<ControlPeriodicOscSendResult>();
         foreach (var device in _config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Osc && d.IsEnabled))
         {
+            var profile = _profiles.FindById(device.ProfileId ?? string.Empty);
+            if (!ControlProfileProtocolBehavior.HasProtocolMaintenance(profile))
+                continue;
+
             var sends = device.PeriodicOscSends
-                .Where(s => ControlX32ProtocolAddresses.UsesProtocolMaintenance(device, s))
+                .Where(s => ControlProfileProtocolBehavior.UsesProtocolMaintenance(profile, device, s))
                 .OrderBy(s => MaintenanceOrder(s.Address))
                 .ToArray();
             if (sends.Length == 0)

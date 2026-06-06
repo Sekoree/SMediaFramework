@@ -19,9 +19,31 @@ public sealed class ControlDeviceProfileTests
     }
 
     [Fact]
+    public void BuiltInRepository_LoadsShippedProfileJsonAssets()
+    {
+        var repository = BuiltInControlDeviceProfileRepository.Instance;
+
+        Assert.Equal(4, repository.Profiles.Count);
+        var x32 = Assert.Single(repository.Profiles, profile => profile.Id == "behringer.x32.osc");
+        Assert.NotNull(x32.Behaviors?.ProtocolMaintenance);
+        Assert.Equal("x32", x32.Behaviors?.MeterBlobDecoder);
+    }
+
+    [Fact]
+    public void ProfileSeeding_CreatesDefaultPeriodicOscSendsFromProfileTasks()
+    {
+        var profile = BuiltInControlDeviceProfileFactory.CreateX32Profile();
+        var sends = ControlDeviceProfileSeeding.CreateDefaultPeriodicOscSends(profile);
+
+        var xremote = Assert.Single(sends);
+        Assert.Equal("/xremote", xremote.Address);
+        Assert.Equal(8000, xremote.IntervalMs);
+    }
+
+    [Fact]
     public void XAirProfile_UsesXAirAddressingAndDefaultPort()
     {
-        var profile = BuiltInControlDeviceProfileRepository.CreateXAirProfile();
+        var profile = BuiltInControlDeviceProfileFactory.CreateXAirProfile();
 
         Assert.Equal("behringer.xair.osc", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Osc, profile.Protocol);
@@ -54,7 +76,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void XTouchMiniProfile_UsesReferenceMcModeMapping()
     {
-        var profile = BuiltInControlDeviceProfileRepository.CreateXTouchMiniProfile();
+        var profile = BuiltInControlDeviceProfileFactory.CreateXTouchMiniProfile();
 
         Assert.Equal("behringer.xtouch-mini.mc", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
@@ -99,7 +121,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void Bcf2000Profile_Uses14BitFadersEncodersAndButtonBanks()
     {
-        var profile = BuiltInControlDeviceProfileRepository.CreateBcf2000Profile();
+        var profile = BuiltInControlDeviceProfileFactory.CreateBcf2000Profile();
 
         Assert.Equal("behringer.bcf2000", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
@@ -144,7 +166,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void X32Profile_ContainsCoreCommandCatalogAndXRemoteTask()
     {
-        var profile = BuiltInControlDeviceProfileRepository.CreateX32Profile();
+        var profile = BuiltInControlDeviceProfileFactory.CreateX32Profile();
 
         Assert.Equal("behringer.x32.osc", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Osc, profile.Protocol);
@@ -173,7 +195,7 @@ public sealed class ControlDeviceProfileTests
         Assert.Equal(3, profile.Tasks.Count);
         var xremote = Assert.Single(profile.Tasks, t => t.Id == "x32.xremote");
         Assert.True(xremote.IsDefaultEnabled);
-        Assert.Equal(ControlDeviceTaskKind.X32ProtocolMaintenance, xremote.Kind);
+        Assert.Equal(ControlDeviceTaskKind.ProtocolMaintenance, xremote.Kind);
         Assert.Equal("/xremote", xremote.Address);
         Assert.Equal(8000, xremote.IntervalMs);
 
@@ -316,6 +338,31 @@ public sealed class ControlDeviceProfileTests
             if (Directory.Exists(root))
                 Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void ShippedProfileJsonAssets_ExistInLibraryAndMatchFactoryCatalog()
+    {
+        var profilesDir = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory,
+            "..", "..", "..", "..", "..",
+            "MediaFramework", "Control", "S.Control", "Profiles"));
+
+        Assert.True(Directory.Exists(profilesDir));
+        var files = Directory.GetFiles(profilesDir, "*.json");
+        Assert.Equal(4, files.Length);
+
+        var factoryIds = BuiltInControlDeviceProfileFactory.All()
+            .Select(profile => profile.Id)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        var loaded = DirectoryControlDeviceProfileRepository.Load(profilesDir);
+        Assert.Empty(loaded.LoadIssues);
+        var loadedIds = loaded.Profiles
+            .Select(profile => profile.Id)
+            .OrderBy(id => id, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(factoryIds, loadedIds);
     }
 
     [Fact]

@@ -13,6 +13,13 @@
     </ItemGroup>
 
     <ItemGroup>
+        <EmbeddedResource Include="Profiles\*.json" />
+        <None Include="Profiles\*.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="Mond" />
     </ItemGroup>
 

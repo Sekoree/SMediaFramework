@@ -992,7 +992,8 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     private async Task EditOscDeviceInternalAsync(ControlDeviceInstanceConfig? existing)
     {
         var isAdd = existing is null;
-        var profiles = CompositeControlDeviceProfileRepository.ForProject(_config).Profiles
+        var profileRepository = CompositeControlDeviceProfileRepository.ForProject(_config);
+        var profiles = profileRepository.Profiles
             .Where(p => p.Protocol == ControlDeviceProtocol.Osc)
             .ToList();
         var defaultProfile = profiles.FirstOrDefault(p => p.Id == DefaultX32ProfileId) ?? profiles.FirstOrDefault();
@@ -1013,6 +1014,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             return;
 
         var values = dialog.BuildValues();
+        var selectedProfile = profileRepository.FindById(values.ProfileId ?? string.Empty);
         var devices = _config.Devices.ToList();
         if (existing is null)
         {
@@ -1029,6 +1031,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
                     OscPort = values.Port,
                     OscLocalPort = values.LocalPort,
                 },
+                PeriodicOscSends = ControlDeviceProfileSeeding.CreateDefaultPeriodicOscSends(selectedProfile),
             });
             StatusMessage = $"Added OSC device '{values.Name}'." + (IsArmed ? " Re-arm to apply." : string.Empty);
         }

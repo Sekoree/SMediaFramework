@@ -1649,7 +1649,7 @@ public sealed class ControlScriptRuntimeTests
         {
             Id = id,
             Name = name,
-            ProfileId = "x32",
+            ProfileId = "behringer.x32.osc",
             Protocol = ControlDeviceProtocol.Osc,
             IsEnabled = true,
             Binding = new ControlDeviceBindingConfig

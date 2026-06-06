@@ -6,6 +6,7 @@ namespace S.Control;
 public sealed class ControlScriptRuntime
 {
     private readonly ControlSystemConfig _config;
+    private readonly IControlDeviceProfileRepository _profiles;
     private readonly ControlScriptFileHost _host;
     private readonly Dictionary<Guid, ControlDeviceInstanceConfig> _devices;
     private readonly Dictionary<Guid, ControlLayerConfig> _layers;
@@ -22,6 +23,7 @@ public sealed class ControlScriptRuntime
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
         ArgumentNullException.ThrowIfNull(sourceProvider);
+        _profiles = CompositeControlDeviceProfileRepository.ForProject(config);
 
         _host = new ControlScriptFileHost(sourceProvider, instructionLimit, runtimeServices);
         _devices = config.Devices.ToDictionary(d => d.Id);
@@ -608,7 +610,8 @@ public sealed class ControlScriptRuntime
             var argument = osc.Arguments[i];
 
             if (argument.Type == OSCArgumentType.Blob
-                && string.Equals(osc.Address, "/meters", StringComparison.OrdinalIgnoreCase))
+                && string.Equals(osc.Address, "/meters", StringComparison.OrdinalIgnoreCase)
+                && ShouldDecodeMeterBlob(evt.OriginId))
             {
                 changes.AddRange(ApplyX32MeterBlobCache(deviceKeys, osc, argument, i, evt));
                 continue;
@@ -631,6 +634,15 @@ public sealed class ControlScriptRuntime
         }
 
         return changes;
+    }
+
+    private bool ShouldDecodeMeterBlob(Guid deviceInstanceId)
+    {
+        if (!_devices.TryGetValue(deviceInstanceId, out var device))
+            return false;
+
+        var profile = _profiles.FindById(device.ProfileId ?? string.Empty);
+        return ControlProfileProtocolBehavior.SupportsMeterBlobDecoding(profile);
     }
 
     private IReadOnlyList<ControlValueCacheChange> ApplyX32MeterBlobCache(

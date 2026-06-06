@@ -12,7 +12,7 @@ public sealed class MidiDeviceAliasTests
     [Fact]
     public void MidiDeviceDialog_BuildValues_TrimsAliasAndReturnsProfile()
     {
-        var profile = BuiltInControlDeviceProfileRepository.CreateBcf2000Profile();
+        var profile = BuiltInControlDeviceProfileFactory.CreateBcf2000Profile();
         var vm = new MidiDeviceDialogViewModel(
             "Edit MIDI device", "Behringer BCF2000 BCF2000 MIDI 1", "generic-midi", alias: null, isEnabled: true,
             midiProfiles: [profile]);
@@ -41,7 +41,7 @@ public sealed class MidiDeviceAliasTests
     [Fact]
     public void MidiDeviceDialog_PreselectsExistingProfile()
     {
-        var profile = BuiltInControlDeviceProfileRepository.CreateXTouchMiniProfile();
+        var profile = BuiltInControlDeviceProfileFactory.CreateXTouchMiniProfile();
         var vm = new MidiDeviceDialogViewModel("Edit", "X-Touch MINI", "behringer.xtouch-mini.mc", "xt", true, [profile]);
 
         Assert.Equal("behringer.xtouch-mini.mc", vm.SelectedProfile.ProfileId);
