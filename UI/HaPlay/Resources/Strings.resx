@@ -1782,6 +1782,21 @@
   <data name="PickMediaFileDialogTitle" xml:space="preserve">
     <value>Pick media file</value>
   </data>
+  <data name="CueNodeDefaultTextLabel" xml:space="preserve">
+    <value>Text</value>
+  </data>
+  <data name="PickImageFileDialogTitle" xml:space="preserve">
+    <value>Pick image file</value>
+  </data>
+  <data name="ImageFileTypeLabel" xml:space="preserve">
+    <value>Images</value>
+  </data>
+  <data name="AddImageButton" xml:space="preserve">
+    <value>Image</value>
+  </data>
+  <data name="AddTextButton" xml:space="preserve">
+    <value>Text</value>
+  </data>
   <data name="CueNodeDefaultActionLabel" xml:space="preserve">
     <value>Action cue</value>
   </data>

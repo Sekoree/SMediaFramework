@@ -66,11 +66,25 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     public LayerSlot AddLayer(VideoFormat sourceFormat, CueVideoPlacement placement)
     {
+        // The editor/model use a top-left origin (DestY = 0 is the top), but the composited output's
+        // vertical axis is the opposite, so a top placement would otherwise appear at the bottom. Mirror
+        // the destination rectangle's Y here (content within the rect stays upright). This is a no-op for
+        // full-frame layers (DestY 0 / DestHeight 1), so existing single-layer behaviour is unchanged.
+        var destY = 1.0 - placement.DestY - placement.DestHeight;
+
         var spec = new VideoPlacementSpec(
             placement.CompositionId.ToString("N"),
             placement.LayerIndex,
             placement.Opacity,
-            placement.Position.ToString());
+            placement.Position.ToString(),
+            placement.DestX,
+            destY,
+            placement.DestWidth,
+            placement.DestHeight,
+            placement.CropLeft,
+            placement.CropTop,
+            placement.CropRight,
+            placement.CropBottom);
         return new LayerSlot(_inner.AddLayer(sourceFormat, spec));
     }
 

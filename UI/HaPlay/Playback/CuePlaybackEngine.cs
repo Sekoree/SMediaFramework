@@ -306,7 +306,13 @@ public sealed class CuePlaybackEngine : IDisposable
             return ex.Message;
         }
 
-        var entry = new ActiveCue(cue, armed, new CancellationTokenSource(), CueClipWindow.From(cue, armed.Player.Duration));
+        // Files report their decoded length; live/held sources (image, text, NDI) report none, so fall
+        // back to the cue's custom duration. NDI/PortAudio cues leave DurationMs at 0 (unbounded), while
+        // image/text cues use it to drive a natural end.
+        var sourceDuration = armed.Player.Duration > TimeSpan.Zero
+            ? armed.Player.Duration
+            : TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs));
+        var entry = new ActiveCue(cue, armed, new CancellationTokenSource(), CueClipWindow.From(cue, sourceDuration));
         var wireErr = await WireEntryRoutesAsync(entry, list, plan, startPaused: true).ConfigureAwait(false);
         if (wireErr is not null)
         {
@@ -376,6 +382,8 @@ public sealed class CuePlaybackEngine : IDisposable
         var (source, window) = cue.Source switch
         {
             FilePlaylistItem fileItem => BuildFileClipSource(cue, fileItem, hasAudioRoutes),
+            ImagePlaylistItem imageItem => BuildImageClipSource(cue, imageItem),
+            TextPlaylistItem textItem => BuildTextClipSource(cue, textItem),
             NDIInputPlaylistItem ndiItem => BuildNdiClipSource(ndiItem),
             PortAudioInputPlaylistItem paItem => BuildPortAudioClipSource(paItem),
             _ => throw new InvalidOperationException($"Unsupported cue source: {cue.Source.GetType().Name}."),
@@ -456,6 +464,32 @@ public sealed class CuePlaybackEngine : IDisposable
                 return new LiveClipSources(input, null);
             }),
             ClipWindow.Unbounded);
+
+    // Still image / rendered text are shown as a single held frame for the cue's custom duration. Both use
+    // a held-frame live source bounded by a known clip window so a natural end fires (auto-follow works).
+    private static readonly Rational StaticFrameRate = new(30, 1);
+
+    private static (IClipMediaSource Source, ClipWindow Window) BuildImageClipSource(MediaCueNode cue, ImagePlaylistItem item) =>
+        (new HaPlayLiveClipMediaSource(
+            item.DisplayName,
+            () =>
+            {
+                var frame = FallbackImageLoader.TryBuildHoldFrameAtImageSize(item.Path, StaticFrameRate)
+                    ?? throw new InvalidOperationException($"Could not load image '{item.Path}'.");
+                return new LiveClipSources(null, new HeldFrameVideoSource(frame));
+            }),
+            CueClipWindow.From(cue, TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs))));
+
+    private static (IClipMediaSource Source, ClipWindow Window) BuildTextClipSource(MediaCueNode cue, TextPlaylistItem item) =>
+        (new HaPlayLiveClipMediaSource(
+            item.DisplayName,
+            () =>
+            {
+                var frame = TextFrameRenderer.Render(item, StaticFrameRate)
+                    ?? throw new InvalidOperationException("Could not render text frame.");
+                return new LiveClipSources(null, new HeldFrameVideoSource(frame));
+            }),
+            CueClipWindow.From(cue, TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs))));
 
     private static AudioRouteSpec ToAudioRouteSpec(CueAudioRoute route) =>
         new(
@@ -946,7 +980,7 @@ public sealed class CuePlaybackEngine : IDisposable
         || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
 
     private static bool SupportsCueEngineSource(PlaylistItem? source) =>
-        source is FilePlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
+        source is FilePlaylistItem or ImagePlaylistItem or TextPlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
 
     private static bool CanSourceSatisfyRoutePlan(PlaylistItem? source, RoutePlan plan, out string? error)
     {

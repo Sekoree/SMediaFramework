@@ -111,11 +111,18 @@ public sealed class CpuVideoCompositor : IVideoCompositor
         var srcPlane = src.Planes[0];
         var alphaMode = ResolveAlphaMode(src.AlphaMode);
 
-        // Compute destination AABB from the four transformed corners, clipped to canvas.
-        var (x0, y0) = layer.Transform.Apply(0, 0);
-        var (x1, y1) = layer.Transform.Apply(srcW, 0);
-        var (x2, y2) = layer.Transform.Apply(0, srcH);
-        var (x3, y3) = layer.Transform.Apply(srcW, srcH);
+        // Source crop in pixels (defaults to the whole frame). Only this sub-rectangle is sampled/drawn.
+        var crop = layer.SourceCrop.Clamped();
+        var cropX0 = crop.X0 * srcW;
+        var cropY0 = crop.Y0 * srcH;
+        var cropX1 = crop.X1 * srcW;
+        var cropY1 = crop.Y1 * srcH;
+
+        // Compute destination AABB from the four transformed CROP corners, clipped to canvas.
+        var (x0, y0) = layer.Transform.Apply(cropX0, cropY0);
+        var (x1, y1) = layer.Transform.Apply(cropX1, cropY0);
+        var (x2, y2) = layer.Transform.Apply(cropX0, cropY1);
+        var (x3, y3) = layer.Transform.Apply(cropX1, cropY1);
         var minX = (int)MathF.Floor(MathF.Min(MathF.Min(x0, x1), MathF.Min(x2, x3)));
         var minY = (int)MathF.Floor(MathF.Min(MathF.Min(y0, y1), MathF.Min(y2, y3)));
         var maxX = (int)MathF.Ceiling(MathF.Max(MathF.Max(x0, x1), MathF.Max(x2, x3)));
@@ -141,6 +148,10 @@ public sealed class CpuVideoCompositor : IVideoCompositor
             {
                 var dxCenter = dx + 0.5f;
                 var (sxf, syf) = inv.Apply(dxCenter, dyCenter);
+
+                // Crop gate: skip dest pixels whose source coordinate lies outside the crop sub-rect.
+                // When the crop is the full frame this matches the source bounds exactly (no behaviour change).
+                if (sxf < cropX0 || sxf >= cropX1 || syf < cropY0 || syf >= cropY1) continue;
 
                 byte b, g, r, a;
                 switch (mode)

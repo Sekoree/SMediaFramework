@@ -76,6 +76,7 @@ public enum CueLayerPosition
     Center,
     FillWidth,
     FillHeight,
+    Stretch,
 }
 
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
@@ -135,6 +136,12 @@ public sealed record MediaCueNode : CueNode
     public int SourceFrameRateNum { get; init; }
 
     public int SourceFrameRateDen { get; init; }
+
+    /// <summary>Probed source video pixel dimensions. 0 when unknown / no video. Used to size a new
+    /// composition placement to the source (actual size, scaled down to fit the canvas).</summary>
+    public int SourceVideoWidth { get; init; }
+
+    public int SourceVideoHeight { get; init; }
 
     public bool Loop { get; init; }
 
@@ -199,9 +206,29 @@ public sealed record CueVideoPlacement
 
     public int LayerIndex { get; init; }
 
+    /// <summary>Fit of the (cropped) source within its destination rectangle.</summary>
     public CueLayerPosition Position { get; init; } = CueLayerPosition.Cover;
 
     public double Opacity { get; init; } = 1.0;
+
+    /// <summary>Destination rectangle on the composition canvas, normalized to [0,1].
+    /// Defaults to the full canvas — older cues load unchanged.</summary>
+    public double DestX { get; init; }
+
+    public double DestY { get; init; }
+
+    public double DestWidth { get; init; } = 1.0;
+
+    public double DestHeight { get; init; } = 1.0;
+
+    /// <summary>Per-edge source crop insets as fractions [0,1). Default 0 = no trim.</summary>
+    public double CropLeft { get; init; }
+
+    public double CropTop { get; init; }
+
+    public double CropRight { get; init; }
+
+    public double CropBottom { get; init; }
 }
 
 public enum CueTriggerMode
@@ -250,4 +277,6 @@ public enum CueActionKind
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
+[JsonSerializable(typeof(ImagePlaylistItem))]
+[JsonSerializable(typeof(TextPlaylistItem))]
 internal partial class CueListJsonContext : JsonSerializerContext;

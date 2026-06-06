@@ -194,7 +194,10 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
                     _acquiredScratch.Add(slot);
-                    _layerScratch.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode));
+                    _layerScratch.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode)
+                    {
+                        SourceCrop = slot.SourceCrop,
+                    });
                 }
 
                 // When the caller drives composition from a master timeline (the declarative
@@ -258,6 +261,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private float _opacity = 1f;
         private LayerTransform2D _transform = LayerTransform2D.Identity;
         private BlendMode _blendMode = BlendMode.SourceOver;
+        private RectNormalized _sourceCrop = RectNormalized.Full;
         private bool _closed;
 
         internal Slot(string id, IReadOnlyList<PixelFormat> accepted)
@@ -291,6 +295,13 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             get { lock (_gate) return _blendMode; }
             set { lock (_gate) _blendMode = value; }
+        }
+
+        /// <summary>Normalized source crop applied before compositing. Animator-friendly; read on every Composite.</summary>
+        public RectNormalized SourceCrop
+        {
+            get { lock (_gate) return _sourceCrop; }
+            set { lock (_gate) _sourceCrop = value; }
         }
 
         /// <summary>Which submitted frame is exposed at composite time. Default

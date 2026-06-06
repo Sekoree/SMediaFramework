@@ -556,11 +556,22 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         public void ApplyPlacement()
         {
-            var config = new LayerConfig(
-                MapPosition(_placement.Placement),
-                Scale: 1f,
-                Opacity: (float)Math.Clamp(_placement.Opacity, 0.0, 1.0));
-            RawSlot.Transform = config.ToTransform(_source, _owner._canvasFormat);
+            var destRect = new RectNormalized(
+                (float)_placement.DestX,
+                (float)_placement.DestY,
+                (float)(_placement.DestX + _placement.DestWidth),
+                (float)(_placement.DestY + _placement.DestHeight));
+            var (transform, crop) = PlacementResolver.Resolve(
+                destRect,
+                MapFit(_placement.Placement),
+                (float)_placement.CropLeft,
+                (float)_placement.CropTop,
+                (float)_placement.CropRight,
+                (float)_placement.CropBottom,
+                _source,
+                _owner._canvasFormat);
+            RawSlot.Transform = transform;
+            RawSlot.SourceCrop = crop;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
         }
@@ -571,11 +582,14 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _owner.RemoveLayer(this);
         }
 
-        private static LayerPosition MapPosition(string? placement) =>
-            string.Equals(placement, "Letterbox", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(placement, "Center", StringComparison.OrdinalIgnoreCase)
-                ? LayerPosition.Center
-                : LayerPosition.Cover;
+        private static PlacementFit MapFit(string? placement) => placement?.ToLowerInvariant() switch
+        {
+            "letterbox" or "contain" or "center" => PlacementFit.Contain,
+            "stretch" => PlacementFit.Stretch,
+            "fillwidth" => PlacementFit.FillWidth,
+            "fillheight" => PlacementFit.FillHeight,
+            _ => PlacementFit.Cover,
+        };
     }
 }
 

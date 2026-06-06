@@ -9,6 +9,29 @@ namespace HaPlay.Playback;
 
 internal static class FallbackImageLoader
 {
+    /// <summary>Reads an image's pixel dimensions without decoding the whole file. Returns false on
+    /// any failure (missing / unreadable / unsupported). Used to size a still-image cue's placement.</summary>
+    public static bool TryGetImageSize(string path, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return false;
+        try
+        {
+            var info = Image.Identify(path);
+            if (info is null || info.Width <= 0 || info.Height <= 0)
+                return false;
+            width = info.Width;
+            height = info.Height;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Builds a CPU-backed template frame matching <paramref name="target"/> (pixel format + size).
     /// The image is scaled to <strong>fit inside</strong> the target rectangle (aspect preserved) and padded with black

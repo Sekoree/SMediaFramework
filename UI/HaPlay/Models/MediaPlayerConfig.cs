@@ -209,4 +209,6 @@ public enum HeadphonesCueTapPoint
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
+[JsonSerializable(typeof(ImagePlaylistItem))]
+[JsonSerializable(typeof(TextPlaylistItem))]
 internal partial class MediaPlayerConfigJsonContext : JsonSerializerContext;

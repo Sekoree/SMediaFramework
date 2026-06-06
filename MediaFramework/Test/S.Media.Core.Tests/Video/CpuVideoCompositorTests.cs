@@ -33,6 +33,42 @@ public sealed class CpuVideoCompositorTests
     }
 
     [Fact]
+    public void SourceCrop_OnlyDrawsCroppedRegion()
+    {
+        // 4x4 solid red source cropped to its RIGHT half, identity transform into a 4x4 canvas.
+        // Only dest columns 2-3 should be painted; columns 0-1 stay untouched (transparent).
+        var srcPlane = MakeSolid(4, 4, 0, 0, 255, 255);
+        using var srcFrame = new VideoFrame(TimeSpan.Zero, Bgra32_4x4, srcPlane, 16, release: null);
+        using var c = new CpuVideoCompositor(Bgra32_4x4);
+        var layer = new CompositorLayer(srcFrame, LayerTransform2D.Identity, 1f, BlendMode.Source)
+        {
+            SourceCrop = new RectNormalized(0.5f, 0f, 1f, 1f),
+        };
+        var result = c.Composite([layer], TimeSpan.Zero);
+        try
+        {
+            var span = result.Planes[0].Span;
+            for (var y = 0; y < 4; y++)
+            {
+                for (var x = 0; x < 4; x++)
+                {
+                    var idx = (y * 4 + x) * 4;
+                    if (x >= 2)
+                    {
+                        Assert.Equal(255, span[idx + 2]); // red
+                        Assert.Equal(255, span[idx + 3]); // opaque
+                    }
+                    else
+                    {
+                        Assert.Equal(0, span[idx + 3]); // left half never drawn
+                    }
+                }
+            }
+        }
+        finally { result.Dispose(); }
+    }
+
+    [Fact]
     public void TwoLayers_SourceOver_HalfOpacityTop_BlendsToward()
     {
         // Base layer: solid blue (255,0,0,255). Top: solid red at 50% opacity over it.

@@ -9,11 +9,16 @@ in vec2 vUV;
 uniform sampler2D uLayer;
 uniform float uOpacity;
 uniform int uBlendKind;
+// 1 = flip the sampled V coordinate. The YUV pre-pass path bakes a vertical flip (yUvFlip) into its
+// intermediate texture, so a direct BGRA32 upload (no pre-pass) is vertically opposite; it sets this
+// to 1 so both paths composite right-side-up. 0 = sample as-is (YUV pre-pass / already-flipped).
+uniform float uLayerFlipV;
 out vec4 fragColor;
 
 void main()
 {
-    vec4 src = texture(uLayer, vUV);
+    vec2 st = vec2(vUV.x, mix(vUV.y, 1.0 - vUV.y, uLayerFlipV));
+    vec4 src = texture(uLayer, st);
     if (uBlendKind == 1)
     {
         // Multiply: emit a multiplier color. Layer alpha * opacity acts as the blend weight --

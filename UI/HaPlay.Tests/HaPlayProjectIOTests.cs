@@ -514,6 +514,55 @@ public sealed class HaPlayProjectIOTests
     }
 
     [Fact]
+    public async Task CueListIO_SaveLoad_RoundTripsImageAndTextSources()
+    {
+        var cueList = new CueList
+        {
+            Name = "Static cues",
+            Nodes =
+            {
+                new MediaCueNode { Number = "1", Label = "Slate", DurationMs = 8000, Source = new ImagePlaylistItem("/show/slate.png") },
+                new MediaCueNode
+                {
+                    Number = "2",
+                    Label = "Title",
+                    DurationMs = 6000,
+                    Source = new TextPlaylistItem
+                    {
+                        Text = "Welcome", FontFamily = "Inter", FontSizePx = 120, Bold = true,
+                        ColorArgb = 0xFFFF0000, BackgroundArgb = 0x80000000, HAlign = TextAlignH.Left, VAlign = TextAlignV.Bottom,
+                    },
+                },
+            },
+        };
+
+        var tmp = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + "." + CueListIO.FileExtension);
+        try
+        {
+            await CueListIO.SaveAsync(cueList, tmp);
+            var loaded = await CueListIO.LoadAsync(tmp);
+
+            var image = Assert.IsType<ImagePlaylistItem>(Assert.IsType<MediaCueNode>(loaded.Nodes[0]).Source);
+            Assert.Equal("/show/slate.png", image.Path);
+            Assert.Equal(8000, ((MediaCueNode)loaded.Nodes[0]).DurationMs);
+
+            var text = Assert.IsType<TextPlaylistItem>(Assert.IsType<MediaCueNode>(loaded.Nodes[1]).Source);
+            Assert.Equal("Welcome", text.Text);
+            Assert.True(text.Bold);
+            Assert.Equal(120, text.FontSizePx);
+            Assert.Equal(0xFFFF0000u, text.ColorArgb);
+            Assert.Equal(0x80000000u, text.BackgroundArgb);
+            Assert.Equal(TextAlignH.Left, text.HAlign);
+            Assert.Equal(TextAlignV.Bottom, text.VAlign);
+        }
+        finally
+        {
+            if (File.Exists(tmp))
+                File.Delete(tmp);
+        }
+    }
+
+    [Fact]
     public async Task LoadAsync_FutureSchemaVersion_ThrowsUnsupportedSchemaVersion()
     {
         // Hand-crafted JSON simulating a project written by a future build.

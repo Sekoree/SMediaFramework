@@ -14,6 +14,8 @@ namespace HaPlay.Models;
 [JsonDerivedType(typeof(FilePlaylistItem), typeDiscriminator: "file")]
 [JsonDerivedType(typeof(NDIInputPlaylistItem), typeDiscriminator: "ndi-input")]
 [JsonDerivedType(typeof(PortAudioInputPlaylistItem), typeDiscriminator: "pa-input")]
+[JsonDerivedType(typeof(ImagePlaylistItem), typeDiscriminator: "image")]
+[JsonDerivedType(typeof(TextPlaylistItem), typeDiscriminator: "text")]
 public abstract record PlaylistItem
 {
     /// <summary>Stable per-instance identity. Lets the same underlying source appear twice in a
@@ -42,6 +44,87 @@ public sealed record FilePlaylistItem(string Path) : PlaylistItem
         string.IsNullOrEmpty(Path) ? "(empty)" : System.IO.Path.GetFileName(Path);
     public override bool IsLive => false;
     public override string ToolTip => Path;
+}
+
+public enum TextAlignH
+{
+    Left,
+    Center,
+    Right,
+}
+
+public enum TextAlignV
+{
+    Top,
+    Middle,
+    Bottom,
+}
+
+/// <summary>A still image shown as a cue for the cue's custom duration (a single held frame). Distinct
+/// from <see cref="FilePlaylistItem"/> so the engine holds the frame rather than decoding it as video.</summary>
+public sealed record ImagePlaylistItem(string Path) : PlaylistItem
+{
+    public override string DisplayName =>
+        string.IsNullOrEmpty(Path) ? "(image)" : System.IO.Path.GetFileName(Path);
+    public override bool IsLive => false;
+    public override string ToolTip => Path;
+    public override string KindGlyph => "🖼";
+}
+
+/// <summary>A rendered text / title card shown as a cue for the cue's custom duration (a single held
+/// frame). Rendered to a BGRA frame by <c>TextFrameRenderer</c>; placeable on the composition like any
+/// media cue. Colours are 0xAARRGGBB.</summary>
+public sealed record TextPlaylistItem : PlaylistItem
+{
+    public string Text { get; init; } = "Text";
+
+    public string FontFamily { get; init; } = "Inter";
+
+    public double FontSizePx { get; init; } = 96;
+
+    public bool Bold { get; init; }
+
+    public bool Italic { get; init; }
+
+    /// <summary>Text fill colour (0xAARRGGBB). Default opaque white.</summary>
+    public uint ColorArgb { get; init; } = 0xFFFFFFFF;
+
+    /// <summary>Background box colour (0xAARRGGBB). Default fully transparent (no box).</summary>
+    public uint BackgroundArgb { get; init; } = 0x00000000;
+
+    /// <summary>Outline colour (0xAARRGGBB). Default opaque black; only drawn when width &gt; 0.</summary>
+    public uint OutlineArgb { get; init; } = 0xFF000000;
+
+    public double OutlineWidthPx { get; init; }
+
+    public TextAlignH HAlign { get; init; } = TextAlignH.Center;
+
+    public TextAlignV VAlign { get; init; } = TextAlignV.Middle;
+
+    /// <summary>Word-wrap width as a fraction [0,1] of the canvas width. 0 = no wrap (single line grows).</summary>
+    public double WrapWidthFraction { get; init; } = 0.9;
+
+    public double PaddingPx { get; init; } = 24;
+
+    /// <summary>Render canvas size. Defaults to 1080p; the placement system scales it onto the composition.</summary>
+    public int CanvasWidth { get; init; } = 1920;
+
+    public int CanvasHeight { get; init; } = 1080;
+
+    public override string DisplayName
+    {
+        get
+        {
+            var trimmed = (Text ?? string.Empty).Trim();
+            if (trimmed.Length == 0) return "(text)";
+            var firstLine = trimmed.Split('\n', 2)[0];
+            return firstLine.Length > 24 ? firstLine[..24] + "…" : firstLine;
+        }
+    }
+
+    public override bool IsLive => false;
+    public override string ToolTip => $"Text · {DisplayName}";
+    public override string KindGlyph => "🅣";
 }
 
 /// <summary>NDI receiver item — identified by the NDI source name. Manual-name items load even when

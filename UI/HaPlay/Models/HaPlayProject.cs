@@ -74,6 +74,8 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(FilePlaylistItem))]
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
+[JsonSerializable(typeof(ImagePlaylistItem))]
+[JsonSerializable(typeof(TextPlaylistItem))]
 [JsonSerializable(typeof(ControlGraphConfig))]
 [JsonSerializable(typeof(ControlNodeConfig))]
 [JsonSerializable(typeof(ControlConnectionConfig))]

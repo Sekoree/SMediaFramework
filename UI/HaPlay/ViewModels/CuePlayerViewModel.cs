@@ -265,12 +265,57 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     [ObservableProperty]
     private double _opacity = 1.0;
 
+    // Destination rectangle on the composition canvas, normalized [0,1]. Defaults to the full canvas.
+    [ObservableProperty]
+    private double _destX;
+
+    [ObservableProperty]
+    private double _destY;
+
+    [ObservableProperty]
+    private double _destWidth = 1.0;
+
+    [ObservableProperty]
+    private double _destHeight = 1.0;
+
+    // Per-edge source crop insets, normalized [0,1). Default 0 = no trim.
+    [ObservableProperty]
+    private double _cropLeft;
+
+    [ObservableProperty]
+    private double _cropTop;
+
+    [ObservableProperty]
+    private double _cropRight;
+
+    [ObservableProperty]
+    private double _cropBottom;
+
+    /// <summary>Sets the destination rectangle, clamped to the canvas with a sane minimum size.</summary>
+    public void SetDestRect(double x, double y, double width, double height)
+    {
+        width = Math.Clamp(width, 0.02, 1.0);
+        height = Math.Clamp(height, 0.02, 1.0);
+        DestX = Math.Clamp(x, 0.0, 1.0 - width);
+        DestY = Math.Clamp(y, 0.0, 1.0 - height);
+        DestWidth = width;
+        DestHeight = height;
+    }
+
     public CueVideoPlacement ToModel() => new()
     {
         CompositionId = CompositionId,
         LayerIndex = LayerIndex,
         Position = Position,
         Opacity = Math.Clamp(Opacity, 0.0, 1.0),
+        DestX = Math.Clamp(DestX, 0.0, 1.0),
+        DestY = Math.Clamp(DestY, 0.0, 1.0),
+        DestWidth = Math.Clamp(DestWidth, 0.0, 1.0),
+        DestHeight = Math.Clamp(DestHeight, 0.0, 1.0),
+        CropLeft = Math.Clamp(CropLeft, 0.0, 0.99),
+        CropTop = Math.Clamp(CropTop, 0.0, 0.99),
+        CropRight = Math.Clamp(CropRight, 0.0, 0.99),
+        CropBottom = Math.Clamp(CropBottom, 0.0, 0.99),
     };
 
     public static CueVideoPlacementViewModel FromModel(CueVideoPlacement model) => new()
@@ -279,6 +324,14 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         LayerIndex = model.LayerIndex,
         Position = model.Position,
         Opacity = model.Opacity,
+        DestX = model.DestX,
+        DestY = model.DestY,
+        DestWidth = model.DestWidth <= 0 ? 1.0 : model.DestWidth,
+        DestHeight = model.DestHeight <= 0 ? 1.0 : model.DestHeight,
+        CropLeft = model.CropLeft,
+        CropTop = model.CropTop,
+        CropRight = model.CropRight,
+        CropBottom = model.CropBottom,
     };
 }
 
@@ -334,6 +387,123 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private bool _sourceHasVideo;
 
+    public bool IsTextCue => MediaSourceItem is TextPlaylistItem;
+
+    public bool IsImageCue => MediaSourceItem is ImagePlaylistItem;
+
+    private TextPlaylistItem? TextSource => MediaSourceItem as TextPlaylistItem;
+
+    // Text-style edits replace the immutable TextPlaylistItem source; OnMediaSourceItemChanged re-raises
+    // all text properties so the editor and the live (re-rendered) frame both follow.
+    private void MutateText(Func<TextPlaylistItem, TextPlaylistItem> update)
+    {
+        if (MediaSourceItem is TextPlaylistItem t)
+            MediaSourceItem = update(t);
+    }
+
+    partial void OnMediaSourceItemChanged(PlaylistItem? value)
+    {
+        _ = value;
+        OnPropertyChanged(nameof(IsTextCue));
+        OnPropertyChanged(nameof(IsImageCue));
+        OnPropertyChanged(nameof(TextContent));
+        OnPropertyChanged(nameof(TextFontFamily));
+        OnPropertyChanged(nameof(TextFontSizePx));
+        OnPropertyChanged(nameof(TextBold));
+        OnPropertyChanged(nameof(TextItalic));
+        OnPropertyChanged(nameof(TextColorHex));
+        OnPropertyChanged(nameof(TextBackgroundHex));
+        OnPropertyChanged(nameof(TextOutlineHex));
+        OnPropertyChanged(nameof(TextOutlineWidthPx));
+        OnPropertyChanged(nameof(TextHAlign));
+        OnPropertyChanged(nameof(TextVAlign));
+        OnPropertyChanged(nameof(TextWrapWidthFraction));
+    }
+
+    public string TextContent
+    {
+        get => TextSource?.Text ?? string.Empty;
+        set { if (TextSource is { } t && t.Text != value) MutateText(_ => _ with { Text = value ?? string.Empty }); }
+    }
+
+    public string TextFontFamily
+    {
+        get => TextSource?.FontFamily ?? "Inter";
+        set { if (TextSource is { } t && t.FontFamily != value && !string.IsNullOrWhiteSpace(value)) MutateText(_ => _ with { FontFamily = value }); }
+    }
+
+    public double TextFontSizePx
+    {
+        get => TextSource?.FontSizePx ?? 96;
+        set { if (TextSource is { } t && Math.Abs(t.FontSizePx - value) > 0.001) MutateText(_ => _ with { FontSizePx = value }); }
+    }
+
+    public bool TextBold
+    {
+        get => TextSource?.Bold ?? false;
+        set { if (TextSource is { } t && t.Bold != value) MutateText(_ => _ with { Bold = value }); }
+    }
+
+    public bool TextItalic
+    {
+        get => TextSource?.Italic ?? false;
+        set { if (TextSource is { } t && t.Italic != value) MutateText(_ => _ with { Italic = value }); }
+    }
+
+    public string TextColorHex
+    {
+        get => ToHex(TextSource?.ColorArgb ?? 0xFFFFFFFF);
+        set { if (TextSource is { } t) MutateText(_ => _ with { ColorArgb = ParseHex(value, t.ColorArgb) }); }
+    }
+
+    public string TextBackgroundHex
+    {
+        get => ToHex(TextSource?.BackgroundArgb ?? 0);
+        set { if (TextSource is { } t) MutateText(_ => _ with { BackgroundArgb = ParseHex(value, t.BackgroundArgb) }); }
+    }
+
+    public string TextOutlineHex
+    {
+        get => ToHex(TextSource?.OutlineArgb ?? 0xFF000000);
+        set { if (TextSource is { } t) MutateText(_ => _ with { OutlineArgb = ParseHex(value, t.OutlineArgb) }); }
+    }
+
+    public double TextOutlineWidthPx
+    {
+        get => TextSource?.OutlineWidthPx ?? 0;
+        set { if (TextSource is { } t && Math.Abs(t.OutlineWidthPx - value) > 0.001) MutateText(_ => _ with { OutlineWidthPx = value }); }
+    }
+
+    public TextAlignH TextHAlign
+    {
+        get => TextSource?.HAlign ?? TextAlignH.Center;
+        set { if (TextSource is { } t && t.HAlign != value) MutateText(_ => _ with { HAlign = value }); }
+    }
+
+    public TextAlignV TextVAlign
+    {
+        get => TextSource?.VAlign ?? TextAlignV.Middle;
+        set { if (TextSource is { } t && t.VAlign != value) MutateText(_ => _ with { VAlign = value }); }
+    }
+
+    public double TextWrapWidthFraction
+    {
+        get => TextSource?.WrapWidthFraction ?? 0.9;
+        set { if (TextSource is { } t && Math.Abs(t.WrapWidthFraction - value) > 0.001) MutateText(_ => _ with { WrapWidthFraction = Math.Clamp(value, 0, 1) }); }
+    }
+
+    private static string ToHex(uint argb) => $"#{argb:X8}";
+
+    private static uint ParseHex(string? value, uint fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return fallback;
+        var s = value.Trim().TrimStart('#');
+        if (s.Length == 6) s = "FF" + s; // assume opaque when alpha omitted
+        return uint.TryParse(s, System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out var argb)
+            ? argb
+            : fallback;
+    }
+
     [ObservableProperty]
     private bool _sourceHasAudio;
 
@@ -348,6 +518,13 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     [ObservableProperty]
     private int _sourceFrameRateDen;
+
+    // Probed source video pixel dimensions (0 = unknown / no video). Used to size a new placement.
+    [ObservableProperty]
+    private int _sourceVideoWidth;
+
+    [ObservableProperty]
+    private int _sourceVideoHeight;
 
     [ObservableProperty]
     private CueRowStatus _rowStatus = CueRowStatus.Idle;
@@ -695,6 +872,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceVideoIsAttachedPicture = m.VideoIsAttachedPicture,
                     SourceFrameRateNum = m.SourceFrameRateNum,
                     SourceFrameRateDen = m.SourceFrameRateDen,
+                    SourceVideoWidth = m.SourceVideoWidth,
+                    SourceVideoHeight = m.SourceVideoHeight,
                     StartOffsetMs = m.StartOffsetMs,
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
@@ -776,6 +955,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 VideoIsAttachedPicture = SourceVideoIsAttachedPicture,
                 SourceFrameRateNum = Math.Max(0, SourceFrameRateNum),
                 SourceFrameRateDen = Math.Max(0, SourceFrameRateDen),
+                SourceVideoWidth = Math.Max(0, SourceVideoWidth),
+                SourceVideoHeight = Math.Max(0, SourceVideoHeight),
                 StartOffsetMs = Math.Max(0, StartOffsetMs),
                 EndOffsetMs = Math.Max(0, EndOffsetMs),
                 Loop = Loop,
@@ -1093,6 +1274,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     public IReadOnlyList<CueGroupFireMode> GroupFireModes { get; } = Enum.GetValues<CueGroupFireMode>();
     public IReadOnlyList<CueLayerPosition> LayerPositions { get; } = Enum.GetValues<CueLayerPosition>();
 
+    public IReadOnlyList<TextAlignH> TextHAlignOptions { get; } = Enum.GetValues<TextAlignH>();
+
+    public IReadOnlyList<TextAlignV> TextVAlignOptions { get; } = Enum.GetValues<TextAlignV>();
+
     [ObservableProperty]
     private CueListEditorViewModel? _selectedCueList;
 
@@ -1205,7 +1390,25 @@ public partial class CuePlayerViewModel : ViewModelBase
     public ObservableCollection<CueVideoPlacementViewModel> VisibleVideoPlacements =>
         SelectedCueNode is { Kind: CueNodeKind.Media } node ? node.VideoPlacements : _emptyVideoPlacements;
 
+    /// <summary>Aspect ratio (w/h) of the composition the placement editor canvas should mirror.</summary>
+    public double PlacementCanvasAspect
+    {
+        get
+        {
+            var comp = SelectedVideoPlacement is { } p
+                ? SelectedCueList?.Compositions.FirstOrDefault(c => c.Id == p.CompositionId)
+                : null;
+            comp ??= SelectedComposition ?? SelectedCueList?.Compositions.FirstOrDefault();
+            return comp is { Width: > 0, Height: > 0 } ? (double)comp.Width / comp.Height : 16.0 / 9.0;
+        }
+    }
+
     public bool HasSelectedMediaCue => SelectedCueNode?.Kind == CueNodeKind.Media;
+    public bool HasSelectedTextCue => SelectedCueNode is { Kind: CueNodeKind.Media } media && media.IsTextCue;
+
+    /// <summary>Image/text cues have no inherent length, so the operator sets the hold duration directly.</summary>
+    public bool HasSelectedStaticCue =>
+        SelectedCueNode is { Kind: CueNodeKind.Media } media && (media.IsImageCue || media.IsTextCue);
     public bool HasSelectedActionCue => SelectedCueNode?.Kind == CueNodeKind.Action;
     public bool HasSelectedCommentCue => SelectedCueNode?.Kind == CueNodeKind.Comment;
     public bool HasSelectedGroupCue => SelectedCueNode?.Kind == CueNodeKind.Group;
@@ -1326,6 +1529,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.SourceFrameRateDen))
         {
             OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
+        OnPropertyChanged(nameof(HasSelectedTextCue));
+        OnPropertyChanged(nameof(HasSelectedStaticCue));
             OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
             OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
             OnPropertyChanged(nameof(IsPreviewingSelectedCue));
@@ -1382,7 +1587,9 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.EndOffsetMs)
             or nameof(CueNodeViewModel.Loop)
             or nameof(CueNodeViewModel.EndBehavior)
-            or nameof(CueNodeViewModel.DisablePreRoll))
+            or nameof(CueNodeViewModel.DisablePreRoll)
+            or nameof(CueNodeViewModel.DurationMs)        // image/text duration drives the hold window
+            or nameof(CueNodeViewModel.MediaSourceItem))  // text restyle replaces the source -> re-render
             OnWatchedCueEdited();
     }
 
@@ -1511,6 +1718,8 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(VisibleVideoPlacements));
         OnPropertyChanged(nameof(HasSelectedMediaCue));
         OnPropertyChanged(nameof(HasSelectedMediaCueWithVideo));
+        OnPropertyChanged(nameof(HasSelectedTextCue));
+        OnPropertyChanged(nameof(HasSelectedStaticCue));
         OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
         OnPropertyChanged(nameof(HasSelectedMediaCueWithAttachedPictureOnly));
         OnPropertyChanged(nameof(HasSelectedActionCue));
@@ -1555,6 +1764,9 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         _ = value;
         RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
+        ApplyPlacementLayoutCommand.NotifyCanExecuteChanged();
+        ApplyCropPresetCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(PlacementCanvasAspect));
         RefreshVideoFrameRateMismatchWarning();
     }
 
@@ -2032,6 +2244,7 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         _ = value;
         RemoveCompositionCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(PlacementCanvasAspect));
     }
 
     partial void OnSelectedVideoOutputChanged(CueVideoOutputBindingViewModel? value)
@@ -2167,10 +2380,18 @@ public partial class CuePlayerViewModel : ViewModelBase
         CueVideoPlacementViewModel? lastOnPrimary = null;
         foreach (var media in targets)
         {
+            // Default the box to the source's size (actual size, scaled down to fit the canvas),
+            // centered — so a new layer lands at the video's aspect instead of stretched full-frame.
+            var (fx, fy, fw, fh) = SourceFitRect(
+                media.SourceVideoWidth, media.SourceVideoHeight, firstComp?.Width ?? 0, firstComp?.Height ?? 0);
             var placement = new CueVideoPlacementViewModel
             {
                 CompositionId = firstComp?.Id ?? Guid.Empty,
                 LayerIndex = media.VideoPlacements.Count,
+                DestX = fx,
+                DestY = fy,
+                DestWidth = fw,
+                DestHeight = fh,
             };
             media.VideoPlacements.Add(placement);
             if (ReferenceEquals(media, SelectedCueNode))
@@ -2210,6 +2431,72 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool CanRemoveVideoPlacement() =>
         SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedVideoPlacement is not null;
+
+    /// <summary>Quick destination-rect layouts for the selected placement (full / halves / quadrants).</summary>
+    [RelayCommand(CanExecute = nameof(CanEditSelectedPlacement))]
+    private void ApplyPlacementLayout(string? preset)
+    {
+        if (SelectedVideoPlacement is not { } p) return;
+        switch (preset)
+        {
+            case "fit":
+            {
+                var comp = SelectedCueList?.Compositions.FirstOrDefault(c => c.Id == p.CompositionId)
+                    ?? SelectedCueList?.Compositions.FirstOrDefault();
+                var node = SelectedCueNode;
+                var (fx, fy, fw, fh) = SourceFitRect(
+                    node?.SourceVideoWidth ?? 0, node?.SourceVideoHeight ?? 0, comp?.Width ?? 0, comp?.Height ?? 0);
+                p.SetDestRect(fx, fy, fw, fh);
+                break;
+            }
+            case "full": p.SetDestRect(0, 0, 1, 1); break;
+            case "left": p.SetDestRect(0, 0, 0.5, 1); break;
+            case "right": p.SetDestRect(0.5, 0, 0.5, 1); break;
+            case "top": p.SetDestRect(0, 0, 1, 0.5); break;
+            case "bottom": p.SetDestRect(0, 0.5, 1, 0.5); break;
+            case "tl": p.SetDestRect(0, 0, 0.5, 0.5); break;
+            case "tr": p.SetDestRect(0.5, 0, 0.5, 0.5); break;
+            case "bl": p.SetDestRect(0, 0.5, 0.5, 0.5); break;
+            case "br": p.SetDestRect(0.5, 0.5, 0.5, 0.5); break;
+            default: return;
+        }
+        SuggestPreRollRefresh();
+    }
+
+    /// <summary>Normalized destination rect that places a <paramref name="srcW"/>×<paramref name="srcH"/>
+    /// source on a <paramref name="canvasW"/>×<paramref name="canvasH"/> canvas at its own size, centered —
+    /// scaled down (aspect preserved) only when the source is larger than the canvas, never scaled up.
+    /// Falls back to the full frame when any dimension is unknown.</summary>
+    internal static (double X, double Y, double W, double H) SourceFitRect(int srcW, int srcH, int canvasW, int canvasH)
+    {
+        if (srcW <= 0 || srcH <= 0 || canvasW <= 0 || canvasH <= 0)
+            return (0.0, 0.0, 1.0, 1.0);
+
+        var scale = Math.Min(1.0, Math.Min((double)canvasW / srcW, (double)canvasH / srcH));
+        var w = Math.Clamp(srcW * scale / canvasW, 0.02, 1.0);
+        var h = Math.Clamp(srcH * scale / canvasH, 0.02, 1.0);
+        var x = Math.Clamp((1.0 - w) / 2.0, 0.0, 1.0 - w);
+        var y = Math.Clamp((1.0 - h) / 2.0, 0.0, 1.0 - h);
+        return (x, y, w, h);
+    }
+
+    /// <summary>Quick source-crop presets for the selected placement.</summary>
+    [RelayCommand(CanExecute = nameof(CanEditSelectedPlacement))]
+    private void ApplyCropPreset(string? preset)
+    {
+        if (SelectedVideoPlacement is not { } p) return;
+        switch (preset)
+        {
+            case "none": p.CropLeft = p.CropTop = p.CropRight = p.CropBottom = 0; break;
+            case "centerH": p.CropTop = p.CropBottom = 0; p.CropLeft = p.CropRight = 0.25; break; // centre 50% wide
+            case "centerV": p.CropLeft = p.CropRight = 0; p.CropTop = p.CropBottom = 0.25; break; // centre 50% tall
+            case "center": p.CropLeft = p.CropTop = p.CropRight = p.CropBottom = 0.25; break;      // centre 50% box
+            default: return;
+        }
+        SuggestPreRollRefresh();
+    }
+
+    private bool CanEditSelectedPlacement() => SelectedVideoPlacement is not null;
 
     [RelayCommand]
     private void AddGroup()
@@ -2355,6 +2642,84 @@ public partial class CuePlayerViewModel : ViewModelBase
         StatusMessage = null;
     }
 
+    private const int StaticCueDefaultDurationMs = 5000;
+
+    /// <summary>Adds a still-image cue (held for the cue's custom duration). Default 5 s, editable in the drawer.</summary>
+    [RelayCommand]
+    private async Task AddImageCueAsync()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var path = await PickImageFilePathAsync();
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var (imgW, imgH) = await Task.Run(() =>
+            FallbackImageLoader.TryGetImageSize(path, out var w, out var h) ? (w, h) : (0, 0));
+
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = Path.GetFileNameWithoutExtension(path),
+            MediaSourceItem = new ImagePlaylistItem(path),
+            SourceOrAction = path,
+            SourceHasVideo = true,
+            SourceVideoWidth = imgW,
+            SourceVideoHeight = imgH,
+            DurationMs = StaticCueDefaultDurationMs,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
+    /// <summary>Adds an editable text/title cue (rendered, held for the cue's custom duration). Default 5 s.</summary>
+    [RelayCommand]
+    private void AddTextCue()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+
+        var text = new TextPlaylistItem { Text = Strings.CueNodeDefaultTextLabel };
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = text.DisplayName,
+            MediaSourceItem = text,
+            SourceOrAction = text.DisplayName,
+            SourceHasVideo = true,
+            SourceVideoWidth = text.CanvasWidth,
+            SourceVideoHeight = text.CanvasHeight,
+            DurationMs = StaticCueDefaultDurationMs,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = null;
+    }
+
+    private static async Task<string?> PickImageFilePathAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return null;
+        var opts = new FilePickerOpenOptions
+        {
+            Title = Strings.PickImageFileDialogTitle,
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType(Strings.ImageFileTypeLabel) { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.gif", "*.webp", "*.tiff"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
+            ],
+        };
+        var picked = await owner.StorageProvider.OpenFilePickerAsync(opts);
+        return picked.Select(f => f.TryGetLocalPath()).FirstOrDefault(p => !string.IsNullOrWhiteSpace(p));
+    }
+
     [RelayCommand(CanExecute = nameof(CanBrowseMediaSource))]
     private async Task BrowseMediaSourceAsync()
     {
@@ -2388,6 +2753,8 @@ public partial class CuePlayerViewModel : ViewModelBase
                 row.SourceVideoIsAttachedPicture = false;
                 row.SourceFrameRateNum = 0;
                 row.SourceFrameRateDen = 0;
+                row.SourceVideoWidth = 0;
+                row.SourceVideoHeight = 0;
                 return;
             }
 
@@ -2398,6 +2765,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             row.SourceVideoIsAttachedPicture = probe.Value.VideoIsAttachedPicture;
             row.SourceFrameRateNum = probe.Value.SourceFrameRateNum;
             row.SourceFrameRateDen = probe.Value.SourceFrameRateDen;
+            row.SourceVideoWidth = probe.Value.SourceVideoWidth;
+            row.SourceVideoHeight = probe.Value.SourceVideoHeight;
         });
     }
 

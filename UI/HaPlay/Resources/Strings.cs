@@ -612,6 +612,11 @@ public static class Strings
     public static string CueNodeDefaultGroupLabel => Get(nameof(CueNodeDefaultGroupLabel));
     public static string CueNodeDefaultMediaLabel => Get(nameof(CueNodeDefaultMediaLabel));
     public static string PickMediaFileDialogTitle => Get(nameof(PickMediaFileDialogTitle));
+    public static string CueNodeDefaultTextLabel => Get(nameof(CueNodeDefaultTextLabel));
+    public static string PickImageFileDialogTitle => Get(nameof(PickImageFileDialogTitle));
+    public static string ImageFileTypeLabel => Get(nameof(ImageFileTypeLabel));
+    public static string AddImageButton => Get(nameof(AddImageButton));
+    public static string AddTextButton => Get(nameof(AddTextButton));
     public static string CueNodeDefaultActionLabel => Get(nameof(CueNodeDefaultActionLabel));
     public static string CueNodeDefaultCommentLabel => Get(nameof(CueNodeDefaultCommentLabel));
     public static string CueNodeDefaultNotesText => Get(nameof(CueNodeDefaultNotesText));

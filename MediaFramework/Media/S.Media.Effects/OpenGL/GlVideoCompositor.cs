@@ -68,9 +68,11 @@ public sealed class GlVideoCompositor : IVideoCompositor
     private GlPixelType _readPixelType;
     private uint _program;
     private int _uXformLoc = -1;
+    private int _uCropLoc = -1;
     private int _uOpacityLoc = -1;
     private int _uBlendKindLoc = -1;
     private int _uLayerLoc = -1;
+    private int _uLayerFlipVLoc = -1;
     private uint _vao;
     private uint _vbo;
     private uint _fbo;
@@ -223,7 +225,10 @@ public sealed class GlVideoCompositor : IVideoCompositor
 
         // Pick the per-layer source texture: BGRA32 uploads direct to RGBA8; everything else runs the YUV
         // pre-pass into a cached RGBA16F intermediate so high-bit precision survives into the composite.
-        if (src.Format.PixelFormat == CorePixelFormat.Bgra32)
+        // The pre-pass bakes a vertical flip (YuvVideoRenderer's yUvFlip) into its intermediate; the direct
+        // BGRA32 upload does not, so flag it so the fragment shader flips V to keep both paths upright.
+        var directBgraUpload = src.Format.PixelFormat == CorePixelFormat.Bgra32;
+        if (directBgraUpload)
         {
             PrepareBgra32LayerTexture(src, srcW, srcH);
         }
@@ -254,7 +259,10 @@ public sealed class GlVideoCompositor : IVideoCompositor
         m[7] = 1f - (2f * t.Ty / outH);
         m[8] = 1f;
         _gl.UniformMatrix3(_uXformLoc, 1, false, m);
+        var crop = layer.SourceCrop.Clamped();
+        _gl.Uniform4(_uCropLoc, crop.X0, crop.Y0, crop.X1, crop.Y1);
         _gl.Uniform1(_uOpacityLoc, opacity);
+        _gl.Uniform1(_uLayerFlipVLoc, directBgraUpload ? 1f : 0f);
 
         switch (layer.BlendMode)
         {
@@ -393,10 +401,12 @@ public sealed class GlVideoCompositor : IVideoCompositor
         _program = SharedGlProgramCache.Acquire(ProgramCacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
 
         _uXformLoc = _gl.GetUniformLocation(_program, "uXform");
+        _uCropLoc = _gl.GetUniformLocation(_program, "uCrop");
         _uOpacityLoc = _gl.GetUniformLocation(_program, "uOpacity");
         _uBlendKindLoc = _gl.GetUniformLocation(_program, "uBlendKind");
         _uLayerLoc = _gl.GetUniformLocation(_program, "uLayer");
-        if (_uXformLoc < 0 || _uOpacityLoc < 0 || _uBlendKindLoc < 0 || _uLayerLoc < 0)
+        _uLayerFlipVLoc = _gl.GetUniformLocation(_program, "uLayerFlipV");
+        if (_uXformLoc < 0 || _uCropLoc < 0 || _uOpacityLoc < 0 || _uBlendKindLoc < 0 || _uLayerLoc < 0 || _uLayerFlipVLoc < 0)
             throw new InvalidOperationException("composite_layer program missing required uniforms.");
 
         _vao = _gl.GenVertexArray();

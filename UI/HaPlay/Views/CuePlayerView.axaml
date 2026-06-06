@@ -54,6 +54,8 @@
     <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8" ItemSpacing="6" LineSpacing="6">
       <Button Content="{x:Static res:Strings.AddGroupButton}" Command="{Binding AddGroupCommand}" />
       <Button Content="{x:Static res:Strings.AddMediaButton}" Command="{Binding AddMediaCueCommand}" />
+      <Button Content="{x:Static res:Strings.AddImageButton}" Command="{Binding AddImageCueCommand}" />
+      <Button Content="{x:Static res:Strings.AddTextButton}" Command="{Binding AddTextCueCommand}" />
       <Button Content="{x:Static res:Strings.AddNdiInputCueButton}" Command="{Binding AddNdiInputCueCommand}" />
       <Button Content="{x:Static res:Strings.AddPortAudioInputCueButton}" Command="{Binding AddPortAudioInputCueCommand}" />
       <Button Content="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />
@@ -227,6 +229,14 @@
                               MinuteIncrement="1"
                               SecondIncrement="1"
                               SelectedTime="{Binding SelectedCueNode.EndOffsetTime, Mode=TwoWay}" />
+                </Grid>
+                <Grid ColumnDefinitions="Auto,160,Auto" ColumnSpacing="8"
+                      IsVisible="{Binding HasSelectedStaticCue}">
+                  <TextBlock Grid.Column="0" Text="Duration (ms)" VerticalAlignment="Center" />
+                  <NumericUpDown Grid.Column="1" Minimum="100" Maximum="3600000" Increment="500" FormatString="0"
+                                 Value="{Binding SelectedCueNode.DurationMs, Mode=TwoWay}" />
+                  <TextBlock Grid.Column="2" VerticalAlignment="Center" Opacity="0.55" FontSize="11"
+                             Text="How long this image/text stays on screen." />
                 </Grid>
                 <Grid ColumnDefinitions="Auto,Auto,*"
                       ColumnSpacing="8"
@@ -418,6 +428,60 @@
                            TextWrapping="Wrap"
                            Text="{x:Static res:Strings.NoVideoPlacementsHint}"
                            IsVisible="{Binding VisibleVideoPlacements.Count, Converter={x:Static ObjectConverters.Equal}, ConverterParameter=0}" />
+
+                <!-- Layout presets for the selected placement -->
+                <WrapPanel ItemSpacing="4" LineSpacing="4">
+                  <TextBlock Text="Layout:" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,4,0" />
+                  <Button Content="Fit source" ToolTip.Tip="Size the box to the source at its own aspect (scaled down to fit the canvas), centred"
+                          Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="fit" />
+                  <Button Content="Full" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="full" />
+                  <Button Content="Left ½" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="left" />
+                  <Button Content="Right ½" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="right" />
+                  <Button Content="Top ½" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="top" />
+                  <Button Content="Bottom ½" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="bottom" />
+                  <Button Content="◤" ToolTip.Tip="Top-left quadrant" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="tl" />
+                  <Button Content="◥" ToolTip.Tip="Top-right quadrant" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="tr" />
+                  <Button Content="◣" ToolTip.Tip="Bottom-left quadrant" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="bl" />
+                  <Button Content="◢" ToolTip.Tip="Bottom-right quadrant" Command="{Binding ApplyPlacementLayoutCommand}" CommandParameter="br" />
+                </WrapPanel>
+
+                <!-- Visual placement canvas: drag to move, bottom-right handle to resize, click to select -->
+                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="4" MinHeight="220">
+                  <controls:CompositionPlacementCanvas
+                      Placements="{Binding VisibleVideoPlacements}"
+                      SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
+                      AspectRatio="{Binding PlacementCanvasAspect}" />
+                </Border>
+                <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap"
+                           Text="Drag a layer to move it, the bottom-right handle to resize (aspect locked — hold Shift to resize freely), click to select." />
+
+                <!-- Crop presets + fine crop / fit for the selected placement -->
+                <WrapPanel ItemSpacing="4" LineSpacing="4">
+                  <TextBlock Text="Crop:" VerticalAlignment="Center" Opacity="0.7" Margin="0,0,4,0" />
+                  <Button Content="None" Command="{Binding ApplyCropPresetCommand}" CommandParameter="none" />
+                  <Button Content="Centre 50% wide" Command="{Binding ApplyCropPresetCommand}" CommandParameter="centerH" />
+                  <Button Content="Centre 50% tall" Command="{Binding ApplyCropPresetCommand}" CommandParameter="centerV" />
+                  <Button Content="Centre box" Command="{Binding ApplyCropPresetCommand}" CommandParameter="center" />
+                </WrapPanel>
+                <WrapPanel ItemSpacing="6" LineSpacing="4"
+                           IsVisible="{Binding SelectedVideoPlacement, Converter={x:Static ObjectConverters.IsNotNull}}">
+                  <TextBlock Text="Trim L" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.CropLeft, Mode=TwoWay}" />
+                  <TextBlock Text="T" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.CropTop, Mode=TwoWay}" />
+                  <TextBlock Text="R" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.CropRight, Mode=TwoWay}" />
+                  <TextBlock Text="B" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="0" Maximum="0.99" Increment="0.05" FormatString="0.00"
+                                 Value="{Binding SelectedVideoPlacement.CropBottom, Mode=TwoWay}" />
+                  <TextBlock Text="Fit" VerticalAlignment="Center" Opacity="0.7" Margin="6,0,0,0" />
+                  <ComboBox MinWidth="120" SelectedItem="{Binding SelectedVideoPlacement.Position, Mode=TwoWay}"
+                            ItemsSource="{Binding LayerPositions}" />
+                </WrapPanel>
+
                 <ListBox ItemsSource="{Binding VisibleVideoPlacements}"
                          SelectedItem="{Binding SelectedVideoPlacement, Mode=TwoWay}">
                   <ListBox.ItemTemplate>
@@ -442,6 +506,49 @@
                     </DataTemplate>
                   </ListBox.ItemTemplate>
                 </ListBox>
+              </StackPanel>
+            </ScrollViewer>
+          </TabItem>
+
+          <TabItem Header="Text" IsVisible="{Binding HasSelectedTextCue}">
+            <ScrollViewer>
+              <StackPanel Spacing="8" Margin="6">
+                <TextBlock Text="Content" Opacity="0.7" />
+                <TextBox AcceptsReturn="True" MinHeight="80" TextWrapping="Wrap"
+                         Text="{Binding SelectedCueNode.TextContent, Mode=TwoWay}" />
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                  <TextBlock Grid.Row="0" Grid.Column="0" Text="Font" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding SelectedCueNode.TextFontFamily, Mode=TwoWay}" />
+                  <CheckBox Grid.Row="0" Grid.Column="2" Content="Bold" IsChecked="{Binding SelectedCueNode.TextBold, Mode=TwoWay}" />
+                  <CheckBox Grid.Row="0" Grid.Column="3" Content="Italic" IsChecked="{Binding SelectedCueNode.TextItalic, Mode=TwoWay}" />
+                  <TextBlock Grid.Row="1" Grid.Column="0" Text="Size" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Grid.Row="1" Grid.Column="1" HorizontalAlignment="Left" Width="130"
+                                 Minimum="4" Maximum="2000" Increment="4" FormatString="0"
+                                 Value="{Binding SelectedCueNode.TextFontSizePx, Mode=TwoWay}" />
+                </Grid>
+                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                  <TextBlock Text="Text #AARRGGBB" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBox Width="110" Text="{Binding SelectedCueNode.TextColorHex, Mode=TwoWay}" />
+                  <TextBlock Text="Background" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBox Width="110" Text="{Binding SelectedCueNode.TextBackgroundHex, Mode=TwoWay}" />
+                  <TextBlock Text="Outline" VerticalAlignment="Center" Opacity="0.7" />
+                  <TextBox Width="110" Text="{Binding SelectedCueNode.TextOutlineHex, Mode=TwoWay}" />
+                  <NumericUpDown Width="92" Minimum="0" Maximum="40" Increment="1" FormatString="0"
+                                 Value="{Binding SelectedCueNode.TextOutlineWidthPx, Mode=TwoWay}" />
+                </WrapPanel>
+                <WrapPanel ItemSpacing="8" LineSpacing="6">
+                  <TextBlock Text="Align H" VerticalAlignment="Center" Opacity="0.7" />
+                  <ComboBox MinWidth="92" ItemsSource="{Binding TextHAlignOptions}"
+                            SelectedItem="{Binding SelectedCueNode.TextHAlign, Mode=TwoWay}" />
+                  <TextBlock Text="Align V" VerticalAlignment="Center" Opacity="0.7" />
+                  <ComboBox MinWidth="92" ItemsSource="{Binding TextVAlignOptions}"
+                            SelectedItem="{Binding SelectedCueNode.TextVAlign, Mode=TwoWay}" />
+                  <TextBlock Text="Wrap" VerticalAlignment="Center" Opacity="0.7" />
+                  <Slider Width="120" Minimum="0" Maximum="1" SmallChange="0.05"
+                          Value="{Binding SelectedCueNode.TextWrapWidthFraction, Mode=TwoWay}" />
+                </WrapPanel>
+                <TextBlock Opacity="0.5" FontSize="11" TextWrapping="Wrap"
+                           Text="Colours are #AARRGGBB hex (alpha first). Set the duration on the General tab; position it on the Video tab." />
               </StackPanel>
             </ScrollViewer>
           </TabItem>

@@ -65,11 +65,22 @@ public sealed record AudioRouteSpec(
     double GainDb = 0,
     bool Muted = false);
 
+/// <param name="Placement">Fit mode within the destination rect (Cover/Contain/Letterbox/Center/Stretch/FillWidth/FillHeight).</param>
+/// <param name="DestX">Destination rectangle on the canvas, normalized to [0,1]. Defaults to the full canvas.</param>
+/// <param name="CropLeft">Per-edge source crop insets as fractions [0,1). Default 0 = no crop.</param>
 public sealed record VideoPlacementSpec(
     string CompositionId,
     int LayerIndex,
     double Opacity = 1,
-    string? Placement = null);
+    string? Placement = null,
+    double DestX = 0,
+    double DestY = 0,
+    double DestWidth = 1,
+    double DestHeight = 1,
+    double CropLeft = 0,
+    double CropTop = 0,
+    double CropRight = 0,
+    double CropBottom = 0);
 
 /// <summary>
 /// What to open and how the host intends to route it. The standby engine owns the open/seek/hold

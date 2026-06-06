@@ -200,6 +200,197 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void SourceFitRect_SmallerThanCanvas_KeepsActualSizeCentered()
+    {
+        // 1280x720 source on a 1920x1080 canvas -> 2/3 size, centered, not scaled up.
+        var (x, y, w, h) = CuePlayerViewModel.SourceFitRect(1280, 720, 1920, 1080);
+        Assert.Equal(2.0 / 3.0, w, 4);
+        Assert.Equal(2.0 / 3.0, h, 4);
+        Assert.Equal((1.0 - w) / 2.0, x, 4);
+        Assert.Equal((1.0 - h) / 2.0, y, 4);
+    }
+
+    [Fact]
+    public void SourceFitRect_LargerThanCanvas_ScalesDownToContain()
+    {
+        // 3840x2160 source on a 1920x1080 canvas -> contain-fits to the full frame (same aspect).
+        var (x, y, w, h) = CuePlayerViewModel.SourceFitRect(3840, 2160, 1920, 1080);
+        Assert.Equal(1.0, w, 4);
+        Assert.Equal(1.0, h, 4);
+        Assert.Equal(0.0, x, 4);
+        Assert.Equal(0.0, y, 4);
+
+        // A portrait source taller than the canvas scales by height and pillarboxes (w < 1, h == 1).
+        // scale = min(1, 1920/1080, 1080/1920) = 0.5625 -> w = 1080*0.5625/1920, h = 1920*0.5625/1080.
+        var (_, _, w2, h2) = CuePlayerViewModel.SourceFitRect(1080, 1920, 1920, 1080);
+        Assert.Equal(1.0, h2, 4);
+        Assert.Equal(1080.0 * 0.5625 / 1920.0, w2, 4);
+    }
+
+    [Fact]
+    public void SourceFitRect_UnknownDimensions_FallsBackToFullFrame()
+    {
+        var (x, y, w, h) = CuePlayerViewModel.SourceFitRect(0, 0, 1920, 1080);
+        Assert.Equal(0.0, x, 4);
+        Assert.Equal(0.0, y, 4);
+        Assert.Equal(1.0, w, 4);
+        Assert.Equal(1.0, h, 4);
+    }
+
+    [Fact]
+    public void SourceVideoDimensions_RoundTripInSnapshot()
+    {
+        var original = new CueList
+        {
+            Name = "dims",
+            Nodes = [new MediaCueNode { Label = "clip", HasVideo = true, SourceVideoWidth = 1280, SourceVideoHeight = 720 }],
+        };
+
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([original]);
+        var media = Assert.IsType<MediaCueNode>(vm.BuildCueListsSnapshot()[0].Nodes[0]);
+
+        Assert.Equal(1280, media.SourceVideoWidth);
+        Assert.Equal(720, media.SourceVideoHeight);
+    }
+
+    [Fact]
+    public void PlacementTransformAndCrop_RoundTripInSnapshot()
+    {
+        var compId = Guid.NewGuid();
+        var original = new CueList
+        {
+            Name = "xform",
+            Compositions = [new CueComposition { Id = compId, Name = "Program", Width = 1920, Height = 1080, FrameRateNum = 30 }],
+            Nodes =
+            [
+                new MediaCueNode
+                {
+                    Label = "right-half centre-crop",
+                    VideoPlacements =
+                    [
+                        new CueVideoPlacement
+                        {
+                            CompositionId = compId, LayerIndex = 1, Position = CueLayerPosition.Stretch,
+                            DestX = 0.5, DestY = 0, DestWidth = 0.5, DestHeight = 1.0,
+                            CropLeft = 0.25, CropRight = 0.25,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([original]);
+        var p = Assert.IsType<MediaCueNode>(vm.BuildCueListsSnapshot()[0].Nodes[0]).VideoPlacements[0];
+
+        Assert.Equal(CueLayerPosition.Stretch, p.Position);
+        Assert.Equal(0.5, p.DestX, 5);
+        Assert.Equal(0.5, p.DestWidth, 5);
+        Assert.Equal(1.0, p.DestHeight, 5);
+        Assert.Equal(0.25, p.CropLeft, 5);
+        Assert.Equal(0.25, p.CropRight, 5);
+    }
+
+    [Fact]
+    public void OldPlacement_LoadsAsFullFrameNoCrop()
+    {
+        // A pre-feature placement (no dest/crop fields set) must default to the full canvas, no crop.
+        var p = CueVideoPlacementViewModel.FromModel(new CueVideoPlacement { LayerIndex = 0 });
+
+        Assert.Equal(0.0, p.DestX);
+        Assert.Equal(0.0, p.DestY);
+        Assert.Equal(1.0, p.DestWidth);
+        Assert.Equal(1.0, p.DestHeight);
+        Assert.Equal(0.0, p.CropLeft + p.CropTop + p.CropRight + p.CropBottom);
+    }
+
+    [Fact]
+    public void LayoutAndCropPresets_UpdateSelectedPlacement()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddCompositionCommand.Execute(null);
+        vm.AddMediaCueCommand.Execute(null);
+        vm.AddVideoPlacementCommand.Execute(null);
+        var placement = vm.SelectedVideoPlacement!;
+
+        vm.ApplyPlacementLayoutCommand.Execute("right");
+        Assert.Equal(0.5, placement.DestX, 5);
+        Assert.Equal(0.0, placement.DestY, 5);
+        Assert.Equal(0.5, placement.DestWidth, 5);
+        Assert.Equal(1.0, placement.DestHeight, 5);
+
+        vm.ApplyCropPresetCommand.Execute("centerH");
+        Assert.Equal(0.25, placement.CropLeft, 5);
+        Assert.Equal(0.25, placement.CropRight, 5);
+        Assert.Equal(0.0, placement.CropTop, 5);
+        Assert.Equal(0.0, placement.CropBottom, 5);
+    }
+
+    [Fact]
+    public void AddTextCue_CreatesMediaCueWithTextSourceAndDefaultDuration()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddTextCueCommand.Execute(null);
+
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        Assert.Equal(CueNodeKind.Media, cue.Kind);
+        Assert.True(cue.IsTextCue);
+        Assert.True(cue.SourceHasVideo); // shows the Video/placement tab
+        Assert.Equal(5000, cue.DurationMs);
+        Assert.True(vm.HasSelectedTextCue);
+        Assert.True(vm.HasSelectedStaticCue);
+        Assert.IsType<TextPlaylistItem>(cue.MediaSourceItem);
+    }
+
+    [Fact]
+    public void TextCueStyleEdits_MutateSourceAndRoundTrip()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddTextCueCommand.Execute(null);
+        var cue = (CueNodeViewModel)vm.SelectedCueNode!;
+
+        cue.TextContent = "Hello";
+        cue.TextFontSizePx = 120;
+        cue.TextBold = true;
+        cue.TextColorHex = "#FF00FF00";
+        cue.TextHAlign = TextAlignH.Left;
+        cue.TextWrapWidthFraction = 0.5;
+
+        var src = Assert.IsType<TextPlaylistItem>(cue.MediaSourceItem);
+        Assert.Equal("Hello", src.Text);
+        Assert.Equal(120.0, src.FontSizePx);
+        Assert.True(src.Bold);
+        Assert.Equal(0xFF00FF00u, src.ColorArgb);
+        Assert.Equal(TextAlignH.Left, src.HAlign);
+        Assert.Equal(0.5, src.WrapWidthFraction, 3);
+
+        var media = Assert.IsType<MediaCueNode>(vm.BuildCueListsSnapshot()[0].Nodes[0]);
+        var text = Assert.IsType<TextPlaylistItem>(media.Source);
+        Assert.Equal("Hello", text.Text);
+        Assert.True(text.Bold);
+        Assert.Equal(0xFF00FF00u, text.ColorArgb);
+        Assert.Equal(5000, media.DurationMs);
+    }
+
+    [Fact]
+    public void ImageSource_RoundTripInSnapshot()
+    {
+        var original = new CueList
+        {
+            Name = "img",
+            Nodes = [new MediaCueNode { Label = "slate", DurationMs = 8000, HasVideo = true, Source = new ImagePlaylistItem("/tmp/slate.png") }],
+        };
+        var vm = new CuePlayerViewModel();
+        vm.ApplyCueLists([original]);
+
+        var media = Assert.IsType<MediaCueNode>(vm.BuildCueListsSnapshot()[0].Nodes[0]);
+        var img = Assert.IsType<ImagePlaylistItem>(media.Source);
+        Assert.Equal("/tmp/slate.png", img.Path);
+        Assert.Equal(8000, media.DurationMs);
+    }
+
+    [Fact]
     public void MediaCue_ProbeFields_RoundTripInSnapshot()
     {
         var original = new CueList
