@@ -10,6 +10,43 @@ namespace S.Media.OpenGL;
 public static class D3D11InteropUtility
 {
     /// <summary>
+    /// Wraps a borrowed <see cref="ID3D11Device"/> COM pointer for the duration of a scope.
+    /// Vortice construction adds a reference; dispose releases it so caller ownership is unchanged.
+    /// </summary>
+    public readonly struct BorrowedD3D11DeviceScope : IDisposable
+    {
+        private readonly ID3D11Device? _device;
+
+        public BorrowedD3D11DeviceScope(nint borrowedDeviceComPtr)
+        {
+            if (borrowedDeviceComPtr != 0 && OperatingSystem.IsWindows())
+                _device = new ID3D11Device(borrowedDeviceComPtr);
+        }
+
+        public nint NativePointer => _device?.NativePointer ?? 0;
+
+        public void Dispose() => _device?.Dispose();
+    }
+
+    /// <summary>
+    /// Wraps a borrowed <see cref="ID3D11Texture2D"/> COM pointer for the duration of a scope.
+    /// </summary>
+    public readonly struct BorrowedD3D11Texture2DScope : IDisposable
+    {
+        private readonly ID3D11Texture2D? _texture;
+
+        public BorrowedD3D11Texture2DScope(nint borrowedTextureComPtr)
+        {
+            if (borrowedTextureComPtr != 0 && OperatingSystem.IsWindows())
+                _texture = new ID3D11Texture2D(borrowedTextureComPtr);
+        }
+
+        public nint NativePointer => _texture?.NativePointer ?? 0;
+
+        public void Dispose() => _texture?.Dispose();
+    }
+
+    /// <summary>
     /// Returns true when <paramref name="deviceComPtr"/> is a usable <c>ID3D11Device</c> COM pointer (adds/releases a probe reference).
     /// </summary>
     public static bool TryValidateDeviceComPointer(nint deviceComPtr, out string? failureMessage)

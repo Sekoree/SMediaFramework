@@ -38,15 +38,18 @@ public class MIDIOutputDevice : MIDIDevice
 
         var err = Native.Pm_OpenOutput(
             out Stream, DeviceId,
-            outputSysDepInfo: nint.Zero,
+            outputSysDepInfo: CreateOpenSysDepInfoPointer(),
             bufferSize: BufferSize,
             timeProc: nint.Zero,
             timeInfo: nint.Zero,
             latency: Latency);
 
         if (err != PmError.NoError)
+        {
+            ReleaseOpenSysDepInfo();
             Logger.LogWarning("MIDIOutputDevice.Open() failed: {Error} (deviceId={DeviceId}, name={Name})",
                 err, DeviceId, Name);
+        }
 
         return err;
     }

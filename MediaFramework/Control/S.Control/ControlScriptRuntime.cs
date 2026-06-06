@@ -607,6 +607,13 @@ public sealed class ControlScriptRuntime
         {
             var argument = osc.Arguments[i];
 
+            if (argument.Type == OSCArgumentType.Blob
+                && string.Equals(osc.Address, "/meters", StringComparison.OrdinalIgnoreCase))
+            {
+                changes.AddRange(ApplyX32MeterBlobCache(deviceKeys, osc, argument, i, evt));
+                continue;
+            }
+
             // Each incoming argument is mirrored to every device alias key (id, name,
             // alias, profile) so scripts can read it by any of them, but a single
             // logical change should only notify once. Use the canonical id key (first)
@@ -615,6 +622,41 @@ public sealed class ControlScriptRuntime
             for (var k = 0; k < deviceKeys.Length; k++)
             {
                 var change = SetCacheValue(deviceKeys[k], osc.Address, argument, i, evt);
+                if (k == 0)
+                    canonicalChange = change;
+            }
+
+            if (canonicalChange is not null)
+                changes.Add(canonicalChange);
+        }
+
+        return changes;
+    }
+
+    private IReadOnlyList<ControlValueCacheChange> ApplyX32MeterBlobCache(
+        string[] deviceKeys,
+        OscControlEvent osc,
+        OSCArgument argument,
+        int argumentIndex,
+        ControlEvent evt)
+    {
+        const ControlValueCacheSource source = ControlValueCacheSource.Incoming;
+        var cache = RuntimeServices.OscCache;
+        var changes = new List<ControlValueCacheChange>();
+
+        foreach (var entry in X32MeterCacheDecoder.Decode(osc.Address, osc.Arguments, argumentIndex, argument.AsBlob()))
+        {
+            ControlValueCacheChange? canonicalChange = null;
+            for (var k = 0; k < deviceKeys.Length; k++)
+            {
+                var change = cache.SetNumber(
+                    deviceKeys[k],
+                    entry.Address,
+                    entry.Value,
+                    source,
+                    argumentIndex: 0,
+                    evt.CorrelationId,
+                    evt.Timestamp);
                 if (k == 0)
                     canonicalChange = change;
             }

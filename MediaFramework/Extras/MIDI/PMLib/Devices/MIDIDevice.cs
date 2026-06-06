@@ -37,6 +37,14 @@ public abstract class MIDIDevice : IDisposable
     /// <summary>Underlying MIDI API cached at construction time (e.g. <c>"ALSA"</c>).</summary>
     public string? Interface { get; }
 
+    /// <summary>Optional ALSA client name passed via <c>PmSysDepInfo</c> when opening the stream.</summary>
+    public string? AlsaClientName { get; set; }
+
+    /// <summary>Optional ALSA port name passed via <c>PmSysDepInfo</c> when opening the stream.</summary>
+    public string? AlsaPortName { get; set; }
+
+    private PmSysDepInfoHandle? _sysDepInfo;
+
     /// <summary>Returns <see langword="true"/> when the stream is open.</summary>
     public bool IsOpen => Stream != nint.Zero;
 
@@ -60,6 +68,19 @@ public abstract class MIDIDevice : IDisposable
     /// <summary>Opens the device stream. Returns <see cref="PmError.NoError"/> on success.</summary>
     public abstract PmError Open();
 
+    protected nint CreateOpenSysDepInfoPointer()
+    {
+        _sysDepInfo?.Dispose();
+        _sysDepInfo = PmSysDepInfoHandle.TryCreateAlsa(AlsaClientName, AlsaPortName);
+        return _sysDepInfo?.Pointer ?? nint.Zero;
+    }
+
+    protected void ReleaseOpenSysDepInfo()
+    {
+        _sysDepInfo?.Dispose();
+        _sysDepInfo = null;
+    }
+
     /// <summary>Closes the device stream.</summary>
     public virtual PmError Close()
     {
@@ -70,6 +91,8 @@ public abstract class MIDIDevice : IDisposable
 
         var err = Native.Pm_Close(Stream);
         Stream = nint.Zero;
+        _sysDepInfo?.Dispose();
+        _sysDepInfo = null;
         return err;
     }
 

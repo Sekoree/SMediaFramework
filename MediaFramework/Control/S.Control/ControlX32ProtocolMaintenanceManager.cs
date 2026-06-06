@@ -2,14 +2,21 @@ using OSCLib;
 
 namespace S.Control;
 
-public sealed class ControlPeriodicOscSendManager
+/// <summary>
+/// Renews X32/X-Air <c>/xremote</c>, <c>/subscribe</c>, and <c>/meters</c> periodic sends with
+/// protocol-aware timing: the renewal clock advances only after a full successful renew cycle.
+/// </summary>
+public sealed class ControlX32ProtocolMaintenanceManager
 {
+    private static readonly TimeSpan FailedRetryInterval = TimeSpan.FromSeconds(2);
+
     private readonly ControlSystemConfig _config;
     private readonly IControlOscSender _sender;
     private readonly IControlMonitorSink _monitor;
-    private readonly Dictionary<(Guid DeviceId, Guid SendId), DateTimeOffset> _lastSentUtc = new();
+    private readonly Dictionary<Guid, DateTimeOffset> _lastSuccessfulRenewUtc = new();
+    private readonly Dictionary<Guid, DateTimeOffset> _lastFailedAttemptUtc = new();
 
-    public ControlPeriodicOscSendManager(
+    public ControlX32ProtocolMaintenanceManager(
         ControlSystemConfig config,
         IControlOscSender sender,
         IControlMonitorSink? monitor = null)
@@ -29,19 +36,28 @@ public sealed class ControlPeriodicOscSendManager
         var results = new List<ControlPeriodicOscSendResult>();
         foreach (var device in _config.Devices.Where(d => d.Protocol == ControlDeviceProtocol.Osc && d.IsEnabled))
         {
-            foreach (var send in device.PeriodicOscSends.Where(s => s.IsEnabled))
+            var sends = device.PeriodicOscSends
+                .Where(s => ControlX32ProtocolAddresses.UsesProtocolMaintenance(device, s))
+                .OrderBy(s => MaintenanceOrder(s.Address))
+                .ToArray();
+            if (sends.Length == 0)
+                continue;
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsDue(device.Id, sends, utcNow))
+                continue;
+
+            var renewResults = await RenewDeviceAsync(device, sends, cancellationToken).ConfigureAwait(false);
+            results.AddRange(renewResults);
+
+            if (renewResults.All(r => r.Succeeded))
             {
-                if (ControlX32ProtocolAddresses.UsesProtocolMaintenance(device, send))
-                    continue;
-
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!IsDue(device.Id, send, utcNow))
-                    continue;
-
-                var result = await SendAsync(device, send, cancellationToken).ConfigureAwait(false);
-                _lastSentUtc[(device.Id, send.Id)] = utcNow;
-                Record(result);
-                results.Add(result);
+                _lastSuccessfulRenewUtc[device.Id] = utcNow;
+                _lastFailedAttemptUtc.Remove(device.Id);
+            }
+            else
+            {
+                _lastFailedAttemptUtc[device.Id] = utcNow;
             }
         }
 
@@ -50,16 +66,46 @@ public sealed class ControlPeriodicOscSendManager
 
     public void Reset()
     {
-        _lastSentUtc.Clear();
+        _lastSuccessfulRenewUtc.Clear();
+        _lastFailedAttemptUtc.Clear();
     }
 
-    private bool IsDue(Guid deviceId, ControlPeriodicOscSendConfig send, DateTimeOffset utcNow)
+    private bool IsDue(Guid deviceId, ControlPeriodicOscSendConfig[] sends, DateTimeOffset utcNow)
     {
-        if (!_lastSentUtc.TryGetValue((deviceId, send.Id), out var last))
+        var interval = TimeSpan.FromMilliseconds(Math.Max(1, sends.Max(s => s.IntervalMs)));
+        if (_lastSuccessfulRenewUtc.TryGetValue(deviceId, out var lastSuccess))
+        {
+            if (utcNow - lastSuccess >= interval)
+                return true;
+        }
+        else if (!_lastFailedAttemptUtc.ContainsKey(deviceId))
+        {
             return true;
+        }
 
-        var interval = TimeSpan.FromMilliseconds(Math.Max(1, send.IntervalMs));
-        return utcNow - last >= interval;
+        if (!_lastFailedAttemptUtc.TryGetValue(deviceId, out var lastFail))
+            return false;
+
+        return utcNow - lastFail >= FailedRetryInterval;
+    }
+
+    private async ValueTask<IReadOnlyList<ControlPeriodicOscSendResult>> RenewDeviceAsync(
+        ControlDeviceInstanceConfig device,
+        IReadOnlyList<ControlPeriodicOscSendConfig> sends,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<ControlPeriodicOscSendResult>(sends.Count);
+        foreach (var send in sends)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await SendAsync(device, send, cancellationToken).ConfigureAwait(false);
+            Record(result);
+            results.Add(result);
+            if (!result.Succeeded)
+                break;
+        }
+
+        return results;
     }
 
     private async ValueTask<ControlPeriodicOscSendResult> SendAsync(
@@ -122,6 +168,15 @@ public sealed class ControlPeriodicOscSendManager
         });
     }
 
+    private static int MaintenanceOrder(string address) =>
+        address switch
+        {
+            "/xremote" => 0,
+            "/subscribe" => 1,
+            "/meters" => 2,
+            _ => 99,
+        };
+
     private static IReadOnlyList<OSCArgument> BuildArguments(IEnumerable<ControlOscArgumentConfig> arguments) =>
         arguments.Select(ToOscArgument).ToArray();
 
@@ -139,37 +194,4 @@ public sealed class ControlPeriodicOscSendManager
             ControlOscArgumentKind.Blob => OSCArgument.Blob(argument.BlobValue ?? []),
             _ => OSCArgument.Nil(),
         };
-}
-
-public sealed record ControlPeriodicOscSendResult(
-    ControlDeviceInstanceConfig Device,
-    ControlPeriodicOscSendConfig Send,
-    IReadOnlyList<OSCArgument> Arguments,
-    bool Succeeded,
-    string? Host,
-    int? Port,
-    string? ErrorMessage)
-{
-    public Guid DeviceInstanceId => Device.Id;
-
-    public string? DeviceKey => Device.Binding.Alias ?? Device.Name;
-
-    public string? ProfileId => Device.ProfileId;
-
-    public static ControlPeriodicOscSendResult Sent(
-        ControlDeviceInstanceConfig device,
-        ControlPeriodicOscSendConfig send,
-        IReadOnlyList<OSCArgument> arguments,
-        string host,
-        int port) =>
-        new(device, send, arguments, Succeeded: true, host, port, ErrorMessage: null);
-
-    public static ControlPeriodicOscSendResult Failed(
-        ControlDeviceInstanceConfig device,
-        ControlPeriodicOscSendConfig send,
-        IReadOnlyList<OSCArgument> arguments,
-        string errorMessage,
-        string? host = null,
-        int? port = null) =>
-        new(device, send, arguments, Succeeded: false, host, port, errorMessage);
 }

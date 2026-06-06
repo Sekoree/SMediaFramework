@@ -150,6 +150,7 @@ public sealed record ControlDeviceTaskProfile
 public enum ControlDeviceTaskKind
 {
     PeriodicOscSend,
+    X32ProtocolMaintenance,
 }
 
 public sealed record ControlDeviceProfileValidationIssue(string Code, string Message);
@@ -649,7 +650,7 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
                     Id = "x32.xremote",
                     DisplayName = "Maintain /xremote",
                     IsDefaultEnabled = true,
-                    Kind = ControlDeviceTaskKind.PeriodicOscSend,
+                    Kind = ControlDeviceTaskKind.X32ProtocolMaintenance,
                     Address = "/xremote",
                     IntervalMs = 8000,
                 },
@@ -657,7 +658,7 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
                 {
                     Id = "x32.subscribe.ch01.fader",
                     DisplayName = "Subscribe Ch 01 fader (optional)",
-                    Kind = ControlDeviceTaskKind.PeriodicOscSend,
+                    Kind = ControlDeviceTaskKind.X32ProtocolMaintenance,
                     Address = "/subscribe",
                     IntervalMs = 8000,
                     Arguments =
@@ -670,7 +671,7 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
                 {
                     Id = "x32.meters.bank6",
                     DisplayName = "Subscribe meter bank 6 (optional)",
-                    Kind = ControlDeviceTaskKind.PeriodicOscSend,
+                    Kind = ControlDeviceTaskKind.X32ProtocolMaintenance,
                     Address = "/meters",
                     IntervalMs = 8000,
                     Arguments =
@@ -741,7 +742,7 @@ public sealed class BuiltInControlDeviceProfileRepository : IControlDeviceProfil
                     Id = "xair.xremote",
                     DisplayName = "Maintain /xremote",
                     IsDefaultEnabled = true,
-                    Kind = ControlDeviceTaskKind.PeriodicOscSend,
+                    Kind = ControlDeviceTaskKind.X32ProtocolMaintenance,
                     Address = "/xremote",
                     IntervalMs = 8000,
                 },

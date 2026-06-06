@@ -5,7 +5,6 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Controls.Models.TreeDataGrid;
 using Avalonia.Controls.Templates;
-using Avalonia.Data;
 using Avalonia.VisualTree;
 using HaPlay.Playback;
 using HaPlay.Resources;
@@ -15,14 +14,9 @@ namespace HaPlay.Views;
 
 public partial class CuePlayerView : UserControl
 {
-    private static readonly DataFormat<CueNodeViewModel> CueNodeDragFormat =
-        DataFormat.CreateInProcessFormat<CueNodeViewModel>("haplay-cuenode-reorder");
-
     private CuePlayerViewModel? _subscribedVm;
     private HierarchicalTreeDataGridSource<CueNodeViewModel>? _source;
-    private Point _dragStartPoint;
-    private PointerPressedEventArgs? _dragPressedArgs;
-    private bool _dragStarted;
+    private IReadOnlyList<CueNodeViewModel>? _rowDragNodes;
 
     public CuePlayerView()
     {
@@ -33,10 +27,10 @@ public partial class CuePlayerView : UserControl
         // Tunnel meant the handlers never fired, so DragEffects was never set and every drop — internal
         // cue reorder AND external file drop — was rejected. Bubble + handledEventsToo catches the drop as
         // it bubbles up from the row/cell under the pointer.
-        AddHandler(DragDrop.DragOverEvent, OnCueTreeDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
-        AddHandler(DragDrop.DropEvent, OnCueTreeDrop, RoutingStrategies.Bubble, handledEventsToo: true);
-        CueTreeGrid.AddHandler(PointerPressedEvent, OnCueTreePointerPressed, RoutingStrategies.Tunnel);
-        CueTreeGrid.AddHandler(PointerMovedEvent, OnCueTreePointerMoved, RoutingStrategies.Tunnel);
+        AddHandler(DragDrop.DragOverEvent, OnExternalFileDragOver, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(DragDrop.DropEvent, OnExternalFileDrop, RoutingStrategies.Bubble, handledEventsToo: true);
+        CueTreeGrid.RowDragStarted += OnCueTreeRowDragStarted;
+        CueTreeGrid.RowDrop += OnCueTreeRowDrop;
         // Phase 5.2 — F2 on the tree opens the rename popup. Phase 5.6 added Del / Ctrl+D /
         // Ctrl+↑↓ on this same handler. Transport keys live on the UserControl below so they
         // fire whether the tree or anything else inside the cue tab has focus.
@@ -139,33 +133,43 @@ public partial class CuePlayerView : UserControl
         }
     }
 
-    private void OnCueTreePointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnCueTreeRowDragStarted(object? sender, TreeDataGridRowDragStartedEventArgs e)
     {
-        if (!e.GetCurrentPoint(CueTreeGrid).Properties.IsLeftButtonPressed) return;
-        _dragStartPoint = e.GetPosition(CueTreeGrid);
-        _dragPressedArgs = e;
-        _dragStarted = false;
+        if (DataContext is not CuePlayerViewModel vm || !vm.IsCueEditMode)
+        {
+            e.AllowedEffects = DragDropEffects.None;
+            _rowDragNodes = null;
+            return;
+        }
+
+        _rowDragNodes = e.Models.OfType<CueNodeViewModel>().ToArray();
+        e.AllowedEffects = _rowDragNodes.Count > 0 ? DragDropEffects.Move : DragDropEffects.None;
     }
 
-    private async void OnCueTreePointerMoved(object? sender, PointerEventArgs e)
+    private void OnCueTreeRowDrop(object? sender, TreeDataGridRowDragEventArgs e)
     {
-        if (_dragStarted || _dragPressedArgs is null) return;
-        if (!e.GetCurrentPoint(CueTreeGrid).Properties.IsLeftButtonPressed) return;
-        if (DataContext is not CuePlayerViewModel vm) return;
-        if (!vm.IsCueEditMode) return;
-        if (vm.SelectedCueNode is null) return;
+        e.Handled = true;
+        if (DataContext is not CuePlayerViewModel vm || !vm.IsCueEditMode)
+            return;
+        if (_rowDragNodes is null || _rowDragNodes.Count == 0)
+            return;
+        if (e.Position == TreeDataGridRowDropPosition.None)
+            return;
 
-        var pos = e.GetPosition(CueTreeGrid);
-        var delta = pos - _dragStartPoint;
-        if (Math.Abs(delta.X) < 8 && Math.Abs(delta.Y) < 8) return;
-
-        _dragStarted = true;
-        var pressedArgs = _dragPressedArgs;
-        _dragPressedArgs = null;
-        var data = new DataTransfer();
-        data.Add(DataTransferItem.Create(CueNodeDragFormat, vm.SelectedCueNode!));
-        await DragDrop.DoDragDropAsync(pressedArgs, data, DragDropEffects.Move);
+        var target = e.TargetRow?.DataContext as CueNodeViewModel;
+        var placement = MapDropPosition(e.Position);
+        foreach (var node in _rowDragNodes)
+            vm.MoveCueNode(node, target, placement);
+        _rowDragNodes = null;
     }
+
+    private static CueNodeDropPlacement MapDropPosition(TreeDataGridRowDropPosition position) =>
+        position switch
+        {
+            TreeDataGridRowDropPosition.Before => CueNodeDropPlacement.Before,
+            TreeDataGridRowDropPosition.Inside => CueNodeDropPlacement.Inside,
+            _ => CueNodeDropPlacement.After,
+        };
 
     private bool IsOverCueTree(DragEventArgs e)
     {
@@ -175,25 +179,18 @@ public partial class CuePlayerView : UserControl
             && pos.Y <= CueTreeGrid.Bounds.Height;
     }
 
-    private void OnCueTreeDragOver(object? sender, DragEventArgs e)
+    private void OnExternalFileDragOver(object? sender, DragEventArgs e)
     {
         _ = sender;
         if (!IsOverCueTree(e)) return;
-        if (e.DataTransfer.Contains(CueNodeDragFormat))
-        {
-            if (DataContext is CuePlayerViewModel { IsCueEditMode: true })
-                e.DragEffects = DragDropEffects.Move;
-            else
-                e.DragEffects = DragDropEffects.None;
-        }
-        else if (e.DataTransfer.Contains(DataFormat.File))
+        if (e.DataTransfer.Contains(DataFormat.File))
             e.DragEffects = DragDropEffects.Copy;
         else
             e.DragEffects = DragDropEffects.None;
         e.Handled = true;
     }
 
-    private void OnCueTreeDrop(object? sender, DragEventArgs e)
+    private void OnExternalFileDrop(object? sender, DragEventArgs e)
     {
         _ = sender;
         if (!IsOverCueTree(e)) return;
@@ -201,22 +198,6 @@ public partial class CuePlayerView : UserControl
             return;
         e.Handled = true;
 
-        // Internal reorder.
-        var draggedNode = e.DataTransfer.TryGetValue(CueNodeDragFormat);
-        if (draggedNode is not null)
-        {
-            if (!vm.IsCueEditMode)
-                return;
-
-            var target = FindCueNodeDropTarget(e);
-            var placement = target is null
-                ? CueNodeDropPlacement.After
-                : ResolveDropPlacement(e, target.Value.Node, target.Value.Visual);
-            vm.MoveCueNode(draggedNode, target?.Node, placement);
-            return;
-        }
-
-        // External file drop.
         var files = e.DataTransfer.TryGetFiles();
         if (files is null || !files.Any())
             return;
@@ -228,32 +209,6 @@ public partial class CuePlayerView : UserControl
         if (paths.Count > 0)
             vm.AddMediaFilesFromDrop(paths);
     }
-
-    private static CueDropTarget? FindCueNodeDropTarget(DragEventArgs e)
-    {
-        if (e.Source is not Visual visual) return null;
-        var current = visual;
-        while (current is not null)
-        {
-            if (current.DataContext is CueNodeViewModel node)
-                return new CueDropTarget(node, current);
-            current = current.GetVisualParent();
-        }
-        return null;
-    }
-
-    private static CueNodeDropPlacement ResolveDropPlacement(DragEventArgs e, CueNodeViewModel target, Visual visual)
-    {
-        var height = Math.Max(1, visual.Bounds.Height);
-        var y = e.GetPosition(visual).Y;
-        if (y <= height * 0.33)
-            return CueNodeDropPlacement.Before;
-        if (target.IsGroup && y <= height * 0.67)
-            return CueNodeDropPlacement.Inside;
-        return CueNodeDropPlacement.After;
-    }
-
-    private readonly record struct CueDropTarget(CueNodeViewModel Node, Visual Visual);
 
     private void OnDataContextChanged(object? sender, EventArgs e)
     {
@@ -272,6 +227,13 @@ public partial class CuePlayerView : UserControl
         _ = sender;
         if (e.PropertyName is nameof(CuePlayerViewModel.VisibleNodes) or nameof(CuePlayerViewModel.SelectedCueList))
             RebuildCueSource();
+        else if (e.PropertyName is nameof(CuePlayerViewModel.IsCueEditMode))
+            SyncCueTreeDragDropMode();
+    }
+
+    private void SyncCueTreeDragDropMode()
+    {
+        CueTreeGrid.AutoDragDropRows = DataContext is CuePlayerViewModel { IsCueEditMode: true };
     }
 
     private void RebuildCueSource()
@@ -325,6 +287,7 @@ public partial class CuePlayerView : UserControl
         }
 
         CueTreeGrid.Source = _source;
+        SyncCueTreeDragDropMode();
     }
 
     /// <summary>Status indicator dot. Re-subscribes to the row's <c>RowStatus</c> notifications

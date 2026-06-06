@@ -173,7 +173,7 @@ public sealed class ControlDeviceProfileTests
         Assert.Equal(3, profile.Tasks.Count);
         var xremote = Assert.Single(profile.Tasks, t => t.Id == "x32.xremote");
         Assert.True(xremote.IsDefaultEnabled);
-        Assert.Equal(ControlDeviceTaskKind.PeriodicOscSend, xremote.Kind);
+        Assert.Equal(ControlDeviceTaskKind.X32ProtocolMaintenance, xremote.Kind);
         Assert.Equal("/xremote", xremote.Address);
         Assert.Equal(8000, xremote.IntervalMs);
 

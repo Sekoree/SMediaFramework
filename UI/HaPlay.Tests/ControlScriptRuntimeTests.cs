@@ -606,6 +606,36 @@ public sealed class ControlScriptRuntimeTests
     }
 
     [Fact]
+    public void DispatchControlEvent_DecodesX32MeterBlobIntoIndexedCacheAddresses()
+    {
+        var oscDeviceId = Guid.NewGuid();
+        var runtime = CreateRuntime(
+            new ControlSystemConfig
+            {
+                IsArmed = true,
+                Devices = [OscDevice(oscDeviceId, "x32")],
+            },
+            new Dictionary<string, string>());
+
+        Span<byte> blob = stackalloc byte[12];
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(blob[..4], 4);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(blob.Slice(4, 4), 253);
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(blob.Slice(8, 4), BitConverter.SingleToInt32Bits(0.25f));
+
+        var result = runtime.DispatchControlEvent(OscEvent(
+            oscDeviceId,
+            "/meters",
+            OSCArgument.String("/meters/6"),
+            OSCArgument.Blob(blob.ToArray())));
+
+        Assert.Contains(
+            result.CacheChanges,
+            change => change.Key.Address == "/meters/6/0" && change.Value.NumberValue == 0.25);
+        Assert.True(runtime.RuntimeServices.OscCache.TryGetNumber("x32", "/meters/6/0", out var value));
+        Assert.Equal(0.25, value, precision: 6);
+    }
+
+    [Fact]
     public void DispatchControlEvent_EndpointScopedCacheChangedPreservesOriginalSource()
     {
         var listenerId = Guid.NewGuid();

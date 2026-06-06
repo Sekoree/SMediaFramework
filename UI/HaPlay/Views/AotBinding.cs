@@ -11,6 +11,11 @@ namespace HaPlay.Views;
 /// <see cref="INotifyPropertyChanged"/> source by hand using only public APIs
 /// (<see cref="AvaloniaObject.PropertyChanged"/> + <see cref="INotifyPropertyChanged.PropertyChanged"/>).
 /// No reflection, no dynamic code. Subscriptions are released on <c>DetachedFromVisualTree</c>.
+/// <para>
+/// Cue tree read-only text columns intentionally use <see cref="OneWayText"/> inside recycled
+/// <c>TemplateColumn</c> cells instead of stock <c>TextColumn</c> until NativeAOT validation confirms
+/// TreeDataGrid's expression-based text columns are safe in published builds.
+/// </para>
 /// </summary>
 internal static class AotBinding
 {
