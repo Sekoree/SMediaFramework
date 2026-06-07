@@ -583,7 +583,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
 
         ILocalVideoPreviewRuntime runtime = d.Engine == VideoOutputEngine.SdlOpenGl
-            ? new SdlLocalVideoPreviewRuntime(d, line, this)
+            ? new SdlLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow())
             : new AvaloniaLocalVideoPreviewRuntime(d, line, this, TryGetOwnerWindow());
 
         try

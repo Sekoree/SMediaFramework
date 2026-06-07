@@ -430,11 +430,14 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             }
             else
             {
+                // Real layout comes from av_hwframe_transfer_data (first frame). Do not advertise NV12
+                // here: codecs such as ProRes transfer to YUV422P10LE, and pretending NV12 lets downstream
+                // negotiation pick a format before we know what swscale will actually receive.
                 _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
-                _vNativePixFmt = PixelFormat.Nv12;
+                _vNativePixFmt = PixelFormat.Unknown;
                 _vPassThrough = false;
                 _vOutPixFmt = PixelFormat.Bgra32;
-                _vNativePixFormats = [PixelFormat.Nv12];
+                _vNativePixFormats = [];
             }
         }
         else

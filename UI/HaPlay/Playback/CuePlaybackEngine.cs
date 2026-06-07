@@ -131,6 +131,12 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             try
             {
+                if (!ValidateAudioRoutes(entry.Cue, routes, out var routeError))
+                {
+                    _cuePlayer.StatusMessage = routeError;
+                    return;
+                }
+
                 ReconcileActiveAudioRoutes(entry, routes);
             }
             catch (ObjectDisposedException)
@@ -269,6 +275,10 @@ public sealed class CuePlaybackEngine : IDisposable
             var plan = BuildRoutePlan(cue);
             if (!plan.HasAnyRoute)
                 continue;
+            if (!CanSourceSatisfyRoutePlan(cue.Source, plan, out _))
+                continue;
+            if (!ValidateRoutePlan(cue, plan, out _))
+                continue;
 
             specs.Add(BuildClipSpec(cue, list, plan));
         }
@@ -295,7 +305,9 @@ public sealed class CuePlaybackEngine : IDisposable
 
         var errors = results.Where(r => r is not null).ToList();
 
-        // Coordinated start: unpause all audio sources, then Play all players at once.
+        // Coordinated start: start every video transport, then unpause audio and start shared audio
+        // runtimes. Newly wired cue audio routers stay stopped until this point, so they cannot prefill
+        // hardware buffers with paused-source silence.
         List<ActiveCue> group;
         lock (_gate)
             group = cues.Select(c => _active.GetValueOrDefault(c.Id)).Where(e => e is not null).ToList()!;
@@ -310,9 +322,8 @@ public sealed class CuePlaybackEngine : IDisposable
 
             foreach (var entry in group)
             {
-                entry.IsPaused = false;
-                foreach (var src in entry.PausableAudioSources)
-                    src.IsPaused = false;
+                entry.SetAudioPaused(false);
+                entry.EnsureAudioRuntimesStarted();
                 CueStarted?.Invoke(this, entry.Cue.Id);
             }
         });
@@ -342,6 +353,8 @@ public sealed class CuePlaybackEngine : IDisposable
             return "Cue has no audio routes or video placements wired to outputs.";
         if (!CanSourceSatisfyRoutePlan(cue.Source, plan, out var sourceRouteError))
             return sourceRouteError;
+        if (!ValidateRoutePlan(cue, plan, out var routeError))
+            return routeError;
 
         // If the same cue id is already running, stop its prior instance. A matching prepared
         // standby instance is kept and consumed below.
@@ -387,9 +400,8 @@ public sealed class CuePlaybackEngine : IDisposable
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
                     entry.StartPlayback();
-                    entry.IsPaused = false;
-                    foreach (var source in entry.PausableAudioSources)
-                        source.IsPaused = false;
+                    entry.SetAudioPaused(false);
+                    entry.EnsureAudioRuntimesStarted();
                     CueStarted?.Invoke(this, cue.Id);
                 });
             }
@@ -579,9 +591,7 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                entry.IsPaused = startPaused;
-                foreach (var source in entry.PausableAudioSources)
-                    source.IsPaused = startPaused;
+                entry.SetAudioPaused(startPaused);
             });
             return null;
         }
@@ -642,8 +652,8 @@ public sealed class CuePlaybackEngine : IDisposable
             toDispose = _active.Values.ToList();
             _active.Clear();
         }
-        foreach (var entry in toDispose)
-            await DisposeEntryAsync(entry, releaseFade: SoftStopFadeDuration).ConfigureAwait(false);
+        await Task.WhenAll(toDispose.Select(entry => DisposeEntryAsync(entry, releaseFade: SoftStopFadeDuration)))
+            .ConfigureAwait(false);
         await _standby.RefreshStandbyAsync([], new ClipStandbyPolicy()).ConfigureAwait(false);
     }
 
@@ -674,17 +684,16 @@ public sealed class CuePlaybackEngine : IDisposable
         lock (_gate)
             entries = _active.Values.ToList();
 
-        // Update model state on UI thread first so audio sources silence immediately.
-        // Always set unconditionally — IsPaused can be stale after group execution.
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        // Pause sources on the UI thread first so audio silences immediately. Resume unpauses each cue
+        // only after its transport has been restarted below.
+        if (paused)
         {
-            foreach (var entry in entries)
+            await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                entry.IsPaused = paused;
-                foreach (var source in entry.PausableAudioSources)
-                    source.IsPaused = paused;
-            }
-        });
+                foreach (var entry in entries)
+                    entry.SetAudioPaused(true);
+            });
+        }
 
         // Heavy transport (thread joins, PortAudio flush) off UI thread with bounded timeout.
         foreach (var entry in entries)
@@ -702,7 +711,11 @@ public sealed class CuePlaybackEngine : IDisposable
                 else
                 {
                     await Dispatcher.UIThread.InvokeAsync(() =>
-                        entry.StartPlayback());
+                    {
+                        entry.StartPlayback();
+                        entry.SetAudioPaused(false);
+                        entry.EnsureAudioRuntimesStarted();
+                    });
                 }
             }
             catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
@@ -755,6 +768,9 @@ public sealed class CuePlaybackEngine : IDisposable
 
     private async Task DisposeEntryAsync(ActiveCue entry, bool notifyEnded = true, TimeSpan releaseFade = default)
     {
+        if (!entry.TryBeginDispose())
+            return;
+
         try { entry.Cts.Cancel(); } catch { /* best effort */ }
 
         if (releaseFade > TimeSpan.Zero)
@@ -1264,6 +1280,90 @@ public sealed class CuePlaybackEngine : IDisposable
     private static bool SupportsCueEngineSource(PlaylistItem? source) =>
         source is FilePlaylistItem or ImagePlaylistItem or TextPlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
 
+    private bool ValidateRoutePlan(MediaCueNode cue, RoutePlan plan, out string? error)
+    {
+        var audioRoutes = plan.AudioByOutput.Values.SelectMany(r => r);
+        return ValidateAudioRoutes(cue, audioRoutes, out error);
+    }
+
+    private bool ValidateAudioRoutes(
+        MediaCueNode cue,
+        IReadOnlyList<CueAudioRoute> routes,
+        out string? error)
+    {
+        var audioRoutes = routes
+            .Select((route, sourceIndex) => new AudioRoutePlanEntry(route, sourceIndex))
+            .Where(entry => entry.Route.OutputLineId != Guid.Empty);
+        return ValidateAudioRoutes(cue, audioRoutes, out error);
+    }
+
+    private bool ValidateAudioRoutes(
+        MediaCueNode cue,
+        IEnumerable<AudioRoutePlanEntry> routes,
+        out string? error)
+    {
+        error = null;
+        var outputDefinitions = SnapshotOutputDefinitions();
+        var sourceChannels = Math.Max(0, cue.AudioChannels);
+
+        foreach (var entry in routes)
+        {
+            var route = entry.Route;
+            if (route.SourceChannel < 0)
+            {
+                error = $"Audio route {entry.SourceIndex + 1} has an invalid input channel {route.SourceChannel}.";
+                return false;
+            }
+
+            if (sourceChannels > 0 && route.SourceChannel >= sourceChannels)
+            {
+                error = $"Audio route {entry.SourceIndex + 1} uses input channel {route.SourceChannel}, but the cue source has {sourceChannels} channel(s).";
+                return false;
+            }
+
+            var output = outputDefinitions.FirstOrDefault(definition => definition.Id == route.OutputLineId);
+            if (output is null)
+            {
+                error = $"Audio route {entry.SourceIndex + 1} targets an output line that is no longer available.";
+                return false;
+            }
+
+            if (!IsAudioCapableOutput(output))
+            {
+                error = $"Audio route {entry.SourceIndex + 1} targets '{output.DisplayName}', which cannot carry audio.";
+                return false;
+            }
+
+            var outputChannels = GetAudioOutputChannelCount(output);
+            if (route.OutputChannel < 1 || route.OutputChannel > outputChannels)
+            {
+                error = $"Audio route {entry.SourceIndex + 1} uses output channel {route.OutputChannel}, but '{output.DisplayName}' has {outputChannels} channel(s).";
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private IReadOnlyList<OutputDefinition> SnapshotOutputDefinitions()
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+            return _outputs.Outputs.Select(output => output.Definition).ToList();
+
+        return Dispatcher.UIThread.InvokeAsync(() => _outputs.Outputs.Select(output => output.Definition).ToList())
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static int GetAudioOutputChannelCount(OutputDefinition definition) =>
+        definition switch
+        {
+            PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
+            NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly =>
+                Math.Max(1, nd.AudioChannelCount),
+            _ => 0,
+        };
+
     private static bool CanSourceSatisfyRoutePlan(PlaylistItem? source, RoutePlan plan, out string? error)
     {
         error = null;
@@ -1344,9 +1444,7 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                entry.IsPaused = true;
-                foreach (var source in entry.PausableAudioSources)
-                    source.IsPaused = true;
+                entry.SetAudioPaused(true);
             });
         }
 
@@ -1361,9 +1459,8 @@ public sealed class CuePlaybackEngine : IDisposable
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 entry.StartPlayback();
-                entry.IsPaused = false;
-                foreach (var source in entry.PausableAudioSources)
-                    source.IsPaused = false;
+                entry.SetAudioPaused(false);
+                entry.EnsureAudioRuntimesStarted();
             });
     }
 
@@ -1640,6 +1737,22 @@ public sealed class CuePlaybackEngine : IDisposable
         public List<(ClipAudioOutputRuntime Runtime, string SourceId)> AudioSources { get; } = new();
         public List<PausableAudioSource> PausableAudioSources { get; } = new();
         public List<IDisposable> AudioDisposables { get; } = new();
+        private int _disposeStarted;
+
+        public bool TryBeginDispose() => Interlocked.Exchange(ref _disposeStarted, 1) == 0;
+
+        public void SetAudioPaused(bool paused)
+        {
+            IsPaused = paused;
+            foreach (var source in PausableAudioSources)
+                source.IsPaused = paused;
+        }
+
+        public void EnsureAudioRuntimesStarted()
+        {
+            foreach (var runtime in AudioSources.Select(source => source.Runtime).Distinct())
+                runtime.EnsureStarted();
+        }
 
         public void StartPlayback()
         {

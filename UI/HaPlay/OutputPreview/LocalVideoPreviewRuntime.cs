@@ -135,6 +135,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
     private LocalVideoOutputDefinition _definition;
     private readonly OutputLineViewModel _line;
     private readonly OutputManagementViewModel _owner;
+    private readonly Window? _screenReference;
     private SDL3GLVideoOutput? _sink;
     private int _closeHandlerPosted;
     private int _playbackHolders;
@@ -142,11 +143,13 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
     public SdlLocalVideoPreviewRuntime(
         LocalVideoOutputDefinition definition,
         OutputLineViewModel line,
-        OutputManagementViewModel owner)
+        OutputManagementViewModel owner,
+        Window? screenReference)
     {
         _definition = definition;
         _line = line;
         _owner = owner;
+        _screenReference = screenReference;
     }
 
     public LocalVideoOutputDefinition Definition => _definition;
@@ -168,11 +171,8 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             output.CloseRequested += OnSdlCloseRequested;
             var format = PreviewVideoFrames.PreviewFormat(iw, ih);
             output.Configure(format);
-            output.ApplyWindowPlacement(
-                _definition.ScreenIndex,
-                _definition.SurfaceMode == VideoSurfaceMode.FullScreen,
-                _definition.WindowWidth,
-                _definition.WindowHeight);
+            ApplySdlWindowPlacement(output, _definition, _definition.SurfaceMode == VideoSurfaceMode.FullScreen,
+                _definition.WindowWidth, _definition.WindowHeight);
             output.Submit(PreviewVideoFrames.CreateIdleFrame(format, _definition.BackgroundImagePath));
             Interlocked.Exchange(ref _sink, output);
         }, cancellationToken).ConfigureAwait(false);
@@ -180,11 +180,13 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
     public void SetFullscreen(bool fullscreen)
     {
-        _sink?.ApplyWindowPlacement(
-            _definition.ScreenIndex,
-            fullscreen,
-            fullscreen ? null : _definition.WindowWidth ?? 1280,
-            fullscreen ? null : _definition.WindowHeight ?? 720);
+        if (_sink is { } sink)
+            ApplySdlWindowPlacement(
+                sink,
+                _definition,
+                fullscreen,
+                fullscreen ? null : _definition.WindowWidth ?? 1280,
+                fullscreen ? null : _definition.WindowHeight ?? 720);
     }
 
     public void ApplyHoldImageWindowSize(int? width, int? height)
@@ -220,8 +222,9 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             var output = _sink;
             if (output is null)
                 return;
-            output.ApplyWindowPlacement(
-                newDefinition.ScreenIndex,
+            ApplySdlWindowPlacement(
+                output,
+                newDefinition,
                 newDefinition.SurfaceMode == VideoSurfaceMode.FullScreen,
                 newDefinition.WindowWidth,
                 newDefinition.WindowHeight);
@@ -236,6 +239,43 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             }
             Reconfigured?.Invoke(this, EventArgs.Empty);
         }, cancellationToken);
+    }
+
+    private void ApplySdlWindowPlacement(
+        SDL3GLVideoOutput output,
+        LocalVideoOutputDefinition definition,
+        bool fullscreen,
+        int? windowWidth,
+        int? windowHeight)
+    {
+        var bounds = ResolveScreenWorkingArea(definition.ScreenIndex);
+        if (bounds is { } b)
+        {
+            output.ApplyWindowPlacementToBounds(b.X, b.Y, b.Width, b.Height, fullscreen, windowWidth, windowHeight);
+            return;
+        }
+
+        output.ApplyWindowPlacement(definition.ScreenIndex, fullscreen, windowWidth, windowHeight);
+    }
+
+    private PixelRect? ResolveScreenWorkingArea(int screenIndex)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+            return ResolveScreenWorkingAreaCore(screenIndex);
+
+        return Dispatcher.UIThread.InvokeAsync(() => ResolveScreenWorkingAreaCore(screenIndex))
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private PixelRect? ResolveScreenWorkingAreaCore(int screenIndex)
+    {
+        var screens = _screenReference?.Screens?.All;
+        if (screens is null || screens.Count == 0)
+            return null;
+
+        var idx = Math.Clamp(screenIndex, 0, screens.Count - 1);
+        return screens[idx].WorkingArea;
     }
 
     public IVideoOutput? AcquireForPlayback()

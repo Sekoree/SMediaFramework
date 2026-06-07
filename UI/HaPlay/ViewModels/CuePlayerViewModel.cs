@@ -1544,6 +1544,9 @@ public partial class CuePlayerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _statusMessage;
 
+    private static readonly TimeSpan StatusMessageAutoClearDelay = TimeSpan.FromSeconds(5);
+    private CancellationTokenSource? _statusMessageClearCts;
+
     [ObservableProperty]
     private bool _isCueEditMode = true;
 
@@ -1685,6 +1688,9 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(VisibleVideoOutputs));
         SelectedComposition = value?.Compositions.FirstOrDefault();
         SelectedVideoOutput = value?.VideoOutputs.FirstOrDefault();
+        _selectedCueNodes.Clear();
+        OnPropertyChanged(nameof(SelectedCueCount));
+        OnPropertyChanged(nameof(IsMultiSelected));
         SelectedCueNode = null;
         SelectedAudioRoute = null;
         SelectedVideoPlacement = null;
@@ -1834,8 +1840,24 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueAudioRouteViewModel.OutputLineId)
             or nameof(CueAudioRouteViewModel.OutputChannel)
             or nameof(CueAudioRouteViewModel.GainDb)
-            or nameof(CueAudioRouteViewModel.Muted)
-            or nameof(CueVideoPlacementViewModel.CompositionId)
+            or nameof(CueAudioRouteViewModel.Muted))
+        {
+            PushActiveAudioRoutesUpdate();
+            OnWatchedCueEdited();
+            return;
+        }
+
+        if (sender is CueVideoPlacementViewModel placement
+            && IsVideoPlacementProperty(e.PropertyName))
+        {
+            if (IsLiveEditableVideoPlacementProperty(e.PropertyName))
+                PushActiveVideoPlacementUpdate(placement);
+            RefreshVideoFrameRateMismatchWarning();
+        }
+    }
+
+    private static bool IsVideoPlacementProperty(string? propertyName) =>
+        propertyName is nameof(CueVideoPlacementViewModel.CompositionId)
             or nameof(CueVideoPlacementViewModel.LayerIndex)
             or nameof(CueVideoPlacementViewModel.Position)
             or nameof(CueVideoPlacementViewModel.Opacity)
@@ -1846,16 +1868,7 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropLeft)
             or nameof(CueVideoPlacementViewModel.CropTop)
             or nameof(CueVideoPlacementViewModel.CropRight)
-            or nameof(CueVideoPlacementViewModel.CropBottom))
-        {
-            if (sender is CueAudioRouteViewModel)
-                PushActiveAudioRoutesUpdate();
-            if (sender is CueVideoPlacementViewModel placement
-                && IsLiveEditableVideoPlacementProperty(e.PropertyName))
-                PushActiveVideoPlacementUpdate(placement);
-            OnWatchedCueEdited();
-        }
-    }
+            or nameof(CueVideoPlacementViewModel.CropBottom);
 
     private static bool IsLiveEditableVideoPlacementProperty(string? propertyName) =>
         propertyName is nameof(CueVideoPlacementViewModel.LayerIndex)
@@ -2393,6 +2406,36 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(TransportState));
     }
 
+    partial void OnStatusMessageChanged(string? value)
+    {
+        _statusMessageClearCts?.Cancel();
+        _statusMessageClearCts?.Dispose();
+        _statusMessageClearCts = null;
+
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        var cts = new CancellationTokenSource();
+        _statusMessageClearCts = cts;
+        _ = ClearStatusMessageLaterAsync(value, cts.Token);
+    }
+
+    private async Task ClearStatusMessageLaterAsync(string message, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(StatusMessageAutoClearDelay, token).ConfigureAwait(false);
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested && string.Equals(StatusMessage, message, StringComparison.Ordinal))
+                    StatusMessage = null;
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
     private ICollection<CueNodeViewModel>? SelectedParentCollection()
     {
         if (SelectedCueList is null)
@@ -2426,6 +2469,47 @@ public partial class CuePlayerViewModel : ViewModelBase
             if (RemoveNodeRecursive(n.Children, target))
                 return true;
         return false;
+    }
+
+    private bool IsInCurrentCueTree(CueNodeViewModel node) =>
+        SelectedCueList is not null && ContainsNode(SelectedCueList.Nodes, node);
+
+    private void PruneSelectionToCurrentTree()
+    {
+        var removed = _selectedCueNodes.RemoveAll(n => !IsInCurrentCueTree(n));
+        if (removed == 0 && (SelectedCueNode is null || IsInCurrentCueTree(SelectedCueNode)))
+            return;
+
+        SelectedCueNode = _selectedCueNodes.FirstOrDefault();
+        OnPropertyChanged(nameof(SelectedCueCount));
+        OnPropertyChanged(nameof(IsMultiSelected));
+    }
+
+    private void ReconcileTransportAfterTreeMutation(int removedFireableIndex)
+    {
+        var ordered = EnumerateFireableCueOrder().ToList();
+
+        if (CurrentCueNode is not null && !IsInCurrentCueTree(CurrentCueNode))
+        {
+            CurrentCueNode = null;
+            IsTransportPaused = false;
+        }
+
+        if (StandbyCueNode is not null && !IsInCurrentCueTree(StandbyCueNode))
+        {
+            StandbyCueNode = ordered.Count == 0
+                ? null
+                : ordered[Math.Clamp(removedFireableIndex < 0 ? 0 : removedFireableIndex, 0, ordered.Count - 1)];
+        }
+        else
+        {
+            RefreshRowStatuses();
+            RebuildUpcomingCues();
+        }
+
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        PauseCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand]
@@ -2587,7 +2671,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanApplyCueDownmix))]
     private void ApplyCueDownmixPreset(AudioDownmixPreset preset)
     {
-        if (SelectedCueNode is not { Kind: CueNodeKind.Media } media)
+        var targets = MediaCuesInSelection();
+        if (targets.Count == 0)
             return;
 
         var line = SelectedAudioRoute?.OutputLineId is { } selId && selId != Guid.Empty
@@ -2599,41 +2684,56 @@ public partial class CuePlayerViewModel : ViewModelBase
             return;
         }
 
-        var srcChannels = Math.Max(1, media.SourceAudioChannels);
         var outChannels = GetAudioOutputChannelCount(line);
-        if (!AudioDownmixPresets.IsApplicable(preset, srcChannels, outChannels))
+        var lineId = line.Definition.Id;
+        var applied = 0;
+        string? firstNotApplicable = null;
+
+        foreach (var media in targets)
         {
-            StatusMessage = Strings.Format(nameof(Strings.DownmixNotApplicableStatusFormat),
-                AudioDownmixPresets.DisplayName(preset), srcChannels, outChannels);
+            var srcChannels = Math.Max(1, media.SourceAudioChannels);
+            if (!AudioDownmixPresets.IsApplicable(preset, srcChannels, outChannels))
+            {
+                firstNotApplicable ??= Strings.Format(nameof(Strings.DownmixNotApplicableStatusFormat),
+                    AudioDownmixPresets.DisplayName(preset), srcChannels, outChannels);
+                continue;
+            }
+
+            for (var i = media.AudioRoutes.Count - 1; i >= 0; i--)
+                if (media.AudioRoutes[i].OutputLineId == lineId)
+                    media.AudioRoutes.RemoveAt(i);
+
+            CueAudioRouteViewModel? first = null;
+            foreach (var contrib in AudioDownmixPresets.Contributions(preset, srcChannels, outChannels))
+            {
+                var route = new CueAudioRouteViewModel
+                {
+                    SourceChannel = contrib.InputChannel,
+                    OutputLineId = lineId,
+                    OutputChannel = contrib.OutputChannel + 1, // cue routes are 1-based
+                    GainDb = contrib.GainDb,
+                };
+                route.SetLineResolver(ResolveOutputLine);
+                media.AudioRoutes.Add(route);
+                first ??= route;
+            }
+
+            if (ReferenceEquals(media, SelectedCueNode) && first is not null)
+                SelectedAudioRoute = first;
+            applied++;
+        }
+
+        if (applied == 0)
+        {
+            StatusMessage = firstNotApplicable;
             return;
         }
 
-        var lineId = line.Definition.Id;
-        for (var i = media.AudioRoutes.Count - 1; i >= 0; i--)
-            if (media.AudioRoutes[i].OutputLineId == lineId)
-                media.AudioRoutes.RemoveAt(i);
-
-        CueAudioRouteViewModel? first = null;
-        foreach (var contrib in AudioDownmixPresets.Contributions(preset, srcChannels, outChannels))
-        {
-            var route = new CueAudioRouteViewModel
-            {
-                SourceChannel = contrib.InputChannel,
-                OutputLineId = lineId,
-                OutputChannel = contrib.OutputChannel + 1, // cue routes are 1-based
-                GainDb = contrib.GainDb,
-            };
-            route.SetLineResolver(ResolveOutputLine);
-            media.AudioRoutes.Add(route);
-            first ??= route;
-        }
-
-        if (first is not null)
-            SelectedAudioRoute = first;
         OnPropertyChanged(nameof(VisibleAudioRoutes));
         OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
         StatusMessage = Strings.Format(nameof(Strings.DownmixAppliedStatusFormat),
-            AudioDownmixPresets.DisplayName(preset), line.Definition.DisplayName);
+            AudioDownmixPresets.DisplayName(preset),
+            applied == 1 ? line.Definition.DisplayName : $"{applied} cues on {line.Definition.DisplayName}");
         SuggestPreRollRefresh();
     }
 
@@ -3111,11 +3211,13 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         if (SelectedCueList is null || SelectedCueNode is null)
             return;
+        var orderedBefore = EnumerateFireableCueOrder().ToList();
+        var removedFireable = ResolveFireableCue(SelectedCueNode) ?? SelectedCueNode;
+        var removedFireableIndex = orderedBefore.FindIndex(c => ReferenceEquals(c, removedFireable));
         if (!RemoveNodeRecursive(SelectedCueList.Nodes, SelectedCueNode))
             return;
-        SelectedCueNode = null;
-        GoCommand.NotifyCanExecuteChanged();
-        BackCommand.NotifyCanExecuteChanged();
+        PruneSelectionToCurrentTree();
+        ReconcileTransportAfterTreeMutation(removedFireableIndex);
     }
 
     private bool CanRemoveNode() => SelectedCueList is not null && SelectedCueNode is not null;
@@ -4082,6 +4184,9 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (CueLists.Count == 0)
             CueLists.Add(new CueListEditorViewModel(Strings.DefaultCueListName));
         SelectedCueList = CueLists[0];
+        _selectedCueNodes.Clear();
+        OnPropertyChanged(nameof(SelectedCueCount));
+        OnPropertyChanged(nameof(IsMultiSelected));
         SelectedCueNode = null;
         SelectedAudioRoute = null;
         SelectedVideoPlacement = null;

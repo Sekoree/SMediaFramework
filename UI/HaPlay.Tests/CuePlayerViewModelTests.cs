@@ -455,6 +455,28 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void ActivePlacementEdit_DoesNotRequestPreRollRefresh()
+    {
+        var vm = new CuePlayerViewModel();
+        var refreshes = 0;
+        vm.PreRollRefreshSuggested += (_, _) => refreshes++;
+        vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => Task.CompletedTask;
+
+        vm.AddCompositionCommand.Execute(null);
+        vm.AddMediaCueCommand.Execute(null);
+        var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddVideoPlacementCommand.Execute(null);
+        var placement = vm.SelectedVideoPlacement;
+        Assert.NotNull(placement);
+
+        refreshes = 0;
+        vm.OnCueStarted(cue.Id);
+        placement!.DestX = 0.25;
+
+        Assert.Equal(0, refreshes);
+    }
+
+    [Fact]
     public void ActiveAudioRouteEdit_PushesLiveAudioRouteSnapshot()
     {
         var vm = new CuePlayerViewModel();
@@ -484,6 +506,55 @@ public sealed class CuePlayerViewModelTests
         var model = Assert.Single(call.Routes);
         Assert.Equal(outputId, model.OutputLineId);
         Assert.Equal(-6, model.GainDb);
+    }
+
+    [Fact]
+    public void RemoveStandbyCue_AdvancesToNextRemainingCue()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var third = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        vm.SelectedCueNode = second;
+        vm.StandbySelectedCommand.Execute(null);
+
+        vm.RemoveNodeCommand.Execute(null);
+
+        Assert.Same(third, vm.StandbyCueNode);
+        Assert.DoesNotContain(second, vm.UpcomingCues);
+        Assert.Contains(first, vm.VisibleNodes);
+        Assert.Contains(third, vm.VisibleNodes);
+    }
+
+    [Fact]
+    public void ApplyCueDownmixPreset_MultiSelect_AppliesToEverySelectedMediaCue()
+    {
+        var vm = new CuePlayerViewModel();
+        var output = Line(new PortAudioOutputDefinition(
+            Guid.NewGuid(), "Main", 0, "ALSA", 0, "dev", 2, 48000));
+        vm.SetAvailableOutputs(new ObservableCollection<OutputLineViewModel> { output });
+
+        vm.AddMediaCueCommand.Execute(null);
+        var first = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        first.SourceAudioChannels = 2;
+        vm.AddMediaCueCommand.Execute(null);
+        var second = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        second.SourceAudioChannels = 2;
+        vm.UpdateSelection([first, second]);
+
+        vm.ApplyCueDownmixPresetCommand.Execute(AudioDownmixPreset.PassThrough);
+
+        Assert.Equal(2, first.AudioRoutes.Count);
+        Assert.Equal(2, second.AudioRoutes.Count);
+        Assert.All(first.AudioRoutes.Concat(second.AudioRoutes), route =>
+        {
+            Assert.Equal(output.Definition.Id, route.OutputLineId);
+            Assert.InRange(route.OutputChannel, 1, 2);
+        });
     }
 
     [Fact]

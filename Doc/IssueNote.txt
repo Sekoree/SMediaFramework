@@ -1,0 +1,16 @@
+Cue Player:
+- When cue in list is removed while list is playing (shows in next up) it goes in kinda of a weird state where it will stop afterwards, when trying to press go on the new next one it somehow plays the cue that was removed.
+- When an incorrect audio routing is done (for example input channel doesnt exist) it hard crashes.
+- Occausinal "already disposed" exception when stopping. (gets catched and ignored but should be fixed)
+- Multiselect adding audio routes doesnt seem to always way (when pressing the quick buttons, does itnot apply to all?)
+- Changing video position/transforming causes A/V desync/general desync between the parallel running cues.
+- Panic/stop seem to fade individually not all running at once?
+- When has a non-zero start time, it seems to be very stuttery (plays a couple frame smooth, then stuck for a bit, then smooth again, then stuck for a bit again). pausing and then resuing seems to fix it but audio and video is not in sync after that. Also takes a few seconds after hitting go to actually play (or at least show video, maybe this is what causes the desync?).
+  Afterwards audio seems to skip forward a little bit every few seconds. Video is ahead of audio.
+  When in Debug video seems to play smooth right away. But it also takes a few seconds to actually start playing. (the pause and resume is only needed on AOT publish it seems)
+
+General:
+- Info/Notification box should go away after a few seconds to not clutter up screen.
+
+Output:
+- SDL3 out monitor nummbering seems to be backwards

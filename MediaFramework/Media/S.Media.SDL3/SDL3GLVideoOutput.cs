@@ -256,6 +256,27 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     public void ApplyWindowPlacement(int displayIndex, bool fullscreen, int? windowWidth, int? windowHeight) =>
         InvokeOnRenderThread(() => ApplyWindowPlacementCore(displayIndex, fullscreen, windowWidth, windowHeight));
 
+    /// <summary>
+    /// Moves/resizes the SDL window using a display rectangle supplied by the host UI. This is useful
+    /// when the host's screen list is authoritative and may not match SDL's display ordering.
+    /// </summary>
+    public void ApplyWindowPlacementToBounds(
+        int displayX,
+        int displayY,
+        int displayWidth,
+        int displayHeight,
+        bool fullscreen,
+        int? windowWidth,
+        int? windowHeight) =>
+        InvokeOnRenderThread(() => ApplyWindowPlacementCore(
+            displayX,
+            displayY,
+            displayWidth,
+            displayHeight,
+            fullscreen,
+            windowWidth,
+            windowHeight));
+
     public void Configure(VideoFormat format)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -1014,13 +1035,28 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         if (displayId == 0 || !SDL.GetDisplayBounds(displayId, out var r))
             return;
 
+        ApplyWindowPlacementCore(r.X, r.Y, r.W, r.H, fullscreen, windowWidth, windowHeight);
+    }
+
+    private void ApplyWindowPlacementCore(
+        int displayX,
+        int displayY,
+        int displayWidth,
+        int displayHeight,
+        bool fullscreen,
+        int? windowWidth,
+        int? windowHeight)
+    {
+        if (_window == nint.Zero || displayWidth <= 0 || displayHeight <= 0)
+            return;
+
         if (fullscreen)
         {
             if (!SDL.SetWindowFullscreen(_window, false))
                 MediaDiagnostics.LogWarning("SDL3GLVideoOutput: leave fullscreen before placement failed: {0}", SDL.GetError());
-            if (!SDL.SetWindowPosition(_window, r.X, r.Y))
+            if (!SDL.SetWindowPosition(_window, displayX, displayY))
                 MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowPosition failed: {0}", SDL.GetError());
-            if (!SDL.SetWindowSize(_window, r.W, r.H))
+            if (!SDL.SetWindowSize(_window, displayWidth, displayHeight))
                 MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowSize failed: {0}", SDL.GetError());
             if (!SDL.SetWindowFullscreen(_window, true))
                 MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowFullscreen failed: {0}", SDL.GetError());
@@ -1035,8 +1071,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             if (!SDL.SetWindowSize(_window, ww, wh))
                 MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowSize failed: {0}", SDL.GetError());
 
-            var x = r.X + Math.Max(0, (r.W - ww) / 2);
-            var y = r.Y + Math.Max(0, (r.H - wh) / 2);
+            var x = displayX + Math.Max(0, (displayWidth - ww) / 2);
+            var y = displayY + Math.Max(0, (displayHeight - wh) / 2);
             if (!SDL.SetWindowPosition(_window, x, y))
                 MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_SetWindowPosition failed: {0}", SDL.GetError());
         }

@@ -82,20 +82,28 @@ public sealed class ClipAudioOutputRuntime : IDisposable
             throw new ArgumentException("at least one route required", nameof(routes));
 
         var srcId = _router.AddSource(source, id: sourceIdHint, autoResample: true);
-
-        var outChannels = _audioOutput.Format.Channels;
-        var routePlans = new List<(string RouteId, ChannelMap Map, float Gain)>(routes.Count);
-        for (var i = 0; i < routes.Count; i++)
-        {
-            var (map, gain) = BuildRoutePlan(routes[i], outChannels);
-            var routeId = routeIdFactory?.Invoke(srcId, i);
-            routePlans.Add((string.IsNullOrWhiteSpace(routeId) ? $"{srcId}_r{i}" : routeId, map, gain));
-        }
-
         try
         {
+            var outChannels = _audioOutput.Format.Channels;
+            var routePlans = new List<(string RouteId, ChannelMap Map, float Gain)>(routes.Count);
+            for (var i = 0; i < routes.Count; i++)
+            {
+                var (map, gain) = BuildRoutePlan(routes[i], outChannels);
+                var routeId = routeIdFactory?.Invoke(srcId, i);
+                routePlans.Add((string.IsNullOrWhiteSpace(routeId) ? $"{srcId}_r{i}" : routeId, map, gain));
+            }
+
             foreach (var (routeId, map, gain) in routePlans)
                 _router.AddRoute(srcId, _routerOutputId, routeId, map, gain);
+
+            lock (_gate)
+            {
+                _sources.Add(srcId);
+                _sourceRouteGains[srcId] = routePlans.ToDictionary(
+                    route => route.RouteId,
+                    route => new RouteGainTarget(route.RouteId, route.Gain),
+                    StringComparer.Ordinal);
+            }
         }
         catch (Exception ex)
         {
@@ -109,17 +117,13 @@ public sealed class ClipAudioOutputRuntime : IDisposable
                 ex);
         }
 
-        lock (_gate)
-        {
-            _sources.Add(srcId);
-            _sourceRouteGains[srcId] = routePlans.ToDictionary(
-                route => route.RouteId,
-                route => new RouteGainTarget(route.RouteId, route.Gain),
-                StringComparer.Ordinal);
-        }
-
-        _router.Play();
         return srcId;
+    }
+
+    public void EnsureStarted()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _router.Play();
     }
 
     public async Task FadeOutSourceAsync(string sourceId, TimeSpan duration, CancellationToken cancellationToken = default)
@@ -240,10 +244,16 @@ public sealed class ClipAudioOutputRuntime : IDisposable
 
     private static (ChannelMap Map, float Gain) BuildRoutePlan(AudioRouteSpec route, int outChannels)
     {
+        if (route.SourceChannel < 0)
+            throw new InvalidOperationException(
+                $"Route source channel {route.SourceChannel} is invalid; source channels are zero-based.");
+        if (route.OutputChannel < 1 || route.OutputChannel > outChannels)
+            throw new InvalidOperationException(
+                $"Route output channel {route.OutputChannel} is outside output channel range 1-{outChannels}.");
+
         var span = new int[outChannels];
         Array.Fill(span, -1);
-        var outCh = Math.Clamp(route.OutputChannel - 1, 0, outChannels - 1);
-        span[outCh] = Math.Max(0, route.SourceChannel);
+        span[route.OutputChannel - 1] = route.SourceChannel;
         var map = new ChannelMap(span);
         var gain = route.Muted ? 0f : DbToLinear(route.GainDb);
         return (map, gain);

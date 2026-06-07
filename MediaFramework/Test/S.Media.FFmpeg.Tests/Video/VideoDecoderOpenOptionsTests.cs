@@ -1,3 +1,4 @@
+using FFmpeg.AutoGen;
 using S.Media.FFmpeg.Video;
 using Xunit;
 
@@ -81,5 +82,17 @@ public sealed class VideoDecoderOpenOptionsTests
         {
             Environment.SetEnvironmentVariable(EnvName, prior);
         }
+    }
+
+    [Fact]
+    public void PreferSoftwareDecodeByDefault_ProRes_True()
+    {
+        Assert.True(VideoHardwareDecodeContext.PreferSoftwareDecodeByDefault(AVCodecID.AV_CODEC_ID_PRORES));
+    }
+
+    [Fact]
+    public void PreferSoftwareDecodeByDefault_H264_False()
+    {
+        Assert.False(VideoHardwareDecodeContext.PreferSoftwareDecodeByDefault(AVCodecID.AV_CODEC_ID_H264));
     }
 }

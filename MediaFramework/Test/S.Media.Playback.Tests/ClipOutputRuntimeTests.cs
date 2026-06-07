@@ -36,6 +36,30 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public void ClipAudioOutputRuntime_AddSource_DoesNotStartRouterUntilExplicitStart()
+    {
+        var format = new AudioFormat(48_000, 2);
+        var output = new RecordingAudioOutput(format);
+        using var runtime = new ClipAudioOutputRuntime(
+            "out-a",
+            output,
+            new FakePlaybackClock(),
+            displayName: "Output A");
+
+        runtime.AddSource(
+            new ConstantAudioSource(format),
+            [new AudioRouteSpec("out-a", SourceChannel: 0, OutputChannel: 1)],
+            "cue-a");
+
+        Thread.Sleep(100);
+        Assert.Equal(0, output.SubmittedFloats);
+
+        runtime.EnsureStarted();
+        Assert.True(SpinWait.SpinUntil(() => output.SubmittedFloats > 0, TimeSpan.FromSeconds(1)),
+            "shared cue audio router did not start after EnsureStarted");
+    }
+
+    [Fact]
     public void ClipAudioOutputRuntime_UpdateAndRemoveRoute_UsesExplicitRouteId()
     {
         var format = new AudioFormat(48_000, 2);
@@ -74,6 +98,25 @@ public sealed class ClipOutputRuntimeTests
         var ex = Assert.Throws<InvalidOperationException>(() => runtime.AddSource(
             new ConstantAudioSource(format),
             [new AudioRouteSpec("out-a", SourceChannel: 1, OutputChannel: 1)],
+            "cue-a"));
+
+        Assert.Contains("Failed to route cue source", ex.Message);
+        Assert.Equal(0, runtime.SourceCount);
+    }
+
+    [Fact]
+    public void ClipAudioOutputRuntime_AddSource_RollsBackWhenOutputChannelInvalid()
+    {
+        var format = new AudioFormat(48_000, 2);
+        using var runtime = new ClipAudioOutputRuntime(
+            "out-a",
+            new RecordingAudioOutput(format),
+            new FakePlaybackClock(),
+            displayName: "Output A");
+
+        var ex = Assert.Throws<InvalidOperationException>(() => runtime.AddSource(
+            new ConstantAudioSource(format),
+            [new AudioRouteSpec("out-a", SourceChannel: 0, OutputChannel: 3)],
             "cue-a"));
 
         Assert.Contains("Failed to route cue source", ex.Message);
@@ -164,9 +207,14 @@ public sealed class ClipOutputRuntimeTests
 
     private sealed class RecordingAudioOutput(AudioFormat format) : IAudioOutput
     {
+        private long _submittedFloats;
+
         public AudioFormat Format { get; } = format;
 
-        public void Submit(ReadOnlySpan<float> packedSamples) { }
+        public long SubmittedFloats => Volatile.Read(ref _submittedFloats);
+
+        public void Submit(ReadOnlySpan<float> packedSamples) =>
+            Interlocked.Add(ref _submittedFloats, packedSamples.Length);
     }
 
     private sealed class FakePlaybackClock : IPlaybackClock

@@ -139,6 +139,9 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
         bool preferLinuxDrmPrimeForGl,
         bool preferWindowsD3D11SharedHandleForGl)
     {
+        if (preferredOrder.Count == 0 && PreferSoftwareDecodeByDefault(codec->id))
+            return null;
+
         var order = preferredOrder.Count > 0
             ? preferredOrder
             : DefaultDeviceOrder();
@@ -291,6 +294,13 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
             hwPixFmt = d3d11Out;
         return hwPixFmt != AVPixelFormat.AV_PIX_FMT_NONE;
     }
+
+    internal static bool PreferSoftwareDecodeByDefault(AVCodecID codecId) =>
+        // FFmpeg exposes a Vulkan path for ProRes on some Linux systems, but for playback we immediately
+        // transfer those frames back to CPU memory. That path disables the decoder's frame/slice threading
+        // and can be slower than real time after deep seeks; the threaded software decoder is the stable
+        // default unless the host explicitly requests a hardware device order.
+        codecId == AVCodecID.AV_CODEC_ID_PRORES;
 
     public AVPixelFormat HwAccelPixFmt => _hwPixFmt;
 

@@ -789,6 +789,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
             _idleSlateSyncTimer.Stop();
             StopHoldPumpTimer();
             CancelCueEnvelope();
+            try { _statusMessageClearCts?.Cancel(); } catch { /* best effort */ }
+            try { _statusMessageClearCts?.Dispose(); } catch { /* best effort */ }
+            _statusMessageClearCts = null;
             CancelPreOpen();
             CancelWaveformExtraction();
             StopIdleSlate();
@@ -1219,6 +1222,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private string? _statusMessage;
 
+    private static readonly TimeSpan StatusMessageAutoClearDelay = TimeSpan.FromSeconds(5);
+    private CancellationTokenSource? _statusMessageClearCts;
+
     /// <summary>Structured load lifecycle for the player, distinct from the transient
     /// <see cref="StatusMessage"/>. Raises <see cref="HasLoadError"/> when it changes.</summary>
     [ObservableProperty]
@@ -1240,6 +1246,36 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     /// <summary>True when the last load attempt failed and an error is available to show.</summary>
     public bool HasLoadError => LoadState == PlayerLoadState.Failed && !string.IsNullOrWhiteSpace(LastLoadError);
+
+    partial void OnStatusMessageChanged(string? value)
+    {
+        _statusMessageClearCts?.Cancel();
+        _statusMessageClearCts?.Dispose();
+        _statusMessageClearCts = null;
+
+        if (string.IsNullOrWhiteSpace(value))
+            return;
+
+        var cts = new CancellationTokenSource();
+        _statusMessageClearCts = cts;
+        _ = ClearStatusMessageLaterAsync(value, cts.Token);
+    }
+
+    private async Task ClearStatusMessageLaterAsync(string message, CancellationToken token)
+    {
+        try
+        {
+            await Task.Delay(StatusMessageAutoClearDelay, token).ConfigureAwait(false);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (!token.IsCancellationRequested && string.Equals(StatusMessage, message, StringComparison.Ordinal))
+                    StatusMessage = null;
+            });
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
 
     public TimeSpan RemainingTime =>
         Duration > CurrentPosition ? Duration - CurrentPosition : TimeSpan.Zero;
