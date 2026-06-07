@@ -1034,11 +1034,28 @@ public sealed partial class AudioRouter : IDisposable
         if (wasRunning) Resume();
     }
 
+    /// <summary>Read-only position for resume drift checks (see <see cref="Playback.AvPlaybackCoordinator"/>).</summary>
+    internal bool TryGetSeekableSourcePosition(string sourceId, out TimeSpan position)
+    {
+        position = default;
+        if (string.IsNullOrEmpty(sourceId)) return false;
+        lock (_gate)
+        {
+            if (!_state.Sources.TryGetValue(sourceId, out var entry))
+                return false;
+            if (entry.Source is not ISeekableSource seekable)
+                return false;
+            position = seekable.Position;
+            return true;
+        }
+    }
+
     private void StopInternal(bool drain, bool flushAfterAbandon, CancellationToken cancellationToken = default)
     {
         Thread? toJoin;
         CancellationTokenSource? toDispose;
         OutputPump[] activePumps;
+        ICooperativeAudioReadInterrupt[] cooperativeSources;
         IAudioOutput[]? sinksForFlush = null;
         lock (_gate)
         {
@@ -1049,9 +1066,11 @@ public sealed partial class AudioRouter : IDisposable
             _thread = null;
             _isRunning = false;
             activePumps = CollectOutputPumps(_state.Outputs);
+            cooperativeSources = CollectCooperativeAudioReadInterrupts(_state.Sources);
             if (flushAfterAbandon)
                 sinksForFlush = CollectOutputs(_state.Outputs);
         }
+        RequestCooperativeAudioReadYield(cooperativeSources);
         toDispose?.Cancel();
         var joinCancelled = false;
         try
@@ -1070,7 +1089,10 @@ public sealed partial class AudioRouter : IDisposable
         finally
         {
             if (toJoin is not { IsAlive: true })
+            {
                 toDispose?.Dispose();
+                ClearCooperativeAudioReadYield(cooperativeSources);
+            }
             else
                 MediaDiagnostics.LogWarning("AudioRouter.StopInternal: run loop still alive after join; leaking CancellationTokenSource to avoid use-after-dispose.");
         }
@@ -1082,7 +1104,12 @@ public sealed partial class AudioRouter : IDisposable
         foreach (var p in activePumps)
         {
             if (drain) p.WaitForIdle(TimeSpan.FromSeconds(1), cancellationToken);
-            else p.AbandonQueue();
+            else
+            {
+                p.AbandonQueue();
+                if (flushAfterAbandon)
+                    p.WaitForIdle(TimeSpan.FromMilliseconds(100), cancellationToken);
+            }
         }
         while (_pumpsAwaitingDispose.TryDequeue(out var pending)) pending.Dispose();
 
@@ -1199,6 +1226,48 @@ public sealed partial class AudioRouter : IDisposable
         foreach (var (_, entry) in outputs)
             collected[i++] = entry.Output;
         return collected;
+    }
+
+    private static ICooperativeAudioReadInterrupt[] CollectCooperativeAudioReadInterrupts(ImmutableDictionary<string, SourceEntry> sources)
+    {
+        if (sources.IsEmpty)
+            return [];
+
+        List<ICooperativeAudioReadInterrupt>? collected = null;
+        foreach (var (_, entry) in sources)
+        {
+            if (entry.Source is not ICooperativeAudioReadInterrupt interrupt)
+                continue;
+
+            collected ??= new List<ICooperativeAudioReadInterrupt>();
+            collected.Add(interrupt);
+        }
+
+        return collected is null ? [] : collected.ToArray();
+    }
+
+    private static void RequestCooperativeAudioReadYield(ICooperativeAudioReadInterrupt[] sources)
+    {
+        foreach (var source in sources)
+        {
+            try { source.RequestYieldBetweenReads(); }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning("AudioRouter.StopInternal: cooperative audio read-yield request failed: {0}", ex.Message);
+            }
+        }
+    }
+
+    private static void ClearCooperativeAudioReadYield(ICooperativeAudioReadInterrupt[] sources)
+    {
+        foreach (var source in sources)
+        {
+            try { source.ClearYieldRequest(); }
+            catch (Exception ex)
+            {
+                MediaDiagnostics.LogWarning("AudioRouter.StopInternal: cooperative audio read-yield clear failed: {0}", ex.Message);
+            }
+        }
     }
 
     private void RaiseFaulted(Exception ex)

@@ -1,4 +1,5 @@
 using System.Buffers;
+using S.Media.Core.Audio;
 
 namespace S.Media.Effects;
 
@@ -24,7 +25,7 @@ namespace S.Media.Effects;
 /// frames carry an <see cref="ArrayPool{T}"/>-rented buffer released via their <c>release</c> hook.
 /// </para>
 /// </remarks>
-public sealed class FadeFromBlackVideoSource : IVideoSource, IDisposable
+public class FadeFromBlackVideoSource : IVideoSource, ICooperativeVideoReadInterrupt, IDisposable
 {
     private readonly IVideoSource _inner;
     private readonly TimeSpan _duration;
@@ -112,6 +113,25 @@ public sealed class FadeFromBlackVideoSource : IVideoSource, IDisposable
         if (_disposeInner && _inner is IDisposable d) d.Dispose();
     }
 
+    public void RequestYieldBetweenReads()
+    {
+        if (_inner is ICooperativeVideoReadInterrupt interrupt)
+            interrupt.RequestYieldBetweenReads();
+    }
+
+    public void ClearYieldRequest()
+    {
+        if (_inner is ICooperativeVideoReadInterrupt interrupt)
+            interrupt.ClearYieldRequest();
+    }
+
+    public static FadeFromBlackVideoSource Wrap(IVideoSource inner, TimeSpan duration, bool disposeInner = true) =>
+        inner is ISeekableSource seekable
+            ? new SeekableFadeFromBlackVideoSource(inner, duration, seekable, disposeInner)
+            : new FadeFromBlackVideoSource(inner, duration, disposeInner);
+
+    protected void ResetFadeAnchor() => _firstPts = null;
+
     private static VideoFrame ApplyRamp(VideoFrame src, float ramp)
     {
         // Single-plane CPU formats only — validated in ctor / SelectOutputFormat.
@@ -189,4 +209,21 @@ public sealed class FadeFromBlackVideoSource : IVideoSource, IDisposable
     private static bool IsSupportedFormat(PixelFormat pf) => pf is
         PixelFormat.Bgra32 or PixelFormat.Rgba32 or PixelFormat.Rgb24 or
         PixelFormat.Bgr24 or PixelFormat.Gray8;
+
+    private sealed class SeekableFadeFromBlackVideoSource(
+        IVideoSource inner,
+        TimeSpan duration,
+        ISeekableSource seekable,
+        bool disposeInner = true) : FadeFromBlackVideoSource(inner, duration, disposeInner), ISeekableSource
+    {
+        public TimeSpan Duration => seekable.Duration;
+
+        public TimeSpan Position => seekable.Position;
+
+        public void Seek(TimeSpan position)
+        {
+            ResetFadeAnchor();
+            seekable.Seek(position);
+        }
+    }
 }

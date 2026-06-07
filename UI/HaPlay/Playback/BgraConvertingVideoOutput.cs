@@ -18,7 +18,7 @@ namespace HaPlay.Playback;
 /// the negotiator as "no formats accepted" and throws — the correct way to say "give me BGRA32"
 /// is to list it explicitly.
 /// </remarks>
-internal sealed class BgraConvertingVideoOutput : IVideoOutput, IDisposable
+internal sealed class BgraConvertingVideoOutput : IVideoOutput, IVideoOutputQueueControl, IDisposable
 {
     private static readonly IReadOnlyList<PixelFormat> AcceptedFormatsArr = new[] { PixelFormat.Bgra32 };
 
@@ -67,6 +67,17 @@ internal sealed class BgraConvertingVideoOutput : IVideoOutput, IDisposable
         if (_disposed) return;
         _disposed = true;
     }
+
+    public void AbandonQueuedFrames()
+    {
+        if (_inner is IVideoOutputQueueControl control)
+            control.AbandonQueuedFrames();
+    }
+
+    public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default) =>
+        _inner is IVideoOutputQueueControl control
+            ? control.WaitForIdle(timeout, cancellationToken)
+            : true;
 
     private static bool TryPremultiplyStraightAlpha(VideoFrame frame, out VideoFrame premultiplied)
     {

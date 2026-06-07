@@ -136,6 +136,36 @@ public class PortAudioOutputTests
     /// (~10–25 ms at 48 kHz), or video playhead gating can sit near ~47 Hz on 60 fps content.
     /// </summary>
     [Fact]
+    public void Flush_ResetsElapsedSinceStartAndFreezesUntilSubmit_Integration()
+    {
+        if (!HasOutputDevice()) return;
+
+        using var output = new PortAudioOutput(StereoFormat, ringCapacityFrames: 8192);
+        output.Start();
+        var frames = Math.Max(output.Format.SampleRate / 4, 4096);
+        var samples = new float[frames * output.Format.Channels];
+        output.Submit(new AudioFrame(TimeSpan.Zero, output.Format, frames, samples));
+        Thread.Sleep(120);
+
+        var beforeFlush = output.ElapsedSinceStart;
+        Assert.True(beforeFlush > TimeSpan.FromMilliseconds(50),
+            $"expected measurable elapsed before flush, got {beforeFlush}");
+
+        output.Flush();
+        Assert.Equal(TimeSpan.Zero, output.ElapsedSinceStart);
+
+        Thread.Sleep(120);
+        Assert.Equal(TimeSpan.Zero, output.ElapsedSinceStart);
+
+        output.Submit(new AudioFrame(TimeSpan.Zero, output.Format, frames / 4, samples[..(frames / 4 * output.Format.Channels)]));
+        Thread.Sleep(80);
+        Assert.True(output.ElapsedSinceStart > TimeSpan.Zero,
+            "elapsed should advance again after flush once audio is submitted");
+
+        output.Stop();
+    }
+
+    [Fact]
     public void ElapsedSinceStart_GranularBetweenCallbacks_Integration()
     {
         if (!HasOutputDevice()) return;
@@ -159,6 +189,35 @@ public class PortAudioOutputTests
         Assert.True(
             distinct >= 8,
             $"expected granular ElapsedSinceStart (distinct={distinct}); played={output.PlayedSamples} streamActive={output.StreamActive}");
+
+        output.Stop();
+    }
+
+    /// <summary>
+    /// Regression: after flush + stream restart, <see cref="PortAudioOutput.ElapsedSinceStart"/>
+    /// must keep advancing via played-sample progress even when PortAudio stream time stalls.
+    /// </summary>
+    [Fact]
+    public void FlushResume_ElapsedSinceStartAdvancesWithPlayedSamples_Integration()
+    {
+        if (!HasOutputDevice()) return;
+
+        using var output = new PortAudioOutput(StereoFormat, ringCapacityFrames: 8192);
+        output.Start();
+        var chunk = Math.Max(output.Format.SampleRate / 20, 480);
+        var samples = new float[chunk * output.Format.Channels];
+        output.Submit(new AudioFrame(TimeSpan.Zero, output.Format, chunk, samples));
+        Thread.Sleep(80);
+
+        output.Flush();
+        output.Submit(new AudioFrame(TimeSpan.Zero, output.Format, chunk, samples));
+
+        var t0 = output.ElapsedSinceStart;
+        Thread.Sleep(120);
+        var t1 = output.ElapsedSinceStart;
+        Assert.True(t1 > t0,
+            $"expected ElapsedSinceStart to advance after flush resume (t0={t0} t1={t1} played={output.PlayedSamples})");
+        Assert.True(output.PlayedSamples > 0);
 
         output.Stop();
     }

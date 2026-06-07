@@ -61,7 +61,7 @@ internal static class PlaybackVideoPipeline
         var fadeInMs = fileOpts.EffectiveVideoFadeInMs;
         if (fadeInMs > 0)
         {
-            var fade = new FadeFromBlackVideoSource(video, TimeSpan.FromMilliseconds(fadeInMs), disposeInner: false);
+            var fade = FadeFromBlackVideoSource.Wrap(video, TimeSpan.FromMilliseconds(fadeInMs), disposeInner: false);
             ownedDisposables?.Add(fade);
             video = fade;
         }

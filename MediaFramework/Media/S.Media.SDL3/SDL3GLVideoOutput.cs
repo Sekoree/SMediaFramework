@@ -44,7 +44,7 @@ namespace S.Media.SDL3;
 /// NV12 dmabuf / Win32 D3D11 paths cannot be mirrored yet (CPU-plane and other non-interop formats can).
 /// </para>
 /// </remarks>
-public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IDisposable
+public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
 
@@ -73,6 +73,9 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     private VideoFrame? _pendingFrame;
     private long _displayed;
     private long _droppedNew;
+    private long _lastPresentedPtsTicks;
+    private int _activePresentations;
+    private int _hasLastPresentedPts;
     private int _firstPresentLogged;
 
     private readonly ConcurrentQueue<Action> _renderThreadActions = new();
@@ -108,6 +111,10 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     public bool OwnsThread => _ownsThread;
     public long DisplayedCount => Volatile.Read(ref _displayed);
     public long DroppedNewer => Volatile.Read(ref _droppedNew);
+    public TimeSpan? LastPresentedPresentationTime =>
+        Volatile.Read(ref _hasLastPresentedPts) != 0
+            ? TimeSpan.FromTicks(Volatile.Read(ref _lastPresentedPtsTicks))
+            : null;
 
     /// <summary>True when this output was created with <see cref="CreateTextureMirror"/> (frames go to the anchor only).</summary>
     public bool IsTextureMirror => _textureMirrorAnchor is not null;
@@ -409,6 +416,35 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
         if (_ownsThread) _wakeup.Set();
     }
 
+    public void AbandonQueuedFrames()
+    {
+        var pending = Interlocked.Exchange(ref _pendingFrame, null);
+        if (pending is not null)
+        {
+            pending.Dispose();
+            Interlocked.Increment(ref _droppedNew);
+        }
+    }
+
+    public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var deadline = Environment.TickCount64 + Math.Max(0, (long)timeout.TotalMilliseconds);
+        if (_ownsThread)
+            _wakeup.Set();
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Volatile.Read(ref _pendingFrame) is null && Volatile.Read(ref _activePresentations) == 0)
+                return true;
+            if (Environment.TickCount64 >= deadline)
+                return false;
+            Thread.Sleep(1);
+            if (_ownsThread)
+                _wakeup.Set();
+        }
+    }
+
     /// <summary>Manual mode driver (see <see cref="SDL3VideoOutput.Pump"/>).</summary>
     public void Pump()
     {
@@ -419,23 +455,31 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
 
         DrainEvents();
 
-        var frame = Interlocked.Exchange(ref _pendingFrame, null);
-        if (frame is not null)
+        Interlocked.Increment(ref _activePresentations);
+        try
         {
-            try { PresentFrame(frame); }
-            catch (Exception ex)
+            var frame = Interlocked.Exchange(ref _pendingFrame, null);
+            if (frame is not null)
             {
-                MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.Pump PresentFrame");
+                try { PresentFrame(frame); }
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.Pump PresentFrame");
+                }
+                finally { frame.Dispose(); }
             }
-            finally { frame.Dispose(); }
+            else if (_canIdleRepaint)
+            {
+                try { PresentWithoutNewUpload(); }
+                catch (Exception ex)
+                {
+                    MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.Pump PresentWithoutNewUpload");
+                }
+            }
         }
-        else if (_canIdleRepaint)
+        finally
         {
-            try { PresentWithoutNewUpload(); }
-            catch (Exception ex)
-            {
-                MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.Pump PresentWithoutNewUpload");
-            }
+            Interlocked.Decrement(ref _activePresentations);
         }
     }
 
@@ -521,23 +565,31 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                     if (idx == 1) break;
                     DrainEvents();
 
-                    var frame = Interlocked.Exchange(ref _pendingFrame, null);
-                    if (frame is not null)
+                    Interlocked.Increment(ref _activePresentations);
+                    try
                     {
-                        try { PresentFrame(frame); }
-                        catch (Exception ex)
+                        var frame = Interlocked.Exchange(ref _pendingFrame, null);
+                        if (frame is not null)
                         {
-                            MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentFrame");
+                            try { PresentFrame(frame); }
+                            catch (Exception ex)
+                            {
+                                MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentFrame");
+                            }
+                            finally { frame.Dispose(); }
                         }
-                        finally { frame.Dispose(); }
+                        else if (_canIdleRepaint)
+                        {
+                            try { PresentWithoutNewUpload(); }
+                            catch (Exception ex)
+                            {
+                                MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentWithoutNewUpload");
+                            }
+                        }
                     }
-                    else if (_canIdleRepaint)
+                    finally
                     {
-                        try { PresentWithoutNewUpload(); }
-                        catch (Exception ex)
-                        {
-                            MediaDiagnostics.LogError(ex, "SDL3GLVideoOutput.RenderLoop PresentWithoutNewUpload");
-                        }
+                        Interlocked.Decrement(ref _activePresentations);
                     }
                 }
             }
@@ -790,6 +842,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             SDL.GLSetSwapInterval(0);
 
         SDL.GLSwapWindow(_window);
+        Volatile.Write(ref _lastPresentedPtsTicks, frame.PresentationTime.Ticks);
+        Volatile.Write(ref _hasLastPresentedPts, 1);
         Interlocked.Increment(ref _displayed);
         _canIdleRepaint = true;
         LogFirstPresentDiagnostics(frame);
@@ -802,8 +856,8 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
 
         var luma = SampleAverageLuma(frame);
         MediaDiagnostics.LogInformation(
-            "SDL3GLVideoOutput '{Title}': first present {W}x{H} {Pf} stride0={Stride} avgLuma={Luma:F1} displayed={Displayed}",
-            _title, frame.Format.Width, frame.Format.Height, frame.Format.PixelFormat,
+            "SDL3GLVideoOutput '{Title}': first present pts={Pts} {W}x{H} {Pf} stride0={Stride} avgLuma={Luma:F1} displayed={Displayed}",
+            _title, frame.PresentationTime, frame.Format.Width, frame.Format.Height, frame.Format.PixelFormat,
             frame.Strides.Length > 0 ? frame.Strides[0] : 0, luma, Volatile.Read(ref _displayed));
     }
 

@@ -57,6 +57,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     private long _segmentPlayed0Samples;
     /// <summary>1 after first callback calibrates stream time vs played samples for this stream segment.</summary>
     private int _streamSmoothCalibrated;
+    /// <summary>
+    /// <see cref="PlayedSamples"/> baseline for <see cref="IPlaybackClock"/> — reset on each
+    /// <see cref="Start"/>/<see cref="Flush"/> so pause/resume drift math sees segment-local time,
+    /// not lifetime output counters that keep advancing on underrun silence.
+    /// </summary>
+    private long _playbackEpochSamples;
+    /// <summary>1 after <see cref="Flush"/> stops the PA stream until the next producer call restarts it.</summary>
+    private int _streamStoppedAfterFlush;
 
     public AudioFormat Format => _format;
     public AudioOutputChannelCapabilities ChannelCapabilities =>
@@ -101,6 +109,11 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     {
         get
         {
+            var epoch = Volatile.Read(ref _playbackEpochSamples);
+            var playedNow = Volatile.Read(ref _playedSamples) - epoch;
+            if (playedNow < 0) playedNow = 0;
+            var sampleElapsedSec = playedNow / (double)_format.SampleRate;
+
             if (_stream != nint.Zero
                 && (int)Native.Pa_IsStreamActive(_stream) == 1
                 && Volatile.Read(ref _streamSmoothCalibrated) != 0)
@@ -109,14 +122,20 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 var st = Native.Pa_GetStreamTime(_stream);
                 if (double.IsFinite(st))
                 {
-                    var elapsedSec = _segmentPlayed0Samples / (double)_format.SampleRate + (st - _segmentStreamT0);
-                    if (elapsedSec < 0)
-                        elapsedSec = 0;
+                    // _segmentPlayed0Samples is already segment-local (played - epoch at calibration).
+                    var segmentPlayed0 = Volatile.Read(ref _segmentPlayed0Samples);
+                    if (segmentPlayed0 < 0) segmentPlayed0 = 0;
+                    var streamElapsedSec = segmentPlayed0 / (double)_format.SampleRate + (st - _segmentStreamT0);
+                    if (streamElapsedSec < 0)
+                        streamElapsedSec = 0;
+                    // After Pa_AbortStream + Pa_StartStream, Pa_GetStreamTime can stall while callbacks
+                    // still drain the ring — never let the master clock lag behind sample progress.
+                    var elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
                     return TimeSpan.FromSeconds(elapsedSec);
                 }
             }
 
-            return TimeSpan.FromSeconds(PlayedSamples / (double)_format.SampleRate);
+            return TimeSpan.FromSeconds(sampleElapsedSec);
         }
     }
 
@@ -125,31 +144,27 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
 
     /// <summary>
     /// <see cref="IFlushableOutput.Flush"/>: aborts the PortAudio stream
-    /// (discards anything in the OS buffer), zeroes the ring counters, and
-    /// restarts the stream. There is a brief audible gap (typically a few ms);
-    /// in exchange the very next <see cref="Submit"/> plays without first
-    /// hearing whatever was queued before <see cref="Flush"/>.
+    /// (discards anything in the OS buffer), zeroes the ring counters, re-anchors
+    /// <see cref="ElapsedSinceStart"/> to zero for this segment, and stops the
+    /// stream until the next <see cref="Submit"/>/<see cref="WaitForCapacity"/>.
     /// </summary>
     public void Flush()
     {
         if (_disposed || !Volatile.Read(ref _isRunning) || _stream == nint.Zero) return;
-        Trace.LogDebug("Flush: aborting + restarting stream (queued={Queued}f played={Played}f)",
-            QueuedSamples, Volatile.Read(ref _playedSamples));
+        Trace.LogDebug("Flush: aborting stream (queued={Queued}f target={Target}f played={Played}f epoch={Epoch}f elapsed={Elapsed} active={Active})",
+            QueuedSamples, TargetQueueSamples, Volatile.Read(ref _playedSamples), Volatile.Read(ref _playbackEpochSamples),
+            ElapsedSinceStart, StreamActive);
         Native.Pa_AbortStream(_stream);
-        // Reset ring positions so the queue starts empty post-restart;
-        // _playedSamples is preserved (lifetime stat / monotonic clock).
+        // Reset ring positions so the queue starts empty; _playedSamples is preserved
+        // (lifetime stat) but _playbackEpochSamples re-anchors IPlaybackClock to zero.
         Volatile.Write(ref _writeIndex, 0);
         Volatile.Write(ref _readIndex, 0);
         Interlocked.Exchange(ref _underrunSamples, 0);
-        // Reset BEFORE Pa_StartStream so the first new-segment callback re-anchors
-        // _segmentStreamT0 / _segmentPlayed0Samples to this segment. Writing after
-        // StartStream races the callback and leaves ElapsedSinceStart anchored to
-        // the previous segment until the next stray callback happens to re-trip
-        // calibration.
+        Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
         Volatile.Write(ref _streamSmoothCalibrated, 0);
-        var err = Native.Pa_StartStream(_stream);
-        if (err != PaError.paNoError)
-            PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
+        // Abort stops the stream; do not restart until the next producer call so
+        // underrun silence during pause cannot advance ElapsedSinceStart.
+        Volatile.Write(ref _streamStoppedAfterFlush, 1);
     }
 
     /// <summary>
@@ -254,7 +269,9 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
         }
 
+        Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
         Volatile.Write(ref _streamSmoothCalibrated, 0);
+        Volatile.Write(ref _streamStoppedAfterFlush, 0);
         Volatile.Write(ref _isRunning, true);
         Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f targetQueue={TargetFrames}f",
             _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
@@ -281,6 +298,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             if (_selfHandle.IsAllocated) _selfHandle.Free();
             Volatile.Write(ref _isRunning, false);
             Volatile.Write(ref _streamSmoothCalibrated, 0);
+            Volatile.Write(ref _streamStoppedAfterFlush, 0);
             Volatile.Write(ref _writeIndex, 0);
             Volatile.Write(ref _readIndex, 0);
         }
@@ -298,6 +316,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     public void Submit(ReadOnlySpan<float> packedSamples)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        EnsureStreamRunningAfterFlush();
         if (packedSamples.Length % _format.Channels != 0)
             throw new ArgumentException(
                 $"packedSamples.Length {packedSamples.Length} is not a multiple of channel count {_format.Channels}",
@@ -409,6 +428,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             return !token.IsCancellationRequested;
         }
 
+        EnsureStreamRunningAfterFlush();
+
         var target = TargetQueueSamples;
         var startTicks = Environment.TickCount64;
         var deadlineTicks = startTicks + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
@@ -460,6 +481,25 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             _ringBuffer.AsSpan(0, toRead - firstChunk).CopyTo(dst[firstChunk..]);
         Volatile.Write(ref _readIndex, read + toRead);
         return toRead;
+    }
+
+    private void EnsureStreamRunningAfterFlush()
+    {
+        if (Volatile.Read(ref _streamStoppedAfterFlush) == 0 || _stream == nint.Zero)
+            return;
+
+        Trace.LogDebug("EnsureStreamRunningAfterFlush: restarting PA stream (played={Played}f epoch={Epoch}f)",
+            Volatile.Read(ref _playedSamples), Volatile.Read(ref _playbackEpochSamples));
+        Volatile.Write(ref _streamSmoothCalibrated, 0);
+        // Abort leaves the stream stopped; Stop+Start is more reliable than Start alone on some
+        // backends when rebinding stream time after a flush segment reset.
+        var err = Native.Pa_StopStream(_stream);
+        if (err != PaError.paNoError && err != PaError.paStreamIsStopped)
+            PortAudioException.ThrowIfError(err, nameof(Native.Pa_StopStream));
+        err = Native.Pa_StartStream(_stream);
+        if (err != PaError.paNoError)
+            PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
+        Volatile.Write(ref _streamStoppedAfterFlush, 0);
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
@@ -515,7 +555,8 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 if (double.IsFinite(st))
                 {
                     var playedNow = Volatile.Read(ref self._playedSamples);
-                    self._segmentPlayed0Samples = playedNow;
+                    self._segmentPlayed0Samples = playedNow - Volatile.Read(ref self._playbackEpochSamples);
+                    if (self._segmentPlayed0Samples < 0) self._segmentPlayed0Samples = 0;
                     self._segmentStreamT0 = st;
                     Thread.MemoryBarrier();
                     Volatile.Write(ref self._streamSmoothCalibrated, 1);

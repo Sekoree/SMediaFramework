@@ -1,5 +1,6 @@
 using HaPlay.ViewModels;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using System.Text;
 
@@ -23,6 +24,7 @@ internal sealed class PlaybackThroughputDiagnostics
     private long _prevNdiUnpackDrops;
     private long _prevNdiOverflow;
     private readonly Dictionary<Guid, (long Submitted, long Dropped)> _prevVideoByLine = new();
+    private readonly Dictionary<Guid, (long Presented, long DroppedPending)> _prevLocalVideoByLine = new();
     private readonly Dictionary<Guid, (long Enqueued, long Processed, long Dropped)> _prevAudioByLine = new();
     private readonly Dictionary<Guid, long> _prevPortAudioUnderruns = new();
 
@@ -32,6 +34,7 @@ internal sealed class PlaybackThroughputDiagnostics
         _prevDecoded = _prevDisplayed = _prevDropLate = _prevDropDrain = 0;
         _prevNdiUnpacked = _prevNdiUnpackDrops = _prevNdiOverflow = 0;
         _prevVideoByLine.Clear();
+        _prevLocalVideoByLine.Clear();
         _prevAudioByLine.Clear();
         _prevPortAudioUnderruns.Clear();
     }
@@ -67,6 +70,34 @@ internal sealed class PlaybackThroughputDiagnostics
             .Append(" dropLate +").Append(dDropLate)
             .Append(" dropDrain +").Append(dDropDrain);
 
+        if (session.Player.HasContainerDecoder)
+        {
+            var clock = session.Player.PlayClock.CurrentPosition;
+            var lastPts = video.LastPresentedPresentationTime;
+            var latestDec = video.LatestDecodedPresentationTime;
+            var offset = video.PlayheadOffset;
+            var audioPos = session.Player.Decoder.HasAudio && session.Player.Decoder.Audio is ISeekableSource a
+                ? a.Position
+                : (TimeSpan?)null;
+            var videoPos = session.Player.Decoder.HasVideo && session.Player.Decoder.Video is ISeekableSource v
+                ? v.Position
+                : (TimeSpan?)null;
+            sb.Append(" | avSync clock=").Append(clock)
+                .Append(" lastPts=").Append(lastPts)
+                .Append(" latestDec=").Append(latestDec)
+                .Append(" offset=").Append(offset);
+            if (audioPos is { } ap && videoPos is { } vp)
+                sb.Append(" demuxSpreadMs=").Append(Math.Abs((ap - vp).TotalMilliseconds).ToString("F0"));
+            sb.Append(" clockMinusLastPtsMs=").Append((clock - lastPts).TotalMilliseconds.ToString("F0"));
+            sb.Append(" latestMinusClockMs=").Append((latestDec - clock).TotalMilliseconds.ToString("F0"));
+            if (audioPos is { } audio)
+                sb.Append(" audioMinusClockMs=").Append((audio - clock).TotalMilliseconds.ToString("F0"));
+            if (videoPos is { } videoSource)
+                sb.Append(" videoSrcMinusClockMs=").Append((videoSource - clock).TotalMilliseconds.ToString("F0"));
+            if (session.Player.AudioClock?.Master is { } master)
+                sb.Append(" masterElapsed=").Append(master.ElapsedSinceStart);
+        }
+
         if (session.TryGetNdiReceiverStats(out var ndiUnpacked, out var ndiUnpackDrops, out var ndiOverflow))
         {
             var dUnpacked = ndiUnpacked - _prevNdiUnpacked;
@@ -99,6 +130,23 @@ internal sealed class PlaybackThroughputDiagnostics
                     .Append('/').Append(vm.MaxQueueDepth);
             }
 
+            if (session.TryGetLocalVideoPresentationStats(line, out var local))
+            {
+                _prevLocalVideoByLine.TryGetValue(line.Definition.Id, out var prev);
+                var dPresented = local.PresentedFrames - prev.Presented;
+                var dPendingDropped = local.DroppedPendingFrames - prev.DroppedPending;
+                _prevLocalVideoByLine[line.Definition.Id] = (local.PresentedFrames, local.DroppedPendingFrames);
+                sb.Append(" | sdl '").Append(name)
+                    .Append("' pres +").Append(dPresented)
+                    .Append(" dropPending +").Append(dPendingDropped);
+                if (local.LastPresentedPresentationTime is { } lastPresented)
+                {
+                    var clock = session.Player.PlayClock.CurrentPosition;
+                    sb.Append(" lastPts=").Append(lastPresented)
+                        .Append(" lastMinusClockMs=").Append((lastPresented - clock).TotalMilliseconds.ToString("F0"));
+                }
+            }
+
             if (session.TryGetAudioHealthMetrics(line, out var ast))
             {
                 _prevAudioByLine.TryGetValue(line.Definition.Id, out var pa);
@@ -118,6 +166,14 @@ internal sealed class PlaybackThroughputDiagnostics
             _prevPortAudioUnderruns[line.Definition.Id] = paUnder;
             if (dUnder > 0)
                 sb.Append(" | portAudio '").Append(name).Append("' underrun +").Append(dUnder);
+
+            if (session.TryGetPortAudioOutput(line, out var portAudio))
+            {
+                sb.Append(" | portAudio '").Append(name)
+                    .Append("' q=").Append(portAudio.QueuedSamples)
+                    .Append('/').Append(portAudio.TargetQueueSamples)
+                    .Append(" elapsed=").Append(portAudio.ElapsedSinceStart);
+            }
         }
 
         Trace.LogDebug("{Stats}", sb.ToString());

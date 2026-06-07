@@ -10,7 +10,7 @@ namespace S.Media.Effects;
 /// <remarks>
 /// Used for live NDI (UYVY) into local SDL/Avalonia outputs that are most reliable on BGRA32.
 /// </remarks>
-public sealed class PixelFormatConvertingVideoSource : IVideoSource, IDisposable
+public sealed class PixelFormatConvertingVideoSource : IVideoSource, ICooperativeVideoReadInterrupt, IDisposable
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.PixelFormatConvertingVideoSource");
     private static int _firstConvertLogged;
@@ -93,6 +93,18 @@ public sealed class PixelFormatConvertingVideoSource : IVideoSource, IDisposable
             src.Dispose();
             throw;
         }
+    }
+
+    public void RequestYieldBetweenReads()
+    {
+        if (_inner is ICooperativeVideoReadInterrupt interrupt)
+            interrupt.RequestYieldBetweenReads();
+    }
+
+    public void ClearYieldRequest()
+    {
+        if (_inner is ICooperativeVideoReadInterrupt interrupt)
+            interrupt.ClearYieldRequest();
     }
 
     private VideoFormat ResolveFormat()

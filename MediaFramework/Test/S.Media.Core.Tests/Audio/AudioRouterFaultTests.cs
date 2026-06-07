@@ -88,6 +88,32 @@ public sealed class AudioRouterFaultTests
         }
     }
 
+    [Fact]
+    public void Stop_CooperativeBlockingSource_YieldsAndCanRestart()
+    {
+        var source = new CooperativeBlockingSource(Stereo);
+        using var router = new AudioRouter(SampleRate, chunkSamples: 64);
+        router.AddSource(source, "blocked");
+        router.AddOutput(new NullOutput(Stereo), "out");
+        router.Connect("blocked", "out");
+
+        router.Start();
+        Assert.True(source.Entered.Wait(TimeSpan.FromSeconds(2)), "run loop should be blocked in source read");
+
+        router.Pause();
+
+        Assert.True(source.RequestedYield, "router stop should request cooperative audio read yield");
+        Assert.True(source.ClearedYield, "router stop should clear cooperative audio read yield after the thread exits");
+        Assert.Null(router.Fault);
+        Assert.False(router.IsRunning);
+
+        source.ResetForNextRead();
+        router.Start();
+        Assert.True(router.IsRunning);
+        source.Release();
+        router.Stop();
+    }
+
     private sealed class ThrowingSource(AudioFormat fmt) : IAudioSource
     {
         public AudioFormat Format { get; } = fmt;
@@ -108,6 +134,43 @@ public sealed class AudioRouterFaultTests
             _release.Wait();
             dst.Clear();
             return dst.Length;
+        }
+
+        public void Release() => _release.Set();
+    }
+
+    private sealed class CooperativeBlockingSource(AudioFormat fmt) : IAudioSource, ICooperativeAudioReadInterrupt
+    {
+        private readonly ManualResetEventSlim _release = new(false);
+        private int _yieldRequested;
+        private int _yieldCleared;
+
+        public ManualResetEventSlim Entered { get; } = new(false);
+        public AudioFormat Format { get; } = fmt;
+        public bool IsExhausted => false;
+        public bool RequestedYield => Volatile.Read(ref _yieldRequested) != 0;
+        public bool ClearedYield => Volatile.Read(ref _yieldCleared) != 0;
+
+        public int ReadInto(Span<float> dst)
+        {
+            Entered.Set();
+            while (!RequestedYield && !_release.Wait(1))
+            {
+            }
+
+            dst.Clear();
+            return RequestedYield ? 0 : dst.Length;
+        }
+
+        public void RequestYieldBetweenReads() => Volatile.Write(ref _yieldRequested, 1);
+
+        public void ClearYieldRequest() => Volatile.Write(ref _yieldCleared, 1);
+
+        public void ResetForNextRead()
+        {
+            Entered.Reset();
+            Volatile.Write(ref _yieldRequested, 0);
+            Volatile.Write(ref _yieldCleared, 0);
         }
 
         public void Release() => _release.Set();

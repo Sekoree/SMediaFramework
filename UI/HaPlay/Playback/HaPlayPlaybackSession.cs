@@ -15,8 +15,14 @@ using S.Media.NDI.Audio;
 using S.Media.NDI.Video;
 using S.Media.Playback;
 using S.Media.PortAudio;
+using S.Media.SDL3;
 
 namespace HaPlay.Playback;
+
+internal readonly record struct LocalVideoPresentationStats(
+    long PresentedFrames,
+    long DroppedPendingFrames,
+    TimeSpan? LastPresentedPresentationTime);
 
 internal sealed class HaPlayPlaybackSession : IDisposable
 {
@@ -204,6 +210,22 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             Math.Max(0, raw.SubmittedFrames - wiring.VideoSubmittedBaseline),
             raw.MaxQueueDepth,
             raw.CurrentQueuedDepth);
+        return true;
+    }
+
+    internal bool TryGetLocalVideoPresentationStats(OutputLineViewModel line, out LocalVideoPresentationStats stats)
+    {
+        stats = default;
+        if (!_lineWiring.TryGetValue(line, out var wiring)
+            || wiring.LogoOutput?.InnerOutput is not SDL3GLVideoOutput sdl)
+        {
+            return false;
+        }
+
+        stats = new LocalVideoPresentationStats(
+            sdl.DisplayedCount,
+            sdl.DroppedNewer,
+            sdl.LastPresentedPresentationTime);
         return true;
     }
 
@@ -979,7 +1001,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         var resampler = ResamplingAudioOutput.Wrap(outDev, targetFmt);
                         playback._portAudioResamplers.Add(resampler);
                         routerSink = resampler;
-                        Trace.LogDebug("WireAudio: PortAudio '{Name}' wrapped in ResamplingAudioOutput (decoder={Dec} hardware={Hw}) — router will NOT slave to PortAudio",
+                        Trace.LogDebug("WireAudio: PortAudio '{Name}' wrapped in ResamplingAudioOutput (decoder={Dec} hardware={Hw}) — clocking is forwarded to PortAudio",
                             pa.DisplayName, dec, outDev.Format);
                     }
                     else

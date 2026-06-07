@@ -625,6 +625,51 @@ public sealed class VideoRouter : IDisposable
             VideoRouter.ApplyD3D11GlBorrowVideoSourceToOutput(primaryOutput, _borrowVideoSourceForWin32Nv12Gl);
         }
 
+        public void AbandonQueuedFrames(VideoRouterInputOutput sink)
+        {
+            foreach (var output in SnapshotRoutedOutputs(sink))
+            {
+                if (output is IVideoOutputQueueControl control)
+                    control.AbandonQueuedFrames();
+            }
+        }
+
+        public bool WaitForIdle(VideoRouterInputOutput sink, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            var outputs = SnapshotRoutedOutputs(sink);
+            var deadline = Environment.TickCount64 + Math.Max(0, (long)timeout.TotalMilliseconds);
+            foreach (var output in outputs)
+            {
+                if (output is not IVideoOutputQueueControl control)
+                    continue;
+                var remainingMs = Math.Max(0, deadline - Environment.TickCount64);
+                if (!control.WaitForIdle(TimeSpan.FromMilliseconds(remainingMs), cancellationToken))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private IVideoOutput[] SnapshotRoutedOutputs(VideoRouterInputOutput sink)
+        {
+            lock (_owner._gate)
+            {
+                ObjectDisposedException.ThrowIf(sink.IsSinkDisposed, sink);
+                ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                if (!_owner._inputs.TryGetValue(Id, out var current) || !ReferenceEquals(current, this))
+                    return [];
+
+                var outputs = new List<IVideoOutput>(RoutedOutputIds.Count);
+                foreach (var outputId in RoutedOutputIds)
+                {
+                    if (_owner._outputs.TryGetValue(outputId, out var output))
+                        outputs.Add(output.Output);
+                }
+
+                return outputs.ToArray();
+            }
+        }
+
         /// <summary>
         /// P2-2: submit with branch conversion performed OUTSIDE the router <c>_gate</c>. Phase 1 snapshots
         /// the routed outputs + their branch converters under the lock and leases the converters; phase 2
@@ -855,7 +900,7 @@ public sealed class VideoRouter : IDisposable
     /// <param name="PumpConverts">True when this branch's <see cref="IVideoCpuFrameConverter"/> was handed to its <see cref="VideoOutputPump"/> (<see cref="VideoOutputPump.SetBranchConverter"/>) to run on the pump's drain thread; <see cref="Converter"/> is then null here and the branch receives an unconverted (fan-out) view to repack off the submit thread.</param>
     private readonly record struct OutputPathState(IVideoCpuFrameConverter? Converter, bool PumpConverts = false);
 
-    private sealed class VideoRouterInputOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup
+    private sealed class VideoRouterInputOutput : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl
     {
         private readonly VideoRouter _owner;
         private readonly InputRegistration _reg;
@@ -917,6 +962,11 @@ public sealed class VideoRouter : IDisposable
             // the lock released (P2-2). Do NOT wrap it in lock(_gate) here.
             _reg.SubmitPhased(frame, this);
         }
+
+        public void AbandonQueuedFrames() => _reg.AbandonQueuedFrames(this);
+
+        public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default) =>
+            _reg.WaitForIdle(this, timeout, cancellationToken);
     }
 }
 

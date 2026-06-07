@@ -128,15 +128,15 @@ public sealed class LayerHandle
     /// resolving per-layer params at <paramref name="timelineTime"/>. Preserves the 1-frame-per-read
     /// passthrough a single-layer scaler relies on (no look-ahead / PTS-grid selection).
     /// </summary>
-    internal void PullOneAndSubmit(TimeSpan timelineTime, VideoFormat canvasFormat)
+    internal bool PullOneAndSubmit(TimeSpan timelineTime, VideoFormat canvasFormat)
     {
         lock (_gate)
         {
             if (_closed)
-                return;
+                return false;
             if (!Source.TryReadNextFrame(out var src))
-                return;
-            SubmitFrameToSlot(src, timelineTime, canvasFormat);
+                return false;
+            return SubmitFrameToSlot(src, timelineTime, canvasFormat);
         }
     }
 
@@ -146,7 +146,7 @@ public sealed class LayerHandle
             return (_config, _transitions.Count == 0 ? [] : _transitions.ToArray());
     }
 
-    private void SubmitFrameToSlot(VideoFrame src, TimeSpan masterTime, VideoFormat canvasFormat)
+    private bool SubmitFrameToSlot(VideoFrame src, TimeSpan masterTime, VideoFormat canvasFormat)
     {
         var (config, transitions) = SnapshotState();
         var resolved = LayerConfigResolver.ResolveAt(config, transitions, masterTime);
@@ -160,7 +160,7 @@ public sealed class LayerHandle
             if (!CompositorBgraHelper.TryToBgra(src, ref _toBgra, out var bgra))
             {
                 src.Dispose();
-                return;
+                return false;
             }
 
             src.Dispose();
@@ -178,10 +178,12 @@ public sealed class LayerHandle
         {
             Slot.Output.Configure(pending.Format);
             Slot.Output.Submit(pending);
+            return true;
         }
         catch
         {
             pending.Dispose();
+            return false;
         }
     }
 

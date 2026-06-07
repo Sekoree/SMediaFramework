@@ -125,10 +125,23 @@ public sealed class MediaClock : IMediaClock, IDisposable
                     var now = _master.ElapsedSinceStart;
                     var drift = now - pausedAt;
                     if (drift > TimeSpan.Zero)
+                    {
                         _basePosition += drift;
+                        TraceLog.LogDebug(
+                            "Start: folded master drift while paused pausedAt={PausedAt} now={Now} driftMs={DriftMs} position={Position}",
+                            pausedAt, now, drift.TotalMilliseconds, _basePosition);
+                    }
+                    else if (drift < TimeSpan.Zero)
+                    {
+                        TraceLog.LogDebug(
+                            "Start: master elapsed regressed during pause (flush/segment reset?) pausedAt={PausedAt} now={Now} driftMs={DriftMs} — not folding",
+                            pausedAt, now, drift.TotalMilliseconds);
+                    }
                     _masterElapsedWhenPaused = null;
                 }
                 _masterAnchor = _master.ElapsedSinceStart;
+                TraceLog.LogDebug("Start: master anchor={Anchor} position={Position}",
+                    _masterAnchor, ComputePositionUnlocked());
             }
             else
             {

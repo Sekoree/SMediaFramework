@@ -38,6 +38,40 @@ public class AudioRouterControlTests
     }
 
     [Fact]
+    public async Task Pause_WaitsForInFlightSubmitBeforeFlush()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 64);
+        var src = new TestSource(Stereo, _ => 1f);
+        var output = new BlockingFlushableOutput(Stereo);
+
+        r.AddSource(src, "src");
+        r.AddOutput(output, "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        r.Start();
+        Assert.True(output.SubmitEntered.Wait(TimeSpan.FromSeconds(2)),
+            "test output should receive a submitted chunk");
+
+        var pauseTask = Task.Run(() => r.Pause());
+        try
+        {
+            Assert.False(output.FlushStarted.Wait(TimeSpan.FromMilliseconds(80)),
+                "Pause must not flush while an output Submit is still in flight");
+
+            output.ReleaseSubmit();
+            await pauseTask.WaitAsync(TimeSpan.FromSeconds(2));
+
+            Assert.False(output.FlushedDuringSubmit);
+            Assert.True(output.FlushCount >= 1, "Pause should still flush after the in-flight Submit unwinds");
+        }
+        finally
+        {
+            output.ReleaseSubmit();
+            await pauseTask.WaitAsync(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
     public void Resume_PicksUpFromWherePauseLeftOff()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 480);
@@ -460,6 +494,44 @@ public class AudioRouterControlTests
         public int FlushCount { get; private set; }
         public void Submit(ReadOnlySpan<float> packedSamples) { }
         public void Flush() => FlushCount++;
+    }
+
+    private sealed class BlockingFlushableOutput(AudioFormat fmt) : IAudioOutput, IFlushableOutput
+    {
+        private int _submitActive;
+        private int _flushCount;
+        private int _flushedDuringSubmit;
+        private readonly ManualResetEventSlim _releaseSubmit = new(false);
+
+        public AudioFormat Format { get; } = fmt;
+        public ManualResetEventSlim SubmitEntered { get; } = new(false);
+        public ManualResetEventSlim FlushStarted { get; } = new(false);
+        public int FlushCount => Volatile.Read(ref _flushCount);
+        public bool FlushedDuringSubmit => Volatile.Read(ref _flushedDuringSubmit) != 0;
+
+        public void Submit(ReadOnlySpan<float> packedSamples)
+        {
+            Volatile.Write(ref _submitActive, 1);
+            SubmitEntered.Set();
+            try
+            {
+                _releaseSubmit.Wait();
+            }
+            finally
+            {
+                Volatile.Write(ref _submitActive, 0);
+            }
+        }
+
+        public void Flush()
+        {
+            if (Volatile.Read(ref _submitActive) != 0)
+                Volatile.Write(ref _flushedDuringSubmit, 1);
+            Interlocked.Increment(ref _flushCount);
+            FlushStarted.Set();
+        }
+
+        public void ReleaseSubmit() => _releaseSubmit.Set();
     }
 
     private sealed class CapturingOutput(AudioFormat fmt) : IAudioOutput

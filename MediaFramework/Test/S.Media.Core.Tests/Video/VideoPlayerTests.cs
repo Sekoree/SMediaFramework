@@ -368,6 +368,125 @@ public class VideoPlayerTests
         }
     }
 
+    [Fact]
+    public void Play_RealignsSeekableSourceWhenDemuxDriftExceedsStartupLead()
+    {
+        var inner = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(42, 16, 16));
+        var src = new SeekableFakeVideoSource(inner) { Position = TimeSpan.FromSeconds(2) };
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(500));
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
+        player.Play();
+        output.WaitForConfigured();
+
+        Assert.Equal(1, src.SeekCalls);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), src.LastSeek);
+    }
+
+    [Fact]
+    public void Play_AlwaysRealignsSeekableSourceOnResumeEvenWhenDriftIsWithinStartupLead()
+    {
+        var inner = new FakeVideoSource(VideoFmt(16, 16), Frame(0, 16, 16), Frame(42, 16, 16));
+        var src = new SeekableFakeVideoSource(inner) { Position = TimeSpan.FromMilliseconds(480) };
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(500));
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
+        player.Play();
+        output.WaitForConfigured();
+
+        Assert.Equal(1, src.SeekCalls);
+        Assert.Equal(TimeSpan.FromMilliseconds(500), src.LastSeek);
+    }
+
+    [Fact]
+    public void HasPresentableFrameAt_RequiresFrameAtOrBeforePlayheadPlusEarlyTolerance()
+    {
+        var src = new FakeVideoSource(VideoFmt(16, 16), Frame(100, 16, 16), Frame(200, 16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2)
+        {
+            EarlyTolerance = TimeSpan.FromMilliseconds(8),
+        };
+        player.Play();
+        output.WaitForConfigured();
+        WaitFor(() => player.QueuedFrameCount >= 2, TimeSpan.FromSeconds(1));
+
+        Assert.False(player.HasPresentableFrameAt(TimeSpan.FromMilliseconds(50)));
+        Assert.True(player.HasPresentableFrameAt(TimeSpan.FromMilliseconds(100)));
+    }
+
+    [Fact]
+    public void PresentBufferedFrameForSync_SubmitsFrameBeforeClockTick()
+    {
+        var src = new FakeVideoSource(VideoFmt(16, 16), Frame(1000, 16, 16), Frame(1042, 16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        clock.AdvanceTo(TimeSpan.FromSeconds(1));
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4);
+        player.Play();
+        output.WaitForConfigured();
+        WaitFor(() => player.QueuedFrameCount >= 2, TimeSpan.FromSeconds(1));
+
+        Assert.Empty(output.Submitted);
+
+        Assert.True(player.TryPresentBufferedFrameForSync(clock.CurrentPosition, TimeSpan.Zero));
+
+        Assert.Single(output.Submitted);
+        Assert.Equal(TimeSpan.FromSeconds(1), output.Submitted[0].PresentationTime);
+        Assert.Equal(1, player.DisplayedCount);
+    }
+
+    [Fact]
+    public void PresentBufferedFrameForSync_AcceptsFirstFutureFrameWithinStartupLead()
+    {
+        var src = new FakeVideoSource(VideoFmt(16, 16), Frame(42, 16, 16), Frame(84, 16, 16));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 4);
+        player.Play();
+        output.WaitForConfigured();
+        WaitFor(() => player.QueuedFrameCount >= 1, TimeSpan.FromSeconds(1));
+
+        Assert.True(player.TryPresentBufferedFrameForSync(TimeSpan.Zero, TimeSpan.Zero));
+
+        Assert.Single(output.Submitted);
+        Assert.Equal(TimeSpan.FromMilliseconds(42), output.Submitted[0].PresentationTime);
+        Assert.Equal(1, player.DisplayedCount);
+    }
+
+    [Fact]
+    public void Pause_DrainsQueue_SoQueuedFrameCountIsZeroWhileLifetimePendingMayRemain()
+    {
+        var frames = Enumerable.Range(0, 24)
+            .Select(i => Frame(i * 42, 16, 16))
+            .ToArray();
+        var src = new FakeVideoSource(VideoFmt(16, 16), frames);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 16);
+        player.Play();
+        output.WaitForConfigured();
+        WaitFor(() => player.QueuedFrameCount >= 2, TimeSpan.FromSeconds(2));
+
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(100));
+        clock.RaiseVideoTick();
+        WaitFor(() => player.DisplayedCount >= 1, TimeSpan.FromSeconds(1));
+
+        player.Pause();
+
+        Assert.Equal(0, player.QueuedFrameCount);
+        Assert.True(player.PendingBufferedCount >= 2);
+    }
+
     private static VideoFormat VideoFmt(int w, int h)
         => new(w, h, PixelFormat.Bgra32, new Rational(30, 1));
 
@@ -561,10 +680,15 @@ internal sealed class SeekableFakeVideoSource : IVideoSource, ISeekableSource
     public SeekableFakeVideoSource(FakeVideoSource inner) => _inner = inner;
 
     public TimeSpan Duration => TimeSpan.FromHours(1);
-    public TimeSpan Position => TimeSpan.Zero;
+    public TimeSpan Position { get; set; }
+    public int SeekCalls { get; private set; }
+    public TimeSpan LastSeek { get; private set; }
 
     public void Seek(TimeSpan position)
     {
+        SeekCalls++;
+        LastSeek = position;
+        Position = position;
     }
 
     public VideoFormat Format => _inner.Format;

@@ -185,6 +185,14 @@ public sealed class MediaContainerDecoder : IDisposable
     public void CancelInFlightSeek() => _shared.CancelInFlightSeek();
 
     /// <summary>
+    /// Playhead both streams have actually reached after a seek. When audio and video disagree by
+    /// more than ~250 ms (typical after a partial GOP catch-up), returns <paramref name="fallback"/>
+    /// so the clock stays on the requested target instead of a pre-target keyframe.
+    /// </summary>
+    public TimeSpan GetAlignedPresentationPosition(TimeSpan fallback) =>
+        _shared.GetAlignedPresentationPosition(fallback);
+
+    /// <summary>
     /// Re-syncs libav decoders and the demuxer to the current mux playhead without changing the
     /// logical timeline: <see cref="SeekPresentation"/> at <c>max(</c><see cref="Video.Position"/><c>, </c>
     /// <see cref="Audio.Position"/><c>)</c>.

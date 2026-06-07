@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Video;
 using S.Media.Effects;
 
@@ -6,7 +7,7 @@ namespace HaPlay.Playback;
 /// <summary>
 /// Scales decoder video into a fixed program raster via <see cref="VideoCompositor"/>.
 /// </summary>
-internal sealed class OutputPresetVideoSource : IVideoSource, IDisposable
+internal class OutputPresetVideoSource : IVideoSource, ICooperativeVideoReadInterrupt, IDisposable
 {
     private readonly IVideoSource _inner;
     private readonly VideoCompositor _compositor;
@@ -32,6 +33,18 @@ internal sealed class OutputPresetVideoSource : IVideoSource, IDisposable
 
     public bool TryReadNextFrame(out VideoFrame frame) => _compositor.TryReadNextFrame(out frame);
 
+    public void RequestYieldBetweenReads()
+    {
+        if (_inner is ICooperativeVideoReadInterrupt interrupt)
+            interrupt.RequestYieldBetweenReads();
+    }
+
+    public void ClearYieldRequest()
+    {
+        if (_inner is ICooperativeVideoReadInterrupt interrupt)
+            interrupt.ClearYieldRequest();
+    }
+
     public static IVideoSource? WrapForPreset(
         IVideoSource decoderVideo,
         PlayerOutputPreset preset,
@@ -44,7 +57,9 @@ internal sealed class OutputPresetVideoSource : IVideoSource, IDisposable
         if (!OutputPresetFormats.TryResolve(preset, decoderVideo.Format.FrameRate, out var target, customWidth, customHeight))
             return null;
 
-        var wrapped = new OutputPresetVideoSource(decoderVideo, target, disposeInner: disposeInnerOnWrapperDispose);
+        var wrapped = decoderVideo is ISeekableSource seekable
+            ? new SeekableOutputPresetVideoSource(decoderVideo, target, seekable, disposeInner: disposeInnerOnWrapperDispose)
+            : new OutputPresetVideoSource(decoderVideo, target, disposeInner: disposeInnerOnWrapperDispose);
         ownedWrapper = wrapped;
         return wrapped;
     }
@@ -61,5 +76,18 @@ internal sealed class OutputPresetVideoSource : IVideoSource, IDisposable
             try { (_inner as IDisposable)?.Dispose(); }
             catch { /* best effort */ }
         }
+    }
+
+    private sealed class SeekableOutputPresetVideoSource(
+        IVideoSource inner,
+        VideoFormat target,
+        ISeekableSource seekable,
+        bool disposeInner = false) : OutputPresetVideoSource(inner, target, disposeInner), ISeekableSource
+    {
+        public TimeSpan Duration => seekable.Duration;
+
+        public TimeSpan Position => seekable.Position;
+
+        public void Seek(TimeSpan position) => seekable.Seek(position);
     }
 }

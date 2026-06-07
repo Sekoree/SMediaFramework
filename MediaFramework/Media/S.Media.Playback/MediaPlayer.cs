@@ -283,6 +283,15 @@ public sealed class MediaPlayer : IDisposable
             _liveSession!.SeekCoordinated(position, cancellationToken, flush);
     }
 
+    /// <summary>
+    /// Spin up video decode briefly after a coordinated seek, before <see cref="Play"/>.
+    /// </summary>
+    public void PrewarmVideoAfterSeek()
+    {
+        if (_bundle is not null)
+            _bundle.Session.PrewarmVideoAfterSeek();
+    }
+
     private Action? ResolveFlushAction(PauseFlushPolicy policy) =>
         policy == PauseFlushPolicy.FlushCodecPipelines && _bundle is not null
             ? _bundle.Decoder.FlushCodecPipelines
@@ -803,6 +812,13 @@ public sealed class MediaPlayer : IDisposable
 
         try
         {
+            // HW decode paths (VA-API/VDA without dma-buf export) leave NativePixelFormats empty until the
+            // first frame is transferred. VideoPlayer negotiates at construction — without priming, H.264 and
+            // attached_pic sources fail with "cannot negotiate pixel format" when opened via Open(decoder)
+            // (HaPlay session create, decoder cache) because both source and DiscardingVideoOutput list none.
+            if (media.HasVideo && media.Video.NativePixelFormats.Count == 0)
+                media.SeekPresentation(TimeSpan.Zero);
+
             if (options.IncludeAudioRouter && media.HasAudio)
             {
                 audioClock = new MediaClock();

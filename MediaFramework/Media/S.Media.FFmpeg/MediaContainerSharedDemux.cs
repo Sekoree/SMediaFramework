@@ -1135,7 +1135,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         if (videoDone && audioDone)
             return;
 
-        var deadline = Environment.TickCount64 + 4000;
+        var deadline = Environment.TickCount64 + 12000;
         while (!videoDone || !audioDone)
         {
             if (IsReadYieldRequested || Volatile.Read(ref _videoDecodeYieldRequested) != 0
@@ -1196,6 +1196,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             return true;
         }
 
+        Video.Position = pts;
+        _vFramesEmitted++;
         av_frame_unref(_vFrame);
         return true;
     }
@@ -1507,6 +1509,35 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         lock (_queueGate)
             Monitor.PulseAll(_queueGate); // wake a prime parked in Monitor.Wait(_queueGate, …)
     }
+
+    /// <summary>
+    /// After <see cref="SeekPresentation"/>, returns the timeline position both decoders have actually
+    /// reached. When catch-up is incomplete, prefer <paramref name="fallback"/> (the requested seek
+    /// target) if audio and video disagree by more than a quarter second — otherwise the clock would
+    /// sit on a pre-target GOP keyframe while audio resumes at the keeper frame on the target.
+    /// </summary>
+    internal TimeSpan GetAlignedPresentationPosition(TimeSpan fallback)
+    {
+        if (_hasAudio && _hasVideo)
+        {
+            var audio = Audio.Position;
+            var video = ResolveVideoAlignmentPosition();
+            var spread = Math.Abs((audio - video).TotalSeconds);
+            if (spread > 0.25)
+                return fallback;
+            return audio <= video ? audio : video;
+        }
+
+        if (_hasAudio)
+            return Audio.Position;
+        if (_hasVideo)
+            return ResolveVideoAlignmentPosition();
+        return fallback;
+    }
+
+    /// <summary>Video track position for clock alignment — uses the primed keeper frame when present.</summary>
+    private TimeSpan ResolveVideoAlignmentPosition() =>
+        _vPrimedAfterSeek?.PresentationTime ?? Video.Position;
 
     private void ClearReadYield() => Volatile.Write(ref _readYieldRequested, 0);
 
@@ -1949,7 +1980,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             metadata: meta);
     }
 
-    internal sealed class AudioTrack : IAudioSource, ISeekableSource, IDisposable
+    internal sealed class AudioTrack : IAudioSource, ISeekableSource, ICooperativeAudioReadInterrupt, IDisposable
     {
         private readonly MediaContainerSharedDemux _o;
 
@@ -1961,6 +1992,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public TimeSpan Position { get; internal set; }
         public bool IsAtEnd => !_o._hasAudio || _o._aEof;
         public bool IsExhausted => !_o._hasAudio || (_o._aEof && _o._aDrainedTail);
+
+        public void RequestYieldBetweenReads() => _o.RequestReadYield();
+
+        public void ClearYieldRequest() => _o.ClearReadYield();
 
         public int ReadInto(Span<float> dst)
         {

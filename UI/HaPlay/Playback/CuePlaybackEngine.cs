@@ -27,6 +27,7 @@ public sealed class CuePlaybackEngine : IDisposable
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.CuePlaybackEngine");
     private static readonly TimeSpan BoundedPauseTimeout = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan BoundedSeekTimeout = TimeSpan.FromSeconds(12);
     private static readonly TimeSpan BoundedDisposeTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SoftStopFadeDuration = TimeSpan.FromMilliseconds(750);
 
@@ -706,12 +707,16 @@ public sealed class CuePlaybackEngine : IDisposable
                     {
                         entry.Player.Pause(CancellationToken.None, PauseFlushPolicy.SkipFlush);
                     }).WaitAsync(BoundedPauseTimeout);
-                    await Dispatcher.UIThread.InvokeAsync(() => entry.Player.PlayClock.SetMaster(null));
                 }
                 else
                 {
                     await Dispatcher.UIThread.InvokeAsync(() =>
                     {
+                        // Re-attach the PortAudio (or NDI) playback clock before restarting transport.
+                        // Pause used to call SetMaster(null) here, which left the media clock on a free-
+                        // running stopwatch after resume while audio was paced by hardware — A/V drift.
+                        if (entry.PlaybackClockMaster is { } master)
+                            entry.Player.PlayClock.SetMaster(master);
                         entry.StartPlayback();
                         entry.SetAudioPaused(false);
                         entry.EnsureAudioRuntimesStarted();
@@ -1430,10 +1435,14 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             await Task.Run(() =>
                 preview.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
-            ).WaitAsync(BoundedPauseTimeout);
+            ).WaitAsync(BoundedSeekTimeout);
         }
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekPreviewAsync: seek timed out or failed"); }
-        await Dispatcher.UIThread.InvokeAsync(() => preview.Play());
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            preview.Player.PrewarmVideoAfterSeek();
+            preview.Play();
+        });
     }
 
     private async Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position)
@@ -1452,12 +1461,13 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             await Task.Run(() =>
                 entry.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
-            ).WaitAsync(BoundedPauseTimeout);
+            ).WaitAsync(BoundedSeekTimeout);
         }
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCueAsync: seek timed out or failed"); }
         if (resume)
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                entry.Player.PrewarmVideoAfterSeek();
                 entry.StartPlayback();
                 entry.SetAudioPaused(false);
                 entry.EnsureAudioRuntimesStarted();

@@ -132,8 +132,14 @@ public sealed class VideoCompositor : IVideoSource, IDisposable
         // drift. Transitions resolve against a synthetic read-index timeline; output PTS stays synthetic.
         var readTime = TimeSpan.FromTicks(_framePeriodTicks * _compositeReads);
         _compositeReads++;
+        var advanced = false;
         foreach (var layer in layers)
-            layer.PullOneAndSubmit(readTime, _output);
+            advanced |= layer.PullOneAndSubmit(readTime, _output);
+        if (layers.Length > 0 && !advanced)
+        {
+            frame = null!;
+            return false;
+        }
         return _source.TryReadNextFrame(out frame);
     }
 

@@ -42,7 +42,7 @@ public readonly record struct VideoOutputPumpAttachOptions(
 /// Subscribe to <see cref="VideoOutputPump.PumpPressure"/> (or <see cref="VideoRouter.PumpPressure"/> when registered via the router)
 /// for per-drop callbacks on the <see cref="Submit"/> thread (same idea as <c>AudioRouter.PumpPressure</c>).
 /// </remarks>
-public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IDisposable
+public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl, IDisposable
 {
     private readonly IVideoOutput _inner;
     private readonly bool _disposeInner;
@@ -59,6 +59,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     private long _dropped;
     private long _submitted;
     private long _lastDropLogTicks;
+    private int _activeSubmits;
     private int _firstSubmitLogged;
     private EventHandler<VideoOutputPumpPressureEventArgs>? _pumpPressure;
 
@@ -229,6 +230,51 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         }
     }
 
+    public void AbandonQueuedFrames()
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            while (_queue.Count > 0)
+            {
+                _queue.Dequeue().Dispose();
+                Interlocked.Increment(ref _dropped);
+            }
+
+            _pending.Reset();
+        }
+
+        if (_inner is IVideoOutputQueueControl innerControl)
+            innerControl.AbandonQueuedFrames();
+    }
+
+    public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        var deadline = Environment.TickCount64 + Math.Max(0, (long)timeout.TotalMilliseconds);
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var queueEmpty = false;
+            lock (_gate)
+                queueEmpty = _queue.Count == 0;
+
+            if (queueEmpty && Volatile.Read(ref _activeSubmits) == 0)
+                break;
+
+            if (Environment.TickCount64 >= deadline)
+                return false;
+
+            Thread.Sleep(1);
+        }
+
+        if (_inner is not IVideoOutputQueueControl innerControl)
+            return true;
+
+        var remainingMs = Math.Max(0, deadline - Environment.TickCount64);
+        return innerControl.WaitForIdle(TimeSpan.FromMilliseconds(remainingMs), cancellationToken);
+    }
+
     private void RaisePumpPressure(long droppedFramesTotal) =>
         _pumpPressure?.Invoke(this, new VideoOutputPumpPressureEventArgs(_name, droppedFramesTotal));
 
@@ -276,47 +322,55 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                     }
 
                     next = _queue.Dequeue();
+                    Interlocked.Increment(ref _activeSubmits);
                 }
 
                 if (next is null) break;
 
-                // Branch conversion (if configured) runs HERE, on the drain thread, so the player submit
-                // thread is never charged for it. Adopt any staged converter swap first (between frames).
-                AdoptPendingBranchConverterIfAny();
-                var toSubmit = next;
-                if (_branchConverter is { } conv)
-                {
-                    try
-                    {
-                        var converted = conv.Convert(next, next.ColorTransferHint);
-                        next.Dispose();
-                        toSubmit = converted;
-                    }
-                    catch (Exception cex)
-                    {
-                        _log?.LogError(cex, "VideoOutputPump {Name}: branch convert failed — frame dropped", _name);
-                        Trace.LogError(cex, $"{_name}: branch convert failed — frame dropped");
-                        next.Dispose();
-                        Interlocked.Increment(ref _dropped);
-                        continue;
-                    }
-                }
-
                 try
                 {
-                    _inner.Submit(toSubmit);
-                    var n = Interlocked.Increment(ref _submitted);
-                    if (n == 1)
+                    // Branch conversion (if configured) runs HERE, on the drain thread, so the player submit
+                    // thread is never charged for it. Adopt any staged converter swap first (between frames).
+                    AdoptPendingBranchConverterIfAny();
+                    var toSubmit = next;
+                    if (_branchConverter is { } conv)
                     {
-                        Interlocked.Exchange(ref _firstSubmitLogged, 1);
-                        Trace.LogDebug("{Name}: first frame submitted to inner output", _name);
+                        try
+                        {
+                            var converted = conv.Convert(next, next.ColorTransferHint);
+                            next.Dispose();
+                            toSubmit = converted;
+                        }
+                        catch (Exception cex)
+                        {
+                            _log?.LogError(cex, "VideoOutputPump {Name}: branch convert failed — frame dropped", _name);
+                            Trace.LogError(cex, $"{_name}: branch convert failed — frame dropped");
+                            next.Dispose();
+                            Interlocked.Increment(ref _dropped);
+                            continue;
+                        }
+                    }
+
+                    try
+                    {
+                        _inner.Submit(toSubmit);
+                        var n = Interlocked.Increment(ref _submitted);
+                        if (n == 1)
+                        {
+                            Interlocked.Exchange(ref _firstSubmitLogged, 1);
+                            Trace.LogDebug("{Name}: first frame submitted to inner output", _name);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _log?.LogError(ex, "VideoOutputPump {Name}: inner Submit failed", _name);
+                        Trace.LogError(ex, $"{_name}: inner Submit failed");
+                        toSubmit.Dispose();
                     }
                 }
-                catch (Exception ex)
+                finally
                 {
-                    _log?.LogError(ex, "VideoOutputPump {Name}: inner Submit failed", _name);
-                    Trace.LogError(ex, $"{_name}: inner Submit failed");
-                    toSubmit.Dispose();
+                    Interlocked.Decrement(ref _activeSubmits);
                 }
             }
         }

@@ -22,7 +22,7 @@ namespace S.Media.FFmpeg.Audio;
 /// first read after a discontinuity (e.g. seek), expect a one-call delay before output catches up.
 /// </para>
 /// </remarks>
-public class ResamplingAudioSource : IAudioSource, IDisposable
+public class ResamplingAudioSource : IAudioSource, ICooperativeAudioReadInterrupt, IDisposable
 {
     /// <summary>
     /// Creates a resampling wrapper that <strong>preserves seekability</strong>: when
@@ -61,6 +61,18 @@ public class ResamplingAudioSource : IAudioSource, IDisposable
     public AudioFormat Format => _outputFormat;
     public bool IsExhausted => _inner.IsExhausted && _drained;
     public IAudioSource Inner => _inner;
+
+    public void RequestYieldBetweenReads()
+    {
+        if (_inner is ICooperativeAudioReadInterrupt interrupt)
+            interrupt.RequestYieldBetweenReads();
+    }
+
+    public void ClearYieldRequest()
+    {
+        if (_inner is ICooperativeAudioReadInterrupt interrupt)
+            interrupt.ClearYieldRequest();
+    }
 
     public int ReadInto(Span<float> destination)
     {

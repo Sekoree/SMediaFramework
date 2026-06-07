@@ -202,12 +202,25 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
                 // When the caller drives composition from a master timeline (the declarative
                 // VideoCompositor), stamp the composite with that master time so downstream players
-                // align to a real clock rather than a synthetic free-running counter. The no-arg /
-                // production-slot path keeps the synthetic PTS (which still advances either way).
-                var pts = masterAlignmentTime ?? _nextPts;
-                _nextPts += _ptsStep;
-                // Composite reads the layer list synchronously and returns an independent (rented) frame;
-                // it must not retain the list — both shipping compositors copy out, so reuse is safe.
+                // align to a real clock rather than a synthetic free-running counter. For read-paced
+                // scaler/preset paths (OutputPresetVideoSource), propagate the background layer's
+                // source PTS so shared-demux seeks stay aligned with audio.
+                TimeSpan pts;
+                if (masterAlignmentTime is { } master)
+                {
+                    pts = master;
+                }
+                else if (_layerScratch.Count > 0)
+                {
+                    pts = _layerScratch[0].Frame.PresentationTime;
+                    _nextPts = pts + _ptsStep;
+                }
+                else
+                {
+                    pts = _nextPts;
+                    _nextPts += _ptsStep;
+                }
+
                 frame = _compositor.Composite(_layerScratch, pts);
                 Interlocked.Increment(ref _compositesEmitted);
                 return true;

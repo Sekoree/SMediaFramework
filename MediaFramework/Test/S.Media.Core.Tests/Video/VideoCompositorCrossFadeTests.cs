@@ -149,6 +149,25 @@ public sealed class VideoCompositorCrossFadeTests
         Assert.Equal(6, src.FramesPulled);
     }
 
+    [Fact]
+    public void NoClock_WhenInnerHasNoFrame_DoesNotRepeatHeldFrame()
+    {
+        var fmt = new VideoFormat(2, 2, PixelFormat.Bgra32, new Rational(30, 1));
+        var src = new GappedFrameSource(fmt);
+        using var program = VideoCompositor.Create(fmt, VideoCompositorBackend.Cpu);
+        program.AddLayer(src, LayerConfig.Background);
+
+        Assert.True(program.TryReadNextFrame(out var first));
+        Assert.Equal(0, first.Planes[0].Span[2]);
+        first.Dispose();
+
+        Assert.False(program.TryReadNextFrame(out _));
+
+        Assert.True(program.TryReadNextFrame(out var second));
+        Assert.Equal(1, second.Planes[0].Span[2]);
+        second.Dispose();
+    }
+
     private sealed class IndexedFrameSource(VideoFormat fmt) : IVideoSource
     {
         private int _next;
@@ -166,6 +185,35 @@ public sealed class VideoCompositorCrossFadeTests
             {
                 buf[i * 4 + 2] = (byte)idx; // R = frame index, so the composite identifies which frame was chosen
                 buf[i * 4 + 3] = 255;       // opaque
+            }
+            frame = new VideoFrame(TimeSpan.FromSeconds(idx / 30.0), Format, [buf], [Format.Width * 4], release: null);
+            return true;
+        }
+    }
+
+    private sealed class GappedFrameSource(VideoFormat fmt) : IVideoSource
+    {
+        private int _read;
+        public VideoFormat Format { get; } = fmt;
+        public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = new[] { PixelFormat.Bgra32 };
+        public bool IsExhausted => _read >= 3;
+        public void SelectOutputFormat(PixelFormat format) { }
+
+        public bool TryReadNextFrame(out VideoFrame frame)
+        {
+            var read = _read++;
+            if (read == 1)
+            {
+                frame = null!;
+                return false;
+            }
+
+            var idx = read == 0 ? 0 : 1;
+            var buf = new byte[Format.Width * Format.Height * 4];
+            for (var i = 0; i < Format.Width * Format.Height; i++)
+            {
+                buf[i * 4 + 2] = (byte)idx;
+                buf[i * 4 + 3] = 255;
             }
             frame = new VideoFrame(TimeSpan.FromSeconds(idx / 30.0), Format, [buf], [Format.Width * 4], release: null);
             return true;

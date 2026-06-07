@@ -14,7 +14,7 @@ namespace HaPlay.Playback;
 /// can restore the source after the user toggles hold off — important for single-frame sources
 /// (audio with cover art) where the decoder doesn't produce more frames on its own.
 /// </summary>
-internal sealed class LogoFallbackVideoOutput : IVideoOutput, IDisposable
+internal sealed class LogoFallbackVideoOutput : IVideoOutput, IVideoOutputQueueControl, IDisposable
 {
     private readonly IVideoOutput _inner;
     private readonly bool _disposeInner;
@@ -43,6 +43,7 @@ internal sealed class LogoFallbackVideoOutput : IVideoOutput, IDisposable
     public VideoFormat Format => _configured ? _format : throw new InvalidOperationException("Configure first");
 
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _inner.AcceptedPixelFormats;
+    internal IVideoOutput InnerOutput => _inner;
 
     public void Configure(VideoFormat format)
     {
@@ -183,6 +184,17 @@ internal sealed class LogoFallbackVideoOutput : IVideoOutput, IDisposable
 
         SubmitToInner(frame);
     }
+
+    public void AbandonQueuedFrames()
+    {
+        if (_inner is IVideoOutputQueueControl control)
+            control.AbandonQueuedFrames();
+    }
+
+    public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default) =>
+        _inner is IVideoOutputQueueControl control
+            ? control.WaitForIdle(timeout, cancellationToken)
+            : true;
 
     private void SubmitToInner(VideoFrame frame)
     {

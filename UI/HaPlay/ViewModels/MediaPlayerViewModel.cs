@@ -341,18 +341,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (session is null)
                 return;
 
-            await RunBoundedCancelableAsync(innerCt =>
-                {
-                    session.Router.SeekCoordinatedSkippingSharedMuxFlush(t, innerCt);
-                    if (playing)
-                    {
-                        session.PrepareOutputsBeforePlay(holdFb);
-                        session.PrepareLiveTransportBeforePlay();
-                        session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
-                    }
-                },
-                innerTimeout: TimeSpan.FromSeconds(3),
-                outerTimeout: TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            await RunFileSeekTransportAsync(session, t, playing, holdFb).ConfigureAwait(false);
 
             if (!playing)
             {
@@ -553,6 +542,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     /// <summary>Serializes load/unload/stop/pause/play/seek and loop-timer Router use so Dispose cannot overlap transport.</summary>
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
+    /// <summary>Wall-clock cap for file seeks. Must exceed the shared-demux prime deadline (~4 s) plus pause/join.</summary>
+    private static readonly TimeSpan FileSeekWallTimeout = TimeSpan.FromSeconds(12);
     private volatile bool _isTransportBusy;
     private readonly Playback.PlaylistDecoderCache _decoderCache = new();
     private CancellationTokenSource? _preOpenCts;
@@ -3737,13 +3728,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 return;
             }
 
+            SDebug.ChangeTrace.Step("Pause: UI flags updated (optimistic)");
+            await Dispatcher.UIThread.InvokeAsync(() => IsPlaying = false);
+
             SDebug.ChangeTrace.Step("Pause: Router.Pause begin");
-            await RunBoundedCancelableAsync(s.Router.PauseSkippingSharedMuxFlush,
-                innerTimeout: TimeSpan.FromSeconds(1.5),
-                outerTimeout: TimeSpan.FromSeconds(2.5));
+            // Do not pass a cancellable token into video pause — cancelling mid-join marks the player
+            // terminal while the UI still shows a loaded session. Bound only the outer wall.
+            await RunBoundedAsync(
+                () => s.Router.PauseSkippingSharedMuxFlush(CancellationToken.None),
+                TimeSpan.FromSeconds(5));
             SDebug.ChangeTrace.Step("Pause: Router.Pause done");
 
-            await Dispatcher.UIThread.InvokeAsync(() => IsPlaying = false);
             SDebug.ChangeTrace.End("Pause");
         }).ConfigureAwait(false);
     }
@@ -3848,6 +3843,28 @@ public partial class MediaPlayerViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// File seek + optional resume. Uses <see cref="CancellationToken.None"/> for the demux prime so a short
+    /// UI cancel cannot abort H.264 GOP catch-up while audio is already at the target.
+    /// </summary>
+    private static async Task RunFileSeekTransportAsync(
+        HaPlayPlaybackSession session,
+        TimeSpan target,
+        bool resumePlayback,
+        bool holdFallbackVideo)
+    {
+        await Task.Run(() =>
+        {
+            session.Router.SeekCoordinatedSkippingSharedMuxFlush(target, CancellationToken.None);
+            if (!resumePlayback)
+                return;
+            session.PrepareOutputsBeforePlay(holdFallbackVideo);
+            session.PrepareLiveTransportBeforePlay();
+            session.Player.PrewarmVideoAfterSeek();
+            session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
+        }).WaitAsync(FileSeekWallTimeout).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Two-tier timeout: pass <paramref name="innerTimeout"/> as a CancellationToken to <paramref name="action"/> (so framework
     /// joins exit cooperatively), then enforce <paramref name="outerTimeout"/> with <see cref="Task.WaitAsync(TimeSpan)"/> as a
     /// last-resort wall. Without the outer wall, a stuck native call would freeze the UI indefinitely.
@@ -3936,19 +3953,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
             var t = TimeSpan.FromTicks((long)(sliderValue * Duration.Ticks / 1000.0));
 
-            await RunBoundedCancelableAsync(ct =>
-                {
-                    session.Router.SeekCoordinatedSkippingSharedMuxFlush(t, ct);
-                    if (playing)
-                    {
-                        // No NDI warmup on seek — silence at the seek target would be obviously wrong audio.
-                        session.PrepareOutputsBeforePlay(holdFb);
-                        session.PrepareLiveTransportBeforePlay();
-                        session.Router.Play(prefillBeforeHardware: null, startHardware: session.StartAllPortAudio);
-                    }
-                },
-                innerTimeout: TimeSpan.FromSeconds(3),
-                outerTimeout: TimeSpan.FromSeconds(5));
+            await RunFileSeekTransportAsync(session, t, playing, holdFb).ConfigureAwait(false);
 
             if (!playing) return;
             await Dispatcher.UIThread.InvokeAsync(() =>

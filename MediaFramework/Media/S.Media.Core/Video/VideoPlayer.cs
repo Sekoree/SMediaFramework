@@ -67,14 +67,18 @@ public sealed class VideoPlayer : IDisposable
     private volatile bool _decodeThreadStuck;
 
     private long _decoded;
+    private long _latestDecodedPtsTicks;
     private long _displayed;
     private long _droppedLate;
     private long _droppedQueueDrain;
+    private long _lastPresentedPtsTicks;
     private int _firstTickLogged;
     private int _firstSubmittedLogged;
     private int _firstDecodedLogged;
+    private int _syncDebugTicksRemaining;
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoPlayer");
+    private static readonly TimeSpan SyncOutputPreDrainTimeout = TimeSpan.FromMilliseconds(120);
 
     /// <summary>
     /// Frozen plane data captured from the final submitted frame when <see cref="HoldLastFrameAtEnd"/> is on.
@@ -116,6 +120,20 @@ public sealed class VideoPlayer : IDisposable
     public long DecodedCount => Volatile.Read(ref _decoded);
     /// <summary>Total frames handed to the output.</summary>
     public long DisplayedCount => Volatile.Read(ref _displayed);
+    /// <summary>
+    /// Lifetime decoded minus displayed (includes frames dropped on pause/seek drain).
+    /// Prefer <see cref="QueuedFrameCount"/> for jitter-buffer depth.
+    /// </summary>
+    public long PendingBufferedCount => DecodedCount - DisplayedCount;
+
+    /// <summary>Frames currently waiting in the presentation queue.</summary>
+    public int QueuedFrameCount => _queue.Count;
+    /// <summary>PTS of the most recently decoded frame still in (or at the tail of) the jitter buffer.</summary>
+    public TimeSpan LatestDecodedPresentationTime =>
+        TimeSpan.FromTicks(Volatile.Read(ref _latestDecodedPtsTicks));
+    /// <summary>PTS last handed to the output (after a successful <see cref="IVideoOutput.Submit"/>).</summary>
+    public TimeSpan LastPresentedPresentationTime =>
+        TimeSpan.FromTicks(Volatile.Read(ref _lastPresentedPtsTicks));
     /// <summary>Frames dropped because the playhead had advanced past them by more than <see cref="LateThreshold"/>.</summary>
     public long DroppedLate => Volatile.Read(ref _droppedLate);
     /// <summary>Frames dropped on Stop/Pause/Seek (queue drain) before they could be displayed.</summary>
@@ -220,8 +238,22 @@ public sealed class VideoPlayer : IDisposable
             Interlocked.Exchange(ref _firstTickLogged, 0);
             Interlocked.Exchange(ref _firstSubmittedLogged, 0);
             Interlocked.Exchange(ref _firstDecodedLogged, 0);
+            _syncDebugTicksRemaining = Trace.IsEnabled(LogLevel.Debug) ? 90 : 0;
             if (_source is ICooperativeVideoReadInterrupt iv)
                 iv.ClearYieldRequest();
+            // After pause the shared demux can leave decode state out of step with the frozen clock
+            // even when Position still reports emitted samples (≈ clock). Always re-seek on resume —
+            // same policy as AvPlaybackCoordinator.RealignAudioSourceBeforeStart for audio.
+            if (!_clock.IsRunning && _source is ISeekableSource seekable)
+            {
+                var pos = _clock.CurrentPosition;
+                var src = seekable.Position;
+                var drift = (src - pos).Duration();
+                Trace.LogDebug(
+                    "Play: realigning source from {Src} to clock {Clock} (driftMs={DriftMs})",
+                    src, pos, drift.TotalMilliseconds);
+                seekable.Seek(pos);
+            }
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
             _tickHandler = (_, _) => OnVideoTick();
@@ -374,7 +406,11 @@ public sealed class VideoPlayer : IDisposable
             f.Dispose();
             dropped++;
         }
-        if (dropped > 0) Interlocked.Add(ref _droppedQueueDrain, dropped);
+        if (dropped > 0)
+        {
+            Interlocked.Add(ref _droppedQueueDrain, dropped);
+            Volatile.Write(ref _latestDecodedPtsTicks, Volatile.Read(ref _lastPresentedPtsTicks));
+        }
 
         // Reissue the semaphore so the new run's decode loop has a clean
         // tally — simpler than counting precisely how many tokens to release.
@@ -404,6 +440,7 @@ public sealed class VideoPlayer : IDisposable
                 }
 
                 Interlocked.Increment(ref _decoded);
+                Volatile.Write(ref _latestDecodedPtsTicks, frame.PresentationTime.Ticks);
                 if (Interlocked.Exchange(ref _firstDecodedLogged, 1) == 0)
                     Trace.LogDebug("DecodeLoop: first frame decoded (pts={Pts})", frame.PresentationTime);
 
@@ -469,6 +506,14 @@ public sealed class VideoPlayer : IDisposable
         // Hold video back by the audio output latency so it lines up with what's actually heard
         // (audio is buffered ahead in the output ring; presenting video at raw clock time leads it).
         var playhead = _clock.CurrentPosition - PlayheadOffset;
+        if (_syncDebugTicksRemaining > 0)
+        {
+            Trace.LogDebug(
+                "OnVideoTick: sync clock={Clock} playhead={Playhead} offset={Offset} queued={Queued} latestDecoded={Latest}",
+                _clock.CurrentPosition, playhead, PlayheadOffset, _queue.Count, LatestDecodedPresentationTime);
+            _syncDebugTicksRemaining--;
+        }
+
         var early = playhead + EarlyTolerance;
         var lateCutoff = playhead - LateThreshold;
 
@@ -543,40 +588,7 @@ public sealed class VideoPlayer : IDisposable
                 CaptureHeldFrame(toShow);
             }
 
-            // Capture PTS before Submit: after a successful Submit the output owns
-            // the frame and we must not touch or dispose it again. Counters and the
-            // presentation event run outside the Submit try so a throwing subscriber
-            // can never trigger a double-release of a frame the output already owns.
-            var presentedPts = toShow.PresentationTime;
-            var submitted = false;
-            try
-            {
-                _sink.Submit(toShow);
-                submitted = true;
-            }
-            catch (Exception ex)
-            {
-#if DEBUG
-                MediaDiagnostics.LogError(ex, "VideoPlayer.OnVideoTick output Submit");
-#endif
-                // Output threw — ownership did not move; release the frame to avoid a
-                // native buffer leak. Rethrow would kill MediaClock's driver.
-                try { toShow.Dispose(); }
-#if DEBUG
-                catch (Exception dex) { MediaDiagnostics.LogError(dex, "VideoPlayer.OnVideoTick frame Dispose after Submit failure"); }
-#else
-                catch { /* best effort */ }
-#endif
-                _ = ex;
-            }
-
-            if (submitted)
-            {
-                Interlocked.Increment(ref _displayed);
-                if (Interlocked.Exchange(ref _firstSubmittedLogged, 1) == 0)
-                    Trace.LogDebug("OnVideoTick: first frame submitted (pts={Pts})", presentedPts);
-                RaisePresented(presentedPts);
-            }
+            TrySubmitFrameToSink(toShow, "OnVideoTick", logFirstSubmission: true);
         }
         else if (_source.IsExhausted && _queue.IsEmpty)
         {
@@ -597,6 +609,121 @@ public sealed class VideoPlayer : IDisposable
         }
     }
 
+    internal bool TryPresentBufferedFrameForSync(
+        TimeSpan target,
+        TimeSpan outputIdleTimeout,
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!IsRunning)
+            return false;
+
+        if (!TryTakeFrameForSyncPresentation(target, out var frame) || frame is null)
+            return false;
+
+        var outputQueue = _sink as IVideoOutputQueueControl;
+        if (outputQueue is not null)
+        {
+            try
+            {
+                outputQueue.AbandonQueuedFrames();
+                if (!WaitForOutputIdle(outputQueue, SyncOutputPreDrainTimeout, cancellationToken, "PresentBufferedFrameForSync.preDrain"))
+                {
+                    Trace.LogDebug("PresentBufferedFrameForSync: output did not become idle before sync submit (timeout={Timeout})",
+                        SyncOutputPreDrainTimeout);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                frame.Dispose();
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Trace.LogDebug(ex, "PresentBufferedFrameForSync: video output pre-drain failed");
+            }
+        }
+
+        var pts = frame.PresentationTime;
+        if (!TrySubmitFrameToSink(frame, "PresentBufferedFrameForSync", logFirstSubmission: true))
+            return false;
+
+        var outputReady = true;
+        if (outputQueue is not null && outputIdleTimeout > TimeSpan.Zero)
+            outputReady = WaitForOutputIdle(outputQueue, outputIdleTimeout, cancellationToken, "PresentBufferedFrameForSync.postSubmit");
+
+        Trace.LogDebug(
+            "PresentBufferedFrameForSync: target={Target} pts={Pts} outputReady={OutputReady} queued={Queued} latestDecoded={Latest}",
+            target, pts, outputReady, QueuedFrameCount, LatestDecodedPresentationTime);
+        return outputReady;
+    }
+
+    private bool TryTakeFrameForSyncPresentation(TimeSpan target, out VideoFrame? toShow)
+    {
+        toShow = null;
+        var playhead = target - PlayheadOffset;
+        var early = playhead + EarlyTolerance;
+        var lateCutoff = playhead - LateThreshold;
+
+        while (_queue.TryPeek(out var head))
+        {
+            if (head.PresentationTime > early)
+                break;
+
+            if (!_queue.TryDequeue(out var frame))
+                break;
+            _slotsAvailable.Release();
+
+            if (frame.PresentationTime < lateCutoff)
+            {
+                frame.Dispose();
+                Interlocked.Increment(ref _droppedLate);
+                continue;
+            }
+
+            if (toShow is not null)
+            {
+                toShow.Dispose();
+                Interlocked.Increment(ref _droppedLate);
+            }
+
+            toShow = frame;
+        }
+
+        if (toShow is not null)
+            return true;
+
+        var futureCutoff = playhead + SyncStartupLead;
+        if (!_queue.TryPeek(out var future) || future.PresentationTime > futureCutoff)
+            return false;
+
+        if (!_queue.TryDequeue(out toShow))
+            return false;
+        _slotsAvailable.Release();
+        return true;
+    }
+
+    private bool WaitForOutputIdle(
+        IVideoOutputQueueControl output,
+        TimeSpan timeout,
+        CancellationToken cancellationToken,
+        string operation)
+    {
+        try
+        {
+            return output.WaitForIdle(timeout, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogDebug(ex, "{Operation}: video output idle wait failed", operation);
+            return false;
+        }
+    }
+
     private void PresentLatestQueuedFrame()
     {
         VideoFrame? latest = null;
@@ -610,30 +737,46 @@ public sealed class VideoPlayer : IDisposable
         if (latest is null)
             return;
 
-        var presentedPts = latest.PresentationTime;
+        TrySubmitFrameToSink(latest, "PresentLatestQueuedFrame", logFirstSubmission: false);
+    }
+
+    private bool TrySubmitFrameToSink(VideoFrame frame, string operation, bool logFirstSubmission)
+    {
+        // Capture PTS before Submit: after a successful Submit the output owns
+        // the frame and we must not touch or dispose it again. Counters and the
+        // presentation event run outside the Submit try so a throwing subscriber
+        // can never trigger a double-release of a frame the output already owns.
+        var presentedPts = frame.PresentationTime;
         var submitted = false;
         try
         {
-            _sink.Submit(latest);
+            _sink.Submit(frame);
             submitted = true;
         }
         catch (Exception ex)
         {
 #if DEBUG
-            MediaDiagnostics.LogError(ex, "VideoPlayer.PresentLatestQueuedFrame output Submit");
+            MediaDiagnostics.LogError(ex, $"VideoPlayer.{operation} output Submit");
 #endif
-            try { latest.Dispose(); } catch { /* best effort */ }
+            // Output threw — ownership did not move; release the frame to avoid a
+            // native buffer leak. Rethrow would kill MediaClock's driver.
+            try { frame.Dispose(); }
+#if DEBUG
+            catch (Exception dex) { MediaDiagnostics.LogError(dex, $"VideoPlayer.{operation} frame Dispose after Submit failure"); }
+#else
+            catch { /* best effort */ }
+#endif
             _ = ex;
         }
 
-        if (submitted)
-        {
-            Interlocked.Increment(ref _displayed);
-            // Via RaisePresented (not a direct Invoke): this runs on the clock-driver
-            // thread (OnVideoTick → LatestOnTick), so a throwing subscriber must not be
-            // allowed to escape and kill the clock driver. Same contract as OnVideoTick.
-            RaisePresented(presentedPts);
-        }
+        if (!submitted)
+            return false;
+
+        Interlocked.Increment(ref _displayed);
+        if (logFirstSubmission && Interlocked.Exchange(ref _firstSubmittedLogged, 1) == 0)
+            Trace.LogDebug("{Operation}: first frame submitted (pts={Pts})", operation, presentedPts);
+        RaisePresented(presentedPts);
+        return true;
     }
 
     private void CaptureHeldFrame(VideoFrame source)
@@ -712,6 +855,7 @@ public sealed class VideoPlayer : IDisposable
     /// </summary>
     private void RaisePresented(TimeSpan pts)
     {
+        Volatile.Write(ref _lastPresentedPtsTicks, pts.Ticks);
         try { FramePresentationTimePresented?.Invoke(pts); }
         catch (Exception ex)
         {
@@ -737,6 +881,49 @@ public sealed class VideoPlayer : IDisposable
         _heldTransferHint = default;
         _heldOriginalPts = TimeSpan.Zero;
         Volatile.Write(ref _holdSubmitCount, 0);
+    }
+
+    /// <summary>
+    /// True when the queue holds at least one frame whose PTS is at or before
+    /// <paramref name="playhead"/> plus <see cref="EarlyTolerance"/>.
+    /// </summary>
+    internal bool HasPresentableFrameAt(TimeSpan playhead) =>
+        HasFrameWithinLeadOf(playhead, EarlyTolerance);
+
+    /// <summary>
+    /// Max lead (ahead of playhead) for the earliest queued frame to count as sync-ready
+    /// before audio starts. ~1.5 frame periods, clamped for pathological rates.
+    /// </summary>
+    internal TimeSpan SyncStartupLead
+    {
+        get
+        {
+            var fps = _sink.Format.FrameRate.ToDouble();
+            var lead = fps > 0
+                ? TimeSpan.FromSeconds(1.5 / fps)
+                : TimeSpan.FromMilliseconds(62.5);
+            if (lead < TimeSpan.FromMilliseconds(50))
+                lead = TimeSpan.FromMilliseconds(50);
+            if (lead > TimeSpan.FromMilliseconds(250))
+                lead = TimeSpan.FromMilliseconds(250);
+            return lead;
+        }
+    }
+
+    /// <summary>
+    /// True when some queued frame has PTS at or before <paramref name="playhead"/> + <paramref name="lead"/>.
+    /// Used for pre-audio buffer checks where the clock is frozen and the first decode frame may
+    /// legitimately start one GOP/frame period after the sync target.
+    /// </summary>
+    internal bool HasFrameWithinLeadOf(TimeSpan playhead, TimeSpan lead)
+    {
+        var cutoff = playhead + lead;
+        foreach (var frame in _queue)
+        {
+            if (frame.PresentationTime <= cutoff)
+                return true;
+        }
+        return false;
     }
 }
 

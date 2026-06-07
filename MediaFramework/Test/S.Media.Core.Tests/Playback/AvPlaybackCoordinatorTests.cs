@@ -11,7 +11,7 @@ namespace S.Media.Core.Tests.Playback;
 public class AvPlaybackCoordinatorTests
 {
     [Fact]
-    public void Play_WhenVerifyPrebufferAfterPrefillFalse_ThrowsAndDoesNotStartVideo()
+    public void Play_WhenVerifyPrebufferAfterPrefillFalse_ThrowsAfterVideoOnlyStart()
     {
         var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
         var stride = 16 * 4;
@@ -29,7 +29,7 @@ public class AvPlaybackCoordinatorTests
                 verifyPrebufferAfterPrefill: () => false));
 
         Assert.Contains("verifyPrebufferAfterPrefill", ex.Message, StringComparison.Ordinal);
-        Assert.False(video.IsRunning);
+        Assert.True(video.IsRunning);
     }
 
     [Fact]
@@ -225,6 +225,207 @@ public class AvPlaybackCoordinatorTests
         var after = hits;
         clock.AdvanceTo(TimeSpan.FromSeconds(2));
         Assert.Equal(after, hits);
+    }
+
+    [Fact]
+    public void IsVideoBufferReadyForSync_RequiresQueuedPresentableFrames_NotLifetimePending()
+    {
+        var frames = Enumerable.Range(0, 24)
+            .Select(i => (TimeSpan.FromMilliseconds(i * 42), new byte[16 * 16 * 4], 16 * 4))
+            .ToArray();
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+        var src = new FakeVideoSource(fmt, frames);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var video = new VideoPlayer(src, output, clock, queueCapacity: 16);
+
+        video.Play();
+        output.WaitForConfigured();
+        WaitFor(() => video.QueuedFrameCount >= 2, TimeSpan.FromSeconds(2));
+
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(100));
+        clock.RaiseVideoTick();
+        WaitFor(() => video.DisplayedCount >= 1, TimeSpan.FromSeconds(1));
+        video.Pause();
+
+        Assert.Equal(0, video.QueuedFrameCount);
+        Assert.True(video.PendingBufferedCount >= 12);
+
+        Assert.False(AvPlaybackCoordinator.IsVideoBufferReadyForSync(video, clock.CurrentPosition));
+    }
+
+    [Fact]
+    public void IsVideoBufferReadyForSync_AcceptsFirstFrameOnePeriodAfterTarget()
+    {
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(24, 1));
+        var stride = 16 * 4;
+        var bytes = new byte[stride * 16];
+        var src = new FakeVideoSource(fmt,
+            (TimeSpan.FromMilliseconds(42), bytes, stride),
+            (TimeSpan.FromMilliseconds(84), bytes, stride));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var video = new VideoPlayer(src, output, clock, queueCapacity: 4);
+
+        video.Play();
+        output.WaitForConfigured();
+        WaitFor(() => video.QueuedFrameCount >= 1, TimeSpan.FromSeconds(1));
+
+        Assert.True(AvPlaybackCoordinator.IsVideoBufferReadyForSync(video, TimeSpan.Zero));
+    }
+
+    [Fact]
+    public void Play_OnResume_RealignsAudioSourceWhenAheadOfClock()
+    {
+        var vFmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(24, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var inner = new FakeVideoSource(vFmt, (TimeSpan.FromSeconds(10), frameBytes, stride));
+        var videoSrc = new SeekableFakeVideoSource(inner) { Position = TimeSpan.FromSeconds(10) };
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var videoClock = new FakeMediaClock();
+        videoClock.Seek(TimeSpan.FromSeconds(10));
+        using var video = new VideoPlayer(videoSrc, output, videoClock);
+
+        var audioFmt = new AudioFormat(44100, 2);
+        var audioSrc = new SeekableResumeAudioSource(audioFmt) { Position = TimeSpan.FromSeconds(10.7) };
+        using var router = new AudioRouter(44100);
+        var srcId = router.AddSource(audioSrc, "src");
+        var outId = router.AddOutput(new SilentAudioOutput(audioFmt));
+        router.Connect(srcId, outId);
+
+        using var audioClock = new MediaClock();
+        audioClock.Seek(TimeSpan.FromSeconds(10));
+
+        AvPlaybackCoordinator.Play(video, router, audioClock, audioSourceId: srcId,
+            verifyPrebufferAfterPrefill: () => true);
+
+        Assert.Equal(TimeSpan.FromSeconds(10), audioSrc.LastSeekTo);
+        router.Stop();
+        video.Pause();
+    }
+
+    [Fact]
+    public void Play_WithAudio_PresentsVideoFrameBeforeStartingAudioClock()
+    {
+        var vFmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(24, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(vFmt,
+            (TimeSpan.FromSeconds(10), frameBytes, stride),
+            (TimeSpan.FromSeconds(10) + TimeSpan.FromMilliseconds(42), frameBytes, stride));
+        using var clock = new MediaClock();
+        clock.Seek(TimeSpan.FromSeconds(10));
+        var output = new ClockObservingVideoOutput([PixelFormat.Bgra32], clock);
+        using var video = new VideoPlayer(src, output, clock, queueCapacity: 4);
+
+        var audioFmt = new AudioFormat(44100, 2);
+        var audioSrc = new SeekableResumeAudioSource(audioFmt) { Position = TimeSpan.FromSeconds(10) };
+        using var router = new AudioRouter(44100, chunkSamples: 64);
+        var srcId = router.AddSource(audioSrc, "src");
+        var outId = router.AddOutput(new SilentAudioOutput(audioFmt));
+        router.Connect(srcId, outId);
+
+        try
+        {
+            AvPlaybackCoordinator.Play(video, router, clock, audioSourceId: srcId);
+
+            WaitFor(() => output.SubmittedCount >= 1, TimeSpan.FromSeconds(1));
+
+            Assert.False(output.FirstSubmitClockWasRunning);
+            Assert.Equal(TimeSpan.FromSeconds(10), output.FirstSubmittedPresentationTime);
+            Assert.True(output.AbandonQueuedFramesCalls >= 1);
+            Assert.True(output.WaitForIdleCalls >= 1);
+        }
+        finally
+        {
+            router.Stop();
+            video.Pause();
+            clock.Pause();
+        }
+    }
+
+    private sealed class SeekableResumeAudioSource(AudioFormat fmt) : IAudioSource, ISeekableSource
+    {
+        public AudioFormat Format { get; } = fmt;
+        public bool IsExhausted => false;
+        public TimeSpan Duration => TimeSpan.FromMinutes(10);
+        public TimeSpan Position { get; set; }
+        public TimeSpan? LastSeekTo { get; private set; }
+
+        public int ReadInto(Span<float> dst)
+        {
+            dst.Clear();
+            return dst.Length;
+        }
+
+        public void Seek(TimeSpan position)
+        {
+            LastSeekTo = position;
+            Position = position;
+        }
+    }
+
+    private sealed class SilentAudioOutput(AudioFormat fmt) : IAudioOutput
+    {
+        public AudioFormat Format { get; } = fmt;
+        public void Submit(ReadOnlySpan<float> packedSamples) { }
+    }
+
+    private sealed class ClockObservingVideoOutput(PixelFormat[] accepted, IMediaClock clock) : IVideoOutput, IVideoOutputQueueControl
+    {
+        private readonly List<TimeSpan> _submitted = new();
+        private int _firstSubmitRecorded;
+        private int _waitForIdleCalls;
+        private int _abandonQueuedFramesCalls;
+
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = accepted;
+        public VideoFormat Format { get; private set; }
+        public bool FirstSubmitClockWasRunning { get; private set; }
+        public int WaitForIdleCalls => Volatile.Read(ref _waitForIdleCalls);
+        public int AbandonQueuedFramesCalls => Volatile.Read(ref _abandonQueuedFramesCalls);
+
+        public int SubmittedCount
+        {
+            get { lock (_submitted) return _submitted.Count; }
+        }
+
+        public TimeSpan FirstSubmittedPresentationTime
+        {
+            get { lock (_submitted) return _submitted[0]; }
+        }
+
+        public void Configure(VideoFormat format) => Format = format;
+
+        public void Submit(VideoFrame frame)
+        {
+            if (Interlocked.Exchange(ref _firstSubmitRecorded, 1) == 0)
+                FirstSubmitClockWasRunning = clock.IsRunning;
+
+            lock (_submitted)
+                _submitted.Add(frame.PresentationTime);
+
+            frame.Dispose();
+        }
+
+        public void AbandonQueuedFrames() => Interlocked.Increment(ref _abandonQueuedFramesCalls);
+
+        public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _waitForIdleCalls);
+            return true;
+        }
+    }
+
+    private static void WaitFor(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
+        {
+            if (condition()) return;
+            Thread.Sleep(5);
+        }
+        throw new TimeoutException("condition not met within timeout");
     }
 
     private sealed class ContainerSessionFixture : IDisposable

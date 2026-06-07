@@ -13,6 +13,7 @@ namespace S.Media.Core.Playback;
 internal static class AvPlaybackCoordinator
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Playback.AvPlaybackCoordinator");
+    private static readonly TimeSpan SyncStartVideoOutputTimeout = TimeSpan.FromMilliseconds(250);
 
     public static void Play(
         VideoPlayer video,
@@ -21,7 +22,8 @@ internal static class AvPlaybackCoordinator
         Action? prefillBeforeHardware = null,
         Action? startHardware = null,
         IPlaybackClock? videoOnlyMaster = null,
-        Func<bool>? verifyPrebufferAfterPrefill = null)
+        Func<bool>? verifyPrebufferAfterPrefill = null,
+        string? audioSourceId = null)
     {
         ArgumentNullException.ThrowIfNull(video);
         Trace.LogDebug("Play: hasAudio={HasAudio} hasPrefill={HasPrefill} hasStartHw={HasStartHw} hasVoMaster={HasVoMaster}",
@@ -30,27 +32,141 @@ internal static class AvPlaybackCoordinator
         if (prefillBeforeHardware is not null)
             prefillBeforeHardware.Invoke();
 
-        if (verifyPrebufferAfterPrefill is not null && !verifyPrebufferAfterPrefill())
-            throw new InvalidOperationException(
-                "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false.");
-
         if (startHardware is not null)
             startHardware.Invoke();
 
         if (audioRouter is not null && audioClock is not null)
         {
+            // Realign audio before video.Play() — video starts the decode thread and may start
+            // the shared clock; audio Position tracks emitted samples (≈ clock at pause) so a
+            // drift threshold would skip realign even when video decode is ~700ms ahead.
+            if (!audioClock.IsRunning)
+                RealignAudioSourceBeforeStart(audioRouter, audioClock, audioSourceId);
+
+            video.Play();
+
+            WaitForVideoBufferBeforeStartingAudio(video, video.Clock, verifyPrebufferAfterPrefill);
+            var syncFramePresented = video.TryPresentBufferedFrameForSync(
+                video.Clock.CurrentPosition,
+                SyncStartVideoOutputTimeout);
+            if (!syncFramePresented)
+            {
+                Trace.LogDebug(
+                    "Play: sync video presentation did not complete before audio start (timeout={Timeout}, queued={Queued}, latestDecoded={Latest})",
+                    SyncStartVideoOutputTimeout, video.QueuedFrameCount, video.LatestDecodedPresentationTime);
+            }
             audioRouter.Start();
             audioClock.Start();
         }
         else
         {
+            video.Play();
+
+            if (verifyPrebufferAfterPrefill is not null && !verifyPrebufferAfterPrefill())
+                throw new InvalidOperationException(
+                    "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false.");
+
             if (videoOnlyMaster is not null)
                 video.Clock.SetMaster(videoOnlyMaster);
             if (!video.Clock.IsRunning)
                 video.Clock.Start();
         }
+    }
 
-        video.Play();
+    /// <summary>
+    /// After a seek/resume, the compositor/scaler path can decode far slower than realtime. Hold audio
+    /// until the video jitter buffer has enough frames stamped at/after the sync target.
+    /// </summary>
+    internal static bool IsVideoBufferReadyForSync(VideoPlayer video, TimeSpan target)
+    {
+        const int minQueued = 1;
+        var playhead = target - video.PlayheadOffset;
+        if (video.QueuedFrameCount < minQueued)
+            return false;
+
+        var lead = video.SyncStartupLead;
+        if (!video.HasFrameWithinLeadOf(playhead, lead))
+            return false;
+
+        return video.LatestDecodedPresentationTime + lead >= playhead;
+    }
+
+    private static void WaitForVideoBufferBeforeStartingAudio(
+        VideoPlayer video,
+        IMediaClock clock,
+        Func<bool>? verify)
+    {
+        const int maxWaitMs = 8000;
+        var deadline = Environment.TickCount64 + maxWaitMs;
+        var target = clock.CurrentPosition;
+        var waitStart = Environment.TickCount64;
+
+        while (Environment.TickCount64 < deadline)
+        {
+            if (verify is not null)
+            {
+                if (verify()) goto Done;
+            }
+            else if (IsVideoBufferReadyForSync(video, target))
+            {
+                goto Done;
+            }
+
+            Thread.Sleep(5);
+        }
+
+        if (verify is not null && !verify())
+            throw new InvalidOperationException(
+                "AvPlaybackCoordinator.Play: verifyPrebufferAfterPrefill returned false after waiting for the video buffer.");
+
+        Done:
+        if (Trace.IsEnabled(LogLevel.Debug))
+        {
+            var playhead = target - video.PlayheadOffset;
+            var lead = video.SyncStartupLead;
+            TimeSpan? masterElapsed = null;
+            if (clock is MediaClock mc && mc.Master is { } master)
+                masterElapsed = master.ElapsedSinceStart;
+            Trace.LogDebug(
+                "WaitForVideoBuffer: waitedMs={WaitMs} target={Target} queued={Queued} lifetimePending={LifetimePending} latestDecoded={Latest} clock={Clock} syncReady={SyncReady} leadMs={LeadMs} masterElapsed={MasterElapsed}",
+                Environment.TickCount64 - waitStart, target, video.QueuedFrameCount, video.PendingBufferedCount,
+                video.LatestDecodedPresentationTime, clock.CurrentPosition,
+                video.HasFrameWithinLeadOf(playhead, lead), lead.TotalMilliseconds,
+                masterElapsed);
+        }
+    }
+
+    /// <summary>
+    /// After pause/resume the shared demux can leave audio decode/resampler state out of step with
+    /// the frozen clock even when <see cref="ISeekableSource.Position"/> still reports emitted
+    /// samples (≈ clock). Always re-seek to the clock before the router resumes.
+    /// </summary>
+    private static void RealignAudioSourceBeforeStart(
+        AudioRouter audioRouter,
+        MediaClock audioClock,
+        string? audioSourceId)
+    {
+        var target = audioClock.CurrentPosition;
+        if (!string.IsNullOrEmpty(audioSourceId))
+        {
+            if (!audioRouter.TryGetSeekableSourcePosition(audioSourceId, out var pos))
+                return;
+            var drift = (pos - target).Duration();
+            Trace.LogDebug(
+                "RealignAudio: source={Id} from {Src} to clock {Clock} (driftMs={DriftMs})",
+                audioSourceId, pos, target, drift.TotalMilliseconds);
+            audioRouter.SeekSource(audioSourceId, target);
+            return;
+        }
+
+        try
+        {
+            audioRouter.Seek(target);
+        }
+        catch (InvalidOperationException)
+        {
+            // Multiple sources — host must pass audioSourceId.
+        }
     }
 
     public static void Pause(
@@ -62,16 +178,19 @@ internal static class AvPlaybackCoordinator
     {
         ArgumentNullException.ThrowIfNull(video);
 
-        // Silence/stop audio FIRST. video.Pause can block up to the decode-thread join cap while a
-        // native read unwinds; if we paused video first (the old order), the audio router + clock
-        // would keep running for that whole window — audible pause latency and A/V divergence. The
-        // audio pause is quick (stop the router thread + clock), so do it up front.
+        // Freeze the media clock while PortAudio's master clock is still calibrated, then stop
+        // audio production (which Flush()es PortAudio and resets stream-time smoothing). The old
+        // router-first order flushed before clock.Pause(), so ElapsedSinceStart jumped backward and
+        // the UI playhead snapped to an earlier position on pause.
+        //
+        // Video.Pause can still block on the decode-thread join cap; clock and audio silence happen
+        // first so pause feels immediate and the stored position stays stable.
         try
         {
             if (audioRouter is not null && audioClock is not null)
             {
-                audioRouter.Pause();
                 audioClock.Pause(cancellationToken);
+                audioRouter.Pause();
             }
             else
             {

@@ -155,6 +155,10 @@ public class SharedDemuxSeekAlignmentTests
             Assert.InRange(audioPts.TotalSeconds, 2.85, 3.30);
             Assert.True(Math.Abs((audioPts - videoPts).TotalSeconds) < 0.20,
                 $"audio/video desync after seek: audio={audioPts.TotalSeconds:F3}s video={videoPts.TotalSeconds:F3}s");
+
+            // Clock should track the requested target, not a pre-target GOP keyframe left in Video.Position.
+            var aligned = c.GetAlignedPresentationPosition(target);
+            Assert.InRange(aligned.TotalSeconds, target.TotalSeconds - 0.15, target.TotalSeconds + 0.15);
         }
         finally
         {

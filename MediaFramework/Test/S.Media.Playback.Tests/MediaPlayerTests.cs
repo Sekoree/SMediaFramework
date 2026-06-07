@@ -253,6 +253,40 @@ public sealed class MediaPlayerTests
         Assert.Equal("25:00:00.000", PlaybackHud.FormatClock(new TimeSpan(1, 1, 0, 0, 0)));
     }
 
+    [Fact]
+    public void OpenDecoderBuilder_primes_hw_h264_when_native_formats_empty()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"mf_open_decoder_hw_{Guid.NewGuid():N}.mp4");
+        if (!MediaPlayerSmokeTestHelpers.TryGenerateAudioVideo(path))
+            return;
+
+        try
+        {
+            using var decoder = MediaContainerDecoder.Open(path, new S.Media.FFmpeg.Video.VideoDecoderOpenOptions
+            {
+                TryHardwareAcceleration = true,
+            });
+
+            if (decoder.Video.NativePixelFormats.Count > 0)
+                return; // CPU decode path already advertises native formats — not the regression under test.
+
+            Assert.True(
+                MediaPlayer.Open(decoder)
+                    .WithDecoderOwnership(MediaPlayerDecoderOwnership.CallerKeepsDecoder)
+                    .TryBuild(out var player, out var err),
+                err);
+            using (player!)
+            {
+                Assert.True(player.Video.Format.Width > 0);
+                Assert.NotEqual(S.Media.Core.Video.PixelFormat.Unknown, player.Video.Format.PixelFormat);
+            }
+        }
+        finally
+        {
+            TryDelete(path);
+        }
+    }
+
     private static byte[] CreateWavBytes()
     {
         const int sampleRate = 48_000;

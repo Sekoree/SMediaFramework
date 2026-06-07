@@ -132,6 +132,23 @@ public sealed class VideoCompositorSourceTests
     }
 
     [Fact]
+    public void SingleSlot_PropagatesSourcePresentationTime()
+    {
+        using var compositor = new CpuVideoCompositor(Bgra32_4x4);
+        using var output = new VideoCompositorSource(Bgra32_4x4, compositor, disposeCompositorOnDispose: false);
+        var slot = output.AddSlot();
+        slot.Output.Configure(Bgra32_4x4);
+        slot.Output.Submit(MakeFrame(0, 0, 255, 255, TimeSpan.FromSeconds(30)));
+
+        Assert.True(output.TryReadNextFrame(out var composite));
+        try
+        {
+            Assert.Equal(TimeSpan.FromSeconds(30), composite.PresentationTime);
+        }
+        finally { composite.Dispose(); }
+    }
+
+    [Fact]
     public void PtsAdvancesPerRead()
     {
         using var compositor = new CpuVideoCompositor(Bgra32_4x4);

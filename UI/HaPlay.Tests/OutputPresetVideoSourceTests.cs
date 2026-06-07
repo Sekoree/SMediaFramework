@@ -1,5 +1,6 @@
 using HaPlay.Playback;
 using S.Media.Core;
+using S.Media.Core.Audio;
 using S.Media.Core.Video;
 using Xunit;
 
@@ -82,8 +83,73 @@ public sealed class OutputPresetVideoSourceTests
         }
 
         Assert.Equal(0, disposed); // held by the compositor slot for future output ticks.
+        Assert.False(wrapped.TryReadNextFrame(out _)); // do not replay the held frame when the decoder has no frame.
+        Assert.Equal(0, disposed);
         wrapped.Dispose();
         Assert.Equal(1, disposed); // disposed once when the slot is torn down.
+    }
+
+    [Fact]
+    public void WrapForPreset_PreservesSeekAndCooperativeYieldCapabilities()
+    {
+        var format = new VideoFormat(2, 2, PixelFormat.Bgra32, new Rational(30, 1));
+        using var src = new SeekableInterruptSource(format);
+
+        var wrapped = OutputPresetVideoSource.WrapForPreset(
+            src,
+            PlayerOutputPreset.Custom,
+            out var owned,
+            customWidth: 16,
+            customHeight: 16);
+
+        Assert.NotNull(wrapped);
+        Assert.NotNull(owned);
+
+        var seekable = Assert.IsAssignableFrom<ISeekableSource>(wrapped);
+        seekable.Seek(TimeSpan.FromSeconds(12));
+        Assert.Equal(TimeSpan.FromSeconds(12), src.Position);
+
+        var interrupt = Assert.IsAssignableFrom<ICooperativeVideoReadInterrupt>(wrapped);
+        interrupt.RequestYieldBetweenReads();
+        interrupt.ClearYieldRequest();
+        Assert.Equal(1, src.RequestYieldCalls);
+        Assert.Equal(1, src.ClearYieldCalls);
+
+        owned.Dispose();
+    }
+
+    private sealed class SeekableInterruptSource(VideoFormat format) : IVideoSource, ISeekableSource,
+        ICooperativeVideoReadInterrupt, IDisposable
+    {
+        public VideoFormat Format => format;
+
+        public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [format.PixelFormat];
+
+        public bool IsExhausted => false;
+
+        public TimeSpan Duration { get; } = TimeSpan.FromMinutes(1);
+
+        public TimeSpan Position { get; private set; }
+
+        public int RequestYieldCalls { get; private set; }
+
+        public int ClearYieldCalls { get; private set; }
+
+        public void SelectOutputFormat(PixelFormat pixelFormat) { }
+
+        public bool TryReadNextFrame(out VideoFrame next)
+        {
+            next = null!;
+            return false;
+        }
+
+        public void Seek(TimeSpan position) => Position = position;
+
+        public void RequestYieldBetweenReads() => RequestYieldCalls++;
+
+        public void ClearYieldRequest() => ClearYieldCalls++;
+
+        public void Dispose() { }
     }
 
     private sealed class OneShotSource(VideoFormat format, VideoFrame frame) : IVideoSource, IDisposable
