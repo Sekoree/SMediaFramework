@@ -144,6 +144,64 @@ public class AudioRouterClockingTests
         r.Stop();
     }
 
+    // --- primary-output backpressure (no flood-drop) -----------------------
+
+    [Fact]
+    public void PrimaryOutput_AppliesBackpressure_InsteadOfDroppingAudio()
+    {
+        // Regression: WaitForCapacity paces on the device ring, but the router commits into the pump
+        // queue first (a drainer thread moves pump -> ring). If WaitForCapacity keeps signalling "ready"
+        // while the drainer lags, the router used to flood the pump and DROP the overflow — and a dropped
+        // chunk on the master output permanently desyncs A/V (played sample count keeps advancing while
+        // the audio content skips). The primary output must now backpressure (wait for its drainer)
+        // rather than drop. Here WaitForCapacity is always ready and Submit is slow, so the broken
+        // behaviour would drop hundreds/thousands of chunks in 300 ms.
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        var src = new TestSource(Stereo, _ => 1f);
+        var primary = new AlwaysReadySlowOutput(Stereo, blockMs: 5);
+
+        r.AddSource(src, "src");
+        r.AddOutput(primary, "primary");
+        r.AddRoute("src", "primary", ChannelMap.Identity(2));
+        r.SlaveTo("primary");
+
+        r.Start();
+        Thread.Sleep(300);
+        var stats = r.GetPumpStats("primary");
+        r.Stop();
+
+        Assert.True(stats.Processed > 10,
+            $"drainer should make steady progress (processed={stats.Processed})");
+        Assert.True(stats.Dropped < 10,
+            $"primary output must backpressure rather than flood-drop (dropped={stats.Dropped}, processed={stats.Processed})");
+    }
+
+    [Fact]
+    public void NonPrimaryOutput_StillDrops_WhenItCannotKeepUp()
+    {
+        // Isolation must be preserved: backpressure is ONLY for the pacing/primary output. A slow
+        // NON-primary output must keep dropping so it can't stall the shared router (and the primary).
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        var src = new TestSource(Stereo, _ => 1f);
+        var pacer = new ManualClockOutput(Stereo, perChunkMs: 2); // fast primary
+        var slow = new AlwaysReadySlowOutput(Stereo, blockMs: 20); // slow secondary
+
+        r.AddSource(src, "src");
+        r.AddOutput(pacer, "pacer");
+        r.AddOutput(slow, "slow");
+        r.AddRoute("src", "pacer", ChannelMap.Identity(2));
+        r.AddRoute("src", "slow", ChannelMap.Identity(2));
+        r.SlaveTo("pacer");
+
+        r.Start();
+        Thread.Sleep(300);
+        var slowStats = r.GetPumpStats("slow");
+        r.Stop();
+
+        Assert.True(slowStats.Dropped > 0,
+            $"non-primary slow output should still drop to stay isolated (dropped={slowStats.Dropped})");
+    }
+
     // --- helpers -----------------------------------------------------------
 
     private sealed class TestSource(AudioFormat fmt, Func<int, float>? perChannelValue = null) : IAudioSource
@@ -198,6 +256,21 @@ public class AudioRouterClockingTests
             }
             return false;
         }
+    }
+
+    /// <summary>Clocked output that is always "ready" to accept a chunk but whose Submit (the drainer
+    /// side) blocks for <c>blockMs</c> — models a drainer that lags the producer, exercising the
+    /// primary-output backpressure path.</summary>
+    private sealed class AlwaysReadySlowOutput(AudioFormat fmt, int blockMs) : IAudioOutput, IClockedOutput
+    {
+        public AudioFormat Format { get; } = fmt;
+
+        public void Submit(ReadOnlySpan<float> packedSamples)
+        {
+            if (blockMs > 0) Thread.Sleep(blockMs);
+        }
+
+        public bool WaitForCapacity(int chunkSamples, CancellationToken token) => !token.IsCancellationRequested;
     }
 
     private sealed class AdvancingIngestClock : IPlaybackClock

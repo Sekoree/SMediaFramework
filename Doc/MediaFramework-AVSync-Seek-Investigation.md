@@ -237,6 +237,70 @@ Two causes, both pre-existing:
   Measured: a probe cycle with two seeks dropped from **70 s** to **4 s**, cover
   still shown at start.
 
+## Follow-up: AOT-only audio "jumping" / progressive desync on long playback
+
+Symptom: in a **NativeAOT** build (not in `dotnet run`/JIT), a long ProRes 1080p29.97
+playback started dropping audio every ~10–60 s after a few minutes, and audio
+progressively ran ahead of video. JACK at 48 kHz, ProRes audio 48 kHz → no resampler.
+
+Diagnosis from `PlaybackThroughputDiagnostics`:
+
+- `audioMinusClockMs` is flat between events and **steps up at each audio `drop`**
+  (30 → 100 → 520 → 730 → 1330 → 1510 ms), each step matching an `enq +560
+  proc +499 drop +61`-style burst. Clock and video stay smooth; no PortAudio
+  underruns.
+- The audio path is router → `OutputPump` (`BlockingCollection`, ~8 chunks ≈ 80 ms)
+  → drainer thread → `PortAudioOutput.Submit`. `Submit` is **non-blocking**: on a
+  full ring it writes what fits and discards the rest; `OutputPump.Commit` likewise
+  drops its oldest chunk when its queue backs up. The pump only backs up when the
+  **drainer thread stalls** — while it's stalled, the native PortAudio callback keeps
+  draining the ring, `WaitForCapacity` sees room, the router keeps producing, the
+  pump overflows, and chunks are dropped.
+- **Each dropped chunk permanently desyncs A/V**: the played sample *count* stays
+  continuous (so the sample-counted master clock — and the clock-paced video — never
+  hitch), but the audio *content* skips forward. There is no mid-stream resync, so
+  audio creeps ahead of video and stays there.
+
+### Root cause: a pacing control-loop flaw (not GC)
+
+First hypothesis was blocking gen2 GC pauses, so `HaPlay.Desktop.csproj` got
+`<ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>` +
+`<ServerGarbageCollection>true</ServerGarbageCollection>`. **That did not fix it** —
+the drops continued — so the real cause is structural; AOT just perturbs thread
+scheduling enough to expose it.
+
+The flaw: the router is paced by `OutputSlavedRouterClock` → the primary output's
+`WaitForCapacity`, which measures the **PortAudio ring** (`QueuedSamples`). But the
+router doesn't write to the ring — it `Commit`s into the **pump's** `_ready` queue,
+and a separate **drainer thread** moves pump → ring via `Submit`. So while the ring
+sits below target (it's being drained by the native PortAudio callback),
+`WaitForCapacity` keeps returning "ready" and the router keeps producing into the
+pump **faster than the drainer empties it**. The pump (≈8 chunks) overflows and
+`Commit` drops the surplus. The pump never gets to act as the jitter buffer it is —
+it overflows instead. Any drainer scheduling hiccup (jittery under AOT) triggers it,
+and `enq` outruns `proc` exactly as the logs show.
+
+### Fix: backpressure on the primary output instead of dropping
+
+`AudioRouter.OutputPump.Commit(bool applyBackpressure)` — for the pacing **primary**
+output the producer now waits (bounded, `BackpressureCapMs`) for the drainer to
+recycle a buffer instead of dropping, so the pump absorbs scheduling jitter instead
+of discarding audio. Non-primary outputs keep dropping (so one slow output can't
+stall the shared router — isolation preserved). `RunLoop` selects backpressure only
+for `_slaveClockOutputId`. Regression tests:
+`AudioRouterClockingTests.PrimaryOutput_AppliesBackpressure_InsteadOfDroppingAudio`
+and `NonPrimaryOutput_StillDrops_WhenItCannotKeepUp`.
+
+The GC settings are kept as a **complementary** latency improvement: even with
+backpressure, a long gen2 pause stalls the drainer and drains the ring, so shorter
+background-GC pauses reduce the chance of a brief underrun. They are no longer the
+fix.
+
+Note this also makes the path robust against *any* drainer stall (CPU spike, JACK
+xrun), not just the AOT case: a stall now causes at worst a brief recoverable ring
+dip, never a permanent content skip. (`PortAudioOutput.Submit` still discards on a
+genuinely full ring, but with correct pacing the ring no longer reaches full.)
+
 ## Files touched
 
 - `MediaFramework/Media/S.Media.FFmpeg/Video/VideoHardwareDecodeContext.cs`
@@ -252,6 +316,11 @@ Two causes, both pre-existing:
   `MediaFramework/Media/S.Media.FFmpeg/Video/VideoFileDecoder.cs`,
   `MediaFramework/Media/S.Media.FFmpeg/MediaContainerSession.cs`
   — attached-picture: software decode, prime skip, held-still exhaustion, prewarm skip.
+- `UI/HaPlay.Desktop/HaPlay.Desktop.csproj`
+  — background + server GC (complementary latency improvement for AOT gen2 pauses).
+- `MediaFramework/Media/S.Media.Core/Audio/AudioRouter.cs`
+  — primary-output backpressure in `OutputPump.Commit` (the real fix for the AOT audio
+  drops / progressive desync); `AudioRouterClockingTests` covers it.
 
 ## Verifying
 

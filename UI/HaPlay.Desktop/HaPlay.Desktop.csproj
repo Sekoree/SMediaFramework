@@ -6,6 +6,16 @@
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
         <PublishAot>true</PublishAot>
+
+        <!-- Real-time audio latency hint (COMPLEMENTARY, not the fix). The AOT-only audio drops were
+             actually a router pacing flaw — fixed by primary-output backpressure in AudioRouter.OutputPump
+             (see Doc/MediaFramework-AVSync-Seek-Investigation.md). Background (concurrent) GC still helps:
+             a long blocking gen2 pause stalls the audio drainer and drains the ring, and with backpressure
+             that becomes a brief recoverable underrun rather than a drop — shorter pauses make even that
+             rare. A plain `dotnet run` build defaults to background GC; the AOT publish did not. Server GC
+             spreads collection across cores; drop it if you suspect GC-thread contention with JACK. -->
+        <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+        <ServerGarbageCollection>true</ServerGarbageCollection>
     </PropertyGroup>
 
     <PropertyGroup>

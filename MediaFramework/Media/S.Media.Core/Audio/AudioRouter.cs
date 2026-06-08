@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
@@ -1385,11 +1386,17 @@ public sealed partial class AudioRouter : IDisposable
                         slot.Current = toGain;
                 }
 
-                // Publish each output's mixed buffer to its pump (zero-copy hand-off);
-                // the drainer thread does the actual Submit so the run loop is
-                // never blocked by a slow output.
-                foreach (var (_, output) in snapshot.Outputs)
-                    output.Pump.Commit();
+                // Publish each output's mixed buffer to its pump (zero-copy hand-off); the drainer
+                // thread does the actual Submit. For the pacing (primary) output the producer applies
+                // backpressure — it briefly waits for its drainer to recycle a buffer instead of
+                // dropping — so a jittery drainer (notably under NativeAOT scheduling) can't overflow
+                // the pump. A dropped chunk on the master output skips audio CONTENT forward while the
+                // sample-counted clock keeps advancing, permanently desyncing A/V; the pump is meant to
+                // absorb that jitter, not discard it. Non-primary outputs keep dropping so one slow
+                // output can't stall the shared router.
+                var primaryPumpId = _slaveClockOutputId;
+                foreach (var (id, output) in snapshot.Outputs)
+                    output.Pump.Commit(applyBackpressure: primaryPumpId is not null && id == primaryPumpId);
 
                 Interlocked.Increment(ref _chunksProduced);
                 if (!loggedFirstChunk)
@@ -1697,6 +1704,10 @@ public sealed partial class AudioRouter : IDisposable
         private readonly CancellationTokenSource _cts = new();
         private readonly int _floatsPerChunk;
         private readonly int _pumpCapacityChunks;
+        /// <summary>Upper bound on how long the primary-output producer waits for the drainer to recycle
+        /// a buffer (backpressure) before falling back to dropping — keeps a dead device from hanging the
+        /// router thread while being far longer than any healthy drainer scheduling gap.</summary>
+        private const int BackpressureCapMs = 1000;
         // Start/dispose are serialized so a late EnsureStarted can never launch the
         // drainer after Dispose has completed the collection / disposed the cts —
         // that would crash the freshly started thread (disposed _ready / _cts.Token).
@@ -1774,19 +1785,27 @@ public sealed partial class AudioRouter : IDisposable
         }
 
         /// <summary>
-        /// Publish <see cref="WorkingBuffer"/> to the consumer queue and
-        /// rotate in a fresh buffer for the next chunk. On pool exhaustion
-        /// (consumer behind), evict the oldest queued chunk to make room
-        /// and count the drop.
+        /// Publish <see cref="WorkingBuffer"/> to the consumer queue and rotate in a fresh buffer for
+        /// the next chunk. On pool exhaustion (consumer behind): when <paramref name="applyBackpressure"/>
+        /// is <see langword="false"/> (non-primary outputs), evict the oldest queued chunk and count the
+        /// drop so a slow output never stalls the shared router. When <see langword="true"/> (the pacing
+        /// primary output, which is the master clock), wait briefly for the drainer to recycle a buffer
+        /// instead — a dropped chunk there permanently desyncs A/V (the played sample count keeps
+        /// advancing while the audio content skips), and the pump exists to absorb that jitter.
         /// </summary>
-        public void Commit()
+        public void Commit(bool applyBackpressure = false)
         {
             if (_disposed) return;
 
             var buf = _working;
             if (!_free.TryDequeue(out var next))
             {
-                if (_ready.TryTake(out next!))
+                if (applyBackpressure && WaitForFreeBuffer(out next))
+                {
+                    // Recycled a buffer via backpressure — the drainer took one from _ready, so there
+                    // is room below; fall through to publish without dropping.
+                }
+                else if (_ready.TryTake(out next!))
                     RecordDrop();
                 else
                 {
@@ -1796,7 +1815,7 @@ public sealed partial class AudioRouter : IDisposable
                     return;
                 }
             }
-            _working = next;
+            _working = next!;
 
             try
             {
@@ -1812,6 +1831,27 @@ public sealed partial class AudioRouter : IDisposable
             }
             catch (ObjectDisposedException)   { RecordDrop(); }
             catch (InvalidOperationException) { RecordDrop(); }
+        }
+
+        /// <summary>
+        /// Pace the producer to the drainer for the primary output: wait (bounded) for the drainer to
+        /// recycle a buffer into the free pool rather than dropping. The drainer's <c>Submit</c> is
+        /// non-blocking, so while the device is healthy it always drains <c>_ready</c> and recycles a
+        /// buffer within ~one chunk; the cap is a safety valve so a wedged/closed device can never hang
+        /// the shared router thread (it falls back to the drop path).
+        /// </summary>
+        private bool WaitForFreeBuffer([NotNullWhen(true)] out float[]? buf)
+        {
+            var deadline = Environment.TickCount64 + BackpressureCapMs;
+            var spin = new SpinWait();
+            while (!_disposed && !_cts.IsCancellationRequested && Environment.TickCount64 < deadline)
+            {
+                if (_free.TryDequeue(out buf))
+                    return true;
+                spin.SpinOnce(); // escalates to Thread.Yield/Sleep — never a hot busy-spin
+            }
+            buf = null;
+            return false;
         }
 
         /// <summary>
