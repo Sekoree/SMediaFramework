@@ -9,13 +9,13 @@ robustness fix.
 
 ## Symptoms (as reported)
 
-| Test file | Codec / type | Behaviour |
-|---|---|---|
-| `DAY1_EN3rd_Re_0826_2_Edited.mov` | ProRes 1080p30 (all‑intra) | Flawless — pause/resume/seek all fine |
-| `おねがいダーリン_0611.mov` | ProRes 4K60 (all‑intra) | Flawless |
-| `_MESMERIZER_…mp4` | H.264 High 720p24 (YouTube rip, long GOP) | After seek, **audio ~2–3 s ahead of video**. A few pause/resume cycles eventually resync. |
-| `THE IDOLM@STER MOVIE.mkv` | H.264 High 1080p24 (Blu‑ray rip, long GOP) | Same as above |
-| `EC - Still Waiting.flac`, `wow war tonight…wav` | audio only | Fine |
+| Test file                                   | Codec / type | Behaviour |
+|---------------------------------------------|---|---|
+| `ProRes_Video_1.mov`                        | ProRes 1080p30 (all‑intra) | Flawless — pause/resume/seek all fine |
+| `ProRes_Video_2.mov`                        | ProRes 4K60 (all‑intra) | Flawless |
+| `YT_Rip.mp4`                                | H.264 High 720p24 (YouTube rip, long GOP) | After seek, **audio ~2–3 s ahead of video**. A few pause/resume cycles eventually resync. |
+| `BluRay_Rip.mkv`                            | H.264 High 1080p24 (Blu‑ray rip, long GOP) | Same as above |
+| `FLAC_with_cover_art.flac`, `basic_WAV.wav` | audio only | Fine |
 
 The two facts that pinned the cause down:
 
