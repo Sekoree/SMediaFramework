@@ -91,6 +91,14 @@ internal static class AvPlaybackCoordinator
         return video.LatestDecodedPresentationTime + lead >= playhead;
     }
 
+    /// <summary>
+    /// True when the video source will never deliver a frame to wait for — an audio-only file's stub video
+    /// (exhausted from the start with nothing queued or in flight). Without this, audio playback of WAV/MP3
+    /// or any video-less file blocks for the full pre-audio wait before a single sample is heard.
+    /// </summary>
+    internal static bool NoVideoToAwait(VideoPlayer video) =>
+        video.IsSourceExhausted && video.QueuedFrameCount == 0 && video.PendingBufferedCount == 0;
+
     private static void WaitForVideoBufferBeforeStartingAudio(
         VideoPlayer video,
         IMediaClock clock,
@@ -107,7 +115,7 @@ internal static class AvPlaybackCoordinator
             {
                 if (verify()) goto Done;
             }
-            else if (IsVideoBufferReadyForSync(video, target))
+            else if (IsVideoBufferReadyForSync(video, target) || NoVideoToAwait(video))
             {
                 goto Done;
             }

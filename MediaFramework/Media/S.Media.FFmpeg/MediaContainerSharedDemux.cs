@@ -87,6 +87,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private int _vStream = -1;
     private bool _hasVideo;
     private bool _videoIsAttachedPicture;
+    // Set once the single attached-picture cover frame has been emitted. Latches for the lifetime of the
+    // demux (the cover packet lives only at the file head, so it cannot be re-decoded after a seek): the
+    // VideoTrack then reports exhausted so the decode loop stops and nothing waits on a video buffer that
+    // will never refill. The cover is held by the output (HaPlay single-frame/logo mode).
+    private bool _vAttachedPicEmitted;
     private AVRational _vTb;
     private AVCodecContext* _vCtx;
     private SwsContext* _swsCtx;
@@ -372,7 +377,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         ret = avcodec_parameters_to_context(_vCtx, vSt->codecpar);
         FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
 
-        var tryHw = videoOptions?.TryHardwareAcceleration ?? true;
+        // Never hardware-decode an attached-picture cover (album art): it is a single still, so a GPU decode
+        // session buys nothing and some drivers (e.g. VAAPI MJPEG) are slow/flaky for one-shot JPEG/PNG —
+        // which stalls the pre-audio video-buffer wait for seconds and can leave the cover blank. Software
+        // decode of one frame is effectively free.
+        var tryHw = (videoOptions?.TryHardwareAcceleration ?? true) && !_videoIsAttachedPicture;
         var retainDmabuf = videoOptions?.RetainDmabufForGl ?? false;
         var retainD3D11 = videoOptions?.RetainD3D11SharedHandleForGl ?? false;
         _win32Nv12SharedHandleOnly = retainD3D11 && VideoDecoderOpenOptions.IsWin32Nv12SharedHandleOnlyRequested(videoOptions);
@@ -1130,7 +1139,11 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     /// </remarks>
     private void PrimeBothAfterSeekLocked(TimeSpan target)
     {
-        var videoDone = !_hasVideo;
+        // Attached-picture cover art is a single still for the whole file — there is no video packet at a seek
+        // target to advance to. Trying would drain the entire remaining file looking for one (or hit the 12 s
+        // deadline) on every seek/realign. Treat video as already primed; the cover was decoded once and is
+        // held downstream (see _vAttachedPicEmitted / VideoTrack.IsExhausted).
+        var videoDone = !_hasVideo || _videoIsAttachedPicture;
         var audioDone = !_hasAudio;
         if (videoDone && audioDone)
             return;
@@ -1747,6 +1760,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         var pts = ResolveVideoPts(work);
         Video.Position = pts;
         _vFramesEmitted++;
+        if (_videoIsAttachedPicture)
+            _vAttachedPicEmitted = true;
 
         if (_drmGpuNv12Path)
             return BuildNv12DrmDmabufGpuFrame(work, pts, meta);
@@ -2129,8 +2144,10 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         public string CodecName => _o.VideoCodecName;
         public TimeSpan Duration => _o.Duration;
         public TimeSpan Position { get; internal set; }
-        public bool IsAtEnd => !_o._hasVideo || _o._vEof;
-        public bool IsExhausted => !_o._hasVideo || _o._vEof;
+        // Attached-picture cover: exhausted once its single frame has been emitted (it cannot be re-decoded
+        // after a seek, and is held downstream), so the decode loop stops instead of blocking forever.
+        public bool IsAtEnd => !_o._hasVideo || _o._vEof || (_o._videoIsAttachedPicture && _o._vAttachedPicEmitted);
+        public bool IsExhausted => !_o._hasVideo || _o._vEof || (_o._videoIsAttachedPicture && _o._vAttachedPicEmitted);
         public IReadOnlyList<PixelFormat> NativePixelFormats => _o._vNativePixFormats;
 
         public void SelectOutputFormat(PixelFormat format)

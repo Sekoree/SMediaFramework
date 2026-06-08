@@ -128,6 +128,13 @@ public sealed class VideoPlayer : IDisposable
 
     /// <summary>Frames currently waiting in the presentation queue.</summary>
     public int QueuedFrameCount => _queue.Count;
+
+    /// <summary>
+    /// True when the underlying source reports it will produce no further frames — e.g. an audio-only
+    /// file's stub video source (which is exhausted from the start), or genuine end of stream. Lets the
+    /// pre-audio sync wait skip a video buffer that can never fill instead of blocking for its full timeout.
+    /// </summary>
+    public bool IsSourceExhausted => _source.IsExhausted;
     /// <summary>PTS of the most recently decoded frame still in (or at the tail of) the jitter buffer.</summary>
     public TimeSpan LatestDecodedPresentationTime =>
         TimeSpan.FromTicks(Volatile.Read(ref _latestDecodedPtsTicks));

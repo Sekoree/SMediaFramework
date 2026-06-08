@@ -167,7 +167,11 @@ public sealed class MediaContainerSession
         var deadline = Environment.TickCount64 + 5000;
         while (Environment.TickCount64 < deadline)
         {
-            if (AvPlaybackCoordinator.IsVideoBufferReadyForSync(video, target))
+            // Stop early when the buffer is ready OR there is no video to prewarm (audio-only / attached-pic
+            // cover that is held downstream) — otherwise this spins the full 5 s for files that will never
+            // queue a frame here.
+            if (AvPlaybackCoordinator.IsVideoBufferReadyForSync(video, target)
+                || AvPlaybackCoordinator.NoVideoToAwait(video))
                 return;
             Thread.Sleep(5);
         }

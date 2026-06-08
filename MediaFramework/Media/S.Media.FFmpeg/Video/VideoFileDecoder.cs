@@ -354,7 +354,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         ret = avcodec_parameters_to_context(_codecCtx, stream->codecpar);
         FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
 
-        var tryHw = options?.TryHardwareAcceleration ?? true;
+        // Skip hardware decode for an attached-picture cover (album art): a one-shot still gains nothing from a
+        // GPU session, and some drivers (VAAPI MJPEG) are slow/flaky for single JPEG/PNG frames. Matches the
+        // shared-demux policy. AV_DISPOSITION_ATTACHED_PIC == 0x400.
+        const int avDispositionAttachedPic = 0x400;
+        var isAttachedPicture = (stream->disposition & avDispositionAttachedPic) != 0;
+        var tryHw = (options?.TryHardwareAcceleration ?? true) && !isAttachedPicture;
         var retainDmabuf = options?.RetainDmabufForGl ?? false;
         var retainD3D11 = options?.RetainD3D11SharedHandleForGl ?? false;
         _win32Nv12SharedHandleOnly = retainD3D11 && VideoDecoderOpenOptions.IsWin32Nv12SharedHandleOnlyRequested(options);

@@ -196,14 +196,62 @@ framework keeps its own internal caps (8 s buffer wait, 12 s decode‑join cap),
 the UI wall remains a genuine last resort rather than a premature abort of a Play
 that is about to succeed.
 
+## Follow-up: audio-only (WAV) and cover-art (FLAC) regressions
+
+After the seek fix landed, two audio-first files surfaced separate, **pre-existing**
+problems (confirmed by A/B-testing the copy_props change — it was not the cause):
+
+### 1. WAV (bare PCM, no video) — slow start / "unable to play, then plays while paused"
+
+`AvPlaybackCoordinator.Play` holds audio until the video jitter buffer is ready
+(`WaitForVideoBufferBeforeStartingAudio`, 8 s cap). For a file with **no video
+stream**, that buffer never fills, so every play blocked the **full 8 s** before a
+sample was heard. Combined with the old 6 s play wall, the UI aborted (error)
+while the background task started audio ~8 s later under a paused-looking UI —
+exactly the reported WAV symptom. Measured: a probe cycle that does ~3 plays took
+**26 s** without the fix, **2 s** with it.
+
+Fix: `AvPlaybackCoordinator.NoVideoToAwait(video)` — when the video source is
+exhausted with nothing queued or in flight (an audio-only stub is exhausted from
+the start), the pre-audio wait returns immediately. `VideoPlayer.IsSourceExhausted`
+exposes the signal. Applied to both `WaitForVideoBufferBeforeStartingAudio` and
+`MediaContainerSession.PrewarmVideoAfterSeek` (which had the same 5 s spin).
+
+### 2. FLAC (MJPEG cover art) — no cover, very slow load
+
+Two causes, both pre-existing:
+
+- **Slow/blank cover:** the MJPEG attached-picture was routed to **VAAPI
+  hardware decode**, which on this driver is slow/flaky for a one-shot JPEG.
+  Software MJPEG decodes the cover instantly. Fix: skip hardware decode for
+  `AV_DISPOSITION_ATTACHED_PIC` streams (`MediaContainerSharedDemux` and
+  `VideoFileDecoder`) — a single still gains nothing from a GPU session.
+- **Slow seeks/resumes:** the cover is one frame at the head of the file. The
+  seek-prime (`PrimeBothAfterSeekLocked`) tried to advance video to the seek
+  target and, finding no cover packet there, drained toward the 12 s deadline on
+  every seek/realign; the buffer/prewarm waits then added their full timeouts.
+  Fix: treat attached-picture video as a held still — skip it in the prime, and
+  latch `_vAttachedPicEmitted` so `VideoTrack.IsExhausted` reports done once the
+  cover frame has been emitted (the cover packet only exists at the file head and
+  cannot be re-decoded after a seek; HaPlay holds it via single-frame logo mode).
+  Measured: a probe cycle with two seeks dropped from **70 s** to **4 s**, cover
+  still shown at start.
+
 ## Files touched
 
 - `MediaFramework/Media/S.Media.FFmpeg/Video/VideoHardwareDecodeContext.cs`
-  — `av_frame_copy_props` after `av_hwframe_transfer_data` (the core fix).
+  — `av_frame_copy_props` after `av_hwframe_transfer_data` (the core seek fix).
 - `MediaFramework/Tools/TransportSyncProbe/Program.cs`
   — `--verify-content` mode + luma‑signature content comparison.
 - `UI/HaPlay/ViewModels/MediaPlayerViewModel.cs`
   — `PlayWallTimeout` for the Play/resume arcs.
+- `MediaFramework/Media/S.Media.Core/Playback/AvPlaybackCoordinator.cs`,
+  `MediaFramework/Media/S.Media.Core/Video/VideoPlayer.cs`
+  — `NoVideoToAwait` / `IsSourceExhausted` (audio-only fast start).
+- `MediaFramework/Media/S.Media.FFmpeg/MediaContainerSharedDemux.cs`,
+  `MediaFramework/Media/S.Media.FFmpeg/Video/VideoFileDecoder.cs`,
+  `MediaFramework/Media/S.Media.FFmpeg/MediaContainerSession.cs`
+  — attached-picture: software decode, prime skip, held-still exhaustion, prewarm skip.
 
 ## Verifying
 
