@@ -328,6 +328,13 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
         av_frame_unref(_swScratch);
         var ret = av_hwframe_transfer_data(_swScratch, hwFrame, 0);
         FFmpegException.ThrowIfError(ret, nameof(av_hwframe_transfer_data));
+        // av_hwframe_transfer_data copies ONLY pixel data, not frame properties. Without this the scratch
+        // frame's best_effort_timestamp / pts are AV_NOPTS_VALUE, so callers (ResolveVideoPts) silently fall
+        // back to a frame-counter PTS. That counter is re-anchored to the seek target on every seek, which
+        // mislabels the post-seek keyframe as the target — leaving hardware-decoded video one GOP behind the
+        // (correctly timestamped) audio. Copy props so hw frames carry the same timestamps as software ones.
+        var propRet = av_frame_copy_props(_swScratch, hwFrame);
+        FFmpegException.ThrowIfError(propRet, nameof(av_frame_copy_props));
         return _swScratch;
     }
 

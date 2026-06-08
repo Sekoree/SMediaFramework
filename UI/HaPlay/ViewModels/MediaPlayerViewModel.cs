@@ -544,6 +544,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private readonly SemaphoreSlim _playbackArc = new(1, 1);
     /// <summary>Wall-clock cap for file seeks. Must exceed the shared-demux prime deadline (~4 s) plus pause/join.</summary>
     private static readonly TimeSpan FileSeekWallTimeout = TimeSpan.FromSeconds(12);
+    /// <summary>
+    /// Wall-clock cap for a Play/resume. Must exceed AvPlaybackCoordinator.Play's internal
+    /// WaitForVideoBufferBeforeStartingAudio budget (8 s) plus the sync-present + hardware-start tail; otherwise
+    /// the UI abandons (IsPlaying stays false) while the background Play actually completes a moment later,
+    /// leaving audio running with a "Play" button — the user then has to wait out the lock and retry.
+    /// </summary>
+    private static readonly TimeSpan PlayWallTimeout = TimeSpan.FromSeconds(11);
     private volatile bool _isTransportBusy;
     private readonly Playback.PlaylistDecoderCache _decoderCache = new();
     private CancellationTokenSource? _preOpenCts;
@@ -3483,7 +3490,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 s.PrepareOutputsBeforePlay(holdForPrime);
                 s.PrepareLiveTransportBeforePlay();
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
-            }, TimeSpan.FromSeconds(6));
+            }, PlayWallTimeout);
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
@@ -3685,7 +3692,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 SDebug.ChangeTrace.Step("StartPlayback: ResetAllUnderrunBaselines");
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
                 SDebug.ChangeTrace.Step("StartPlayback: Router.Play");
-            }, TimeSpan.FromSeconds(6));
+            }, PlayWallTimeout);
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
