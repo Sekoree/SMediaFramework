@@ -301,6 +301,40 @@ xrun), not just the AOT case: a stall now causes at worst a brief recoverable ri
 dip, never a permanent content skip. (`PortAudioOutput.Submit` still discards on a
 genuinely full ring, but with correct pacing the ring no longer reaches full.)
 
+## Follow-up: play the audio when the video stream is unusable
+
+Symptom: an audio file with album-art **and no video output configured** could throw
+`neither source nor output declared any pixel formats` and not play at all.
+
+Two fixes, both in the FFmpeg decoder layer:
+
+1. **Source always advertises what it actually emits.** When the decoder's pixel
+   format has no native mapping it sws-converts to BGRA32, but `_vNativePixFormats`
+   was left empty for even-dimension frames (the odd-dimension cover path already set
+   `[Bgra32]`). A yuvj444p/yuvj420p cover (unmapped) then declared no formats, and
+   against `DiscardingVideoOutput` (the permissive sink used when no real video output
+   exists — it also declares none) the negotiator threw. Now the software path
+   advertises `[Bgra32]` whenever it falls back to conversion (both
+   `MediaContainerSharedDemux` and `VideoFileDecoder`).
+
+2. **Degrade to audio-only when the video stream can't be set up.** Per "if at least
+   one stream is playable, use it": `MediaContainerSharedDemux` now wraps video-stream
+   setup so that an unusable video stream (unsupported cover/video codec, dimensions
+   beyond the sanity cap, sws failure, …) on a file that has a **playable audio
+   stream** degrades to audio-only — releasing the half-built video state, reconfiguring
+   the no-video stub, disowning the stream (`_vStream = -1`), and **warning** via
+   `MediaDiagnostics.LogWarning` — instead of failing the whole open. A video-only file
+   (no audio to fall back to) still surfaces the error.
+
+Regression tests (`MediaContainerDecoderTests`):
+`Open_AudioWithEvenDimUnmappedCover_NegotiatesAgainstDiscardingOutput` and
+`Open_UnusableVideoButPlayableAudio_DegradesToAudioOnly` (both synthesize media via
+ffmpeg and self-skip if ffmpeg is unavailable).
+
+Possible follow-up: the degrade warning currently only goes to the log; surfacing it
+as a transient HaPlay `StatusMessage` ("video stream unavailable — playing audio
+only") would make it visible to the operator.
+
 ## Files touched
 
 - `MediaFramework/Media/S.Media.FFmpeg/Video/VideoHardwareDecodeContext.cs`
@@ -321,6 +355,10 @@ genuinely full ring, but with correct pacing the ring no longer reaches full.)
 - `MediaFramework/Media/S.Media.Core/Audio/AudioRouter.cs`
   — primary-output backpressure in `OutputPump.Commit` (the real fix for the AOT audio
   drops / progressive desync); `AudioRouterClockingTests` covers it.
+- `MediaFramework/Media/S.Media.FFmpeg/MediaContainerSharedDemux.cs`,
+  `MediaFramework/Media/S.Media.FFmpeg/Video/VideoFileDecoder.cs`
+  — software path advertises BGRA32 when it converts, and audio-only degrade when the
+  video stream is unusable; `MediaContainerDecoderTests` covers both.
 
 ## Verifying
 

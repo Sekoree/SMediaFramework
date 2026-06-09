@@ -368,6 +368,13 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
 
         vSt = _fmt->streams[_vStream];
+        // Wrap video-stream setup so a file with a playable AUDIO stream still opens (audio-only) when the
+        // video stream is unusable — unsupported cover/video codec, bad dimensions, sws failure, etc. Without
+        // this the whole open throws and a perfectly good audio track (e.g. an album with a broken embedded
+        // cover) won't play. The catch only engages when there IS audio to fall back to; a video-only file
+        // still surfaces the error. (Body left at this indent to keep the change a pure wrap — see catch below.)
+        try
+        {
         _videoIsAttachedPicture = (vSt->disposition & AvDispositionAttachedPic) != 0;
         _vTb = vSt->time_base;
         VideoCodecName = Marshal.PtrToStringAnsi((IntPtr)vCodec->name) ?? "unknown";
@@ -456,7 +463,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             _vNativePixFmt = nativeSoft != PixelFormat.Unknown ? nativeSoft : PixelFormat.Bgra32;
             _vPassThrough = nativeSoft != PixelFormat.Unknown;
             _vOutPixFmt = _vNativePixFmt;
-            _vNativePixFormats = nativeSoft != PixelFormat.Unknown ? [nativeSoft] : [];
+            // When the decoder's pixel format has no native mapping we sws-convert to BGRA32, so advertise
+            // BGRA32 (what we actually emit) rather than nothing. Otherwise an even-dimension source whose
+            // pixfmt is unmapped (e.g. a yuvj420p album cover) declares no formats and, against a permissive
+            // sink that also declares none (DiscardingVideoOutput on the no-video-output path), the negotiator
+            // throws "neither source nor output declared any pixel formats" and the file won't play.
+            _vNativePixFormats = nativeSoft != PixelFormat.Unknown ? [nativeSoft] : [PixelFormat.Bgra32];
         }
 
         var fps = vSt->avg_frame_rate;
@@ -513,6 +525,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             if (_swsCtx == null)
                 throw new FFmpegException(0, "sws_getCachedContext returned NULL");
         }
+        }
+        catch (Exception ex) when (_hasAudio)
+        {
+            // Playable audio + unusable video ⇒ degrade to audio-only (warns) instead of failing the open.
+            ConfigureNoVideoStubAfterVideoSetupFailure(aSt, ex.Message);
+        }
 
         _demuxPkt = av_packet_alloc();
         if (_demuxPkt == null) throw new OutOfMemoryException("demux av_packet_alloc returned NULL");
@@ -521,10 +539,59 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             _aFrame = av_frame_alloc();
             if (_aFrame == null) throw new OutOfMemoryException("audio av_frame_alloc returned NULL");
         }
-        _vFrame = av_frame_alloc();
-        if (_vFrame == null) throw new OutOfMemoryException("video av_frame_alloc returned NULL");
+        if (_hasVideo)
+        {
+            _vFrame = av_frame_alloc();
+            if (_vFrame == null) throw new OutOfMemoryException("video av_frame_alloc returned NULL");
+        }
 
         StartDemuxerThread();
+    }
+
+    /// <summary>
+    /// After a partial video-stream setup throws on a file that has a usable audio stream, release the
+    /// half-initialised video native state and reconfigure as a no-video (audio-only) container — the same
+    /// stub state the no-decodable-video path produces — so the audio still plays. The chosen video stream is
+    /// disowned (<c>_vStream = -1</c>) so the demux reader stops routing its packets.
+    /// </summary>
+    private void ConfigureNoVideoStubAfterVideoSetupFailure(AVStream* aSt, string reason)
+    {
+        MediaDiagnostics.LogWarning(
+            $"MediaContainerSharedDemux: video stream unusable ({reason}); playing audio only.");
+
+        // Release whatever video native state was allocated before the failure.
+        ReleaseSws();
+        if (_vCtx != null)
+        {
+            _hwAccel?.DetachFromCodec(_vCtx);
+            var c = _vCtx;
+            avcodec_free_context(&c);
+            _vCtx = null;
+        }
+        MediaDiagnostics.SwallowDisposeErrors(() => _hwAccel?.Dispose(), "MediaContainerSharedDemux.DegradeAudioOnly: _hwAccel");
+        _hwAccel = null;
+        _drmGpuNv12Path = false;
+        _d3d11GpuNv12Path = false;
+
+        // Reconfigure exactly like the no-decodable-video path (stub video source, never produces frames).
+        _hasVideo = false;
+        _vStream = -1;
+        _videoIsAttachedPicture = false;
+        VideoCodecName = "";
+        _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
+        _vNativePixFmt = PixelFormat.Bgra32;
+        _vPassThrough = false;
+        _vOutPixFmt = PixelFormat.Bgra32;
+        _vNativePixFormats = [PixelFormat.Bgra32];
+        Video.Format = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+
+        if (Duration == default)
+        {
+            if (aSt is not null && aSt->duration > 0)
+                Duration = PtsToTimeSpanAudio(aSt->duration);
+            else if (_fmt->duration > 0)
+                Duration = TimeSpan.FromMicroseconds(_fmt->duration);
+        }
     }
 
     private static bool VideoCodecparDimensionsLookSane(AVCodecParameters* cp)

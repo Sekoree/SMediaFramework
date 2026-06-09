@@ -436,7 +436,10 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             _nativePixelFormat = nativeSoft != PixelFormat.Unknown ? nativeSoft : PixelFormat.Bgra32;
             _passThrough = nativeSoft != PixelFormat.Unknown;
             _outPixelFormat = _nativePixelFormat;
-            _nativePixelFormats = nativeSoft != PixelFormat.Unknown ? [nativeSoft] : [];
+            // Unmapped pixfmt ⇒ we sws-convert to BGRA32, so advertise BGRA32 (what we emit) instead of
+            // nothing — otherwise this source declares no formats and negotiation against a permissive
+            // empty-declaring sink throws "neither source nor output declared any pixel formats".
+            _nativePixelFormats = nativeSoft != PixelFormat.Unknown ? [nativeSoft] : [PixelFormat.Bgra32];
         }
 
         var fps = stream->avg_frame_rate;

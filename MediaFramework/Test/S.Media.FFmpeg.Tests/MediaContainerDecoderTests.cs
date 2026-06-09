@@ -251,6 +251,124 @@ public class MediaContainerDecoderTests
         }
     }
 
+    [Fact]
+    public void Open_AudioWithEvenDimUnmappedCover_NegotiatesAgainstDiscardingOutput()
+    {
+        // Regression: an album-art cover whose pixfmt has no native mapping (yuvj444p) and whose dimensions
+        // are even used to declare NO pixel formats; against a permissive sink that also declares none
+        // (DiscardingVideoOutput on the no-video-output path) the negotiator threw "neither source nor output
+        // declared any pixel formats" and the audio file would not play. The source must now advertise BGRA32
+        // (what it sws-converts to).
+        var path = Path.Combine(Path.GetTempPath(), $"mc_cover_{Guid.NewGuid():N}.mp3");
+        if (!TryGenerateAudioWithCover(path, "yuvj444p", "100x100")) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+
+            Assert.True(c.HasAudio);
+            Assert.True(c.HasVideo);
+            Assert.NotEmpty(c.Video.NativePixelFormats);
+
+            // The actual failing scenario: negotiating the cover against a permissive empty-declaring sink.
+            var ex = Record.Exception(() => VideoFormatNegotiator.Connect(c.Video, new DiscardingVideoOutput()));
+            Assert.Null(ex);
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp cover delete");
+        }
+    }
+
+    [Fact]
+    public void Open_UnusableVideoButPlayableAudio_DegradesToAudioOnly()
+    {
+        // "Play whatever stream is decodable": a file whose VIDEO stream can't be set up (here: dimensions
+        // beyond the decoder's sanity cap) but whose AUDIO is fine must open audio-only with a warning,
+        // instead of failing the whole open.
+        var path = Path.Combine(Path.GetTempPath(), $"mc_bigvid_{Guid.NewGuid():N}.mkv");
+        if (!TryGenerateAudioWithOversizeVideo(path)) return;
+        try
+        {
+            using var c = MediaContainerDecoder.Open(path, new VideoDecoderOpenOptions { TryHardwareAcceleration = false });
+
+            Assert.True(c.HasAudio);
+            Assert.False(c.HasVideo); // video degraded away
+
+            var scratch = new float[c.Audio.Format.Channels * 512];
+            Assert.True(c.Audio.ReadInto(scratch) > 0);
+        }
+        finally
+        {
+            MediaDiagnostics.SwallowDisposeErrors(() => File.Delete(path), $"{nameof(MediaContainerDecoderTests)}: temp bigvid delete");
+        }
+    }
+
+    private static bool TryGenerateAudioWithCover(string path, string coverPixFmt, string coverSize)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("ffmpeg")
+            {
+                ArgumentList =
+                {
+                    "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=1",
+                    "-f", "lavfi", "-i", $"color=c=red:size={coverSize}:rate=1:duration=1",
+                    "-map", "0:a", "-map", "1:v",
+                    "-frames:v", "1",
+                    "-disposition:v:0", "attached_pic",
+                    "-c:a", "libmp3lame",
+                    "-c:v", "mjpeg", "-pix_fmt", coverPixFmt,
+                    "-loglevel", "error",
+                    path,
+                },
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+            };
+            using var p = Process.Start(psi);
+            if (p is null) return false;
+            p.WaitForExit(20000);
+            return p.ExitCode == 0 && File.Exists(path) && new FileInfo(path).Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGenerateAudioWithOversizeVideo(string path)
+    {
+        try
+        {
+            // 8000 px wide exceeds the decoder's dimension sanity cap (> 7680), so video setup throws and
+            // (because audio is present) degrades to audio-only. mjpeg has no width/level limit so it encodes.
+            var psi = new ProcessStartInfo("ffmpeg")
+            {
+                ArgumentList =
+                {
+                    "-y",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
+                    "-f", "lavfi", "-i", "color=c=blue:size=8000x100:rate=10:duration=1",
+                    "-map", "0:a", "-map", "1:v",
+                    "-c:a", "aac",
+                    "-c:v", "mjpeg",
+                    "-loglevel", "error",
+                    path,
+                },
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+            };
+            using var p = Process.Start(psi);
+            if (p is null) return false;
+            p.WaitForExit(20000);
+            return p.ExitCode == 0 && File.Exists(path) && new FileInfo(path).Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static bool TryGenerateAudioVideo(string path)
     {
         try
