@@ -18,6 +18,14 @@ namespace S.Media.Core.Clock;
 /// </remarks>
 public interface IPlayhead
 {
+    /// <summary>
+    /// The playhead position on the media timeline. Naming disambiguation for the three
+    /// position-like properties in the framework: this is the <em>clock-side</em> playhead;
+    /// <c>ISeekableSource.Position</c> is the <em>decoder-side</em> consumed-samples position
+    /// (can run ahead of audible output by the buffered amount); and
+    /// <c>IPlaybackClock.ElapsedSinceStart</c> is the master clock's raw played-time feed
+    /// the playhead is derived from.
+    /// </summary>
     TimeSpan CurrentPosition { get; }
 
     bool IsRunning { get; }

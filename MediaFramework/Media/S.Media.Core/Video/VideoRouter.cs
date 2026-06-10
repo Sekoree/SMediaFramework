@@ -67,6 +67,11 @@ public sealed class VideoRouter : IDisposable
     private int _idCounter;
     private bool _disposed;
     private EventHandler<VideoRouterPumpPressureEventArgs>? _pumpPressure;
+    /// <summary>Total submit-plan cache rebuilds across all inputs (test/diagnostic hook for the H1
+    /// cache: steady-state submits must not rebuild).</summary>
+    internal int _submitPlanRebuilds;
+
+    internal int SubmitPlanRebuilds => Volatile.Read(ref _submitPlanRebuilds);
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoRouter");
 
@@ -271,12 +276,51 @@ public sealed class VideoRouter : IDisposable
                 return false;
             }
 
+            // Capture the pre-mutation configure state so a failed branch negotiation can be rolled
+            // back completely. Without this, a throw out of ApplyConfigureLocked used to leave a
+            // half-added route behind with Configured=false — every subsequent Submit on the input
+            // then failed until the route was manually removed.
+            var wasConfigured = reg.Configured;
+            var previousFormat = reg.NegotiatedFormat;
+
             _outputOwner[outputId] = inputId;
             reg.RoutedOutputIds.Add(outputId);
             reg.RoutedSet.Add(outputId);
+            try
+            {
+                ReconfigureInputIfNeededLocked(reg);
+            }
+            catch (Exception ex)
+            {
+                _outputOwner.Remove(outputId);
+                reg.RoutedOutputIds.Remove(outputId);
+                reg.RoutedSet.Remove(outputId);
+                if (wasConfigured && previousFormat is { } prevFmt)
+                {
+                    // The previous graph was valid; re-applying it must succeed. Guard anyway so a
+                    // restore failure degrades to "input unconfigured" instead of unwinding TryAddRoute.
+                    try
+                    {
+                        reg.TearDownPaths();
+                        reg.ApplyConfigureLocked(prevFmt);
+                    }
+                    catch (Exception restoreEx)
+                    {
+                        _log?.LogError(restoreEx,
+                            "VideoRouter: failed to restore input {InputId} after rejected route to {OutputId}; input left unconfigured.",
+                            inputId, outputId);
+                    }
+                }
+
+                errorMessage =
+                    $"route '{inputId}' -> '{outputId}' was rejected during format negotiation and rolled back: {ex.Message}";
+                _log?.LogWarning(ex, "VideoRouter: TryAddRoute {InputId} -> {OutputId} rejected; route rolled back.",
+                    inputId, outputId);
+                return false;
+            }
+
             Trace.LogDebug("TryAddRoute: input={InputId} -> output={OutputId} (totalRoutes={Total})",
                 inputId, outputId, reg.RoutedOutputIds.Count);
-            ReconfigureInputIfNeededLocked(reg);
             return true;
         }
     }
@@ -497,6 +541,22 @@ public sealed class VideoRouter : IDisposable
         private bool _convertInFlight;
         private readonly List<IVideoCpuFrameConverter> _deferredConverters = [];
 
+        // H1: route-derived submit plan, cached per configuration version. Every route/converter
+        // mutation funnels through ApplyConfigureLocked or TearDownPaths (both under _owner._gate),
+        // which bump _routesVersion; the per-frame submit only rebuilds the plan arrays when the
+        // version moved. Frame-dependent bits (hardware backing → readback / fan-out eligibility)
+        // are computed per submit from the cached aggregates below.
+        private int _routesVersion;
+        private int _planVersion = -1;
+        private string[] _planOutputIds = [];
+        private IVideoCpuFrameConverter?[] _planConverters = [];
+        private bool[] _planPumpConverts = [];
+        private bool _planAnySyncConverter;
+        private bool _planAnyConverterOrPump;
+        /// <summary>Branch-frame scratch reused across submits (serialized by <see cref="_submitLock"/>;
+        /// every slot is null outside a submit).</summary>
+        private VideoFrame?[] _branchFrameScratch = [];
+
         public InputRegistration(VideoRouter owner, string id, string primaryOutputId, IReadOnlyList<PixelFormat> accepted)
         {
             _owner = owner;
@@ -520,6 +580,8 @@ public sealed class VideoRouter : IDisposable
             ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
             if (RoutedOutputIds.Count == 0)
                 throw new InvalidOperationException($"VideoRouter input '{Id}' has no routed outputs.");
+
+            _routesVersion++; // invalidate the cached submit plan (H1)
 
             VideoRouter.Trace.LogDebug("ApplyConfigure: input={InputId} negotiated={Format} routedOutputs=[{Outputs}]",
                 Id, negotiated, string.Join(",", RoutedOutputIds));
@@ -594,6 +656,7 @@ public sealed class VideoRouter : IDisposable
 
         public void TearDownPaths()
         {
+            _routesVersion++; // invalidate the cached submit plan (H1)
             foreach (var p in _paths.Values)
             {
                 if (p.Converter is not { } conv) continue;
@@ -700,14 +763,16 @@ public sealed class VideoRouter : IDisposable
                         return;
                     }
 
-                    plan = BuildSubmitPlanLocked(frame);
+                    plan = GetSubmitPlanLocked(frame);
                     _convertInFlight = true; // lease the snapshotted converters from disposal by TearDownPaths
                 }
 
                 var n = plan.OutputIds.Length;
                 var hint = frame.ColorTransferHint;
                 VideoFrame? primary = frame;
-                var branchFrames = new VideoFrame?[n - 1];
+                if (_branchFrameScratch.Length != n - 1)
+                    _branchFrameScratch = new VideoFrame?[n - 1];
+                var branchFrames = _branchFrameScratch;
                 VideoFrame? converterReadback = null;
                 try
                 {
@@ -829,25 +894,47 @@ public sealed class VideoRouter : IDisposable
                         DrainDeferredConvertersLocked();
                     }
                     converterReadback?.Dispose();
-                    foreach (var bf in branchFrames)
-                        bf?.Dispose();
+                    for (var i = 0; i < branchFrames.Length; i++)
+                    {
+                        branchFrames[i]?.Dispose();
+                        branchFrames[i] = null; // scratch is reused — leave every slot null
+                    }
                     primary?.Dispose();
                     throw;
                 }
             }
         }
 
-        /// <summary>Snapshots the routed outputs + their branch converters + fan-out/readback decisions for a
-        /// submit, so phase 2 can convert without holding <c>_owner._gate</c>. Caller holds <c>_owner._gate</c>.</summary>
-        private SubmitPlan BuildSubmitPlanLocked(VideoFrame frame)
+        /// <summary>Returns the submit plan for <paramref name="frame"/>: the route-derived arrays come from
+        /// the version-stamped cache (rebuilt only after a route/converter mutation); only the
+        /// frame-backing-dependent readback/fan-out bits are computed per call. Caller holds <c>_owner._gate</c>,
+        /// so phase 2 can convert without it.</summary>
+        private SubmitPlan GetSubmitPlanLocked(VideoFrame frame)
+        {
+            if (_planVersion != _routesVersion)
+                RebuildSubmitPlanCacheLocked();
+
+            var hasHw = frame.DmabufNv12 is not null || frame.DmabufP010 is not null
+                        || frame.DmabufP016 is not null || frame.Win32Nv12 is not null;
+            // Both a submit-thread converter and a pump-thread converter need CPU planes, so a hardware
+            // (dma-buf / Win32) frame must be read back for either before it can be repacked.
+            var needsReadback = hasHw && _planAnyConverterOrPump;
+            // Any CPU-backed format can fan out into shared zero-copy views; a branch that converts on the
+            // submit thread forces the per-branch path, but a pump-converts branch (repacked on its own
+            // thread) does not — it just receives a raw view to convert there.
+            var canFanOut = !hasHw && !_planAnySyncConverter;
+            return new SubmitPlan(_planOutputIds, _planConverters, _planPumpConverts,
+                NegotiatedFormat!.Value, needsReadback, canFanOut);
+        }
+
+        private void RebuildSubmitPlanCacheLocked()
         {
             var ids = RoutedOutputIds.ToArray();
             var n = ids.Length;
             var converters = new IVideoCpuFrameConverter?[n - 1];
             var pumpConverts = new bool[n - 1];
-            var hasHw = frame.DmabufNv12 is not null || frame.DmabufP010 is not null
-                        || frame.DmabufP016 is not null || frame.Win32Nv12 is not null;
-            var needsReadback = false;
+            var anySync = false;
+            var anyConvOrPump = false;
             for (var i = 1; i < n; i++)
             {
                 IVideoCpuFrameConverter? conv = null;
@@ -860,26 +947,17 @@ public sealed class VideoRouter : IDisposable
 
                 converters[i - 1] = conv;
                 pumpConverts[i - 1] = pc;
-                // Both a submit-thread converter and a pump-thread converter need CPU planes, so a hardware
-                // (dma-buf / Win32) frame must be read back for either before it can be repacked.
-                if (hasHw && (conv is not null || pc))
-                    needsReadback = true;
+                if (conv is not null) anySync = true;
+                if (conv is not null || pc) anyConvOrPump = true;
             }
 
-            var negotiated = NegotiatedFormat!.Value;
-            // Any CPU-backed format can fan out into shared zero-copy views; a branch that converts on the
-            // submit thread (st.Converter != null) forces the per-branch path, but a pump-converts branch
-            // (repacked on its own thread) does not — it just receives a raw view to convert there.
-            var canFanOut = !hasHw;
-            if (canFanOut)
-            {
-                for (var i = 1; i < n; i++)
-                {
-                    if (converters[i - 1] is not null) { canFanOut = false; break; }
-                }
-            }
-
-            return new SubmitPlan(ids, converters, pumpConverts, negotiated, needsReadback, canFanOut);
+            _planOutputIds = ids;
+            _planConverters = converters;
+            _planPumpConverts = pumpConverts;
+            _planAnySyncConverter = anySync;
+            _planAnyConverterOrPump = anyConvOrPump;
+            _planVersion = _routesVersion;
+            Interlocked.Increment(ref _owner._submitPlanRebuilds);
         }
 
         private bool IsStillCurrentRouteLocked(string outputId)

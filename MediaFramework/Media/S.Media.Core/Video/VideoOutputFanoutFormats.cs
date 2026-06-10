@@ -37,6 +37,12 @@ public static class VideoOutputFanoutFormats
         var h = negotiated.Height;
         var src = negotiated.PixelFormat;
 
+        // Empty accepted list = permissive output ("takes anything"), same convention the primary
+        // negotiation applies (see DiscardingVideoOutput): pass the negotiated format through
+        // unconverted instead of treating the branch as accepting nothing.
+        if (branchAccepted.Count == 0)
+            return src;
+
         static bool OutputHas(IReadOnlyList<PixelFormat> list, PixelFormat p)
         {
             for (var i = 0; i < list.Count; i++)

@@ -27,7 +27,10 @@ public interface IVideoOutput
     /// <summary>
     /// Pixel formats this output can render without CPU conversion, ordered
     /// best-to-worst. An empty list means the output will accept whatever it's
-    /// configured with and convert internally.
+    /// configured with and convert internally — the convention holds both when
+    /// the output is a router input's negotiation primary and when it is a
+    /// fan-out branch (the branch then receives the negotiated format
+    /// pass-through; see <see cref="VideoOutputFanoutFormats.PickBranchPixelFormat(VideoFormat, IReadOnlyList{PixelFormat}, Func{PixelFormat, PixelFormat, int, int, bool})"/>).
     /// </summary>
     IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; }
 

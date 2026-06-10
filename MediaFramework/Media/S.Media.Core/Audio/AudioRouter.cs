@@ -330,7 +330,9 @@ public sealed partial class AudioRouter : IDisposable
         }
     }
 
-    /// <summary>Snapshot of registered output ids.</summary>
+    /// <summary>Snapshot of registered output ids. Allocates a fresh array per call (same as
+    /// <see cref="SourceIds"/>/<see cref="OutputIds"/>) — for HUD/status polling, sample at a low
+    /// rate and reuse the snapshot rather than calling per frame.</summary>
     public IReadOnlyList<string> GetRegisteredOutputIds()
     {
         lock (_gate)
@@ -644,6 +646,8 @@ public sealed partial class AudioRouter : IDisposable
     }
 
     // --- inspection --------------------------------------------------------
+    // These are snapshots: each read takes the gate and allocates a fresh array. Fine for
+    // occasional inspection/diagnostics; poll at a low rate (and reuse the result) from HUDs.
 
     public IReadOnlyCollection<string> SourceIds
     {

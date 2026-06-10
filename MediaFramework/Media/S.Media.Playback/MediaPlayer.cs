@@ -235,6 +235,79 @@ public sealed class MediaPlayer : IDisposable
             ndiSnap);
     }
 
+    // --- one-call output wiring (A1) ---------------------------------------
+
+    /// <summary>
+    /// Adds <paramref name="output"/> to <see cref="VideoRouter"/> and routes this player's video
+    /// input to it in one call. Returns the registered output id (pass it to
+    /// <see cref="VideoRouter.RemoveOutput"/> to detach). On a negotiation failure the output
+    /// registration is rolled back and <see cref="InvalidOperationException"/> is thrown —
+    /// the player keeps presenting on its existing routes either way.
+    /// </summary>
+    /// <param name="synchronous">Forwarded to <see cref="VideoRouter.AddOutput"/> — pass
+    /// <see langword="true"/> only for outputs whose <see cref="IVideoOutput.Submit"/> returns promptly.</param>
+    public string AttachVideoOutput(IVideoOutput output, string? id = null, bool synchronous = false)
+    {
+        return TryAttachVideoOutput(output, out var outputId, out var error, id, synchronous)
+            ? outputId
+            : throw new InvalidOperationException(error);
+    }
+
+    /// <summary>Non-throwing form of <see cref="AttachVideoOutput"/>.</summary>
+    public bool TryAttachVideoOutput(
+        IVideoOutput output,
+        [NotNullWhen(true)] out string? outputId,
+        [NotNullWhen(false)] out string? error,
+        string? id = null,
+        bool synchronous = false)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        error = null;
+        outputId = VideoRouter.AddOutput(output, id, synchronous: synchronous);
+        if (VideoRouter.TryAddRoute(_videoRouterInputId, outputId, out var routeError))
+            return true;
+
+        VideoRouter.RemoveOutput(outputId);
+        outputId = null;
+        error = routeError;
+        return false;
+    }
+
+    /// <summary>
+    /// Adds <paramref name="output"/> to <see cref="AudioRouter"/> and routes the decoder's audio
+    /// source to it in one call. Returns the registered output id. <paramref name="map"/> defaults
+    /// to the identity map for the output's channel count; on a routing failure the output
+    /// registration is rolled back before the exception propagates.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The player has no <see cref="AudioRouter"/>
+    /// (opened with <c>IncludeAudioRouter: false</c>) or no decodable audio stream.</exception>
+    public string AttachAudioOutput(IAudioOutput output, string? id = null, ChannelMap? map = null, float gain = 1.0f)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        var router = AudioRouter
+            ?? throw new InvalidOperationException(
+                "AttachAudioOutput: this player has no AudioRouter (opened with IncludeAudioRouter: false).");
+        var sourceId = AudioSourceId
+            ?? throw new InvalidOperationException(
+                "AttachAudioOutput: this player has no routed audio source (no decodable audio stream).");
+
+        var outputId = router.AddOutput(output, id);
+        try
+        {
+            if (map is { } m)
+                router.AddRoute(sourceId, outputId, m, gain);
+            else
+                router.Route(sourceId, outputId, gain);
+        }
+        catch
+        {
+            router.RemoveOutput(outputId);
+            throw;
+        }
+
+        return outputId;
+    }
+
     public void Play(
         Action? prefillBeforeHardware = null,
         Action? startHardware = null,

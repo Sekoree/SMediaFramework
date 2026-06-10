@@ -91,8 +91,14 @@ public sealed class AudioClipPlayer
                 return false;
             }
 
-            if (Mode == AudioClipPlayerMode.OneShot && _activeVoices.Any(v => !v.Voice.IsExhausted))
-                return false;
+            if (Mode == AudioClipPlayerMode.OneShot)
+            {
+                foreach (var v in _activeVoices)
+                {
+                    if (!v.Voice.IsExhausted)
+                        return false;
+                }
+            }
 
             if (Mode == AudioClipPlayerMode.MonoRetrigger)
             {
