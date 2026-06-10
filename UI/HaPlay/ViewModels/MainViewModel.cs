@@ -127,8 +127,51 @@ public partial class MainViewModel : ViewModelBase
         AppearanceController.ApplyDensity(_density);
         if (!Playback.PlaybackVideoPipeline.CliRequestedUyvyPassthrough)
             Playback.PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = _appSettings.PreferLiveUyvyPassthrough;
-        SelectedWorkspace = Workspaces.FirstOrDefault(w => w.Id == _appSettings.LastSelectedWorkspace)
+        var lastWorkspaceId = WorkspaceItem.MigrateLegacyId(_appSettings.LastSelectedWorkspace);
+        SelectedWorkspace = Workspaces.FirstOrDefault(w => w.Id == lastWorkspaceId)
                             ?? WorkspaceItem.Players;
+        ToastCenter.Sink = OnToastPosted;
+    }
+
+    // ----- UI rewrite P1 (plan §1): toast overlay queue -----------------------------------------
+
+    private const int MaxVisibleToasts = 3;
+    private static readonly TimeSpan ToastLifetime = TimeSpan.FromSeconds(6);
+    private DispatcherTimer? _toastSweepTimer;
+
+    /// <summary>Visible toasts, newest last. Rendered by the MainView overlay — never part of layout.</summary>
+    public ObservableCollection<ToastViewModel> Toasts { get; } = new();
+
+    private void OnToastPosted(ToastSeverity severity, string message)
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(() => OnToastPosted(severity, message));
+            return;
+        }
+
+        while (Toasts.Count >= MaxVisibleToasts)
+            Toasts.RemoveAt(0);
+        Toasts.Add(new ToastViewModel(severity, message, t => Toasts.Remove(t))
+        {
+            DeadlineTicks = Environment.TickCount64 + (long)ToastLifetime.TotalMilliseconds,
+        });
+
+        _toastSweepTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, SweepExpiredToasts);
+        _toastSweepTimer.Start();
+    }
+
+    private void SweepExpiredToasts(object? sender, EventArgs e)
+    {
+        var now = Environment.TickCount64;
+        for (var i = Toasts.Count - 1; i >= 0; i--)
+        {
+            if (!Toasts[i].IsPinned && Toasts[i].DeadlineTicks <= now)
+                Toasts.RemoveAt(i);
+        }
+
+        if (Toasts.Count == 0)
+            _toastSweepTimer?.Stop();
     }
 
     // ----- Phase B (§12.1): App-shell sidebar -------------------------------------------------
@@ -139,9 +182,8 @@ public partial class MainViewModel : ViewModelBase
     [
         WorkspaceItem.Players,
         WorkspaceItem.Cues,
-        WorkspaceItem.Outputs,
-        WorkspaceItem.MidiDevices,
         WorkspaceItem.Control,
+        WorkspaceItem.Io,
         WorkspaceItem.Project,
     ];
 
@@ -156,16 +198,14 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPlayersWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsCuesWorkspaceSelected))]
-    [NotifyPropertyChangedFor(nameof(IsOutputsWorkspaceSelected))]
-    [NotifyPropertyChangedFor(nameof(IsMidiDevicesWorkspaceSelected))]
+    [NotifyPropertyChangedFor(nameof(IsIoWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsControlWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsProjectWorkspaceSelected))]
     private WorkspaceItem _selectedWorkspace = WorkspaceItem.Players;
 
     public bool IsPlayersWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Players;
     public bool IsCuesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Cues;
-    public bool IsOutputsWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Outputs;
-    public bool IsMidiDevicesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.MidiDevices;
+    public bool IsIoWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Io;
     public bool IsControlWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Control;
     public bool IsProjectWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Project;
 
@@ -1295,7 +1335,6 @@ public partial class MainViewModel : ViewModelBase
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
         Outputs = OutputManagement.Outputs.Select(o => o.Definition).ToList(),
-        VirtualAudioChannels = OutputManagement.BuildVirtualAudioChannelAssignmentsSnapshot().ToList(),
         SharedHeadphonesBuses = OutputManagement.BuildSharedHeadphonesBusesSnapshot().ToList(),
         Players = Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList(),
         ActionEndpoints = ActionEndpoints.ToList(),
@@ -1319,7 +1358,10 @@ public partial class MainViewModel : ViewModelBase
         // Reconcile outputs: rebuild the list from the project definitions. Phase B will need a richer
         // "rebind missing devices" flow (§7.3, §7.4); for now we just project the definitions.
         OutputManagement.ReplaceDefinitionsForLoad(project.Outputs);
-        OutputManagement.ApplyVirtualAudioChannelAssignments(project.VirtualAudioChannels);
+        // UI rewrite P2: the virtual-audio-channel ("VOut") model was removed in favor of output
+        // aliases + per-player matrix presets. Old projects still load; tell the operator once.
+        if (project.VirtualAudioChannels.Count > 0)
+            ToastCenter.Info(Strings.VirtualChannelsMigratedToast);
         OutputManagement.ApplySharedHeadphonesBuses(project.SharedHeadphonesBuses);
         ActionEndpoints.Clear();
         foreach (var endpoint in project.ActionEndpoints)

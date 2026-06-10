@@ -20,6 +20,9 @@ public sealed record HaPlayProject
     /// <summary>All output definitions in display order. Identity is <see cref="OutputDefinition.Id"/>.</summary>
     public List<OutputDefinition> Outputs { get; init; } = new();
 
+    /// <summary>Legacy (pre-UI-rewrite-P2): the virtual-audio-channel model was removed in favor of
+    /// output aliases + matrix presets. Kept only so old project files deserialize; ignored on load
+    /// (a one-time migration toast tells the operator) and written empty on save.</summary>
     public List<VirtualAudioChannelAssignment> VirtualAudioChannels { get; init; } = new();
 
     /// <summary>Per-player config (§4.5 will split this; Phase A keeps the existing <see cref="MediaPlayerConfig"/> shape).</summary>

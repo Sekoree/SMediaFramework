@@ -29,6 +29,8 @@ public partial class OutputLineViewModel : ViewModelBase
     {
         Definition = newDefinition;
         OnPropertyChanged(nameof(Definition));
+        OnPropertyChanged(nameof(EffectiveName));
+        OnPropertyChanged(nameof(NameEdit));
         OnPropertyChanged(nameof(KindLabel));
         OnPropertyChanged(nameof(Summary));
         OnPropertyChanged(nameof(IsLocalVideo));
@@ -41,6 +43,29 @@ public partial class OutputLineViewModel : ViewModelBase
         OnPropertyChanged(nameof(CloneParentLabel));
         OnPropertyChanged(nameof(NdiRecordingButtonText));
         ToggleNdiRecordingCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>The name shown everywhere for this output: the operator alias when set, else the
+    /// device-derived display name (UI rewrite P2, plan §5).</summary>
+    public string EffectiveName => Definition.EffectiveName;
+
+    /// <summary>
+    /// Editable name cell. Shows <see cref="EffectiveName"/>; committing a different value stores it
+    /// as the alias. Committing blank — or the original device name — clears the alias (falls back
+    /// to <see cref="OutputDefinition.DisplayName"/>).
+    /// </summary>
+    public string NameEdit
+    {
+        get => Definition.EffectiveName;
+        set
+        {
+            var trimmed = value?.Trim();
+            var newAlias = string.IsNullOrEmpty(trimmed) || trimmed == Definition.DisplayName ? null : trimmed;
+            if (newAlias == Definition.Alias)
+                return;
+            ReplaceDefinition(Definition with { Alias = newAlias });
+            _host?.NotifyAliasChanged(this);
+        }
     }
 
     /// <summary>True for top-level lines (non-clones). Per-player routing UI hides clones from the
@@ -194,6 +219,11 @@ public partial class OutputLineViewModel : ViewModelBase
 
     partial void OnHealthDetailChanged(string? value) => OnPropertyChanged(nameof(HealthToolTip));
 
+    /// <summary>UI rewrite P2 (plan §5): compact live throughput numbers next to the sparkline —
+    /// cumulative video frames + audio chunks delivered through this line. Empty while unwired.</summary>
+    [ObservableProperty]
+    private string? _statsSummary;
+
     public string NdiRecordingButtonText => IsNdiRecording ? Strings.StopRecButton : Strings.RecordButton;
 
     partial void OnIsNdiRecordingChanged(bool value)
@@ -204,8 +234,7 @@ public partial class OutputLineViewModel : ViewModelBase
 
     partial void OnIsPreviewRunningChanged(bool value)
     {
-        StartPreviewCommand.NotifyCanExecuteChanged();
-        StopPreviewCommand.NotifyCanExecuteChanged();
+        _ = value;
         FullscreenPreviewCommand.NotifyCanExecuteChanged();
         WindowedPreviewCommand.NotifyCanExecuteChanged();
     }
@@ -253,20 +282,6 @@ public partial class OutputLineViewModel : ViewModelBase
         },
         _ => Definition.DisplayName,
     };
-
-    [RelayCommand(CanExecute = nameof(CanStartPreview))]
-    private Task StartPreviewAsync(CancellationToken cancellationToken) =>
-        IsLocalVideo && _host is not null
-            ? _host.StartLocalPreviewAsync(this, cancellationToken)
-            : Task.CompletedTask;
-
-    private bool CanStartPreview() =>
-        !IsPreviewRunning && IsLocalVideo && _host is not null;
-
-    [RelayCommand(CanExecute = nameof(CanStopPreview))]
-    private void StopPreview() => _host?.StopLocalPreview(this);
-
-    private bool CanStopPreview() => IsPreviewRunning && IsLocalVideo && _host is not null;
 
     [RelayCommand(CanExecute = nameof(CanFullscreenPreview))]
     private void FullscreenPreview() => _host?.SetLocalPreviewFullscreen(this, true);

@@ -15,6 +15,7 @@ public static class Strings
         string.Format(CultureInfo.CurrentUICulture, Get(key), args);
 
     public static string HeadphonesCueBusLabel => Get(nameof(HeadphonesCueBusLabel));
+    public static string VirtualChannelsMigratedToast => Get(nameof(VirtualChannelsMigratedToast));
     public static string Enable => Get(nameof(Enable));
     public static string Tap => Get(nameof(Tap));
     public static string HeadphonesCueMatrixHint => Get(nameof(HeadphonesCueMatrixHint));

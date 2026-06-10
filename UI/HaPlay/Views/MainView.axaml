@@ -6,6 +6,7 @@
              xmlns:models="using:HaPlay.Models"
              xmlns:res="using:HaPlay.Resources"
              xmlns:views="using:HaPlay.Views"
+             xmlns:controls="using:HaPlay.Views.Controls"
              mc:Ignorable="d" d:DesignWidth="1100" d:DesignHeight="700"
              x:Class="HaPlay.Views.MainView"
              x:DataType="vm:MainViewModel">
@@ -40,15 +41,15 @@
     <KeyBinding Gesture="Ctrl+2" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Cues}" />
     <KeyBinding Gesture="Ctrl+3" Command="{Binding SelectWorkspaceCommand}"
-                CommandParameter="{x:Static models:WorkspaceItem.Outputs}" />
-    <KeyBinding Gesture="Ctrl+4" Command="{Binding SelectWorkspaceCommand}"
-                CommandParameter="{x:Static models:WorkspaceItem.MidiDevices}" />
-    <KeyBinding Gesture="Ctrl+5" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Control}" />
-    <KeyBinding Gesture="Ctrl+6" Command="{Binding SelectWorkspaceCommand}"
+    <KeyBinding Gesture="Ctrl+4" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.Io}" />
+    <KeyBinding Gesture="Ctrl+5" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Project}" />
   </UserControl.KeyBindings>
 
+  <!-- Root grid so the toast overlay can stack above the shell without touching layout (P1). -->
+  <Grid>
   <DockPanel>
     <Menu DockPanel.Dock="Top">
       <MenuItem Header="{x:Static res:Strings.MenuFileHeader}">
@@ -73,19 +74,17 @@
         </MenuItem>
       </MenuItem>
       <MenuItem Header="{x:Static res:Strings.MenuViewHeader}">
-        <!-- Workspace navigation duplicated here so the Ctrl+1…6 shortcuts are discoverable
+        <!-- Workspace navigation duplicated here so the Ctrl+1…5 shortcuts are discoverable
              (the sidebar gives no hint that they exist). -->
         <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Players}}" InputGesture="Ctrl+1"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Players}" />
         <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Cues}}" InputGesture="Ctrl+2"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Cues}" />
-        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Outputs}}" InputGesture="Ctrl+3"
-                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Outputs}" />
-        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.MidiDevices}}" InputGesture="Ctrl+4"
-                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.MidiDevices}" />
-        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Control}}" InputGesture="Ctrl+5"
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Control}}" InputGesture="Ctrl+3"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Control}" />
-        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Project}}" InputGesture="Ctrl+6"
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Io}}" InputGesture="Ctrl+4"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Io}" />
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Project}}" InputGesture="Ctrl+5"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Project}" />
         <Separator />
         <MenuItem Header="{x:Static res:Strings.MenuToggleSidebarHeader}" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
@@ -93,12 +92,10 @@
       </MenuItem>
     </Menu>
 
-    <Border DockPanel.Dock="Top"
-            Background="#222"
-            Padding="8,4"
-            IsVisible="{Binding ProjectStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-      <TextBlock Text="{Binding ProjectStatus}" Foreground="#DDD" />
-    </Border>
+    <!-- P1: fixed-height status line — text changes, layout never does (no banner push-down). -->
+    <controls:StatusLineControl DockPanel.Dock="Top"
+                                Padding="8,0"
+                                Text="{Binding ProjectStatus}" />
 
     <Border DockPanel.Dock="Left"
             BorderBrush="#22808080" BorderThickness="0,0,1,0"
@@ -222,8 +219,20 @@
         </Grid>
       </DockPanel>
 
-      <views:OutputManagementView DataContext="{Binding OutputManagement}"
-                                  IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsOutputsWorkspaceSelected}" />
+      <!-- P1 transitional I/O host: existing Outputs + MIDI views under one workspace; replaced by
+           the master-detail IoWorkspaceView in P2. -->
+      <TabControl Margin="8"
+                  IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsIoWorkspaceSelected}">
+        <TabItem Header="{x:Static res:Strings.OutputsHeader}">
+          <views:OutputManagementView DataContext="{Binding OutputManagement}" />
+        </TabItem>
+        <TabItem Header="{x:Static res:Strings.MidiHeader}">
+          <views:MidiDevicesView />
+        </TabItem>
+        <TabItem Header="OSC">
+          <views:OscConnectionsView />
+        </TabItem>
+      </TabControl>
 
       <!-- Cues workspace: the cue player. OSC/MIDI action targets open in the Action Targets
            dialog (button below or the app menu) rather than taking permanent space here. -->
@@ -235,9 +244,6 @@
                 Command="{Binding OpenTargetConfigurationCommand}" />
         <views:CuePlayerView DataContext="{Binding CuePlayer}" />
       </DockPanel>
-
-      <views:MidiDevicesView
-          IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsMidiDevicesWorkspaceSelected}" />
 
       <views:ControlWorkspaceView DataContext="{Binding Control}"
           IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsControlWorkspaceSelected}" />
@@ -314,4 +320,39 @@
       </DockPanel>
     </Grid>
   </DockPanel>
+
+  <!-- P1: toast overlay — top-right, stacked, hit-testable only where toasts are. Body click pins
+       (stops auto-dismiss), ✕ closes. Never affects layout below. -->
+  <ItemsControl ItemsSource="{Binding Toasts}"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,40,16,0" Width="340"
+                IsHitTestVisible="True">
+    <ItemsControl.ItemTemplate>
+      <DataTemplate DataType="vm:ToastViewModel">
+        <Border CornerRadius="6" Padding="10,8" Margin="0,0,0,6"
+                Background="#E0303030" BorderThickness="1"
+                BorderBrush="{StaticResource BorderSubtle}">
+          <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+            <Panel Grid.Column="0" VerticalAlignment="Top">
+              <TextBlock Text="ℹ" FontSize="13" Opacity="0.7" IsVisible="{Binding IsInfo}" />
+              <TextBlock Text="⚠" FontSize="13" Foreground="{StaticResource StatusWarnFg}"
+                         IsVisible="{Binding IsWarning}" />
+              <TextBlock Text="⛔" FontSize="13" Foreground="{StaticResource StatusErrorFg}"
+                         IsVisible="{Binding IsError}" />
+            </Panel>
+            <TextBlock Grid.Column="1" Text="{Binding Message}" TextWrapping="Wrap"
+                       Foreground="#EEE" FontSize="12"
+                       PointerPressed="OnToastBodyPressed" />
+            <StackPanel Grid.Column="2" Spacing="2">
+              <Button Content="✕" Padding="6,0" MinWidth="22" FontSize="11"
+                      Command="{Binding CloseCommand}" />
+              <TextBlock Text="📌" FontSize="10" HorizontalAlignment="Center"
+                         IsVisible="{Binding IsPinned}" />
+            </StackPanel>
+          </Grid>
+        </Border>
+      </DataTemplate>
+    </ItemsControl.ItemTemplate>
+  </ItemsControl>
+  </Grid>
 </UserControl>

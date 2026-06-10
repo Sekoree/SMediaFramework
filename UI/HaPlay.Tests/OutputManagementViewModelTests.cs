@@ -227,23 +227,50 @@ public sealed class OutputManagementViewModelTests
         Assert.Equal(parentId, excluded[0].Id);
     }
 
+    /// <summary>UI rewrite P2: output aliases replace the virtual-audio-channel model. The alias is
+    /// the displayed name everywhere; blank (or the original device name) clears it.</summary>
     [Fact]
-    public void VirtualAudioChannelAssignments_BuiltFromAudioOutputs()
+    public void OutputAlias_EditAndClear_UpdatesEffectiveNameAndRaisesNamingChanged()
     {
         var vm = new OutputManagementViewModel();
         var paId = Guid.NewGuid();
-        var ndiId = Guid.NewGuid();
         vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
         {
-            new PortAudioOutputDefinition(paId, "PA", 0, "Alsa", 1, "dev", 4, 48000),
-            new NDIOutputDefinition(ndiId, "NDI", "src", null, NDIOutputStreamMode.AudioOnly, 2, 48000),
+            new PortAudioOutputDefinition(paId, "ALSA dev 1", 0, "Alsa", 1, "dev", 2, 48000),
         });
+        var line = vm.Outputs[0];
+        var namingChanges = 0;
+        vm.OutputNamingChanged += (_, _) => namingChanges++;
 
-        Assert.Equal(6, vm.VirtualAudioChannelAssignments.Count);
-        Assert.Equal(1, vm.VirtualAudioChannelAssignments[0].VirtualOutputChannel);
-        Assert.Equal(6, vm.VirtualAudioChannelAssignments[^1].VirtualOutputChannel);
-        Assert.Equal(4, vm.GetAssignedVirtualAudioChannel(paId, 3));
-        Assert.Equal(6, vm.GetAssignedVirtualAudioChannel(ndiId, 1));
+        Assert.Equal("ALSA dev 1", line.EffectiveName);
+
+        line.NameEdit = "  Main PA  ";
+        Assert.Equal("Main PA", line.EffectiveName);
+        Assert.Equal("Main PA", line.Definition.Alias);
+        Assert.Equal("ALSA dev 1", line.Definition.DisplayName); // device name preserved
+        Assert.Equal(1, namingChanges);
+
+        line.NameEdit = "ALSA dev 1"; // committing the device name clears the alias
+        Assert.Null(line.Definition.Alias);
+        Assert.Equal("ALSA dev 1", line.EffectiveName);
+        Assert.Equal(2, namingChanges);
+
+        line.NameEdit = "   "; // blank also clears (no-op here: already null → no event)
+        Assert.Null(line.Definition.Alias);
+        Assert.Equal(2, namingChanges);
+    }
+
+    [Fact]
+    public void OutputAlias_RoundTripsThroughProjectJson()
+    {
+        var def = new PortAudioOutputDefinition(Guid.NewGuid(), "dev", 0, "Alsa", 1, "dev", 2, 48000)
+            { Alias = "Monitors" };
+        var json = System.Text.Json.JsonSerializer.Serialize<OutputDefinition>(def);
+        var back = System.Text.Json.JsonSerializer.Deserialize<OutputDefinition>(json);
+
+        Assert.NotNull(back);
+        Assert.Equal("Monitors", back.Alias);
+        Assert.Equal("Monitors", back.EffectiveName);
     }
 
     [Fact]

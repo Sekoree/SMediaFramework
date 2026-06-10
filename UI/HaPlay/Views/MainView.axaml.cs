@@ -15,6 +15,13 @@ public partial class MainView : UserControl
         PlayersQuickPlayHost.AddHandler(DragDrop.DropEvent, OnPlayersQuickPlayDrop, RoutingStrategies.Bubble);
     }
 
+    /// <summary>Toast body click = pin/unpin (stops the auto-dismiss); the ✕ button closes.</summary>
+    private void OnToastBodyPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is Control { DataContext: ToastViewModel toast })
+            toast.TogglePinCommand.Execute(null);
+    }
+
     private void OnPlayersQuickPlayDragOver(object? sender, DragEventArgs e)
     {
         _ = sender;

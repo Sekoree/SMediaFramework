@@ -22,7 +22,6 @@ namespace HaPlay.ViewModels;
 public partial class OutputManagementViewModel : ViewModelBase
 {
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
-    public ObservableCollection<OutputVirtualChannelAssignmentViewModel> VirtualAudioChannelAssignments { get; } = new();
     /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
     /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
     public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();
@@ -30,7 +29,6 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// <summary>§8.2 — pre-filtered view of <see cref="Outputs"/> exposing only PortAudio lines.
     /// Refreshed every time <see cref="Outputs"/> changes so the shared-bus PA picker stays in sync.</summary>
     public ObservableCollection<OutputLineViewModel> PortAudioOutputLines { get; } = new();
-    private readonly Dictionary<(Guid OutputId, int OutputChannel), int> _virtualAudioChannelMap = new();
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
     private readonly Dictionary<OutputLineViewModel, NDIOutputPreviewRuntime> _ndiOutputs = new();
@@ -80,17 +78,10 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// list to drop the clone's checkbox.
     /// </summary>
     public event EventHandler? RoutingTopologyChanged;
-    public event EventHandler? VirtualAudioChannelMapChanged;
 
     /// <summary>§8.2 — raised when the shared-bus list mutates or any bus's PortAudio target /
     /// label changes. Player VMs use this to refresh their cue target picker.</summary>
     public event EventHandler? SharedHeadphonesBusesChanged;
-
-    [ObservableProperty]
-    private bool _hasVirtualChannelCollisions;
-
-    [ObservableProperty]
-    private string? _virtualChannelCollisionMessage;
 
     // ----- Phase E (§8.1): aggregate health summary -------------------------------------------------
 
@@ -152,7 +143,6 @@ public partial class OutputManagementViewModel : ViewModelBase
             OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
             RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         };
-        Outputs.CollectionChanged += (_, _) => RebuildVirtualAudioChannelAssignments();
         // §8.2 — a removed PA output may have been a bus's target; raise the event so player VMs
         // can re-resolve and mark buses without a backing PA output as broken.
         Outputs.CollectionChanged += (_, _) =>
@@ -161,9 +151,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             RaiseSharedHeadphonesBusesChanged();
         };
         RebuildPortAudioOutputLines();
-        VirtualAudioChannelAssignments.CollectionChanged += OnVirtualAudioChannelAssignmentsChanged;
         SharedHeadphonesBuses.CollectionChanged += OnSharedHeadphonesBusesCollectionChanged;
-        RebuildVirtualAudioChannelAssignments();
     }
 
     private void OnSharedHeadphonesBusesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -247,110 +235,16 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private void RaiseTopologyChanged() => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
 
-    private void OnVirtualAudioChannelAssignmentsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    /// <summary>
+    /// UI rewrite P2 (plan §2.3/§5): raised when an output's <see cref="OutputDefinition.Alias"/>
+    /// changes so dependents (player matrix row labels, cue pickers) refresh their naming.
+    /// </summary>
+    public event EventHandler? OutputNamingChanged;
+
+    internal void NotifyAliasChanged(OutputLineViewModel line)
     {
-        _ = sender;
-        if (e.OldItems is not null)
-            foreach (var removed in e.OldItems.OfType<OutputVirtualChannelAssignmentViewModel>())
-                removed.PropertyChanged -= OnVirtualChannelAssignmentPropertyChanged;
-        if (e.NewItems is not null)
-            foreach (var added in e.NewItems.OfType<OutputVirtualChannelAssignmentViewModel>())
-                added.PropertyChanged += OnVirtualChannelAssignmentPropertyChanged;
-    }
-
-    private void OnVirtualChannelAssignmentPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (sender is OutputVirtualChannelAssignmentViewModel row)
-            _virtualAudioChannelMap[(row.OutputDefinitionId, row.OutputChannel)] = row.VirtualOutputChannel;
-        _ = e;
-        ValidateVirtualChannelAssignments();
-        VirtualAudioChannelMapChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    public int? GetAssignedVirtualAudioChannel(Guid outputDefinitionId, int outputChannel)
-    {
-        var row = VirtualAudioChannelAssignments.FirstOrDefault(a =>
-            a.OutputDefinitionId == outputDefinitionId && a.OutputChannel == outputChannel);
-        return row?.VirtualOutputChannel;
-    }
-
-    public IReadOnlyList<VirtualAudioChannelAssignment> BuildVirtualAudioChannelAssignmentsSnapshot() =>
-        VirtualAudioChannelAssignments.Select(x => new VirtualAudioChannelAssignment
-        {
-            OutputDefinitionId = x.OutputDefinitionId,
-            OutputChannel = x.OutputChannel,
-            VirtualOutputChannel = x.VirtualOutputChannel,
-        }).ToList();
-
-    public void ApplyVirtualAudioChannelAssignments(IReadOnlyList<VirtualAudioChannelAssignment> assignments)
-    {
-        _virtualAudioChannelMap.Clear();
-        foreach (var a in assignments.Where(a => a.VirtualOutputChannel > 0 && a.OutputChannel >= 0))
-            _virtualAudioChannelMap[(a.OutputDefinitionId, a.OutputChannel)] = a.VirtualOutputChannel;
-        RebuildVirtualAudioChannelAssignments();
-    }
-
-    private void RebuildVirtualAudioChannelAssignments()
-    {
-        var preserved = VirtualAudioChannelAssignments.ToDictionary(
-            a => (a.OutputDefinitionId, a.OutputChannel),
-            a => a.VirtualOutputChannel);
-        var rows = new List<OutputVirtualChannelAssignmentViewModel>();
-        var vout = 1;
-        foreach (var line in Outputs)
-        {
-            var channels = line.Definition switch
-            {
-                PortAudioOutputDefinition pa => Math.Max(1, pa.ChannelCount),
-                NDIOutputDefinition { StreamMode: NDIOutputStreamMode.VideoOnly } => 0,
-                NDIOutputDefinition nd => Math.Max(1, nd.AudioChannelCount),
-                _ => 0,
-            };
-            for (var oc = 0; oc < channels; oc++)
-            {
-                var key = (line.Definition.Id, oc);
-                var assigned = preserved.TryGetValue(key, out var existing)
-                    ? existing
-                    : _virtualAudioChannelMap.TryGetValue(key, out var saved) ? saved : vout;
-                rows.Add(new OutputVirtualChannelAssignmentViewModel(
-                    line.Definition.Id,
-                    line.Definition.DisplayName,
-                    oc,
-                    channels,
-                    assigned));
-                vout++;
-            }
-        }
-
-        VirtualAudioChannelAssignments.Clear();
-        foreach (var row in rows.OrderBy(r => r.VirtualOutputChannel).ThenBy(r => r.OutputDisplayName).ThenBy(r => r.OutputChannel))
-            VirtualAudioChannelAssignments.Add(row);
-        ValidateVirtualChannelAssignments();
-        VirtualAudioChannelMapChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void ValidateVirtualChannelAssignments()
-    {
-        var used = new HashSet<int>();
-        foreach (var row in VirtualAudioChannelAssignments
-                     .OrderBy(x => x.OutputDisplayName, StringComparer.OrdinalIgnoreCase)
-                     .ThenBy(x => x.OutputChannel))
-        {
-            row.IsDuplicate = false;
-            if (row.VirtualOutputChannel <= 0)
-                continue;
-
-            if (used.Contains(row.VirtualOutputChannel))
-            {
-                var nextFree = Enumerable.Range(1, 256).First(n => !used.Contains(n));
-                row.VirtualOutputChannel = nextFree;
-            }
-
-            used.Add(row.VirtualOutputChannel);
-        }
-
-        HasVirtualChannelCollisions = false;
-        VirtualChannelCollisionMessage = null;
+        _ = line;
+        OutputNamingChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>
@@ -1094,9 +988,23 @@ public partial class OutputManagementViewModel : ViewModelBase
             line.Health = worst;
             line.HealthDetail = detail;
             if (anyWired)
+            {
                 line.RecordSparklineSample(videoSubmittedTotal, audioEnqueuedTotal);
+                // P2 stats line: cumulative delivery counters next to the sparkline. Same 1 Hz tick
+                // as the health poll — no extra polling cost.
+                line.StatsSummary = (videoSubmittedTotal, audioEnqueuedTotal) switch
+                {
+                    (> 0, > 0) => $"{videoSubmittedTotal:N0} f · {audioEnqueuedTotal:N0} ch",
+                    (> 0, _) => $"{videoSubmittedTotal:N0} f",
+                    (_, > 0) => $"{audioEnqueuedTotal:N0} ch",
+                    _ => null,
+                };
+            }
             else
+            {
                 line.ResetSparkline();
+                line.StatsSummary = null;
+            }
         }
 
         var active = 0;
@@ -1158,35 +1066,3 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 }
 
-public sealed partial class OutputVirtualChannelAssignmentViewModel : ObservableObject
-{
-    public OutputVirtualChannelAssignmentViewModel(
-        Guid outputDefinitionId,
-        string outputDisplayName,
-        int outputChannel,
-        int outputChannelCount,
-        int virtualOutputChannel)
-    {
-        OutputDefinitionId = outputDefinitionId;
-        OutputDisplayName = outputDisplayName;
-        OutputChannel = outputChannel;
-        OutputChannelCount = outputChannelCount;
-        _virtualOutputChannel = virtualOutputChannel;
-    }
-
-    public Guid OutputDefinitionId { get; }
-    public string OutputDisplayName { get; }
-    public int OutputChannel { get; }
-    public int OutputChannelCount { get; }
-
-    public string OutputChannelLabel =>
-        OutputChannelCount == 2
-            ? (OutputChannel == 0 ? Strings.ChannelOutLeftLabel : Strings.ChannelOutRightLabel)
-            : Strings.Format(nameof(Strings.ChannelOutNumberFormat), OutputChannel + 1);
-
-    [ObservableProperty]
-    private int _virtualOutputChannel;
-
-    [ObservableProperty]
-    private bool _isDuplicate;
-}

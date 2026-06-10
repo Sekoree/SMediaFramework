@@ -39,6 +39,18 @@ public abstract record OutputDefinition(Guid Id, string DisplayName)
 {
     [JsonIgnore]
     public abstract ManagedOutputKind Kind { get; }
+
+    /// <summary>
+    /// Operator-given name (UI rewrite P2, plan §5): the single naming truth shown wherever this
+    /// output appears — I/O rows, player routing matrix columns, cue route pickers. Null/blank
+    /// falls back to the device-derived <see cref="DisplayName"/>. Absent in pre-P2 project files
+    /// (deserializes as null — no migration needed).
+    /// </summary>
+    public string? Alias { get; init; }
+
+    /// <summary>The name to display: <see cref="Alias"/> when set, else <see cref="DisplayName"/>.</summary>
+    [JsonIgnore]
+    public string EffectiveName => string.IsNullOrWhiteSpace(Alias) ? DisplayName : Alias;
 }
 
 public sealed record PortAudioOutputDefinition(

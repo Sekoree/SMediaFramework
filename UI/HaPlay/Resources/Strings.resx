@@ -2208,4 +2208,7 @@
   <data name="ControlConfigFileNameFallback" xml:space="preserve">
     <value>control-system</value>
   </data>
+  <data name="VirtualChannelsMigratedToast" xml:space="preserve">
+    <value>This project used virtual audio channels (VOut); that model was replaced by output aliases and routing matrix presets. Review your player routing.</value>
+  </data>
 </root>

@@ -761,7 +761,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // Phase B (§3.4) — also resync on definition changes (Edit) so clone-of transitions update
         // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
         _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
-        _outputs.VirtualAudioChannelMapChanged += OnVirtualAudioChannelMapChanged;
+        _outputs.OutputNamingChanged += OnOutputNamingChanged;
         // Phase B follow-up — unwire from the active session BEFORE the runtime is disposed (§4.3.3).
         // Without this the AudioRouter pump keeps Submit'ing to a disposed PortAudioOutput and spams
         // ObjectDisposedException until the session is torn down.
@@ -823,7 +823,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _outputs.Outputs.CollectionChanged -= OnSharedOutputsCollectionChanged;
         _outputs.SharedHeadphonesBusesChanged -= OnSharedHeadphonesBusesChanged;
         _outputs.RoutingTopologyChanged -= OnRoutingTopologyChanged;
-        _outputs.VirtualAudioChannelMapChanged -= OnVirtualAudioChannelMapChanged;
+        _outputs.OutputNamingChanged -= OnOutputNamingChanged;
         _outputs.OutputLineRemoving -= OnOutputLineRemoving;
         _outputs.OutputLineReconfiguringAsync -= OnOutputLineReconfiguringAsync;
         _outputs.OutputLineReconfiguredAsync -= OnOutputLineReconfiguredAsync;
@@ -880,15 +880,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
         });
     }
 
-    private void OnVirtualAudioChannelMapChanged(object? sender, EventArgs e)
+    /// <summary>UI rewrite P2: alias changes re-label the matrix rows (the routing itself is
+    /// untouched, so no session re-apply is needed).</summary>
+    private void OnOutputNamingChanged(object? sender, EventArgs e)
     {
         _ = sender;
         _ = e;
-        Dispatcher.UIThread.Post(() =>
-        {
-            RebuildAudioMatrixRows();
-            ApplyAllOutputMatricesToSession();
-        });
+        Dispatcher.UIThread.Post(RebuildAudioMatrixRows);
     }
 
     public OutputManagementViewModel OutputsRepository => _outputs;
@@ -1978,7 +1976,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         foreach (var slot in BuildVirtualOutputMap())
         {
             inputChannels = Math.Max(inputChannels, slot.Binding.Matrix.InputChannelCount);
-            var label = $"VOut {slot.VirtualOutputChannel} · {slot.Binding.Line.Definition.DisplayName} · {OutputChannelSuffix(slot.Binding.Matrix.OutputChannelCount, slot.OutputChannel)}";
+            var label = $"{slot.Binding.Line.Definition.EffectiveName} · {OutputChannelSuffix(slot.Binding.Matrix.OutputChannelCount, slot.OutputChannel)}";
             AudioMatrixRows.Add(new AudioMatrixRow(slot.Binding, slot.OutputChannel, slot.VirtualOutputChannel, label));
         }
 
@@ -1991,31 +1989,21 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private IEnumerable<VirtualOutputSlot> BuildVirtualOutputMap()
     {
+        // UI rewrite P2: rows are simply (line, channel) in alias order — the operator-managed
+        // "VOut" numbering is gone; the ordinal is just the 1-based row number.
         var rows = new List<VirtualOutputSlot>();
-        var fallback = 1;
-        var used = new HashSet<int>();
         foreach (var binding in Outputs)
         {
             if (!binding.IsSelected) continue;
             if (binding.Matrix.InputChannelCount == 0 || binding.Matrix.OutputChannelCount == 0) continue;
             for (var oc = 0; oc < binding.Matrix.OutputChannelCount; oc++)
-            {
-                var assigned = _outputs.GetAssignedVirtualAudioChannel(binding.Line.Definition.Id, oc);
-                var vout = assigned is > 0 ? assigned.Value : 0;
-                if (vout <= 0)
-                {
-                    while (used.Contains(fallback))
-                        fallback++;
-                    vout = fallback++;
-                }
-                used.Add(vout);
-                rows.Add(new VirtualOutputSlot(vout, binding, oc));
-            }
+                rows.Add(new VirtualOutputSlot(0, binding, oc));
         }
+
         return rows
-            .OrderBy(r => r.VirtualOutputChannel)
-            .ThenBy(r => r.Binding.Line.Definition.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.OutputChannel);
+            .OrderBy(r => r.Binding.Line.Definition.EffectiveName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.OutputChannel)
+            .Select((r, i) => r with { VirtualOutputChannel = i + 1 });
     }
 
     private readonly record struct VirtualOutputSlot(

@@ -14,6 +14,8 @@
 
   <Application.Styles>
     <FluentTheme DensityStyle="Compact"/>
+    <!-- UI rewrite P1: the "Deck" design tokens; the single home for spacing/type/surface/touch styles. -->
+    <StyleInclude Source="avares://HaPlay/Styles/Tokens.axaml"/>
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml"/>
     <StyleInclude Source="avares://Avalonia.Controls.TreeDataGrid/Themes/Fluent.axaml"/>
     <!-- Xaml.Behaviors drag-to-reorder: provides the ListBox.draggable style used by the playlist. -->

@@ -113,7 +113,7 @@
               Command="{Binding StandbySelectedCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportStandbyTooltip}" />
       <Button Grid.Column="1" Content="{x:Static res:Strings.GoButton}"
-              Classes="accent" MinWidth="84" FontWeight="Bold"
+              Classes="Touch Go" MinWidth="96"
               Command="{Binding GoCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportGoTooltip}" />
       <Button Grid.Column="2" Content="{x:Static res:Strings.BackButton}"
@@ -126,6 +126,7 @@
               Command="{Binding StopCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportStopTooltip}" />
       <Button Grid.Column="5" Content="{x:Static res:Strings.PanicButton}"
+              Classes="Touch"
               Command="{Binding PanicCommand}"
               ToolTip.Tip="{x:Static res:Strings.CueTransportPanicTooltip}" />
       <TextBlock Grid.Column="6" Text="{Binding TransportState}" VerticalAlignment="Center" Margin="8,0,0,0" />
@@ -151,7 +152,7 @@
                    IsVisible="{Binding !HasSelectedCue}" />
         <!-- MaxHeight caps the bottom drawer so a tall tab (e.g. several video placements) can't push it
              out of the window; each tab's content is in a ScrollViewer, which then scrolls within the cap. -->
-        <TabControl Margin="0,4,0,0" MinHeight="220" MaxHeight="440"
+        <TabControl Classes="Segmented" Margin="0,4,0,0" MinHeight="220" MaxHeight="440"
                     IsVisible="{Binding HasSelectedCue}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch">

@@ -93,7 +93,12 @@
                     <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold"
                                ToolTip.Tip="{Binding KindTechnicalLabel}" />
                     <TextBlock Text="{x:Static res:Strings.EmDash}" Opacity="0.5" />
-                    <TextBlock Text="{Binding Definition.DisplayName}" FontWeight="SemiBold" />
+                    <!-- P2 alias: borderless inline editor — commit a new name to alias the output
+                         everywhere (matrix columns, cue pickers); blank restores the device name. -->
+                    <TextBox Text="{Binding NameEdit, Mode=TwoWay}" FontWeight="SemiBold"
+                             BorderThickness="0" Background="Transparent" Padding="2,0"
+                             MinWidth="80" VerticalAlignment="Center"
+                             ToolTip.Tip="{Binding Definition.DisplayName}" />
                     <TextBlock Text="{Binding CloneParentLabel}"
                                Opacity="0.55" FontSize="12" VerticalAlignment="Center"
                                IsVisible="{Binding IsClone}" />
@@ -101,6 +106,10 @@
                   <TextBlock Classes="hint" Text="{Binding Summary}" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                  <!-- P2: cumulative delivery counters (frames / audio chunks) beside the sparkline. -->
+                  <TextBlock Text="{Binding StatsSummary}" FontSize="11" Opacity="0.7"
+                             FontFamily="Consolas,monospace" VerticalAlignment="Center"
+                             IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                   <!-- §8.1 inline sparkline — frames+chunks per second over last 60 s. -->
                   <ctrls:SparklineControl Width="120" Height="22"
                                           Samples="{Binding SparklineSamples}"
@@ -147,7 +156,7 @@
                               SelectedValue="{Binding PortAudioOutputId, Mode=TwoWay}">
                       <ComboBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:OutputLineViewModel">
-                          <TextBlock Text="{Binding Definition.DisplayName}" />
+                          <TextBlock Text="{Binding EffectiveName}" />
                         </DataTemplate>
                       </ComboBox.ItemTemplate>
                     </ComboBox>
@@ -161,41 +170,6 @@
           </DockPanel>
         </Border>
 
-        <Border Classes="card">
-          <DockPanel>
-            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.VirtualAudioChannelsHeader}" FontWeight="SemiBold" Margin="0,0,0,6" />
-            <TextBlock DockPanel.Dock="Top" Classes="hint"
-                       Text="{x:Static res:Strings.VirtualAudioChannelsHint}" />
-            <Border DockPanel.Dock="Top"
-                    IsVisible="{Binding HasVirtualChannelCollisions}"
-                    Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
-                    CornerRadius="4" Padding="8,4" Margin="0,6,0,0">
-              <TextBlock Text="{Binding VirtualChannelCollisionMessage}" Foreground="#FFE6E6" />
-            </Border>
-            <ListBox ItemsSource="{Binding VirtualAudioChannelAssignments}" Background="Transparent" Margin="0,6,0,0" MaxHeight="200">
-              <ListBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:OutputVirtualChannelAssignmentViewModel">
-                  <Grid ColumnDefinitions="220,90,100,90,*" ColumnSpacing="8" Margin="0,2">
-                    <TextBlock Grid.Column="0" Text="{Binding OutputDisplayName}" VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="1" Text="{Binding OutputChannelLabel}" VerticalAlignment="Center" />
-                    <NumericUpDown Grid.Column="2"
-                                   Minimum="1"
-                                   Maximum="512"
-                                   ShowButtonSpinner="False"
-                                   Value="{Binding VirtualOutputChannel, Mode=TwoWay}" />
-                    <TextBlock Grid.Column="3"
-                               IsVisible="{Binding IsDuplicate}"
-                               Text="{x:Static res:Strings.DuplicateLabel}"
-                               Foreground="#FFCC6666"
-                               VerticalAlignment="Center" />
-                    <TextBlock Grid.Column="4" Text="{Binding VirtualOutputChannel, StringFormat='VOut {0}'}"
-                               VerticalAlignment="Center" Opacity="0.75" />
-                  </Grid>
-                </DataTemplate>
-              </ListBox.ItemTemplate>
-            </ListBox>
-          </DockPanel>
-        </Border>
       </StackPanel>
     </Expander>
   </Grid>
