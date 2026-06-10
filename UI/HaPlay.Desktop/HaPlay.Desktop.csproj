@@ -6,6 +6,7 @@
         <TargetFramework>net10.0</TargetFramework>
         <Nullable>enable</Nullable>
         <PublishAot>true</PublishAot>
+        <AssemblyName>HaPlay_Test</AssemblyName>
 
         <!-- Real-time audio latency hint (COMPLEMENTARY, not the fix). The AOT-only audio drops were
              actually a router pacing flaw — fixed by primary-output backpressure in AudioRouter.OutputPump

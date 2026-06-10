@@ -12,6 +12,7 @@ using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
+using HaPlay.Resources;
 using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.NDI;
@@ -516,7 +517,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             string? err = null;
             await Task.Run(() =>
             {
-                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path) : null;
+                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path, fi.AudioTrackIndex) : null;
                 if (!HaPlayPlaybackSession.TryCreate(item, lines, _outputs, out created, out err, fileOpts, preOpened))
                     created = null;
             }, ct).ConfigureAwait(false);
@@ -1338,19 +1339,19 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // shuffle-aware, so shuffle playback no longer advances into a cold decoder — plus the linear
         // neighbours manual Next/Previous use. Deduped so a non-shuffled next isn't opened twice.
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var paths = new List<string>(3);
+        var targets = new List<(string Path, int? AudioTrackIndex)>(3);
         void Add(PlaylistItem? item)
         {
             if (item is FilePlaylistItem f && seen.Add(f.Path))
-                paths.Add(f.Path);
+                targets.Add((f.Path, f.AudioTrackIndex));
         }
 
         Add(PeekAutoAdvanceNext(items));                  // unattended auto-advance target
         if (idx + 1 < items.Count) Add(items[idx + 1]);  // manual Next (linear)
         if (idx - 1 >= 0) Add(items[idx - 1]);            // manual Previous (linear)
 
-        if (paths.Count > 0)
-            _decoderCache.PreOpenAsync(paths, _preOpenCts.Token);
+        if (targets.Count > 0)
+            _decoderCache.PreOpenAsync(targets, _preOpenCts.Token);
     }
 
     private float[]? _waveformPeaks;
@@ -1528,6 +1529,66 @@ public partial class MediaPlayerViewModel : ViewModelBase
         MovePlaylistItemDownCommand.NotifyCanExecuteChanged();
         PlayCommand.NotifyCanExecuteChanged();
         TogglePlayPauseCommand.NotifyCanExecuteChanged();
+        _ = RefreshSelectedItemAudioTrackChoicesAsync(value);
+    }
+
+    /// <summary>Audio-track entries for the playlist context menu ("Audio track" submenu). Filled
+    /// asynchronously when a multi-track file item is selected; empty otherwise (submenu hidden).</summary>
+    public ObservableCollection<PlaylistAudioTrackChoiceViewModel> SelectedItemAudioTrackChoices { get; } = new();
+
+    [ObservableProperty]
+    private bool _selectedItemHasMultipleAudioTracks;
+
+    private async Task RefreshSelectedItemAudioTrackChoicesAsync(PlaylistItem? value)
+    {
+        if (value is not FilePlaylistItem file)
+        {
+            SelectedItemAudioTrackChoices.Clear();
+            SelectedItemHasMultipleAudioTracks = false;
+            return;
+        }
+
+        var tracks = await Playback.CueMediaProbe.TryProbeAudioTracksAsync(file.Path).ConfigureAwait(false);
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            // Selection may have moved on while probing — only publish for the still-selected item.
+            if (!ReferenceEquals(SelectedPlaylistItem, value))
+                return;
+
+            SelectedItemAudioTrackChoices.Clear();
+            if (tracks.Count >= 2)
+            {
+                SelectedItemAudioTrackChoices.Add(new PlaylistAudioTrackChoiceViewModel(
+                    this, null, Strings.AudioTrackAutomaticLabel, file.AudioTrackIndex is null));
+                foreach (var track in tracks)
+                    SelectedItemAudioTrackChoices.Add(new PlaylistAudioTrackChoiceViewModel(
+                        this, track.Index, track.ToDisplayString(), file.AudioTrackIndex == track.Index));
+            }
+
+            SelectedItemHasMultipleAudioTracks = SelectedItemAudioTrackChoices.Count > 0;
+        });
+    }
+
+    /// <summary>Replaces the selected file item with a copy carrying the chosen audio track. Applies on
+    /// the next open of the item (reload if it is currently playing).</summary>
+    internal void SetSelectedPlaylistItemAudioTrack(int? audioTrackIndex)
+    {
+        if (SelectedPlaylistItem is not FilePlaylistItem file || file.AudioTrackIndex == audioTrackIndex)
+            return;
+
+        var replacement = file with { AudioTrackIndex = audioTrackIndex };
+        var idx = PlaylistItems.IndexOf(file);
+        if (idx < 0)
+            return;
+
+        PlaylistItems[idx] = replacement;
+        if (ReferenceEquals(_currentPlaylistItem, file))
+            _currentPlaylistItem = replacement;
+        SelectedPlaylistItem = replacement;
+        // A neighbouring pre-open may hold a decoder keyed on the old track — drop it so the next
+        // open uses the new choice.
+        _decoderCache.InvalidateAll();
+        StatusMessage = Strings.Format(nameof(Strings.AudioTrackChangedStatusFormat), replacement.DisplayName);
     }
 
     partial void OnSelectedPlaylistTabChanged(PlaylistTabViewModel? oldValue, PlaylistTabViewModel? newValue)
@@ -3168,7 +3229,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             await Task.Run(() =>
             {
                 SDebug.ChangeTrace.Step("OpenOrReload: TryCreate begin (thread pool)");
-                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path) : null;
+                var preOpened = item is FilePlaylistItem fi ? _decoderCache.TryTake(fi.Path, fi.AudioTrackIndex) : null;
                 decoderCacheHit = preOpened is not null;
                 if (!HaPlayPlaybackSession.TryCreate(item, selected, _outputs, out created, out createErr, fileOpts, preOpened))
                     created = null;
@@ -3199,7 +3260,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 ExitWaitingForSource();
                 _session = created;
                 IsMediaLoaded = true;
-                StatusMessage = null;
+                // Play-what-you-can: a session can open with some lines skipped (dead NDI carrier,
+                // held PortAudio device) — keep playing but tell the operator which lines are silent.
+                StatusMessage = created.OpenWarnings.Count > 0 ? string.Join(" ", created.OpenWarnings) : null;
                 LastLoadError = null;
                 LoadState = PlayerLoadState.Ready;
                 Duration = item.IsLive
@@ -4207,4 +4270,27 @@ public partial class MediaPlayerViewModel : ViewModelBase
         _idleSlate = slate;
         _idleSlateSig = sig;
     }
+}
+
+/// <summary>One entry of the playlist "Audio track" context submenu.</summary>
+public sealed partial class PlaylistAudioTrackChoiceViewModel : ObservableObject
+{
+    private readonly MediaPlayerViewModel _owner;
+
+    public PlaylistAudioTrackChoiceViewModel(MediaPlayerViewModel owner, int? index, string label, bool isSelected)
+    {
+        _owner = owner;
+        Index = index;
+        Label = isSelected ? $"✓ {label}" : label;
+        IsSelected = isSelected;
+    }
+
+    public int? Index { get; }
+
+    public string Label { get; }
+
+    public bool IsSelected { get; }
+
+    [RelayCommand]
+    private void Select() => _owner.SetSelectedPlaylistItemAudioTrack(Index);
 }

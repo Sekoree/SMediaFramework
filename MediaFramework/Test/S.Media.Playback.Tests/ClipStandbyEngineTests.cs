@@ -179,6 +179,51 @@ public sealed class ClipStandbyEngineTests
         }
     }
 
+    [Fact]
+    public async Task RefreshStandbyAsync_PreparesWindowEntriesInParallel()
+    {
+        var paths = new[] { WriteWav(), WriteWav() };
+        await using var engine = new ClipStandbyEngine();
+        try
+        {
+            using var bothInFlight = new SemaphoreSlim(0);
+            var concurrent = 0;
+            var sawParallel = false;
+
+            ClipSpec GatedSpec(string id, string path, string cacheKey) => new(
+                id,
+                ClipMediaSource.FromBuilder(() =>
+                {
+                    // With parallel preparation both builders are in here together: the second
+                    // arrival flags it and releases both. A serial pass never overlaps, so the
+                    // first builder just waits out the (bounded) timeout and the flag stays false.
+                    if (Interlocked.Increment(ref concurrent) >= 2)
+                    {
+                        Volatile.Write(ref sawParallel, true);
+                        bothInFlight.Release(2);
+                    }
+
+                    bothInFlight.Wait(TimeSpan.FromSeconds(5));
+                    Interlocked.Decrement(ref concurrent);
+                    return MediaPlayer.OpenFile(path);
+                }, path),
+                ClipWindow.FromOffsets(TimeSpan.Zero, TimeSpan.Zero, TimeSpan.FromSeconds(1)),
+                cacheKey);
+
+            var specs = new[] { GatedSpec("cue-0", paths[0], "v0"), GatedSpec("cue-1", paths[1], "v1") };
+
+            await engine.RefreshStandbyAsync(specs, new ClipStandbyPolicy(PrepareParallelism: 2));
+
+            Assert.True(Volatile.Read(ref sawParallel), "standby preparation did not overlap the two opens");
+            Assert.Equal(2, engine.PreparedKeys.Count);
+        }
+        finally
+        {
+            foreach (var path in paths)
+                MediaPlayerSmokeTestHelpers.TryDelete(path);
+        }
+    }
+
     private static ClipSpec Spec(string id, string path, string cacheKey) =>
         new(
             id,

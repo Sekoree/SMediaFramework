@@ -40,7 +40,15 @@ public readonly record struct MediaPlayerOpenOptions(
     /// <see cref="S.Media.Core.Diagnostics.MediaFrameworkPlugins.VideoDeinterlacerFactory"/>,
     /// then the built-in Core fallback.
     /// </summary>
-    Func<VideoFormat, IDeinterlacer>? VideoDeinterlacerFactory = null)
+    Func<VideoFormat, IDeinterlacer>? VideoDeinterlacerFactory = null,
+    /// <summary>Explicit audio stream index (<see cref="MediaStreamInfo.Index"/>). <c>null</c> = automatic;
+    /// <see cref="MediaStreamSelection.Disabled"/> disables audio decode entirely. Invalid indices warn and
+    /// fall back to automatic.</summary>
+    int? AudioStreamIndex = null,
+    /// <summary>Explicit video stream index, same semantics as <see cref="AudioStreamIndex"/>. Pass
+    /// <see cref="MediaStreamSelection.Disabled"/> for audio-only playback of video files at zero
+    /// video-decode cost (the player runs its stub video source).</summary>
+    int? VideoStreamIndex = null)
 {
     public MediaPlayerOpenOptions()
         : this(
@@ -59,7 +67,9 @@ public readonly record struct MediaPlayerOpenOptions(
             LiveVideoPresentation: VideoPresentationMode.Scheduled,
             SpoolStreamToDisk: false,
             StreamIsSeekable: false,
-            VideoDeinterlacerFactory: null)
+            VideoDeinterlacerFactory: null,
+            AudioStreamIndex: null,
+            VideoStreamIndex: null)
     {
     }
 
@@ -91,5 +101,7 @@ public readonly record struct MediaPlayerOpenOptions(
             AudioPacketQueueDepth = AudioPacketQueueDepth,
             VideoPacketQueueDepth = VideoPacketQueueDepth,
             FileReadBufferBytes = FileReadBufferBytes,
+            AudioStreamIndex = AudioStreamIndex,
+            VideoStreamIndex = VideoStreamIndex,
         };
 }

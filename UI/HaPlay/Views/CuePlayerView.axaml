@@ -17,7 +17,9 @@
       <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
     </Border>
 
-    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,160,*,Auto,Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
+    <!-- Cue-list header. Load/Save live only in the Files menu (they used to ALSO be standalone
+         buttons here — the duplication just widened an already busy row). -->
+    <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,160,*,Auto,Auto,Auto,Auto,*" ColumnSpacing="6">
       <TextBlock Grid.Column="0" Text="{x:Static res:Strings.CueListLabel}" VerticalAlignment="Center" />
       <ComboBox Grid.Column="1"
                 ItemsSource="{Binding CueLists}"
@@ -38,15 +40,7 @@
                IsEnabled="{Binding SelectedCueList, Converter={x:Static ObjectConverters.IsNotNull}}" />
       <Button Grid.Column="3" Content="{x:Static res:Strings.AddListButton}" Command="{Binding AddCueListCommand}" />
       <Button Grid.Column="4" Content="{x:Static res:Strings.RemoveListButton}" Command="{Binding RemoveCueListCommand}" />
-      <Button Grid.Column="5"
-              Content="{x:Static res:Strings.LoadButton}"
-              ToolTip.Tip="{x:Static res:Strings.LoadCueListTooltip}"
-              Command="{Binding LoadCueListCommand}" />
-      <Button Grid.Column="6"
-              Content="{x:Static res:Strings.SaveButton}"
-              ToolTip.Tip="{x:Static res:Strings.SaveCueListTooltip}"
-              Command="{Binding SaveCueListCommand}" />
-      <Menu Grid.Column="7" VerticalAlignment="Center" Padding="0">
+      <Menu Grid.Column="5" VerticalAlignment="Center" Padding="0">
         <MenuItem Header="{x:Static res:Strings.FilesMenuLabel}"
                   ToolTip.Tip="{x:Static res:Strings.CueListFilesMenuTooltip}">
           <MenuItem Header="{x:Static res:Strings.LoadButton}" Command="{Binding LoadCueListCommand}" />
@@ -61,11 +55,11 @@
                     Command="{Binding SaveAllCueListsAsCommand}" />
         </MenuItem>
       </Menu>
-      <Button Grid.Column="8"
+      <Button Grid.Column="6"
               Content="{x:Static res:Strings.CueListSettingsButton}"
               ToolTip.Tip="{x:Static res:Strings.CueListSettingsTooltip}"
               Command="{Binding OpenCueListSettingsCommand}" />
-      <TextBlock Grid.Column="9"
+      <TextBlock Grid.Column="7"
                  Text="{Binding DisplayedCueFilePath}"
                  VerticalAlignment="Center"
                  Foreground="#888888"
@@ -112,17 +106,32 @@
               Command="{Binding OpenCueOutputSetupCommand}" />
     </DockPanel>
 
+    <!-- Transport. GO is the show's primary action — keep it visually dominant; the tooltips double
+         as the keyboard-shortcut reference for the code-behind transport bindings. -->
     <Grid DockPanel.Dock="Top" Margin="0,0,0,8" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto" ColumnSpacing="6">
-      <Button Grid.Column="0" Content="{x:Static res:Strings.StandbySelectedButton}" Command="{Binding StandbySelectedCommand}" />
-      <Button Grid.Column="1" Content="{x:Static res:Strings.GoButton}" Command="{Binding GoCommand}" />
-      <Button Grid.Column="2" Content="{x:Static res:Strings.BackButton}" Command="{Binding BackCommand}" />
-      <Button Grid.Column="3" Content="{x:Static res:Strings.PauseButton}" Command="{Binding PauseCommand}" />
-      <Button Grid.Column="4" Content="{x:Static res:Strings.StopButton}" Command="{Binding StopCommand}" />
-      <Button Grid.Column="5" Content="{x:Static res:Strings.PanicButton}" Command="{Binding PanicCommand}" />
+      <Button Grid.Column="0" Content="{x:Static res:Strings.StandbySelectedButton}"
+              Command="{Binding StandbySelectedCommand}"
+              ToolTip.Tip="{x:Static res:Strings.CueTransportStandbyTooltip}" />
+      <Button Grid.Column="1" Content="{x:Static res:Strings.GoButton}"
+              Classes="accent" MinWidth="84" FontWeight="Bold"
+              Command="{Binding GoCommand}"
+              ToolTip.Tip="{x:Static res:Strings.CueTransportGoTooltip}" />
+      <Button Grid.Column="2" Content="{x:Static res:Strings.BackButton}"
+              Command="{Binding BackCommand}"
+              ToolTip.Tip="{x:Static res:Strings.CueTransportBackTooltip}" />
+      <Button Grid.Column="3" Content="{x:Static res:Strings.PauseButton}"
+              Command="{Binding PauseCommand}"
+              ToolTip.Tip="{x:Static res:Strings.CueTransportPauseTooltip}" />
+      <Button Grid.Column="4" Content="{x:Static res:Strings.StopButton}"
+              Command="{Binding StopCommand}"
+              ToolTip.Tip="{x:Static res:Strings.CueTransportStopTooltip}" />
+      <Button Grid.Column="5" Content="{x:Static res:Strings.PanicButton}"
+              Command="{Binding PanicCommand}"
+              ToolTip.Tip="{x:Static res:Strings.CueTransportPanicTooltip}" />
       <TextBlock Grid.Column="6" Text="{Binding TransportState}" VerticalAlignment="Center" Margin="8,0,0,0" />
       <ToggleSwitch Grid.Column="8"
-                    Content="Edit cues"
-                    ToolTip.Tip="Turn on to drag cues and reorder them with the keyboard"
+                    Content="{x:Static res:Strings.EditCuesToggleLabel}"
+                    ToolTip.Tip="{x:Static res:Strings.EditCuesToggleTooltip}"
                     IsChecked="{Binding IsCueEditMode, Mode=TwoWay}" />
     </Grid>
 
@@ -207,13 +216,13 @@
                 </Grid>
                 <Grid ColumnDefinitions="Auto,160,Auto" ColumnSpacing="8"
                       IsVisible="{Binding HasSelectedStaticCue}">
-                  <TextBlock Grid.Column="0" Text="Hold duration" VerticalAlignment="Center" />
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.HoldDurationLabel}" VerticalAlignment="Center" />
                   <TextBox Grid.Column="1"
                            Text="{Binding SelectedCueNode.DurationTimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                            PlaceholderText="00:00:05.000"
                            TextAlignment="Right" />
                   <TextBlock Grid.Column="2" VerticalAlignment="Center" Opacity="0.55" FontSize="11"
-                             Text="hh:mm:ss.fff or milliseconds" />
+                             Text="{x:Static res:Strings.DurationFormatHint}" />
                 </Grid>
                 <Grid ColumnDefinitions="Auto,Auto,*"
                       ColumnSpacing="8"
@@ -308,6 +317,17 @@
                   <TextBlock Text="{x:Static res:Strings.AudioSourceHasNoneLabel}"
                              Opacity="0.65"
                              IsVisible="{Binding !SelectedCueNode.SourceHasAudio}" />
+                </StackPanel>
+                <!-- Multi-track sources (MKV with several languages): pick which audio track the cue
+                     plays. Hidden for single-track files — most cues never see this row. -->
+                <StackPanel Orientation="Horizontal" Spacing="6"
+                            IsVisible="{Binding SelectedCueNode.HasMultipleAudioTracks, FallbackValue=False}"
+                            ToolTip.Tip="{x:Static res:Strings.AudioTrackTooltip}">
+                  <TextBlock Text="{x:Static res:Strings.AudioTrackLabel}" FontWeight="SemiBold"
+                             VerticalAlignment="Center" />
+                  <ComboBox MinWidth="260"
+                            ItemsSource="{Binding SelectedCueNode.AudioTrackChoices}"
+                            SelectedItem="{Binding SelectedCueNode.SelectedAudioTrackChoice, Mode=TwoWay}" />
                 </StackPanel>
                 <Border Background="#22808080" BorderBrush="#44808080" BorderThickness="1"
                         CornerRadius="3" Padding="6,3"

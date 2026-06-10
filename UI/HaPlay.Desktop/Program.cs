@@ -53,7 +53,7 @@ sealed class Program
 
         var level = ParseLevel(GetArg(args, "--media-log-level"), LogLevel.Debug);
         var dir = GetArg(args, "--media-log-dir")
-                  ?? Path.Combine(Path.GetTempPath(), "HaPlay", "logs");
+                  ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
 
         var fileProvider = new RollingFileLoggerProvider(new RollingFileLoggerOptions
         {
@@ -79,8 +79,8 @@ sealed class Program
 
         if (HasArg(args, "--media-live-uyvy-passthrough"))
         {
-            PlaybackVideoPipeline.CliRequestedUyvyPassthrough = true;
-            PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = true;
+            //PlaybackVideoPipeline.CliRequestedUyvyPassthrough = true;
+            //PlaybackVideoPipeline.PreferNativePixelFormatForLiveVideo = true;
             MediaDiagnostics.LogInformation("HaPlay: live video using native pixel format (UYVY passthrough when source delivers UYVY)");
         }
 

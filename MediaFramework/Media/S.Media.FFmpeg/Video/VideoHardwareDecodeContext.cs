@@ -80,6 +80,22 @@ public sealed class VideoDecoderOpenOptions
     public int FileReadBufferBytes { get; init; }
 
     /// <summary>
+    /// Explicit audio stream to decode, as a container stream index (<see cref="MediaStreamInfo.Index"/>).
+    /// <c>null</c> = automatic election (<c>av_find_best_stream</c>, current behavior).
+    /// <see cref="MediaStreamSelection.Disabled"/> disables audio entirely (no packets demuxed, no decoder
+    /// opened). An explicit index that is out of range / not audio / not decodable logs a warning and falls
+    /// back to automatic election — a stale persisted track choice must not make a file unplayable.
+    /// </summary>
+    public int? AudioStreamIndex { get; init; }
+
+    /// <summary>
+    /// Explicit video stream to decode, same semantics as <see cref="AudioStreamIndex"/>.
+    /// <see cref="MediaStreamSelection.Disabled"/> makes a video file behave like an audio-only file (stub
+    /// video source) at zero video-decode cost — use for audio-only playback of video containers.
+    /// </summary>
+    public int? VideoStreamIndex { get; init; }
+
+    /// <summary>
     /// Returns whether shared-handle-only Win32 NV12 export is requested via <see cref="Win32Nv12SharedHandleOnlyExport"/> or
     /// <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c> (<c>1</c> / <c>true</c>). Callers still require <see cref="RetainD3D11SharedHandleForGl"/>.
     /// </summary>

@@ -185,7 +185,8 @@ public sealed class CuePlaybackEngine : IDisposable
 
         try
         {
-            await Dispatcher.UIThread.InvokeAsync(() => session.Play());
+            // Off the UI thread for the same reason as cue fires: Play() can block on prefill.
+            await Task.Run(() => session.Play()).ConfigureAwait(false);
             _ = WatchPreviewEndAsync(session);
             return null;
         }
@@ -276,9 +277,10 @@ public sealed class CuePlaybackEngine : IDisposable
             var plan = BuildRoutePlan(cue);
             if (!plan.HasAnyRoute)
                 continue;
-            if (!CanSourceSatisfyRoutePlan(cue.Source, plan, out _))
-                continue;
-            if (!ValidateRoutePlan(cue, plan, out _))
+            // Same degrade policy as the fire path so the standby spec (and its cache key) matches what
+            // Go will actually wire — otherwise a partially-degraded cue would never hit its prepared decoder.
+            plan = SanitizeRoutePlan(cue, plan, out _);
+            if (!plan.HasAnyRoute)
                 continue;
 
             specs.Add(BuildClipSpec(cue, list, plan));
@@ -313,20 +315,27 @@ public sealed class CuePlaybackEngine : IDisposable
         lock (_gate)
             group = cues.Select(c => _active.GetValueOrDefault(c.Id)).Where(e => e is not null).ToList()!;
 
+        // Transports start in parallel OFF the UI thread: each Play() can block on its own prefill /
+        // video-buffer wait (seconds on a cold heavy file), and the old serial UI-thread loop made total
+        // group latency the sum of the parts while freezing every other control. The collective audio
+        // unpause below stays the sync barrier — all cue audio starts within the same router chunk
+        // window regardless of how long the individual transport starts took.
+        await Task.WhenAll(group.Select(entry => Task.Run(() =>
+        {
+            try { entry.StartPlayback(); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.ExecuteGroupAsync: Play failed for {Cue}", entry.Cue.Id); }
+        }))).ConfigureAwait(false);
+
+        foreach (var entry in group)
+        {
+            entry.SetAudioPaused(false);
+            entry.EnsureAudioRuntimesStarted();
+        }
+
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             foreach (var entry in group)
-            {
-                try { entry.StartPlayback(); }
-                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.ExecuteGroupAsync: Play failed for {Cue}", entry.Cue.Id); }
-            }
-
-            foreach (var entry in group)
-            {
-                entry.SetAudioPaused(false);
-                entry.EnsureAudioRuntimesStarted();
                 CueStarted?.Invoke(this, entry.Cue.Id);
-            }
         });
 
         foreach (var entry in group)
@@ -352,10 +361,18 @@ public sealed class CuePlaybackEngine : IDisposable
         var plan = BuildRoutePlan(cue);
         if (!plan.HasAnyRoute)
             return "Cue has no audio routes or video placements wired to outputs.";
-        if (!CanSourceSatisfyRoutePlan(cue.Source, plan, out var sourceRouteError))
-            return sourceRouteError;
-        if (!ValidateRoutePlan(cue, plan, out var routeError))
-            return routeError;
+
+        // Play-what-you-can: unsatisfiable routes are dropped with warnings and the cue fires with
+        // whatever remains; it only fails when nothing at all can be wired.
+        plan = SanitizeRoutePlan(cue, plan, out var routeWarnings);
+        if (!plan.HasAnyRoute)
+            return "No cue route could be wired. " + string.Join(" ", routeWarnings);
+        if (routeWarnings.Count > 0)
+        {
+            var warningText = string.Join(" ", routeWarnings);
+            Trace.LogWarning("ExecuteCoreAsync: cue {Cue} firing degraded — {Warnings}", cue.Id, warningText);
+            await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.StatusMessage = warningText);
+        }
 
         // If the same cue id is already running, stop its prior instance. A matching prepared
         // standby instance is kept and consumed below.
@@ -398,13 +415,16 @@ public sealed class CuePlaybackEngine : IDisposable
         {
             try
             {
-                await Dispatcher.UIThread.InvokeAsync(() =>
+                // Transport start stays OFF the UI thread: Play() can block on its prefill /
+                // video-buffer wait (seconds on a cold heavy file) and would freeze the whole
+                // transport surface. Only the CueStarted notification needs the dispatcher.
+                await Task.Run(() =>
                 {
                     entry.StartPlayback();
                     entry.SetAudioPaused(false);
                     entry.EnsureAudioRuntimesStarted();
-                    CueStarted?.Invoke(this, cue.Id);
-                });
+                }).ConfigureAwait(false);
+                await Dispatcher.UIThread.InvokeAsync(() => CueStarted?.Invoke(this, cue.Id));
             }
             catch (Exception ex)
             {
@@ -459,9 +479,10 @@ public sealed class CuePlaybackEngine : IDisposable
             throw new InvalidOperationException("Cue source is missing.");
 
         var hasAudioRoutes = plan.AudioByOutput.Count > 0;
+        var hasVideoPlacements = plan.Placements.Count > 0;
         var (source, window) = cue.Source switch
         {
-            FilePlaylistItem fileItem => BuildFileClipSource(cue, fileItem, hasAudioRoutes),
+            FilePlaylistItem fileItem => BuildFileClipSource(cue, fileItem, hasAudioRoutes, hasVideoPlacements),
             ImagePlaylistItem imageItem => BuildImageClipSource(cue, imageItem),
             TextPlaylistItem textItem => BuildTextClipSource(cue, textItem),
             NDIInputPlaylistItem ndiItem => BuildNdiClipSource(ndiItem),
@@ -493,7 +514,7 @@ public sealed class CuePlaybackEngine : IDisposable
             cue.Id.ToString("N"),
             source,
             window,
-            BuildPreparedCueKey(cue, list),
+            BuildPreparedCueKey(cue, list, plan),
             audioRoutes,
             videoPlacements);
     }
@@ -501,7 +522,26 @@ public sealed class CuePlaybackEngine : IDisposable
     private static (IClipMediaSource Source, ClipWindow Window) BuildFileClipSource(
         MediaCueNode cue,
         FilePlaylistItem fileItem,
-        bool hasAudioRoutes)
+        bool hasAudioRoutes,
+        bool hasVideoPlacements)
+    {
+        // Options resolve inside the builder lambda so the (rare) audio-track signature probe runs on
+        // the open thread, not on the Go path.
+        var source = ClipMediaSource.FromBuilder(
+            () => MediaPlayer.OpenFile(fileItem.Path)
+                .WithOptions(BuildFileOpenOptions(cue, fileItem, hasAudioRoutes, hasVideoPlacements))
+                .WithDecoderOwnership(MediaPlayerDecoderOwnership.BundleDisposesDecoder),
+            fileItem.Path);
+
+        var sourceDuration = TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs));
+        return (source, CueClipWindow.From(cue, sourceDuration));
+    }
+
+    private static MediaPlayerOpenOptions BuildFileOpenOptions(
+        MediaCueNode cue,
+        FilePlaylistItem fileItem,
+        bool hasAudioRoutes,
+        bool hasVideoPlacements)
     {
         // Whether to use MediaPlayer's *internal* audio router. We turn it off only when this
         // cue's audio is being mixed externally via ClipAudioOutputRuntime — otherwise we leave
@@ -509,18 +549,58 @@ public sealed class CuePlaybackEngine : IDisposable
         // Skipping consumption back-pressures the demuxer and starves the video pump, which is
         // what was breaking video playback on a video-with-audio file that had no audio routes
         // wired (e.g. the operator only set up a video placement on it).
-        var openOptions = new MediaPlayerOpenOptions(
+        return new MediaPlayerOpenOptions(
             TryHardwareAcceleration: true,
-            IncludeAudioRouter: !hasAudioRoutes);
+            IncludeAudioRouter: !hasAudioRoutes)
+        {
+            // No placement consumes this cue's video — skip electing a video stream entirely so a
+            // sound-only cue on a video file doesn't burn a decoder (possibly a HW session) filling
+            // a discard sink. The demux then runs its audio-only stub video path.
+            VideoStreamIndex = hasVideoPlacements ? null : MediaStreamSelection.Disabled,
+            AudioStreamIndex = ResolveCueAudioTrackIndex(cue, fileItem),
+        };
+    }
 
-        var source = ClipMediaSource.FromBuilder(
-            () => MediaPlayer.OpenFile(fileItem.Path)
-                .WithOptions(openOptions)
-                .WithDecoderOwnership(MediaPlayerDecoderOwnership.BundleDisposesDecoder),
-            fileItem.Path);
+    /// <summary>
+    /// Resolves the cue's persisted audio-track choice against the file's current stream table. The
+    /// stored content signature catches re-muxed files whose indices shifted: prefer the same index when
+    /// its signature still matches, otherwise find the track by signature, otherwise automatic.
+    /// </summary>
+    private static int? ResolveCueAudioTrackIndex(MediaCueNode cue, FilePlaylistItem fileItem)
+    {
+        if (cue.AudioTrackIndex is not { } idx || idx < 0)
+            return null;
+        if (string.IsNullOrEmpty(cue.AudioTrackSignature))
+            return idx;
 
-        var sourceDuration = TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs));
-        return (source, CueClipWindow.From(cue, sourceDuration));
+        try
+        {
+            var streams = MediaContainerDecoder.ProbeStreams(fileItem.Path);
+            if (idx < streams.Length
+                && streams[idx].Kind == MediaStreamKind.Audio
+                && streams[idx].ContentSignature == cue.AudioTrackSignature)
+                return idx;
+
+            var bySignature = streams.FirstOrDefault(s =>
+                s.Kind == MediaStreamKind.Audio && s.ContentSignature == cue.AudioTrackSignature);
+            if (bySignature is not null)
+            {
+                Trace.LogInformation(
+                    "ResolveCueAudioTrackIndex: stream table shifted for {Path}; audio track re-resolved #{Old} → #{New}",
+                    fileItem.Path, idx, bySignature.Index);
+                return bySignature.Index;
+            }
+
+            Trace.LogWarning(
+                "ResolveCueAudioTrackIndex: persisted audio track #{Idx} not found in {Path}; using automatic selection",
+                idx, fileItem.Path);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "ResolveCueAudioTrackIndex: probe failed for {Path}; passing index through", fileItem.Path);
+            return idx; // demux validates and falls back to automatic on its own
+        }
     }
 
     private static (IClipMediaSource Source, ClipWindow Window) BuildNdiClipSource(NDIInputPlaylistItem item) =>
@@ -685,45 +765,49 @@ public sealed class CuePlaybackEngine : IDisposable
         lock (_gate)
             entries = _active.Values.ToList();
 
-        // Pause sources on the UI thread first so audio silences immediately. Resume unpauses each cue
-        // only after its transport has been restarted below.
         if (paused)
         {
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                foreach (var entry in entries)
-                    entry.SetAudioPaused(true);
-            });
-        }
+            // Silence first — SetAudioPaused is a volatile flip with no UI affinity, so do it inline
+            // (the old dispatcher hop only added latency before the audio went quiet).
+            foreach (var entry in entries)
+                entry.SetAudioPaused(true);
 
-        // Heavy transport (thread joins, PortAudio flush) off UI thread with bounded timeout.
-        foreach (var entry in entries)
-        {
-            try
+            // Heavy transport (thread joins, PortAudio flush) off UI thread with bounded timeout.
+            foreach (var entry in entries)
             {
-                if (paused)
+                try
                 {
                     await Task.Run(() =>
                     {
                         entry.Player.Pause(CancellationToken.None, PauseFlushPolicy.SkipFlush);
                     }).WaitAsync(BoundedPauseTimeout);
                 }
-                else
-                {
-                    await Dispatcher.UIThread.InvokeAsync(() =>
-                    {
-                        // Re-attach the PortAudio (or NDI) playback clock before restarting transport.
-                        // Pause used to call SetMaster(null) here, which left the media clock on a free-
-                        // running stopwatch after resume while audio was paced by hardware — A/V drift.
-                        if (entry.PlaybackClockMaster is { } master)
-                            entry.Player.PlayClock.SetMaster(master);
-                        entry.StartPlayback();
-                        entry.SetAudioPaused(false);
-                        entry.EnsureAudioRuntimesStarted();
-                    });
-                }
+                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
+            }
+            return;
+        }
+
+        // Resume: restart transports in parallel off the UI thread (Play can block on its prefill /
+        // video-buffer wait), then unpause audio collectively so a multi-cue resume stays as aligned
+        // as the group-fire barrier.
+        await Task.WhenAll(entries.Select(entry => Task.Run(() =>
+        {
+            try
+            {
+                // Re-attach the PortAudio (or NDI) playback clock before restarting transport.
+                // Pause used to call SetMaster(null) here, which left the media clock on a free-
+                // running stopwatch after resume while audio was paced by hardware — A/V drift.
+                if (entry.PlaybackClockMaster is { } master)
+                    entry.Player.PlayClock.SetMaster(master);
+                entry.StartPlayback();
             }
             catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
+        }))).ConfigureAwait(false);
+
+        foreach (var entry in entries)
+        {
+            entry.SetAudioPaused(false);
+            entry.EnsureAudioRuntimesStarted();
         }
     }
 
@@ -1285,12 +1369,6 @@ public sealed class CuePlaybackEngine : IDisposable
     private static bool SupportsCueEngineSource(PlaylistItem? source) =>
         source is FilePlaylistItem or ImagePlaylistItem or TextPlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
 
-    private bool ValidateRoutePlan(MediaCueNode cue, RoutePlan plan, out string? error)
-    {
-        var audioRoutes = plan.AudioByOutput.Values.SelectMany(r => r);
-        return ValidateAudioRoutes(cue, audioRoutes, out error);
-    }
-
     private bool ValidateAudioRoutes(
         MediaCueNode cue,
         IReadOnlyList<CueAudioRoute> routes,
@@ -1313,41 +1391,125 @@ public sealed class CuePlaybackEngine : IDisposable
 
         foreach (var entry in routes)
         {
-            var route = entry.Route;
-            if (route.SourceChannel < 0)
-            {
-                error = $"Audio route {entry.SourceIndex + 1} has an invalid input channel {route.SourceChannel}.";
+            if (!TryValidateAudioRoute(entry, sourceChannels, outputDefinitions, out error))
                 return false;
-            }
-
-            if (sourceChannels > 0 && route.SourceChannel >= sourceChannels)
-            {
-                error = $"Audio route {entry.SourceIndex + 1} uses input channel {route.SourceChannel}, but the cue source has {sourceChannels} channel(s).";
-                return false;
-            }
-
-            var output = outputDefinitions.FirstOrDefault(definition => definition.Id == route.OutputLineId);
-            if (output is null)
-            {
-                error = $"Audio route {entry.SourceIndex + 1} targets an output line that is no longer available.";
-                return false;
-            }
-
-            if (!IsAudioCapableOutput(output))
-            {
-                error = $"Audio route {entry.SourceIndex + 1} targets '{output.DisplayName}', which cannot carry audio.";
-                return false;
-            }
-
-            var outputChannels = GetAudioOutputChannelCount(output);
-            if (route.OutputChannel < 1 || route.OutputChannel > outputChannels)
-            {
-                error = $"Audio route {entry.SourceIndex + 1} uses output channel {route.OutputChannel}, but '{output.DisplayName}' has {outputChannels} channel(s).";
-                return false;
-            }
         }
 
         return true;
+    }
+
+    private static bool TryValidateAudioRoute(
+        AudioRoutePlanEntry entry,
+        int sourceChannels,
+        IReadOnlyList<OutputDefinition> outputDefinitions,
+        out string? error)
+    {
+        error = null;
+        var route = entry.Route;
+        if (route.SourceChannel < 0)
+        {
+            error = $"Audio route {entry.SourceIndex + 1} has an invalid input channel {route.SourceChannel}.";
+            return false;
+        }
+
+        if (sourceChannels > 0 && route.SourceChannel >= sourceChannels)
+        {
+            error = $"Audio route {entry.SourceIndex + 1} uses input channel {route.SourceChannel}, but the cue source has {sourceChannels} channel(s).";
+            return false;
+        }
+
+        var output = outputDefinitions.FirstOrDefault(definition => definition.Id == route.OutputLineId);
+        if (output is null)
+        {
+            error = $"Audio route {entry.SourceIndex + 1} targets an output line that is no longer available.";
+            return false;
+        }
+
+        if (!IsAudioCapableOutput(output))
+        {
+            error = $"Audio route {entry.SourceIndex + 1} targets '{output.DisplayName}', which cannot carry audio.";
+            return false;
+        }
+
+        var outputChannels = GetAudioOutputChannelCount(output);
+        if (route.OutputChannel < 1 || route.OutputChannel > outputChannels)
+        {
+            error = $"Audio route {entry.SourceIndex + 1} uses output channel {route.OutputChannel}, but '{output.DisplayName}' has {outputChannels} channel(s).";
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Play-what-you-can: drops routes the source or the current output registry can't satisfy (stale
+    /// output lines, channel mismatches, side mismatches) and keeps the rest, one warning per drop. The
+    /// cue fires with whatever remains; callers fail it only when <em>nothing</em> remains. A cue with 3
+    /// good routes and 1 stale one (an output deleted yesterday) must fire the 3, not refuse mid-show.
+    /// </summary>
+    private RoutePlan SanitizeRoutePlan(MediaCueNode cue, RoutePlan plan, out List<string> warnings)
+    {
+        warnings = [];
+
+        var placements = plan.Placements;
+        var placementSourceIndices = plan.PlacementSourceIndices;
+        var audioByOutput = plan.AudioByOutput;
+
+        // Source-side capability: drop a whole category the source can never provide.
+        switch (cue.Source)
+        {
+            case PortAudioInputPlaylistItem when placements.Count > 0:
+                warnings.Add("Video placements skipped: PortAudio input cues do not provide video.");
+                placements = [];
+                placementSourceIndices = [];
+                break;
+            case NDIInputPlaylistItem { AudioOnly: true } when placements.Count > 0:
+                warnings.Add("Video placements skipped: this NDI input cue is audio-only.");
+                placements = [];
+                placementSourceIndices = [];
+                break;
+        }
+
+        if (cue.Source is NDIInputPlaylistItem { VideoOnly: true } && audioByOutput.Count > 0)
+        {
+            warnings.Add("Audio routes skipped: this NDI input cue is video-only.");
+            audioByOutput = new Dictionary<Guid, List<AudioRoutePlanEntry>>();
+        }
+
+        if (audioByOutput.Count > 0)
+        {
+            var outputDefinitions = SnapshotOutputDefinitions();
+            var sourceChannels = Math.Max(0, cue.AudioChannels);
+            Dictionary<Guid, List<AudioRoutePlanEntry>>? sanitized = null;
+            foreach (var (lineId, entries) in audioByOutput)
+            {
+                foreach (var entry in entries)
+                {
+                    if (TryValidateAudioRoute(entry, sourceChannels, outputDefinitions, out var routeError))
+                        continue;
+                    if (sanitized is null)
+                    {
+                        // First drop — copy the plan so valid routes survive.
+                        sanitized = audioByOutput.ToDictionary(
+                            kv => kv.Key,
+                            kv => new List<AudioRoutePlanEntry>(kv.Value));
+                    }
+                    sanitized[lineId].Remove(entry);
+                    warnings.Add($"Skipped: {routeError}");
+                }
+            }
+
+            if (sanitized is not null)
+            {
+                foreach (var emptyLine in sanitized.Where(kv => kv.Value.Count == 0).Select(kv => kv.Key).ToArray())
+                    sanitized.Remove(emptyLine);
+                audioByOutput = sanitized;
+            }
+        }
+
+        return warnings.Count == 0
+            ? plan
+            : new RoutePlan(audioByOutput, placements, placementSourceIndices);
     }
 
     private IReadOnlyList<OutputDefinition> SnapshotOutputDefinitions()
@@ -1368,25 +1530,6 @@ public sealed class CuePlaybackEngine : IDisposable
                 Math.Max(1, nd.AudioChannelCount),
             _ => 0,
         };
-
-    private static bool CanSourceSatisfyRoutePlan(PlaylistItem? source, RoutePlan plan, out string? error)
-    {
-        error = null;
-        switch (source)
-        {
-            case PortAudioInputPlaylistItem when plan.Placements.Count > 0:
-                error = "PortAudio input cues do not provide video for video placements.";
-                return false;
-            case NDIInputPlaylistItem { AudioOnly: true } when plan.Placements.Count > 0:
-                error = "This NDI input cue is audio-only and cannot feed video placements.";
-                return false;
-            case NDIInputPlaylistItem { VideoOnly: true } when plan.AudioByOutput.Count > 0:
-                error = "This NDI input cue is video-only and cannot feed audio routes.";
-                return false;
-            default:
-                return true;
-        }
-    }
 
     private static (IAudioOutput Output, IPlaybackClock? PlaybackClock, Action Release) AcquireAudioOutput(
         OutputLineViewModel line,
@@ -1511,11 +1654,12 @@ public sealed class CuePlaybackEngine : IDisposable
     private async Task WatchNaturalEndAsync(ActiveCue entry)
     {
         var ct = entry.Cts.Token;
+        var delay = TimeSpan.FromMilliseconds(150);
         try
         {
             while (!ct.IsCancellationRequested)
             {
-                await Task.Delay(150, ct).ConfigureAwait(false);
+                await Task.Delay(delay, ct).ConfigureAwait(false);
 
                 TimeSpan pos;
                 try { pos = entry.Player.PlayClock.CurrentPosition; }
@@ -1529,7 +1673,16 @@ public sealed class CuePlaybackEngine : IDisposable
                     entry.ClipWindow.Duration);
                 await Dispatcher.UIThread.InvokeAsync(() => CueProgress?.Invoke(this, progress));
 
-                if (!entry.ClipWindow.HasKnownEnd) continue;
+                if (!entry.ClipWindow.HasKnownEnd)
+                    continue;
+
+                // Approach the end with shrinking sleeps so loop wraps and natural ends trigger within
+                // ~15 ms of the boundary instead of up to a full 150 ms poll late (audible on loop cues).
+                var remaining = entry.ClipWindow.Duration - entry.ClipWindow.ToRelativePosition(pos);
+                delay = remaining > TimeSpan.FromMilliseconds(300)
+                    ? TimeSpan.FromMilliseconds(150)
+                    : TimeSpan.FromMilliseconds(Math.Clamp(remaining.TotalMilliseconds / 2, 15, 150));
+
                 if (entry.ClipWindow.IsAtEnd(pos))
                 {
                     if (entry.Cue.Loop || entry.Cue.EndBehavior == CueEndBehavior.Loop)
@@ -1594,10 +1747,15 @@ public sealed class CuePlaybackEngine : IDisposable
         foreach (var r in audioLeft) { try { r.Dispose(); } catch { } }
     }
 
-    private static string BuildPreparedCueKey(MediaCueNode cue, CueList list)
+    private static string BuildPreparedCueKey(MediaCueNode cue, CueList list, RoutePlan plan)
     {
+        // Keyed on the SANITIZED plan (not raw cue routes) so standby preparation and Go agree on the
+        // key even when some routes were dropped by the play-what-you-can policy; a change in output
+        // availability between standby and fire then re-prepares instead of reusing a mismatched decoder.
         var source = cue.Source?.CacheKey() ?? string.Empty;
-        var audio = string.Join(";", cue.AudioRoutes
+        var audio = string.Join(";", plan.AudioByOutput.Values
+            .SelectMany(entries => entries)
+            .Select(entry => entry.Route)
             .OrderBy(r => r.OutputLineId)
             .ThenBy(r => r.SourceChannel)
             .ThenBy(r => r.OutputChannel)
@@ -1607,7 +1765,7 @@ public sealed class CuePlaybackEngine : IDisposable
                 r.OutputChannel,
                 r.GainDb.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
                 r.Muted ? "1" : "0")));
-        var placements = string.Join(";", cue.VideoPlacements
+        var placements = string.Join(";", plan.Placements
             .OrderBy(p => p.CompositionId)
             .ThenBy(p => p.LayerIndex)
             .Select(p => string.Join(",",
@@ -1642,6 +1800,7 @@ public sealed class CuePlaybackEngine : IDisposable
             $"end:{Math.Max(0, cue.EndOffsetMs)}",
             $"loop:{cue.Loop}",
             $"endBehavior:{cue.EndBehavior}",
+            $"atrack:{(cue.AudioTrackIndex is { } trackIdx ? trackIdx.ToString() : "auto")}",
             $"audio:{audio}",
             $"video:{placements}",
             $"comps:{compositions}",

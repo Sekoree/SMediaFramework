@@ -73,6 +73,13 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private AVRational _aTb;
     private AVCodecContext* _aCtx;
     private SwrContext* _swr;
+    // Input parameters _swr was built for. Audio streams can change format mid-file (HE-AAC SBR,
+    // DVB parameter changes); EnsureSwrMatchesDecodedAudioFrameLocked compares the live frame against
+    // these and rebuilds swr instead of feeding it misinterpreted buffers.
+    private AVSampleFormat _swrInSampleFmt;
+    private int _swrInSampleRate;
+    private AVChannelLayout _swrInChLayout;
+    private bool _swrInChLayoutValid;
     private AVFrame* _aFrame;
     private bool _aEof;
     private bool _aDrainSent;
@@ -97,6 +104,12 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private SwsContext* _swsCtx;
     private AVFrame* _vFrame;
     private AVPixelFormat _vSrcPixFmt;
+    // Source geometry the sws context (and pass-through plane math) was configured for. Streams can
+    // change dimensions mid-file (DVB captures, spliced MKVs); SyncVideoPixelFormatIfNeeded compares the
+    // decoded frame against these and rebuilds the conversion path instead of feeding sws mismatched
+    // geometry (which corrupts or over-reads — sws trusts its build-time source dims).
+    private int _vSrcW;
+    private int _vSrcH;
     private PixelFormat _vNativePixFmt;
     private PixelFormat _vOutPixFmt;
     private PixelFormat[] _vNativePixFormats = [];
@@ -136,6 +149,17 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     public string AudioCodecName { get; private set; } = "";
     public string VideoCodecName { get; private set; } = "";
     public TimeSpan Duration { get; private set; }
+
+    private MediaStreamInfo[] _streamInfos = [];
+
+    /// <summary>All container streams (including not-elected ones) from probe metadata.</summary>
+    public IReadOnlyList<MediaStreamInfo> Streams => _streamInfos;
+
+    /// <summary>Container stream index of the elected audio stream, or −1 (no audio / disabled / degraded).</summary>
+    public int ActiveAudioStreamIndex => _aStream;
+
+    /// <summary>Container stream index of the elected video stream, or −1 (no video / disabled / degraded).</summary>
+    public int ActiveVideoStreamIndex => _vStream;
 
     /// <summary>True when the container exposed a decodable audio stream — false for video-only files.</summary>
     public bool HasAudio => _hasAudio;
@@ -280,15 +304,17 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
     private void OpenInternalAfterFormatOpen(VideoDecoderOpenOptions? videoOptions)
     {
         int ret;
+        _streamInfos = MediaStreamProbe.ReadAll(_fmt);
+
         AVStream* aSt = null;
         AVCodec* aCodec = null;
-        _aStream = av_find_best_stream(_fmt, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &aCodec, 0);
+        _aStream = ElectAudioStream(videoOptions?.AudioStreamIndex, &aCodec);
         _hasAudio = _aStream >= 0 && aCodec != null;
         if (!_hasAudio)
             _aStream = -1;
 
         AVCodec* vCodec = null;
-        _vStream = PickVideoStreamIndex(_fmt, _aStream, &vCodec);
+        _vStream = ElectVideoStream(videoOptions?.VideoStreamIndex, _aStream, &vCodec);
         _hasVideo = _vStream >= 0 && vCodec != null;
         if (!_hasVideo)
         {
@@ -300,32 +326,51 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         if (_hasAudio)
         {
             aSt = _fmt->streams[_aStream];
-            _aTb = aSt->time_base;
-            AudioCodecName = Marshal.PtrToStringAnsi((IntPtr)aCodec->name) ?? "unknown";
+            // Wrap audio-stream setup so a file with a usable VIDEO stream still opens (video-only) when
+            // the audio stream is unusable — unsupported codec build, corrupt codec parameters, a channel
+            // layout swr can't negotiate, etc. Mirrors the video-side degrade below; the catch only engages
+            // when there IS video to fall back to (an audio-only file still surfaces the error).
+            try
+            {
+                _aTb = aSt->time_base;
+                AudioCodecName = Marshal.PtrToStringAnsi((IntPtr)aCodec->name) ?? "unknown";
 
-            _aCtx = avcodec_alloc_context3(aCodec);
-            if (_aCtx == null) throw new OutOfMemoryException("audio avcodec_alloc_context3 returned NULL");
-            ret = avcodec_parameters_to_context(_aCtx, aSt->codecpar);
-            FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
-            ret = avcodec_open2(_aCtx, aCodec, null);
-            FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
+                _aCtx = avcodec_alloc_context3(aCodec);
+                if (_aCtx == null) throw new OutOfMemoryException("audio avcodec_alloc_context3 returned NULL");
+                ret = avcodec_parameters_to_context(_aCtx, aSt->codecpar);
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_parameters_to_context));
+                ret = avcodec_open2(_aCtx, aCodec, null);
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_open2));
 
-            Audio.Format = new AudioFormat(_aCtx->sample_rate, _aCtx->ch_layout.nb_channels);
+                if (_aCtx->sample_rate <= 0 || _aCtx->ch_layout.nb_channels <= 0)
+                    throw new FFmpegException(0,
+                        $"audio stream reports unusable format (rate={_aCtx->sample_rate}, channels={_aCtx->ch_layout.nb_channels})");
 
-            AVChannelLayout outLayout;
-            av_channel_layout_default(&outLayout, Audio.Format.Channels);
-            SwrContext* swr = null;
-            ret = swr_alloc_set_opts2(&swr,
-                &outLayout, AVSampleFormat.AV_SAMPLE_FMT_FLT, Audio.Format.SampleRate,
-                &_aCtx->ch_layout, _aCtx->sample_fmt, _aCtx->sample_rate,
-                0, null);
-            av_channel_layout_uninit(&outLayout);
-            FFmpegException.ThrowIfError(ret, nameof(swr_alloc_set_opts2));
-            _swr = swr;
-            ret = swr_init(_swr);
-            FFmpegException.ThrowIfError(ret, nameof(swr_init));
+                Audio.Format = new AudioFormat(_aCtx->sample_rate, _aCtx->ch_layout.nb_channels);
+
+                AVChannelLayout outLayout;
+                av_channel_layout_default(&outLayout, Audio.Format.Channels);
+                SwrContext* swr = null;
+                ret = swr_alloc_set_opts2(&swr,
+                    &outLayout, AVSampleFormat.AV_SAMPLE_FMT_FLT, Audio.Format.SampleRate,
+                    &_aCtx->ch_layout, _aCtx->sample_fmt, _aCtx->sample_rate,
+                    0, null);
+                av_channel_layout_uninit(&outLayout);
+                FFmpegException.ThrowIfError(ret, nameof(swr_alloc_set_opts2));
+                _swr = swr;
+                ret = swr_init(_swr);
+                FFmpegException.ThrowIfError(ret, nameof(swr_init));
+
+                CaptureSwrInputConfig(&_aCtx->ch_layout, _aCtx->sample_fmt, _aCtx->sample_rate);
+            }
+            catch (Exception ex) when (_hasVideo)
+            {
+                // Playable video + unusable audio ⇒ degrade to video-only (warns) instead of failing the open.
+                ConfigureNoAudioStubAfterAudioSetupFailure(ex.Message);
+            }
         }
-        else
+
+        if (!_hasAudio)
         {
             // Sentinel format for video-only files: AudioFormat(0, 0) — both fields zero so any
             // consumer that forgets to guard with HasAudio fails fast at AudioFormat.Validate
@@ -483,6 +528,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 "If this is audio with a broken embedded cover stream, re-encode or strip the cover.");
         }
 
+        _vSrcW = _vCtx->width;
+        _vSrcH = _vCtx->height;
+
         // Some streams (notably attached_pic / album cover art) report odd dimensions. Pixel formats with
         // chroma subsampling (I420 / NV12 over NDI) require even W and H, and BGRA / RGBA / UYVY require
         // even W. Round up to the next even multiple here and route through the sws-to-BGRA32 path so
@@ -594,6 +642,93 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         }
     }
 
+    /// <summary>
+    /// After a partial audio-stream setup throws on a file that has a usable video stream, release the
+    /// half-initialised audio native state and reconfigure as a no-audio (video-only) container — the same
+    /// stub state the no-decodable-audio path produces — so the video still plays. The chosen audio stream
+    /// is disowned (<c>_aStream = -1</c>) so the demux reader stops routing its packets.
+    /// </summary>
+    private void ConfigureNoAudioStubAfterAudioSetupFailure(string reason)
+    {
+        MediaDiagnostics.LogWarning(
+            $"MediaContainerSharedDemux: audio stream unusable ({reason}); playing video only.");
+
+        if (_swr != null) { var s = _swr; swr_free(&s); _swr = null; }
+        ReleaseSwrInputConfig();
+        if (_aCtx != null) { var c = _aCtx; avcodec_free_context(&c); _aCtx = null; }
+
+        _hasAudio = false;
+        _aStream = -1;
+        AudioCodecName = "";
+        Audio.Format = new AudioFormat(0, 0);
+    }
+
+    /// <summary>Records the input parameters <see cref="_swr"/> was built for so mid-stream drift can be detected.</summary>
+    private void CaptureSwrInputConfig(AVChannelLayout* layout, AVSampleFormat sampleFmt, int sampleRate)
+    {
+        ReleaseSwrInputConfig();
+        fixed (AVChannelLayout* dst = &_swrInChLayout)
+        {
+            var ret = av_channel_layout_copy(dst, layout);
+            FFmpegException.ThrowIfError(ret, nameof(av_channel_layout_copy));
+        }
+        _swrInChLayoutValid = true;
+        _swrInSampleFmt = sampleFmt;
+        _swrInSampleRate = sampleRate;
+    }
+
+    private void ReleaseSwrInputConfig()
+    {
+        if (!_swrInChLayoutValid) return;
+        fixed (AVChannelLayout* dst = &_swrInChLayout)
+            av_channel_layout_uninit(dst);
+        _swrInChLayoutValid = false;
+    }
+
+    /// <summary>
+    /// Audio streams can change parameters mid-file (HE-AAC SBR rate doubling on some decoder builds,
+    /// DVB captures, spliced files). <see cref="_swr"/> is configured once at open; feeding it a frame
+    /// with a different sample format / rate / channel layout misinterprets the input buffers. Detect the
+    /// drift on the decoded frame and rebuild swr from the frame's parameters, keeping the OUTPUT fixed at
+    /// <see cref="AudioTrack.Format"/> so the downstream router graph never has to renegotiate.
+    /// Caller holds <c>_audioDecodeLock</c> and a decoded frame in <see cref="_aFrame"/>.
+    /// </summary>
+    private void EnsureSwrMatchesDecodedAudioFrameLocked()
+    {
+        var fmt = (AVSampleFormat)_aFrame->format;
+        var rate = _aFrame->sample_rate;
+        if (fmt == AVSampleFormat.AV_SAMPLE_FMT_NONE || rate <= 0 || _aFrame->ch_layout.nb_channels <= 0)
+            return; // frame metadata incomplete — trust the existing configuration
+
+        bool layoutMatches;
+        fixed (AVChannelLayout* cfg = &_swrInChLayout)
+            layoutMatches = _swrInChLayoutValid && av_channel_layout_compare(&_aFrame->ch_layout, cfg) == 0;
+        if (layoutMatches && fmt == _swrInSampleFmt && rate == _swrInSampleRate)
+            return;
+
+        MediaDiagnostics.LogWarning(
+            $"MediaContainerSharedDemux: audio stream parameters changed mid-stream " +
+            $"(fmt {_swrInSampleFmt}→{fmt}, rate {_swrInSampleRate}→{rate}, channels →{_aFrame->ch_layout.nb_channels}); " +
+            $"rebuilding resampler — output stays {Audio.Format}.");
+
+        if (_swr != null) { var s = _swr; swr_free(&s); _swr = null; }
+
+        AVChannelLayout outLayout;
+        av_channel_layout_default(&outLayout, Audio.Format.Channels);
+        SwrContext* swr = null;
+        var ret = swr_alloc_set_opts2(&swr,
+            &outLayout, AVSampleFormat.AV_SAMPLE_FMT_FLT, Audio.Format.SampleRate,
+            &_aFrame->ch_layout, fmt, rate,
+            0, null);
+        av_channel_layout_uninit(&outLayout);
+        FFmpegException.ThrowIfError(ret, nameof(swr_alloc_set_opts2));
+        _swr = swr;
+        ret = swr_init(_swr);
+        FFmpegException.ThrowIfError(ret, nameof(swr_init));
+
+        CaptureSwrInputConfig(&_aFrame->ch_layout, fmt, rate);
+    }
+
     private static bool VideoCodecparDimensionsLookSane(AVCodecParameters* cp)
     {
         if (cp == null)
@@ -606,6 +741,64 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             return false;
         if ((long)w * h > 32_000_000L)
             return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Elects the audio stream honoring an explicit host selection. <c>null</c> = automatic
+    /// (<c>av_find_best_stream</c>); <see cref="MediaStreamSelection.Disabled"/> = no audio at all; an
+    /// invalid explicit index warns and falls back to automatic so a stale persisted track choice can
+    /// never make a file unplayable.
+    /// </summary>
+    private int ElectAudioStream(int? requested, AVCodec** decoderRet)
+    {
+        *decoderRet = null;
+        if (requested == MediaStreamSelection.Disabled)
+            return -1;
+
+        if (requested is { } idx && idx >= 0)
+        {
+            if (TryUseExplicitStream(idx, AVMediaType.AVMEDIA_TYPE_AUDIO, decoderRet))
+                return idx;
+            MediaDiagnostics.LogWarning(
+                $"MediaContainerSharedDemux: requested audio stream #{idx} is not a decodable audio stream; falling back to automatic selection.");
+        }
+
+        return av_find_best_stream(_fmt, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, decoderRet, 0);
+    }
+
+    /// <summary>Video-side counterpart of <see cref="ElectAudioStream"/>; explicit picks still go through
+    /// the sane-dimension guard so a broken explicit choice degrades the same way a broken automatic one does.</summary>
+    private int ElectVideoStream(int? requested, int relatedAudioStream, AVCodec** decoderRet)
+    {
+        *decoderRet = null;
+        if (requested == MediaStreamSelection.Disabled)
+            return -1;
+
+        if (requested is { } idx && idx >= 0)
+        {
+            if (TryUseExplicitStream(idx, AVMediaType.AVMEDIA_TYPE_VIDEO, decoderRet)
+                && VideoCodecparDimensionsLookSane(_fmt->streams[idx]->codecpar))
+                return idx;
+            *decoderRet = null;
+            MediaDiagnostics.LogWarning(
+                $"MediaContainerSharedDemux: requested video stream #{idx} is not a usable video stream; falling back to automatic selection.");
+        }
+
+        return PickVideoStreamIndex(_fmt, relatedAudioStream, decoderRet);
+    }
+
+    private bool TryUseExplicitStream(int index, AVMediaType type, AVCodec** decoderRet)
+    {
+        if (index < 0 || index >= _fmt->nb_streams)
+            return false;
+        var st = _fmt->streams[index];
+        if (st->codecpar->codec_type != type)
+            return false;
+        var codec = avcodec_find_decoder(st->codecpar->codec_id);
+        if (codec == null)
+            return false;
+        *decoderRet = codec;
         return true;
     }
 
@@ -656,7 +849,9 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         if (double.IsNaN(d) || double.IsInfinity(d) || d <= 0)
             return new Rational(30, 1);
 
-        if (d < 0.05 || d > 120.0)
+        // Cap at 300 so genuine high-fps content (144/240) keeps its declared rate; rates beyond that are
+        // container/timebase noise (e.g. an MKV r_frame_rate of 1000/1), not real frame cadence.
+        if (d < 0.05 || d > 300.0)
             return new Rational(30, 1);
 
         if (den >= 5000 && d < 2.0)
@@ -978,6 +1173,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 if (_vFrame != null) { var f = _vFrame; av_frame_free(&f); _vFrame = null; }
 
                 if (_swr != null) { var s = _swr; swr_free(&s); _swr = null; }
+                ReleaseSwrInputConfig();
                 ReleaseSws();
 
                 if (_aCtx != null) { var c = _aCtx; avcodec_free_context(&c); _aCtx = null; }
@@ -1460,6 +1656,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
 
         private AudioFrame ConvertAudioFrame()
         {
+        EnsureSwrMatchesDecodedAudioFrameLocked();
         var srcSamples = _aFrame->nb_samples;
         var outCapacity = (int)av_rescale_rnd(
             swr_get_delay(_swr, Audio.Format.SampleRate) + srcSamples,
@@ -1722,8 +1919,41 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
             return;
 
         var effective = (AVPixelFormat)workFrame->format;
-        if (effective == _vSrcPixFmt)
+        var w = workFrame->width;
+        var h = workFrame->height;
+        var dimsChanged = w > 0 && h > 0 && (w != _vSrcW || h != _vSrcH);
+
+        if (effective == _vSrcPixFmt && !dimsChanged)
             return;
+
+        if (dimsChanged)
+        {
+            // Mid-stream geometry change. The negotiated Video.Format canvas must stay stable for the
+            // routing graph, so drop out of pass-through and sws-scale the new source geometry into the
+            // existing canvas instead of emitting frames whose plane math no longer matches the format.
+            MediaDiagnostics.LogWarning(
+                $"MediaContainerSharedDemux: video source geometry changed mid-stream " +
+                $"({_vSrcW}×{_vSrcH} {_vSrcPixFmt} → {w}×{h} {effective}); " +
+                $"scaling into the negotiated {Video.Format.Width}×{Video.Format.Height} canvas.");
+            _vSrcW = w;
+            _vSrcH = h;
+            _vSrcPixFmt = effective;
+            var mappedNative = VideoFileDecoder.MapNativePixelFormat(effective);
+            _vNativePixFmt = mappedNative != PixelFormat.Unknown ? mappedNative : PixelFormat.Bgra32;
+            _vNativePixFormats = mappedNative != PixelFormat.Unknown ? [mappedNative] : [];
+            var avTarget = FfmpegVideoPixelMaps.ToAvPixelFormat(_vOutPixFmt)
+                ?? throw new NotSupportedException(
+                    $"video geometry changed mid-stream but output format {_vOutPixFmt} has no FFmpeg mapping to scale into");
+            ReleaseSws();
+            _swsCtx = sws_getCachedContext(null,
+                w, h, effective,
+                Video.Format.Width, Video.Format.Height, avTarget,
+                (int)SwsFlags.SWS_BICUBIC, null, null, null);
+            if (_swsCtx == null)
+                throw new FFmpegException(0, "sws_getCachedContext for mid-stream geometry change returned NULL");
+            _vPassThrough = false;
+            return;
+        }
 
         _vSrcPixFmt = effective;
         var mapped = VideoFileDecoder.MapNativePixelFormat(_vSrcPixFmt);
@@ -1796,7 +2026,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                 ?? throw new NotSupportedException($"pixel format {format} has no FFmpeg mapping");
             ReleaseSws();
             _swsCtx = sws_getCachedContext(null,
-                _vCtx->width, _vCtx->height, _vSrcPixFmt,
+                _vSrcW, _vSrcH, _vSrcPixFmt,
                 Video.Format.Width, Video.Format.Height, avTarget,
                 (int)SwsFlags.SWS_BICUBIC, null, null, null);
             if (_swsCtx == null)
@@ -1916,7 +2146,8 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
         var height = Video.Format.Height;
         // sws_scale's srcSliceH is the SOURCE slice height — must match the decoder's actual frame
         // height even when we're upscaling to even output dimensions (attached_pic / odd-dim path).
-        var srcHeight = _vCtx->height;
+        // _vSrcH tracks mid-stream geometry changes (SyncVideoPixelFormatIfNeeded runs before this).
+        var srcHeight = _vSrcH;
         var bytesPerPixel = VideoFileDecoder.BytesPerPackedPixel(_vOutPixFmt);
         if (bytesPerPixel == 0)
         {
@@ -2130,6 +2361,7 @@ internal sealed unsafe class MediaContainerSharedDemux : IDisposable
                             continue;
                         }
 
+                        _o.EnsureSwrMatchesDecodedAudioFrameLocked();
                         var capacity = (dst.Length - written) / Format.Channels;
                         var produced = _o.SwrConvertInto(dst[written..], capacity, _o._aFrame->extended_data, _o._aFrame->nb_samples);
                         if (produced > 0)

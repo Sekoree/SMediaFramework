@@ -140,6 +140,18 @@ public sealed record MediaCueNode : CueNode
     /// <summary>Source channel count probed once on add. 0 when unknown / no audio.</summary>
     public int AudioChannels { get; init; }
 
+    /// <summary>
+    /// Explicit audio track for multi-track sources (container stream index, see
+    /// <c>MediaStreamInfo.Index</c>). <c>null</c> = automatic election. The demuxer falls back to
+    /// automatic when the index is stale, so an old choice can never make a cue unplayable.
+    /// </summary>
+    public int? AudioTrackIndex { get; init; }
+
+    /// <summary>Content signature of the chosen audio track at pick time (codec/language/channels).
+    /// Guards <see cref="AudioTrackIndex"/> against re-muxed files whose stream indices shifted —
+    /// on mismatch the engine re-resolves by signature or falls back to automatic.</summary>
+    public string? AudioTrackSignature { get; init; }
+
     /// <summary>True when the source's only video is an attached picture (e.g. MP3 with cover art).
     /// The Video tab still shows so the cover art can be placed into a composition, but with a
     /// hint that it's a still image.</summary>

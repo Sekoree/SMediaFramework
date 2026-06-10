@@ -135,10 +135,15 @@ public readonly record struct ClipPreparationStatus(ClipKey Key, ClipPreparation
 
 public sealed record ClipStandbyPolicy(
     int MaxPreparedDecoders = 0,
-    int Window = 0)
+    int Window = 0,
+    /// <summary>Concurrent decoder opens during a standby refresh. <c>0</c> = default (2). Opens are
+    /// CPU/IO heavy (container probe + optional HW session + seek-prime), so keep this small; raising
+    /// it trades open-burst CPU for a faster warm window on large pre-rolls.</summary>
+    int PrepareParallelism = 0)
 {
     internal int ResolvedMaxPreparedDecoders => MaxPreparedDecoders <= 0 ? int.MaxValue : Math.Clamp(MaxPreparedDecoders, 1, 4096);
     internal int ResolvedWindow => Window <= 0 ? int.MaxValue : Math.Clamp(Window, 1, 4096);
+    internal int ResolvedPrepareParallelism => PrepareParallelism <= 0 ? 2 : Math.Clamp(PrepareParallelism, 1, 8);
 }
 
 public interface IPreparedClip : IAsyncDisposable
@@ -199,6 +204,9 @@ public interface IClipStandbyEngine : IAsyncDisposable
 public sealed class ClipStandbyEngine : IClipStandbyEngine
 {
     private readonly Lock _gate = new();
+    // Serializes whole refresh passes: two overlapping refreshes interleaving remove/store on the
+    // same ids could otherwise evict each other's freshly prepared decoders mid-pass.
+    private readonly SemaphoreSlim _refreshGate = new(1, 1);
     private readonly Dictionary<string, PreparedClip> _preparedById = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipPreparationStatus> _statusesById = new(StringComparer.Ordinal);
     private bool _disposed;
@@ -213,45 +221,71 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(window);
 
-        if (window.Count == 0 || policy.ResolvedWindow == 0 || policy.ResolvedMaxPreparedDecoders == 0)
+        await _refreshGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            await ClearPreparedAsync().ConfigureAwait(false);
-            return;
+            if (window.Count == 0 || policy.ResolvedWindow == 0 || policy.ResolvedMaxPreparedDecoders == 0)
+            {
+                await ClearPreparedAsync().ConfigureAwait(false);
+                return;
+            }
+
+            var candidates = window
+                .Take(policy.ResolvedWindow)
+                .Take(policy.ResolvedMaxPreparedDecoders)
+                .ToArray();
+            var keepIds = new HashSet<string>(candidates.Select(c => c.Id), StringComparer.Ordinal);
+
+            // Cheap sequential pass first: mark warm entries Ready and queue the cold ones as
+            // Preparing, so the host sees the whole window's state before the slow opens begin.
+            var toPrepare = new List<ClipSpec>(candidates.Length);
+            foreach (var spec in candidates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (HasMatchingPrepared(spec.Key))
+                {
+                    SetStatus(spec.Key, ClipPreparationState.Ready);
+                    continue;
+                }
+
+                await RemovePreparedAsync(spec.Id).ConfigureAwait(false);
+                SetStatus(spec.Key, ClipPreparationState.Preparing);
+                toPrepare.Add(spec);
+            }
+
+            if (toPrepare.Count > 0)
+            {
+                // Bounded parallel opens: a decoder open + seek-prime can take seconds on heavy
+                // files, and the old serial pass made the warm window's total latency the sum of its
+                // parts. ForEachAsync dequeues the list in order, so the next cue to fire still
+                // starts opening first.
+                var parallelism = Math.Min(policy.ResolvedPrepareParallelism, toPrepare.Count);
+                await Parallel.ForEachAsync(
+                    toPrepare,
+                    new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                    async (spec, ct) =>
+                    {
+                        try
+                        {
+                            var prepared = await PrepareAsync(spec, ct).ConfigureAwait(false);
+                            await StorePreparedAsync(prepared).ConfigureAwait(false);
+                            SetStatus(spec.Key, ClipPreparationState.Ready);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            SetStatus(spec.Key, ClipPreparationState.Failed, ex.Message);
+                        }
+                    }).ConfigureAwait(false);
+            }
+
+            await EvictPreparedExceptAsync(keepIds, policy.ResolvedMaxPreparedDecoders).ConfigureAwait(false);
+            ClearStatusesExcept(keepIds);
         }
-
-        var candidates = window
-            .Take(policy.ResolvedWindow)
-            .Take(policy.ResolvedMaxPreparedDecoders)
-            .ToArray();
-        var keepIds = new HashSet<string>(candidates.Select(c => c.Id), StringComparer.Ordinal);
-
-        foreach (var spec in candidates)
+        finally
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (HasMatchingPrepared(spec.Key))
-            {
-                SetStatus(spec.Key, ClipPreparationState.Ready);
-                continue;
-            }
-
-            await RemovePreparedAsync(spec.Id).ConfigureAwait(false);
-            SetStatus(spec.Key, ClipPreparationState.Preparing);
-
-            try
-            {
-                var prepared = await PrepareAsync(spec, cancellationToken).ConfigureAwait(false);
-                StorePrepared(prepared);
-                SetStatus(spec.Key, ClipPreparationState.Ready);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                SetStatus(spec.Key, ClipPreparationState.Failed, ex.Message);
-            }
+            _refreshGate.Release();
         }
-
-        await EvictPreparedExceptAsync(keepIds, policy.ResolvedMaxPreparedDecoders).ConfigureAwait(false);
-        ClearStatusesExcept(keepIds);
     }
 
     public async Task<IArmedClip> ArmAsync(ClipSpec spec, CancellationToken cancellationToken = default)
@@ -284,6 +318,13 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
             RaiseStandbyStatesChanged();
     }
 
+    /// <summary>
+    /// Arms every spec in parallel, then starts them sequentially. Note the sync characteristics:
+    /// each <see cref="IArmedClip.Start"/> includes that clip's prefill/buffer wait, so group members
+    /// begin staggered by their predecessors' start costs. Hosts that need tighter cross-clip alignment
+    /// should wire their audio paused, start all transports, and unpause collectively (the pattern
+    /// HaPlay's cue engine uses) — pausing is a host-source concern this engine cannot impose.
+    /// </summary>
     public async Task<IReadOnlyList<IArmedClip>> StartGroupAsync(
         IReadOnlyList<ClipSpec> specs,
         CancellationToken cancellationToken = default)
@@ -334,9 +375,13 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed)
-            return;
-        _disposed = true;
+        lock (_gate)
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+        }
+
         await ClearPreparedAsync().ConfigureAwait(false);
     }
 
@@ -356,10 +401,12 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
         {
             if (spec.Window.Start > TimeSpan.Zero)
             {
+                // The caller's token flows into SeekCoordinated so an aborted arm/refresh cancels a long
+                // in-flight decode-to-target prime (CancelInFlightSeek) instead of letting it run on.
                 await Task.Run(
                         () => session.Player.SeekCoordinated(
                             spec.Window.Start,
-                            CancellationToken.None,
+                            cancellationToken,
                             PauseFlushPolicy.SkipFlush),
                         cancellationToken)
                     .ConfigureAwait(false);
@@ -395,17 +442,34 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
         }
     }
 
-    private void StorePrepared(PreparedClip prepared)
+    private async Task StorePreparedAsync(PreparedClip prepared)
     {
         PreparedClip? replaced = null;
+        var engineDisposed = false;
         lock (_gate)
         {
-            if (_preparedById.Remove(prepared.Key.Id, out var existing))
-                replaced = existing;
-            _preparedById[prepared.Key.Id] = prepared;
+            // A prepare finishing after DisposeAsync's ClearPreparedAsync must not park a live
+            // decoder in the (already drained) map — that would leak it until process exit.
+            if (_disposed)
+            {
+                engineDisposed = true;
+            }
+            else
+            {
+                if (_preparedById.Remove(prepared.Key.Id, out var existing))
+                    replaced = existing;
+                _preparedById[prepared.Key.Id] = prepared;
+            }
         }
 
-        replaced?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        if (engineDisposed)
+        {
+            await prepared.DisposeAsync().ConfigureAwait(false);
+            return;
+        }
+
+        if (replaced is not null)
+            await replaced.DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task<bool> RemovePreparedAsync(string id)
@@ -513,15 +577,15 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
         StandbyStatesChanged?.Invoke(snapshot);
     }
 
-    private void ReturnPrepared(PreparedClip prepared)
+    private async ValueTask ReturnPreparedAsync(PreparedClip prepared)
     {
         if (_disposed)
         {
-            prepared.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            await prepared.DisposeAsync().ConfigureAwait(false);
             return;
         }
 
-        StorePrepared(prepared);
+        await StorePreparedAsync(prepared).ConfigureAwait(false);
         SetStatus(prepared.Key, ClipPreparationState.Ready);
     }
 
@@ -593,10 +657,7 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
             _released = true;
 
             if (!IsStarted && _wasPrepared)
-            {
-                _owner.ReturnPrepared(_prepared);
-                return ValueTask.CompletedTask;
-            }
+                return _owner.ReturnPreparedAsync(_prepared);
 
             return _prepared.DisposeAsync();
         }

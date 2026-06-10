@@ -40,10 +40,15 @@ public abstract record PlaylistItem
 /// item so it co-exists with live sources.</summary>
 public sealed record FilePlaylistItem(string Path) : PlaylistItem
 {
+    /// <summary>Explicit audio track (container stream index) for multi-track files; <c>null</c> =
+    /// automatic. A stale index falls back to automatic inside the demuxer, never an open failure.</summary>
+    public int? AudioTrackIndex { get; init; }
+
     public override string DisplayName =>
         string.IsNullOrEmpty(Path) ? "(empty)" : System.IO.Path.GetFileName(Path);
     public override bool IsLive => false;
-    public override string ToolTip => Path;
+    public override string ToolTip =>
+        AudioTrackIndex is { } track ? $"{Path} · audio track #{track}" : Path;
 }
 
 public enum TextAlignH

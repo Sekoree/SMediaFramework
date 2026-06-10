@@ -14,7 +14,8 @@ internal readonly record struct CueMediaProbeResult(
     int SourceFrameRateNum,
     int SourceFrameRateDen,
     int SourceVideoWidth,
-    int SourceVideoHeight);
+    int SourceVideoHeight,
+    IReadOnlyList<MediaStreamInfo> AudioTracks);
 
 internal static class CueMediaProbe
 {
@@ -67,7 +68,8 @@ internal static class CueMediaProbe
                     SourceFrameRateNum: fpsNum,
                     SourceFrameRateDen: fpsDen,
                     SourceVideoWidth: videoWidth,
-                    SourceVideoHeight: videoHeight);
+                    SourceVideoHeight: videoHeight,
+                    AudioTracks: ListDecodableAudioTracks(decoder.Streams));
             }
             finally
             {
@@ -77,6 +79,28 @@ internal static class CueMediaProbe
         catch
         {
             return null;
+        }
+    }
+
+    private static IReadOnlyList<MediaStreamInfo> ListDecodableAudioTracks(IReadOnlyList<MediaStreamInfo> streams) =>
+        streams.Where(s => s.Kind == MediaStreamKind.Audio && s.IsDecodable).ToArray();
+
+    /// <summary>
+    /// Lightweight stream-table-only probe (no decoder build) for filling the audio-track picker on
+    /// cues loaded from disk. Returns an empty list on failure.
+    /// </summary>
+    public static async Task<IReadOnlyList<MediaStreamInfo>> TryProbeAudioTracksAsync(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return [];
+        try
+        {
+            var streams = await Task.Run(() => MediaContainerDecoder.ProbeStreams(path)).ConfigureAwait(false);
+            return ListDecodableAudioTracks(streams);
+        }
+        catch
+        {
+            return [];
         }
     }
 }

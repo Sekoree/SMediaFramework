@@ -18,11 +18,16 @@ internal sealed class PlaylistDecoderCache : IDisposable
     private readonly Dictionary<string, CacheEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
 
-    public MediaContainerDecoder? TryTake(string path)
+    // Cache key includes the explicit audio track so a decoder pre-opened on the default track is
+    // never reused after the operator picks a different language on the item (and vice versa).
+    private static string BuildKey(string path, int? audioTrackIndex) =>
+        $"{path}\n#atrack:{(audioTrackIndex is { } t ? t.ToString() : "auto")}";
+
+    public MediaContainerDecoder? TryTake(string path, int? audioTrackIndex = null)
     {
         lock (_gate)
         {
-            if (_entries.Remove(path, out var entry))
+            if (_entries.Remove(BuildKey(path, audioTrackIndex), out var entry))
             {
                 Trace.LogDebug("PlaylistDecoderCache: hit for {Path}", path);
                 return entry.Decoder;
@@ -31,12 +36,13 @@ internal sealed class PlaylistDecoderCache : IDisposable
         return null;
     }
 
-    public void PreOpen(string path, CancellationToken ct = default)
+    public void PreOpen(string path, int? audioTrackIndex = null, CancellationToken ct = default)
     {
+        var key = BuildKey(path, audioTrackIndex);
         lock (_gate)
         {
             if (_disposed) return;
-            if (_entries.ContainsKey(path)) return;
+            if (_entries.ContainsKey(key)) return;
         }
 
         MediaContainerDecoder? decoder;
@@ -46,8 +52,11 @@ internal sealed class PlaylistDecoderCache : IDisposable
             // Match the live open path's deep read-ahead + large file read buffer so a cached track plays as
             // smoothly as a freshly-opened one (anyNDI=false: the speculative pre-open can't know the future
             // route, and HW decode is the safe default — the NDI path re-opens without it when needed).
-            decoder = MediaContainerDecoder.Open(path,
-                HaPlayPlaybackSession.BuildFileOpenOptions(anyNDI: false).ToVideoDecoderOpenOptions());
+            var options = HaPlayPlaybackSession.BuildFileOpenOptions(anyNDI: false) with
+            {
+                AudioStreamIndex = audioTrackIndex,
+            };
+            decoder = MediaContainerDecoder.Open(path, options.ToVideoDecoderOpenOptions());
             Trace.LogDebug("PlaylistDecoderCache: pre-opened {Path}", path);
         }
         catch (OperationCanceledException)
@@ -68,13 +77,13 @@ internal sealed class PlaylistDecoderCache : IDisposable
                 return;
             }
 
-            if (_entries.ContainsKey(path))
+            if (_entries.ContainsKey(key))
             {
                 decoder.Dispose();
                 return;
             }
 
-            _entries[path] = new CacheEntry(decoder, DateTime.UtcNow);
+            _entries[key] = new CacheEntry(decoder, DateTime.UtcNow);
 
             while (_entries.Count > MaxEntries)
             {
@@ -88,12 +97,13 @@ internal sealed class PlaylistDecoderCache : IDisposable
         }
     }
 
-    public void PreOpenAsync(IEnumerable<string> paths, CancellationToken ct = default)
+    public void PreOpenAsync(IEnumerable<(string Path, int? AudioTrackIndex)> items, CancellationToken ct = default)
     {
-        foreach (var path in paths)
+        foreach (var (path, track) in items)
         {
             var p = path;
-            _ = Task.Run(() => PreOpen(p, ct), ct);
+            var t = track;
+            _ = Task.Run(() => PreOpen(p, t, ct), ct);
         }
     }
 

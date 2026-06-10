@@ -414,6 +414,18 @@
                             <MenuItem Header="{x:Static res:Strings.PlaylistContextMoveDown}"
                                       Command="{Binding MovePlaylistItemDownCommand}" />
                             <Separator />
+                            <!-- Multi-track files only (MKV with several languages); hidden otherwise. -->
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextAudioTrack}"
+                                      IsVisible="{Binding SelectedItemHasMultipleAudioTracks}"
+                                      ItemsSource="{Binding SelectedItemAudioTrackChoices}">
+                                <MenuItem.Styles>
+                                    <Style Selector="MenuItem MenuItem" x:DataType="vm:PlaylistAudioTrackChoiceViewModel">
+                                        <Setter Property="Header" Value="{Binding Label}" />
+                                        <Setter Property="Command" Value="{Binding SelectCommand}" />
+                                    </Style>
+                                </MenuItem.Styles>
+                            </MenuItem>
+                            <Separator IsVisible="{Binding SelectedItemHasMultipleAudioTracks}" />
                             <MenuItem Header="{x:Static res:Strings.PlaylistContextRemove}"
                                       Command="{Binding RemoveFromPlaylistCommand}" />
                         </ContextMenu>

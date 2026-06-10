@@ -64,6 +64,22 @@ public sealed class MediaContainerDecoder : IDisposable
     public bool UsesSharedDemux => true;
 
     /// <summary>
+    /// All container streams (audio/video/subtitle/data), including the ones not elected for decoding.
+    /// Use with <see cref="VideoDecoderOpenOptions.AudioStreamIndex"/> /
+    /// <see cref="VideoDecoderOpenOptions.VideoStreamIndex"/> to open a specific track.
+    /// </summary>
+    public IReadOnlyList<MediaStreamInfo> Streams => _shared.Streams;
+
+    /// <summary>Container stream index of the audio stream being decoded, or −1.</summary>
+    public int ActiveAudioStreamIndex => _shared.ActiveAudioStreamIndex;
+
+    /// <summary>Container stream index of the video stream being decoded, or −1.</summary>
+    public int ActiveVideoStreamIndex => _shared.ActiveVideoStreamIndex;
+
+    /// <summary>Enumerates a file's streams without building a decoder (UI track pickers).</summary>
+    public static MediaStreamInfo[] ProbeStreams(string path) => MediaStreamProbe.ProbeFile(path);
+
+    /// <summary>
     /// True when Windows D3D11 NV12 decode exports <see cref="Win32SharedNv12Backing"/> with DXGI NT shared handle only
     /// (no libav <c>ID3D11Device</c>/<c>ID3D11Texture2D</c> COM pointers on the backing). See
     /// <see cref="VideoDecoderOpenOptions.Win32Nv12SharedHandleOnlyExport"/> and <c>MF_MEDIA_WIN32_NV12_SHARED_HANDLE_ONLY</c>.

@@ -2,7 +2,7 @@ using S.Media.Core.Audio;
 
 namespace HaPlay.Playback;
 
-internal sealed class PausableAudioSource : IAudioSource, IDisposable
+internal sealed class PausableAudioSource : IAudioSource, ICooperativeAudioReadInterrupt, IDisposable
 {
     private readonly IAudioSource _inner;
     private readonly bool _disposeInner;
@@ -23,7 +23,16 @@ internal sealed class PausableAudioSource : IAudioSource, IDisposable
         set => Volatile.Write(ref _paused, value ? 1 : 0);
     }
 
-    public bool IsExhausted => !_disposed && !IsPaused && _inner.IsExhausted;
+    // A disposed source is "fully done" (exhausted), not "stalled live" — the router treats exhausted
+    // sources as removable; reporting !exhausted after dispose would make it look stuck instead.
+    public bool IsExhausted => _disposed || (!IsPaused && _inner.IsExhausted);
+
+    // Forward cooperative interruption so AudioRouter.Pause/Dispose can abort a blocking decoder read
+    // through the cue path (the demux AudioTrack implements this); without the forward, cue stops wait
+    // out the full read.
+    public void RequestYieldBetweenReads() => (_inner as ICooperativeAudioReadInterrupt)?.RequestYieldBetweenReads();
+
+    public void ClearYieldRequest() => (_inner as ICooperativeAudioReadInterrupt)?.ClearYieldRequest();
 
     public bool TryReadNextFrame(out AudioFrame frame)
     {
@@ -129,8 +138,9 @@ internal sealed class AudioSourceFanout : IDisposable
 
     private bool IsBranchExhausted(Branch branch)
     {
+        // A disposed fanout/branch is "fully done", not "stalled live" — see PausableAudioSource.IsExhausted.
         lock (_gate)
-            return !_disposed && !branch.Disposed && _inner.IsExhausted && branch.Position >= _baseFloatIndex + _count;
+            return _disposed || branch.Disposed || (_inner.IsExhausted && branch.Position >= _baseFloatIndex + _count);
     }
 
     private void RemoveBranch(Branch branch)
@@ -203,7 +213,7 @@ internal sealed class AudioSourceFanout : IDisposable
         }
     }
 
-    private sealed class Branch : IAudioSource, IDisposable
+    private sealed class Branch : IAudioSource, ICooperativeAudioReadInterrupt, IDisposable
     {
         private readonly AudioSourceFanout _owner;
 
@@ -220,6 +230,14 @@ internal sealed class AudioSourceFanout : IDisposable
         public AudioFormat Format => _owner._inner.Format;
 
         public bool IsExhausted => _owner.IsBranchExhausted(this);
+
+        // Forwarded to the shared inner source: a branch's router may be tearing down while another
+        // branch's router is mid-pull under the fanout gate — yielding the inner read releases both.
+        // ClearYieldRequest is also shared, so a clear from a resuming branch can race a concurrent
+        // teardown's yield; the teardown re-requests on its next read attempt, so the window is benign.
+        public void RequestYieldBetweenReads() => (_owner._inner as ICooperativeAudioReadInterrupt)?.RequestYieldBetweenReads();
+
+        public void ClearYieldRequest() => (_owner._inner as ICooperativeAudioReadInterrupt)?.ClearYieldRequest();
 
         public int ReadInto(Span<float> destination) => _owner.ReadBranch(this, destination);
 

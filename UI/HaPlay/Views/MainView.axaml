@@ -73,6 +73,21 @@
         </MenuItem>
       </MenuItem>
       <MenuItem Header="{x:Static res:Strings.MenuViewHeader}">
+        <!-- Workspace navigation duplicated here so the Ctrl+1…6 shortcuts are discoverable
+             (the sidebar gives no hint that they exist). -->
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Players}}" InputGesture="Ctrl+1"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Players}" />
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Cues}}" InputGesture="Ctrl+2"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Cues}" />
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Outputs}}" InputGesture="Ctrl+3"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Outputs}" />
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.MidiDevices}}" InputGesture="Ctrl+4"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.MidiDevices}" />
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Control}}" InputGesture="Ctrl+5"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Control}" />
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Project}}" InputGesture="Ctrl+6"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Project}" />
+        <Separator />
         <MenuItem Header="{x:Static res:Strings.MenuToggleSidebarHeader}" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
         <MenuItem Header="{x:Static res:Strings.MenuTargetConfigurationHeader}" Command="{Binding OpenTargetConfigurationCommand}" />
       </MenuItem>
@@ -215,8 +230,8 @@
       <DockPanel Margin="8"
                  IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsCuesWorkspaceSelected}">
         <Button DockPanel.Dock="Top" HorizontalAlignment="Right" Margin="0,0,0,6"
-                Content="Action Targets…"
-                ToolTip.Tip="Configure named OSC/MIDI targets for action cues"
+                Content="{x:Static res:Strings.ActionTargetsButtonLabel}"
+                ToolTip.Tip="{x:Static res:Strings.ActionTargetsButtonTooltip}"
                 Command="{Binding OpenTargetConfigurationCommand}" />
         <views:CuePlayerView DataContext="{Binding CuePlayer}" />
       </DockPanel>

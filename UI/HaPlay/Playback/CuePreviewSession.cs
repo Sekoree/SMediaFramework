@@ -120,7 +120,12 @@ internal sealed class CuePreviewSession : IDisposable
 
                 var opts = new MediaPlayerOpenOptions(
                     TryHardwareAcceleration: true,
-                    IncludeAudioRouter: hasAudio);
+                    IncludeAudioRouter: hasAudio)
+                {
+                    // Preview hears the same track Go will play. Invalid/stale indices fall back to
+                    // automatic inside the demuxer, so no signature re-resolution is needed here.
+                    AudioStreamIndex = cue.AudioTrackIndex,
+                };
 
                 var builder = MediaPlayer.OpenFile(fileItem.Path)
                     .WithOptions(opts)

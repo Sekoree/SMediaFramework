@@ -192,6 +192,90 @@ public sealed class ClipOutputRuntimeTests
         Assert.Equal(0.25f, layer.Opacity);
     }
 
+    [Fact]
+    public async Task ClipCompositionRuntime_MultiOutputPump_SharesCanvasBackingAcrossOutputs()
+    {
+        var a = new RecordingVideoOutput();
+        var b = new RecordingVideoOutput();
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 60, 1),
+            [
+                new ClipCompositionOutputLease("out-a", "A", a),
+                new ClipCompositionOutputLease("out-b", "B", b),
+            ]);
+
+        runtime.EnsurePumpStarted();
+
+        var deadline = Environment.TickCount64 + 5000;
+        while ((a.Snapshot().Length == 0 || b.Snapshot().Length == 0) && Environment.TickCount64 < deadline)
+            await Task.Delay(10);
+
+        try
+        {
+            var fromA = a.Snapshot();
+            var fromB = b.Snapshot();
+            Assert.True(fromA.Length > 0 && fromB.Length > 0, "pump did not deliver frames to both outputs");
+
+            // Pair up composites both outputs received and assert each pair is two zero-copy views
+            // over the SAME canvas memory (ReadOnlyMemory equality = same array + offset + length).
+            // A regression to per-output deep copies would surface as differing backings.
+            var shared = fromA
+                .SelectMany(fa => fromB.Where(fb => fb.Pts == fa.Pts).Select(fb => (fa, fb)))
+                .ToArray();
+            Assert.NotEmpty(shared);
+            Assert.All(shared, pair => Assert.True(
+                pair.fa.Plane0.Equals(pair.fb.Plane0),
+                "outputs received separately-backed frames — composition fan-out is copying again"));
+        }
+        finally
+        {
+            a.DisposeCaptured();
+            b.DisposeCaptured();
+        }
+    }
+
+    private sealed class RecordingVideoOutput : IVideoOutput
+    {
+        private readonly object _gate = new();
+        private readonly List<VideoFrame> _captured = new();
+
+        public VideoFormat Format { get; private set; } = new(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
+
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats => [];
+
+        public void Configure(VideoFormat format) => Format = format;
+
+        public void Submit(VideoFrame frame)
+        {
+            lock (_gate)
+            {
+                if (_captured.Count < 4)
+                {
+                    _captured.Add(frame);
+                    return;
+                }
+            }
+
+            frame.Dispose();
+        }
+
+        public (TimeSpan Pts, ReadOnlyMemory<byte> Plane0)[] Snapshot()
+        {
+            lock (_gate)
+                return _captured.Select(f => (f.PresentationTime, f.Planes[0])).ToArray();
+        }
+
+        public void DisposeCaptured()
+        {
+            lock (_gate)
+            {
+                foreach (var f in _captured)
+                    f.Dispose();
+                _captured.Clear();
+            }
+        }
+    }
+
     private sealed class ConstantAudioSource(AudioFormat format) : IAudioSource
     {
         public AudioFormat Format { get; } = format;

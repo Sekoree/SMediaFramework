@@ -408,6 +408,14 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     }
 }
 
+/// <summary>One audio-track picker entry. <see cref="Index"/> null = automatic election.</summary>
+public sealed record CueAudioTrackChoice(int? Index, string? Signature, string Label)
+{
+    public static readonly CueAudioTrackChoice Automatic = new(null, null, Strings.AudioTrackAutomaticLabel);
+
+    public override string ToString() => Label;
+}
+
 public sealed partial class CueNodeViewModel : ObservableObject
 {
     private const int DefaultNdiInputAudioChannels = 2;
@@ -616,6 +624,50 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     [ObservableProperty]
     private int _sourceAudioChannels;
+
+    /// <summary>Persisted explicit audio track (container stream index); null = automatic.</summary>
+    [ObservableProperty]
+    private int? _audioTrackIndex;
+
+    /// <summary>Content signature of the chosen track at pick time — guards against re-muxed files.</summary>
+    [ObservableProperty]
+    private string? _audioTrackSignature;
+
+    /// <summary>Track picker entries: an "Automatic" row followed by the probed audio tracks.</summary>
+    public ObservableCollection<CueAudioTrackChoice> AudioTrackChoices { get; } = new();
+
+    [ObservableProperty]
+    private CueAudioTrackChoice? _selectedAudioTrackChoice;
+
+    /// <summary>The picker only shows when there is an actual choice (2+ real audio tracks).</summary>
+    public bool HasMultipleAudioTracks => AudioTrackChoices.Count >= 3;
+
+    partial void OnSelectedAudioTrackChoiceChanged(CueAudioTrackChoice? value)
+    {
+        AudioTrackIndex = value?.Index;
+        AudioTrackSignature = value?.Signature;
+    }
+
+    /// <summary>
+    /// Replaces the picker entries from a probe and re-resolves the persisted choice: same
+    /// index+signature first, then signature alone (stream table shifted), else automatic.
+    /// </summary>
+    public void SetAudioTrackChoices(IReadOnlyList<S.Media.FFmpeg.MediaStreamInfo> tracks)
+    {
+        var persistedIndex = AudioTrackIndex;
+        var persistedSignature = AudioTrackSignature;
+
+        AudioTrackChoices.Clear();
+        AudioTrackChoices.Add(CueAudioTrackChoice.Automatic);
+        foreach (var track in tracks)
+            AudioTrackChoices.Add(new CueAudioTrackChoice(track.Index, track.ContentSignature, track.ToDisplayString()));
+
+        SelectedAudioTrackChoice =
+            AudioTrackChoices.FirstOrDefault(c => c.Index == persistedIndex && c.Signature == persistedSignature)
+            ?? AudioTrackChoices.FirstOrDefault(c => c.Signature is not null && c.Signature == persistedSignature)
+            ?? AudioTrackChoices[0];
+        OnPropertyChanged(nameof(HasMultipleAudioTracks));
+    }
 
     [ObservableProperty]
     private bool _sourceVideoIsAttachedPicture;
@@ -1065,6 +1117,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     SourceHasVideo = m.HasVideo,
                     SourceHasAudio = m.HasAudio,
                     SourceAudioChannels = m.AudioChannels,
+                    AudioTrackIndex = m.AudioTrackIndex,
+                    AudioTrackSignature = m.AudioTrackSignature,
                     SourceVideoIsAttachedPicture = m.VideoIsAttachedPicture,
                     SourceFrameRateNum = m.SourceFrameRateNum,
                     SourceFrameRateDen = m.SourceFrameRateDen,
@@ -1149,6 +1203,8 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 HasVideo = SourceHasVideo,
                 HasAudio = SourceHasAudio,
                 AudioChannels = Math.Max(0, SourceAudioChannels),
+                AudioTrackIndex = AudioTrackIndex,
+                AudioTrackSignature = AudioTrackSignature,
                 VideoIsAttachedPicture = SourceVideoIsAttachedPicture,
                 SourceFrameRateNum = Math.Max(0, SourceFrameRateNum),
                 SourceFrameRateDen = Math.Max(0, SourceFrameRateDen),
@@ -1804,7 +1860,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.EndBehavior)
             or nameof(CueNodeViewModel.DisablePreRoll)
             or nameof(CueNodeViewModel.DurationMs)        // image/text duration drives the hold window
-            or nameof(CueNodeViewModel.MediaSourceItem))  // text restyle replaces the source -> re-render
+            or nameof(CueNodeViewModel.MediaSourceItem)   // text restyle replaces the source -> re-render
+            or nameof(CueNodeViewModel.AudioTrackIndex))  // track change is part of the prepared-cue key
             OnWatchedCueEdited();
     }
 
@@ -1982,6 +2039,11 @@ public partial class CuePlayerViewModel : ViewModelBase
         // add/remove commands (those already suggest a refresh), so watch the node directly to keep
         // its standby pre-roll warm after gain/channel/opacity/offset tweaks. Debounced downstream.
         WatchSelectedCueForPreRoll(value);
+
+        // Cues loaded from disk have no probed track list yet — fill the audio-track picker lazily
+        // on first selection (stream-table probe only, no decoder build).
+        if (value is { Kind: CueNodeKind.Media })
+            _ = EnsureAudioTrackChoicesAsync(value);
 
         SelectedAudioRoute = value is { Kind: CueNodeKind.Media } media
             ? media.AudioRoutes.FirstOrDefault()
@@ -3123,6 +3185,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 row.SourceFrameRateDen = 0;
                 row.SourceVideoWidth = 0;
                 row.SourceVideoHeight = 0;
+                row.SetAudioTrackChoices([]);
                 return;
             }
 
@@ -3135,10 +3198,29 @@ public partial class CuePlayerViewModel : ViewModelBase
             row.SourceFrameRateDen = probe.Value.SourceFrameRateDen;
             row.SourceVideoWidth = probe.Value.SourceVideoWidth;
             row.SourceVideoHeight = probe.Value.SourceVideoHeight;
+            row.SetAudioTrackChoices(probe.Value.AudioTracks);
         });
     }
 
     private bool CanBrowseMediaSource() => SelectedCueNode?.Kind == CueNodeKind.Media;
+
+    /// <summary>Fills the audio-track picker for cues that were loaded from disk (no probe yet).
+    /// Stream-table probe only — cheap enough to run on first selection.</summary>
+    private static async Task EnsureAudioTrackChoicesAsync(CueNodeViewModel node)
+    {
+        if (node.AudioTrackChoices.Count > 0)
+            return;
+        if (node.MediaSourceItem is not FilePlaylistItem file)
+            return;
+
+        var tracks = await CueMediaProbe.TryProbeAudioTracksAsync(file.Path).ConfigureAwait(false);
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            // A Browse-media probe may have filled the list while we were probing; keep its result.
+            if (node.AudioTrackChoices.Count == 0)
+                node.SetAudioTrackChoices(tracks);
+        });
+    }
 
     private static async Task<string?> PickMediaFilePathAsync()
     {

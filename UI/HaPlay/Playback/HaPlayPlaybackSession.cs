@@ -102,6 +102,15 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     public IReadOnlyList<LogoFallbackVideoOutput> LogoOutputs => _logoSinks;
     public IReadOnlyList<MeteringAudioOutput> AudioMeters => _meters;
 
+    private readonly List<string> _openWarnings = new();
+
+    /// <summary>
+    /// Per-line wiring problems collected at open under the play-what-you-can policy: an unavailable
+    /// output (dead NDI carrier, held PortAudio device) is skipped with a warning here instead of
+    /// aborting the whole session. Empty when every selected line wired cleanly.
+    /// </summary>
+    public IReadOnlyList<string> OpenWarnings => _openWarnings;
+
     internal sealed class PlaybackRouter
     {
         private readonly MediaPlayer _player;
@@ -341,7 +350,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         switch (item)
         {
             case FilePlaylistItem f:
-                return TryCreate(f.Path, selectedOutputs, outputs, out session, out errorMessage, filePlayback, preOpenedDecoder);
+                return TryCreate(f.Path, selectedOutputs, outputs, out session, out errorMessage, filePlayback,
+                    preOpenedDecoder, f.AudioTrackIndex);
             case PortAudioInputPlaylistItem pa:
                 preOpenedDecoder?.Dispose();
                 return TryCreateLive(pa, selectedOutputs, outputs, preconnectedInput: null, out session, out errorMessage);
@@ -385,18 +395,19 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         [NotNullWhen(true)] out HaPlayPlaybackSession? session,
         out string? errorMessage,
         HaPlayFilePlaybackOptions? filePlayback = null,
-        MediaContainerDecoder? preOpenedDecoder = null)
+        MediaContainerDecoder? preOpenedDecoder = null,
+        int? audioTrackIndex = null)
     {
         session = null;
         errorMessage = null;
 
         var lines = selectedOutputs.ToList();
         var anyNDI = lines.Exists(static l => l.Definition is NDIOutputDefinition);
-        Trace.LogInformation("TryCreate: path={Path} selectedOutputs={Count} ([{Kinds}]) anyNDI={AnyNDI} preOpened={PreOpened}",
+        Trace.LogInformation("TryCreate: path={Path} selectedOutputs={Count} ([{Kinds}]) anyNDI={AnyNDI} preOpened={PreOpened} audioTrack={Track}",
             mediaPath, lines.Count,
             string.Join(",", lines.Select(l => l.Definition.GetType().Name)),
-            anyNDI, preOpenedDecoder is not null);
-        var mpOpt = BuildFileOpenOptions(anyNDI);
+            anyNDI, preOpenedDecoder is not null, audioTrackIndex?.ToString() ?? "auto");
+        var mpOpt = BuildFileOpenOptions(anyNDI) with { AudioStreamIndex = audioTrackIndex };
 
         MediaContainerDecoder? decoder = preOpenedDecoder;
         if (decoder is null)
@@ -422,6 +433,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         // black/silence flowing so receivers don't see resolution flicker or audio-format flicker.
         var ndiByDefinitionId = new Dictionary<Guid, NDIOutput>();
         var acquired = new List<OutputLineViewModel>();
+        var openWarnings = new List<string>();
         foreach (var line in lines)
         {
             if (line.Definition is not NDIOutputDefinition nd)
@@ -439,11 +451,13 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             var ndi = outputs.TryAcquireNDICarrierForPlayback(line, needsVideo, needsAudio);
             if (ndi is null)
             {
-                Trace.LogWarning("TryCreate: NDI carrier '{Name}' unavailable — aborting", nd.DisplayName);
-                ReleaseAcquiredCarriers(outputs, acquired);
-                decoder.Dispose();
-                errorMessage = $"NDI output '{nd.DisplayName}' has no live carrier (was it just removed, or is another player using it?).";
-                return false;
+                // Play-what-you-can: a dead carrier no longer aborts the whole open (local-video acquire
+                // failures were already skip-with-warning). The line stays unwired, the remaining outputs
+                // play; a selection where NOTHING wires still fails below.
+                Trace.LogWarning("TryCreate: NDI carrier '{Name}' unavailable — skipping this output line", nd.DisplayName);
+                openWarnings.Add(
+                    $"NDI output '{nd.DisplayName}' has no live carrier (was it just removed, or is another player using it?) — skipped.");
+                continue;
             }
 
             ndiByDefinitionId[nd.Id] = ndi;
@@ -469,6 +483,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                         {
                             Trace.LogWarning("TryCreate: local video '{Name}' ({Engine}) returned null on acquire — skipping",
                                 lv.DisplayName, lv.Engine);
+                            openWarnings.Add($"Local video output '{lv.DisplayName}' is unavailable — skipped.");
                             continue;
                         }
                         acquiredLocalLines.Add(line);
@@ -558,10 +573,25 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             pendingPlayback._acquiredCarriers.AddRange(acquired);
             pendingPlayback._acquiredLocalVideoLines.AddRange(acquiredLocalLines);
 
-            WireAudio(lines, ndiByDefinitionId, player, pendingPlayback, outputs);
-            Trace.LogInformation("TryCreate: success — videoChains={V} portAudio={Pa} ndiAudio={Na} audioSrc={Src}",
+            WireAudio(lines, ndiByDefinitionId, player, pendingPlayback, outputs, openWarnings);
+
+            // Play-what-you-can has a floor: when the operator selected outputs and EVERY one of them
+            // failed to wire (all skipped with warnings), a session would play to nothing — surface that
+            // as the open error instead. Selections that simply have no matching side (e.g. audio-only
+            // outputs for a video-only file) produce no warnings and keep the legacy zero-output session.
+            if (openWarnings.Count > 0
+                && videoChains.Count == 0
+                && pendingPlayback._acquiredPortAudioLines.Count == 0
+                && pendingPlayback._ndiAudioOutputs.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    "No selected output could be wired. " + string.Join(" ", openWarnings));
+            }
+
+            pendingPlayback._openWarnings.AddRange(openWarnings);
+            Trace.LogInformation("TryCreate: success — videoChains={V} portAudio={Pa} ndiAudio={Na} audioSrc={Src} warnings={W}",
                 videoChains.Count, pendingPlayback._acquiredPortAudioLines.Count,
-                pendingPlayback._ndiAudioOutputs.Count, player.AudioSourceId ?? "(none)");
+                pendingPlayback._ndiAudioOutputs.Count, player.AudioSourceId ?? "(none)", openWarnings.Count);
             session = pendingPlayback;
             pendingPlayback = null;
             return true;
@@ -927,8 +957,9 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     }
 
     private static void WireAudio(List<OutputLineViewModel> lines, Dictionary<Guid, NDIOutput> ndiByDefinitionId,
-        MediaPlayer player, HaPlayPlaybackSession playback, OutputManagementViewModel outputs) =>
-        WireAudio(lines, ndiByDefinitionId, player, playback, outputs, player.Decoder.Audio.Format);
+        MediaPlayer player, HaPlayPlaybackSession playback, OutputManagementViewModel outputs,
+        List<string>? openWarnings = null) =>
+        WireAudio(lines, ndiByDefinitionId, player, playback, outputs, player.Decoder.Audio.Format, openWarnings);
 
     /// <summary>Phase C.5 — live-source-aware audio wiring. Live items don't have a container decoder
     /// so the caller passes in the source <see cref="AudioFormat"/> (PortAudio capture rate / NDI
@@ -936,7 +967,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     /// from <see cref="MediaPlayer.Decoder"/>.</summary>
     private static void WireAudio(List<OutputLineViewModel> lines, Dictionary<Guid, NDIOutput> ndiByDefinitionId,
         MediaPlayer player, HaPlayPlaybackSession playback, OutputManagementViewModel outputs,
-        AudioFormat sourceFormat)
+        AudioFormat sourceFormat, List<string>? openWarnings = null)
     {
         if (player.AudioRouter is null || string.IsNullOrEmpty(player.AudioSourceId))
         {
@@ -967,6 +998,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                     {
                         Trace.LogWarning("WireAudio: PortAudio '{Name}' returned null on acquire — skipping",
                             pa.DisplayName);
+                        openWarnings?.Add($"Audio output '{pa.DisplayName}' is unavailable (held by another session?) — skipped.");
                         continue;
                     }
                     playback._acquiredPortAudioLines.Add(line);

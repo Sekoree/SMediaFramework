@@ -329,20 +329,39 @@ public sealed class ClipCompositionRuntime : IDisposable
             _outputsConfigured = true;
         }
 
+        // Multi-output fan-out is zero-copy when the canvas is CPU-backed (the CpuVideoCompositor's
+        // pool-rented buffer — the common case): every output gets a refcounted view over the same
+        // pixels and the canvas returns to the pool once the last view is disposed. The per-output
+        // deep copies this replaces were ~8 MB × (outputs−1) of memcpy per 1080p frame. Fallback to
+        // cloning covers non-CPU backings (GL compositor) — TryCreateCpuFanOutViews leaves the frame
+        // untouched when it declines.
+        VideoFrame[]? views = null;
+        if (snapshot.Count > 1)
+            VideoFrame.TryCreateCpuFanOutViews(frame, snapshot.Count, frame.ColorTransferHint, out views);
+
         for (var i = 0; i < snapshot.Count; i++)
         {
             var output = snapshot[i];
             var isLast = i == snapshot.Count - 1;
             VideoFrame toSubmit;
-            try
+            if (views is not null)
             {
-                toSubmit = isLast ? frame : VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                // The canvas frame's release moved into the views' shared countdown; `frame` itself
+                // is now an inert husk (disposing it is a no-op), so no isLast special-casing.
+                toSubmit = views[i];
             }
-            catch (Exception ex)
+            else
             {
-                Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: clone failed for {Line}", output.DisplayName);
-                if (isLast) frame.Dispose();
-                continue;
+                try
+                {
+                    toSubmit = isLast ? frame : VideoFrameCpuClone.DuplicateCpuBacking(frame, frame.ColorTransferHint);
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: clone failed for {Line}", output.DisplayName);
+                    if (isLast) frame.Dispose();
+                    continue;
+                }
             }
 
             try

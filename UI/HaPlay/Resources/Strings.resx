@@ -537,6 +537,57 @@
   <data name="AudioTabSourceLabel" xml:space="preserve">
     <value>Source:</value>
   </data>
+  <data name="AudioTrackLabel" xml:space="preserve">
+    <value>Audio track:</value>
+  </data>
+  <data name="AudioTrackAutomaticLabel" xml:space="preserve">
+    <value>Automatic (default track)</value>
+  </data>
+  <data name="AudioTrackTooltip" xml:space="preserve">
+    <value>Multi-track source (e.g. MKV with several languages). Picks which audio track this cue plays; Automatic uses the container's default.</value>
+  </data>
+  <data name="PlaylistContextAudioTrack" xml:space="preserve">
+    <value>Audio track</value>
+  </data>
+  <data name="CueTransportStandbyTooltip" xml:space="preserve">
+    <value>Put the selected cue on standby (Enter)</value>
+  </data>
+  <data name="CueTransportGoTooltip" xml:space="preserve">
+    <value>Fire the standby cue (Space)</value>
+  </data>
+  <data name="CueTransportBackTooltip" xml:space="preserve">
+    <value>Move standby back one cue (Backspace)</value>
+  </data>
+  <data name="CueTransportPauseTooltip" xml:space="preserve">
+    <value>Pause / resume all running cues</value>
+  </data>
+  <data name="CueTransportStopTooltip" xml:space="preserve">
+    <value>Stop all running cues</value>
+  </data>
+  <data name="CueTransportPanicTooltip" xml:space="preserve">
+    <value>Stop everything immediately (Esc)</value>
+  </data>
+  <data name="EditCuesToggleLabel" xml:space="preserve">
+    <value>Edit cues</value>
+  </data>
+  <data name="EditCuesToggleTooltip" xml:space="preserve">
+    <value>Reorder mode: drag rows to move them. Keys on the cue list: F2 rename · Del remove · Ctrl+D duplicate · Ctrl+↑/↓ move</value>
+  </data>
+  <data name="HoldDurationLabel" xml:space="preserve">
+    <value>Hold duration</value>
+  </data>
+  <data name="DurationFormatHint" xml:space="preserve">
+    <value>hh:mm:ss.fff or milliseconds</value>
+  </data>
+  <data name="ActionTargetsButtonLabel" xml:space="preserve">
+    <value>Action Targets…</value>
+  </data>
+  <data name="ActionTargetsButtonTooltip" xml:space="preserve">
+    <value>Configure named OSC/MIDI targets for action cues</value>
+  </data>
+  <data name="AudioTrackChangedStatusFormat" xml:space="preserve">
+    <value>Audio track changed for {0} — applies when the item is (re)opened.</value>
+  </data>
   <data name="AudioChannelCountFormat" xml:space="preserve">
     <value>{0} ch</value>
   </data>
