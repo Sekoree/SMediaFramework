@@ -2283,4 +2283,49 @@
   <data name="IoTabOsc" xml:space="preserve">
     <value>OSC</value>
   </data>
+  <data name="ExportLayerMenuHeader" xml:space="preserve">
+    <value>Export layer…</value>
+  </data>
+  <data name="ImportLayerMenuHeader" xml:space="preserve">
+    <value>Import layer…</value>
+  </data>
+  <data name="ExportLayerDialogTitle" xml:space="preserve">
+    <value>Export control layer</value>
+  </data>
+  <data name="ImportLayerDialogTitle" xml:space="preserve">
+    <value>Import control layer(s)</value>
+  </data>
+  <data name="LayerExportedStatusFormat" xml:space="preserve">
+    <value>Exported layer "{0}" to {1}</value>
+  </data>
+  <data name="LayerImportedStatusFormat" xml:space="preserve">
+    <value>Imported layer(s): {0}</value>
+  </data>
+  <data name="ImportLayerNoLayersStatus" xml:space="preserve">
+    <value>The selected file contains no layers.</value>
+  </data>
+  <data name="ExportCompositionsMenuHeader" xml:space="preserve">
+    <value>Export Compositions…</value>
+  </data>
+  <data name="ImportCompositionsMenuHeader" xml:space="preserve">
+    <value>Import Compositions…</value>
+  </data>
+  <data name="ExportCompositionsDialogTitle" xml:space="preserve">
+    <value>Export compositions</value>
+  </data>
+  <data name="ImportCompositionsDialogTitle" xml:space="preserve">
+    <value>Import compositions</value>
+  </data>
+  <data name="CompositionsFileTypeLabel" xml:space="preserve">
+    <value>HaPlay compositions</value>
+  </data>
+  <data name="CompositionsExportedStatusFormat" xml:space="preserve">
+    <value>Exported {0} composition(s) to {1}</value>
+  </data>
+  <data name="CompositionsImportedStatusFormat" xml:space="preserve">
+    <value>Compositions imported: {0} updated, {1} added</value>
+  </data>
+  <data name="NoCompositionsToExportStatus" xml:space="preserve">
+    <value>The selected cue list has no compositions to export.</value>
+  </data>
 </root>

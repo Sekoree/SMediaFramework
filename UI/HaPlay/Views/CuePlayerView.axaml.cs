@@ -18,10 +18,16 @@ public partial class CuePlayerView : UserControl
     private HierarchicalTreeDataGridSource<CueNodeViewModel>? _source;
     private IReadOnlyList<CueNodeViewModel>? _rowDragNodes;
 
+    /// <summary>P4 close-out (plan §3.1): last drawer tab the operator used per cue type, so
+    /// switching cue types lands on the tab that matters for that type (media → Audio stays
+    /// Audio, groups remember Group, …) instead of always falling back to the first tab.</summary>
+    private readonly Dictionary<CueNodeKind, int> _drawerTabMemory = new();
+
     public CuePlayerView()
     {
         InitializeComponent();
         DataContextChanged += OnDataContextChanged;
+        CueDrawerTabs.SelectionChanged += OnDrawerTabSelectionChanged;
         DragDrop.SetAllowDrop(this, true);
         // DragDrop.DragOver/Drop are Bubble-only routed events (no tunnel route). Registering them as
         // Tunnel meant the handlers never fired, so DragEffects was never set and every drop — internal
@@ -244,6 +250,16 @@ public partial class CuePlayerView : UserControl
     {
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
+            // Per-type memory first: land on the tab last used for this cue type when it applies.
+            if (_subscribedVm?.SelectedCueNode is { } node
+                && _drawerTabMemory.TryGetValue(node.Kind, out var remembered)
+                && remembered >= 0 && remembered < CueDrawerTabs.Items.Count
+                && CueDrawerTabs.Items[remembered] is TabItem { IsVisible: true } rememberedTab)
+            {
+                CueDrawerTabs.SelectedItem = rememberedTab;
+                return;
+            }
+
             if (CueDrawerTabs.SelectedItem is TabItem { IsVisible: true })
                 return;
             foreach (var item in CueDrawerTabs.Items)
@@ -255,6 +271,14 @@ public partial class CuePlayerView : UserControl
                 }
             }
         }, Avalonia.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnDrawerTabSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        if (_subscribedVm?.SelectedCueNode is { } node && CueDrawerTabs.SelectedIndex >= 0)
+            _drawerTabMemory[node.Kind] = CueDrawerTabs.SelectedIndex;
     }
 
     /// <summary>P4 — tap-to-seek on a group aggregate bar: every child seeks to the same fraction

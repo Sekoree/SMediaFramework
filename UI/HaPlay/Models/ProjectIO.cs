@@ -121,6 +121,45 @@ public static class CueListIO
     }
 }
 
+/// <summary>Save/load rework — standalone composition (virtual canvas) sets, shareable between
+/// cue lists/shows. Import merges by composition <em>name</em> (same name updates size/fps in
+/// place keeping the Id, so existing cue placements stay bound; new names append).</summary>
+public sealed record CueCompositionsDocument
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+
+    public List<CueComposition> Compositions { get; init; } = new();
+}
+
+public static class CueCompositionsIO
+{
+    public const string FileExtension = "haplaycomps";
+
+    public static async Task<CueCompositionsDocument> LoadAsync(string path, CancellationToken cancellationToken = default)
+    {
+        await using var stream = File.OpenRead(path);
+        var document = await JsonSerializer
+            .DeserializeAsync(stream, CueListJsonContext.Default.CueCompositionsDocument, cancellationToken)
+            .ConfigureAwait(false);
+        if (document is null)
+            throw new InvalidDataException($"Compositions file '{path}' contains no JSON object.");
+        if (document.SchemaVersion is < 1 or > CueCompositionsDocument.CurrentSchemaVersion)
+            throw new InvalidDataException(
+                $"Compositions file '{path}' has schema {document.SchemaVersion}; this build reads up to {CueCompositionsDocument.CurrentSchemaVersion}.");
+        return document;
+    }
+
+    public static async Task SaveAsync(IReadOnlyList<CueComposition> compositions, string path,
+        CancellationToken cancellationToken = default)
+    {
+        var document = new CueCompositionsDocument { Compositions = compositions.ToList() };
+        await AtomicJsonFile.SaveAsync(document, path, CueListJsonContext.Default.CueCompositionsDocument, cancellationToken)
+            .ConfigureAwait(false);
+    }
+}
+
 public static class CueListsIO
 {
     public const string FileExtension = "haplaycuelists";

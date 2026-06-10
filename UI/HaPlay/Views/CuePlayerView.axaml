@@ -53,6 +53,11 @@
                     Command="{Binding SaveAllCueListsCommand}" />
           <MenuItem Header="{x:Static res:Strings.SaveAllCueListsAsMenuHeader}"
                     Command="{Binding SaveAllCueListsAsCommand}" />
+          <Separator />
+          <MenuItem Header="{x:Static res:Strings.ExportCompositionsMenuHeader}"
+                    Command="{Binding ExportCompositionsCommand}" />
+          <MenuItem Header="{x:Static res:Strings.ImportCompositionsMenuHeader}"
+                    Command="{Binding ImportCompositionsCommand}" />
         </MenuItem>
       </Menu>
       <Button Grid.Column="6"

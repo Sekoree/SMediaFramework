@@ -48,6 +48,8 @@
                       Command="{Binding SaveControlConfigCommand}" />
             <MenuItem Header="{x:Static res:Strings.SaveControlConfigAsMenuHeader}"
                       Command="{Binding SaveControlConfigAsCommand}" />
+            <MenuItem Header="{x:Static res:Strings.ImportLayerMenuHeader}"
+                      Command="{Binding ImportLayerCommand}" />
           </MenuItem>
         </Menu>
         <Button Grid.Row="0" Grid.Column="5"
@@ -123,6 +125,7 @@
                             <MenuItem Header="Add layer…" Command="{Binding AddLayerCommand}" />
                             <MenuItem Header="Activate layer" Command="{Binding ActivateLayerCommand}" IsVisible="{Binding CanActivateLayer}" />
                             <MenuItem Header="Edit layer…" Command="{Binding EditLayerCommand}" IsVisible="{Binding CanEditLayer}" />
+                            <MenuItem Header="{x:Static res:Strings.ExportLayerMenuHeader}" Command="{Binding ExportLayerCommand}" IsVisible="{Binding CanEditLayer}" />
                             <MenuItem Header="Remove layer" Command="{Binding RemoveLayerCommand}" IsVisible="{Binding CanEditLayer}" />
                             <MenuItem Header="Add periodic OSC send…" Command="{Binding AddPeriodicSendCommand}" IsVisible="{Binding CanAddPeriodicSend}" />
                             <MenuItem Header="Edit periodic send…" Command="{Binding EditPeriodicSendCommand}" IsVisible="{Binding CanEditPeriodicSend}" />

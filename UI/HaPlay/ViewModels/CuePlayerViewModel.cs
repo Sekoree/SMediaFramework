@@ -4514,6 +4514,111 @@ public partial class CuePlayerViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Save/load rework — export the selected cue list's compositions (virtual canvases)
+    /// as a standalone shareable file.</summary>
+    [RelayCommand]
+    private async Task ExportCompositionsAsync()
+    {
+        if (SelectedCueList is null || VisibleCompositions.Count == 0)
+        {
+            StatusMessage = Strings.NoCompositionsToExportStatus;
+            return;
+        }
+
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+        var opts = new FilePickerSaveOptions
+        {
+            Title = Strings.ExportCompositionsDialogTitle,
+            DefaultExtension = CueCompositionsIO.FileExtension,
+            SuggestedFileName = $"compositions.{CueCompositionsIO.FileExtension}",
+            FileTypeChoices =
+            [
+                new FilePickerFileType(Strings.CompositionsFileTypeLabel)
+                    { Patterns = ["*." + CueCompositionsIO.FileExtension] },
+            ],
+        };
+        var picked = await owner.StorageProvider.SaveFilePickerAsync(opts);
+        var path = picked?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            await CueCompositionsIO.SaveAsync(VisibleCompositions.Select(c => c.ToModel()).ToList(), path);
+            StatusMessage = Strings.Format(nameof(Strings.CompositionsExportedStatusFormat),
+                VisibleCompositions.Count, Path.GetFileName(path));
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
+    }
+
+    /// <summary>Save/load rework — merge a compositions file into the selected cue list. Same-named
+    /// compositions update their size/fps in place (keeping the Id, so cue placements bound to them
+    /// stay valid); new names append (fresh Id on collision).</summary>
+    [RelayCommand]
+    private async Task ImportCompositionsAsync()
+    {
+        if (SelectedCueList is null)
+            return;
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+        var opts = new FilePickerOpenOptions
+        {
+            Title = Strings.ImportCompositionsDialogTitle,
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType(Strings.CompositionsFileTypeLabel)
+                    { Patterns = ["*." + CueCompositionsIO.FileExtension] },
+                new FilePickerFileType("All files") { Patterns = ["*"] },
+            ],
+        };
+        var files = await owner.StorageProvider.OpenFilePickerAsync(opts);
+        var path = files.FirstOrDefault()?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            var document = await CueCompositionsIO.LoadAsync(path);
+            var (updated, added) = MergeCompositions(document.Compositions);
+            OnPropertyChanged(nameof(VisibleCompositions));
+            StatusMessage = Strings.Format(nameof(Strings.CompositionsImportedStatusFormat), updated, added);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
+    }
+
+    /// <summary>Name-keyed composition merge (see <see cref="ImportCompositionsAsync"/>). Exposed for tests.</summary>
+    internal (int Updated, int Added) MergeCompositions(IReadOnlyList<CueComposition> incoming)
+    {
+        var target = VisibleCompositions;
+        var updated = 0;
+        var added = 0;
+        foreach (var comp in incoming)
+        {
+            var existing = target.FirstOrDefault(c =>
+                string.Equals(c.Name, comp.Name, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+            {
+                // Keep the Id: cue video placements reference compositions by id.
+                existing.Width = comp.Width;
+                existing.Height = comp.Height;
+                existing.FrameRateNum = comp.FrameRateNum;
+                existing.FrameRateDen = comp.FrameRateDen;
+                updated++;
+                continue;
+            }
+
+            var model = target.Any(c => c.Id == comp.Id) ? comp with { Id = Guid.NewGuid() } : comp;
+            target.Add(CueCompositionViewModel.FromModel(model));
+            added++;
+        }
+
+        return (updated, added);
+    }
+
     [RelayCommand]
     private Task SaveCueListAsync() =>
         SelectedCueList is { Path: { } path } ? SaveCueListToPathAsync(path) : SaveCueListAsAsync();

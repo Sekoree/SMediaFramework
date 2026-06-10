@@ -305,5 +305,6 @@ public enum CueActionKind
 [JsonSerializable(typeof(ImagePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
 [JsonSerializable(typeof(CueListsCollectionDocument))]
+[JsonSerializable(typeof(CueCompositionsDocument))]
 [JsonSerializable(typeof(List<CueList>))]
 internal partial class CueListJsonContext : JsonSerializerContext;
