@@ -152,7 +152,7 @@
                    IsVisible="{Binding !HasSelectedCue}" />
         <!-- MaxHeight caps the bottom drawer so a tall tab (e.g. several video placements) can't push it
              out of the window; each tab's content is in a ScrollViewer, which then scrolls within the cap. -->
-        <TabControl Classes="Segmented" Margin="0,4,0,0" MinHeight="220" MaxHeight="440"
+        <TabControl x:Name="CueDrawerTabs" Classes="Segmented" Margin="0,4,0,0" MinHeight="220" MaxHeight="440"
                     IsVisible="{Binding HasSelectedCue}"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch">
@@ -679,15 +679,21 @@
                          Text="{x:Static res:Strings.NowPlayingHeader}"
                          FontWeight="SemiBold"
                          VerticalAlignment="Center" />
-              <Button Grid.Column="1"
-                      Content="{x:Static res:Strings.StopAllNowPlayingButton}"
-                      Command="{Binding StopCommand}"
-                      IsEnabled="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                <ToggleButton Classes="Dense" Content="&#x1F512;"
+                              IsChecked="{Binding NowPlayingSeekUnlocked}"
+                              ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekLockTooltip}" />
+                <Button Content="{x:Static res:Strings.StopAllNowPlayingButton}"
+                        Command="{Binding StopCommand}"
+                        IsEnabled="{Binding ActiveCues.Count, Converter={x:Static ObjectConverters.NotEqual}, ConverterParameter=0}" />
+              </StackPanel>
             </Grid>
 
             <ScrollViewer DockPanel.Dock="Top" MaxHeight="320" Margin="0,0,0,8">
-            <ItemsControl ItemsSource="{Binding ActiveCues}">
-              <ItemsControl.ItemTemplate>
+            <!-- P4 (plan §3.2): rows are singles OR group aggregates. The implicit per-type
+                 templates below also apply to the group's nested children list. -->
+            <ItemsControl ItemsSource="{Binding NowPlayingRows}">
+              <ItemsControl.DataTemplates>
                 <DataTemplate DataType="vm:ActiveCueViewModel">
                   <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="3"
                           Padding="6,4" Margin="0,0,0,4">
@@ -701,16 +707,55 @@
                               Command="{Binding CancelCommand}"
                               ToolTip.Tip="{x:Static res:Strings.NowPlayingCancelTooltip}" />
                       <ProgressBar Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
-                                   Margin="0,4,0,2" Height="6"
+                                   Margin="0,4,0,2" Height="10"
                                    Minimum="0" Maximum="100"
-                                   Value="{Binding ProgressPercent}" />
+                                   Value="{Binding ProgressPercent}"
+                                   Background="#28808080"
+                                   Cursor="Hand"
+                                   PointerPressed="OnNowPlayingProgressPressed"
+                                   ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekTooltip}" />
                       <TextBlock Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2"
                                  Text="{Binding PositionDisplay}"
                                  FontSize="11" Opacity="0.7" />
                     </Grid>
                   </Border>
                 </DataTemplate>
-              </ItemsControl.ItemTemplate>
+
+                <DataTemplate DataType="vm:ActiveGroupViewModel">
+                  <Border BorderBrush="#33808080" BorderThickness="1" CornerRadius="3"
+                          Padding="6,4" Margin="0,0,0,4" Background="#0A808080">
+                    <StackPanel Spacing="2">
+                      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="6">
+                        <ToggleButton Grid.Column="0" Classes="Dense" MinWidth="24" Padding="4,0"
+                                      IsChecked="{Binding IsExpanded}"
+                                      Content="▸"
+                                      ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupExpandTooltip}" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding GroupNode.Number}" FontWeight="SemiBold" Opacity="0.7" />
+                          <TextBlock Text="{Binding GroupNode.Label}" FontWeight="SemiBold"
+                                     TextTrimming="CharacterEllipsis" />
+                          <TextBlock Text="{Binding Children.Count, StringFormat='({0})'}" Opacity="0.6" FontSize="11"
+                                     VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Button Grid.Column="2"
+                                Content="✕" Padding="6,0" MinWidth="22"
+                                Command="{Binding CancelAllCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.NowPlayingGroupCancelTooltip}" />
+                      </Grid>
+                      <ProgressBar Margin="0,2,0,2" Height="10"
+                                   Minimum="0" Maximum="100"
+                                   Value="{Binding ProgressPercent}"
+                                   Background="#28808080"
+                                   Cursor="Hand"
+                                   PointerPressed="OnNowPlayingGroupProgressPressed"
+                                   ToolTip.Tip="{x:Static res:Strings.NowPlayingSeekTooltip}" />
+                      <TextBlock Text="{Binding PositionDisplay}" FontSize="11" Opacity="0.7" />
+                      <ItemsControl ItemsSource="{Binding Children}" Margin="16,2,0,0"
+                                    IsVisible="{Binding IsExpanded}" />
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.DataTemplates>
             </ItemsControl>
             </ScrollViewer>
 

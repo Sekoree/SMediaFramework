@@ -17,6 +17,13 @@ public sealed record HaPlayProject
     /// <summary>Best-effort app version stamp — informational only.</summary>
     public string? HaPlayVersion { get; init; }
 
+    /// <summary>
+    /// Sections this file actually carries (see <see cref="ProjectSections"/>). <c>null</c> = full
+    /// project (every pre-existing file). Loading applies only the listed sections, so partial
+    /// files double as section exports/imports.
+    /// </summary>
+    public List<string>? SavedSections { get; init; }
+
     /// <summary>All output definitions in display order. Identity is <see cref="OutputDefinition.Id"/>.</summary>
     public List<OutputDefinition> Outputs { get; init; } = new();
 

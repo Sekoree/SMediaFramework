@@ -27,9 +27,6 @@
   <data name="NoOutputsConfiguredHint" xml:space="preserve">
     <value>No outputs configured yet — add one above. Click Play with nothing selected to auto-route.</value>
   </data>
-  <data name="OutputPresetLabel" xml:space="preserve">
-    <value>Output preset</value>
-  </data>
   <data name="TransitionLabel" xml:space="preserve">
     <value>Transition</value>
   </data>
@@ -38,18 +35,6 @@
   </data>
   <data name="MillisecondsShort" xml:space="preserve">
     <value>ms</value>
-  </data>
-  <data name="CustomWidthLabel" xml:space="preserve">
-    <value>Custom W</value>
-  </data>
-  <data name="CustomHeightLabel" xml:space="preserve">
-    <value>H</value>
-  </data>
-  <data name="CustomOutputTooltip" xml:space="preserve">
-    <value>Custom output raster dimensions. Source frames are letterboxed into this fixed format.</value>
-  </data>
-  <data name="CustomOutputAppliedHint" xml:space="preserve">
-    <value>px — applied on next open</value>
   </data>
   <data name="IdleImageLabel" xml:space="preserve">
     <value>Idle image</value>
@@ -68,12 +53,6 @@
   </data>
   <data name="HoldFallbackToggleTooltip" xml:space="preserve">
     <value>When on, video outputs display the image instead of decoded frames.</value>
-  </data>
-  <data name="LiveUyvyPassthroughLabel" xml:space="preserve">
-    <value>Live NDI: native UYVY (no BGRA conversion)</value>
-  </data>
-  <data name="LiveUyvyPassthroughTooltip" xml:space="preserve">
-    <value>When off (default), live NDI is converted to BGRA for local video outputs — most reliable on Linux. When on, UYVY is sent directly to SDL (lower CPU; requires full-range color metadata). Takes effect on the next play.</value>
   </data>
   <data name="SharedHeadphonesBusesLabel" xml:space="preserve">
     <value>Shared Headphones Buses</value>
@@ -116,12 +95,6 @@
   </data>
   <data name="TooltipToggleSidebar" xml:space="preserve">
     <value>Toggle sidebar (Ctrl+B)</value>
-  </data>
-  <data name="PlayersAllVisibleHint" xml:space="preserve">
-    <value>All players visible — use the layout combo to switch back to tabs.</value>
-  </data>
-  <data name="PlayersLayoutTooltip" xml:space="preserve">
-    <value>Tabs: one player at a time. Stacked: scroll through all players vertically. Split: tile players side-by-side.</value>
   </data>
   <data name="AddPlayerButton" xml:space="preserve">
     <value>+ Add player</value>
@@ -1086,15 +1059,6 @@
   <data name="EditButton" xml:space="preserve">
     <value>Edit…</value>
   </data>
-  <data name="VirtualAudioChannelsHeader" xml:space="preserve">
-    <value>Virtual Audio Channels</value>
-  </data>
-  <data name="VirtualAudioChannelsHint" xml:space="preserve">
-    <value>Assign each real output channel to a virtual channel number used by media/cue routing (VOut).</value>
-  </data>
-  <data name="DuplicateLabel" xml:space="preserve">
-    <value>Duplicate</value>
-  </data>
   <data name="RecordButton" xml:space="preserve">
     <value>Record</value>
   </data>
@@ -1178,9 +1142,6 @@
   </data>
   <data name="MasterGainTooltip" xml:space="preserve">
     <value>Master gain in dB.</value>
-  </data>
-  <data name="LoadErrorBannerTooltip" xml:space="preserve">
-    <value>The most recent attempt to load this player's media failed. This stays visible until a load succeeds.</value>
   </data>
   <data name="DownmixPresetsLabel" xml:space="preserve">
     <value>Downmix:</value>
@@ -1415,15 +1376,6 @@
   </data>
   <data name="OutputHealthPortAudioUnderrunsFormat" xml:space="preserve">
     <value>(PA underruns this play {0}, queued {1})</value>
-  </data>
-  <data name="ChannelOutLeftLabel" xml:space="preserve">
-    <value>Out L</value>
-  </data>
-  <data name="ChannelOutRightLabel" xml:space="preserve">
-    <value>Out R</value>
-  </data>
-  <data name="ChannelOutNumberFormat" xml:space="preserve">
-    <value>Out {0}</value>
   </data>
   <data name="DeviceWithIdFormat" xml:space="preserve">
     <value>Device {0}</value>
@@ -2040,12 +1992,6 @@
   <data name="PlayerSettingsTooltip" xml:space="preserve">
     <value>Open player settings (output format, transitions, idle image, headphones cue bus)</value>
   </data>
-  <data name="OutputAndTransitionsTab" xml:space="preserve">
-    <value>Output &amp; Transitions</value>
-  </data>
-  <data name="IdleImageTab" xml:space="preserve">
-    <value>Idle Image</value>
-  </data>
   <data name="HeadphonesCueBusTab" xml:space="preserve">
     <value>Headphones Cue Bus</value>
   </data>
@@ -2210,5 +2156,86 @@
   </data>
   <data name="VirtualChannelsMigratedToast" xml:space="preserve">
     <value>This project used virtual audio channels (VOut); that model was replaced by output aliases and routing matrix presets. Review your player routing.</value>
+  </data>
+  <data name="PlayersDeckHint" xml:space="preserve">
+    <value>Double-tap a player to focus it; Esc returns to the grid. Drop media files on a player to quick-play.</value>
+  </data>
+  <data name="HoldButtonLabel" xml:space="preserve">
+    <value>HOLD</value>
+  </data>
+  <data name="HoldButtonTooltip" xml:space="preserve">
+    <value>Hold image: show the configured idle image on this player's video outputs. Pick the image via the arrow button.</value>
+  </data>
+  <data name="HoldImagePickerTooltip" xml:space="preserve">
+    <value>Choose the hold/idle image</value>
+  </data>
+  <data name="SectionsImportedToastFormat" xml:space="preserve">
+    <value>Imported sections from file: {0}. The current project path is unchanged.</value>
+  </data>
+  <data name="ExportSectionsMenuHeader" xml:space="preserve">
+    <value>Export Sections…</value>
+  </data>
+  <data name="ExportSectionsDialogTitle" xml:space="preserve">
+    <value>Export project sections</value>
+  </data>
+  <data name="ExportSectionsDialogHint" xml:space="preserve">
+    <value>The exported file carries only the checked sections. Opening it later imports just those sections into the running show without replacing anything else.</value>
+  </data>
+  <data name="ExportButton" xml:space="preserve">
+    <value>Export</value>
+  </data>
+  <data name="SectionAudioOutputsLabel" xml:space="preserve">
+    <value>Audio outputs (PortAudio + headphone buses)</value>
+  </data>
+  <data name="SectionVideoOutputsLabel" xml:space="preserve">
+    <value>Video outputs (local windows + NDI)</value>
+  </data>
+  <data name="SectionMidiTargetsLabel" xml:space="preserve">
+    <value>MIDI action targets</value>
+  </data>
+  <data name="SectionOscTargetsLabel" xml:space="preserve">
+    <value>OSC action targets</value>
+  </data>
+  <data name="SectionPlayersLabel" xml:space="preserve">
+    <value>Players (configuration, routing matrix, playlists)</value>
+  </data>
+  <data name="SectionCueListsLabel" xml:space="preserve">
+    <value>Cue lists (incl. compositions)</value>
+  </data>
+  <data name="SectionControlLabel" xml:space="preserve">
+    <value>Control system (devices, layers, scripts)</value>
+  </data>
+  <data name="SectionExportDefaultFileNameFormat" xml:space="preserve">
+    <value>sections.{0}</value>
+  </data>
+  <data name="SectionsExportedStatusFormat" xml:space="preserve">
+    <value>Exported {0} ({1})</value>
+  </data>
+  <data name="AutoPresetRulesTitle" xml:space="preserve">
+    <value>Auto-preset rules</value>
+  </data>
+  <data name="AutoPresetRulesHint" xml:space="preserve">
+    <value>When media with a matching audio channel count loads, the preset is applied to the routing matrix automatically. Without a rule, extra channels beyond the outputs are dropped (identity mapping).</value>
+  </data>
+  <data name="AutoPresetWhenLabel" xml:space="preserve">
+    <value>When source has</value>
+  </data>
+  <data name="AutoPresetApplyLabel" xml:space="preserve">
+    <value>channels, apply</value>
+  </data>
+  <data name="AddRuleButton" xml:space="preserve">
+    <value>Add rule</value>
+  </data>
+  <data name="NowPlayingSeekLockTooltip" xml:space="preserve">
+    <value>Unlock to allow seeking by tapping the progress bars below. Locked by default so a stray tap next to GO cannot jump a running cue.</value>
+  </data>
+  <data name="NowPlayingSeekTooltip" xml:space="preserve">
+    <value>Tap to seek (when unlocked via the padlock above)</value>
+  </data>
+  <data name="NowPlayingGroupExpandTooltip" xml:space="preserve">
+    <value>Show the individual cues in this group</value>
+  </data>
+  <data name="NowPlayingGroupCancelTooltip" xml:space="preserve">
+    <value>Stop every cue in this group</value>
   </data>
 </root>

@@ -84,30 +84,21 @@ public sealed class AppSettingsTests
         var fresh = new AppSettings();
         Assert.Equal(AppThemeMode.System, fresh.Theme);
         Assert.Equal(AppDensityMode.Compact, fresh.Density);
-        // §8.3 — Players-workspace defaults to the pre-§8.3 single-player Tabs layout so an upgrade
-        // doesn't surprise users with a re-arranged workspace.
-        Assert.Equal(PlayersLayoutMode.Tabs, fresh.PlayersLayout);
     }
 
-    /// <summary>§8.3 — PlayersLayout round-trips through JSON as a kebab-cased string.</summary>
+    /// <summary>UI rewrite P5: the PlayersLayout setting was removed with the deck grid. A settings
+    /// file persisted by an older build (still carrying the key) must load without errors.</summary>
     [Fact]
-    public void AppSettings_RoundTrips_PlayersLayout()
+    public void AppSettings_LegacyPlayersLayoutKey_IsIgnoredOnLoad()
     {
-        var settings = new AppSettings { PlayersLayout = PlayersLayoutMode.Split };
-        var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
-        {
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-        });
-        Assert.Contains("\"playersLayout\":\"split\"", json);
-
+        var json = "{\"theme\":\"dark\",\"playersLayout\":\"split\"}";
         var loaded = JsonSerializer.Deserialize<AppSettings>(json, new JsonSerializerOptions
         {
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
             Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
         });
         Assert.NotNull(loaded);
-        Assert.Equal(PlayersLayoutMode.Split, loaded!.PlayersLayout);
+        Assert.Equal(AppThemeMode.Dark, loaded!.Theme);
     }
 
     /// <summary>Phase B (§12.2) — per-dialog size memory round-trips through JSON. Keys are dialog-type

@@ -73,6 +73,14 @@ public sealed partial class ActiveCueViewModel : ObservableObject
     [RelayCommand]
     private void Cancel() => _cancelCallback(CueId);
 
+    /// <summary>Shared "pos / dur" formatter (also used by the group aggregate row).</summary>
+    internal static string FormatPositionDisplay(long positionMs, long durationMs)
+    {
+        var pos = FormatMs(positionMs);
+        var dur = durationMs > 0 ? FormatMs(durationMs) : Resources.Strings.EmDash;
+        return $"{pos} / {dur}";
+    }
+
     private static string FormatMs(long ms)
     {
         var ts = TimeSpan.FromMilliseconds(Math.Max(0, ms));

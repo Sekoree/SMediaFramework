@@ -68,10 +68,6 @@ public sealed class EnumDisplayConverter : IValueConverter
             AppThemeMode.Dark => "Dark",
             AppDensityMode.Compact => "Compact",
             AppDensityMode.Normal => "Comfortable",
-            PlayersLayoutMode.Tabs => "Tabs",
-            PlayersLayoutMode.Stacked => "Stacked",
-            PlayersLayoutMode.Split => "Split",
-
             PlayerOutputPreset.AsSource => "Match source",
             PlayerOutputPreset.Preset1080p60 => "1080p60",
             PlayerOutputPreset.Preset720p60 => "720p60",

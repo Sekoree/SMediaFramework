@@ -65,15 +65,6 @@
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
-        <Style Selector="Button.transport">
-            <Setter Property="MinWidth" Value="44" />
-            <Setter Property="Padding" Value="10,7" />
-        </Style>
-        <Style Selector="Button.play-pause">
-            <Setter Property="MinWidth" Value="92" />
-            <Setter Property="Padding" Value="14,7" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
         <!-- The slim indeterminate busy bar. -->
         <Style Selector="ProgressBar.busy">
             <Setter Property="MinHeight" Value="3" />
@@ -103,14 +94,6 @@
         <Style Selector="UserControl.compact controls|LevelMeterControl.hide-compact">
             <Setter Property="IsVisible" Value="False" />
         </Style>
-        <Style Selector="UserControl.compact Button.transport">
-            <Setter Property="MinWidth" Value="36" />
-            <Setter Property="Padding" Value="6,6" />
-        </Style>
-        <Style Selector="UserControl.compact Button.play-pause">
-            <Setter Property="MinWidth" Value="60" />
-            <Setter Property="Padding" Value="8,6" />
-        </Style>
         <Style Selector="UserControl.compact Slider.vol">
             <Setter Property="Width" Value="78" />
         </Style>
@@ -120,27 +103,6 @@
     </UserControl.Styles>
 
     <DockPanel LastChildFill="True">
-
-        <!-- Transient status banner (errors raised during transport). -->
-        <Border DockPanel.Dock="Top"
-                IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
-                CornerRadius="4" Padding="10,6" Margin="0,0,0,8">
-            <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
-        </Border>
-
-        <!-- Sticky last-load-error banner: persists until the next successful load. -->
-        <Border DockPanel.Dock="Top"
-                IsVisible="{Binding HasLoadError}"
-                Background="#332B2B" BorderBrush="#88E53935" BorderThickness="1"
-                CornerRadius="4" Padding="10,6" Margin="0,0,0,8"
-                ToolTip.Tip="{x:Static res:Strings.LoadErrorBannerTooltip}">
-            <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="&#x26A0;" Foreground="#FF8A80" VerticalAlignment="Center" />
-                <TextBlock Text="{Binding LastLoadError}" Foreground="#FFCDD2" TextWrapping="Wrap"
-                           VerticalAlignment="Center" />
-            </StackPanel>
-        </Border>
 
         <!-- ============ Now-playing / transport deck header (pinned) ============ -->
         <Border DockPanel.Dock="Top" Classes="card" Margin="0,0,0,8">
@@ -212,6 +174,12 @@
                     </StackPanel>
                 </Grid>
 
+                <!-- P5: fixed-height status line — transient status + sticky load errors live here
+                     (and in toasts); nothing above the transport ever appears/disappears. -->
+                <controls:StatusLineControl Text="{Binding DeckStatusText}"
+                                            Severity="{Binding DeckStatusSeverity}"
+                                            ToolTip.Tip="{Binding DeckStatusText}" />
+
                 <!-- Busy indicator: slim indeterminate bar + status (loading / analysing / waiting). -->
                 <StackPanel Spacing="3" IsVisible="{Binding IsBusy}">
                     <ProgressBar Classes="busy" IsIndeterminate="True" Minimum="0" Maximum="100" />
@@ -256,27 +224,39 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Transport row: right cluster docks first (always gets its width); the
-                     prev/play/next/stop group centres in the remaining space and never overflows. -->
+                <!-- P5 transport: the touch tier. Prev/Play/Next/Stop + HOLD are >=56 px panic-path
+                     controls; HOLD pushes the configured idle image to this player's video outputs
+                     (long-press the flyout arrow for the image picker). Mute/volume moved to the
+                     slim row below — frequently used, but not panic-path. -->
                 <DockPanel LastChildFill="True">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6"
                                 VerticalAlignment="Center">
-                        <ToggleButton Content="{x:Static res:Strings.MuteToggleLabel}"
-                                      IsChecked="{Binding MasterMuted}"
-                                      Padding="8,6"
-                                      ToolTip.Tip="{x:Static res:Strings.MuteToggleTooltip}" />
-                        <Slider Name="VolumeSlider" Classes="vol" Width="104" Minimum="-60" Maximum="12"
-                                Value="{Binding MasterVolumeDb, Mode=TwoWay}"
-                                VerticalAlignment="Center"
-                                ToolTip.Tip="{x:Static res:Strings.ResetVolumeTooltip}" />
-                        <TextBlock Classes="time hide-compact" Width="52" VerticalAlignment="Center"
-                                   Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
-                        <controls:LevelMeterControl Classes="hide-compact" Width="44" Height="10"
-                                                    VerticalAlignment="Center"
-                                                    Level="{Binding PeakLevelNormalized}" />
+                        <ToggleButton Classes="Touch Warn"
+                                      IsChecked="{Binding HoldFallbackVideo}"
+                                      Content="{x:Static res:Strings.HoldButtonLabel}"
+                                      ToolTip.Tip="{x:Static res:Strings.HoldButtonTooltip}" />
+                        <Button Classes="Std" VerticalAlignment="Center"
+                                ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">
+                            <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
+                            <Button.Flyout>
+                                <Flyout Placement="Bottom">
+                                    <StackPanel Spacing="6" Margin="4" MinWidth="280">
+                                        <TextBlock Classes="CaptionText" TextWrapping="Wrap"
+                                                   Text="{x:Static res:Strings.IdleImageHeaderTooltip}" />
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                            <TextBox Grid.Column="0"
+                                                     PlaceholderText="{x:Static res:Strings.FallbackPathPlaceholder}"
+                                                     Text="{Binding FallbackImagePath}" />
+                                            <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}"
+                                                    Command="{Binding BrowseFallbackCommand}" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
 
                         <!-- Options flyout: loop / auto-advance / shuffle / repeat-all + active badge. -->
-                        <Button Padding="10,6"
+                        <Button Classes="Std" Padding="10,6"
                                 ToolTip.Tip="{x:Static res:Strings.PlaybackOptionsTooltip}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <TextBlock Text="{x:Static res:Strings.PlaybackOptionsButton}"
@@ -308,23 +288,39 @@
                         </Button>
                     </StackPanel>
 
-                    <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center"
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center"
                                 VerticalAlignment="Center">
-                        <Button Classes="transport" Content="{x:Static res:Strings.PreviousTrackGlyph}"
+                        <Button Classes="Touch" Content="{x:Static res:Strings.PreviousTrackGlyph}"
                                 Command="{Binding PreviousTrackCommand}"
                                 ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}" />
-                        <Button Classes="play-pause"
+                        <Button Classes="Touch Go" MinWidth="84"
                                 Content="{Binding PlayPauseLabel}"
                                 Command="{Binding TogglePlayPauseCommand}"
                                 ToolTip.Tip="{x:Static res:Strings.PlayPauseTooltip}" />
-                        <Button Classes="transport" Content="{x:Static res:Strings.NextTrackGlyph}"
+                        <Button Classes="Touch" Content="{x:Static res:Strings.NextTrackGlyph}"
                                 Command="{Binding NextTrackCommand}"
                                 ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}" />
-                        <Button Classes="transport" Content="{x:Static res:Strings.StopTrackGlyph}"
+                        <Button Classes="Touch" Content="{x:Static res:Strings.StopTrackGlyph}"
                                 Command="{Binding StopCommand}"
                                 ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}" />
                     </StackPanel>
                 </DockPanel>
+
+                <!-- Volume row (Std tier): mute / slider / dB / meter. -->
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <ToggleButton Classes="Std" Content="{x:Static res:Strings.MuteToggleLabel}"
+                                  IsChecked="{Binding MasterMuted}"
+                                  ToolTip.Tip="{x:Static res:Strings.MuteToggleTooltip}" />
+                    <Slider Name="VolumeSlider" Classes="vol" Width="140" Minimum="-60" Maximum="12"
+                            Value="{Binding MasterVolumeDb, Mode=TwoWay}"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="{x:Static res:Strings.ResetVolumeTooltip}" />
+                    <TextBlock Classes="time hide-compact" Width="52" VerticalAlignment="Center"
+                               Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
+                    <controls:LevelMeterControl Classes="hide-compact" Width="56" Height="10"
+                                                VerticalAlignment="Center"
+                                                Level="{Binding PeakLevelNormalized}" />
+                </StackPanel>
             </StackPanel>
         </Border>
 

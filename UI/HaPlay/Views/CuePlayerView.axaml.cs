@@ -229,6 +229,56 @@ public partial class CuePlayerView : UserControl
             RebuildCueSource();
         else if (e.PropertyName is nameof(CuePlayerViewModel.IsCueEditMode))
             SyncCueTreeDragDropMode();
+        else if (e.PropertyName is nameof(CuePlayerViewModel.SelectedCueNode))
+            EnsureVisibleDrawerTabSelected();
+    }
+
+    /// <summary>
+    /// UI rewrite P4 — stale-drawer fix: the property tabs are visibility-filtered per cue type, and
+    /// switching e.g. from a media cue (Audio tab selected) to a group cue left the now-hidden tab
+    /// selected, showing a blank/stale drawer. After every cue switch, snap selection to the first
+    /// visible tab whenever the current one no longer applies. Posted at Loaded priority so the
+    /// IsVisible bindings have settled first.
+    /// </summary>
+    private void EnsureVisibleDrawerTabSelected()
+    {
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            if (CueDrawerTabs.SelectedItem is TabItem { IsVisible: true })
+                return;
+            foreach (var item in CueDrawerTabs.Items)
+            {
+                if (item is TabItem { IsVisible: true } visible)
+                {
+                    CueDrawerTabs.SelectedItem = visible;
+                    return;
+                }
+            }
+        }, Avalonia.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>P4 — tap-to-seek on a group aggregate bar: every child seeks to the same fraction
+    /// of its own duration. Same padlock gate as the single rows.</summary>
+    private void OnNowPlayingGroupProgressPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ActiveGroupViewModel group } bar)
+            return;
+        if (DataContext is not CuePlayerViewModel vm || bar.Bounds.Width <= 0)
+            return;
+        var fraction = e.GetPosition(bar).X / bar.Bounds.Width;
+        _ = vm.SeekActiveGroupToFractionAsync(group, fraction);
+    }
+
+    /// <summary>P4 — tap-to-seek on a Now Playing progress bar. The VM gates on the padlock
+    /// (locked default) and on a known duration.</summary>
+    private void OnNowPlayingProgressPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control { DataContext: ActiveCueViewModel cue } bar)
+            return;
+        if (DataContext is not CuePlayerViewModel vm || bar.Bounds.Width <= 0)
+            return;
+        var fraction = e.GetPosition(bar).X / bar.Bounds.Width;
+        _ = vm.SeekActiveCueToFractionAsync(cue, fraction);
     }
 
     private void SyncCueTreeDragDropMode()

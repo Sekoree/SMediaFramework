@@ -99,3 +99,16 @@ public static class AudioDownmixPresets
         }
     }
 }
+
+/// <summary>
+/// UI rewrite P5b: one per-player auto-preset rule — "when a source with
+/// <see cref="SourceChannels"/> channels loads, apply <see cref="Preset"/> to the routing matrix".
+/// Stereo files typically need no rule (identity default); a 6-channel rule is how an operator
+/// predetermines that an occasional 5.1 file folds down (or passes through) instead of silently
+/// playing FL/FR only.
+/// </summary>
+public sealed record ChannelPresetRule
+{
+    public int SourceChannels { get; init; }
+    public AudioDownmixPreset Preset { get; init; }
+}

@@ -81,6 +81,10 @@ public sealed record MediaPlayerConfig
 
     public List<OutputGainConfig> OutputGains { get; init; } = new();
 
+    /// <summary>UI rewrite P5b — auto-preset rules: source channel count → downmix preset applied
+    /// to the routing matrix when media with that channel count loads.</summary>
+    public List<ChannelPresetRule> ChannelPresetRules { get; init; } = new();
+
     /// <summary>
     /// Explicit source channel count used to size the audio matrix before a media file is open.
     /// 0 means "auto" for older configs: infer from the active source when possible, otherwise stereo.

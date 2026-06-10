@@ -48,6 +48,7 @@ public partial class MainViewModel : ViewModelBase
         };
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
+        Players.CollectionChanged += (_, _) => OnPlayersChangedForDeckGrid();
         RecentProjects.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoRecentProjects));
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
@@ -122,7 +123,6 @@ public partial class MainViewModel : ViewModelBase
         // would re-save on first set; seed via backing fields so we don't fire that pointlessly.
         _theme = _appSettings.Theme;
         _density = _appSettings.Density;
-        _playersLayout = _appSettings.PlayersLayout;
         AppearanceController.ApplyTheme(_theme);
         AppearanceController.ApplyDensity(_density);
         if (!Playback.PlaybackVideoPipeline.CliRequestedUyvyPassthrough)
@@ -284,7 +284,6 @@ public partial class MainViewModel : ViewModelBase
 
     public IReadOnlyList<AppThemeMode> ThemeChoices { get; } = Enum.GetValues<AppThemeMode>();
     public IReadOnlyList<AppDensityMode> DensityChoices { get; } = Enum.GetValues<AppDensityMode>();
-    public IReadOnlyList<PlayersLayoutMode> PlayersLayoutChoices { get; } = Enum.GetValues<PlayersLayoutMode>();
 
     /// <summary>Phase E (§8.6) — chrome theme. Setting this both persists the choice and applies it
     /// live to <see cref="Application.RequestedThemeVariant"/> so the UI repaints without restart.</summary>
@@ -310,51 +309,54 @@ public partial class MainViewModel : ViewModelBase
         AppearanceController.ApplyDensity(value);
     }
 
-    /// <summary>Phase E (§8.3) — Players-workspace layout mode (Tabs / Stacked / Split). Setting this
-    /// flips which visual tree renders inside the Players DockPanel via the boolean derived properties
-    /// below, and persists to app-settings.json.</summary>
+    // ----- UI rewrite P5 (plan §2.1): one responsive deck grid + focus mode ----------------------
+    // Replaces the Tabs/Stacked/Split layout chooser. All players render as decks in a uniform
+    // grid; double-tapping a deck focuses it full-workspace (Esc or double-tap again returns).
+    // Focus is session-only — it's a glance gesture, not a persisted mode.
+
+    /// <summary>Deck currently filling the workspace, or null for the grid. Cleared automatically
+    /// when that player is removed.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPlayersTabsLayout))]
-    [NotifyPropertyChangedFor(nameof(IsPlayersStackedLayout))]
-    [NotifyPropertyChangedFor(nameof(IsPlayersSplitLayout))]
-    private PlayersLayoutMode _playersLayout;
+    [NotifyPropertyChangedFor(nameof(IsPlayerFocused))]
+    [NotifyPropertyChangedFor(nameof(FocusedDeckContent))]
+    [NotifyPropertyChangedFor(nameof(DeckGridContent))]
+    private MediaPlayerViewModel? _focusedPlayer;
 
-    public bool IsPlayersTabsLayout => PlayersLayout == PlayersLayoutMode.Tabs;
-    public bool IsPlayersStackedLayout => PlayersLayout == PlayersLayoutMode.Stacked;
-    public bool IsPlayersSplitLayout => PlayersLayout == PlayersLayoutMode.Split;
+    public bool IsPlayerFocused => FocusedPlayer is not null;
 
-    /// <summary>Phase E (§8.3) — bound by the Tabs-layout ContentControl. Returns the selected player
-    /// only when Tabs mode is active so the hidden Tabs branch can't materialize a duplicate
-    /// <c>MediaPlayerView</c> for the same VM that the Stacked/Split ItemsControl is already showing.
-    /// (<see cref="Avalonia.Controls.Control.IsVisible"/>=false hides rendering but keeps the visual
-    /// tree materialized, so without this null-when-not-tabs gate every selected player would have
-    /// two attached views in Stacked/Split mode.)</summary>
-    public MediaPlayerViewModel? TabsLayoutContent =>
-        IsPlayersTabsLayout ? SelectedPlayer : null;
+    /// <summary>Null-gated content projections: only one branch may materialize a
+    /// <c>MediaPlayerView</c> per VM at a time (IsVisible=false still keeps the visual tree
+    /// attached, which would double-render the same player).</summary>
+    public MediaPlayerViewModel? FocusedDeckContent => FocusedPlayer;
 
-    /// <summary>Same idea for Stacked layout — returns the players collection only when Stacked is active.</summary>
-    public ObservableCollection<MediaPlayerViewModel>? StackedLayoutContent =>
-        IsPlayersStackedLayout ? Players : null;
+    public ObservableCollection<MediaPlayerViewModel>? DeckGridContent =>
+        IsPlayerFocused ? null : Players;
 
-    /// <summary>Same idea for Split layout.</summary>
-    public ObservableCollection<MediaPlayerViewModel>? SplitLayoutContent =>
-        IsPlayersSplitLayout ? Players : null;
+    /// <summary>Grid columns for N decks: 1 → 1, 2–4 → 2, 5–9 → 3 … (⌈√N⌉).</summary>
+    public int DeckColumns => Math.Max(1, (int)Math.Ceiling(Math.Sqrt(Players.Count)));
 
-    partial void OnPlayersLayoutChanged(PlayersLayoutMode value)
+    [RelayCommand]
+    private void ToggleFocusPlayer(MediaPlayerViewModel? player)
     {
-        _appSettings.PlayersLayout = value;
-        _appSettings.Save();
-        OnPropertyChanged(nameof(TabsLayoutContent));
-        OnPropertyChanged(nameof(StackedLayoutContent));
-        OnPropertyChanged(nameof(SplitLayoutContent));
+        if (player is null)
+            return;
+        SelectedPlayer = player;
+        FocusedPlayer = ReferenceEquals(FocusedPlayer, player) ? null : player;
     }
 
-    partial void OnSelectedPlayerChanged(MediaPlayerViewModel? value)
+    /// <summary>Bound to Escape on the shell; a no-op outside focus so the gesture stays free
+    /// elsewhere.</summary>
+    [RelayCommand]
+    private void ExitPlayerFocus() => FocusedPlayer = null;
+
+    /// <summary>Called from the Players.CollectionChanged hook: keeps focus/selection valid and
+    /// re-derives the grid shape.</summary>
+    private void OnPlayersChangedForDeckGrid()
     {
-        _ = value;
-        // Tabs layout pulls from the live SelectedPlayer, so a tab switch must rebroadcast.
-        if (IsPlayersTabsLayout)
-            OnPropertyChanged(nameof(TabsLayoutContent));
+        if (FocusedPlayer is { } focused && !Players.Contains(focused))
+            FocusedPlayer = null;
+        OnPropertyChanged(nameof(DeckColumns));
+        OnPropertyChanged(nameof(DeckGridContent));
     }
 
     /// <summary>OSC endpoints with persistent health LEDs for the OSC sidebar workspace.</summary>
@@ -1328,19 +1330,41 @@ public partial class MainViewModel : ViewModelBase
     /// no I/O. Phase B will wire this through a File → Save menu; for now tests and programmatic callers
     /// can round-trip via <see cref="ProjectIO"/>.
     /// </summary>
-    public HaPlayProject BuildProjectSnapshot() => new()
+    public HaPlayProject BuildProjectSnapshot() => BuildProjectSnapshot(sections: null);
+
+    /// <summary>
+    /// Scoped snapshot (save/load rework 2026-06-10): when <paramref name="sections"/> is non-null,
+    /// only the listed <see cref="ProjectSections"/> leaves are filled in and the file records them
+    /// in <see cref="HaPlayProject.SavedSections"/> — loading such a file applies only those parts.
+    /// </summary>
+    public HaPlayProject BuildProjectSnapshot(IReadOnlyCollection<string>? sections)
     {
-        SchemaVersion = HaPlayProject.CurrentSchemaVersion,
-        HaPlayVersion = typeof(MainViewModel).Assembly
-            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-            ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
-        Outputs = OutputManagement.Outputs.Select(o => o.Definition).ToList(),
-        SharedHeadphonesBuses = OutputManagement.BuildSharedHeadphonesBusesSnapshot().ToList(),
-        Players = Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList(),
-        ActionEndpoints = ActionEndpoints.ToList(),
-        CueLists = CuePlayer.BuildCueListsSnapshot(),
-        ControlSystem = Control.BuildSnapshot(),
-    };
+        bool Has(string leaf) => ProjectSections.Includes(sections, leaf);
+
+        var outputs = OutputManagement.Outputs
+            .Select(o => o.Definition)
+            .Where(d => d is PortAudioOutputDefinition ? Has(ProjectSections.OutputsAudio) : Has(ProjectSections.OutputsVideo))
+            .ToList();
+
+        return new HaPlayProject
+        {
+            SchemaVersion = HaPlayProject.CurrentSchemaVersion,
+            HaPlayVersion = typeof(MainViewModel).Assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
+            SavedSections = sections is null ? null : ProjectSections.Normalize(sections),
+            Outputs = outputs,
+            SharedHeadphonesBuses = Has(ProjectSections.OutputsAudio)
+                ? OutputManagement.BuildSharedHeadphonesBusesSnapshot().ToList()
+                : [],
+            Players = Has(ProjectSections.Players) ? Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList() : [],
+            ActionEndpoints = ActionEndpoints
+                .Where(e => e is MidiActionEndpoint ? Has(ProjectSections.TargetsMidi) : Has(ProjectSections.TargetsOsc))
+                .ToList(),
+            CueLists = Has(ProjectSections.CueLists) ? CuePlayer.BuildCueListsSnapshot() : [],
+            ControlSystem = Has(ProjectSections.Control) ? Control.BuildSnapshot() : new ControlSystemConfig(),
+        };
+    }
 
     /// <summary>
     /// Applies a previously-saved <see cref="HaPlayProject"/> to this VM. Player count is matched (extra
@@ -1355,22 +1379,58 @@ public partial class MainViewModel : ViewModelBase
     /// </remarks>
     public void ApplyProjectSnapshot(HaPlayProject project)
     {
-        // Reconcile outputs: rebuild the list from the project definitions. Phase B will need a richer
-        // "rebind missing devices" flow (§7.3, §7.4); for now we just project the definitions.
-        OutputManagement.ReplaceDefinitionsForLoad(project.Outputs);
+        // Save/load rework 2026-06-10: a partial file (SavedSections != null) applies ONLY its own
+        // sections; everything else in the live show is left untouched, so partial project files
+        // double as section imports. null = full project, original replace-everything semantics.
+        var sections = project.SavedSections;
+        bool Has(string leaf) => ProjectSections.Includes(sections, leaf);
+        var hasAudioOut = Has(ProjectSections.OutputsAudio);
+        var hasVideoOut = Has(ProjectSections.OutputsVideo);
+
+        if (hasAudioOut || hasVideoOut)
+        {
+            // Merge: keep current definitions of the kinds the file does NOT carry.
+            var merged = new List<OutputDefinition>();
+            if (!hasAudioOut)
+                merged.AddRange(OutputManagement.Outputs.Select(o => o.Definition).Where(d => d is PortAudioOutputDefinition));
+            if (!hasVideoOut)
+                merged.AddRange(OutputManagement.Outputs.Select(o => o.Definition).Where(d => d is not PortAudioOutputDefinition));
+            merged.AddRange(project.Outputs);
+            OutputManagement.ReplaceDefinitionsForLoad(merged);
+        }
+
         // UI rewrite P2: the virtual-audio-channel ("VOut") model was removed in favor of output
         // aliases + per-player matrix presets. Old projects still load; tell the operator once.
         if (project.VirtualAudioChannels.Count > 0)
             ToastCenter.Info(Strings.VirtualChannelsMigratedToast);
-        OutputManagement.ApplySharedHeadphonesBuses(project.SharedHeadphonesBuses);
-        ActionEndpoints.Clear();
-        foreach (var endpoint in project.ActionEndpoints)
-            ActionEndpoints.Add(endpoint);
-        RebuildEndpointWorkspaceLists();
-        SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
-        CuePlayer.ApplyCueLists(project.CueLists);
-        Control.LoadConfig(project.ControlSystem);
+        if (hasAudioOut)
+            OutputManagement.ApplySharedHeadphonesBuses(project.SharedHeadphonesBuses);
+
+        var hasMidiTargets = Has(ProjectSections.TargetsMidi);
+        var hasOscTargets = Has(ProjectSections.TargetsOsc);
+        if (hasMidiTargets || hasOscTargets)
+        {
+            var keep = ActionEndpoints
+                .Where(e => e is MidiActionEndpoint ? !hasMidiTargets : !hasOscTargets)
+                .ToList();
+            ActionEndpoints.Clear();
+            foreach (var endpoint in keep.Concat(project.ActionEndpoints))
+                ActionEndpoints.Add(endpoint);
+            RebuildEndpointWorkspaceLists();
+            SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
+        }
+
+        if (Has(ProjectSections.CueLists))
+            CuePlayer.ApplyCueLists(project.CueLists);
+        if (Has(ProjectSections.Control))
+            Control.LoadConfig(project.ControlSystem);
         RebuildProjectMidiDeviceRows();
+
+        if (!Has(ProjectSections.Players))
+        {
+            _ = RefreshCuePreRollAsync();
+            return;
+        }
 
         // Reconcile players: extend or shrink to match the project's player count, then apply each one.
         while (Players.Count < project.Players.Count)
@@ -1498,8 +1558,17 @@ public partial class MainViewModel : ViewModelBase
         ApplyProjectSnapshot(project);
         _ = RefreshCuePreRollAsync();
         var outputStartErrors = await OutputManagement.StartRuntimesForLoadedDefinitionsAsync();
-        CurrentProjectPath = path;
-        PushRecentProject(path);
+        if (project.SavedSections is { Count: > 0 } imported)
+        {
+            // Partial file = a section import into the current show, not a project switch: keep the
+            // current project path so a later Save can't overwrite the full project with a fragment.
+            ToastCenter.Info(Strings.Format(nameof(Strings.SectionsImportedToastFormat), string.Join(", ", imported)));
+        }
+        else
+        {
+            CurrentProjectPath = path;
+            PushRecentProject(path);
+        }
 
         if (missing.Count > 0)
         {
@@ -1540,6 +1609,47 @@ public partial class MainViewModel : ViewModelBase
 
         await SaveProjectAsAsync();
         return !string.IsNullOrEmpty(CurrentProjectPath);
+    }
+
+    /// <summary>Save/load rework: export a partial project file carrying only the checked sections
+    /// (see <see cref="ProjectSections"/>). Opening such a file later imports just those sections.</summary>
+    [RelayCommand]
+    private async Task ExportProjectSectionsAsync()
+    {
+        var owner = TryGetOwnerWindow();
+        if (owner is null) return;
+
+        var dialog = new Views.Dialogs.ProjectExportDialog();
+        await dialog.ShowDialog(owner);
+        if (dialog.Result is not { Count: > 0 } sections)
+            return;
+
+        var startFolder = await TryGetStartLocationAsync(owner);
+        var opts = new FilePickerSaveOptions
+        {
+            Title = Strings.ExportSectionsDialogTitle,
+            DefaultExtension = ProjectIO.FileExtension,
+            SuggestedFileName = Strings.Format(nameof(Strings.SectionExportDefaultFileNameFormat), ProjectIO.FileExtension),
+            SuggestedStartLocation = startFolder,
+            FileTypeChoices =
+            [
+                new FilePickerFileType(Strings.HaPlayProjectFileTypeLabel) { Patterns = ["*." + ProjectIO.FileExtension] },
+            ],
+        };
+        var picked = await owner.StorageProvider.SaveFilePickerAsync(opts);
+        var path = picked?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path)) return;
+
+        try
+        {
+            await ProjectIO.SaveAsync(BuildProjectSnapshot(sections), path);
+            ProjectStatus = Strings.Format(nameof(Strings.SectionsExportedStatusFormat),
+                Path.GetFileName(path), string.Join(", ", ProjectSections.Normalize(sections)));
+        }
+        catch (Exception ex)
+        {
+            ProjectStatus = Strings.Format(nameof(Strings.ProjectSaveFailedFormat), ex.Message);
+        }
     }
 
     [RelayCommand]

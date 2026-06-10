@@ -2228,6 +2228,84 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <see cref="OnCueProgress"/>.</summary>
     public ObservableCollection<ActiveCueViewModel> ActiveCues { get; } = new();
 
+    /// <summary>
+    /// P4 (plan §3.2) — what the Now Playing panel renders: <see cref="ActiveCueViewModel"/> for
+    /// standalone cues, <see cref="ActiveGroupViewModel"/> aggregating active cues that share a
+    /// parent group node. <see cref="ActiveCues"/> stays the flat source of truth.
+    /// </summary>
+    public ObservableCollection<object> NowPlayingRows { get; } = new();
+
+    /// <summary>Group-row seek: every child seeks to the same fraction of ITS OWN duration (keeps
+    /// proportional alignment for staggered-length children). Same padlock gate as single rows.</summary>
+    public async Task SeekActiveGroupToFractionAsync(ActiveGroupViewModel group, double fraction)
+    {
+        if (!NowPlayingSeekUnlocked)
+            return;
+        foreach (var child in group.Children.ToArray())
+            await SeekActiveCueToFractionAsync(child, fraction).ConfigureAwait(false);
+    }
+
+    /// <summary>The group node a cue sits under, or null for top-level cues. Searches the selected
+    /// cue list's tree (active cues always come from the visible list).</summary>
+    private CueNodeViewModel? FindParentGroupOf(CueNodeViewModel node)
+    {
+        if (SelectedCueList is null)
+            return null;
+        return Search(SelectedCueList.Nodes, null);
+
+        CueNodeViewModel? Search(IEnumerable<CueNodeViewModel> nodes, CueNodeViewModel? parent)
+        {
+            foreach (var candidate in nodes)
+            {
+                if (ReferenceEquals(candidate, node))
+                    return parent is { IsGroup: true } ? parent : null;
+                if (Search(candidate.Children, candidate) is { } found)
+                    return found;
+            }
+
+            return null;
+        }
+    }
+
+    private void AddNowPlayingRow(ActiveCueViewModel entry)
+    {
+        if (FindParentGroupOf(entry.Node) is { } groupNode)
+        {
+            var group = NowPlayingRows.OfType<ActiveGroupViewModel>()
+                .FirstOrDefault(g => g.GroupId == groupNode.Id);
+            if (group is null)
+            {
+                group = new ActiveGroupViewModel(groupNode);
+                NowPlayingRows.Add(group);
+            }
+
+            group.Children.Add(entry);
+            return;
+        }
+
+        NowPlayingRows.Add(entry);
+    }
+
+    private void RemoveNowPlayingRow(Guid cueId)
+    {
+        for (var i = NowPlayingRows.Count - 1; i >= 0; i--)
+        {
+            switch (NowPlayingRows[i])
+            {
+                case ActiveCueViewModel single when single.CueId == cueId:
+                    NowPlayingRows.RemoveAt(i);
+                    break;
+                case ActiveGroupViewModel group:
+                    for (var c = group.Children.Count - 1; c >= 0; c--)
+                        if (group.Children[c].CueId == cueId)
+                            group.Children.RemoveAt(c);
+                    if (group.Children.Count == 0)
+                        NowPlayingRows.RemoveAt(i);
+                    break;
+            }
+        }
+    }
+
     /// <summary>Cues that *will* fire once the operator presses Go from the current Standby
     /// position — used by the Now Playing panel's Upcoming section.</summary>
     public ObservableCollection<CueNodeViewModel> UpcomingCues { get; } = new();
@@ -2235,6 +2313,23 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host-provided per-cue stop callback (engine.StopCueAsync). The Now Playing
     /// panel's per-row ✕ button forwards through this; null in tests.</summary>
     public Func<Guid, Task>? CancelCueCallback { get; set; }
+
+    // ----- UI rewrite P4: Now Playing row seek (with lock) --------------------------------------
+
+    /// <summary>Unlocks dragging/tapping the Now Playing progress bars to seek. Default locked —
+    /// the panel sits next to GO, so accidental seeks during a show must be opt-in (plan §3.2).</summary>
+    [ObservableProperty]
+    private bool _nowPlayingSeekUnlocked;
+
+    /// <summary>Seeks an active cue to a 0..1 fraction of its duration. No-op while locked or when
+    /// the cue has no known duration yet.</summary>
+    public Task SeekActiveCueToFractionAsync(ActiveCueViewModel cue, double fraction)
+    {
+        if (!NowPlayingSeekUnlocked || cue.DurationMs <= 0 || SeekCueCallback is null)
+            return Task.CompletedTask;
+        var clamped = Math.Clamp(fraction, 0.0, 1.0);
+        return SeekCueCallback(cue.CueId, TimeSpan.FromMilliseconds(cue.DurationMs * clamped));
+    }
 
     /// <summary>Host callback for mutating a placement's already-running compositor slot while the
     /// selected cue is active. No-op in tests or when the cue is not playing.</summary>
@@ -2259,6 +2354,7 @@ public partial class CuePlayerViewModel : ViewModelBase
                 DurationMs = Math.Max(0, node.EffectiveDurationMs),
             };
             ActiveCues.Add(entry);
+            AddNowPlayingRow(entry);
         }
         RebuildUpcomingCues();
         OnPropertyChanged(nameof(IsCueScrubberVisible));
@@ -2285,6 +2381,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         for (var i = ActiveCues.Count - 1; i >= 0; i--)
             if (ActiveCues[i].CueId == cueId)
                 ActiveCues.RemoveAt(i);
+        RemoveNowPlayingRow(cueId);
         RebuildUpcomingCues();
         OnPropertyChanged(nameof(IsCueScrubberVisible));
         SyncCueScrubberFromActiveSelection();

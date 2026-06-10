@@ -32,6 +32,42 @@
                          ToolTip.Tip="Expected source channel count for preparing the matrix before media is opened." />
         </Grid>
 
+        <!-- P5b: auto-preset rules — "when an N-channel source loads, apply this preset". This is
+             the predetermined answer for the occasional 5.1 file in a stereo show. -->
+        <Border Classes="Card" Padding="8">
+          <StackPanel Spacing="6">
+            <TextBlock Classes="SectionText" Text="{x:Static res:Strings.AutoPresetRulesTitle}" />
+            <TextBlock Classes="CaptionText" TextWrapping="Wrap"
+                       Text="{x:Static res:Strings.AutoPresetRulesHint}" />
+            <ItemsControl ItemsSource="{Binding ChannelPresetRules}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="models:ChannelPresetRule">
+                  <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" Margin="0,1">
+                    <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                               Text="{Binding SourceChannels, StringFormat='{}{0} ch →'}" />
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center" Opacity="0.85"
+                               Text="{Binding Preset}" />
+                    <Button Grid.Column="2" Classes="Dense" Content="{x:Static res:Strings.RemoveButton}"
+                            Command="{Binding $parent[Window].((vm:MediaPlayerViewModel)DataContext).RemoveChannelPresetRuleCommand}"
+                            CommandParameter="{Binding}" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <Grid ColumnDefinitions="Auto,90,Auto,*,Auto" ColumnSpacing="8">
+              <TextBlock Grid.Column="0" Text="{x:Static res:Strings.AutoPresetWhenLabel}" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="1" Minimum="1" Maximum="64" FormatString="0"
+                             Value="{Binding NewRuleChannels, Mode=TwoWay}" />
+              <TextBlock Grid.Column="2" Text="{x:Static res:Strings.AutoPresetApplyLabel}" VerticalAlignment="Center" />
+              <ComboBox Grid.Column="3" HorizontalAlignment="Stretch"
+                        ItemsSource="{Binding DownmixPresetChoices}"
+                        SelectedItem="{Binding NewRulePreset, Mode=TwoWay}" />
+              <Button Grid.Column="4" Classes="Std" Content="{x:Static res:Strings.AddRuleButton}"
+                      Command="{Binding AddChannelPresetRuleCommand}" />
+            </Grid>
+          </StackPanel>
+        </Border>
+
         <!-- Per-output mix-mode preset row -->
         <ItemsControl ItemsSource="{Binding Outputs}">
           <ItemsControl.ItemTemplate>
@@ -39,7 +75,7 @@
               <StackPanel Spacing="2" Margin="0,2" IsVisible="{Binding IsSelected}">
                 <Grid ColumnDefinitions="*,128,Auto,140,64" ColumnSpacing="8">
                   <TextBlock Grid.Column="0" VerticalAlignment="Center"
-                             Text="{Binding Line.Definition.DisplayName}" />
+                             Text="{Binding Line.EffectiveName}" />
                   <ComboBox Grid.Column="1" MinWidth="128"
                             ItemsSource="{Binding $parent[Window].((vm:MediaPlayerViewModel)DataContext).MixModes}"
                             SelectedItem="{Binding MixMode}"

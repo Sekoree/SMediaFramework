@@ -34,11 +34,6 @@ public sealed class AppSettings
     /// tight pre-§8.6 spacing (the default), <see cref="AppDensityMode.Normal"/> opens it up.</summary>
     public AppDensityMode Density { get; set; } = AppDensityMode.Compact;
 
-    /// <summary>Phase E (§8.3) — how the Players workspace lays out its players. <see cref="PlayersLayoutMode.Tabs"/>
-    /// is the pre-§8.3 single-player-visible default; <see cref="PlayersLayoutMode.Stacked"/> shows every
-    /// player vertically (scrollable); <see cref="PlayersLayoutMode.Split"/> tiles them in a UniformGrid.</summary>
-    public PlayersLayoutMode PlayersLayout { get; set; } = PlayersLayoutMode.Tabs;
-
     /// <summary>
     /// When true, live NDI (and similar) video keeps native UYVY into local SDL outputs instead of
     /// converting to BGRA32 first. Requires correct full-range metadata on frames.
@@ -131,17 +126,6 @@ public enum AppDensityMode
     Normal,
 }
 
-/// <summary>Phase E (§8.3) — how the Players workspace lays out its players.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter<PlayersLayoutMode>))]
-public enum PlayersLayoutMode
-{
-    /// <summary>One player visible at a time, picked via a TabStrip. Pre-§8.3 default.</summary>
-    Tabs,
-    /// <summary>Every player visible vertically; the workspace gets a scroll viewer.</summary>
-    Stacked,
-    /// <summary>Every player tiled in a UniformGrid (side-by-side for two, grid for more).</summary>
-    Split,
-}
 
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(AppSettings))]

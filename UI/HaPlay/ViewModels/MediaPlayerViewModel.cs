@@ -642,11 +642,19 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void ResizeSelectedAudioMatrices(HaPlayPlaybackSession? session)
     {
         var inputChannels = MatrixInputChannelCountFor(session);
+        var anyInputCountChanged = false;
         foreach (var binding in Outputs)
         {
             if (!binding.IsSelected) continue;
+            var before = binding.Matrix.InputChannelCount;
             binding.Matrix.Resize(inputChannels, OutputChannelCountOrZero(binding.Line));
+            anyInputCountChanged |= before != binding.Matrix.InputChannelCount;
         }
+
+        // P5b: a rule fires only when the channel COUNT changes (e.g. stereo show, then a 5.1 file
+        // arrives). Same-count reloads keep whatever the operator hand-tuned for that layout.
+        if (anyInputCountChanged)
+            ApplyChannelPresetRuleIfMatching(inputChannels);
     }
 
     private void SyncMatrixSourceChannelsFromSession(HaPlayPlaybackSession? session)
@@ -1002,6 +1010,59 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// </summary>
     public ObservableCollection<AudioMatrixInputTrimViewModel> AudioMatrixInputTrims { get; } = new();
 
+    // ----- UI rewrite P5b: channel-count → preset auto-rules -----------------------------------
+
+    /// <summary>Per-player auto-preset rules (one per source channel count). When media whose audio
+    /// channel count matches a rule loads, the rule's preset is applied to every selected output's
+    /// matrix — this is how an occasional 5.1 file folds down properly without manual cell edits.</summary>
+    public ObservableCollection<ChannelPresetRule> ChannelPresetRules { get; } = new();
+
+    public IReadOnlyList<AudioDownmixPreset> DownmixPresetChoices { get; } = AudioDownmixPresets.All;
+
+    [ObservableProperty]
+    private int _newRuleChannels = 6;
+
+    [ObservableProperty]
+    private AudioDownmixPreset _newRulePreset = AudioDownmixPreset.Surround51ToStereo;
+
+    /// <summary>Adds (or replaces, keyed by channel count) an auto-preset rule.</summary>
+    [RelayCommand]
+    private void AddChannelPresetRule()
+    {
+        var channels = Math.Clamp(NewRuleChannels, 1, 64);
+        for (var i = ChannelPresetRules.Count - 1; i >= 0; i--)
+        {
+            if (ChannelPresetRules[i].SourceChannels == channels)
+                ChannelPresetRules.RemoveAt(i);
+        }
+
+        ChannelPresetRules.Add(new ChannelPresetRule { SourceChannels = channels, Preset = NewRulePreset });
+        // An applicable rule takes effect immediately when it matches the current source.
+        ApplyChannelPresetRuleIfMatching(MatrixInputChannelCountFor(_session));
+    }
+
+    [RelayCommand]
+    private void RemoveChannelPresetRule(ChannelPresetRule? rule)
+    {
+        if (rule is not null)
+            ChannelPresetRules.Remove(rule);
+    }
+
+    /// <summary>Applies the matching rule's preset to every selected output matrix sized for
+    /// <paramref name="inputChannels"/>. No-op without a matching, applicable rule.</summary>
+    private void ApplyChannelPresetRuleIfMatching(int inputChannels)
+    {
+        var rule = ChannelPresetRules.FirstOrDefault(r => r.SourceChannels == inputChannels);
+        if (rule is null)
+            return;
+        foreach (var binding in Outputs)
+        {
+            if (!binding.IsSelected) continue;
+            if (binding.Matrix.InputChannelCount != inputChannels) continue;
+            binding.Matrix.ApplyDownmix(rule.Preset);
+        }
+    }
+
     private bool _audioMatrixSourceChannelsExplicit;
     private bool _updatingAudioMatrixSourceChannels;
 
@@ -1229,6 +1290,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [NotifyPropertyChangedFor(nameof(IsLoadingMedia))]
     [NotifyPropertyChangedFor(nameof(IsBusy))]
     [NotifyPropertyChangedFor(nameof(BusyStatusText))]
+    [NotifyPropertyChangedFor(nameof(DeckStatusText))]
+    [NotifyPropertyChangedFor(nameof(DeckStatusSeverity))]
     private PlayerLoadState _loadState = PlayerLoadState.Idle;
 
     /// <summary>True while a media open is in flight — drives the slim indeterminate loading bar in the
@@ -1239,13 +1302,30 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// attempt succeeds. Unlike <see cref="StatusMessage"/> it isn't cleared by unrelated status text.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasLoadError))]
+    [NotifyPropertyChangedFor(nameof(DeckStatusText))]
+    [NotifyPropertyChangedFor(nameof(DeckStatusSeverity))]
     private string? _lastLoadError;
 
     /// <summary>True when the last load attempt failed and an error is available to show.</summary>
     public bool HasLoadError => LoadState == PlayerLoadState.Failed && !string.IsNullOrWhiteSpace(LastLoadError);
 
+    // ----- UI rewrite P5 (plan §1/§2.2): fixed-height deck status line ---------------------------
+    // One always-present row replaces the two dock-top banners that used to push the transport
+    // down mid-click. Sticky load errors win over transient status text.
+
+    public string? DeckStatusText => HasLoadError ? LastLoadError : StatusMessage;
+
+    public ToastSeverity DeckStatusSeverity => HasLoadError ? ToastSeverity.Error : ToastSeverity.Info;
+
+    private void NotifyDeckStatusChanged()
+    {
+        OnPropertyChanged(nameof(DeckStatusText));
+        OnPropertyChanged(nameof(DeckStatusSeverity));
+    }
+
     partial void OnStatusMessageChanged(string? value)
     {
+        NotifyDeckStatusChanged();
         _statusMessageClearCts?.Cancel();
         _statusMessageClearCts?.Dispose();
         _statusMessageClearCts = null;
@@ -2857,6 +2937,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         MediaFilePath = MediaFilePath,
         SelectedPlaylistPath = _currentPlaylistItem is FilePlaylistItem cf ? cf.Path : null,
         FallbackImagePath = FallbackImagePath,
+        ChannelPresetRules = ChannelPresetRules.ToList(),
         IsLooping = IsLooping,
         AutoAdvancePlaylist = AutoAdvancePlaylist,
         HoldFallbackVideo = HoldFallbackVideo,
@@ -2933,6 +3014,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void ApplyPlayerConfig(MediaPlayerConfig config)
     {
         Name = string.IsNullOrWhiteSpace(config.Name) ? Name : config.Name;
+
+        ChannelPresetRules.Clear();
+        foreach (var rule in config.ChannelPresetRules)
+            ChannelPresetRules.Add(rule);
 
         PlaylistTabs.Clear();
         var tabs = config.PlaylistTabs.Count > 0
