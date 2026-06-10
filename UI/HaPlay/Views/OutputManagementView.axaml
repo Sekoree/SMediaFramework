@@ -48,88 +48,116 @@
       </StackPanel>
     </Grid>
 
-    <Border Grid.Row="1" Classes="card">
-      <Grid>
-        <TextBlock Text="{x:Static res:Strings.NoOutputsEmptyHint}"
-                   TextWrapping="Wrap"
-                   Opacity="0.65"
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Center"
-                   IsVisible="{Binding HasNoOutputs}" />
-        <ListBox ItemsSource="{Binding Outputs}" Background="Transparent">
-          <ListBox.ItemTemplate>
-            <DataTemplate x:DataType="vm:OutputLineViewModel">
-              <Grid ColumnDefinitions="*,Auto" Margin="{Binding IndentMargin}">
-                <Grid.ContextFlyout>
-                  <MenuFlyout>
-                    <MenuItem Header="{x:Static res:Strings.NoPreviewActionsMenuHeader}"
-                              IsVisible="{Binding IsNotLocalVideo}"
-                              IsEnabled="False" />
-                    <!-- The output window opens when the output is added and closes when it's removed, so a
-                         manual open/close ("start/stop preview") was removed. Fullscreen / Windowed remain. -->
-                    <MenuItem Header="{x:Static res:Strings.FullscreenPreviewMenuHeader}"
-                              Command="{Binding FullscreenPreviewCommand}"
-                              IsVisible="{Binding IsLocalVideo}" />
-                    <MenuItem Header="{x:Static res:Strings.WindowedPreviewMenuHeader}"
-                              Command="{Binding WindowedPreviewCommand}"
-                              IsVisible="{Binding IsLocalVideo}" />
-                  </MenuFlyout>
-                </Grid.ContextFlyout>
-                <StackPanel Grid.Column="0" Spacing="4">
-                  <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Ellipse Width="10" Height="10"
-                             VerticalAlignment="Center"
-                             Fill="{Binding HealthColor}"
-                             ToolTip.Tip="{Binding HealthToolTip}" />
-                    <Border IsVisible="{Binding IsNdiRecording}"
-                            Background="#CCB00020"
-                            BorderBrush="#FFDF4A4A"
-                            BorderThickness="1"
-                            CornerRadius="3"
-                            Padding="4,1">
-                      <TextBlock Text="{x:Static res:Strings.RecBadgeLabel}" FontSize="10" FontWeight="SemiBold" Foreground="#FFF5D4D4" />
-                    </Border>
-                    <TextBlock Text="{x:Static res:Strings.CloneOutputGlyph}" Opacity="0.6" IsVisible="{Binding IsClone}" />
-                    <TextBlock Text="{Binding KindLabel}" FontWeight="SemiBold"
-                               ToolTip.Tip="{Binding KindTechnicalLabel}" />
-                    <TextBlock Text="{x:Static res:Strings.EmDash}" Opacity="0.5" />
-                    <!-- P2 alias: borderless inline editor — commit a new name to alias the output
-                         everywhere (matrix columns, cue pickers); blank restores the device name. -->
-                    <TextBox Text="{Binding NameEdit, Mode=TwoWay}" FontWeight="SemiBold"
-                             BorderThickness="0" Background="Transparent" Padding="2,0"
-                             MinWidth="80" VerticalAlignment="Center"
+    <!-- I/O master-detail (plan §5): slim line list on the left, detail + live stats for the
+         selected line on the right. Per-line action buttons and the sparkline moved into the
+         detail pane; rows stay scannable (health dot · kind · name · badges). -->
+    <Grid Grid.Row="1" ColumnDefinitions="340,10,*">
+
+      <Border Grid.Column="0" Classes="card">
+        <Grid>
+          <TextBlock Text="{x:Static res:Strings.NoOutputsEmptyHint}"
+                     TextWrapping="Wrap"
+                     Opacity="0.65"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"
+                     IsVisible="{Binding HasNoOutputs}" />
+          <ListBox ItemsSource="{Binding Outputs}"
+                   SelectedItem="{Binding SelectedLine, Mode=TwoWay}"
+                   Background="Transparent">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:OutputLineViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="{Binding IndentMargin}">
+                  <Ellipse Width="10" Height="10"
+                           VerticalAlignment="Center"
+                           Fill="{Binding HealthColor}"
+                           ToolTip.Tip="{Binding HealthToolTip}" />
+                  <Border IsVisible="{Binding IsNdiRecording}"
+                          Background="#CCB00020"
+                          BorderBrush="#FFDF4A4A"
+                          BorderThickness="1"
+                          CornerRadius="3"
+                          Padding="4,1">
+                    <TextBlock Text="{x:Static res:Strings.RecBadgeLabel}" FontSize="10" FontWeight="SemiBold" Foreground="#FFF5D4D4" />
+                  </Border>
+                  <TextBlock Text="{x:Static res:Strings.CloneOutputGlyph}" Opacity="0.6" IsVisible="{Binding IsClone}" />
+                  <TextBlock Text="{Binding KindLabel}" Opacity="0.7" FontSize="12" VerticalAlignment="Center"
+                             ToolTip.Tip="{Binding KindTechnicalLabel}" />
+                  <TextBlock Text="{Binding EffectiveName}" FontWeight="SemiBold" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"
                              ToolTip.Tip="{Binding Definition.DisplayName}" />
-                    <TextBlock Text="{Binding CloneParentLabel}"
-                               Opacity="0.55" FontSize="12" VerticalAlignment="Center"
-                               IsVisible="{Binding IsClone}" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </Border>
+
+      <Border Grid.Column="2" Classes="card">
+        <Grid>
+          <TextBlock Text="{x:Static res:Strings.OutputDetailEmptyHint}"
+                     Opacity="0.55" TextWrapping="Wrap"
+                     HorizontalAlignment="Center" VerticalAlignment="Center"
+                     IsVisible="{Binding SelectedLine, Converter={x:Static ObjectConverters.IsNull}}" />
+          <ContentControl Content="{Binding SelectedLine}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:OutputLineViewModel">
+                <StackPanel Spacing="10">
+
+                  <!-- Identity: alias editor (blank restores device name) + technical identity. -->
+                  <StackPanel Spacing="2">
+                    <TextBox Text="{Binding NameEdit, Mode=TwoWay}" FontWeight="SemiBold" FontSize="16"
+                             BorderThickness="0" Background="Transparent" Padding="2,0"
+                             ToolTip.Tip="{x:Static res:Strings.OutputAliasTooltip}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Classes="CaptionText" Text="{Binding KindTechnicalLabel}" />
+                      <TextBlock Classes="CaptionText" Text="{Binding Definition.DisplayName}" />
+                      <TextBlock Classes="CaptionText" Text="{Binding CloneParentLabel}" IsVisible="{Binding IsClone}" />
+                    </StackPanel>
                   </StackPanel>
+
                   <TextBlock Classes="hint" Text="{Binding Summary}" />
+
+                  <!-- Actions -->
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Content="{Binding NdiRecordingButtonText}"
+                            Command="{Binding ToggleNdiRecordingCommand}"
+                            IsVisible="{Binding IsNdi}" />
+                    <Button Content="{x:Static res:Strings.FullscreenPreviewMenuHeader}"
+                            Command="{Binding FullscreenPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                    <Button Content="{x:Static res:Strings.WindowedPreviewMenuHeader}"
+                            Command="{Binding WindowedPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                    <Button Content="{x:Static res:Strings.EditButton}" Command="{Binding EditCommand}" />
+                    <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCommand}" />
+                  </StackPanel>
+
+                  <!-- Live stats card (plan §5): health + delivery counters + 60 s throughput. -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="6">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Ellipse Width="10" Height="10" VerticalAlignment="Center" Fill="{Binding HealthColor}" />
+                        <TextBlock Text="{Binding HealthToolTip}" TextWrapping="Wrap" FontSize="12" />
+                      </StackPanel>
+                      <TextBlock FontFamily="Consolas,monospace" FontSize="12" Opacity="0.8"
+                                 Text="{Binding StatsSummary}"
+                                 IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                      <ctrls:SparklineControl Height="48" HorizontalAlignment="Stretch"
+                                              Samples="{Binding SparklineSamples}"
+                                              PeakSample="{Binding SparklinePeakSample}"
+                                              Revision="{Binding SparklineRevision}"
+                                              Stroke="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.Instance}}"
+                                              AreaFill="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.AreaInstance}}"
+                                              ToolTip.Tip="{x:Static res:Strings.OutputThroughputTooltip}" />
+                    </StackPanel>
+                  </Border>
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                  <!-- P2: cumulative delivery counters (frames / audio chunks) beside the sparkline. -->
-                  <TextBlock Text="{Binding StatsSummary}" FontSize="11" Opacity="0.7"
-                             FontFamily="Consolas,monospace" VerticalAlignment="Center"
-                             IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                  <!-- §8.1 inline sparkline — frames+chunks per second over last 60 s. -->
-                  <ctrls:SparklineControl Width="120" Height="22"
-                                          Samples="{Binding SparklineSamples}"
-                                          PeakSample="{Binding SparklinePeakSample}"
-                                          Revision="{Binding SparklineRevision}"
-                                          Stroke="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.Instance}}"
-                                          AreaFill="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.AreaInstance}}"
-                                          ToolTip.Tip="{x:Static res:Strings.OutputThroughputTooltip}" />
-                  <Button Content="{Binding NdiRecordingButtonText}"
-                          Command="{Binding ToggleNdiRecordingCommand}"
-                          IsVisible="{Binding IsNdi}" />
-                  <Button Content="{x:Static res:Strings.EditButton}" Command="{Binding EditCommand}" />
-                  <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCommand}" />
-                </StackPanel>
-              </Grid>
-            </DataTemplate>
-          </ListBox.ItemTemplate>
-        </ListBox>
-      </Grid>
-    </Border>
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
+        </Grid>
+      </Border>
+    </Grid>
 
     <Expander Grid.Row="2"
               Header="{x:Static res:Strings.AdvancedRoutingHeader}"

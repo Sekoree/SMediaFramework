@@ -46,6 +46,14 @@ public static class Strings
     public static string MatrixPresetFileTypeLabel => Get(nameof(MatrixPresetFileTypeLabel));
     public static string MatrixPresetSavedFormat => Get(nameof(MatrixPresetSavedFormat));
     public static string MatrixPresetLoadedFormat => Get(nameof(MatrixPresetLoadedFormat));
+    public static string OutputDetailEmptyHint => Get(nameof(OutputDetailEmptyHint));
+    public static string OutputAliasTooltip => Get(nameof(OutputAliasTooltip));
+    public static string ControlTabSurfaces => Get(nameof(ControlTabSurfaces));
+    public static string ControlTabScripts => Get(nameof(ControlTabScripts));
+    public static string ControlTabMonitor => Get(nameof(ControlTabMonitor));
+    public static string ControlTabTools => Get(nameof(ControlTabTools));
+    public static string ControlManualSendsTitle => Get(nameof(ControlManualSendsTitle));
+    public static string IoTabOsc => Get(nameof(IoTabOsc));
     public static string NowPlayingSeekLockTooltip => Get(nameof(NowPlayingSeekLockTooltip));
     public static string NowPlayingSeekTooltip => Get(nameof(NowPlayingSeekTooltip));
     public static string NowPlayingGroupExpandTooltip => Get(nameof(NowPlayingGroupExpandTooltip));

@@ -48,6 +48,11 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// <summary>Supplies players with active sessions for output-line health LEDs.</summary>
     public Func<IReadOnlyList<MediaPlayerViewModel>>? ActivePlayersProbe { get; set; }
 
+    /// <summary>UI rewrite (I/O master-detail): the line whose detail/stats pane is shown. Cleared
+    /// automatically when that line is removed.</summary>
+    [ObservableProperty]
+    private OutputLineViewModel? _selectedLine;
+
     private DispatcherTimer? _healthTimer;
 
     /// <summary>
@@ -141,6 +146,9 @@ public partial class OutputManagementViewModel : ViewModelBase
             OnPropertyChanged(nameof(HasOutputs));
             OnPropertyChanged(nameof(HasNoOutputs));
             OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
+            if (SelectedLine is { } sel && !Outputs.Contains(sel))
+                SelectedLine = null;
+            SelectedLine ??= Outputs.FirstOrDefault();
             RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         };
         // §8.2 — a removed PA output may have been a bus's target; raise the event so player VMs

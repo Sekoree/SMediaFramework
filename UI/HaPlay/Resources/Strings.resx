@@ -2259,4 +2259,28 @@
   <data name="MatrixPresetLoadedFormat" xml:space="preserve">
     <value>Applied matrix preset "{0}"</value>
   </data>
+  <data name="OutputDetailEmptyHint" xml:space="preserve">
+    <value>Select an output on the left to see its details and live stats.</value>
+  </data>
+  <data name="OutputAliasTooltip" xml:space="preserve">
+    <value>Rename this output (alias shown everywhere). Clearing the field restores the device name.</value>
+  </data>
+  <data name="ControlTabSurfaces" xml:space="preserve">
+    <value>Surfaces</value>
+  </data>
+  <data name="ControlTabScripts" xml:space="preserve">
+    <value>Scripts</value>
+  </data>
+  <data name="ControlTabMonitor" xml:space="preserve">
+    <value>Monitor</value>
+  </data>
+  <data name="ControlTabTools" xml:space="preserve">
+    <value>Tools</value>
+  </data>
+  <data name="ControlManualSendsTitle" xml:space="preserve">
+    <value>Manual sends</value>
+  </data>
+  <data name="IoTabOsc" xml:space="preserve">
+    <value>OSC</value>
+  </data>
 </root>

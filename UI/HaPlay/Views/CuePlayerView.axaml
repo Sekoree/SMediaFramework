@@ -358,6 +358,9 @@
                   <Button Content="Drop LFE" Padding="6,2" FontSize="11"
                           Command="{Binding ApplyCueDownmixPresetCommand}"
                           CommandParameter="{x:Static models:AudioDownmixPreset.DropLfe}" />
+                  <Button Content="{x:Static res:Strings.MatrixPresetLoadButton}" Padding="6,2" FontSize="11"
+                          Command="{Binding LoadCueMixPresetCommand}"
+                          ToolTip.Tip="{x:Static res:Strings.MatrixPresetLoadTitle}" />
                 </WrapPanel>
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"

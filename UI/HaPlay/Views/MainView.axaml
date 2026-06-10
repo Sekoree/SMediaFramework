@@ -196,7 +196,7 @@
         <TabItem Header="{x:Static res:Strings.MidiHeader}">
           <views:MidiDevicesView />
         </TabItem>
-        <TabItem Header="OSC">
+        <TabItem Header="{x:Static res:Strings.IoTabOsc}">
           <views:OscConnectionsView />
         </TabItem>
       </TabControl>

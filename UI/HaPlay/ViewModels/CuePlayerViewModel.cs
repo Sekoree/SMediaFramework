@@ -2899,6 +2899,96 @@ public partial class CuePlayerViewModel : ViewModelBase
     private bool CanApplyCueDownmix() =>
         SelectedCueNode is { Kind: CueNodeKind.Media } && AvailableAudioOutputs.Count > 0;
 
+    /// <summary>P5c follow-through — load a framework <c>.mfmix</c> preset file into the selected
+    /// cues' routes on the chosen target line (same replace semantics as the enum quick-applies;
+    /// non-zero cells become 1-based cue routes with dB gains).</summary>
+    [RelayCommand(CanExecute = nameof(CanApplyCueDownmix))]
+    private async Task LoadCueMixPresetAsync()
+    {
+        var targets = MediaCuesInSelection();
+        if (targets.Count == 0)
+            return;
+        var line = SelectedAudioRoute?.OutputLineId is { } selId && selId != Guid.Empty
+            ? AvailableAudioOutputs.FirstOrDefault(l => l.Definition.Id == selId) ?? AvailableAudioOutputs.FirstOrDefault()
+            : AvailableAudioOutputs.FirstOrDefault();
+        if (line is null)
+        {
+            StatusMessage = Strings.DownmixNoOutputStatus;
+            return;
+        }
+
+        var owner = TryGetMainWindow();
+        if (owner is null) return;
+        var opts = new FilePickerOpenOptions
+        {
+            Title = Strings.MatrixPresetLoadTitle,
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType(Strings.MatrixPresetFileTypeLabel)
+                    { Patterns = ["*." + S.Media.Core.Audio.AudioMixPreset.FileExtension] },
+                new FilePickerFileType("All files") { Patterns = ["*"] },
+            ],
+        };
+        var files = await owner.StorageProvider.OpenFilePickerAsync(opts);
+        var path = files.FirstOrDefault()?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path)) return;
+
+        float[,] gains;
+        string presetName;
+        try
+        {
+            var preset = S.Media.Core.Audio.AudioMixPreset.Load(path);
+            gains = preset.ToMatrix();
+            presetName = preset.Name;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+            return;
+        }
+
+        var lineId = line.Definition.Id;
+        var outChannels = GetAudioOutputChannelCount(line);
+        var applied = 0;
+        foreach (var media in targets)
+        {
+            for (var i = media.AudioRoutes.Count - 1; i >= 0; i--)
+                if (media.AudioRoutes[i].OutputLineId == lineId)
+                    media.AudioRoutes.RemoveAt(i);
+
+            CueAudioRouteViewModel? first = null;
+            for (var src = 0; src < gains.GetLength(0); src++)
+            {
+                for (var dst = 0; dst < Math.Min(gains.GetLength(1), outChannels); dst++)
+                {
+                    var linear = gains[src, dst];
+                    if (linear <= 0f) continue;
+                    var route = new CueAudioRouteViewModel
+                    {
+                        SourceChannel = src,
+                        OutputLineId = lineId,
+                        OutputChannel = dst + 1, // cue routes are 1-based
+                        GainDb = 20.0 * Math.Log10(linear),
+                    };
+                    route.SetLineResolver(ResolveOutputLine);
+                    media.AudioRoutes.Add(route);
+                    first ??= route;
+                }
+            }
+
+            if (ReferenceEquals(media, SelectedCueNode) && first is not null)
+                SelectedAudioRoute = first;
+            applied++;
+        }
+
+        OnPropertyChanged(nameof(VisibleAudioRoutes));
+        OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
+        StatusMessage = Strings.Format(nameof(Strings.DownmixAppliedStatusFormat), presetName,
+            applied == 1 ? line.Definition.EffectiveName : $"{applied} cues on {line.Definition.EffectiveName}");
+        SuggestPreRollRefresh();
+    }
+
     [RelayCommand(CanExecute = nameof(CanAddVideoPlacement))]
     private void AddVideoPlacement()
     {
