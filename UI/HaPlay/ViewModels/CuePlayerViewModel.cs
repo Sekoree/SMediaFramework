@@ -2892,7 +2892,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSelectedMediaCueWithAudio));
         StatusMessage = Strings.Format(nameof(Strings.DownmixAppliedStatusFormat),
             AudioDownmixPresets.DisplayName(preset),
-            applied == 1 ? line.Definition.DisplayName : $"{applied} cues on {line.Definition.DisplayName}");
+            applied == 1 ? line.Definition.EffectiveName : $"{applied} cues on {line.Definition.EffectiveName}");
         SuggestPreRollRefresh();
     }
 

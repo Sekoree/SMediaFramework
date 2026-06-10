@@ -47,7 +47,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <TextBlock FontWeight="SemiBold" Text="{Binding Line.KindLabel}" />
                   <TextBlock Text="{x:Static res:Strings.EmDash}" Opacity="0.5" />
-                  <TextBlock Text="{Binding Line.Definition.DisplayName}" />
+                  <TextBlock Text="{Binding Line.Definition.EffectiveName}" />
                 </StackPanel>
               </StackPanel>
             </Grid>

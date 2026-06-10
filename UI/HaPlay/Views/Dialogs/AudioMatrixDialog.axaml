@@ -113,6 +113,15 @@
                   <Button Content="Drop LFE" Padding="6,2" FontSize="11"
                           Command="{Binding Matrix.ApplyDownmixPresetCommand}"
                           CommandParameter="{x:Static models:AudioDownmixPreset.DropLfe}" />
+                  <Border Width="8" />
+                  <Button Content="{x:Static res:Strings.MatrixPresetSaveButton}" Padding="6,2" FontSize="11"
+                          Command="{Binding $parent[Window].((vm:MediaPlayerViewModel)DataContext).SaveMatrixPresetCommand}"
+                          CommandParameter="{Binding}"
+                          ToolTip.Tip="{x:Static res:Strings.MatrixPresetSaveTitle}" />
+                  <Button Content="{x:Static res:Strings.MatrixPresetLoadButton}" Padding="6,2" FontSize="11"
+                          Command="{Binding $parent[Window].((vm:MediaPlayerViewModel)DataContext).LoadMatrixPresetCommand}"
+                          CommandParameter="{Binding}"
+                          ToolTip.Tip="{x:Static res:Strings.MatrixPresetLoadTitle}" />
                 </StackPanel>
               </StackPanel>
             </DataTemplate>

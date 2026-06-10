@@ -2238,4 +2238,25 @@
   <data name="NowPlayingGroupCancelTooltip" xml:space="preserve">
     <value>Stop every cue in this group</value>
   </data>
+  <data name="MatrixPresetSaveButton" xml:space="preserve">
+    <value>Save preset…</value>
+  </data>
+  <data name="MatrixPresetLoadButton" xml:space="preserve">
+    <value>Load preset…</value>
+  </data>
+  <data name="MatrixPresetSaveTitle" xml:space="preserve">
+    <value>Save routing matrix preset</value>
+  </data>
+  <data name="MatrixPresetLoadTitle" xml:space="preserve">
+    <value>Load routing matrix preset</value>
+  </data>
+  <data name="MatrixPresetFileTypeLabel" xml:space="preserve">
+    <value>Audio mix preset</value>
+  </data>
+  <data name="MatrixPresetSavedFormat" xml:space="preserve">
+    <value>Saved matrix preset {0}</value>
+  </data>
+  <data name="MatrixPresetLoadedFormat" xml:space="preserve">
+    <value>Applied matrix preset "{0}"</value>
+  </data>
 </root>

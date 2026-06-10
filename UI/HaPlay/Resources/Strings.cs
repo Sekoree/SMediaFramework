@@ -39,6 +39,13 @@ public static class Strings
     public static string AutoPresetWhenLabel => Get(nameof(AutoPresetWhenLabel));
     public static string AutoPresetApplyLabel => Get(nameof(AutoPresetApplyLabel));
     public static string AddRuleButton => Get(nameof(AddRuleButton));
+    public static string MatrixPresetSaveButton => Get(nameof(MatrixPresetSaveButton));
+    public static string MatrixPresetLoadButton => Get(nameof(MatrixPresetLoadButton));
+    public static string MatrixPresetSaveTitle => Get(nameof(MatrixPresetSaveTitle));
+    public static string MatrixPresetLoadTitle => Get(nameof(MatrixPresetLoadTitle));
+    public static string MatrixPresetFileTypeLabel => Get(nameof(MatrixPresetFileTypeLabel));
+    public static string MatrixPresetSavedFormat => Get(nameof(MatrixPresetSavedFormat));
+    public static string MatrixPresetLoadedFormat => Get(nameof(MatrixPresetLoadedFormat));
     public static string NowPlayingSeekLockTooltip => Get(nameof(NowPlayingSeekLockTooltip));
     public static string NowPlayingSeekTooltip => Get(nameof(NowPlayingSeekTooltip));
     public static string NowPlayingGroupExpandTooltip => Get(nameof(NowPlayingGroupExpandTooltip));

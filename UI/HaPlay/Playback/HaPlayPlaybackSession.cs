@@ -1217,7 +1217,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         // When the matrix path owns this line's routes, the legacy single-route mix-mode reroute is a no-op.
         // The caller should be using TrySetOutputMatrix instead — silently honour both paths so VMs that
         // still poke MixMode (e.g. via "preset" buttons) don't fight the matrix.
-        if (wiring.CellRouteIds.Count > 0)
+        if (wiring.Cells.Count > 0)
             return true;
 
         try
@@ -1263,18 +1263,11 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         try
         {
             var router = Player.AudioRouter;
-            // First the legacy single route (if WireAudio's initial Connect installed one). Otherwise the
-            // run loop would add the cell contributions *on top of* the original identity route.
+            // The legacy single route (if WireAudio's initial Connect installed one) must go — the
+            // matrix owns this line's contribution now. ApplyMatrix only touches its own prefix.
             try { router.RemoveRoute(Player.AudioSourceId!, wiring.AudioOutputId); }
             catch { /* tolerate "no route" — back-compat removal sweeps */ }
 
-            // Then any cell routes from a previous matrix push.
-            foreach (var rid in wiring.CellRouteIds)
-            {
-                try { router.RemoveRouteById(rid); }
-                catch { /* best effort — racing teardown */ }
-            }
-            wiring.CellRouteIds.Clear();
             wiring.Cells.Clear();
 
             var srcChannels = SourceChannelCountOrFallback(0);
@@ -1282,21 +1275,11 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                 ? wiring.SinkChannelCount
                 : GetOutputChannelCount(line.Definition);
 
-            foreach (var cell in cells)
-            {
-                if (cell.Muted) continue;
-                if (cell.GainDb <= AudioMatrixDefaults.MutedFloorDb) continue;
-                if (cell.InputChannel < 0 || cell.InputChannel >= srcChannels) continue;
-                if (cell.OutputChannel < 0 || cell.OutputChannel >= wiring.SinkChannelCount) continue;
-
-                var map = BuildSingleCellMap(cell.InputChannel, cell.OutputChannel, wiring.SinkChannelCount);
-                var cellLinear = (float)Math.Pow(10.0, cell.GainDb / 20.0);
-                var routeGain = compoundEnvelope * cellLinear;
-                var routeId = $"cell:{wiring.AudioOutputId}:{cell.InputChannel}>{cell.OutputChannel}";
-                router.AddRoute(Player.AudioSourceId!, wiring.AudioOutputId, routeId, map, routeGain);
-                wiring.CellRouteIds.Add(routeId);
-                wiring.Cells.Add(cell);
-            }
+            // P5c: per-cell routes via the framework's atomic reconcile (AudioRouter.ApplyMatrix):
+            // changed cells ramp click-free, new cells fade in from silence, dropped cells removed —
+            // all in one router-state swap instead of the old remove-everything-re-add hard cut.
+            var gains = BuildMatrixGains(cells, srcChannels, wiring.SinkChannelCount, compoundEnvelope, wiring.Cells);
+            router.ApplyMatrix(Player.AudioSourceId!, wiring.AudioOutputId, gains);
 
             return true;
         }
@@ -1323,37 +1306,56 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             return false;
         }
 
-        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.CellRouteIds.Count == 0)
+        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.Cells.Count == 0)
             return false; // no matrix; caller picks the legacy gain path
-        if (Player.AudioRouter is null)
+        if (Player.AudioRouter is null || string.IsNullOrEmpty(Player.AudioSourceId) || wiring.AudioOutputId is null)
             return true;
 
-        var router = Player.AudioRouter;
-        for (var i = 0; i < wiring.CellRouteIds.Count; i++)
+        try
         {
-            var cell = wiring.Cells[i];
+            // Same reconcile as TrySetOutputMatrix: identical cell set, rescaled gains → ApplyMatrix
+            // only moves each route's GainSlot.Target (click-free ramps), no add/remove churn.
+            var gains = BuildMatrixGains(wiring.Cells, SourceChannelCountOrFallback(0),
+                wiring.SinkChannelCount, compoundEnvelope, liveCellsOut: null);
+            Player.AudioRouter.ApplyMatrix(Player.AudioSourceId!, wiring.AudioOutputId, gains);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            errorMessage = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Builds the linear gain matrix for <see cref="AudioRouter.ApplyMatrix"/> from cell configs:
+    /// muted/floor/out-of-range cells are zero; live cells get <c>envelope × 10^(dB/20)</c>.
+    /// When <paramref name="liveCellsOut"/> is non-null it receives the surviving cells (the set the
+    /// compound-gain ride later rescales).
+    /// </summary>
+    private static float[,] BuildMatrixGains(
+        IReadOnlyList<AudioMatrixCellConfig> cells,
+        int srcChannels,
+        int sinkChannels,
+        float compoundEnvelope,
+        List<AudioMatrixCellConfig>? liveCellsOut)
+    {
+        var gains = new float[Math.Max(0, srcChannels), Math.Max(0, sinkChannels)];
+        foreach (var cell in cells)
+        {
+            if (cell.Muted) continue;
+            if (cell.GainDb <= AudioMatrixDefaults.MutedFloorDb) continue;
+            if (cell.InputChannel < 0 || cell.InputChannel >= srcChannels) continue;
+            if (cell.OutputChannel < 0 || cell.OutputChannel >= sinkChannels) continue;
+
             var cellLinear = (float)Math.Pow(10.0, cell.GainDb / 20.0);
-            try { router.SetRouteGainById(wiring.CellRouteIds[i], compoundEnvelope * cellLinear); }
-            catch (Exception ex)
-            {
-                errorMessage = ex.Message;
-                return false;
-            }
+            gains[cell.InputChannel, cell.OutputChannel] = compoundEnvelope * cellLinear;
+            liveCellsOut?.Add(cell);
         }
 
-        return true;
+        return gains;
     }
 
-    /// <summary>Phase C (§4.3.4) — build a one-cell ChannelMap that routes <paramref name="inputChannel"/>
-    /// to <paramref name="outputChannel"/> and silences every other output channel.</summary>
-    internal static ChannelMap BuildSingleCellMap(int inputChannel, int outputChannel, int sinkChannels)
-    {
-        var arr = new int[sinkChannels];
-        for (var i = 0; i < sinkChannels; i++)
-            arr[i] = ChannelMap.Silence;
-        arr[outputChannel] = inputChannel;
-        return new ChannelMap(arr);
-    }
 
 
     public void ApplyFallbackImage(string? path)
@@ -2018,7 +2020,6 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         /// <summary>Phase C (§4.3.4) — when the per-cell matrix is in use, the list of router route ids
         /// installed for each non-zero cell. Empty when the line is using the single-route mix-mode path.</summary>
-        public List<string> CellRouteIds { get; } = new();
         /// <summary>Phase C (§4.3.4) — cached cell configs so master/per-output gain rides can recompute
         /// the per-route gain via <see cref="AudioRouter.SetRouteGainById"/> without re-adding routes.</summary>
         public List<AudioMatrixCellConfig> Cells { get; } = new();

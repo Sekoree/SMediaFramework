@@ -82,7 +82,7 @@
                           <Ellipse Width="9" Height="9" VerticalAlignment="Center"
                                    Fill="{Binding HealthColor}"
                                    ToolTip.Tip="{Binding HealthToolTip}" />
-                          <TextBlock Text="{Binding Definition.DisplayName}" VerticalAlignment="Center" />
+                          <TextBlock Text="{Binding Definition.EffectiveName}" VerticalAlignment="Center" />
                         </StackPanel>
                       </DataTemplate>
                     </ComboBox.ItemTemplate>

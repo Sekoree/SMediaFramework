@@ -1041,6 +1041,73 @@ public partial class MediaPlayerViewModel : ViewModelBase
         ApplyChannelPresetRuleIfMatching(MatrixInputChannelCountFor(_session));
     }
 
+    /// <summary>P5c — save this output's matrix as a shareable framework preset file (.mfmix).</summary>
+    [RelayCommand]
+    private async Task SaveMatrixPresetAsync(PlayerOutputBinding? binding)
+    {
+        if (binding is null) return;
+        var top = TryGetMainWindow();
+        if (top is null) return;
+        var opts = new FilePickerSaveOptions
+        {
+            Title = Strings.MatrixPresetSaveTitle,
+            DefaultExtension = S.Media.Core.Audio.AudioMixPreset.FileExtension,
+            SuggestedFileName = $"{binding.Line.EffectiveName}.{S.Media.Core.Audio.AudioMixPreset.FileExtension}",
+            FileTypeChoices =
+            [
+                new FilePickerFileType(Strings.MatrixPresetFileTypeLabel)
+                    { Patterns = ["*." + S.Media.Core.Audio.AudioMixPreset.FileExtension] },
+            ],
+        };
+        var picked = await top.StorageProvider.SaveFilePickerAsync(opts);
+        var path = picked?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            S.Media.Core.Audio.AudioMixPreset
+                .FromMatrix(Path.GetFileNameWithoutExtension(path), binding.Matrix.ToLinearMatrix())
+                .Save(path);
+            StatusMessage = Strings.Format(nameof(Strings.MatrixPresetSavedFormat), Path.GetFileName(path));
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
+    }
+
+    /// <summary>P5c — load a framework preset file into this output's matrix.</summary>
+    [RelayCommand]
+    private async Task LoadMatrixPresetAsync(PlayerOutputBinding? binding)
+    {
+        if (binding is null) return;
+        var top = TryGetMainWindow();
+        if (top is null) return;
+        var opts = new FilePickerOpenOptions
+        {
+            Title = Strings.MatrixPresetLoadTitle,
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType(Strings.MatrixPresetFileTypeLabel)
+                    { Patterns = ["*." + S.Media.Core.Audio.AudioMixPreset.FileExtension] },
+                new FilePickerFileType("All files") { Patterns = ["*"] },
+            ],
+        };
+        var files = await top.StorageProvider.OpenFilePickerAsync(opts);
+        var path = files.FirstOrDefault()?.TryGetLocalPath();
+        if (string.IsNullOrEmpty(path)) return;
+        try
+        {
+            var preset = S.Media.Core.Audio.AudioMixPreset.Load(path);
+            binding.Matrix.ApplyLinearMatrix(preset.ToMatrix());
+            StatusMessage = Strings.Format(nameof(Strings.MatrixPresetLoadedFormat), preset.Name);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = ex.Message;
+        }
+    }
+
     [RelayCommand]
     private void RemoveChannelPresetRule(ChannelPresetRule? rule)
     {

@@ -9,8 +9,10 @@ public sealed partial class AudioRouter
     /// <paramref name="outputId"/> as one route per non-zero cell, atomically.
     /// </summary>
     /// <param name="gains">
-    /// Cell gains indexed <c>[sourceChannel, outputChannel]</c>. Dimensions must exactly match the
-    /// source's and output's channel counts. A zero cell means "no route".
+    /// Cell gains indexed <c>[sourceChannel, outputChannel]</c>. Dimensions must not exceed the
+    /// source's / output's channel counts; a smaller matrix leaves the remaining channels unrouted
+    /// (hosts often size matrices from their UI model rather than the negotiated formats).
+    /// A zero cell means "no route".
     /// </param>
     /// <param name="routeIdPrefix">
     /// Namespace for the per-cell route ids (<c>{prefix}#{src}:{dst}</c>). Defaults to a prefix
@@ -48,21 +50,23 @@ public sealed partial class AudioRouter
             if (!_state.Outputs.TryGetValue(outputId, out var output))
                 throw new ArgumentException($"unknown output ID '{outputId}'", nameof(outputId));
 
-            var srcChannels = src.Source.Format.Channels;
+            var srcChannels = gains.GetLength(0);
             var dstChannels = output.Output.Format.Channels;
-            if (gains.GetLength(0) != srcChannels || gains.GetLength(1) != dstChannels)
+            if (gains.GetLength(0) > src.Source.Format.Channels || gains.GetLength(1) > dstChannels)
                 throw new ArgumentException(
-                    $"matrix is {gains.GetLength(0)}x{gains.GetLength(1)} but source '{sourceId}' has {srcChannels} channels and output '{outputId}' has {dstChannels}",
+                    $"matrix is {gains.GetLength(0)}x{gains.GetLength(1)} but source '{sourceId}' has {src.Source.Format.Channels} channels and output '{outputId}' has {dstChannels}",
                     nameof(gains));
 
             var prefix = (routeIdPrefix ?? DefaultMatrixRouteIdPrefix(sourceId, outputId)) + '#';
             var builder = _state.Routes.ToBuilder();
+            var matrixDst = gains.GetLength(1);
 
             // Pass 1 — reconcile existing prefix-owned routes: update changed gains in place, drop
             // cells that are now zero/out of range, reject prefix collisions with foreign pairs.
-            Span<bool> covered = srcChannels * dstChannels <= 256
-                ? stackalloc bool[srcChannels * dstChannels]
-                : new bool[srcChannels * dstChannels];
+            var coveredLen = Math.Max(1, srcChannels * matrixDst);
+            Span<bool> covered = coveredLen <= 256
+                ? stackalloc bool[coveredLen]
+                : new bool[coveredLen];
             for (var i = builder.Count - 1; i >= 0; i--)
             {
                 var route = builder[i].Route;
@@ -74,10 +78,10 @@ public sealed partial class AudioRouter
                         nameof(routeIdPrefix));
 
                 if (TryParseMatrixCellId(route.RouteId.AsSpan(prefix.Length), out var s, out var d)
-                    && s < srcChannels && d < dstChannels && gains[s, d] != 0f)
+                    && s < srcChannels && d < matrixDst && gains[s, d] != 0f)
                 {
                     route.GainSlot.Target = gains[s, d]; // click-free ramp from the current gain
-                    covered[s * dstChannels + d] = true;
+                    covered[s * matrixDst + d] = true;
                 }
                 else
                 {
@@ -86,12 +90,12 @@ public sealed partial class AudioRouter
             }
 
             // Pass 2 — add routes for non-zero cells that had none; fade in from silence.
-            for (var s = 0; s < srcChannels; s++)
+            for (var s = 0; s < gains.GetLength(0); s++)
             {
-                for (var d = 0; d < dstChannels; d++)
+                for (var d = 0; d < gains.GetLength(1); d++)
                 {
                     var gain = gains[s, d];
-                    if (gain == 0f || covered[s * dstChannels + d])
+                    if (gain == 0f || covered[s * matrixDst + d])
                         continue;
 
                     var slot = new RouteGainSlot(gain) { Current = 0f };

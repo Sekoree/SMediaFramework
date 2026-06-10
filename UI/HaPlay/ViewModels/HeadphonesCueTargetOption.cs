@@ -33,8 +33,8 @@ public sealed class HeadphonesCueTargetOption : IEquatable<HeadphonesCueTargetOp
     public string Display => Kind == TargetKind.SharedBus && Bus is not null
         ? (ResolvedLine is null
             ? Strings.Format(nameof(Strings.HeadphonesCueBusNoTargetFormat), Bus.Label)
-            : Strings.Format(nameof(Strings.HeadphonesCueBusTargetFormat), Bus.Label, ResolvedLine.Definition.DisplayName))
-        : Direct?.Definition.DisplayName ?? string.Empty;
+            : Strings.Format(nameof(Strings.HeadphonesCueBusTargetFormat), Bus.Label, ResolvedLine.Definition.EffectiveName))
+        : Direct?.Definition.EffectiveName ?? string.Empty;
 
     public bool IsBroken => Kind == TargetKind.SharedBus && ResolvedLine is null;
 

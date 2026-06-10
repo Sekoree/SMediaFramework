@@ -52,13 +52,33 @@ public sealed class AudioRouterMatrixTests
     }
 
     [Fact]
-    public void ApplyMatrix_DimensionMismatch_Throws()
+    public void ApplyMatrix_OversizedMatrix_Throws()
     {
         using var router = new AudioRouter(48000);
         var srcId = router.AddSource(new ConstantSource(new AudioFormat(48000, 2)));
         var outId = router.AddOutput(new CapturingOutput(new AudioFormat(48000, 2)));
 
         Assert.Throws<ArgumentException>(() => router.ApplyMatrix(srcId, outId, new float[6, 2]));
+        Assert.Throws<ArgumentException>(() => router.ApplyMatrix(srcId, outId, new float[2, 6]));
+    }
+
+    /// <summary>Hosts often size matrices from their UI model, not the negotiated formats — a matrix
+    /// smaller than the channel counts is valid and leaves the remaining channels unrouted.</summary>
+    [Fact]
+    public void ApplyMatrix_SmallerMatrix_RoutesOnlyCoveredCells_AndZeroRowsClear()
+    {
+        using var router = new AudioRouter(48000);
+        var srcId = router.AddSource(new ConstantSource(new AudioFormat(48000, 6)));
+        var outId = router.AddOutput(new CapturingOutput(new AudioFormat(48000, 2)));
+
+        var gains = new float[2, 1]; // only FL/FR → out L, channels 2..5 and out R untouched
+        gains[0, 0] = 1f;
+        gains[1, 0] = 0.5f;
+        router.ApplyMatrix(srcId, outId, gains);
+        Assert.Equal(2, router.Routes.Count);
+
+        router.ApplyMatrix(srcId, outId, new float[0, 0]); // empty matrix = remove all matrix routes
+        Assert.Empty(router.Routes);
     }
 
     [Fact]

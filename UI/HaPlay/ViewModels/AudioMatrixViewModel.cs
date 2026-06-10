@@ -253,6 +253,41 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
     [RelayCommand]
     private void ApplyDownmixPreset(AudioDownmixPreset preset) => ApplyDownmix(preset);
 
+    /// <summary>P5c — current layout as a linear gain matrix (muted/floor cells = 0) for
+    /// <see cref="S.Media.Core.Audio.AudioMixPreset"/> save.</summary>
+    public float[,] ToLinearMatrix()
+    {
+        var gains = new float[InputChannelCount, OutputChannelCount];
+        foreach (var c in Cells)
+        {
+            if (c.Muted || c.GainDb <= AudioMatrixDefaults.MutedFloorDb) continue;
+            gains[c.InputChannel, c.OutputChannel] = (float)Math.Pow(10.0, c.GainDb / 20.0);
+        }
+
+        return gains;
+    }
+
+    /// <summary>P5c — overwrite the cells from a linear gain matrix (preset load). Cells outside the
+    /// preset's dimensions are muted; zero gains mute; non-zero gains convert to dB.</summary>
+    public void ApplyLinearMatrix(float[,] gains)
+    {
+        foreach (var c in Cells)
+        {
+            var inRange = c.InputChannel < gains.GetLength(0) && c.OutputChannel < gains.GetLength(1);
+            var linear = inRange ? gains[c.InputChannel, c.OutputChannel] : 0f;
+            if (linear <= 0f)
+            {
+                c.GainDb = AudioMatrixDefaults.MutedFloorDb;
+                c.Muted = true;
+            }
+            else
+            {
+                c.GainDb = 20.0 * Math.Log10(linear);
+                c.Muted = false;
+            }
+        }
+    }
+
     /// <summary>Phase C — current cell layout as persistable configs (filtered to changed/audible cells).</summary>
     public IReadOnlyList<AudioMatrixCellConfig> ToPersistableCells() =>
         Cells.Select(c => c.ToConfig()).ToList();
