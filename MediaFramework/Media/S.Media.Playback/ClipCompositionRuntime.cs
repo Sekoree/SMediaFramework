@@ -58,6 +58,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     private long _lastDriftCheckTicks;
     private TimeSpan _lastMasterPosition;
     private IPlaybackClock? _master;
+    private IPlayhead? _timeline;
     private MediaClock? _slaveClock;
     private int _driverDisposeState;
     private bool _disposed;
@@ -223,15 +224,21 @@ public sealed class ClipCompositionRuntime : IDisposable
             stage.DisposeCompositor();
     }
 
-    public void SetClockMaster(IPlaybackClock master)
+    public void SetClockMaster(IPlaybackClock master, IPlayhead? timeline = null)
     {
         ArgumentNullException.ThrowIfNull(master);
         MediaClock? clockToRetarget = null;
         lock (_gate)
         {
             if (_disposed) return;
-            if (_master is not null) return;
+            if (_master is not null)
+            {
+                if (timeline is not null)
+                    _timeline = timeline;
+                return;
+            }
             _master = master;
+            _timeline = timeline;
             foreach (var layer in _slots)
                 layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
             clockToRetarget = _slaveClock;
@@ -370,7 +377,12 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         var sw = Stopwatch.StartNew();
         TimeSpan? masterPts = null;
-        if (_master is not null)
+        if (_timeline is not null)
+        {
+            try { masterPts = _timeline.CurrentPosition; }
+            catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: timeline read"); }
+        }
+        else if (_master is not null)
         {
             try { masterPts = _master.ElapsedSinceStart; }
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
@@ -656,9 +668,26 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             var sections = new WarpSection[_sections.Count];
             for (var i = 0; i < _sections.Count; i++)
-                sections[i] = new WarpSection(_sections[i].SourceCrop, _sections[i].Transform, _sections[i].Opacity);
+                sections[i] = new WarpSection(
+                    _sections[i].SourceCrop, _sections[i].Transform, _sections[i].Opacity, _sections[i].Mesh);
             return sections;
         }
+
+        /// <summary>True when any section carries a mesh warp — needs the GL warp pass; the CPU
+        /// fallback renders such sections with their affine placement instead.</summary>
+        private bool HasMeshSection()
+        {
+            foreach (var section in _sections)
+            {
+                if (section.Mesh is not null)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private bool _warpModeApplied;
+        private bool _meshFallbackWarned;
 
         /// <summary>Pump thread only. The canvas frame is borrowed — the compositor never takes
         /// ownership, so the caller keeps disposing it.</summary>
@@ -673,6 +702,32 @@ public sealed class ClipCompositionRuntime : IDisposable
                 compositor.Configure(OutputFormat);
                 _box.Compositor = compositor;
                 _box.DisposeOnDriverThread = created.DisposeOnDriverThread;
+            }
+
+            if (compositor is IWarpPassVideoCompositor warpCapable)
+            {
+                // Warp mode (GL): composite the canvas as one identity layer, then the compositor's
+                // integrated warp pass cuts/warps it into the output — the same pixel path as the
+                // single-output integrated warp, and the only path that renders mesh sections.
+                // Applied once per stage instance; section edits arrive as a new instance sharing
+                // the boxed compositor (WithSections), re-applying here on its first frame.
+                if (!_warpModeApplied)
+                {
+                    warpCapable.Configure(canvas.Format);
+                    warpCapable.SetWarpPass(OutputFormat, BuildWarpSections());
+                    _warpModeApplied = true;
+                }
+
+                _layerScratch.Clear();
+                _layerScratch.Add(new CompositorLayer(canvas, LayerTransform2D.Identity, 1f, BlendMode.Source));
+                return compositor.Composite(_layerScratch, canvas.PresentationTime);
+            }
+
+            if (!_meshFallbackWarned && HasMeshSection())
+            {
+                _meshFallbackWarned = true;
+                Trace.LogWarning(
+                    "Output mapping has mesh-warp sections but the compositor backend is CPU-only; rendering them with their affine placement (mesh warp requires the GL compositor).");
             }
 
             _layerScratch.Clear();

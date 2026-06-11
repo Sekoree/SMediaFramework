@@ -1,6 +1,7 @@
 using System.Text.Json;
 using HaPlay.Models;
 using HaPlay.Playback;
+using HaPlay.ViewModels.Dialogs;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -96,5 +97,140 @@ public sealed class OutputMappingModelTests
         Assert.Equal(200, s.DestWidth);
         Assert.Equal(-2, s.RotationDegrees);
         Assert.Equal(0.75, s.Brightness);
+        Assert.Equal(0, s.MeshColumns);
+        Assert.Null(s.MeshPoints);
+    }
+
+    [Fact]
+    public void CueListJson_RoundTripsMeshWarp()
+    {
+        var list = new CueList
+        {
+            VideoOutputs =
+            {
+                new CueVideoOutputBinding
+                {
+                    Mapping = new CueOutputMapping
+                    {
+                        Sections =
+                        {
+                            new CueOutputMappingSection
+                            {
+                                Name = "Curved screen",
+                                DestWidth = 800,
+                                DestHeight = 600,
+                                MeshColumns = 3,
+                                MeshRows = 2,
+                                MeshPoints = CueOutputMappingSection.IdentityMeshPoints(3, 2),
+                            },
+                        },
+                    },
+                },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(list);
+        var loaded = JsonSerializer.Deserialize<CueList>(json);
+
+        var section = Assert.Single(Assert.Single(loaded!.VideoOutputs).Mapping!.Sections);
+        Assert.Equal((3, 2), (section.MeshColumns, section.MeshRows));
+        Assert.NotNull(section.MeshPoints);
+        Assert.Equal(6, section.MeshPoints!.Count);
+        Assert.Equal(0.5, section.MeshPoints[1].X, precision: 6);
+        Assert.Equal(1.0, section.MeshPoints[5].Y, precision: 6);
+    }
+
+    [Fact]
+    public void ToMappingSpec_ConvertsMeshPoints()
+    {
+        var spec = CueCompositionRuntime.ToMappingSpec(new CueOutputMapping
+        {
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    MeshColumns = 2,
+                    MeshRows = 2,
+                    MeshPoints = [new(0, 0), new(1, 0), new(0, 1), new(1.25, 0.75)],
+                },
+            },
+        });
+
+        var s = Assert.Single(spec!.Sections);
+        Assert.Equal((2, 2), (s.MeshColumns, s.MeshRows));
+        Assert.NotNull(s.MeshPoints);
+        Assert.Equal(1.25, s.MeshPoints![3].X);
+        Assert.Equal(0.75, s.MeshPoints[3].Y);
+    }
+
+    [Fact]
+    public void IdentityMeshPoints_AreTheUniformGrid()
+    {
+        var points = CueOutputMappingSection.IdentityMeshPoints(3, 3);
+        Assert.Equal(9, points.Count);
+        Assert.Equal(new CuePoint(0, 0), points[0]);
+        Assert.Equal(new CuePoint(0.5, 0), points[1]);
+        Assert.Equal(new CuePoint(0.5, 0.5), points[4]);
+        Assert.Equal(new CuePoint(1, 1), points[8]);
+    }
+
+    [Fact]
+    public void EditorViewModel_EnablingMesh_SeedsIdentityGridAndApplies()
+    {
+        CueOutputMapping? applied = null;
+        var vm = new MappingEditorViewModel(
+            "Out", 1920, 1080,
+            CueOutputMapping.Identity(),
+            m => applied = m);
+        var section = vm.SelectedSection!;
+
+        section.MeshEnabled = true;
+
+        Assert.Equal(16, section.MeshPoints.Count); // default 4×4
+        var model = Assert.Single(applied!.Sections);
+        Assert.Equal((4, 4), (model.MeshColumns, model.MeshRows));
+        Assert.Equal(16, model.MeshPoints!.Count);
+
+        // Disabling drops the mesh from the persisted model but keeps the grid in the VM.
+        section.MeshEnabled = false;
+        model = Assert.Single(applied!.Sections);
+        Assert.Equal(0, model.MeshColumns);
+        Assert.Null(model.MeshPoints);
+        Assert.Equal(16, section.MeshPoints.Count);
+    }
+
+    [Fact]
+    public void EditorViewModel_MeshRoundTripsAndPointEditsApply()
+    {
+        CueOutputMapping? applied = null;
+        var initial = new CueOutputMapping
+        {
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    MeshColumns = 2,
+                    MeshRows = 2,
+                    MeshPoints = [new(0, 0), new(1, 0), new(0, 1), new(1.1, 1.1)],
+                },
+            },
+        };
+        var vm = new MappingEditorViewModel("Out", 1920, 1080, initial, m => applied = m);
+        var section = vm.SelectedSection!;
+
+        Assert.True(section.MeshEnabled);
+        Assert.Equal((2, 2), (section.MeshColumns, section.MeshRows));
+        Assert.Equal(1.1, section.MeshPoints[3].X, precision: 6);
+
+        section.SetMeshPoint(3, 1.3, 0.9);
+        var model = Assert.Single(applied!.Sections);
+        Assert.Equal(1.3, model.MeshPoints![3].X, precision: 6);
+        Assert.Equal(0.9, model.MeshPoints[3].Y, precision: 6);
+
+        // Grid resize restarts from identity.
+        section.MeshColumns = 3;
+        model = Assert.Single(applied!.Sections);
+        Assert.Equal(6, model.MeshPoints!.Count);
+        Assert.Equal(0.5, model.MeshPoints[1].X, precision: 6);
     }
 }

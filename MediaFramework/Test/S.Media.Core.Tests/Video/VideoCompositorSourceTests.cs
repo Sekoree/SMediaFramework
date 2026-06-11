@@ -65,6 +65,35 @@ public sealed class VideoCompositorSourceTests
     }
 
     [Fact]
+    public void SlotOutput_AbandonQueuedFrames_ClearsHeldFrame()
+    {
+        using var compositor = new CpuVideoCompositor(Bgra32_4x4);
+        using var output = new VideoCompositorSource(Bgra32_4x4, compositor, disposeCompositorOnDispose: false);
+        var slot = output.AddSlot();
+        slot.Output.Configure(Bgra32_4x4);
+        slot.Output.Submit(MakeFrame(0, 0, 255, 255)); // red
+
+        Assert.True(output.TryReadNextFrame(out var first));
+        first.Dispose();
+
+        var control = slot.Output as IVideoOutputQueueControl;
+        Assert.NotNull(control);
+        control!.AbandonQueuedFrames();
+
+        Assert.True(control.WaitForIdle(TimeSpan.FromMilliseconds(100)));
+        Assert.True(output.TryReadNextFrame(out var afterAbandon));
+        try
+        {
+            var span = afterAbandon.Planes[0].Span;
+            Assert.Equal(0, span[0]);
+            Assert.Equal(0, span[1]);
+            Assert.Equal(0, span[2]);
+            Assert.Equal(0, span[3]);
+        }
+        finally { afterAbandon.Dispose(); }
+    }
+
+    [Fact]
     public void Slot_HoldsLastFrameAcrossCompositeReads()
     {
         using var compositor = new CpuVideoCompositor(Bgra32_4x4);

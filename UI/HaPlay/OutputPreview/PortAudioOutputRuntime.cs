@@ -52,7 +52,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         {
             if (_output is not null)
                 return;
-            var output = CreateOutput();
+            var output = CreateOutput(_definition, out var resolvedDefinition);
             try
             {
                 output.Start();
@@ -63,6 +63,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 throw;
             }
 
+            _definition = resolvedDefinition;
             _output = output;
         }
         Trace.LogInformation("Start: '{Name}' device={Device} rate={Rate}Hz channels={Ch}",
@@ -131,21 +132,115 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         try { _output.Dispose(); }
         catch (Exception ex) { Trace.LogWarning(ex, "EnsureLiveSizedOutput Dispose"); }
 
-        var output = CreateOutput();
+        var output = CreateOutput(_definition, out var resolvedDefinition);
         output.Start();
+        _definition = resolvedDefinition;
         _output = output;
     }
 
-    private PortAudioOutput CreateOutput()
+    private PortAudioOutput CreateOutput(
+        PortAudioOutputDefinition definition,
+        out PortAudioOutputDefinition resolvedDefinition)
     {
+        var devices = PortAudioDeviceCatalog.EnumerateOutputDevices();
+        var hostApis = PortAudioDeviceCatalog.EnumerateHostApis();
+        resolvedDefinition = ResolveCurrentOutputDevice(definition, devices, hostApis);
+        if (resolvedDefinition.GlobalDeviceIndex != definition.GlobalDeviceIndex
+            || !string.Equals(resolvedDefinition.DeviceName, definition.DeviceName, StringComparison.Ordinal)
+            || resolvedDefinition.HostApiIndex != definition.HostApiIndex)
+        {
+            Trace.LogWarning(
+                "CreateOutput: '{Name}' saved PA device {SavedIndex} '{SavedDevice}' resolved to current device {ResolvedIndex} '{ResolvedDevice}'",
+                definition.DisplayName,
+                definition.GlobalDeviceIndex,
+                definition.DeviceName,
+                resolvedDefinition.GlobalDeviceIndex,
+                resolvedDefinition.DeviceName);
+        }
+
         var output = new PortAudioOutput(
-            Format,
-            _definition.GlobalDeviceIndex,
+            new AudioFormat(resolvedDefinition.SampleRate, resolvedDefinition.ChannelCount),
+            resolvedDefinition.GlobalDeviceIndex,
             suggestedLatency: null,
             framesPerBuffer: 480,
-            ringCapacityFrames: PortAudioLiveMonitoring.RingCapacityFrames(_definition.SampleRate));
-        output.TargetQueueSamples = PortAudioLiveMonitoring.TargetQueueSamples(_definition.SampleRate);
+            ringCapacityFrames: PortAudioLiveMonitoring.RingCapacityFrames(resolvedDefinition.SampleRate));
+        output.TargetQueueSamples = PortAudioLiveMonitoring.TargetQueueSamples(resolvedDefinition.SampleRate);
         return output;
+    }
+
+    internal static PortAudioOutputDefinition ResolveCurrentOutputDevice(
+        PortAudioOutputDefinition definition,
+        IReadOnlyList<PortAudioOutputDeviceEntry> devices,
+        IReadOnlyList<PortAudioHostApiEntry> hostApis)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(devices);
+        ArgumentNullException.ThrowIfNull(hostApis);
+
+        var requestedChannels = Math.Max(1, definition.ChannelCount);
+        var hostNames = hostApis.ToDictionary(h => h.Index, h => h.Name);
+        var requestedDeviceName = definition.DeviceName?.Trim() ?? string.Empty;
+        var requestedHostName = definition.HostApiName?.Trim() ?? string.Empty;
+
+        static bool SameName(string? a, string? b) =>
+            string.Equals(a?.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
+
+        string HostNameFor(PortAudioOutputDeviceEntry device) =>
+            hostNames.TryGetValue(device.HostApiIndex, out var name) ? name : requestedHostName;
+
+        PortAudioOutputDeviceEntry? PickUsable(IEnumerable<PortAudioOutputDeviceEntry> candidates)
+        {
+            foreach (var candidate in candidates)
+            {
+                if (candidate.MaxOutputChannels >= requestedChannels)
+                    return candidate;
+            }
+
+            return null;
+        }
+
+        var nameMatches = devices
+            .Where(d => SameName(d.Name, requestedDeviceName))
+            .ToList();
+
+        PortAudioOutputDeviceEntry? match = null;
+        if (nameMatches.Count > 0)
+        {
+            match = PickUsable(nameMatches.Where(d => SameName(HostNameFor(d), requestedHostName)))
+                ?? PickUsable(nameMatches.Where(d => d.HostApiIndex == definition.HostApiIndex))
+                ?? PickUsable(nameMatches.Where(d => d.GlobalDeviceIndex == definition.GlobalDeviceIndex))
+                ?? PickUsable(nameMatches);
+
+            if (match is null)
+            {
+                var closest = nameMatches
+                    .OrderByDescending(d => SameName(HostNameFor(d), requestedHostName))
+                    .ThenByDescending(d => d.HostApiIndex == definition.HostApiIndex)
+                    .ThenByDescending(d => d.GlobalDeviceIndex == definition.GlobalDeviceIndex)
+                    .First();
+                throw new InvalidOperationException(
+                    $"saved PortAudio output '{definition.DisplayName}' resolved to device '{closest.Name}', " +
+                    $"but it supports {closest.MaxOutputChannels} output channel(s), requested {requestedChannels}");
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(requestedDeviceName))
+        {
+            match = PickUsable(devices.Where(d => d.GlobalDeviceIndex == definition.GlobalDeviceIndex));
+        }
+
+        if (match is not { } resolved)
+        {
+            throw new InvalidOperationException(
+                $"saved PortAudio output '{definition.DisplayName}' device '{definition.DeviceName}' was not found; edit the output and choose an available output device");
+        }
+
+        return definition with
+        {
+            HostApiIndex = resolved.HostApiIndex,
+            HostApiName = HostNameFor(resolved),
+            GlobalDeviceIndex = resolved.GlobalDeviceIndex,
+            DeviceName = resolved.Name,
+        };
     }
 
     /// <summary>
@@ -193,7 +288,6 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 if (_disposed)
                     throw new ObjectDisposedException(nameof(PortAudioOutputRuntime));
                 toDispose = _output;
-                _definition = newDefinition;
                 // Build the new output before dropping the old reference so any failure leaves the line
                 // in the "no current output" state rather than half-reconfigured. Hot semantics still hold
                 // — acquirers will see null until the new stream comes up.
@@ -213,8 +307,9 @@ internal sealed class PortAudioOutputRuntime : IDisposable
 
             try
             {
-                newOutput = CreateOutput();
+                newOutput = CreateOutput(newDefinition, out var resolvedDefinition);
                 newOutput.Start();
+                newDefinition = resolvedDefinition;
             }
             catch
             {

@@ -64,6 +64,23 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
     private uint _warpFboTexture;
     private (int W, int H) _warpFboSize;
 
+    /// <summary>One mesh section's uploaded tessellation, keyed back to its warp-section index.</summary>
+    private readonly record struct MeshDraw(int SectionIndex, uint Vao, uint Vbo, uint Ebo, int IndexCount);
+
+    // Mesh warp (Phase 4): a lazily linked second program (composite_mesh.vert + the shared fragment
+    // shader) plus per-section tessellated buffers. Buffers are rebuilt only when the warp snapshot
+    // changes (control-point edits), never per frame; all GL work stays on the Composite thread.
+    private const string MeshProgramCacheKey = "GlVideoCompositor:composite_mesh";
+    private uint _meshProgram;
+    private int _meshXformLoc = -1;
+    private int _meshCropLoc = -1;
+    private int _meshOpacityLoc = -1;
+    private int _meshBlendKindLoc = -1;
+    private int _meshLayerLoc = -1;
+    private int _meshLayerFlipVLoc = -1;
+    private WarpPassState? _meshBuffersState;
+    private readonly List<MeshDraw> _meshDraws = new();
+
     private static readonly ConcurrentDictionary<string, string> ShaderSourceCache = new(StringComparer.Ordinal);
     private const string ProgramCacheKey = "GlVideoCompositor:composite_layer";
 
@@ -206,6 +223,12 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
                 readH = warp.Output.Height;
                 readStride = readW * (_outputStride / _output.Width);
                 readBytes = readStride * readH;
+            }
+            else if (_meshDraws.Count > 0)
+            {
+                // Warp cleared since the last frame — free the stale mesh buffers here, on the GL
+                // thread (SetWarpPass may run on any thread and must not touch GL objects).
+                ReleaseMeshBuffers();
             }
 
             // --- Readback. ---
@@ -515,17 +538,136 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
 
-        foreach (var section in warp.Sections)
+        EnsureMeshBuffers(warp);
+
+        var meshIdx = 0; // _meshDraws is ordered by ascending SectionIndex
+        for (var i = 0; i < warp.Sections.Length; i++)
         {
+            var section = warp.Sections[i];
             var opacity = Math.Clamp(section.Opacity, 0f, 1f);
+
+            while (meshIdx < _meshDraws.Count && _meshDraws[meshIdx].SectionIndex < i)
+                meshIdx++;
+            var hasMesh = meshIdx < _meshDraws.Count && _meshDraws[meshIdx].SectionIndex == i;
+
             if (opacity <= 0f)
                 continue;
-            // Canvas texture is stored top-down (it IS the readback content) — no sampling flip and
-            // no dest mirroring, unlike the layer pass (see DrawQuad's mirrorDestY remarks).
-            DrawQuad(_output.Width, _output.Height, warp.Output.Width, warp.Output.Height,
-                section.Transform, section.SourceCrop, opacity, flipV: false, BlendMode.SourceOver,
-                mirrorDestY: false);
+
+            if (hasMesh)
+            {
+                DrawMeshSection(_meshDraws[meshIdx], section, warp.Output.Width, warp.Output.Height, opacity);
+                // The mesh draw switched program + VAO — restore the layer pipeline for any affine
+                // sections that follow (and for state-restore symmetry at the end of Composite).
+                _gl.UseProgram(_program);
+                _gl.BindVertexArray(_vao);
+            }
+            else
+            {
+                // Canvas texture is stored top-down (it IS the readback content) — no sampling flip and
+                // no dest mirroring, unlike the layer pass (see DrawQuad's mirrorDestY remarks).
+                DrawQuad(_output.Width, _output.Height, warp.Output.Width, warp.Output.Height,
+                    section.Transform, section.SourceCrop, opacity, flipV: false, BlendMode.SourceOver,
+                    mirrorDestY: false);
+            }
         }
+    }
+
+    /// <summary>GL thread. (Re)builds the per-section mesh buffers when the warp snapshot changed;
+    /// tessellation runs on the CPU here, the per-frame cost is just the indexed draws.</summary>
+    private unsafe void EnsureMeshBuffers(WarpPassState warp)
+    {
+        if (ReferenceEquals(_meshBuffersState, warp))
+            return;
+
+        ReleaseMeshBuffers();
+        for (var i = 0; i < warp.Sections.Length; i++)
+        {
+            if (warp.Sections[i].Mesh is not { } mesh)
+                continue;
+
+            EnsureMeshPipeline();
+            WarpMeshTessellator.Tessellate(mesh, out var vertices, out var indices);
+
+            var vao = _gl.GenVertexArray();
+            _gl.BindVertexArray(vao);
+            var vbo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+            fixed (float* p = vertices)
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+            var ebo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ebo);
+            fixed (uint* p = indices)
+                _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StaticDraw);
+            // Interleaved (s, t, x, y): location 0 = section parameter (UV via uCrop), 1 = warped
+            // destination position in output pixels.
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)0);
+            _gl.EnableVertexAttribArray(1);
+            _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)(2 * sizeof(float)));
+            _gl.BindVertexArray(0);
+
+            _meshDraws.Add(new MeshDraw(i, vao, vbo, ebo, indices.Length));
+        }
+
+        // Mesh-buffer setup unbound the VAO — restore the layer-pass binding the caller expects.
+        _gl.BindVertexArray(_vao);
+        _meshBuffersState = warp;
+    }
+
+    private unsafe void DrawMeshSection(MeshDraw draw, WarpSection section, int destW, int destH, float opacity)
+    {
+        _gl.UseProgram(_meshProgram);
+        _gl.BindVertexArray(draw.Vao);
+
+        // Output pixels → NDC, no Y mirror — identical convention to the affine warp draw
+        // (mirrorDestY: false); the mesh positions are already absolute output pixels.
+        Span<float> m = stackalloc float[9];
+        m[0] = 2f / destW; m[1] = 0f; m[2] = 0f;
+        m[3] = 0f; m[4] = 2f / destH; m[5] = 0f;
+        m[6] = -1f; m[7] = -1f; m[8] = 1f;
+        _gl.UniformMatrix3(_meshXformLoc, 1, false, m);
+        var crop = section.SourceCrop.Clamped();
+        _gl.Uniform4(_meshCropLoc, crop.X0, crop.Y0, crop.X1, crop.Y1);
+        _gl.Uniform1(_meshOpacityLoc, opacity);
+        _gl.Uniform1(_meshLayerFlipVLoc, 0f);
+        _gl.Uniform1(_meshLayerLoc, 0);
+        _gl.Uniform1(_meshBlendKindLoc, 0);
+        _gl.Enable(EnableCap.Blend);
+        _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+
+        _gl.DrawElements(PrimitiveType.Triangles, (uint)draw.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
+    }
+
+    private void EnsureMeshPipeline()
+    {
+        if (_meshProgram != 0)
+            return;
+
+        var vertSrc = LoadShaderCached("composite_mesh.vert.glsl");
+        var fragSrc = LoadShaderCached("composite_layer.frag.glsl");
+        _meshProgram = SharedGlProgramCache.Acquire(MeshProgramCacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
+
+        _meshXformLoc = _gl.GetUniformLocation(_meshProgram, "uXform");
+        _meshCropLoc = _gl.GetUniformLocation(_meshProgram, "uCrop");
+        _meshOpacityLoc = _gl.GetUniformLocation(_meshProgram, "uOpacity");
+        _meshBlendKindLoc = _gl.GetUniformLocation(_meshProgram, "uBlendKind");
+        _meshLayerLoc = _gl.GetUniformLocation(_meshProgram, "uLayer");
+        _meshLayerFlipVLoc = _gl.GetUniformLocation(_meshProgram, "uLayerFlipV");
+        if (_meshXformLoc < 0 || _meshCropLoc < 0 || _meshOpacityLoc < 0 || _meshBlendKindLoc < 0
+            || _meshLayerLoc < 0 || _meshLayerFlipVLoc < 0)
+            throw new InvalidOperationException("composite_mesh program missing required uniforms.");
+    }
+
+    private void ReleaseMeshBuffers()
+    {
+        foreach (var md in _meshDraws)
+        {
+            _gl.DeleteVertexArray(md.Vao);
+            _gl.DeleteBuffer(md.Vbo);
+            _gl.DeleteBuffer(md.Ebo);
+        }
+        _meshDraws.Clear();
+        _meshBuffersState = null;
     }
 
     private unsafe void EnsureWarpFbo(int width, int height)
@@ -704,6 +846,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         if (_fbo != 0) { _gl.DeleteFramebuffer(_fbo); _fbo = 0; }
         if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }
         if (_warpFbo != 0) { _gl.DeleteFramebuffer(_warpFbo); _warpFbo = 0; }
+        ReleaseMeshBuffers();
+        if (_meshProgram != 0) { SharedGlProgramCache.Release(_gl, MeshProgramCacheKey); _meshProgram = 0; }
         if (_vbo != 0) { _gl.DeleteBuffer(_vbo); _vbo = 0; }
         if (_vao != 0) { _gl.DeleteVertexArray(_vao); _vao = 0; }
         if (_program != 0) { SharedGlProgramCache.Release(_gl, ProgramCacheKey); _program = 0; }

@@ -147,6 +147,32 @@ public sealed record CueOutputMappingSection
     /// <summary>Reserved for Phase 3 corner-pin (TL, TR, BR, BL in output pixels); ignored in Phase 1.</summary>
     public List<CuePoint>? Corners { get; init; }
 
+    /// <summary>Mesh warp control grid columns (Phase 4 — projection onto non-flat surfaces);
+    /// 0 = no mesh, otherwise ≥ 2 with <see cref="MeshRows"/> and a matching
+    /// <see cref="MeshPoints"/> count.</summary>
+    public int MeshColumns { get; init; }
+
+    public int MeshRows { get; init; }
+
+    /// <summary>Row-major mesh control points in normalized dest-rect space ((0,0) = the un-warped
+    /// rect's TL, (1,1) = BR; values may overshoot [0,1]). Relative storage means moving/scaling/
+    /// rotating the section carries its warp along. An identity grid renders as pure affine.</summary>
+    public List<CuePoint>? MeshPoints { get; init; }
+
+    /// <summary>The identity control grid for <paramref name="columns"/>×<paramref name="rows"/> —
+    /// every point on its un-warped grid position.</summary>
+    public static List<CuePoint> IdentityMeshPoints(int columns, int rows)
+    {
+        var points = new List<CuePoint>(columns * rows);
+        for (var r = 0; r < rows; r++)
+        {
+            for (var c = 0; c < columns; c++)
+                points.Add(new CuePoint(c / (double)(columns - 1), r / (double)(rows - 1)));
+        }
+
+        return points;
+    }
+
     public static CueOutputMappingSection FullCanvas() => new() { Name = "Full canvas" };
 }
 

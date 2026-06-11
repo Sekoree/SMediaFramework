@@ -37,7 +37,7 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
         HostApis.Clear();
         foreach (var h in PortAudioDeviceCatalog.EnumerateHostApis())
             HostApis.Add(h);
-        SelectedHostApi = HostApis.FirstOrDefault();
+        SelectedHostApi = HostApis.Cast<PortAudioHostApiEntry?>().FirstOrDefault();
     }
 
     /// <summary>Pre-populate the dialog from <paramref name="existing"/> so the user sees current values.</summary>
@@ -47,16 +47,26 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
         DisplayName = existing.DisplayName;
 
         ReloadHostApis();
-        // PortAudioHostApiEntry / PortAudioOutputDeviceEntry are value-type structs, so FirstOrDefault
-        // returns a zero-init struct on no-match (not null). Match by index, fall back to whatever's
-        // current if the saved device is no longer enumerable.
-        var hostMatch = HostApis.Where(h => h.Index == existing.HostApiIndex).Cast<PortAudioHostApiEntry?>().FirstOrDefault();
+        // PortAudio indices can move between launches, so match saved host/device names first and
+        // use indices only as a fallback. Cast to nullable avoids treating a zero-init struct as a hit.
+        var hostMatch = HostApis
+            .Where(h => string.Equals(h.Name, existing.HostApiName, StringComparison.OrdinalIgnoreCase))
+            .Cast<PortAudioHostApiEntry?>()
+            .FirstOrDefault()
+            ?? HostApis.Where(h => h.Index == existing.HostApiIndex)
+                .Cast<PortAudioHostApiEntry?>()
+                .FirstOrDefault();
         if (hostMatch is not null)
             SelectedHostApi = hostMatch;
 
         // ReloadDevices is invoked by OnSelectedHostApiChanged; pick the matching device after that runs.
-        var deviceMatch = Devices.Where(d => d.GlobalDeviceIndex == existing.GlobalDeviceIndex)
-            .Cast<PortAudioOutputDeviceEntry?>().FirstOrDefault();
+        var deviceMatch = Devices
+            .Where(d => string.Equals(d.Name, existing.DeviceName, StringComparison.OrdinalIgnoreCase))
+            .Cast<PortAudioOutputDeviceEntry?>()
+            .FirstOrDefault()
+            ?? Devices.Where(d => d.GlobalDeviceIndex == existing.GlobalDeviceIndex)
+                .Cast<PortAudioOutputDeviceEntry?>()
+                .FirstOrDefault();
         if (deviceMatch is not null)
             SelectedDevice = deviceMatch;
 
@@ -92,7 +102,7 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
         var host = SelectedHostApi?.Index;
         foreach (var d in PortAudioDeviceCatalog.EnumerateOutputDevices(host))
             Devices.Add(d);
-        SelectedDevice = Devices.FirstOrDefault();
+        SelectedDevice = Devices.Cast<PortAudioOutputDeviceEntry?>().FirstOrDefault();
     }
 
     public PortAudioOutputDefinition? TryCommit()

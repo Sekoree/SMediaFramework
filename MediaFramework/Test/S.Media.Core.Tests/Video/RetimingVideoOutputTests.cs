@@ -107,6 +107,19 @@ public sealed class RetimingVideoOutputTests
         inner.Frame!.Dispose();
     }
 
+    [Fact]
+    public void QueueControl_ForwardsToInnerOutput()
+    {
+        var inner = new QueueControlledVideoOutput();
+        var output = new RetimingVideoOutput(inner, TimeSpan.FromSeconds(-1));
+
+        output.AbandonQueuedFrames();
+
+        Assert.Equal(1, inner.AbandonCalls);
+        Assert.True(output.WaitForIdle(TimeSpan.FromMilliseconds(50)));
+        Assert.Equal(1, inner.WaitCalls);
+    }
+
     private sealed class CapturingVideoOutput : IVideoOutput
     {
         public VideoFrame? Frame { get; private set; }
@@ -114,6 +127,25 @@ public sealed class RetimingVideoOutputTests
         public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = [PixelFormat.Bgra32];
         public void Configure(VideoFormat format) => Format = format;
         public void Submit(VideoFrame frame) => Frame = frame;
+    }
+
+    private sealed class QueueControlledVideoOutput : IVideoOutput, IVideoOutputQueueControl
+    {
+        public int AbandonCalls { get; private set; }
+        public int WaitCalls { get; private set; }
+
+        public VideoFormat Format { get; private set; }
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = [PixelFormat.Bgra32];
+        public void Configure(VideoFormat format) => Format = format;
+        public void Submit(VideoFrame frame) => frame.Dispose();
+
+        public void AbandonQueuedFrames() => AbandonCalls++;
+
+        public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            WaitCalls++;
+            return true;
+        }
     }
 
     private sealed class CountingRelease(Action onDispose) : IDisposable

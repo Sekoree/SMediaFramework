@@ -98,6 +98,78 @@ public sealed class OutputMappingResolverTests
         Assert.Equal(canvas.PixelFormat, sized.PixelFormat);
     }
 
+    [Fact]
+    public void Mesh_ResolvesToAbsoluteOutputPixels()
+    {
+        // 2×2 mesh on a 100×100 dest rect at (10, 20); BR control point pulled to 1.5 overshoot.
+        var section = Section(destX: 10, destY: 20, destW: 100, destH: 100) with
+        {
+            MeshColumns = 2,
+            MeshRows = 2,
+            MeshPoints = [new(0, 0), new(1, 0), new(0, 1), new(1.5, 1.5)],
+        };
+        var r = Assert.Single(OutputMappingResolver.Resolve(new ClipOutputMappingSpec([section]), 200, 200));
+
+        Assert.NotNull(r.Mesh);
+        Assert.Equal((2, 2), (r.Mesh!.Columns, r.Mesh.Rows));
+        Assert.Equal(10f, r.Mesh.Points[0].X, precision: 3);   // TL = rect origin
+        Assert.Equal(20f, r.Mesh.Points[0].Y, precision: 3);
+        Assert.Equal(110f, r.Mesh.Points[1].X, precision: 3);  // TR
+        Assert.Equal(160f, r.Mesh.Points[3].X, precision: 3);  // BR overshoot: 10 + 1.5×100
+        Assert.Equal(170f, r.Mesh.Points[3].Y, precision: 3);
+    }
+
+    [Fact]
+    public void Mesh_RotationAppliesAroundDestCenter()
+    {
+        // 180° about the dest center (60, 70): the TL control point lands on the BR corner.
+        var section = Section(destX: 10, destY: 20, destW: 100, destH: 100, rotation: 180) with
+        {
+            MeshColumns = 2,
+            MeshRows = 2,
+            MeshPoints = [new(0, 0), new(1, 0), new(0, 1), new(1.5, 1.5)],
+        };
+        var r = Assert.Single(OutputMappingResolver.Resolve(new ClipOutputMappingSpec([section]), 200, 200));
+
+        Assert.NotNull(r.Mesh);
+        Assert.Equal(110f, r.Mesh!.Points[0].X, precision: 3);
+        Assert.Equal(120f, r.Mesh.Points[0].Y, precision: 3);
+    }
+
+    [Fact]
+    public void Mesh_IdentityGrid_ResolvesToNull()
+    {
+        // Enabled-but-untouched mesh must keep the zero-cost affine path.
+        var section = Section(destW: 100, destH: 100) with
+        {
+            MeshColumns = 3,
+            MeshRows = 2,
+            MeshPoints = [new(0, 0), new(0.5, 0), new(1, 0), new(0, 1), new(0.5, 1), new(1, 1)],
+        };
+        var r = Assert.Single(OutputMappingResolver.Resolve(new ClipOutputMappingSpec([section]), 200, 200));
+        Assert.Null(r.Mesh);
+    }
+
+    [Fact]
+    public void Mesh_MalformedGrids_ResolveToNull()
+    {
+        // Point-count mismatch and a sub-2 axis must fall back to affine, not throw.
+        var wrongCount = Section(destW: 100, destH: 100) with
+        {
+            MeshColumns = 2, MeshRows = 2, MeshPoints = [new(0, 0), new(1, 1)],
+        };
+        var tooFew = Section(destW: 100, destH: 100) with
+        {
+            MeshColumns = 1, MeshRows = 2, MeshPoints = [new(0, 0), new(0, 1)],
+        };
+
+        foreach (var section in new[] { wrongCount, tooFew })
+        {
+            var r = Assert.Single(OutputMappingResolver.Resolve(new ClipOutputMappingSpec([section]), 200, 200));
+            Assert.Null(r.Mesh);
+        }
+    }
+
     private static void AssertMapsTo(ResolvedMappingSection r, float srcX, float srcY, float destX, float destY)
     {
         var (x, y) = r.Transform.Apply(srcX, srcY);

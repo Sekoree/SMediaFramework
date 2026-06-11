@@ -269,6 +269,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private readonly SlotOutput _sink;
         private VideoFrame? _current;
         private VideoFrame? _pending;
+        private VideoFrame? _abandonedCurrent;
         private long _overflowFrames;
         private int _activeReaders;
         private float _opacity = 1f;
@@ -403,6 +404,49 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
             return frame;
         }
 
+        internal void AbandonQueuedFrames()
+        {
+            VideoFrame? pendingToDispose;
+            VideoFrame? currentToDispose = null;
+            lock (_gate)
+            {
+                pendingToDispose = _pending;
+                _pending = null;
+                if (_activeReaders == 0)
+                {
+                    currentToDispose = _current;
+                    _current = null;
+                }
+                else if (_current is not null)
+                {
+                    _abandonedCurrent = _current;
+                    _current = null;
+                }
+            }
+
+            pendingToDispose?.Dispose();
+            currentToDispose?.Dispose();
+        }
+
+        internal bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
+        {
+            var deadline = Environment.TickCount64 + Math.Max(0, (long)timeout.TotalMilliseconds);
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                lock (_gate)
+                {
+                    if (_pending is null && _activeReaders == 0)
+                        return true;
+                }
+
+                if (Environment.TickCount64 >= deadline)
+                    return false;
+
+                Thread.Sleep(1);
+            }
+        }
+
         private VideoFrame? ChooseMasterAlignedFrame(TimeSpan masterPts, TimeSpan canvasPeriod, ref VideoFrame? toDispose)
         {
             var maxFuture = masterPts + canvasPeriod;
@@ -456,6 +500,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         internal void Close()
         {
             VideoFrame? currentToDispose = null;
+            VideoFrame? abandonedToDispose = null;
             VideoFrame? pendingToDispose;
             lock (_gate)
             {
@@ -467,10 +512,13 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 {
                     currentToDispose = _current;
                     _current = null;
+                    abandonedToDispose = _abandonedCurrent;
+                    _abandonedCurrent = null;
                 }
             }
             pendingToDispose?.Dispose();
             currentToDispose?.Dispose();
+            abandonedToDispose?.Dispose();
         }
 
         /// <summary>Releases one read-ref taken by <see cref="AcquireLatestFrame"/> /
@@ -478,20 +526,27 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         internal void ReleaseFrame()
         {
             VideoFrame? toDispose = null;
+            VideoFrame? abandonedToDispose = null;
             lock (_gate)
             {
                 if (_activeReaders > 0)
                     _activeReaders--;
-                if (_closed && _activeReaders == 0)
+                if (_activeReaders == 0)
                 {
-                    toDispose = _current;
-                    _current = null;
+                    abandonedToDispose = _abandonedCurrent;
+                    _abandonedCurrent = null;
+                    if (_closed)
+                    {
+                        toDispose = _current;
+                        _current = null;
+                    }
                 }
             }
             toDispose?.Dispose();
+            abandonedToDispose?.Dispose();
         }
 
-        private sealed class SlotOutput(Slot owner, IReadOnlyList<PixelFormat> accepted) : IVideoOutput
+        private sealed class SlotOutput(Slot owner, IReadOnlyList<PixelFormat> accepted) : IVideoOutput, IVideoOutputQueueControl
         {
             private VideoFormat _format;
             public VideoFormat Format => _format;
@@ -513,6 +568,11 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                 ArgumentNullException.ThrowIfNull(frame);
                 owner.SubmitFromOutput(frame);
             }
+
+            public void AbandonQueuedFrames() => owner.AbandonQueuedFrames();
+
+            public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default) =>
+                owner.WaitForIdle(timeout, cancellationToken);
 
             private static bool ContainsFormat(IReadOnlyList<PixelFormat> list, PixelFormat pf)
             {

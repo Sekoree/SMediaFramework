@@ -355,16 +355,31 @@ public partial class OutputManagementViewModel : ViewModelBase
 
         var runtime = await Task.Run(() =>
         {
-            var rt = new PortAudioOutputRuntime(definition);
-            rt.Start();
-            return rt;
+            return StartPortAudioRuntime(definition);
         }, cancellationToken).ConfigureAwait(false);
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            if (!runtime.Definition.Equals(line.Definition))
+                line.ReplaceDefinition(runtime.Definition);
             lock (_portAudioOutputsGate)
                 _portAudioOutputs[line] = runtime;
         });
+    }
+
+    private static PortAudioOutputRuntime StartPortAudioRuntime(PortAudioOutputDefinition definition)
+    {
+        var runtime = new PortAudioOutputRuntime(definition);
+        try
+        {
+            runtime.Start();
+            return runtime;
+        }
+        catch
+        {
+            runtime.Dispose();
+            throw;
+        }
     }
 
     private async Task EnsureNDIRuntimeAsync(
@@ -838,13 +853,13 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             var runtime = await Task.Run(() =>
             {
-                var rt = new PortAudioOutputRuntime(result);
-                rt.Start();
-                return rt;
+                return StartPortAudioRuntime(result);
             }, cancellationToken).ConfigureAwait(false);
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
+                if (!runtime.Definition.Equals(line.Definition))
+                    line.ReplaceDefinition(runtime.Definition);
                 lock (_portAudioOutputsGate)
                     _portAudioOutputs[line] = runtime;
             });
@@ -1083,4 +1098,3 @@ public partial class OutputManagementViewModel : ViewModelBase
         return state.ToString();
     }
 }
-

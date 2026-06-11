@@ -18,7 +18,7 @@ namespace S.Media.Core.Video;
 /// (zero-copy for hardware/dmabuf backings) and disposes the original, matching
 /// <see cref="IVideoOutput"/> ownership semantics.
 /// </remarks>
-public sealed class RetimingVideoOutput : IVideoOutput, IDisposable
+public sealed class RetimingVideoOutput : IVideoOutput, IVideoOutputQueueControl, IDisposable
 {
     private readonly IVideoOutput _inner;
     private readonly TimeSpan _ptsOffset;
@@ -88,6 +88,21 @@ public sealed class RetimingVideoOutput : IVideoOutput, IDisposable
         _disposed = true;
         if (_disposeInner && _inner is IDisposable d)
             d.Dispose();
+    }
+
+    public void AbandonQueuedFrames()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_inner is IVideoOutputQueueControl control)
+            control.AbandonQueuedFrames();
+    }
+
+    public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_inner is not IVideoOutputQueueControl control)
+            return true;
+        return control.WaitForIdle(timeout, cancellationToken);
     }
 
     private static VideoFrame RewritePts(VideoFrame original, TimeSpan newPts)

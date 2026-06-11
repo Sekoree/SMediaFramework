@@ -277,6 +277,74 @@ public sealed partial class MappingSectionViewModel : ObservableObject
     [ObservableProperty]
     private double _brightness = 1.0;
 
+    /// <summary>Mesh warp (Phase 4): the grid is kept even while disabled so toggling the checkbox
+    /// is non-destructive within the dialog session; only an enabled mesh is persisted.</summary>
+    [ObservableProperty]
+    private bool _meshEnabled;
+
+    [ObservableProperty]
+    private int _meshColumns = 4;
+
+    [ObservableProperty]
+    private int _meshRows = 4;
+
+    private List<CuePoint> _meshPoints = new();
+
+    /// <summary>Row-major control points, normalized dest-rect space (see the model docs).</summary>
+    public IReadOnlyList<CuePoint> MeshPoints => _meshPoints;
+
+    /// <summary>Moves one control point (editor drag). Coordinates are normalized dest-rect space;
+    /// out-of-[0,1] values are legal (overshooting the rect).</summary>
+    public void SetMeshPoint(int index, double x, double y)
+    {
+        if (index < 0 || index >= _meshPoints.Count)
+            return;
+        _meshPoints[index] = new CuePoint(Math.Round(x, 4), Math.Round(y, 4));
+        Owner?.Apply();
+    }
+
+    [RelayCommand]
+    private void ResetMesh()
+    {
+        _meshPoints = CueOutputMappingSection.IdentityMeshPoints(ClampedMeshColumns, ClampedMeshRows);
+        if (MeshEnabled)
+            Owner?.Apply();
+    }
+
+    private int ClampedMeshColumns => Math.Clamp(MeshColumns, 2, 16);
+
+    private int ClampedMeshRows => Math.Clamp(MeshRows, 2, 16);
+
+    private void EnsureMeshPointsShape()
+    {
+        if (_meshPoints.Count != ClampedMeshColumns * ClampedMeshRows)
+            _meshPoints = CueOutputMappingSection.IdentityMeshPoints(ClampedMeshColumns, ClampedMeshRows);
+    }
+
+    partial void OnMeshEnabledChanged(bool value)
+    {
+        if (Owner is null)
+            return; // model load — points are restored separately by FromModel
+        if (value)
+            EnsureMeshPointsShape();
+        Owner.Apply();
+    }
+
+    partial void OnMeshColumnsChanged(int value) => OnMeshGridSizeChanged();
+
+    partial void OnMeshRowsChanged(int value) => OnMeshGridSizeChanged();
+
+    /// <summary>Grid resize restarts from identity (no warp resampling in v1 — resizing is a
+    /// set-up-time action, not a calibration tweak).</summary>
+    private void OnMeshGridSizeChanged()
+    {
+        if (Owner is null)
+            return;
+        _meshPoints = CueOutputMappingSection.IdentityMeshPoints(ClampedMeshColumns, ClampedMeshRows);
+        if (MeshEnabled)
+            Owner.Apply();
+    }
+
     partial void OnNameChanged(string value) => Owner?.Apply();
     partial void OnEnabledChanged(bool value) => Owner?.Apply();
     partial void OnSrcXChanged(double value) => Owner?.Apply();
@@ -291,39 +359,58 @@ public sealed partial class MappingSectionViewModel : ObservableObject
     partial void OnOpacityChanged(double value) => Owner?.Apply();
     partial void OnBrightnessChanged(double value) => Owner?.Apply();
 
-    public CueOutputMappingSection ToModel() => new()
+    public CueOutputMappingSection ToModel()
     {
-        Id = Id,
-        Name = Name,
-        Enabled = Enabled,
-        SrcX = SrcX,
-        SrcY = SrcY,
-        SrcWidth = SrcWidth,
-        SrcHeight = SrcHeight,
-        DestX = DestX,
-        DestY = DestY,
-        DestWidth = DestWidth,
-        DestHeight = DestHeight,
-        RotationDegrees = RotationDegrees,
-        Opacity = Opacity,
-        Brightness = Brightness,
-    };
+        if (MeshEnabled)
+            EnsureMeshPointsShape();
+        return new CueOutputMappingSection
+        {
+            Id = Id,
+            Name = Name,
+            Enabled = Enabled,
+            SrcX = SrcX,
+            SrcY = SrcY,
+            SrcWidth = SrcWidth,
+            SrcHeight = SrcHeight,
+            DestX = DestX,
+            DestY = DestY,
+            DestWidth = DestWidth,
+            DestHeight = DestHeight,
+            RotationDegrees = RotationDegrees,
+            Opacity = Opacity,
+            Brightness = Brightness,
+            MeshColumns = MeshEnabled ? ClampedMeshColumns : 0,
+            MeshRows = MeshEnabled ? ClampedMeshRows : 0,
+            MeshPoints = MeshEnabled ? new List<CuePoint>(_meshPoints) : null,
+        };
+    }
 
-    public static MappingSectionViewModel FromModel(CueOutputMappingSection model) => new()
+    public static MappingSectionViewModel FromModel(CueOutputMappingSection model)
     {
-        Id = model.Id,
-        Name = model.Name,
-        Enabled = model.Enabled,
-        SrcX = model.SrcX,
-        SrcY = model.SrcY,
-        SrcWidth = model.SrcWidth,
-        SrcHeight = model.SrcHeight,
-        DestX = model.DestX,
-        DestY = model.DestY,
-        DestWidth = model.DestWidth,
-        DestHeight = model.DestHeight,
-        RotationDegrees = model.RotationDegrees,
-        Opacity = model.Opacity,
-        Brightness = model.Brightness,
-    };
+        var hasMesh = model is { MeshColumns: >= 2, MeshRows: >= 2 }
+                      && model.MeshPoints is { } mp
+                      && mp.Count == model.MeshColumns * model.MeshRows;
+        var vm = new MappingSectionViewModel
+        {
+            Id = model.Id,
+            Name = model.Name,
+            Enabled = model.Enabled,
+            SrcX = model.SrcX,
+            SrcY = model.SrcY,
+            SrcWidth = model.SrcWidth,
+            SrcHeight = model.SrcHeight,
+            DestX = model.DestX,
+            DestY = model.DestY,
+            DestWidth = model.DestWidth,
+            DestHeight = model.DestHeight,
+            RotationDegrees = model.RotationDegrees,
+            Opacity = model.Opacity,
+            Brightness = model.Brightness,
+            MeshEnabled = hasMesh,
+            MeshColumns = hasMesh ? model.MeshColumns : 4,
+            MeshRows = hasMesh ? model.MeshRows : 4,
+        };
+        vm._meshPoints = hasMesh ? new List<CuePoint>(model.MeshPoints!) : new List<CuePoint>();
+        return vm;
+    }
 }

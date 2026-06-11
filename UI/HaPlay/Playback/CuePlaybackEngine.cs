@@ -1497,12 +1497,21 @@ public sealed class CuePlaybackEngine : IDisposable
             var runtime = GetOrCreateComposition(list, compId);
             if (runtime is null) continue;
 
-            // Phase 5.4 — slave the composition pump to this cue's audio master so the
-            // composited frames present at the master's video-tick rate instead of free-running
-            // on Stopwatch. Composition keeps only the FIRST master it sees (idempotent), so
-            // back-to-back cues with different masters don't fight for the slave clock.
+            // Slave the composition pump to the cue's audio hardware cadence, but align slot frame
+            // selection to the media playhead. After a seek, submitted frames carry media PTS near
+            // the seek target while the hardware elapsed clock restarts near zero.
+            // The timeline must live on the SAME timebase as the slot frames: a trimmed cue's
+            // frames are rebased to cue-relative PTS (RetimingVideoOutput below), so the playhead
+            // is rebased identically. Mixing source-time playhead with cue-relative frame PTS made
+            // "closest to the playhead" prefer the stale pre-seek frame over fresh post-seek frames
+            // after every backward seek — video froze while audio played on.
             if (entry.PlaybackClockMaster is { } master)
-                runtime.SetClockMaster(master);
+            {
+                IPlayhead timeline = entry.Player.PlayClock;
+                if (entry.ClipWindow.Start > TimeSpan.Zero)
+                    timeline = new OffsetPlayhead(timeline, -entry.ClipWindow.Start);
+                runtime.SetClockMaster(master, timeline);
+            }
 
             var slot = runtime.AddLayer(sourceFormat, placement);
             entry.LayerSlots.Add(slot);
@@ -1862,31 +1871,42 @@ public sealed class CuePlaybackEngine : IDisposable
 
     private async Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position)
     {
-        position = entry.ClipWindow.ToSourcePosition(position);
-        var resume = !entry.IsPaused;
-        if (resume)
-        {
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                entry.SetAudioPaused(true);
-            });
-        }
-
+        // Serialize per cue: an overlapping seek (rapid taps on the progress bar) would read the
+        // transient IsPaused=true set by the in-flight one, conclude the cue is user-paused, and
+        // skip the resume — leaving video stopped while audio comes back.
+        await entry.SeekGate.WaitAsync();
         try
         {
-            await Task.Run(() =>
-                entry.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
-            ).WaitAsync(BoundedSeekTimeout);
-        }
-        catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCueAsync: seek timed out or failed"); }
-        if (resume)
-            await Dispatcher.UIThread.InvokeAsync(() =>
+            position = entry.ClipWindow.ToSourcePosition(position);
+            var resume = !entry.IsPaused;
+            if (resume)
             {
-                entry.Player.PrewarmVideoAfterSeek();
-                entry.StartPlayback();
-                entry.SetAudioPaused(false);
-                entry.EnsureAudioRuntimesStarted();
-            });
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    entry.SetAudioPaused(true);
+                });
+            }
+
+            try
+            {
+                await Task.Run(() =>
+                    entry.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
+                ).WaitAsync(BoundedSeekTimeout);
+            }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCueAsync: seek timed out or failed"); }
+            if (resume)
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    entry.Player.PrewarmVideoAfterSeek();
+                    entry.StartPlayback();
+                    entry.SetAudioPaused(false);
+                    entry.EnsureAudioRuntimesStarted();
+                });
+        }
+        finally
+        {
+            entry.SeekGate.Release();
+        }
     }
 
     private async Task WatchPreviewEndAsync(CuePreviewSession session)
@@ -2200,6 +2220,9 @@ public sealed class CuePlaybackEngine : IDisposable
 
         private int _disposeStarted;
         private int _fadeOutStarted;
+
+        /// <summary>Serializes coordinated seeks on this cue (see SeekActiveCueAsync).</summary>
+        public SemaphoreSlim SeekGate { get; } = new(1, 1);
 
         public bool TryBeginDispose() => Interlocked.Exchange(ref _disposeStarted, 1) == 0;
 

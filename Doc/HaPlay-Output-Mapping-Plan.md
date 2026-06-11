@@ -1,6 +1,6 @@
 # HaPlay Output Mapping (Composition Slices / Warp Sections) — Planning Doc
 
-Status: **Phase 1 implemented** (2026-06-11) · Scope: HaPlay cue player + S.Media.Playback/S.Media.Effects
+Status: **Phases 1, 2 and 4 implemented** (2026-06-11) · Scope: HaPlay cue player + S.Media.Playback/S.Media.Effects
 Author: planning session 2026-06-11
 
 Implemented: model (`CueOutputMapping`/`CueOutputMappingSection` incl. per-section Brightness, on
@@ -185,11 +185,65 @@ Measurements demanded it (1080p, Release, desktop GL): CPU compositor 41 ms canv
   affine struct (every existing call site stays untouched); `CompositorLayer` gets an optional
   perspective override the backends check.
 
+### Phase 4 — Mesh warp per section (IMPLEMENTED 2026-06-11)
+
+For projection onto non-flat surfaces (curved screens, draped cloth, uneven walls): the operator
+bends a section by dragging control points until the projected image reads as flat.
+
+Model (additive on `CueOutputMappingSection`, mirrored on `ClipOutputMappingSection`):
+
+```csharp
+public int MeshColumns { get; init; }            // 0 = no mesh (affine as today), else >= 2
+public int MeshRows { get; init; }
+public List<CuePoint>? MeshPoints { get; init; } // row-major, normalized DEST-RECT space
+```
+
+Two deliberate deviations from the original sketch:
+
+- **Interpolating Catmull-Rom surface, not a Bézier patch** (`WarpMeshTessellator`): the surface
+  passes *through* every control point — drag a point and the image under it lands exactly there,
+  which is the calibration contract an operator expects. Borders use mirror-extrapolated virtual
+  points, which cancels the cubic terms on single-segment axes: a 2×2 mesh is exactly bilinear
+  corner pin. Visually as smooth as Bézier; UX strictly better.
+- **Control points are stored normalized to the section's dest rect** (not output pixels), so
+  moving/scaling/rotating the section carries its warp along; `OutputMappingResolver` bakes them
+  to absolute output pixels (Catmull-Rom commutes with affine maps, so transforming control
+  points equals transforming the surface). An identity grid resolves to no mesh — enabling the
+  checkbox without dragging stays on the zero-cost affine path.
+
+Rendering (GL, `GlVideoCompositor`): on warp-snapshot change (not per frame) the mesh is
+tessellated CPU-side (8 sub-segments per cell, capped 256/axis) into a per-section VBO/EBO of
+interleaved `(s, t, x, y)`; `composite_mesh.vert.glsl` reads `gl_Position` from the position
+attribute (uXform reduces to pixels→NDC) and the fragment shader is shared with the layer pass.
+Per-frame cost stays one (indexed) draw per section. The **chained multi-output stage** now also
+routes through the warp pass on warp-capable compositors (one identity canvas layer + warp pass —
+the same pixel path as the integrated single-output warp), so mesh works on every GL output;
+the CPU backend renders mesh sections with their affine placement and logs a one-time warning
+(GL was already mandatory for mapped outputs per the Phase 2 measurements).
+
+Editor: per-section "Mesh warp" checkbox + Cols/Rows (2–16) + "Reset mesh"; the selected
+section's warped grid is drawn as polylines (sampled from the same Catmull-Rom surface the GL
+pass tessellates) with one drag handle per control point. Handle drags live-apply through
+`UpdateOutputMapping` per tick; grid resize restarts from identity (no resampling in v1).
+The mesh is kept in the VM while the checkbox is off (session-non-destructive) but only an
+enabled mesh persists to the project file.
+
+Verified on the real GL stack via `CompositorSmoke --pattern` (see §8): affine slice-swap,
+2×2 corner pin (pinned corners exact, out-of-quad area transparent black), and a 4×4 wave
+(smooth, watertight tessellation). Unit coverage: tessellator interpolation/bilinearity/caps,
+resolver baking (rotation, identity-drop, malformed-grid fallback), runtime pass-through,
+model JSON round-trip, editor VM behaviors.
+
+Relationship to Phase 3: a 2×2 mesh equals corner pin with *bilinear* interpolation, not true
+perspective — fine for calibration-by-eye, subtly wrong for content with straight lines under
+strong keystone. Phase 3's homography stays the answer for exact keystone; in practice a 4×4
+mesh covers most projector cases.
+
 ### Out of scope / future ideas (named so they don't creep in)
 
-Bezier mesh warp per section, edge blending (overlap + gamma feathering), per-section masks,
-black-level compensation, per-output color correction. The section model is deliberately shaped
-so these attach later without remodeling (they're all per-section or per-mapping additions).
+Edge blending (overlap + gamma feathering), per-section masks, black-level compensation,
+per-output color correction. The section model is deliberately shaped so these attach later
+without remodeling (they're all per-section or per-mapping additions).
 
 ## 5. UI / UX
 
@@ -232,23 +286,28 @@ definition (it's in the project file).
 
 ## 7. Phasing & rough effort
 
-| Phase | Contents | Effort (rough) |
-|---|---|---|
-| 1a | Model records + `OutputMappingResolver` math + unit tests | S |
-| 1b | Framework: lease mapping spec + chained mapping compositor in pump + live-update API | M |
-| 1c | HaPlay wiring: binding → lease, `UpdateOutputMapping`, preview-session parity | S |
-| 1d | Mapping editor dialog (numeric + drag preview) + calibration grid + splitter helper | M–L |
-| 2 | Integrated GL second pass (only if measurements demand) | M |
-| 3 | Corner-pin homography (model already reserved) | M |
+| Phase | Contents | Effort (rough) | Status |
+|---|---|---|---|
+| 1a | Model records + `OutputMappingResolver` math + unit tests | S | ✔ 2026-06-11 |
+| 1b | Framework: lease mapping spec + chained mapping compositor in pump + live-update API | M | ✔ 2026-06-11 |
+| 1c | HaPlay wiring: binding → lease, `UpdateOutputMapping`, preview-session parity | S | ✔ 2026-06-11 |
+| 1d | Mapping editor dialog (numeric + drag preview) + calibration grid + splitter helper | M–L | ✔ 2026-06-11 |
+| 2 | Integrated GL second pass (only if measurements demand) | M | ✔ 2026-06-11 |
+| 3 | Corner-pin homography (model already reserved) | M | open |
+| 4 | Mesh warp: model + GL tessellated VBO + control-point editor (§4 Phase 4) | M–L | ✔ 2026-06-11 |
 
 Phase 1 alone fully covers the motivating 3-panel use case.
 
 ## 8. Testing
 
-- Unit (S.Media.Core.Tests / HaPlay.Tests): resolver math (src slice → transform, rotation about
-  center, identity round-trip), model serialization round-trip, null-mapping behavior unchanged.
-- `CompositorSmoke` tool: add a `--mapping <json>` option rendering a test pattern through a
-  mapping — doubles as the performance measurement harness for the Phase 2 decision.
+- Unit (S.Media.Core.Tests / S.Media.Playback.Tests / HaPlay.Tests): resolver math (src slice →
+  transform, rotation about center, identity round-trip), mesh tessellator (interpolation,
+  bilinear 2×2, caps), mesh resolver baking, model serialization round-trip, null-mapping
+  behavior unchanged, editor VM mesh behaviors.
+- `CompositorSmoke` mapping mode (landed 2026-06-11): `--pattern WxH` renders a synthetic
+  quadrant pattern through `--mapping <json>` / `--mapping-json '<json>'` on the real GL stack;
+  `--probe x,y` prints result pixels for scripted assertions. Run under `xvfb-run -a` headless.
+  Verified: affine slice-swap, 2×2 corner pin, 4×4 wave (all pixel-exact / visually smooth).
 - Manual: 3-section calibration against a real projector; live-edit while a cue plays; NDI output
   receives mapped (baked) pixels.
 

@@ -1,4 +1,6 @@
+using HaPlay.OutputPreview;
 using HaPlay.ViewModels;
+using S.Media.PortAudio;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -171,6 +173,87 @@ public sealed class OutputManagementViewModelTests
         await vm.ReconfigureLineAsync(line, updated);
 
         Assert.Equal(new[] { "pre:48000", "post:96000" }, events);
+    }
+
+    [Fact]
+    public void PortAudioResolveCurrentOutputDevice_PrefersSavedNameOverStaleGlobalIndex()
+    {
+        var saved = new PortAudioOutputDefinition(
+            Guid.NewGuid(),
+            "Main speakers",
+            HostApiIndex: 0,
+            HostApiName: "ALSA",
+            GlobalDeviceIndex: 5,
+            DeviceName: "Main speakers",
+            ChannelCount: 2,
+            SampleRate: 48000);
+        var devices = new[]
+        {
+            new PortAudioOutputDeviceEntry(5, 0, "Different speakers", 2, 48000),
+            new PortAudioOutputDeviceEntry(12, 0, "Main speakers", 2, 48000),
+        };
+        var hostApis = new[]
+        {
+            new PortAudioHostApiEntry(0, "ALSA", 0, 2),
+        };
+
+        var resolved = PortAudioOutputRuntime.ResolveCurrentOutputDevice(saved, devices, hostApis);
+
+        Assert.Equal(12, resolved.GlobalDeviceIndex);
+        Assert.Equal("Main speakers", resolved.DeviceName);
+    }
+
+    [Fact]
+    public void PortAudioResolveCurrentOutputDevice_DoesNotFallbackToWrongNamedSavedIndex()
+    {
+        var saved = new PortAudioOutputDefinition(
+            Guid.NewGuid(),
+            "Main speakers",
+            HostApiIndex: 0,
+            HostApiName: "ALSA",
+            GlobalDeviceIndex: 5,
+            DeviceName: "Main speakers",
+            ChannelCount: 2,
+            SampleRate: 48000);
+        var devices = new[]
+        {
+            new PortAudioOutputDeviceEntry(5, 0, "Different speakers", 2, 48000),
+        };
+        var hostApis = new[]
+        {
+            new PortAudioHostApiEntry(0, "ALSA", 0, 1),
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            PortAudioOutputRuntime.ResolveCurrentOutputDevice(saved, devices, hostApis));
+        Assert.Contains("device 'Main speakers' was not found", ex.Message);
+    }
+
+    [Fact]
+    public void PortAudioResolveCurrentOutputDevice_ReportsChannelMismatchForNamedDevice()
+    {
+        var saved = new PortAudioOutputDefinition(
+            Guid.NewGuid(),
+            "Main speakers",
+            HostApiIndex: 0,
+            HostApiName: "ALSA",
+            GlobalDeviceIndex: 12,
+            DeviceName: "Main speakers",
+            ChannelCount: 2,
+            SampleRate: 48000);
+        var devices = new[]
+        {
+            new PortAudioOutputDeviceEntry(12, 0, "Main speakers", 1, 48000),
+        };
+        var hostApis = new[]
+        {
+            new PortAudioHostApiEntry(0, "ALSA", 0, 1),
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            PortAudioOutputRuntime.ResolveCurrentOutputDevice(saved, devices, hostApis));
+        Assert.Contains("supports 1 output channel", ex.Message);
+        Assert.Contains("requested 2", ex.Message);
     }
 
     [Fact]

@@ -26,6 +26,12 @@ public sealed record ClipOutputMappingSpec(
 /// <param name="Brightness">Per-section brightness [0,1] for panel matching. Folded into the layer
 /// opacity — over the black output background that equals an RGB multiply; with overlapping
 /// sections the lower section shows through instead (acceptable for v1).</param>
+/// <param name="MeshColumns">Mesh warp control grid columns; 0 (with <paramref name="MeshRows"/>)
+/// = no mesh (pure affine). Phase 4, see Doc/HaPlay-Output-Mapping-Plan.md.</param>
+/// <param name="MeshPoints">Row-major <c>MeshColumns × MeshRows</c> control points in normalized
+/// destination-rect space ((0,0) = dest rect TL, (1,1) = BR; values outside [0,1] overshoot the
+/// rect). Stored relative so moving/scaling/rotating the section carries its warp along; the
+/// resolver bakes them to absolute output pixels. An identity grid resolves to no mesh.</param>
 public sealed record ClipOutputMappingSection(
     string Id,
     bool Enabled,
@@ -33,14 +39,24 @@ public sealed record ClipOutputMappingSection(
     double DestX, double DestY, double DestWidth, double DestHeight,
     double RotationDegrees = 0.0,
     double Opacity = 1.0,
-    double Brightness = 1.0);
+    double Brightness = 1.0,
+    int MeshColumns = 0,
+    int MeshRows = 0,
+    IReadOnlyList<ClipMeshPoint>? MeshPoints = null);
+
+/// <summary>One mesh control point in normalized destination-rect space (see
+/// <see cref="ClipOutputMappingSection.MeshPoints"/>).</summary>
+public sealed record ClipMeshPoint(double X, double Y);
 
 /// <summary>A mapping section resolved against a concrete canvas: ready to become a
-/// <see cref="CompositorLayer"/> whose source frame is the composited canvas.</summary>
+/// <see cref="CompositorLayer"/> whose source frame is the composited canvas. <paramref name="Mesh"/>
+/// (control points in absolute output pixels) is non-null only for warp-capable GL backends — the
+/// CPU chained stage ignores it and falls back to the affine transform.</summary>
 public readonly record struct ResolvedMappingSection(
     RectNormalized SourceCrop,
     LayerTransform2D Transform,
-    float Opacity);
+    float Opacity,
+    WarpMesh? Mesh = null);
 
 /// <summary>
 /// Pure math: turns <see cref="ClipOutputMappingSpec"/> sections into crop + affine transform pairs
@@ -132,7 +148,70 @@ public static class OutputMappingResolver
         if (opacity <= 0f)
             return false;
 
-        resolved = new ResolvedMappingSection(crop, transform, opacity);
+        resolved = new ResolvedMappingSection(crop, transform, opacity,
+            TryResolveMesh(s, destW, destH, destCenterX, destCenterY));
         return true;
+    }
+
+    /// <summary>Max mesh control points per axis — matches the editor's cap; anything bigger is
+    /// treated as malformed and ignored (affine fallback) rather than tessellated unbounded.</summary>
+    private const int MaxMeshPointsPerAxis = 65;
+
+    /// <summary>Identity tolerance in normalized dest-rect units (~1/20 px at 1080p) — a mesh whose
+    /// points all sit on the identity grid resolves to null, keeping the zero-cost affine path.</summary>
+    private const double MeshIdentityEpsilon = 5e-5;
+
+    /// <summary>
+    /// Bakes the section's normalized mesh control points to absolute output pixels: unnormalize
+    /// over the dest rect, then rotate about the dest center — the same placement the affine
+    /// transform applies. (Catmull-Rom interpolation commutes with affine maps, so transforming the
+    /// control points equals transforming the evaluated surface.) Malformed grids resolve to null.
+    /// </summary>
+    private static WarpMesh? TryResolveMesh(
+        ClipOutputMappingSection s, float destW, float destH, float destCenterX, float destCenterY)
+    {
+        if (s.MeshColumns < 2 || s.MeshRows < 2 || s.MeshPoints is null)
+            return null;
+        if (s.MeshColumns > MaxMeshPointsPerAxis || s.MeshRows > MaxMeshPointsPerAxis)
+            return null;
+        if (s.MeshPoints.Count != s.MeshColumns * s.MeshRows)
+            return null;
+
+        var identity = true;
+        for (var r = 0; r < s.MeshRows && identity; r++)
+        {
+            for (var c = 0; c < s.MeshColumns; c++)
+            {
+                var p = s.MeshPoints[r * s.MeshColumns + c];
+                if (Math.Abs(p.X - c / (double)(s.MeshColumns - 1)) > MeshIdentityEpsilon
+                    || Math.Abs(p.Y - r / (double)(s.MeshRows - 1)) > MeshIdentityEpsilon)
+                {
+                    identity = false;
+                    break;
+                }
+            }
+        }
+
+        if (identity)
+            return null;
+
+        var radians = s.RotationDegrees * Math.PI / 180.0;
+        var cos = (float)Math.Cos(radians);
+        var sin = (float)Math.Sin(radians);
+        var destX = (float)s.DestX;
+        var destY = (float)s.DestY;
+
+        var points = new System.Numerics.Vector2[s.MeshPoints.Count];
+        for (var i = 0; i < points.Length; i++)
+        {
+            var p = s.MeshPoints[i];
+            var dx = destX + (float)p.X * destW - destCenterX;
+            var dy = destY + (float)p.Y * destH - destCenterY;
+            points[i] = new System.Numerics.Vector2(
+                destCenterX + dx * cos - dy * sin,
+                destCenterY + dx * sin + dy * cos);
+        }
+
+        return new WarpMesh(s.MeshColumns, s.MeshRows, points);
     }
 }

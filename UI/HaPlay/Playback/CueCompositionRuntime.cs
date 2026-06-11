@@ -69,7 +69,9 @@ internal sealed class CueCompositionRuntime : IDisposable
                         s.Id.ToString("N"), s.Enabled,
                         s.SrcX, s.SrcY, s.SrcWidth, s.SrcHeight,
                         s.DestX, s.DestY, s.DestWidth, s.DestHeight,
-                        s.RotationDegrees, s.Opacity, s.Brightness))
+                        s.RotationDegrees, s.Opacity, s.Brightness,
+                        s.MeshColumns, s.MeshRows,
+                        s.MeshPoints?.Select(p => new ClipMeshPoint(p.X, p.Y)).ToArray()))
                     .ToArray(),
                 mapping.OutputWidth,
                 mapping.OutputHeight);
@@ -94,7 +96,8 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     public void EnsurePumpStarted() => _inner.EnsurePumpStarted();
 
-    public void SetClockMaster(IPlaybackClock master) => _inner.SetClockMaster(master);
+    public void SetClockMaster(IPlaybackClock master, IPlayhead? timeline = null) =>
+        _inner.SetClockMaster(master, timeline);
 
     public LayerSlot AddLayer(VideoFormat sourceFormat, CueVideoPlacement placement)
     {
