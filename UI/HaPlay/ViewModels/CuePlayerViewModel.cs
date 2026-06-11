@@ -811,11 +811,6 @@ public sealed partial class CueNodeViewModel : ObservableObject
     [ObservableProperty]
     private CueEndBehavior _endBehavior = CueEndBehavior.Stop;
 
-    /// <summary>Per-cue pre-roll opt-out. When set, the cue is excluded from standby warming so a
-    /// large/expensive file doesn't hold an open decoder in the pre-roll window.</summary>
-    [ObservableProperty]
-    private bool _disablePreRoll;
-
     [ObservableProperty]
     private string _endpointIdText = string.Empty;
 
@@ -1136,7 +1131,6 @@ public sealed partial class CueNodeViewModel : ObservableObject
                     EndOffsetMs = m.EndOffsetMs,
                     Loop = m.Loop,
                     EndBehavior = m.EndBehavior,
-                    DisablePreRoll = m.DisablePreRoll,
                 };
                 foreach (var route in m.AudioRoutes)
                     vm.AudioRoutes.Add(CueAudioRouteViewModel.FromModel(route, resolveLine));
@@ -1221,7 +1215,6 @@ public sealed partial class CueNodeViewModel : ObservableObject
                 EndOffsetMs = Math.Max(0, EndOffsetMs),
                 Loop = Loop,
                 EndBehavior = EndBehavior,
-                DisablePreRoll = DisablePreRoll,
                 AudioRoutes = AudioRoutes.Select(r => r.ToModel()).ToList(),
                 VideoPlacements = VideoPlacements.Select(p => p.ToModel()).ToList(),
             },
@@ -1281,20 +1274,12 @@ public sealed partial class CueListEditorViewModel : ObservableObject
     public CueList ToModel() => new()
     {
         Name = Name,
-        PreRollCount = PreRollCount,
-        MaxPreparedDecoders = MaxPreparedDecoders,
         DefaultTriggerMode = DefaultTriggerMode,
         AutoRenumberOnInsert = AutoRenumberOnInsert,
         Compositions = Compositions.Select(c => c.ToModel()).ToList(),
         VideoOutputs = VideoOutputs.Select(o => o.ToModel()).ToList(),
         Nodes = Nodes.Select(n => n.ToModel()).ToList(),
     };
-
-    [ObservableProperty]
-    private int _preRollCount;
-
-    [ObservableProperty]
-    private int _maxPreparedDecoders;
 
     [ObservableProperty]
     private CueTriggerMode _defaultTriggerMode = CueTriggerMode.Manual;
@@ -1310,8 +1295,6 @@ public sealed partial class CueListEditorViewModel : ObservableObject
         var vm = new CueListEditorViewModel(list.Name)
         {
             Path = path,
-            PreRollCount = Math.Max(0, list.PreRollCount),
-            MaxPreparedDecoders = Math.Max(0, list.MaxPreparedDecoders),
             DefaultTriggerMode = list.DefaultTriggerMode,
             AutoRenumberOnInsert = list.AutoRenumberOnInsert,
         };
@@ -1865,7 +1848,6 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.EndOffsetMs)
             or nameof(CueNodeViewModel.Loop)
             or nameof(CueNodeViewModel.EndBehavior)
-            or nameof(CueNodeViewModel.DisablePreRoll)
             or nameof(CueNodeViewModel.DurationMs)        // image/text duration drives the hold window
             or nameof(CueNodeViewModel.MediaSourceItem)   // text restyle replaces the source -> re-render
             or nameof(CueNodeViewModel.AudioTrackIndex))  // track change is part of the prepared-cue key
@@ -2146,9 +2128,9 @@ public partial class CuePlayerViewModel : ViewModelBase
     private bool _suppressStandbyPreRollRefresh;
 
     /// <summary>The fireable cue order starting at standby (or list start) — the window each
-    /// pre-roll query pulls its next-N targets from. Callers apply a per-source-type filter and
-    /// cap the count of *matched* targets themselves, so a non-matching cue (e.g. an NDI cue while
-    /// scanning for files) is skipped without consuming the budget.</summary>
+    /// pre-roll query pulls its targets from. Callers apply a per-source-type filter, so a
+    /// non-matching cue (e.g. an NDI cue while scanning for files) is skipped without changing
+    /// the file-media target set.</summary>
     private IEnumerable<CueNodeViewModel> EnumeratePreRollWindow()
     {
         if (SelectedCueList is null)
@@ -2171,18 +2153,38 @@ public partial class CuePlayerViewModel : ViewModelBase
             yield return ordered[i];
     }
 
-    /// <summary>Next file media cues from standby for the cue engine's own opened/routed cache.</summary>
-    public IReadOnlyList<MediaCueNode> GetPreparedMediaCueTargets(int maxCount)
+    private IReadOnlyList<CueNodeViewModel> GetStandbySimultaneousGroupTargets()
     {
-        var effectiveMax = ResolvePreRollTargetLimit(maxCount);
+        if (StandbyCueNode is not { Kind: CueNodeKind.Group } group
+            || ParseGroupFireMode(group) != CueGroupFireMode.FireAllSimultaneously)
+            return [];
+
+        return BuildTriggerPlan(group).Select(step => step.Cue).ToList();
+    }
+
+    /// <summary>Next file media cues from standby for the cue engine's own opened/routed cache.</summary>
+    public IReadOnlyList<MediaCueNode> GetPreparedMediaCueTargets()
+    {
+        var simultaneousGroup = GetStandbySimultaneousGroupTargets();
+        if (simultaneousGroup.Count > 0)
+        {
+            var groupTargets = new List<MediaCueNode>();
+            foreach (var cue in simultaneousGroup)
+            {
+                if (cue.Kind != CueNodeKind.Media
+                    || cue.MediaSourceItem is not FilePlaylistItem
+                    || cue.ToModel() is not MediaCueNode media)
+                    continue;
+                groupTargets.Add(media);
+            }
+
+            return groupTargets;
+        }
 
         var targets = new List<MediaCueNode>();
         foreach (var cue in EnumeratePreRollWindow())
         {
-            if (targets.Count >= effectiveMax)
-                break;
             if (cue.Kind != CueNodeKind.Media
-                || cue.DisablePreRoll // per-cue resource opt-out
                 || cue.MediaSourceItem is not FilePlaylistItem
                 || cue.ToModel() is not MediaCueNode media)
                 continue;
@@ -2193,17 +2195,28 @@ public partial class CuePlayerViewModel : ViewModelBase
     }
 
     /// <summary>NDI media cues in the pre-roll window (§6.11).</summary>
-    public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNdiPreConnectTargets(int maxCount)
+    public IReadOnlyList<(Guid CueId, NDIInputPlaylistItem Item)> GetNdiPreConnectTargets()
     {
-        var effectiveMax = ResolvePreRollTargetLimit(maxCount);
+        var simultaneousGroup = GetStandbySimultaneousGroupTargets();
+        if (simultaneousGroup.Count > 0)
+        {
+            var groupTargets = new List<(Guid, NDIInputPlaylistItem)>();
+            foreach (var cue in simultaneousGroup)
+            {
+                if (cue.Kind != CueNodeKind.Media
+                    || cue.MediaSourceItem is not NDIInputPlaylistItem ndi
+                    || !ndi.SupportsPreRoll())
+                    continue;
+                groupTargets.Add((cue.Id, ndi));
+            }
+
+            return groupTargets;
+        }
 
         var targets = new List<(Guid, NDIInputPlaylistItem)>();
         foreach (var cue in EnumeratePreRollWindow())
         {
-            if (targets.Count >= effectiveMax)
-                break;
             if (cue.Kind != CueNodeKind.Media
-                || cue.DisablePreRoll // per-cue resource opt-out
                 || cue.MediaSourceItem is not NDIInputPlaylistItem ndi
                 || !ndi.SupportsPreRoll())
                 continue;
@@ -2212,9 +2225,6 @@ public partial class CuePlayerViewModel : ViewModelBase
 
         return targets;
     }
-
-    private static int ResolvePreRollTargetLimit(int maxCount) =>
-        maxCount <= 0 ? int.MaxValue : maxCount;
 
     partial void OnCurrentCueNodeChanged(CueNodeViewModel? value)
     {
@@ -2541,6 +2551,17 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         UpcomingCues.Clear();
         if (SelectedCueList is null) return;
+        var simultaneousGroup = GetStandbySimultaneousGroupTargets();
+        if (simultaneousGroup.Count > 0)
+        {
+            foreach (var c in simultaneousGroup)
+            {
+                if (_activeCueIds.Contains(c.Id)) continue;
+                UpcomingCues.Add(c);
+            }
+            return;
+        }
+
         var ordered = EnumerateFireableCueOrder().ToList();
         if (ordered.Count == 0) return;
 
@@ -2549,8 +2570,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         var startIdx = ordered.FindIndex(c => ReferenceEquals(c, ResolveFireableCue(anchor) ?? anchor));
         if (startIdx < 0) return;
 
-        // Show up to 8 cues ahead — enough context for a chain without crowding the panel.
-        for (var i = startIdx; i < ordered.Count && UpcomingCues.Count < 8; i++)
+        for (var i = startIdx; i < ordered.Count; i++)
         {
             var c = ordered[i];
             // Don't list already-active cues as upcoming — they're in the Active section.
@@ -3542,9 +3562,7 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private bool CanRenameSelectedCue() => SelectedCueNode is not null;
 
-    /// <summary>Phase 5.8.2 — open the cue list settings dialog (pre-roll, default trigger
-    /// mode, auto-renumber). Replaces the inline pre-roll spinner that used to live on the
-    /// toolbar; gear icon on the toolbar opens this.</summary>
+    /// <summary>Open the cue list settings dialog for default trigger mode and auto-renumber.</summary>
     [RelayCommand(CanExecute = nameof(CanOpenCueListSettings))]
     private async Task OpenCueListSettingsAsync()
     {
@@ -3553,18 +3571,15 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (owner is null) return;
 
         var dialogVm = new Dialogs.CueListSettingsDialogViewModel(
-            SelectedCueList.PreRollCount,
-            SelectedCueList.MaxPreparedDecoders,
             SelectedCueList.DefaultTriggerMode,
             SelectedCueList.AutoRenumberOnInsert);
         var dialog = new Views.Dialogs.CueListSettingsDialog { DataContext = dialogVm };
         var result = await dialog.ShowDialog<Dialogs.CueListSettingsDialogResult?>(owner);
         if (result is null) return;
 
-        SelectedCueList.PreRollCount = Math.Max(0, result.PreRollCount);
-        SelectedCueList.MaxPreparedDecoders = Math.Max(0, result.MaxPreparedDecoders);
         SelectedCueList.DefaultTriggerMode = result.DefaultTriggerMode;
         SelectedCueList.AutoRenumberOnInsert = result.AutoRenumberOnInsert;
+        RebuildUpcomingCues();
         StatusMessage = Strings.CueListSettingsAppliedStatus;
         SuggestPreRollRefresh();
     }
@@ -4215,17 +4230,28 @@ public partial class CuePlayerViewModel : ViewModelBase
         RefreshBrokenEndpointFlags();
     }
 
-    public IReadOnlyList<(Guid CueId, PortAudioInputPlaylistItem Item)> GetPortAudioPreConnectTargets(int maxCount)
+    public IReadOnlyList<(Guid CueId, PortAudioInputPlaylistItem Item)> GetPortAudioPreConnectTargets()
     {
-        var effectiveMax = ResolvePreRollTargetLimit(maxCount);
+        var simultaneousGroup = GetStandbySimultaneousGroupTargets();
+        if (simultaneousGroup.Count > 0)
+        {
+            var groupTargets = new List<(Guid, PortAudioInputPlaylistItem)>();
+            foreach (var cue in simultaneousGroup)
+            {
+                if (cue.Kind != CueNodeKind.Media
+                    || cue.MediaSourceItem is not PortAudioInputPlaylistItem pa
+                    || !pa.SupportsPreRoll())
+                    continue;
+                groupTargets.Add((cue.Id, pa));
+            }
+
+            return groupTargets;
+        }
 
         var targets = new List<(Guid, PortAudioInputPlaylistItem)>();
         foreach (var cue in EnumeratePreRollWindow())
         {
-            if (targets.Count >= effectiveMax)
-                break;
             if (cue.Kind != CueNodeKind.Media
-                || cue.DisablePreRoll // per-cue resource opt-out
                 || cue.MediaSourceItem is not PortAudioInputPlaylistItem pa
                 || !pa.SupportsPreRoll())
                 continue;

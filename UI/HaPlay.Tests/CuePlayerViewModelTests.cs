@@ -976,6 +976,31 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public void NowPlaying_UpcomingCues_ShowsEntireStandbySimultaneousGroup()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddGroupCommand.Execute(null);
+        var group = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        group.Extra = CueGroupFireMode.FireAllSimultaneously.ToString();
+
+        var children = new List<CueNodeViewModel>();
+        for (var i = 0; i < 13; i++)
+        {
+            vm.SelectedCueNode = group;
+            vm.AddMediaCueCommand.Execute(null);
+            var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            cue.Label = $"Stem {i + 1}";
+            children.Add(cue);
+        }
+
+        vm.SelectedCueNode = group;
+        vm.StandbySelectedCommand.Execute(null);
+
+        Assert.Equal(13, vm.UpcomingCues.Count);
+        Assert.Equal(children.Select(c => c.Id), vm.UpcomingCues.Select(c => c.Id));
+    }
+
+    [Fact]
     public void Drawer_MultiSelectFlag_TrueWhenMultipleSelected()
     {
         var vm = new CuePlayerViewModel();
@@ -1280,13 +1305,40 @@ public sealed class CuePlayerViewModelTests
         vm.SelectedCueNode = first;
         vm.StandbySelectedCommand.Execute(null);
 
-        var target = Assert.Single(vm.GetPreparedMediaCueTargets(2));
+        var target = Assert.Single(vm.GetPreparedMediaCueTargets());
         Assert.Equal(first.Id, target.Id);
         Assert.Equal("/a.mp4", Assert.IsType<FilePlaylistItem>(target.Source).Path);
         Assert.Equal(80 * 60 * 1000, target.StartOffsetMs);
         Assert.Equal(1500, target.EndOffsetMs);
         Assert.Equal(audioOutputId, Assert.Single(target.AudioRoutes).OutputLineId);
         Assert.Equal(compositionId, Assert.Single(target.VideoPlacements).CompositionId);
+    }
+
+    [Fact]
+    public void GetPreparedMediaCueTargets_StandbySimultaneousGroupReturnsEntireGroup()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddGroupCommand.Execute(null);
+        var group = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        group.Extra = CueGroupFireMode.FireAllSimultaneously.ToString();
+
+        var children = new List<CueNodeViewModel>();
+        for (var i = 0; i < 13; i++)
+        {
+            vm.SelectedCueNode = group;
+            vm.AddMediaCueCommand.Execute(null);
+            var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            cue.MediaSourceItem = new FilePlaylistItem($"/stem-{i + 1}.wav");
+            children.Add(cue);
+        }
+
+        vm.SelectedCueNode = group;
+        vm.StandbySelectedCommand.Execute(null);
+
+        var targets = vm.GetPreparedMediaCueTargets();
+
+        Assert.Equal(13, targets.Count);
+        Assert.Equal(children.Select(c => c.Id), targets.Select(t => t.Id));
     }
 
     [Fact]
@@ -1299,7 +1351,7 @@ public sealed class CuePlayerViewModelTests
         vm.SelectedCueNode = media;
         vm.StandbySelectedCommand.Execute(null);
 
-        var targets = vm.GetNdiPreConnectTargets(2);
+        var targets = vm.GetNdiPreConnectTargets();
         var t = Assert.Single(targets);
         Assert.Equal(media.Id, t.CueId);
         Assert.Equal("Studio-PC (Output 1)", t.Item.SourceName);
@@ -1485,20 +1537,6 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void MaxPreparedDecoders_RoundTripsThroughModel()
-    {
-        // Per-list standby-decoder cap persists through ToModel/FromModel like the other list settings.
-        var vm = new CuePlayerViewModel();
-        vm.SelectedCueList!.MaxPreparedDecoders = 3;
-
-        var snapshot = vm.BuildCueListsSnapshot();
-        Assert.Equal(3, snapshot[0].MaxPreparedDecoders);
-
-        var restored = CueListEditorViewModel.FromModel(snapshot[0]);
-        Assert.Equal(3, restored.MaxPreparedDecoders);
-    }
-
-    [Fact]
     public void CueListEditorViewModel_EmptyNameFallsBackToDefaultFileName()
     {
         var vm = new CueListEditorViewModel("Show A");
@@ -1507,11 +1545,24 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
-    public void MaxPreparedDecoders_ZeroMeansNoSeparateCap()
+    public void CueListEditorViewModel_LegacyPreRollLimitsNormalizeToUnlimited()
     {
-        // Zero is the project-file sentinel for no separate standby-decoder cap.
-        var restored = CueListEditorViewModel.FromModel(new CueList { MaxPreparedDecoders = 0 });
-        Assert.Equal(0, restored.MaxPreparedDecoders);
+        var restored = CueListEditorViewModel.FromModel(new CueList
+        {
+            PreRollCount = 3,
+            MaxPreparedDecoders = 8,
+            Nodes =
+            {
+                new MediaCueNode { DisablePreRoll = true },
+            },
+        });
+
+        var snapshot = restored.ToModel();
+
+        Assert.Equal(0, snapshot.PreRollCount);
+        Assert.Equal(0, snapshot.MaxPreparedDecoders);
+        var cue = Assert.IsType<MediaCueNode>(Assert.Single(snapshot.Nodes));
+        Assert.False(cue.DisablePreRoll);
     }
 
     [Fact]

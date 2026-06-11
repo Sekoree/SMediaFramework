@@ -241,10 +241,6 @@ public static class Strings
     public static string AddListButton => Get(nameof(AddListButton));
     public static string RemoveListButton => Get(nameof(RemoveListButton));
     public static string LoadButton => Get(nameof(LoadButton));
-    public static string PreRollNLabel => Get(nameof(PreRollNLabel));
-    public static string PreRollTooltip => Get(nameof(PreRollTooltip));
-    public static string MaxStandbyDecodersLabel => Get(nameof(MaxStandbyDecodersLabel));
-    public static string MaxStandbyDecodersTooltip => Get(nameof(MaxStandbyDecodersTooltip));
     public static string AddGroupButton => Get(nameof(AddGroupButton));
     public static string AddCueMenuButton => Get(nameof(AddCueMenuButton));
     public static string CueSelectionMenuButton => Get(nameof(CueSelectionMenuButton));
@@ -461,8 +457,6 @@ public static class Strings
     public static string DownmixPresetsLabel => Get(nameof(DownmixPresetsLabel));
     public static string DownmixPresetsTooltip => Get(nameof(DownmixPresetsTooltip));
     public static string DownmixNoOutputStatus => Get(nameof(DownmixNoOutputStatus));
-    public static string DisablePreRollLabel => Get(nameof(DisablePreRollLabel));
-    public static string DisablePreRollTooltip => Get(nameof(DisablePreRollTooltip));
     public static string DownmixNotApplicableStatusFormat => Get(nameof(DownmixNotApplicableStatusFormat));
     public static string DownmixAppliedStatusFormat => Get(nameof(DownmixAppliedStatusFormat));
     public static string LoopToggleLabel => Get(nameof(LoopToggleLabel));

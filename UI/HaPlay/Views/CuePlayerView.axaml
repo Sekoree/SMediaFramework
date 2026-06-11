@@ -243,10 +243,6 @@
                     </ComboBox.ItemTemplate>
                   </ComboBox>
                 </Grid>
-                <CheckBox Content="{x:Static res:Strings.DisablePreRollLabel}"
-                          IsVisible="{Binding HasSelectedMediaCue}"
-                          IsChecked="{Binding SelectedCueNode.DisablePreRoll, Mode=TwoWay}"
-                          ToolTip.Tip="{x:Static res:Strings.DisablePreRollTooltip}" />
                 <TextBlock Text="{x:Static res:Strings.NotesLabel}" />
                 <TextBox AcceptsReturn="True"
                          MinHeight="60"

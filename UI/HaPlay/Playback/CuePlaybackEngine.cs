@@ -288,7 +288,7 @@ public sealed class CuePlaybackEngine : IDisposable
 
         await _standby.RefreshStandbyAsync(
                 specs,
-                new ClipStandbyPolicy(MaxPreparedDecoders: Math.Max(0, list.MaxPreparedDecoders), Window: specs.Count),
+                new ClipStandbyPolicy(Window: specs.Count),
                 ct)
             .ConfigureAwait(false);
     }

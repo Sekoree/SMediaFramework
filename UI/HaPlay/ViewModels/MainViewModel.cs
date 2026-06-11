@@ -1164,10 +1164,9 @@ public partial class MainViewModel : ViewModelBase
                 if (list is null)
                     return;
 
-                var n = list.PreRollCount;
-                var engineTargets = CuePlayer.GetPreparedMediaCueTargets(n);
-                var ndiTargets = CuePlayer.GetNdiPreConnectTargets(n);
-                var paTargets = CuePlayer.GetPortAudioPreConnectTargets(n);
+                var engineTargets = CuePlayer.GetPreparedMediaCueTargets();
+                var ndiTargets = CuePlayer.GetNdiPreConnectTargets();
+                var paTargets = CuePlayer.GetPortAudioPreConnectTargets();
 
                 player?.InvalidateCuePreRoll();
                 await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets, ct).ConfigureAwait(false);

@@ -18,18 +18,9 @@
     </StackPanel>
 
     <StackPanel Spacing="10">
-      <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8" ColumnSpacing="8">
-        <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.PreRollNLabel}" VerticalAlignment="Center"
-                   ToolTip.Tip="{x:Static res:Strings.PreRollTooltip}" />
-        <NumericUpDown Grid.Row="0" Grid.Column="1" Value="{Binding PreRollCount, Mode=TwoWay}" Minimum="0" Maximum="1024" />
-
-        <TextBlock Grid.Row="1" Grid.Column="0" Text="{x:Static res:Strings.MaxStandbyDecodersLabel}" VerticalAlignment="Center"
-                   ToolTip.Tip="{x:Static res:Strings.MaxStandbyDecodersTooltip}" />
-        <NumericUpDown Grid.Row="1" Grid.Column="1" Value="{Binding MaxPreparedDecoders, Mode=TwoWay}" Minimum="0" Maximum="1024"
-                       ToolTip.Tip="{x:Static res:Strings.MaxStandbyDecodersTooltip}" />
-
-        <TextBlock Grid.Row="2" Grid.Column="0" Text="{x:Static res:Strings.DefaultTriggerModeLabel}" VerticalAlignment="Center" />
-        <ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding TriggerModes}"
+      <Grid ColumnDefinitions="150,*" RowDefinitions="Auto,Auto" RowSpacing="8" ColumnSpacing="8">
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.DefaultTriggerModeLabel}" VerticalAlignment="Center" />
+        <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding TriggerModes}"
                   SelectedItem="{Binding DefaultTriggerMode, Mode=TwoWay}" HorizontalAlignment="Stretch">
           <ComboBox.ItemTemplate>
             <DataTemplate>
@@ -38,7 +29,7 @@
           </ComboBox.ItemTemplate>
         </ComboBox>
 
-        <CheckBox Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+        <CheckBox Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2"
                   Content="{x:Static res:Strings.AutoRenumberOnInsertLabel}"
                   IsChecked="{Binding AutoRenumberOnInsert, Mode=TwoWay}" />
       </Grid>

@@ -276,18 +276,6 @@
   <data name="LoadButton" xml:space="preserve">
     <value>Load…</value>
   </data>
-  <data name="PreRollNLabel" xml:space="preserve">
-    <value>Pre-roll N</value>
-  </data>
-  <data name="PreRollTooltip" xml:space="preserve">
-    <value>Upcoming media cues to pre-open ahead of standby. 0 means all upcoming cues.</value>
-  </data>
-  <data name="MaxStandbyDecodersLabel" xml:space="preserve">
-    <value>Max standby decoders</value>
-  </data>
-  <data name="MaxStandbyDecodersTooltip" xml:space="preserve">
-    <value>Resource cap: how many standby decoders stay open at once, independent of the pre-roll window. 0 means no separate decoder cap.</value>
-  </data>
   <data name="AddGroupButton" xml:space="preserve">
     <value>+ Group</value>
   </data>
@@ -1151,12 +1139,6 @@
   </data>
   <data name="DownmixNoOutputStatus" xml:space="preserve">
     <value>No audio output line available to apply a downmix preset to.</value>
-  </data>
-  <data name="DisablePreRollLabel" xml:space="preserve">
-    <value>Don't pre-roll (open cold on Go)</value>
-  </data>
-  <data name="DisablePreRollTooltip" xml:space="preserve">
-    <value>Exclude this cue from standby warming. Saves an open decoder for large/expensive files at the cost of a slightly slower start when fired.</value>
   </data>
   <data name="DownmixNotApplicableStatusFormat" xml:space="preserve">
     <value>Downmix '{0}' doesn't fit {1} source × {2} output channels — skipped.</value>

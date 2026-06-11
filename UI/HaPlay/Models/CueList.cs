@@ -25,12 +25,12 @@ public sealed record CueList
 
     public string Name { get; init; } = "Cue List";
 
-    /// <summary>Number of upcoming cues to standby. <c>0</c> means the full upcoming cue window.</summary>
+    /// <summary>Legacy persisted standby-window cap. Ignored by the current cue runtime; all
+    /// upcoming standby targets are prepared.</summary>
     public int PreRollCount { get; init; }
 
-    /// <summary>Resource cap: maximum standby decoders kept open at once, independent of the pre-roll
-    /// window size. <c>0</c> means no separate decoder cap; the pre-roll window decides how many cues
-    /// are prepared. Positive values are honored for projects that need an explicit memory cap.</summary>
+    /// <summary>Legacy persisted standby-decoder cap. Ignored by the current cue runtime; decoder
+    /// preparation uses as many decoders as the standby window needs.</summary>
     public int MaxPreparedDecoders { get; init; }
 
     /// <summary>Trigger mode applied to cues created via the toolbar (Phase 5.8.2). Default
@@ -277,9 +277,7 @@ public sealed record MediaCueNode : CueNode
 
     public int FadeOutMs { get; init; }
 
-    /// <summary>Per-cue pre-roll opt-out (§ resource policy). When true this cue is never warmed in
-    /// standby — it opens cold on Go. Use it to keep several large/expensive H.264 files from each
-    /// holding an open, seeked decoder in the pre-roll window.</summary>
+    /// <summary>Legacy persisted per-cue pre-roll opt-out. Ignored by the current cue runtime.</summary>
     public bool DisablePreRoll { get; init; }
 
     /// <summary>Per-source-channel audio routing — picks a cue audio output + a device channel
