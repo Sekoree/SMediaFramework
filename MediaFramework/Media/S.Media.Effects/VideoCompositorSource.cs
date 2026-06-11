@@ -326,6 +326,9 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
 
         internal void SubmitFromOutput(VideoFrame frame)
         {
+            // A closed slot drops silently (frame disposed, ownership honored): a player tick is
+            // routinely in flight while a cue's slots are torn down, and throwing here only
+            // produced per-tick error spam upstream — no submitter can react to it anyway.
             VideoFrame? toDispose;
             var closed = false;
             lock (_gate)
@@ -347,8 +350,6 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                     Interlocked.Increment(ref _overflowFrames);
                 toDispose.Dispose();
             }
-            if (closed)
-                throw new ObjectDisposedException(nameof(Slot));
         }
 
         /// <summary>Returns the slot's latest held frame and registers an active read-ref on it (the

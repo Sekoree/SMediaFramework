@@ -21,8 +21,9 @@ public sealed partial class ToastViewModel(ToastSeverity severity, string messag
     [ObservableProperty]
     private bool _isPinned;
 
-    /// <summary>Auto-dismiss deadline; ignored once <see cref="IsPinned"/> is set.</summary>
-    public long DeadlineTicks { get; init; }
+    /// <summary>Auto-dismiss deadline; ignored once <see cref="IsPinned"/> is set. Settable so a
+    /// repeated identical message refreshes the existing toast instead of stacking a duplicate.</summary>
+    public long DeadlineTicks { get; set; }
 
     [RelayCommand]
     private void Close() => close(this);

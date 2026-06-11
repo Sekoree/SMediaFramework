@@ -332,6 +332,9 @@ public sealed class CuePlaybackEngine : IDisposable
             entry.EnsureAudioRuntimesStarted();
         }
 
+        foreach (var entry in group)
+            BeginFadeIn(entry);
+
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             foreach (var entry in group)
@@ -424,6 +427,7 @@ public sealed class CuePlaybackEngine : IDisposable
                     entry.SetAudioPaused(false);
                     entry.EnsureAudioRuntimesStarted();
                 }).ConfigureAwait(false);
+                BeginFadeIn(entry);
                 await Dispatcher.UIThread.InvokeAsync(() => CueStarted?.Invoke(this, cue.Id));
             }
             catch (Exception ex)
@@ -687,6 +691,7 @@ public sealed class CuePlaybackEngine : IDisposable
                 entry.IsPaused = startPaused;
                 WireAudioRoutes(entry, plan.AudioByOutput);
                 WireVideoPlacements(entry, list, plan);
+                PrepareFadeInStartLevels(entry);
                 entry.RoutesWired = true;
             });
             return null;
@@ -733,7 +738,7 @@ public sealed class CuePlaybackEngine : IDisposable
             toDispose = _active.Values.ToList();
             _active.Clear();
         }
-        await Task.WhenAll(toDispose.Select(entry => DisposeEntryAsync(entry, releaseFade: SoftStopFadeDuration)))
+        await Task.WhenAll(toDispose.Select(entry => DisposeEntryAsync(entry, releaseFade: ReleaseFadeFor(entry))))
             .ConfigureAwait(false);
         await _standby.RefreshStandbyAsync([], new ClipStandbyPolicy()).ConfigureAwait(false);
     }
@@ -755,6 +760,9 @@ public sealed class CuePlaybackEngine : IDisposable
             if (!_active.Remove(cueId, out entry))
                 return;
         }
+        // Soft stops honor the cue's own FadeOutMs; hard stops (releaseFade = 0) stay immediate.
+        if (releaseFade > TimeSpan.Zero)
+            releaseFade = ReleaseFadeFor(entry);
         await DisposeEntryAsync(entry, releaseFade: releaseFade).ConfigureAwait(false);
     }
 
@@ -817,6 +825,74 @@ public sealed class CuePlaybackEngine : IDisposable
             return _active.ContainsKey(cueId);
     }
 
+    /// <summary>Per-line throughput snapshot for the outputs panel's 1 Hz health poll. Sums every
+    /// composition runtime holding a video lease on the line plus the line's shared audio runtime.
+    /// Returns null when no cue runtime drives the line (panel falls back to the media-player probe
+    /// or Idle).</summary>
+    internal OutputLineHealthEvaluator.LineHealthMetrics? TryGetLineHealthMetrics(Guid outputLineId)
+    {
+        List<CueCompositionRuntime>? comps = null;
+        ClipAudioOutputRuntime? audio;
+        lock (_gate)
+        {
+            foreach (var runtime in _compositions.Values)
+            {
+                if (!runtime.DrivesLine(outputLineId))
+                    continue;
+                comps ??= new List<CueCompositionRuntime>();
+                comps.Add(runtime);
+            }
+            _audioOutputs.TryGetValue(outputLineId, out audio);
+        }
+
+        if (comps is null && audio is null)
+            return null;
+
+        long videoSubmitted = 0;
+        long videoDropped = 0;
+        long audioEnqueued = 0;
+        long audioDropped = 0;
+
+        if (comps is not null)
+        {
+            foreach (var comp in comps)
+            {
+                try
+                {
+                    var stats = comp.GetStats();
+                    videoSubmitted += stats.FramesSubmitted;
+                    videoDropped += stats.PumpOverruns;
+                }
+                catch (ObjectDisposedException) { /* torn down between snapshot and read */ }
+            }
+        }
+
+        if (audio is not null)
+        {
+            try
+            {
+                var st = audio.GetOutputPumpStats();
+                audioEnqueued = st.Enqueued;
+                audioDropped = st.Dropped;
+            }
+            catch (ObjectDisposedException) { /* torn down between snapshot and read */ }
+        }
+
+        var throughput = videoSubmitted + audioEnqueued;
+        if (throughput == 0)
+            return null;
+
+        var totalDropped = videoDropped + audioDropped;
+        var state = totalDropped == 0
+            ? OutputLineHealthState.Healthy
+            : totalDropped > 120 || (double)totalDropped / throughput > 0.05
+                ? OutputLineHealthState.Error
+                : OutputLineHealthState.Warning;
+
+        return new OutputLineHealthEvaluator.LineHealthMetrics(
+            state, videoSubmitted, videoDropped, 0, 0, audioEnqueued, audioDropped);
+    }
+
     private void OnStandbyStatesChanged(IReadOnlyList<S.Media.Playback.ClipPreparationStatus> states)
     {
         RaisePreparedCuesChanged();
@@ -861,11 +937,34 @@ public sealed class CuePlaybackEngine : IDisposable
             return;
 
         try { entry.Cts.Cancel(); } catch { /* best effort */ }
+        try { entry.FadeInCts?.Cancel(); } catch { /* best effort */ }
 
-        if (releaseFade > TimeSpan.Zero)
+        // TryBeginFadeOut keeps this from re-ramping (levels would jump back up) when the
+        // natural-end watcher already ran the FadeOutMs fade.
+        if (releaseFade > TimeSpan.Zero && entry.TryBeginFadeOut())
             await FadeEntryOutputsAsync(entry, releaseFade).ConfigureAwait(false);
 
         try { entry.Cts.Dispose(); } catch { /* best effort */ }
+
+        // Stop the transport BEFORE detaching routes. Until ArmedClip disposes (bounded below —
+        // and that can run seconds on a heavy file) the player keeps ticking video into the slots
+        // we're about to dispose, and cues on the player's internal audio router keep the audio
+        // device running. That zombie held outputs across a stop→GO cycle and spammed
+        // disposed-slot submit errors until the media ran out.
+        if (entry.ArmedClip.IsStarted)
+        {
+            try
+            {
+                using var pauseCts = new CancellationTokenSource(BoundedPauseTimeout);
+                await Task.Run(() => entry.Player.Pause(pauseCts.Token, PauseFlushPolicy.SkipFlush))
+                    .WaitAsync(BoundedPauseTimeout)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "CuePlaybackEngine.DisposeEntryAsync: bounded pre-dispose pause failed");
+            }
+        }
 
         // Detach from shared runtimes on UI thread (lightweight ops).
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -921,6 +1020,96 @@ public sealed class CuePlaybackEngine : IDisposable
             }
         });
     }
+
+    /// <summary>Cue FadeInMs: zero the freshly wired levels (route gains + layer opacities) before
+    /// the transport starts so the first frames/chunks don't blip at full level. <see cref="BeginFadeIn"/>
+    /// ramps them back up after Play. Runs on the UI thread as part of wiring.</summary>
+    private static void PrepareFadeInStartLevels(ActiveCue entry)
+    {
+        if (entry.Cue.FadeInMs <= 0)
+            return;
+
+        entry.FadeSlotTargets.Clear();
+        foreach (var slot in entry.LayerSlots)
+        {
+            entry.FadeSlotTargets.Add((slot, slot.Opacity));
+            slot.Opacity = 0f;
+        }
+
+        foreach (var (runtime, sourceId) in entry.AudioSources)
+        {
+            try { runtime.SetSourceGainScale(sourceId, 0f); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: fade-in pre-mute failed for {Source}", sourceId); }
+        }
+    }
+
+    /// <summary>Starts the FadeInMs ramp (audio route gains + layer opacities). Call right after the
+    /// transport started and audio was unpaused.</summary>
+    private void BeginFadeIn(ActiveCue entry)
+    {
+        if (entry.Cue.FadeInMs <= 0)
+            return;
+
+        var cts = new CancellationTokenSource();
+        entry.FadeInCts = cts;
+        _ = RunFadeInAsync(entry, TimeSpan.FromMilliseconds(entry.Cue.FadeInMs), cts.Token);
+    }
+
+    private async Task RunFadeInAsync(ActiveCue entry, TimeSpan duration, CancellationToken ct)
+    {
+        try
+        {
+            var audioTasks = entry.AudioSources
+                .Select(source => FadeAudioSourceInAsync(source.Runtime, source.SourceId, duration, ct))
+                .ToList();
+            var videoTask = FadeVideoSlotsToTargetsAsync(entry.FadeSlotTargets, duration, ct);
+            await Task.WhenAll(audioTasks.Append(videoTask)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { /* fade-out / stop superseded the fade-in */ }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "CuePlaybackEngine.RunFadeInAsync");
+        }
+    }
+
+    private static async Task FadeAudioSourceInAsync(
+        ClipAudioOutputRuntime runtime,
+        string sourceId,
+        TimeSpan duration,
+        CancellationToken ct)
+    {
+        try { await runtime.FadeInSourceAsync(sourceId, duration, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { throw; }
+        catch { /* runtime may already be disposed or the route may already be gone */ }
+    }
+
+    private static async Task FadeVideoSlotsToTargetsAsync(
+        IReadOnlyList<(CueCompositionRuntime.LayerSlot Slot, float TargetOpacity)> targets,
+        TimeSpan duration,
+        CancellationToken ct)
+    {
+        if (targets.Count == 0)
+            return;
+
+        var steps = Math.Clamp((int)Math.Ceiling(Math.Max(1, duration.TotalMilliseconds) / 33.0), 1, 120);
+        var delay = TimeSpan.FromTicks(Math.Max(1, duration.Ticks / steps));
+        for (var step = 1; step <= steps; step++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var scale = Math.Clamp((float)step / steps, 0f, 1f);
+            foreach (var (slot, target) in targets)
+            {
+                try { slot.Opacity = target * scale; }
+                catch { /* slot disposed mid-fade */ }
+            }
+            if (step < steps && delay > TimeSpan.Zero)
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Soft-stop fade duration for an entry: the cue's own FadeOutMs when set, else the default.</summary>
+    private static TimeSpan ReleaseFadeFor(ActiveCue entry) =>
+        entry.Cue.FadeOutMs > 0 ? TimeSpan.FromMilliseconds(entry.Cue.FadeOutMs) : SoftStopFadeDuration;
 
     private async Task FadeEntryOutputsAsync(ActiveCue entry, TimeSpan duration)
     {
@@ -1268,9 +1457,13 @@ public sealed class CuePlaybackEngine : IDisposable
 
             // The index keeps the id unique when the same source is placed more than once on one
             // composition (same compId), so the router accepts every layer's output.
+            // Pumped (router default), NOT synchronous: a synchronous branch runs its pixel
+            // conversion (CPU-compositor BGRA repack, locked NDI formats) inline on the player's
+            // clock tick thread, stalling ticks and throttling decode — heavy files played smooth
+            // for a few seconds (prefill) and then crawled. The pump's drain thread does the
+            // conversion; the slot is a latest-frame mailbox so drop-oldest queueing is harmless.
             var outId = router.AddOutput(layerOutput, id: $"cuecomp_{entry.Cue.Id:N}_{entry.InstanceId:N}_{compId:N}_{i}",
-                disposeOutputOnRouterDispose: false,
-                synchronous: true);
+                disposeOutputOnRouterDispose: false);
             if (!router.TryAddRoute(inputId, outId, out var routeErr))
                 throw new InvalidOperationException(routeErr ?? "TryAddRoute failed for composition slot");
         }
@@ -1683,6 +1876,18 @@ public sealed class CuePlaybackEngine : IDisposable
                     ? TimeSpan.FromMilliseconds(150)
                     : TimeSpan.FromMilliseconds(Math.Clamp(remaining.TotalMilliseconds / 2, 15, 150));
 
+                // FadeOutMs: start ramping down ahead of the natural end (skipped for looping cues —
+                // the wrap should stay seamless). A seek back out of the window can't restart the
+                // ramp (TryBeginFadeOut is once per entry); acceptable for show playback.
+                var loops = entry.Cue.Loop || entry.Cue.EndBehavior == CueEndBehavior.Loop;
+                if (!loops && entry.Cue.FadeOutMs > 0 && remaining > TimeSpan.Zero
+                    && remaining <= TimeSpan.FromMilliseconds(entry.Cue.FadeOutMs)
+                    && entry.TryBeginFadeOut())
+                {
+                    try { entry.FadeInCts?.Cancel(); } catch { /* best effort */ }
+                    _ = FadeEntryOutputsAsync(entry, remaining);
+                }
+
                 if (entry.ClipWindow.IsAtEnd(pos))
                 {
                     if (entry.Cue.Loop || entry.Cue.EndBehavior == CueEndBehavior.Loop)
@@ -1906,9 +2111,22 @@ public sealed class CuePlaybackEngine : IDisposable
         public List<(ClipAudioOutputRuntime Runtime, string SourceId)> AudioSources { get; } = new();
         public List<PausableAudioSource> PausableAudioSources { get; } = new();
         public List<IDisposable> AudioDisposables { get; } = new();
+
+        /// <summary>Per-slot placement opacity captured before fade-in zeroes the levels —
+        /// the ramp target (the placement's configured opacity, not necessarily 1).</summary>
+        public List<(CueCompositionRuntime.LayerSlot Slot, float TargetOpacity)> FadeSlotTargets { get; } = new();
+
+        /// <summary>Cancels an in-flight fade-in when a fade-out/stop supersedes it.</summary>
+        public CancellationTokenSource? FadeInCts { get; set; }
+
         private int _disposeStarted;
+        private int _fadeOutStarted;
 
         public bool TryBeginDispose() => Interlocked.Exchange(ref _disposeStarted, 1) == 0;
+
+        /// <summary>True once per entry — gates the FadeOutMs ramp so the natural-end watcher and
+        /// the stop path don't both run it (a second ramp would jump levels back up).</summary>
+        public bool TryBeginFadeOut() => Interlocked.Exchange(ref _fadeOutStarted, 1) == 0;
 
         public void SetAudioPaused(bool paused)
         {

@@ -54,6 +54,7 @@ public partial class MainViewModel : ViewModelBase
         Players.Add(CreatePlayer(removable: false));
         SelectedPlayer = Players[0];
         _cuePlaybackEngine = new Playback.CuePlaybackEngine(OutputManagement, CuePlayer);
+        OutputManagement.CueLineMetricsProbe = _cuePlaybackEngine.TryGetLineHealthMetrics;
         _cuePlaybackEngine.NaturalEnd += OnCuePlaybackEngineNaturalEndAsync;
         _cuePlaybackEngine.CueStarted += (_, id) => CuePlayer.OnCueStarted(id);
         _cuePlaybackEngine.CueEnded += (_, id) => CuePlayer.OnCueEnded(id);
@@ -147,6 +148,14 @@ public partial class MainViewModel : ViewModelBase
         if (!Dispatcher.UIThread.CheckAccess())
         {
             Dispatcher.UIThread.Post(() => OnToastPosted(severity, message));
+            return;
+        }
+
+        // Repeats (per-second drift/pressure updates) refresh the existing toast's clock instead of
+        // stacking duplicates and churning the overlay.
+        if (Toasts.Count > 0 && Toasts[^1].Message == message && Toasts[^1].Severity == severity)
+        {
+            Toasts[^1].DeadlineTicks = Environment.TickCount64 + (long)ToastLifetime.TotalMilliseconds;
             return;
         }
 

@@ -48,6 +48,10 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// <summary>Supplies players with active sessions for output-line health LEDs.</summary>
     public Func<IReadOnlyList<MediaPlayerViewModel>>? ActivePlayersProbe { get; set; }
 
+    /// <summary>Supplies cue-engine throughput for a line (or null when the engine doesn't drive it),
+    /// so cue playback lights the health LEDs/stats instead of leaving the line "Idle".</summary>
+    internal Func<Guid, Playback.OutputLineHealthEvaluator.LineHealthMetrics?>? CueLineMetricsProbe { get; set; }
+
     /// <summary>UI rewrite (I/O master-detail): the line whose detail/stats pane is shown. Cleared
     /// automatically when that line is removed.</summary>
     [ObservableProperty]
@@ -948,21 +952,8 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private void RefreshOutputHealth()
     {
-        var players = ActivePlayersProbe?.Invoke();
-        if (players is null || players.Count == 0)
-        {
-            foreach (var line in Outputs)
-            {
-                line.Health = OutputLineHealthState.Unknown;
-                line.HealthDetail = null;
-                line.ResetSparkline();
-            }
-
-            AggregateActiveCount = 0;
-            AggregateWarningCount = 0;
-            AggregateErrorCount = 0;
-            return;
-        }
+        var players = ActivePlayersProbe?.Invoke() ?? [];
+        var cueProbe = CueLineMetricsProbe;
 
         foreach (var line in Outputs)
         {
@@ -990,6 +981,20 @@ public partial class OutputManagementViewModel : ViewModelBase
                 {
                     worst = metrics.State;
                     detail = FormatHealthDetail(session, line, metrics.State);
+                }
+            }
+
+            // Cue-engine playback drives lines outside any player session — without this the panel
+            // showed "Idle" (no LED, no stats) during cue playback.
+            if (cueProbe?.Invoke(line.Definition.Id) is { State: not OutputLineHealthState.Unknown } cue)
+            {
+                anyWired = true;
+                videoSubmittedTotal += cue.VideoSubmitted;
+                audioEnqueuedTotal += cue.AudioEnqueued;
+                if (cue.State > worst)
+                {
+                    worst = cue.State;
+                    detail = FormatCueHealthDetail(cue);
                 }
             }
 
@@ -1031,6 +1036,11 @@ public partial class OutputManagementViewModel : ViewModelBase
         AggregateWarningCount = warn;
         AggregateErrorCount = err;
     }
+
+    private static string FormatCueHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
+        m.State == OutputLineHealthState.Healthy
+            ? $"Cues: {m.VideoSubmitted:N0} f · {m.AudioEnqueued:N0} ch"
+            : $"Cues: {m.VideoDropped + m.AudioDropped:N0} drops of {m.VideoSubmitted + m.AudioEnqueued:N0} delivered";
 
     private static string? FormatHealthDetail(
         HaPlayPlaybackSession session,

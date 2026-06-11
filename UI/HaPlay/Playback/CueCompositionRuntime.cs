@@ -19,6 +19,7 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     private readonly CueComposition _composition;
     private readonly ClipCompositionRuntime _inner;
+    private readonly HashSet<Guid> _leasedLineIds = new();
 
     public CueCompositionRuntime(
         CueComposition composition,
@@ -34,13 +35,23 @@ internal sealed class CueCompositionRuntime : IDisposable
             composition.FrameRateNum,
             composition.FrameRateDen);
 
+        var leases = BuildOutputLeases(composition, targetLines, outputs);
+        foreach (var lease in leases)
+        {
+            if (TryParseGuid(lease.OutputId) is { } lineId)
+                _leasedLineIds.Add(lineId);
+        }
+
         _inner = new ClipCompositionRuntime(
             definition,
-            BuildOutputLeases(composition, targetLines, outputs),
+            leases,
             canvas => CreateCompositor(canvas, composition));
         _inner.DriftWarning += OnInnerDriftWarning;
         _inner.PumpPressureWarning += OnInnerPumpPressureWarning;
     }
+
+    /// <summary>True when this composition holds a video lease on the given output line (outputs-panel health probe).</summary>
+    public bool DrivesLine(Guid outputLineId) => _leasedLineIds.Contains(outputLineId);
 
     public Guid CompositionId => _composition.Id;
 

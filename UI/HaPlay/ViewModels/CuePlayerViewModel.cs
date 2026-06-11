@@ -2574,10 +2574,24 @@ public partial class CuePlayerViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(value))
             return;
 
+        // Status surfaces as a top-right toast (MainView overlay) instead of the old inline banner,
+        // which pushed the whole cue list down mid-click. Severity is a keyword heuristic — cue
+        // status strings carry no structured level.
+        ToastCenter.Post(ClassifyStatusSeverity(value), value);
+
         var cts = new CancellationTokenSource();
         _statusMessageClearCts = cts;
         _ = ClearStatusMessageLaterAsync(value, cts.Token);
     }
+
+    private static ToastSeverity ClassifyStatusSeverity(string message) =>
+        message.Contains("fail", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("error", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("drift", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("drop", StringComparison.OrdinalIgnoreCase)
+            ? ToastSeverity.Warning
+            : ToastSeverity.Info;
 
     private async Task ClearStatusMessageLaterAsync(string message, CancellationToken token)
     {

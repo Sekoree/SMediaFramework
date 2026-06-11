@@ -10,12 +10,8 @@
              x:Class="HaPlay.Views.CuePlayerView"
              x:DataType="vm:CuePlayerViewModel">
   <DockPanel LastChildFill="True">
-    <Border DockPanel.Dock="Top"
-            IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-            Background="#33C00000" BorderBrush="#88C00000" BorderThickness="1"
-            CornerRadius="4" Padding="10,6" Margin="0,0,0,10">
-      <TextBlock Text="{Binding StatusMessage}" Foreground="#FFE6E6" TextWrapping="Wrap" />
-    </Border>
+    <!-- Status messages surface via the MainView toast overlay (ToastCenter) — the old inline
+         banner here resized the whole panel on every message and caused misclicks. -->
 
     <!-- Cue-list header. Load/Save live only in the Files menu (they used to ALSO be standalone
          buttons here — the duplication just widened an already busy row). -->

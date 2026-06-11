@@ -225,8 +225,12 @@ public partial class MediaPlayerViewModel : ViewModelBase
         var cacheKey = CuePreRollCache.BuildCacheKey(cue.Source!, lines, fileOpts);
         if (_cuePreRoll.TryTake(cue.Id, cacheKey, out var session, out var item) && session is not null && item is not null)
         {
-            _activePlaybackTab = SelectedPlaylistTab;
-            SelectedPlaylistItem = item;
+            // Cue executors run on pool threads — observable property sets must go via the dispatcher.
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                _activePlaybackTab = SelectedPlaylistTab;
+                SelectedPlaylistItem = item;
+            });
             await AdoptPreRolledSessionAsync(session, item, cue, ct).ConfigureAwait(false);
             if (!IsPlaying)
                 await StartPlaybackAsync().ConfigureAwait(false);
@@ -2779,9 +2783,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
             SDebug.ChangeTrace.Step("CancelCueEnvelope");
         }
 
-        _activePlaybackTab = SelectedPlaylistTab;
-        SelectedPlaylistItem = item;
-        await PrepareCurrentItemAsync(item).ConfigureAwait(false);
+        // Callable from pool threads (cue executors) as well as the view — marshal the observable
+        // property sets (SelectedPlaylistItem fires transport CanExecuteChanged into the buttons).
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            _activePlaybackTab = SelectedPlaylistTab;
+            SelectedPlaylistItem = item;
+            return PrepareCurrentItemAsync(item);
+        });
         SDebug.ChangeTrace.Step("PrepareCurrentItemAsync");
         await OpenOrReloadAsync().ConfigureAwait(false);
         SDebug.ChangeTrace.Step("OpenOrReloadAsync");
@@ -3708,9 +3717,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [RelayCommand(CanExecute = nameof(CanPlay))]
     private async Task PlayAsync()
     {
+        // Stays on the dispatcher context: the code between awaits sets observable properties
+        // (StatusMessage / MediaFilePath / IsPlaying) whose change notifications must be raised on
+        // the UI thread. The helpers do their own Task.Run/InvokeAsync marshalling.
+
         // Phase 1C — auto-route: if the user clicks Play with no outputs selected, pick a sensible
         // default (first compatible output) so playback isn't silent on first run.
-        await TryAutoRouteAsync().ConfigureAwait(false);
+        await TryAutoRouteAsync();
 
         // Auto-load: if nothing's loaded yet but the user has selected a playlist row, load + play in one click.
         if (_session is null && SelectedPlaylistItem is { } selected)
@@ -3723,13 +3736,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 return;
             }
             _activePlaybackTab = SelectedPlaylistTab;
-            await PrepareCurrentItemAsync(selected).ConfigureAwait(false);
+            await PrepareCurrentItemAsync(selected);
             IsPlaying = true; // signals OpenOrReloadAsync to resume after open
-            await OpenOrReloadAsync().ConfigureAwait(false);
+            await OpenOrReloadAsync();
             return;
         }
 
-        await StartPlaybackAsync().ConfigureAwait(false);
+        await StartPlaybackAsync();
     }
 
     /// <summary>One-button transport: pause if playing, play otherwise.</summary>

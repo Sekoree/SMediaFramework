@@ -74,6 +74,7 @@ public sealed class VideoPlayer : IDisposable
     private long _lastPresentedPtsTicks;
     private int _firstTickLogged;
     private int _firstSubmittedLogged;
+    private long _submitFailureStreak;
     private int _firstDecodedLogged;
     private int _syncDebugTicksRemaining;
 
@@ -245,7 +246,9 @@ public sealed class VideoPlayer : IDisposable
             Interlocked.Exchange(ref _firstTickLogged, 0);
             Interlocked.Exchange(ref _firstSubmittedLogged, 0);
             Interlocked.Exchange(ref _firstDecodedLogged, 0);
-            _syncDebugTicksRemaining = Trace.IsEnabled(LogLevel.Debug) ? 90 : 0;
+            // Short burst: enough to see clock/playhead/queue settle right after start without
+            // flooding debug logs (90 ticks ≈ 1.5–3 s of per-tick lines on every Play).
+            _syncDebugTicksRemaining = Trace.IsEnabled(LogLevel.Debug) ? 12 : 0;
             if (_source is ICooperativeVideoReadInterrupt iv)
                 iv.ClearYieldRequest();
             // After pause the shared demux can leave decode state out of step with the frozen clock
@@ -759,11 +762,16 @@ public sealed class VideoPlayer : IDisposable
         {
             _sink.Submit(frame);
             submitted = true;
+            Interlocked.Exchange(ref _submitFailureStreak, 0);
         }
         catch (Exception ex)
         {
 #if DEBUG
-            MediaDiagnostics.LogError(ex, $"VideoPlayer.{operation} output Submit");
+            // A persistently failing sink would otherwise log a full stack every tick — report the
+            // first failure, then summarize once per 100 while the streak lasts.
+            var streak = Interlocked.Increment(ref _submitFailureStreak);
+            if (streak == 1 || streak % 100 == 0)
+                MediaDiagnostics.LogError(ex, $"VideoPlayer.{operation} output Submit (consecutive failures={streak})");
 #endif
             // Output threw — ownership did not move; release the frame to avoid a
             // native buffer leak. Rethrow would kill MediaClock's driver.
