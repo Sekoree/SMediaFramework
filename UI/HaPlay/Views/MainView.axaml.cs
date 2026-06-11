@@ -2,12 +2,17 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
+using HaPlay.Models;
 using HaPlay.ViewModels;
+using HaPlay.Views.Dialogs;
 
 namespace HaPlay.Views;
 
 public partial class MainView : UserControl
 {
+    private readonly PopoutRegion _playersPopout = new();
+    private readonly PopoutRegion _cuesPopout = new();
+
     public MainView()
     {
         InitializeComponent();
@@ -15,6 +20,12 @@ public partial class MainView : UserControl
         PlayersQuickPlayHost.AddHandler(DragDrop.DragOverEvent, OnPlayersQuickPlayDragOver, RoutingStrategies.Bubble);
         PlayersQuickPlayHost.AddHandler(DragDrop.DropEvent, OnPlayersQuickPlayDrop, RoutingStrategies.Bubble);
     }
+
+    private void OnPopOutPlayersClick(object? sender, RoutedEventArgs e) =>
+        _playersPopout.OpenOrActivate(PlayersPopoutHost, WorkspaceItem.Players.Label, TopLevel.GetTopLevel(this) as Window);
+
+    private void OnPopOutCuesClick(object? sender, RoutedEventArgs e) =>
+        _cuesPopout.OpenOrActivate(CuesPopoutHost, WorkspaceItem.Cues.Label, TopLevel.GetTopLevel(this) as Window);
 
     /// <summary>Toast body click = pin/unpin (stops the auto-dismiss); the ✕ button closes.</summary>
     private void OnToastBodyPressed(object? sender, PointerPressedEventArgs e)

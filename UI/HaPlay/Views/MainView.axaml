@@ -138,14 +138,19 @@
            3–4 make a 2×2, 5+ wrap into more columns (⌈√N⌉). Double-tap a deck header area to focus
            it full-workspace; Esc or double-tap again returns to the grid. -->
       <DockPanel Margin="8" IsVisible="{Binding IsPlayersWorkspaceSelected}">
-        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,6">
+        <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,6">
           <TextBlock Grid.Column="0" VerticalAlignment="Center" Classes="CaptionText"
                      Text="{x:Static res:Strings.PlayersDeckHint}" />
           <Button Grid.Column="1" Content="{x:Static res:Strings.AddPlayerButton}"
                   Command="{Binding AddPlayerCommand}"
                   VerticalAlignment="Center" Margin="6,0,0,0" />
+          <Button Grid.Column="2" Content="{x:Static res:Strings.PopoutButtonLabel}"
+                  ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  Click="OnPopOutPlayersClick"
+                  VerticalAlignment="Center" Margin="6,0,0,0" />
         </Grid>
 
+        <ContentControl x:Name="PlayersPopoutHost">
         <Grid x:Name="PlayersQuickPlayHost"
               ToolTip.Tip="{x:Static res:Strings.QuickPlayDropTooltip}">
 
@@ -184,6 +189,7 @@
             </ItemsControl>
           </ScrollViewer>
         </Grid>
+        </ContentControl>
       </DockPanel>
 
       <!-- P1 transitional I/O host: existing Outputs + MIDI views under one workspace; replaced by
@@ -205,11 +211,18 @@
            dialog (button below or the app menu) rather than taking permanent space here. -->
       <DockPanel Margin="8"
                  IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsCuesWorkspaceSelected}">
-        <Button DockPanel.Dock="Top" HorizontalAlignment="Right" Margin="0,0,0,6"
-                Content="{x:Static res:Strings.ActionTargetsButtonLabel}"
-                ToolTip.Tip="{x:Static res:Strings.ActionTargetsButtonTooltip}"
-                Command="{Binding OpenTargetConfigurationCommand}" />
-        <views:CuePlayerView DataContext="{Binding CuePlayer}" />
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Spacing="6" Margin="0,0,0,6">
+          <Button Content="{x:Static res:Strings.ActionTargetsButtonLabel}"
+                  ToolTip.Tip="{x:Static res:Strings.ActionTargetsButtonTooltip}"
+                  Command="{Binding OpenTargetConfigurationCommand}" />
+          <Button Content="{x:Static res:Strings.PopoutButtonLabel}"
+                  ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  Click="OnPopOutCuesClick" />
+        </StackPanel>
+        <ContentControl x:Name="CuesPopoutHost">
+          <views:CuePlayerView DataContext="{Binding CuePlayer}" />
+        </ContentControl>
       </DockPanel>
 
       <views:ControlWorkspaceView DataContext="{Binding Control}"

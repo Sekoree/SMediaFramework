@@ -338,11 +338,28 @@ public partial class MainViewModel : ViewModelBase
     /// attached, which would double-render the same player).</summary>
     public MediaPlayerViewModel? FocusedDeckContent => FocusedPlayer;
 
-    public ObservableCollection<MediaPlayerViewModel>? DeckGridContent =>
-        IsPlayerFocused ? null : Players;
+    /// <summary>Players shown in the deck grid: everyone except detached ones — a detached player's
+    /// only view lives in its floating window (same one-view-per-VM rule as focus mode). The player
+    /// stays in <see cref="Players"/> so project saves, the output-health probe, and cue pre-roll
+    /// keep seeing it.</summary>
+    private readonly ObservableCollection<MediaPlayerViewModel> _visibleDeckPlayers = new();
 
-    /// <summary>Grid columns for N decks: 1 → 1, 2–4 → 2, 5–9 → 3 … (⌈√N⌉).</summary>
-    public int DeckColumns => Math.Max(1, (int)Math.Ceiling(Math.Sqrt(Players.Count)));
+    public ObservableCollection<MediaPlayerViewModel>? DeckGridContent =>
+        IsPlayerFocused ? null : _visibleDeckPlayers;
+
+    /// <summary>Grid columns for N visible decks: 1 → 1, 2–4 → 2, 5–9 → 3 … (⌈√N⌉).</summary>
+    public int DeckColumns => Math.Max(1, (int)Math.Ceiling(Math.Sqrt(_visibleDeckPlayers.Count)));
+
+    private void RebuildVisibleDeckPlayers()
+    {
+        _visibleDeckPlayers.Clear();
+        foreach (var player in Players)
+        {
+            if (!_detachedPlayerWindows.ContainsKey(player))
+                _visibleDeckPlayers.Add(player);
+        }
+        OnPropertyChanged(nameof(DeckColumns));
+    }
 
     [RelayCommand]
     private void ToggleFocusPlayer(MediaPlayerViewModel? player)
@@ -364,7 +381,7 @@ public partial class MainViewModel : ViewModelBase
     {
         if (FocusedPlayer is { } focused && !Players.Contains(focused))
             FocusedPlayer = null;
-        OnPropertyChanged(nameof(DeckColumns));
+        RebuildVisibleDeckPlayers();
         OnPropertyChanged(nameof(DeckGridContent));
     }
 
@@ -1067,6 +1084,8 @@ public partial class MainViewModel : ViewModelBase
     {
         var idx = Players.IndexOf(player);
         if (idx < 0) return;
+        if (_detachedPlayerWindows.TryGetValue(player, out var detachedWindow))
+            detachedWindow.Close();
         player.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
         player.DetachRequested -= OnPlayerDetachRequested;
         await player.DisposeAsync();
@@ -1075,27 +1094,39 @@ public partial class MainViewModel : ViewModelBase
             SelectedPlayer = Players.Count > 0 ? Players[Math.Min(idx, Players.Count - 1)] : null;
     }
 
-    private async void OnPlayerDetachRequested(MediaPlayerViewModel player)
+    /// <summary>Tracks the floating window per detached player — gates double-detach (second click
+    /// just activates the window) and lets <see cref="RemovePlayer"/> close it.</summary>
+    private readonly Dictionary<MediaPlayerViewModel, Views.Dialogs.DetachedPlayerWindow> _detachedPlayerWindows = new();
+
+    private void OnPlayerDetachRequested(MediaPlayerViewModel player)
     {
-        var idx = Players.IndexOf(player);
-        if (idx < 0) return;
-
-        Players.RemoveAt(idx);
-        if (SelectedPlayer == player)
-            SelectedPlayer = Players.Count > 0 ? Players[Math.Min(idx, Players.Count - 1)] : null;
-
-        var owner = TryGetOwnerWindow();
-        var window = new Views.Dialogs.DetachedPlayerWindow { DataContext = player };
-        if (owner is not null)
-            await window.ShowDialog<object?>(owner);
-        else
-            window.Show();
+        if (_detachedPlayerWindows.TryGetValue(player, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
 
         if (!Players.Contains(player))
+            return;
+
+        // Non-modal: the operator keeps using the shell while players float on other screens.
+        // The player stays in Players (saves/probes/pre-roll); it only leaves the deck grid.
+        if (ReferenceEquals(FocusedPlayer, player))
+            FocusedPlayer = null;
+
+        var window = new Views.Dialogs.DetachedPlayerWindow { DataContext = player };
+        _detachedPlayerWindows[player] = window;
+        RebuildVisibleDeckPlayers();
+        window.Closed += (_, _) =>
         {
-            Players.Insert(Math.Min(idx, Players.Count), player);
-            SelectedPlayer = player;
-        }
+            _detachedPlayerWindows.Remove(player);
+            RebuildVisibleDeckPlayers();
+        };
+
+        if (TryGetOwnerWindow() is { } owner)
+            window.Show(owner);
+        else
+            window.Show();
     }
 
     private async Task RefreshCuePreRollAsync()

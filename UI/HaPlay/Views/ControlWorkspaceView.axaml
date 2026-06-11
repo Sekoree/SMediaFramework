@@ -26,7 +26,7 @@
 
     <!-- Arm + summary (global, always visible) -->
     <Border Grid.Row="0" Classes="Card" Margin="0,0,0,8">
-      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+      <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
         <Button Grid.Row="0" Grid.Column="0" Width="100"
                 Content="{Binding ArmButtonText}" Command="{Binding ToggleArmCommand}" />
         <TextBlock Grid.Row="0" Grid.Column="1" VerticalAlignment="Center"
@@ -56,6 +56,10 @@
                 Content="Add script…"
                 ToolTip.Tip="Create a project, device, endpoint, or layer script"
                 Command="{Binding AddScriptCommand}" />
+        <Button Grid.Row="0" Grid.Column="6"
+                Content="{x:Static res:Strings.PopoutButtonLabel}"
+                ToolTip.Tip="{x:Static res:Strings.PopoutTabButtonTooltip}"
+                Click="OnPopOutTabClick" />
         <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Orientation="Horizontal" Spacing="16" Opacity="0.85">
           <TextBlock Text="{Binding DeviceCount, StringFormat='Devices: {0}'}" />
           <TextBlock Text="{Binding ListenerCount, StringFormat='Listeners: {0}'}" />
@@ -72,10 +76,11 @@
       </Grid>
     </Border>
 
-    <TabControl Grid.Row="2">
+    <TabControl Grid.Row="2" x:Name="ControlTabs">
 
       <!-- ===== Surfaces: devices / listeners / layers + profiles ===== -->
       <TabItem Header="{x:Static res:Strings.ControlTabSurfaces}">
+        <ContentControl x:Name="SurfacesPopoutHost">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="0,8,0,0">
 
@@ -245,10 +250,12 @@
             </Border>
           </StackPanel>
         </ScrollViewer>
+        </ContentControl>
       </TabItem>
 
       <!-- ===== Scripts ===== -->
       <TabItem Header="{x:Static res:Strings.ControlTabScripts}">
+        <ContentControl x:Name="ScriptsPopoutHost">
         <Border Classes="Card" Margin="0,8,0,0">
           <DockPanel>
             <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="4" Margin="0,0,0,8">
@@ -277,10 +284,12 @@
             </ListBox>
           </DockPanel>
         </Border>
+        </ContentControl>
       </TabItem>
 
       <!-- ===== Monitor: live event tail (fills the tab; the ListBox is the scroll region) ===== -->
       <TabItem Header="{x:Static res:Strings.ControlTabMonitor}">
+        <ContentControl x:Name="MonitorPopoutHost">
         <Grid RowDefinitions="Auto,*" Margin="0,8,0,0">
           <Grid Grid.Row="0"
                 ColumnDefinitions="*,130,130,160,Auto,Auto,Auto"
@@ -334,10 +343,12 @@
             </Grid>
           </Border>
         </Grid>
+        </ContentControl>
       </TabItem>
 
       <!-- ===== Tools: X32 browser + manual test sends ===== -->
       <TabItem Header="{x:Static res:Strings.ControlTabTools}">
+        <ContentControl x:Name="ToolsPopoutHost">
         <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
           <StackPanel Margin="0,8,0,0" Spacing="10">
 
@@ -400,6 +411,7 @@
             </Border>
           </StackPanel>
         </ScrollViewer>
+        </ContentControl>
       </TabItem>
     </TabControl>
   </Grid>

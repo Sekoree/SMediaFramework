@@ -14,6 +14,13 @@ public static class Strings
     public static string Format(string key, params object?[] args) =>
         string.Format(CultureInfo.CurrentUICulture, Get(key), args);
 
+    public static string PopoutButtonLabel => Get(nameof(PopoutButtonLabel));
+    public static string PopoutButtonTooltip => Get(nameof(PopoutButtonTooltip));
+    public static string PopoutTabButtonTooltip => Get(nameof(PopoutTabButtonTooltip));
+    public static string PopoutPlaceholderFormat => Get(nameof(PopoutPlaceholderFormat));
+    public static string PopoutBringToFrontButton => Get(nameof(PopoutBringToFrontButton));
+    public static string PopoutRestoreButton => Get(nameof(PopoutRestoreButton));
+    public static string PopoutControlTabTitleFormat => Get(nameof(PopoutControlTabTitleFormat));
     public static string HeadphonesCueBusLabel => Get(nameof(HeadphonesCueBusLabel));
     public static string VirtualChannelsMigratedToast => Get(nameof(VirtualChannelsMigratedToast));
     public static string PlayersDeckHint => Get(nameof(PlayersDeckHint));

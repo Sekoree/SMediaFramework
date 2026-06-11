@@ -2328,4 +2328,25 @@
   <data name="NoCompositionsToExportStatus" xml:space="preserve">
     <value>The selected cue list has no compositions to export.</value>
   </data>
+  <data name="PopoutButtonLabel" xml:space="preserve">
+    <value>⧉</value>
+  </data>
+  <data name="PopoutButtonTooltip" xml:space="preserve">
+    <value>Pop out into a separate window</value>
+  </data>
+  <data name="PopoutTabButtonTooltip" xml:space="preserve">
+    <value>Pop out the selected tab into a separate window</value>
+  </data>
+  <data name="PopoutPlaceholderFormat" xml:space="preserve">
+    <value>{0} is open in a separate window.</value>
+  </data>
+  <data name="PopoutBringToFrontButton" xml:space="preserve">
+    <value>Bring window to front</value>
+  </data>
+  <data name="PopoutRestoreButton" xml:space="preserve">
+    <value>Restore here</value>
+  </data>
+  <data name="PopoutControlTabTitleFormat" xml:space="preserve">
+    <value>Control — {0}</value>
+  </data>
 </root>
