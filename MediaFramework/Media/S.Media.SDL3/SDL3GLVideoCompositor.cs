@@ -24,7 +24,7 @@ namespace S.Media.SDL3;
 /// NDI can consume the BGRA32 path through its existing sender.
 /// </para>
 /// </remarks>
-public sealed class SDL3GLVideoCompositor : IVideoCompositor
+public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.SDL3.SDL3GLVideoCompositor");
     private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
@@ -151,6 +151,26 @@ public sealed class SDL3GLVideoCompositor : IVideoCompositor
         return _inner!.Composite(layersBackToFront, presentationTime);
     }
 
+    private readonly object _warpGate = new();
+    private VideoFormat _pendingWarpOutput;
+    private IReadOnlyList<WarpSection>? _pendingWarpSections;
+    private bool _hasPendingWarp;
+
+    /// <inheritdoc />
+    public void SetWarpPass(VideoFormat warpOutput, IReadOnlyList<WarpSection>? sections)
+    {
+        // The inner compositor is created lazily on the pump thread — buffer the warp config until
+        // then. The inner setter itself is a GL-free snapshot swap, so forwarding from any thread
+        // is safe once it exists.
+        lock (_warpGate)
+        {
+            _pendingWarpOutput = warpOutput;
+            _pendingWarpSections = sections;
+            _hasPendingWarp = true;
+            _inner?.SetWarpPass(warpOutput, sections);
+        }
+    }
+
     /// <summary>
     /// Disposes GL resources only when called on the context owner thread.
     /// Use this from a composition pump's finally block before disposing from another thread.
@@ -195,6 +215,11 @@ public sealed class SDL3GLVideoCompositor : IVideoCompositor
 
         _gl = SilkGL.GetApi(SDL.GLGetProcAddress);
         _inner = new GlVideoCompositor(_gl, _output, PrecisionForOutput(_output.PixelFormat));
+        lock (_warpGate)
+        {
+            if (_hasPendingWarp)
+                _inner.SetWarpPass(_pendingWarpOutput, _pendingWarpSections);
+        }
         Trace.LogInformation("SDL3 GL compositor initialized for {Width}x{Height} {PixelFormat} {RateNum}/{RateDen}",
             _output.Width,
             _output.Height,

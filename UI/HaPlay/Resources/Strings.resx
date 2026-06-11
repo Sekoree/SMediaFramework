@@ -2349,4 +2349,13 @@
   <data name="PopoutControlTabTitleFormat" xml:space="preserve">
     <value>Control — {0}</value>
   </data>
+  <data name="MappingButtonLabel" xml:space="preserve">
+    <value>Mapping…</value>
+  </data>
+  <data name="MappingButtonTooltip" xml:space="preserve">
+    <value>Cut this output's composition into individually movable/warpable sections (multi-panel or uneven projection surfaces)</value>
+  </data>
+  <data name="MappingNeedsCompositionToast" xml:space="preserve">
+    <value>Pick a composition for this output first — the mapping cuts that composition's canvas into sections.</value>
+  </data>
 </root>

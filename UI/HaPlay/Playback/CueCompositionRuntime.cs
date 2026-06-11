@@ -24,7 +24,8 @@ internal sealed class CueCompositionRuntime : IDisposable
     public CueCompositionRuntime(
         CueComposition composition,
         IReadOnlyList<OutputLineViewModel> targetLines,
-        OutputManagementViewModel outputs)
+        OutputManagementViewModel outputs,
+        IReadOnlyDictionary<Guid, CueOutputMapping?>? mappingsByLine = null)
     {
         _composition = composition;
         var definition = new ClipCompositionDefinition(
@@ -35,7 +36,7 @@ internal sealed class CueCompositionRuntime : IDisposable
             composition.FrameRateNum,
             composition.FrameRateDen);
 
-        var leases = BuildOutputLeases(composition, targetLines, outputs);
+        var leases = BuildOutputLeases(composition, targetLines, outputs, mappingsByLine);
         foreach (var lease in leases)
         {
             if (TryParseGuid(lease.OutputId) is { } lineId)
@@ -52,6 +53,26 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     /// <summary>True when this composition holds a video lease on the given output line (outputs-panel health probe).</summary>
     public bool DrivesLine(Guid outputLineId) => _leasedLineIds.Contains(outputLineId);
+
+    /// <summary>Live-swaps the warp mapping of the given output line (null clears). False when this
+    /// composition doesn't drive the line.</summary>
+    public bool UpdateOutputMapping(Guid outputLineId, CueOutputMapping? mapping) =>
+        _inner.UpdateOutputMapping(outputLineId.ToString("N"), ToMappingSpec(mapping));
+
+    /// <summary>HaPlay model → framework spec (null-preserving).</summary>
+    internal static ClipOutputMappingSpec? ToMappingSpec(CueOutputMapping? mapping) =>
+        mapping is null
+            ? null
+            : new ClipOutputMappingSpec(
+                mapping.Sections
+                    .Select(s => new ClipOutputMappingSection(
+                        s.Id.ToString("N"), s.Enabled,
+                        s.SrcX, s.SrcY, s.SrcWidth, s.SrcHeight,
+                        s.DestX, s.DestY, s.DestWidth, s.DestHeight,
+                        s.RotationDegrees, s.Opacity, s.Brightness))
+                    .ToArray(),
+                mapping.OutputWidth,
+                mapping.OutputHeight);
 
     public Guid CompositionId => _composition.Id;
 
@@ -150,11 +171,15 @@ internal sealed class CueCompositionRuntime : IDisposable
     private static IReadOnlyList<ClipCompositionOutputLease> BuildOutputLeases(
         CueComposition composition,
         IReadOnlyList<OutputLineViewModel> targetLines,
-        OutputManagementViewModel outputs)
+        OutputManagementViewModel outputs,
+        IReadOnlyDictionary<Guid, CueOutputMapping?>? mappingsByLine)
     {
         var leases = new List<ClipCompositionOutputLease>();
         foreach (var line in targetLines)
         {
+            var mapping = mappingsByLine is not null && mappingsByLine.TryGetValue(line.Definition.Id, out var m)
+                ? ToMappingSpec(m)
+                : null;
             try
             {
                 if (line.Definition is LocalVideoOutputDefinition)
@@ -166,7 +191,8 @@ internal sealed class CueCompositionRuntime : IDisposable
                             line.Definition.Id.ToString("N"),
                             line.Definition.DisplayName,
                             output,
-                            Release: () => outputs.ReleaseLocalVideoOutputForPlayback(line)));
+                            Release: () => outputs.ReleaseLocalVideoOutputForPlayback(line),
+                            Mapping: mapping));
                     }
                 }
                 else if (line.Definition is NDIOutputDefinition nd
@@ -188,7 +214,8 @@ internal sealed class CueCompositionRuntime : IDisposable
                             nd.DisplayName,
                             pump,
                             Release: () => outputs.ReleaseNDICarrierForPlayback(line, releaseVideo: true, releaseAudio: false),
-                            DisposeOutputOnRuntimeDispose: true));
+                            DisposeOutputOnRuntimeDispose: true,
+                            Mapping: mapping));
                     }
                 }
             }

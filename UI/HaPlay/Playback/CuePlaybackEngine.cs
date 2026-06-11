@@ -730,6 +730,15 @@ public sealed class CuePlaybackEngine : IDisposable
     /// <summary>Stop all active cues — used by the Cue VM's Stop / Panic commands.</summary>
     public async Task StopAsync()
     {
+        // Calibration grids hold composition runtimes (and their leased outputs) open — panic/stop
+        // must release them too. Synchronous section: runs on the calling UI thread before awaits.
+        foreach (var slot in _testPatternSlots.Values)
+        {
+            try { slot.Dispose(); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.StopAsync: test pattern slot dispose"); }
+        }
+        _testPatternSlots.Clear();
+
         await StopPreviewAsync().ConfigureAwait(false);
 
         List<ActiveCue> toDispose;
@@ -823,6 +832,72 @@ public sealed class CuePlaybackEngine : IDisposable
     {
         lock (_gate)
             return _active.ContainsKey(cueId);
+    }
+
+    /// <summary>Live-applies an output mapping (warp sections) to a running composition's output
+    /// line. Returns false when the composition isn't live (the editor then only persists the
+    /// model — the mapping is picked up on the next runtime creation).</summary>
+    public bool UpdateCompositionOutputMapping(Guid compositionId, Guid outputLineId, CueOutputMapping? mapping)
+    {
+        CueCompositionRuntime? runtime;
+        lock (_gate)
+            _compositions.TryGetValue(compositionId, out runtime);
+
+        return runtime is not null && runtime.UpdateOutputMapping(outputLineId, mapping);
+    }
+
+    /// <summary>Calibration grid slots held open per composition while the mapping editor's
+    /// "show grid" toggle is on (UI thread only).</summary>
+    private readonly Dictionary<Guid, CueCompositionRuntime.LayerSlot> _testPatternSlots = new();
+
+    /// <summary>
+    /// Shows/hides the mapping calibration grid on a composition: a generated test frame is held in
+    /// a top-most layer slot, so the composition runtime spins up (acquiring its real outputs) and
+    /// renders the grid through any configured mapping — the operator aligns sections against the
+    /// physical surface. UI thread only (same as route wiring).
+    /// </summary>
+    public bool SetCompositionTestPattern(CueList? list, Guid compositionId, bool show)
+    {
+        if (!show)
+        {
+            if (!_testPatternSlots.Remove(compositionId, out var slot))
+                return false;
+            try { slot.Dispose(); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: test pattern slot dispose"); }
+            ReleaseEmptyRuntimes();
+            return true;
+        }
+
+        if (_testPatternSlots.ContainsKey(compositionId))
+            return true;
+        if (list is null)
+            return false;
+
+        var runtime = GetOrCreateComposition(list, compositionId);
+        if (runtime is null)
+            return false;
+
+        try
+        {
+            var canvas = runtime.CanvasFormat;
+            var slot = runtime.AddLayer(canvas, new CueVideoPlacement
+            {
+                CompositionId = compositionId,
+                LayerIndex = int.MaxValue,
+                Position = CueLayerPosition.Stretch,
+            });
+            slot.Output.Configure(canvas);
+            slot.Output.Submit(MappingTestPattern.Render(canvas));
+            runtime.EnsurePumpStarted();
+            _testPatternSlots[compositionId] = slot;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "CuePlaybackEngine.SetCompositionTestPattern: failed for {Composition}", compositionId);
+            ReleaseEmptyRuntimes();
+            return false;
+        }
     }
 
     /// <summary>Per-line throughput snapshot for the outputs panel's 1 Hz health poll. Sums every
@@ -1480,13 +1555,17 @@ public sealed class CuePlaybackEngine : IDisposable
         var composition = list.Compositions.FirstOrDefault(c => c.Id == compositionId);
         if (composition is null) return null;
 
-        var targetLineIds = list.VideoOutputs
+        var compositionBindings = list.VideoOutputs
             .Where(b => b.CompositionId == compositionId && b.OutputLineId != Guid.Empty)
-            .Select(b => b.OutputLineId)
-            .ToHashSet();
+            .ToList();
+        var targetLineIds = compositionBindings.Select(b => b.OutputLineId).ToHashSet();
         var targetLines = _outputs.Outputs.Where(l => targetLineIds.Contains(l.Definition.Id)).ToList();
+        // Per-line output mapping (warp sections) — first binding wins when a line is bound twice.
+        var mappingsByLine = compositionBindings
+            .GroupBy(b => b.OutputLineId)
+            .ToDictionary(g => g.Key, g => g.First().Mapping);
 
-        var runtime = new CueCompositionRuntime(composition, targetLines, _outputs);
+        var runtime = new CueCompositionRuntime(composition, targetLines, _outputs, mappingsByLine);
         // Surface drift warnings to the operator via the cue VM's status message — keeps the
         // "your composition is behind by 12 frames" signal close to the transport UI rather
         // than buried in logs only.

@@ -1,6 +1,7 @@
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Video;
+using S.Media.Effects;
 using S.Media.Playback;
 using Xunit;
 
@@ -231,6 +232,127 @@ public sealed class ClipOutputRuntimeTests
         {
             a.DisposeCaptured();
             b.DisposeCaptured();
+        }
+    }
+
+    [Fact]
+    public async Task ClipCompositionRuntime_MappedOutput_GetsMappingSizedFrames_WhileUnmappedGetsCanvas()
+    {
+        var mapped = new RecordingVideoOutput();
+        var raw = new RecordingVideoOutput();
+        var mapping = new ClipOutputMappingSpec(
+            [new ClipOutputMappingSection("s1", true, 0, 0, 1, 1, DestX: 80, DestY: 45, DestWidth: 0, DestHeight: 0)],
+            OutputWidth: 640,
+            OutputHeight: 360);
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 60, 1),
+            [
+                new ClipCompositionOutputLease("out-mapped", "Mapped", mapped, Mapping: mapping),
+                new ClipCompositionOutputLease("out-raw", "Raw", raw),
+            ]);
+
+        runtime.EnsurePumpStarted();
+
+        var deadline = Environment.TickCount64 + 5000;
+        while ((mapped.Snapshot().Length == 0 || raw.Snapshot().Length == 0) && Environment.TickCount64 < deadline)
+            await Task.Delay(10);
+
+        try
+        {
+            Assert.True(mapped.Snapshot().Length > 0 && raw.Snapshot().Length > 0,
+                "pump did not deliver frames to both outputs");
+
+            // The mapped output is configured for (and receives) the mapping's output size; the
+            // unmapped output keeps the canvas size.
+            Assert.Equal((640, 360), (mapped.Format.Width, mapped.Format.Height));
+            Assert.Equal((320, 180), (raw.Format.Width, raw.Format.Height));
+
+            // Live update: section-only change succeeds; unknown outputs are rejected.
+            Assert.True(runtime.UpdateOutputMapping("out-mapped", mapping with
+            {
+                Sections = [new ClipOutputMappingSection("s1", true, 0, 0, 0.5, 1, 0, 0, 0, 0)],
+            }));
+            Assert.True(runtime.UpdateOutputMapping("out-mapped", null)); // clear → raw canvas again
+            Assert.False(runtime.UpdateOutputMapping("nope", null));
+        }
+        finally
+        {
+            mapped.DisposeCaptured();
+            raw.DisposeCaptured();
+        }
+    }
+
+    [Fact]
+    public async Task ClipCompositionRuntime_SingleMappedOutput_UsesIntegratedWarpPass()
+    {
+        var output = new RecordingVideoOutput();
+        var compositor = new FakeWarpCompositor(new VideoFormat(320, 180, PixelFormat.Bgra32, new Rational(60, 1)));
+        var mapping = new ClipOutputMappingSpec(
+            [new ClipOutputMappingSection("s1", true, 0, 0, 1, 1, 0, 0, 0, 0)],
+            OutputWidth: 640,
+            OutputHeight: 360);
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 60, 1),
+            [new ClipCompositionOutputLease("out-a", "A", output, Mapping: mapping)],
+            canvas => new ClipCompositionCompositor(compositor, RequiresBgraLayerConversion: true, BackendName: "Fake"));
+
+        // The single mapped output routes through the canvas compositor's warp pass.
+        Assert.NotNull(compositor.WarpOutput);
+        Assert.Equal((640, 360), (compositor.WarpOutput!.Value.Width, compositor.WarpOutput.Value.Height));
+        Assert.Equal(1, compositor.WarpSectionCount);
+
+        runtime.EnsurePumpStarted();
+        var deadline = Environment.TickCount64 + 5000;
+        while (output.Snapshot().Length == 0 && Environment.TickCount64 < deadline)
+            await Task.Delay(10);
+
+        try
+        {
+            Assert.True(output.Snapshot().Length > 0, "pump did not deliver frames");
+            // Frames come straight from the (fake-warped) canvas compositor — output configured at warp size.
+            Assert.Equal((640, 360), (output.Format.Width, output.Format.Height));
+
+            // Clearing the mapping disables the warp pass.
+            Assert.True(runtime.UpdateOutputMapping("out-a", null));
+            Assert.Null(compositor.WarpOutput);
+        }
+        finally
+        {
+            output.DisposeCaptured();
+        }
+    }
+
+    /// <summary>CPU-style stand-in implementing the integrated warp capability: Composite returns a
+    /// frame sized to the warp output when a warp pass is configured (content irrelevant).</summary>
+    private sealed class FakeWarpCompositor(VideoFormat output) : IWarpPassVideoCompositor
+    {
+        private VideoFormat _output = output;
+
+        public VideoFormat? WarpOutput { get; private set; }
+
+        public int WarpSectionCount { get; private set; }
+
+        public VideoFormat OutputFormat => _output;
+
+        public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats => [PixelFormat.Bgra32];
+
+        public void Configure(VideoFormat output) => _output = output;
+
+        public void SetWarpPass(VideoFormat warpOutput, IReadOnlyList<WarpSection>? sections)
+        {
+            WarpOutput = sections is null ? null : warpOutput;
+            WarpSectionCount = sections?.Count ?? 0;
+        }
+
+        public VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime)
+        {
+            var fmt = WarpOutput ?? _output;
+            var stride = fmt.Width * 4;
+            return new VideoFrame(presentationTime, fmt, new ReadOnlyMemory<byte>(new byte[stride * fmt.Height]), stride);
+        }
+
+        public void Dispose()
+        {
         }
     }
 

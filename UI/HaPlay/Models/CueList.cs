@@ -80,7 +80,77 @@ public sealed record CueVideoOutputBinding
 
     /// <summary>Composition (from <see cref="CueList.Compositions"/>) that feeds this output.</summary>
     public Guid CompositionId { get; init; }
+
+    /// <summary>Optional output mapping (warp sections) for this output — the composited canvas is
+    /// cut into sections placed individually in output space (projection onto uneven/multi-panel
+    /// surfaces). Null = no mapping stage (identical pipeline and cost to before the feature).
+    /// See Doc/HaPlay-Output-Mapping-Plan.md.</summary>
+    public CueOutputMapping? Mapping { get; init; }
 }
+
+/// <summary>Output mapping for one composition→output binding (Doc/HaPlay-Output-Mapping-Plan.md §3).</summary>
+public sealed record CueOutputMapping
+{
+    /// <summary>Sections drawn back-to-front onto the output. Empty = nothing drawn (all black);
+    /// use a single full-canvas section for identity.</summary>
+    public List<CueOutputMappingSection> Sections { get; init; } = new();
+
+    /// <summary>Output canvas size; null = composition size.</summary>
+    public int? OutputWidth { get; init; }
+
+    public int? OutputHeight { get; init; }
+
+    /// <summary>A fresh identity mapping: one full-canvas section.</summary>
+    public static CueOutputMapping Identity() => new()
+    {
+        Sections = { CueOutputMappingSection.FullCanvas() },
+    };
+}
+
+/// <summary>One mapping section: a normalized source slice of the composition canvas plus an
+/// affine destination placement (output pixels, rotation around the destination center).</summary>
+public sealed record CueOutputMappingSection
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public string Name { get; init; } = string.Empty;
+
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>Source slice, normalized [0,1] canvas coordinates.</summary>
+    public double SrcX { get; init; }
+
+    public double SrcY { get; init; }
+
+    public double SrcWidth { get; init; } = 1.0;
+
+    public double SrcHeight { get; init; } = 1.0;
+
+    /// <summary>Destination placement in output pixels. Width/height ≤ 0 = natural slice size.</summary>
+    public double DestX { get; init; }
+
+    public double DestY { get; init; }
+
+    public double DestWidth { get; init; }
+
+    public double DestHeight { get; init; }
+
+    /// <summary>Rotation around the destination rect center, degrees clockwise.</summary>
+    public double RotationDegrees { get; init; }
+
+    /// <summary>Per-section alpha multiplier [0,1].</summary>
+    public double Opacity { get; init; } = 1.0;
+
+    /// <summary>Per-section brightness [0,1] — panel brightness matching.</summary>
+    public double Brightness { get; init; } = 1.0;
+
+    /// <summary>Reserved for Phase 3 corner-pin (TL, TR, BR, BL in output pixels); ignored in Phase 1.</summary>
+    public List<CuePoint>? Corners { get; init; }
+
+    public static CueOutputMappingSection FullCanvas() => new() { Name = "Full canvas" };
+}
+
+public sealed record CuePoint(double X, double Y);
 
 public enum CueLayerPosition
 {

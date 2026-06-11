@@ -20,7 +20,8 @@ public sealed record ClipCompositionOutputLease(
     string DisplayName,
     IVideoOutput Output,
     Action? Release = null,
-    bool DisposeOutputOnRuntimeDispose = false);
+    bool DisposeOutputOnRuntimeDispose = false,
+    ClipOutputMappingSpec? Mapping = null);
 
 public sealed record ClipCompositionCompositor(
     IVideoCompositor Compositor,
@@ -59,8 +60,18 @@ public sealed class ClipCompositionRuntime : IDisposable
     private IPlaybackClock? _master;
     private MediaClock? _slaveClock;
     private int _driverDisposeState;
-    private bool _outputsConfigured;
     private bool _disposed;
+
+    private readonly Func<VideoFormat, ClipCompositionCompositor> _compositorFactory;
+
+    /// <summary>Mapping stages whose compositor must be torn down on the pump (driver) thread —
+    /// retired by live mapping updates or runtime dispose; drained at the next tick.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentQueue<OutputMappingStage> _retiredMappingStages = new();
+
+    /// <summary>True when the single mapped output's warp runs inside the canvas compositor
+    /// (<see cref="IWarpPassVideoCompositor"/>) — the mixer frame is already warped and the
+    /// chained per-lease stage is skipped. Saves a full readback + re-upload per frame.</summary>
+    private volatile bool _integratedWarpActive;
 
     public ClipCompositionRuntime(
         ClipCompositionDefinition definition,
@@ -80,7 +91,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             rate);
         _canvasPeriod = TimeSpan.FromTicks((long)(TimeSpan.TicksPerSecond * (long)den / Math.Max(1L, (long)num)));
 
-        var compositor = (compositorFactory ?? CreateDefaultCompositor)(_canvasFormat);
+        _compositorFactory = compositorFactory ?? CreateDefaultCompositor;
+        var compositor = _compositorFactory(_canvasFormat);
         _compositor = compositor.Compositor ?? throw new InvalidOperationException("Compositor factory returned null compositor.");
         RequiresBgraLayerConversion = compositor.RequiresBgraLayerConversion;
         CompositorBackendName = string.IsNullOrWhiteSpace(compositor.BackendName) ? "Unknown" : compositor.BackendName;
@@ -92,8 +104,39 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (output.Output is null)
                 continue;
             var acquired = new AcquiredOutput(output);
+            if (output.Mapping is not null)
+                acquired.SetMapping(output.Mapping, _canvasFormat, out _);
             _acquired.Add(acquired);
             acquired.SubscribePumpPressure(this);
+        }
+
+        ReevaluateIntegratedWarp();
+    }
+
+    /// <summary>
+    /// Routes the warp through the canvas compositor itself when possible: with exactly one output
+    /// and a warp-capable compositor, the canvas pass renders straight into the warped output (one
+    /// GPU pass, one readback). Multi-output compositions keep the per-lease chained stages — each
+    /// output may need a different (or no) warp from the same canvas.
+    /// </summary>
+    private void ReevaluateIntegratedWarp()
+    {
+        if (_compositor is not IWarpPassVideoCompositor warp)
+            return;
+
+        OutputMappingStage? single;
+        lock (_gate)
+            single = _acquired.Count == 1 ? _acquired[0].MappingStage : null;
+
+        if (single is not null)
+        {
+            warp.SetWarpPass(single.OutputFormat, single.BuildWarpSections());
+            _integratedWarpActive = true;
+        }
+        else if (_integratedWarpActive)
+        {
+            warp.SetWarpPass(_canvasFormat, null);
+            _integratedWarpActive = false;
         }
     }
 
@@ -147,6 +190,37 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (_slaveClock is not null) return;
             StartPumpLocked();
         }
+    }
+
+    /// <summary>
+    /// Live-swaps the output mapping of <paramref name="outputId"/> (null clears it — the output
+    /// goes back to receiving the raw canvas). Safe while the pump runs; the editor calls this on
+    /// every change. Returns false when the output isn't part of this runtime.
+    /// </summary>
+    public bool UpdateOutputMapping(string outputId, ClipOutputMappingSpec? mapping)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
+        AcquiredOutput? target;
+        lock (_gate)
+        {
+            if (_disposed) return false;
+            target = _acquired.FirstOrDefault(a => string.Equals(a.OutputId, outputId, StringComparison.Ordinal));
+        }
+
+        if (target is null)
+            return false;
+
+        target.SetMapping(mapping, _canvasFormat, out var retired);
+        if (retired is not null)
+            _retiredMappingStages.Enqueue(retired);
+        ReevaluateIntegratedWarp();
+        return true;
+    }
+
+    private void DrainRetiredMappingStages()
+    {
+        while (_retiredMappingStages.TryDequeue(out var stage))
+            stage.DisposeCompositor();
     }
 
     public void SetClockMaster(IPlaybackClock master)
@@ -234,11 +308,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         _ = e;
         if (Interlocked.CompareExchange(ref _driverDisposeState, 2, 1) == 1)
         {
+            DrainRetiredMappingStages();
             try { _disposeCompositorOnDriverThread?.Invoke(); }
             catch (Exception ex) { Trace.LogWarning(ex, "ClipCompositionRuntime.OnSlaveVideoTick: driver compositor dispose"); }
             return;
         }
         if (_disposed) return;
+        DrainRetiredMappingStages();
         PumpOneFrame();
         CheckMasterDrift();
     }
@@ -313,20 +389,42 @@ public sealed class ClipCompositionRuntime : IDisposable
             return;
         }
 
-        if (!_outputsConfigured)
+        // Output-mapping stages run first, while the canvas frame is alive: each mapped output
+        // composites its warp sections from the canvas (compositors never take frame ownership)
+        // and gets its own output-sized frame. Unmapped outputs share the canvas via the fan-out
+        // below. With the integrated GPU warp active, the mixer frame IS the warped output already
+        // — the chained stage is skipped. See Doc/HaPlay-Output-Mapping-Plan.md.
+        var integratedWarp = _integratedWarpActive;
+        List<AcquiredOutput>? unmapped = null;
+        foreach (var output in snapshot)
         {
-            foreach (var output in snapshot)
+            var stage = integratedWarp ? null : output.MappingStage;
+            if (stage is null)
             {
-                try { output.Output.Configure(frame.Format); }
-                catch (Exception ex)
-                {
-                    Trace.LogWarning(
-                        ex,
-                        "ClipCompositionRuntime.Pump: initial Configure failed for {Line}",
-                        output.DisplayName);
-                }
+                (unmapped ??= new List<AcquiredOutput>(snapshot.Count)).Add(output);
+                continue;
             }
-            _outputsConfigured = true;
+
+            VideoFrame mappedFrame;
+            try
+            {
+                mappedFrame = stage.Composite(frame, _compositorFactory);
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "ClipCompositionRuntime.Pump: mapping stage failed for {Line}", output.DisplayName);
+                continue;
+            }
+
+            SubmitToOutput(output, mappedFrame);
+        }
+
+        if (unmapped is null)
+        {
+            frame.Dispose();
+            sw.Stop();
+            RecordPumpTiming(sw.Elapsed, _canvasPeriod);
+            return;
         }
 
         // Multi-output fan-out is zero-copy when the canvas is CPU-backed (the CpuVideoCompositor's
@@ -336,13 +434,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         // cloning covers non-CPU backings (GL compositor) — TryCreateCpuFanOutViews leaves the frame
         // untouched when it declines.
         VideoFrame[]? views = null;
-        if (snapshot.Count > 1)
-            VideoFrame.TryCreateCpuFanOutViews(frame, snapshot.Count, frame.ColorTransferHint, out views);
+        if (unmapped.Count > 1)
+            VideoFrame.TryCreateCpuFanOutViews(frame, unmapped.Count, frame.ColorTransferHint, out views);
 
-        for (var i = 0; i < snapshot.Count; i++)
+        for (var i = 0; i < unmapped.Count; i++)
         {
-            var output = snapshot[i];
-            var isLast = i == snapshot.Count - 1;
+            var output = unmapped[i];
+            var isLast = i == unmapped.Count - 1;
             VideoFrame toSubmit;
             if (views is not null)
             {
@@ -364,20 +462,28 @@ public sealed class ClipCompositionRuntime : IDisposable
                 }
             }
 
-            try
-            {
-                output.Output.Submit(toSubmit);
-                Interlocked.Increment(ref _framesSubmitted);
-            }
-            catch (Exception ex)
-            {
-                Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: Submit failed for {Line}", output.DisplayName);
-                toSubmit.Dispose();
-            }
+            SubmitToOutput(output, toSubmit);
         }
 
         sw.Stop();
         RecordPumpTiming(sw.Elapsed, _canvasPeriod);
+    }
+
+    /// <summary>Configures the output on format change (idempotent per format) and submits;
+    /// disposes the frame on submit failure.</summary>
+    private void SubmitToOutput(AcquiredOutput output, VideoFrame toSubmit)
+    {
+        try
+        {
+            output.EnsureConfigured(toSubmit.Format);
+            output.Output.Submit(toSubmit);
+            Interlocked.Increment(ref _framesSubmitted);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogTrace(ex, "ClipCompositionRuntime.Pump: Submit failed for {Line}", output.DisplayName);
+            toSubmit.Dispose();
+        }
     }
 
     private void RecordPumpTiming(TimeSpan elapsed, TimeSpan budget)
@@ -459,6 +565,14 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (_disposed) return;
             _disposed = true;
             slaveClock = _slaveClock;
+
+            // Retire mapping stages up front so the driver-thread dispose window below (and the
+            // direct drain fallback at the end) can tear their compositors down.
+            foreach (var acquired in _acquired)
+            {
+                if (acquired.DetachMappingStage() is { } stage)
+                    _retiredMappingStages.Enqueue(stage);
+            }
         }
 
         if (slaveClock is not null && _disposeCompositorOnDriverThread is not null)
@@ -492,8 +606,100 @@ public sealed class ClipCompositionRuntime : IDisposable
             _acquired.Clear();
         }
 
+        // Best-effort fallback for stages the driver window didn't reach (pump never started, or
+        // the dispose deadline lapsed) — mirrors the direct canvas-compositor dispose below.
+        DrainRetiredMappingStages();
+
         MediaDiagnostics.SwallowDisposeErrors(_mixer.Dispose, "ClipCompositionRuntime.Dispose: mixer");
         MediaDiagnostics.SwallowDisposeErrors(_compositor.Dispose, "ClipCompositionRuntime.Dispose: compositor");
+    }
+
+    /// <summary>
+    /// Per-output warp stage: composites the canvas frame's mapping sections into an output-sized
+    /// frame on the pump thread. The mapping compositor is created lazily on the pump thread (GL
+    /// context affinity) and shared across section-only updates via a boxed holder so live editor
+    /// drags never churn GL contexts; it is disposed on the pump thread via the retired-stage queue.
+    /// </summary>
+    private sealed class OutputMappingStage
+    {
+        private sealed class CompositorBox
+        {
+            public IVideoCompositor? Compositor;
+            public Action? DisposeOnDriverThread;
+        }
+
+        private readonly List<ResolvedMappingSection> _sections;
+        private readonly CompositorBox _box;
+        private readonly List<CompositorLayer> _layerScratch = new();
+
+        public OutputMappingStage(VideoFormat outputFormat, List<ResolvedMappingSection> sections)
+            : this(outputFormat, sections, new CompositorBox())
+        {
+        }
+
+        private OutputMappingStage(VideoFormat outputFormat, List<ResolvedMappingSection> sections, CompositorBox box)
+        {
+            OutputFormat = outputFormat;
+            _sections = sections;
+            _box = box;
+        }
+
+        public VideoFormat OutputFormat { get; }
+
+        /// <summary>Section-only update at the same output size: the new stage shares the live
+        /// compositor (boxed), so nothing needs disposal.</summary>
+        public OutputMappingStage WithSections(List<ResolvedMappingSection> sections) =>
+            new(OutputFormat, sections, _box);
+
+        /// <summary>Sections in the shape the integrated GPU warp pass consumes.</summary>
+        public WarpSection[] BuildWarpSections()
+        {
+            var sections = new WarpSection[_sections.Count];
+            for (var i = 0; i < _sections.Count; i++)
+                sections[i] = new WarpSection(_sections[i].SourceCrop, _sections[i].Transform, _sections[i].Opacity);
+            return sections;
+        }
+
+        /// <summary>Pump thread only. The canvas frame is borrowed — the compositor never takes
+        /// ownership, so the caller keeps disposing it.</summary>
+        public VideoFrame Composite(VideoFrame canvas, Func<VideoFormat, ClipCompositionCompositor> compositorFactory)
+        {
+            var compositor = _box.Compositor;
+            if (compositor is null)
+            {
+                var created = compositorFactory(OutputFormat);
+                compositor = created.Compositor
+                             ?? throw new InvalidOperationException("Compositor factory returned null compositor.");
+                compositor.Configure(OutputFormat);
+                _box.Compositor = compositor;
+                _box.DisposeOnDriverThread = created.DisposeOnDriverThread;
+            }
+
+            _layerScratch.Clear();
+            foreach (var section in _sections)
+            {
+                _layerScratch.Add(new CompositorLayer(canvas, section.Transform, section.Opacity, BlendMode.SourceOver)
+                {
+                    SourceCrop = section.SourceCrop,
+                });
+            }
+
+            return compositor.Composite(_layerScratch, canvas.PresentationTime);
+        }
+
+        /// <summary>Idempotent (the box is shared across section updates and emptied on first call).</summary>
+        public void DisposeCompositor()
+        {
+            var driver = _box.DisposeOnDriverThread;
+            _box.DisposeOnDriverThread = null;
+            var compositor = _box.Compositor;
+            _box.Compositor = null;
+
+            if (driver is not null)
+                MediaDiagnostics.SwallowDisposeErrors(driver, "ClipCompositionRuntime: mapping compositor driver dispose");
+            if (compositor is not null)
+                MediaDiagnostics.SwallowDisposeErrors(compositor.Dispose, "ClipCompositionRuntime: mapping compositor dispose");
+        }
     }
 
     private sealed class AcquiredOutput
@@ -502,6 +708,8 @@ public sealed class ClipCompositionRuntime : IDisposable
         private EventHandler<VideoOutputPumpPressureEventArgs>? _pressureHandler;
         private long _lastReportedDrops;
         private long _nextReportTicks;
+        private volatile OutputMappingStage? _mappingStage;
+        private VideoFormat? _configuredFormat;
 
         public AcquiredOutput(ClipCompositionOutputLease lease)
         {
@@ -517,6 +725,55 @@ public sealed class ClipCompositionRuntime : IDisposable
         public Action? Release => _lease.Release;
 
         public bool DisposeOutputOnRuntimeDispose => _lease.DisposeOutputOnRuntimeDispose;
+
+        /// <summary>Current mapping stage, or null when this output receives the raw canvas.
+        /// Volatile snapshot — the pump reads it once per frame, the UI thread swaps it.</summary>
+        public OutputMappingStage? MappingStage => _mappingStage;
+
+        /// <summary>Swaps the mapping. When the output canvas size is unchanged the existing
+        /// compositor carries over (no GL churn while dragging in the editor); otherwise the old
+        /// stage is handed back via <paramref name="retired"/> for driver-thread disposal.</summary>
+        public void SetMapping(ClipOutputMappingSpec? mapping, VideoFormat canvasFormat, out OutputMappingStage? retired)
+        {
+            retired = null;
+            var current = _mappingStage;
+
+            if (mapping is null)
+            {
+                _mappingStage = null;
+                retired = current;
+                return;
+            }
+
+            var outputFormat = OutputMappingResolver.ResolveOutputFormat(mapping, canvasFormat);
+            var sections = OutputMappingResolver.Resolve(mapping, canvasFormat.Width, canvasFormat.Height);
+            if (current is not null && current.OutputFormat == outputFormat)
+            {
+                _mappingStage = current.WithSections(sections);
+                return;
+            }
+
+            _mappingStage = new OutputMappingStage(outputFormat, sections);
+            retired = current;
+        }
+
+        /// <summary>Takes the mapping stage for disposal (runtime teardown).</summary>
+        public OutputMappingStage? DetachMappingStage()
+        {
+            var stage = _mappingStage;
+            _mappingStage = null;
+            return stage;
+        }
+
+        /// <summary>Configure-on-change: mapped and unmapped outputs see different formats, and a
+        /// live mapping resize changes the format mid-run. Configure is idempotent downstream.</summary>
+        public void EnsureConfigured(VideoFormat format)
+        {
+            if (_configuredFormat == format)
+                return;
+            Output.Configure(format);
+            _configuredFormat = format;
+        }
 
         public void SubscribePumpPressure(ClipCompositionRuntime owner)
         {

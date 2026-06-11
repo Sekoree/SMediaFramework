@@ -53,8 +53,17 @@ namespace S.Media.Effects.OpenGL;
 /// inside another output's render path without trashing host state.
 /// </para>
 /// </remarks>
-public sealed class GlVideoCompositor : IVideoCompositor
+public sealed class GlVideoCompositor : IWarpPassVideoCompositor
 {
+    /// <summary>Immutable warp-pass snapshot (swapped atomically by <see cref="SetWarpPass"/>;
+    /// read once per <see cref="Composite"/> so a mid-frame swap can't tear).</summary>
+    private sealed record WarpPassState(VideoFormat Output, WarpSection[] Sections);
+
+    private volatile WarpPassState? _warpPass;
+    private uint _warpFbo;
+    private uint _warpFboTexture;
+    private (int W, int H) _warpFboSize;
+
     private static readonly ConcurrentDictionary<string, string> ShaderSourceCache = new(StringComparer.Ordinal);
     private const string ProgramCacheKey = "GlVideoCompositor:composite_layer";
 
@@ -180,20 +189,39 @@ public sealed class GlVideoCompositor : IVideoCompositor
                 DrawLayer(layer, opacity);
             }
 
+            // --- Optional warp pass: re-render the composited canvas texture into the warp FBO
+            // as N warped sections, so output mapping never leaves the GPU (the chained-compositor
+            // alternative costs an extra readback + re-upload per frame). ---
+            var warp = _warpPass;
+            var frameFormat = _output;
+            var readW = _output.Width;
+            var readH = _output.Height;
+            var readStride = _outputStride;
+            var readBytes = _outputByteCount;
+            if (warp is not null)
+            {
+                RunWarpPass(warp);
+                frameFormat = warp.Output;
+                readW = warp.Output.Width;
+                readH = warp.Output.Height;
+                readStride = readW * (_outputStride / _output.Width);
+                readBytes = readStride * readH;
+            }
+
             // --- Readback. ---
-            var buffer = ArrayPool<byte>.Shared.Rent(_outputByteCount);
+            var buffer = ArrayPool<byte>.Shared.Rent(readBytes);
             _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
             _gl.PixelStore(PixelStoreParameter.PackRowLength, 0);
             fixed (byte* p = buffer)
-                _gl.ReadPixels(0, 0, (uint)_output.Width, (uint)_output.Height, _readPixelFormat, _readPixelType, p);
+                _gl.ReadPixels(0, 0, (uint)readW, (uint)readH, _readPixelFormat, _readPixelType, p);
 
-            var plane = new ReadOnlyMemory<byte>(buffer, 0, _outputByteCount);
+            var plane = new ReadOnlyMemory<byte>(buffer, 0, readBytes);
             var owned = buffer;
             return new VideoFrame(
                 presentationTime,
-                _output,
+                frameFormat,
                 plane,
-                _outputStride,
+                readStride,
                 release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)));
         }
         finally
@@ -217,7 +245,7 @@ public sealed class GlVideoCompositor : IVideoCompositor
         }
     }
 
-    private unsafe void DrawLayer(CompositorLayer layer, float opacity)
+    private void DrawLayer(CompositorLayer layer, float opacity)
     {
         var src = layer.Frame;
         var srcW = src.Format.Width;
@@ -237,34 +265,47 @@ public sealed class GlVideoCompositor : IVideoCompositor
             PrepareYuvLayerIntermediate(src, srcW, srcH);
         }
 
-        // Bake the per-layer 3x3 transform: uv ∈ [0,1] → ndc ∈ [-1,1] with Y flipped so glReadPixels
-        // produces a top-down output buffer.
-        var t = layer.Transform;
-        var outW = (float)_output.Width;
-        var outH = (float)_output.Height;
+        DrawQuad(srcW, srcH, _output.Width, _output.Height,
+            layer.Transform, layer.SourceCrop, opacity, flipV: directBgraUpload, layer.BlendMode);
+    }
+
+    /// <summary>Core textured-quad draw shared by the layer pass and the warp pass: bakes the
+    /// source-pixels → dest-NDC transform and issues the draw with the bound texture-unit-0 source.</summary>
+    /// <param name="mirrorDestY">The layer pass paints the framebuffer vertically MIRRORED (Y flip
+    /// in the bake, paired with the sampling V-flip) so bottom-up glReadPixels yields a top-down
+    /// buffer. The warp pass samples the canvas FBO texture, which is already stored top-down —
+    /// it must paint unmirrored (false) with no sampling flip, or the output arrives upside down.</param>
+    private void DrawQuad(
+        int srcW, int srcH, int destW, int destH,
+        LayerTransform2D t, RectNormalized sourceCrop, float opacity, bool flipV, BlendMode blendMode,
+        bool mirrorDestY = true)
+    {
+        var outW = (float)destW;
+        var outH = (float)destH;
+        var ySign = mirrorDestY ? -1f : 1f;
         // matrix is column-major when sent via UniformMatrix3, but we use *transpose=false convention
         // by laying out per-column. Easier: assemble the 9-float array explicitly.
         // m[col,row]: column-major storage.
         Span<float> m = stackalloc float[9];
-        // Col 0: derivative w.r.t. uv.x — (M11*srcW)*(2/outW), -(M21*srcW)*(2/outH), 0
+        // Col 0: derivative w.r.t. uv.x — (M11*srcW)*(2/outW), ±(M21*srcW)*(2/outH), 0
         m[0] = (t.M11 * srcW) * (2f / outW);
-        m[1] = -(t.M21 * srcW) * (2f / outH);
+        m[1] = ySign * (t.M21 * srcW) * (2f / outH);
         m[2] = 0f;
-        // Col 1: derivative w.r.t. uv.y — (M12*srcH)*(2/outW), -(M22*srcH)*(2/outH), 0
+        // Col 1: derivative w.r.t. uv.y — (M12*srcH)*(2/outW), ±(M22*srcH)*(2/outH), 0
         m[3] = (t.M12 * srcH) * (2f / outW);
-        m[4] = -(t.M22 * srcH) * (2f / outH);
+        m[4] = ySign * (t.M22 * srcH) * (2f / outH);
         m[5] = 0f;
-        // Col 2: translation — (2*Tx/outW) - 1, 1 - (2*Ty/outH), 1
+        // Col 2: translation — (2*Tx/outW) - 1, ∓(1 - (2*Ty/outH)), 1
         m[6] = (2f * t.Tx / outW) - 1f;
-        m[7] = 1f - (2f * t.Ty / outH);
+        m[7] = mirrorDestY ? 1f - (2f * t.Ty / outH) : (2f * t.Ty / outH) - 1f;
         m[8] = 1f;
         _gl.UniformMatrix3(_uXformLoc, 1, false, m);
-        var crop = layer.SourceCrop.Clamped();
+        var crop = sourceCrop.Clamped();
         _gl.Uniform4(_uCropLoc, crop.X0, crop.Y0, crop.X1, crop.Y1);
         _gl.Uniform1(_uOpacityLoc, opacity);
-        _gl.Uniform1(_uLayerFlipVLoc, directBgraUpload ? 1f : 0f);
+        _gl.Uniform1(_uLayerFlipVLoc, flipV ? 1f : 0f);
 
-        switch (layer.BlendMode)
+        switch (blendMode)
         {
             case BlendMode.Source:
                 _gl.Disable(EnableCap.Blend);
@@ -281,7 +322,7 @@ public sealed class GlVideoCompositor : IVideoCompositor
                 _gl.Uniform1(_uBlendKindLoc, 1);
                 break;
             default:
-                throw new NotSupportedException($"BlendMode {layer.BlendMode} not supported.");
+                throw new NotSupportedException($"BlendMode {blendMode} not supported.");
         }
 
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -432,6 +473,94 @@ public sealed class GlVideoCompositor : IVideoCompositor
         _gl.BindVertexArray(0);
     }
 
+    /// <inheritdoc />
+    public void SetWarpPass(VideoFormat warpOutput, IReadOnlyList<WarpSection>? sections)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (sections is null)
+        {
+            _warpPass = null;
+            return;
+        }
+
+        var expectedPf = OutputPixelFormatForPrecision(_outputPrecision);
+        if (warpOutput.PixelFormat != expectedPf)
+            throw new ArgumentException(
+                $"warp output must match compositor precision pixel format {expectedPf}; got {warpOutput.PixelFormat}.",
+                nameof(warpOutput));
+        if (warpOutput.Width <= 0 || warpOutput.Height <= 0)
+            throw new ArgumentException(
+                $"warp output dimensions must be positive (got {warpOutput.Width}x{warpOutput.Height}).",
+                nameof(warpOutput));
+
+        _warpPass = new WarpPassState(warpOutput, sections.ToArray());
+    }
+
+    /// <summary>GL thread (inside Composite). Draws the warp sections from the canvas FBO texture
+    /// into the warp FBO; the caller reads back from the warp FBO afterwards.</summary>
+    private void RunWarpPass(WarpPassState warp)
+    {
+        EnsureWarpFbo(warp.Output.Width, warp.Output.Height);
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _warpFbo);
+        _gl.Viewport(0, 0, (uint)warp.Output.Width, (uint)warp.Output.Height);
+        _gl.ClearColor(0f, 0f, 0f, 0f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
+
+        // The composited canvas texture is the source for every section. Linear so scaled/rotated
+        // sections sample smoothly (the FBO texture defaults to Nearest because it is normally
+        // only read back, never sampled).
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, _fboTexture);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+
+        foreach (var section in warp.Sections)
+        {
+            var opacity = Math.Clamp(section.Opacity, 0f, 1f);
+            if (opacity <= 0f)
+                continue;
+            // Canvas texture is stored top-down (it IS the readback content) — no sampling flip and
+            // no dest mirroring, unlike the layer pass (see DrawQuad's mirrorDestY remarks).
+            DrawQuad(_output.Width, _output.Height, warp.Output.Width, warp.Output.Height,
+                section.Transform, section.SourceCrop, opacity, flipV: false, BlendMode.SourceOver,
+                mirrorDestY: false);
+        }
+    }
+
+    private unsafe void EnsureWarpFbo(int width, int height)
+    {
+        if (_warpFbo != 0 && _warpFboSize == (width, height))
+            return;
+
+        if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }
+        if (_warpFbo != 0) { _gl.DeleteFramebuffer(_warpFbo); _warpFbo = 0; }
+
+        _warpFboTexture = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, _warpFboTexture);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, _fboInternalFormat,
+            (uint)width, (uint)height, 0,
+            GlPixelFormat.Rgba, PixelTypeForInternalFormat(_fboInternalFormat), null);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+
+        _warpFbo = _gl.GenFramebuffer();
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _warpFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, _warpFboTexture, 0);
+        var status = _gl.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != GLEnum.FramebufferComplete)
+        {
+            _gl.DeleteFramebuffer(_warpFbo);
+            _gl.DeleteTexture(_warpFboTexture);
+            _warpFbo = 0;
+            _warpFboTexture = 0;
+            throw new InvalidOperationException($"GlVideoCompositor warp FBO incomplete: {status}");
+        }
+
+        _warpFboSize = (width, height);
+    }
+
     private unsafe void RecreateFbo()
     {
         if (_fboTexture != 0) { _gl.DeleteTexture(_fboTexture); _fboTexture = 0; }
@@ -573,6 +702,8 @@ public sealed class GlVideoCompositor : IVideoCompositor
         _yuvIntermediates.Clear();
         if (_fboTexture != 0) { _gl.DeleteTexture(_fboTexture); _fboTexture = 0; }
         if (_fbo != 0) { _gl.DeleteFramebuffer(_fbo); _fbo = 0; }
+        if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }
+        if (_warpFbo != 0) { _gl.DeleteFramebuffer(_warpFbo); _warpFbo = 0; }
         if (_vbo != 0) { _gl.DeleteBuffer(_vbo); _vbo = 0; }
         if (_vao != 0) { _gl.DeleteVertexArray(_vao); _vao = 0; }
         if (_program != 0) { SharedGlProgramCache.Release(_gl, ProgramCacheKey); _program = 0; }

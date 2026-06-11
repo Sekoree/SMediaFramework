@@ -64,7 +64,7 @@
                    SelectedItem="{Binding SelectedVideoOutput, Mode=TwoWay}">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:CueVideoOutputBindingViewModel">
-                <Grid ColumnDefinitions="Auto,Auto,*,Auto,*"
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto,*,Auto"
                       ColumnSpacing="8"
                       Margin="0,3">
                   <Ellipse Grid.Column="0" Width="9" Height="9" VerticalAlignment="Center"
@@ -94,6 +94,10 @@
                             DisplayMemberBinding="{Binding DisplayName}"
                             ItemsSource="{Binding $parent[Window].((vm:CuePlayerViewModel)DataContext).VisibleCompositions}"
                             MinWidth="220" />
+                  <Button Grid.Column="5"
+                          Content="{x:Static res:Strings.MappingButtonLabel}"
+                          ToolTip.Tip="{x:Static res:Strings.MappingButtonTooltip}"
+                          Click="MappingClick" />
                 </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>

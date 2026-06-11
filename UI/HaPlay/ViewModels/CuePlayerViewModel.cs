@@ -181,6 +181,11 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
 
     partial void OnOutputLineIdChanged(Guid value) => LineRef = _resolveLine?.Invoke(value);
 
+    /// <summary>Output mapping (warp sections) for this binding — edited by the mapping editor
+    /// dialog, persisted with the cue list. Null = no mapping stage.</summary>
+    [ObservableProperty]
+    private CueOutputMapping? _mapping;
+
     internal void SetLineResolver(Func<Guid, OutputLineViewModel?> resolveLine)
     {
         _resolveLine = resolveLine;
@@ -192,6 +197,7 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
         Id = Id,
         OutputLineId = OutputLineId,
         CompositionId = CompositionId,
+        Mapping = Mapping,
     };
 
     public static CueVideoOutputBindingViewModel FromModel(
@@ -203,6 +209,7 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
             Id = model.Id,
             OutputLineId = model.OutputLineId,
             CompositionId = model.CompositionId,
+            Mapping = model.Mapping,
         };
         if (resolveLine is not null)
             vm.SetLineResolver(resolveLine);
@@ -2338,6 +2345,13 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host callback for reconciling the selected cue's running audio routes after route
     /// row edits. No-op in tests or when the cue is not playing.</summary>
     public Func<Guid, IReadOnlyList<CueAudioRoute>, Task>? UpdateActiveCueAudioRoutesCallback { get; set; }
+
+    /// <summary>Host callback — live-applies an output mapping (warp sections) to a running
+    /// composition: (compositionId, outputLineId, mapping). No-op when the composition isn't live.</summary>
+    public Func<Guid, Guid, CueOutputMapping?, bool>? UpdateOutputMappingCallback { get; set; }
+
+    /// <summary>Host callback — shows/hides the mapping calibration grid on a composition.</summary>
+    public Func<Guid, bool, bool>? SetCompositionTestPatternCallback { get; set; }
 
     /// <summary>Engine callback — cue began playing. Marks its row Current and pushes a new
     /// <see cref="ActiveCueViewModel"/> into <see cref="ActiveCues"/>.</summary>

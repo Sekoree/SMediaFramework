@@ -21,6 +21,9 @@ public static class Strings
     public static string PopoutBringToFrontButton => Get(nameof(PopoutBringToFrontButton));
     public static string PopoutRestoreButton => Get(nameof(PopoutRestoreButton));
     public static string PopoutControlTabTitleFormat => Get(nameof(PopoutControlTabTitleFormat));
+    public static string MappingButtonLabel => Get(nameof(MappingButtonLabel));
+    public static string MappingButtonTooltip => Get(nameof(MappingButtonTooltip));
+    public static string MappingNeedsCompositionToast => Get(nameof(MappingNeedsCompositionToast));
     public static string HeadphonesCueBusLabel => Get(nameof(HeadphonesCueBusLabel));
     public static string VirtualChannelsMigratedToast => Get(nameof(VirtualChannelsMigratedToast));
     public static string PlayersDeckHint => Get(nameof(PlayersDeckHint));
