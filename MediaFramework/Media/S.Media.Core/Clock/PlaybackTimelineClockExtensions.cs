@@ -10,7 +10,7 @@ public static class PlaybackTimelineClockExtensions
     /// <summary>
     /// Returns a seek-free view of <paramref name="playhead"/> (same position / running / rate).
     /// </summary>
-    public static IPlaybackPlayhead AsPlayhead(this IPlayhead playhead)
+    public static IReadOnlyPlayhead AsPlayhead(this IPlayhead playhead)
     {
         ArgumentNullException.ThrowIfNull(playhead);
         return new PlaybackPlayheadAdapter(playhead);
@@ -18,7 +18,7 @@ public static class PlaybackTimelineClockExtensions
 
     /// <summary>Obsolete overload — use <see cref="AsPlayhead(IPlayhead)"/>.</summary>
     [Obsolete("Use AsPlayhead(IPlayhead).")]
-    public static IPlaybackPlayhead AsPlayhead(this IPlaybackTimeline timeline) =>
+    public static IReadOnlyPlayhead AsPlayhead(this IPlaybackTimeline timeline) =>
         AsPlayhead((IPlayhead)timeline);
 
     /// <summary>
@@ -60,7 +60,7 @@ public static class PlaybackTimelineClockExtensions
         }
     }
 
-    private sealed class PlaybackPlayheadAdapter(IPlayhead inner) : IPlaybackPlayhead
+    private sealed class PlaybackPlayheadAdapter(IPlayhead inner) : IReadOnlyPlayhead
     {
         public TimeSpan CurrentPosition => inner.CurrentPosition;
 

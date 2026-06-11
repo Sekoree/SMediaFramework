@@ -31,7 +31,7 @@
                MinWidth="120"
                Margin="4,0,0,0"
                Text="{Binding SelectedCueList.Name, Mode=TwoWay}"
-               Watermark="{x:Static res:Strings.CueListNameWatermark}"
+               PlaceholderText="{x:Static res:Strings.CueListNameWatermark}"
                ToolTip.Tip="{x:Static res:Strings.CueListNameTooltip}"
                IsEnabled="{Binding SelectedCueList, Converter={x:Static ObjectConverters.IsNotNull}}" />
       <Button Grid.Column="3" Content="{x:Static res:Strings.AddListButton}" Command="{Binding AddCueListCommand}" />

@@ -5,7 +5,7 @@ namespace S.Media.Core.Video;
 
 /// <summary>
 /// Pluggable CPU pixel-format converter (libswscale-style). The shipping implementation lives in
-/// <c>S.Media.FFmpeg</c> and is installed via <see cref="VideoCpuFrameConverterRegistry.Factory"/>
+/// <c>S.Media.FFmpeg</c> and is installed via <see cref="MediaFrameworkPlugins.VideoCpuFrameConverterFactory"/>
 /// during <c>FFmpegRuntime.EnsureInitialized()</c>. Core uses the interface so <see cref="VideoRouter"/>
 /// and <see cref="VideoOutputFanoutFormats"/> can do branch conversion without referencing FFmpeg.
 /// </summary>
@@ -47,15 +47,15 @@ public static class VideoCpuFrameConverterRegistry
         set => MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = value;
     }
 
-    /// <summary>Creates a converter from <see cref="Factory"/>; throws when no factory is registered.</summary>
+    /// <summary>Creates a converter from <see cref="MediaFrameworkPlugins.VideoCpuFrameConverterFactory"/>; throws when none is registered.</summary>
     public static IVideoCpuFrameConverter Create() =>
-        Factory?.Invoke()
+        MediaFrameworkPlugins.VideoCpuFrameConverterFactory?.Invoke()
             ?? throw new InvalidOperationException(
-                "VideoCpuFrameConverterRegistry.Factory is not installed — reference S.Media.FFmpeg and call FFmpegRuntime.EnsureInitialized() to install the default swscale-backed converter.");
+                "No CPU frame converter is installed — reference S.Media.FFmpeg and call FFmpegRuntime.EnsureInitialized() to install the default swscale-backed converter.");
 
     /// <summary>Convenience that returns <c>false</c> when no probe is installed.</summary>
     public static bool CanConvert(PixelFormat src, PixelFormat dst, int width, int height) =>
-        CanConvertProbe?.Invoke(src, dst, width, height) ?? false;
+        MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe?.Invoke(src, dst, width, height) ?? false;
 }
 
 /// <summary>
