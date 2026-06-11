@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Rapid pushes to master supersede each other — only the latest commit's builds matter.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: linux-x64,     os: ubuntu-latest,  rid: linux-x64, aot: false }
+          - { label: linux-x64-aot, os: ubuntu-latest,  rid: linux-x64, aot: true }
+          - { label: win-x64,       os: windows-latest, rid: win-x64,   aot: false }
+          - { label: win-x64-aot,   os: windows-latest, rid: win-x64,   aot: true }
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # Native AOT links with the platform toolchain. The Windows runner image ships the
+      # required MSVC tools; on Linux clang + zlib headers must be present.
+      - name: Install Linux AOT prerequisites
+        if: ${{ matrix.aot && runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Publish
+        run: >
+          dotnet publish UI/HaPlay.Desktop/HaPlay.Desktop.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishAot=${{ matrix.aot }}
+          -o publish
+
+      # Plain build artifacts, not releases — runtime natives that can't live in the repo
+      # (NDI, FFmpeg, PortAudio, SDL3) are added to the unpacked artifact by hand.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HaPlay-${{ matrix.label }}
+          path: publish/
+          if-no-files-found: error
