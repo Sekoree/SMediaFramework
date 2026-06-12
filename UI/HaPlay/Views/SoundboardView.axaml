@@ -224,6 +224,12 @@
                                      Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
                   Margin="3" CornerRadius="6" BorderThickness="1.5" MinHeight="84"
                   Tapped="OnTileTapped">
+            <Border.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
+                          Click="OnCopyTileApiUrlClick" />
+              </ContextMenu>
+            </Border.ContextMenu>
             <Panel Margin="8,6">
               <!-- Unbound + edit mode: drop-target hint. -->
               <TextBlock Text="+" FontSize="26" Opacity="0.3"
@@ -255,6 +261,13 @@
                              Foreground="#DAAA3A" Background="#28808080"
                              IsVisible="{Binding IsFading}" />
               </Grid>
+
+              <!-- Tile number badge (the {tile} segment of the remote API URL). -->
+              <TextBlock Text="{Binding GridIndex}"
+                         FontSize="9" Opacity="0.45"
+                         HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                         Margin="0,0,1,-2"
+                         IsVisible="{Binding ShowsGridIndex}" />
             </Panel>
           </Border>
         </DataTemplate>

@@ -149,6 +149,78 @@ public partial class MainViewModel : ViewModelBase
         SelectedWorkspace = Workspaces.FirstOrDefault(w => w.Id == lastWorkspaceId)
                             ?? WorkspaceItem.Players;
         ToastCenter.Sink = OnToastPosted;
+
+        // Remote API (per-machine setting) — seed via backing fields so the OnXChanged hooks don't
+        // re-save during construction, then bring the listener up if it was left enabled.
+        _restApiEnabled = _appSettings.RestApiEnabled;
+        _restApiPort = _appSettings.RestApiPort is >= 1 and <= 65535 ? _appSettings.RestApiPort : 8990;
+        RestartRestApi();
+    }
+
+    // ----- Remote API (HTTP) ---------------------------------------------------------------------
+
+    private readonly Remote.RestApiServer _restApiServer = new();
+    private Remote.RemoteApiDispatcher? _restApiDispatcher;
+
+    /// <summary>Per-machine: serve the HTTP remote API. Off by default (unauthenticated LAN surface).</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RestApiBaseUrlDisplay))]
+    private bool _restApiEnabled;
+
+    [ObservableProperty]
+    private int _restApiPort = 8990;
+
+    /// <summary>Shown in the Project workspace card (and the base for Copy-API-URL menus).</summary>
+    public string RestApiBaseUrlDisplay =>
+        _restApiServer.IsRunning && _restApiServer.BaseUrl is { } url
+            ? url
+            : Strings.RemoteApiDisabledStatus;
+
+    /// <summary>Degradation note (e.g. Windows loopback fallback) or bind error; null when clean.</summary>
+    public string? RestApiStatusNote => _restApiServer.StatusNote;
+
+    /// <summary>Endpoint cheat-sheet rendered as a list by the Project workspace card. Paths are
+    /// protocol, not prose — only the descriptions localize.</summary>
+    public IReadOnlyList<Remote.RemoteApiEndpointDoc> RestApiEndpointDocs { get; } =
+    [
+        new("/api/v1/cues/go · pause · resume · stop · panic", Strings.RemoteApiDocCues),
+        new("/api/v1/players/{player}/play · pause · toggle · stop · next · prev", Strings.RemoteApiDocPlayerTransport),
+        new("/api/v1/players/{player}/volume?db=-10", Strings.RemoteApiDocPlayerVolume),
+        new("/api/v1/players/{player}/hold?on=true", Strings.RemoteApiDocPlayerHold),
+        new("/api/v1/players/{player}/{playlist}/{item}", Strings.RemoteApiDocPlaylistItem),
+        new("/api/v1/soundboards/{board}/{tile}/tap · play · stop · fade", Strings.RemoteApiDocTile),
+        new("/api/v1/soundboards/stop", Strings.RemoteApiDocSoundboardStop),
+        new("/api/v1/control/arm · disarm", Strings.RemoteApiDocControl),
+        new("/api/v1/status", Strings.RemoteApiDocStatus),
+    ];
+
+    partial void OnRestApiEnabledChanged(bool value)
+    {
+        _appSettings.RestApiEnabled = value;
+        _appSettings.Save();
+        RestartRestApi();
+    }
+
+    partial void OnRestApiPortChanged(int value)
+    {
+        _appSettings.RestApiPort = value;
+        _appSettings.Save();
+        RestartRestApi();
+    }
+
+    private void RestartRestApi()
+    {
+        _restApiDispatcher ??= new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control);
+        _restApiServer.Stop();
+        if (RestApiEnabled && RestApiPort is >= 1 and <= 65535)
+            _restApiServer.Start(RestApiPort, _restApiDispatcher);
+
+        // Copy-API-URL menus keep working while the listener is off — the copied URL targets the
+        // configured port and becomes live the moment the API is enabled.
+        Remote.RemoteApi.BaseUrl = _restApiServer.BaseUrl
+                                   ?? $"http://{Remote.RestApiServer.ResolveAdvertisedHost()}:{RestApiPort}";
+        OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
+        OnPropertyChanged(nameof(RestApiStatusNote));
     }
 
     // ----- UI rewrite P1 (plan §1): toast overlay queue -----------------------------------------

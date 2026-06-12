@@ -40,6 +40,12 @@ public sealed class AppSettings
     /// </summary>
     public bool PreferLiveUyvyPassthrough { get; set; }
 
+    /// <summary>HTTP remote API listener (per-machine, off by default — it is unauthenticated and
+    /// binds all interfaces so show controllers on the LAN can reach it).</summary>
+    public bool RestApiEnabled { get; set; }
+
+    public int RestApiPort { get; set; } = 8990;
+
     private static string FilePath
     {
         get

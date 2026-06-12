@@ -2448,4 +2448,52 @@
   <data name="SoundboardImportFailedToastFormat" xml:space="preserve">
     <value>Soundboard import failed: {0}</value>
   </data>
+  <data name="RemoteApiSectionHeader" xml:space="preserve">
+    <value>Remote API</value>
+  </data>
+  <data name="RemoteApiEnableLabel" xml:space="preserve">
+    <value>Enable HTTP remote API</value>
+  </data>
+  <data name="RemoteApiPortLabel" xml:space="preserve">
+    <value>Port</value>
+  </data>
+  <data name="RemoteApiDisabledStatus" xml:space="preserve">
+    <value>(disabled)</value>
+  </data>
+  <data name="RemoteApiHint" xml:space="preserve">
+    <value>Unauthenticated HTTP control for show controllers on this network. GET or POST; all indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL.</value>
+  </data>
+  <data name="RemoteApiDocCues" xml:space="preserve">
+    <value>Cue player transport (go fires the standby/selected cue)</value>
+  </data>
+  <data name="RemoteApiDocPlayerTransport" xml:space="preserve">
+    <value>Media player transport (player = number or name)</value>
+  </data>
+  <data name="RemoteApiDocPlayerVolume" xml:space="preserve">
+    <value>Master volume in dB (−60 … +12)</value>
+  </data>
+  <data name="RemoteApiDocPlayerHold" xml:space="preserve">
+    <value>Hold image on/off — without ?on it toggles</value>
+  </data>
+  <data name="RemoteApiDocPlaylistItem" xml:space="preserve">
+    <value>Play a playlist item (optional /play suffix)</value>
+  </data>
+  <data name="RemoteApiDocTile" xml:space="preserve">
+    <value>Soundboard tile — bare URL = tap (same as touching it)</value>
+  </data>
+  <data name="RemoteApiDocSoundboardStop" xml:space="preserve">
+    <value>Stop every playing soundboard sound</value>
+  </data>
+  <data name="RemoteApiDocControl" xml:space="preserve">
+    <value>Arm / disarm the control system</value>
+  </data>
+  <data name="RemoteApiDocStatus" xml:space="preserve">
+    <value>Status ping (player/board counts)</value>
+  </data>
+  <data name="CopyApiUrlMenuItem" xml:space="preserve">
+    <value>Copy API URL</value>
+  </data>
+  <data name="CopiedToClipboardToastFormat" xml:space="preserve">
+    <value>Copied {0}</value>
+  </data>
 </root>

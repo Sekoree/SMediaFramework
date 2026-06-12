@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:remote="using:HaPlay.Remote"
              xmlns:models="using:HaPlay.Models"
              xmlns:res="using:HaPlay.Resources"
              xmlns:views="using:HaPlay.Views"
@@ -283,38 +284,79 @@
             </DockPanel>
           </Border>
 
-          <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
-          <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
-            <StackPanel Spacing="6">
-              <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
-              <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
-                         Text="{x:Static res:Strings.DisplaySettingsHint}" />
-              <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto" Margin="0,4,0,0">
-                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ThemeLabel}" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="1"
-                          ItemsSource="{Binding ThemeChoices}"
-                          SelectedItem="{Binding Theme}"
-                          HorizontalAlignment="Stretch">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+          <StackPanel Grid.Column="1" Spacing="10">
+            <!-- §8.6 Display preferences — per-machine, not part of the project file. -->
+            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{x:Static res:Strings.DisplayHeader}" FontWeight="SemiBold" />
+                <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
+                           Text="{x:Static res:Strings.DisplaySettingsHint}" />
+                <Grid ColumnDefinitions="80,*,16,80,*" RowDefinitions="Auto" Margin="0,4,0,0">
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.ThemeLabel}" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding ThemeChoices}"
+                            SelectedItem="{Binding Theme}"
+                            HorizontalAlignment="Stretch">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                  <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="4"
+                            ItemsSource="{Binding DensityChoices}"
+                            SelectedItem="{Binding Density}"
+                            HorizontalAlignment="Stretch">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
+                </Grid>
+              </StackPanel>
+            </Border>
+
+            <!-- Remote API — per-machine HTTP control surface for show controllers. -->
+            <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="8">
+              <StackPanel Spacing="6">
+                <TextBlock Text="{x:Static res:Strings.RemoteApiSectionHeader}" FontWeight="SemiBold" />
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                  <CheckBox Content="{x:Static res:Strings.RemoteApiEnableLabel}"
+                            IsChecked="{Binding RestApiEnabled, Mode=TwoWay}" />
+                  <TextBlock Text="{x:Static res:Strings.RemoteApiPortLabel}" VerticalAlignment="Center" />
+                  <NumericUpDown Minimum="1024" Maximum="65535" Increment="1" FormatString="0"
+                                 Value="{Binding RestApiPort, Mode=TwoWay}" MinWidth="120" />
+                </StackPanel>
+                <SelectableTextBlock Text="{Binding RestApiBaseUrlDisplay}" FontFamily="monospace" FontSize="12" />
+                <TextBlock Text="{Binding RestApiStatusNote}" Foreground="#DAAA3A" FontSize="12"
+                           TextWrapping="Wrap"
+                           IsVisible="{Binding RestApiStatusNote, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <TextBlock Opacity="0.65" FontSize="12" TextWrapping="Wrap"
+                           Text="{x:Static res:Strings.RemoteApiHint}" />
+                <!-- Endpoint cheat-sheet: aligned path column (shared size scope) + description. -->
+                <ItemsControl ItemsSource="{Binding RestApiEndpointDocs}"
+                              Grid.IsSharedSizeScope="True" Margin="0,2,0,0">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="remote:RemoteApiEndpointDoc">
+                      <Grid ColumnSpacing="12" Margin="0,1">
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="Auto" SharedSizeGroup="ApiPath" />
+                          <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <SelectableTextBlock Grid.Column="0" Text="{Binding Path}"
+                                             FontFamily="monospace" FontSize="11" />
+                        <TextBlock Grid.Column="1" Text="{Binding Description}"
+                                   Opacity="0.65" FontSize="11" TextWrapping="Wrap"
+                                   VerticalAlignment="Center" />
+                      </Grid>
                     </DataTemplate>
-                  </ComboBox.ItemTemplate>
-                </ComboBox>
-                <TextBlock Grid.Column="3" Text="{x:Static res:Strings.DensityLabel}" VerticalAlignment="Center" />
-                <ComboBox Grid.Column="4"
-                          ItemsSource="{Binding DensityChoices}"
-                          SelectedItem="{Binding Density}"
-                          HorizontalAlignment="Stretch">
-                  <ComboBox.ItemTemplate>
-                    <DataTemplate>
-                      <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
-                    </DataTemplate>
-                  </ComboBox.ItemTemplate>
-                </ComboBox>
-              </Grid>
-            </StackPanel>
-          </Border>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+              </StackPanel>
+            </Border>
+          </StackPanel>
         </Grid>
       </DockPanel>
     </Grid>

@@ -1,8 +1,10 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
+using HaPlay.Resources;
 using HaPlay.ViewModels;
 using S.Media.Core;
 
@@ -47,6 +49,32 @@ public partial class MediaPlayerView : UserControl
         e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
+    }
+
+    /// <summary>Copies the remote API URL playing the selected playlist item (the menu operates on
+    /// the selection, like the other playlist context actions). Player/playlist/item numbers are
+    /// 1-based to match the UI labels.</summary>
+    private async void OnCopyPlaylistItemApiUrlClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        if (DataContext is not MediaPlayerViewModel vm
+            || vm.SelectedPlaylistTab is not { } tab
+            || vm.SelectedPlaylistItem is not { } item)
+            return;
+
+        var itemIndex = tab.Items.IndexOf(item);
+        var tabIndex = vm.PlaylistTabs.IndexOf(tab);
+        var playerIndex = (TopLevel.GetTopLevel(this)?.DataContext as MainViewModel)?.Players.IndexOf(vm) ?? -1;
+        if (itemIndex < 0 || tabIndex < 0 || playerIndex < 0)
+            return;
+
+        var url = Remote.RemoteApi.PlaylistItemPlayUrl(playerIndex + 1, tabIndex + 1, itemIndex + 1);
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+        await clipboard.SetTextAsync(url);
+        ToastCenter.Info(Strings.Format(nameof(Strings.CopiedToClipboardToastFormat), url));
     }
 
     private void OnPlaylistDrop(object? sender, DragEventArgs e)

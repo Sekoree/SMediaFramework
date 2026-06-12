@@ -113,9 +113,11 @@ public sealed partial class SoundboardViewModel : ObservableObject
         for (var row = 0; row < rows; row++)
         for (var column = 0; column < columns; column++)
         {
-            Tiles.Add(byCell.TryGetValue((row, column), out var existing)
+            var tile = byCell.TryGetValue((row, column), out var existing)
                 ? existing
-                : new SoundboardTileViewModel(row, column) { IsEditing = IsEditing });
+                : new SoundboardTileViewModel(row, column) { IsEditing = IsEditing };
+            tile.GridIndex = Tiles.Count + 1; // 1-based row-major — the remote API tile number
+            Tiles.Add(tile);
         }
     }
 
@@ -150,7 +152,11 @@ public sealed partial class SoundboardViewModel : ObservableObject
         {
             var tile = SoundboardTileViewModel.FromConfig(tileConfig);
             if (tile.Row < board.Rows && tile.Column < board.Columns)
-                board.Tiles[tile.Row * board.Columns + tile.Column] = tile;
+            {
+                var index = tile.Row * board.Columns + tile.Column;
+                tile.GridIndex = index + 1;
+                board.Tiles[index] = tile;
+            }
         }
 
         return board;

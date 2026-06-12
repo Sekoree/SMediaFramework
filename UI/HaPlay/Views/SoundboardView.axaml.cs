@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using Avalonia.Platform.Storage;
 using HaPlay.Resources;
@@ -94,6 +95,23 @@ public partial class SoundboardView : UserControl
         }
 
         return null;
+    }
+
+    private async void OnCopyTileApiUrlClick(object? sender, RoutedEventArgs e)
+    {
+        _ = e;
+        if (Vm is not { } vm
+            || (sender as Control)?.DataContext is not SoundboardTileViewModel tile
+            || vm.FindBoardOf(tile) is not { } board)
+            return;
+
+        var boardNumber = vm.Boards.IndexOf(board) + 1;
+        var url = Remote.RemoteApi.TileTapUrl(boardNumber, tile.GridIndex);
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+        await clipboard.SetTextAsync(url);
+        ToastCenter.Info(Strings.Format(nameof(Strings.CopiedToClipboardToastFormat), url));
     }
 
     private async void OnBrowseTileFileClick(object? sender, RoutedEventArgs e)

@@ -422,6 +422,9 @@
                                 </MenuItem.Styles>
                             </MenuItem>
                             <Separator IsVisible="{Binding SelectedItemHasMultipleAudioTracks}" />
+                            <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
+                                      Click="OnCopyPlaylistItemApiUrlClick" />
+                            <Separator />
                             <MenuItem Header="{x:Static res:Strings.PlaylistContextRemove}"
                                       Command="{Binding RemoveFromPlaylistCommand}" />
                         </ContextMenu>

@@ -3987,7 +3987,10 @@ public partial class CuePlayerViewModel : ViewModelBase
         {
             _suppressStandbyPreRollRefresh = false;
         }
-        SelectedCueNode = plan[0].Cue;
+        // Selection follows the next cue that would fire (same advance as standby) so the
+        // highlighted row always previews what the next GO does; at list end it stays on the
+        // fired cue.
+        SelectedCueNode = nextStandby ?? plan[0].Cue;
         StatusMessage = Strings.Format(
             nameof(Strings.CueGoStatusFormat),
             CueDisplay(fire),
@@ -4336,11 +4339,11 @@ public partial class CuePlayerViewModel : ViewModelBase
             ct.ThrowIfCancellationRequested();
 
             var steps = group.ToList();
+            // Only the playing pointer follows the fired steps. The SELECTION stays where Go put
+            // it (the next cue that would fire) — yanking it back to the firing cue defeated the
+            // "selection previews the next GO" behavior and moved the operator's editor cursor.
             foreach (var step in steps)
-            {
                 CurrentCueNode = step.Cue;
-                SelectedCueNode = step.Cue;
-            }
 
             if (steps.Count > 1 && MediaCueGroupExecutor is not null)
             {

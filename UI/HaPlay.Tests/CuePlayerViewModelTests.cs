@@ -1037,6 +1037,33 @@ public sealed class CuePlayerViewModelTests
     }
 
     [Fact]
+    public async Task GoAdvancesSelectionToNextFireableCue()
+    {
+        var vm = new CuePlayerViewModel();
+        vm.AddMediaCueCommand.Execute(null);
+        var cue1 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+        vm.AddMediaCueCommand.Execute(null);
+        var cue2 = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+
+        // Firing the standby cue moves the selection (not just standby) to what plays next.
+        vm.SelectedCueNode = cue1;
+        vm.StandbySelectedCommand.Execute(null);
+        vm.GoCommand.Execute(null);
+        // Let the dispatched trigger-plan run settle — its steps update CurrentCueNode async and
+        // must NOT move the selection back to the fired cue.
+        await Task.Delay(50);
+        Assert.Same(cue1, vm.CurrentCueNode);
+        Assert.Same(cue2, vm.SelectedCueNode);
+        Assert.Same(cue2, vm.StandbyCueNode);
+
+        // Last cue in the list: nothing after it, selection stays on the fired cue.
+        vm.GoCommand.Execute(null);
+        await Task.Delay(50);
+        Assert.Same(cue2, vm.CurrentCueNode);
+        Assert.Same(cue2, vm.SelectedCueNode);
+    }
+
+    [Fact]
     public async Task GroupFireAllSimultaneously_HonorsPerCuePreWaitDelay()
     {
         var vm = new CuePlayerViewModel();

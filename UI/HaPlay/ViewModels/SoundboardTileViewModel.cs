@@ -24,7 +24,7 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
     public int Column { get; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsBound), nameof(DisplayName), nameof(FileNameDisplay), nameof(TimeLabel), nameof(ShowsDropHint))]
+    [NotifyPropertyChangedFor(nameof(IsBound), nameof(DisplayName), nameof(FileNameDisplay), nameof(TimeLabel), nameof(ShowsDropHint), nameof(ShowsGridIndex))]
     private string? _filePath;
 
     /// <summary>Optional alias shown on the tile instead of the filename; null/blank = filename.</summary>
@@ -75,8 +75,18 @@ public sealed partial class SoundboardTileViewModel : ObservableObject
     /// <summary>Mirrors the workspace edit mode (propagated by the owning board) so the grid can
     /// show unbound tiles as drop targets without cross-template ancestor bindings.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ShowsDropHint))]
+    [NotifyPropertyChangedFor(nameof(ShowsDropHint), nameof(ShowsGridIndex))]
     private bool _isEditing;
+
+    /// <summary>1-based row-major position on the board — the tile number remote API URLs use
+    /// (/soundboards/{board}/{tile}/…). Maintained by the owning board's grid reconciliation.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsGridIndex))]
+    private int _gridIndex;
+
+    /// <summary>The corner index badge: on bound tiles always (it documents the API address), on
+    /// unbound ones only while editing (where the tile is visible anyway).</summary>
+    public bool ShowsGridIndex => GridIndex > 0 && (IsBound || IsEditing);
 
     public bool IsBound => !string.IsNullOrWhiteSpace(FilePath);
 

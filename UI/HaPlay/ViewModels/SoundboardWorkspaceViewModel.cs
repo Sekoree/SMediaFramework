@@ -126,14 +126,21 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
     // ----- Tap state machine ----------------------------------------------------------------------
 
     /// <summary>Single tap surface for grid tiles (touch or mouse).</summary>
-    public async Task TapTileAsync(SoundboardTileViewModel tile)
+    public Task TapTileAsync(SoundboardTileViewModel tile)
     {
         if (IsEditMode)
         {
             SelectedTile = tile;
-            return;
+            return Task.CompletedTask;
         }
 
+        return TriggerTileAsync(tile);
+    }
+
+    /// <summary>The tap state machine without the edit-mode select branch — also the remote API
+    /// entry point (a remote trigger means "play it", even while the operator is editing).</summary>
+    public async Task TriggerTileAsync(SoundboardTileViewModel tile)
+    {
         if (!tile.IsBound)
             return;
 
@@ -164,7 +171,14 @@ public sealed partial class SoundboardWorkspaceViewModel : ObservableObject
             return;
         }
 
-        if (PlaySoundCallback is not { } play)
+        await PlayTileAsync(tile).ConfigureAwait(false);
+    }
+
+    /// <summary>Force-(re)starts a bound tile regardless of its current state (the remote API's
+    /// explicit <c>/play</c>; a playing tile restarts from the top).</summary>
+    public async Task PlayTileAsync(SoundboardTileViewModel tile)
+    {
+        if (!tile.IsBound || PlaySoundCallback is not { } play)
             return;
 
         var board = FindBoardOf(tile) ?? SelectedBoard;
