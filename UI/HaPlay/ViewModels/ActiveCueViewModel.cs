@@ -29,16 +29,9 @@ public sealed partial class ActiveCueViewModel : ObservableObject
     [ObservableProperty]
     private long _durationMs;
 
-    /// <summary>Display string: <c>mm:ss / mm:ss</c> (or <c>h:mm:ss</c> for clips ≥ 1 h).</summary>
-    public string PositionDisplay
-    {
-        get
-        {
-            var pos = FormatMs(PositionMs);
-            var dur = DurationMs > 0 ? FormatMs(DurationMs) : Resources.Strings.EmDash;
-            return $"{pos} / {dur}";
-        }
-    }
+    /// <summary>Display string: <c>mm:ss / mm:ss (-mm:ss)</c> (or <c>h:mm:ss</c> for clips ≥ 1 h);
+    /// the parenthesized part is the remaining time, omitted when duration is unknown.</summary>
+    public string PositionDisplay => FormatPositionDisplay(PositionMs, DurationMs);
 
     /// <summary>0–100. Clamped; returns 0 when duration is unknown (live sources etc.).</summary>
     public double ProgressPercent
@@ -73,12 +66,16 @@ public sealed partial class ActiveCueViewModel : ObservableObject
     [RelayCommand]
     private void Cancel() => _cancelCallback(CueId);
 
-    /// <summary>Shared "pos / dur" formatter (also used by the group aggregate row).</summary>
+    /// <summary>Shared "pos / dur (-remaining)" formatter (also used by the group aggregate row).
+    /// Remaining is omitted when duration is unknown (live sources etc.).</summary>
     internal static string FormatPositionDisplay(long positionMs, long durationMs)
     {
         var pos = FormatMs(positionMs);
-        var dur = durationMs > 0 ? FormatMs(durationMs) : Resources.Strings.EmDash;
-        return $"{pos} / {dur}";
+        if (durationMs <= 0)
+            return $"{pos} / {Resources.Strings.EmDash}";
+        var dur = FormatMs(durationMs);
+        var remaining = FormatMs(Math.Max(0, durationMs - positionMs));
+        return $"{pos} / {dur} (-{remaining})";
     }
 
     private static string FormatMs(long ms)

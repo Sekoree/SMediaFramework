@@ -93,6 +93,22 @@ internal sealed class AudioSourceFanout : IDisposable
         }
     }
 
+    /// <summary>Drops every buffered-but-unconsumed sample and snaps all branches to the write
+    /// head. Call after seeking the inner source (while the branches' routers are silenced): the
+    /// buffer only holds pre-seek content at that point, and the snap also clears any branch-to-
+    /// branch skew so every output line resumes on post-seek samples at the same position.</summary>
+    public void DiscardBuffered()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _baseFloatIndex += _count;
+            _count = 0;
+            foreach (var branch in _branches)
+                branch.Position = _baseFloatIndex;
+        }
+    }
+
     public void Dispose()
     {
         lock (_gate)

@@ -108,6 +108,67 @@ public sealed class NowPlayingGroupRowTests
     }
 
     [Fact]
+    public void GroupSeek_PrefersBatchedCallback_ForCoordinatedEngineSeek()
+    {
+        DispatchUi(static () =>
+        {
+            var (vm, _, child1, child2) = CreateGroupWithTwoChildren();
+            var sequential = new List<Guid>();
+            var batches = new List<IReadOnlyList<(Guid CueId, TimeSpan Position)>>();
+            vm.SeekCueCallback = (id, _) =>
+            {
+                sequential.Add(id);
+                return Task.CompletedTask;
+            };
+            vm.SeekCuesCallback = targets =>
+            {
+                batches.Add(targets);
+                return Task.CompletedTask;
+            };
+
+            vm.OnCueStarted(child1.Id);
+            vm.OnCueStarted(child2.Id);
+            vm.OnCueProgress(new CuePlaybackProgress(child1.Id, TimeSpan.Zero, TimeSpan.FromSeconds(60)));
+            vm.OnCueProgress(new CuePlaybackProgress(child2.Id, TimeSpan.Zero, TimeSpan.FromSeconds(120)));
+            var row = Assert.IsType<ActiveGroupViewModel>(Assert.Single(vm.NowPlayingRows));
+
+            vm.NowPlayingSeekUnlocked = true;
+            vm.SeekActiveGroupToFractionAsync(row, 0.5).GetAwaiter().GetResult();
+
+            // One coordinated batch with both children, proportional positions; no per-cue calls.
+            Assert.Empty(sequential);
+            var batch = Assert.Single(batches);
+            Assert.Equal(2, batch.Count);
+            Assert.Contains(batch, t => t.CueId == child1.Id && t.Position == TimeSpan.FromSeconds(30));
+            Assert.Contains(batch, t => t.CueId == child2.Id && t.Position == TimeSpan.FromSeconds(60));
+        });
+    }
+
+    [Fact]
+    public void NowPlayingRows_ShowRemainingTimeInParentheses()
+    {
+        DispatchUi(static () =>
+        {
+            var (vm, _, child1, child2) = CreateGroupWithTwoChildren();
+
+            vm.OnCueStarted(child1.Id);
+            vm.OnCueStarted(child2.Id);
+            vm.OnCueProgress(new CuePlaybackProgress(child1.Id, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(60)));
+            vm.OnCueProgress(new CuePlaybackProgress(child2.Id, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(120)));
+            var row = Assert.IsType<ActiveGroupViewModel>(Assert.Single(vm.NowPlayingRows));
+
+            Assert.Equal("00:30 / 01:00 (-00:30)", row.Children.First(c => c.CueId == child1.Id).PositionDisplay);
+            // Group aggregate runs on the longest child timeline.
+            Assert.Equal("00:30 / 02:00 (-01:30)", row.PositionDisplay);
+
+            // Unknown duration (live sources): no remaining segment.
+            var live = new ActiveCueViewModel(child1, child1.Id, _ => { }) { PositionMs = 30_000 };
+            Assert.StartsWith("00:30 / ", live.PositionDisplay);
+            Assert.DoesNotContain("(", live.PositionDisplay);
+        });
+    }
+
+    [Fact]
     public void GroupCancel_CancelsEveryChild()
     {
         DispatchUi(static () =>

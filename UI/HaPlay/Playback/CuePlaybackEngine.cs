@@ -245,6 +245,35 @@ public sealed class CuePlaybackEngine : IDisposable
         await SeekActiveCueAsync(entry, position);
     }
 
+    /// <summary>
+    /// Coordinated multi-cue seek (the Now Playing group row): every target is paused, seeked in
+    /// parallel and resumed through one collective audio-unpause barrier, so group children stay
+    /// as aligned as a group fire instead of resuming one-by-one.
+    /// </summary>
+    public async Task SeekCuesAsync(IReadOnlyList<(Guid CueId, TimeSpan Position)> targets)
+    {
+        if (targets.Count == 1)
+        {
+            // Single target keeps the preview-aware path.
+            await SeekCueAsync(targets[0].CueId, targets[0].Position);
+            return;
+        }
+
+        var seeks = new List<(ActiveCue Entry, TimeSpan Position)>(targets.Count);
+        lock (_gate)
+        {
+            // De-dup by cue id — the same SeekGate must not be acquired twice in one pass.
+            var seen = new HashSet<Guid>();
+            foreach (var (cueId, position) in targets)
+                if (seen.Add(cueId) && _active.TryGetValue(cueId, out var entry))
+                    seeks.Add((entry!, position));
+        }
+
+        if (seeks.Count == 0) return;
+
+        await SeekActiveCuesCoreAsync(seeks);
+    }
+
     public Task<string?> ExecuteAsync(MediaCueNode cue, CancellationToken ct) =>
         ExecuteCoreAsync(cue, ct, deferPlay: false);
 
@@ -789,18 +818,20 @@ public sealed class CuePlaybackEngine : IDisposable
             foreach (var entry in entries)
                 entry.SetAudioPaused(true);
 
-            // Heavy transport (thread joins, PortAudio flush) off UI thread with bounded timeout.
-            foreach (var entry in entries)
+            // Heavy transport (thread joins, PortAudio flush) off UI thread with bounded timeout —
+            // in parallel, so a multi-cue pause freezes everything together instead of staggered
+            // by each predecessor's transport teardown (mirrors the parallel resume below).
+            await Task.WhenAll(entries.Select(async entry =>
             {
                 try
                 {
                     await Task.Run(() =>
                     {
                         entry.Player.Pause(CancellationToken.None, PauseFlushPolicy.SkipFlush);
-                    }).WaitAsync(BoundedPauseTimeout);
+                    }).WaitAsync(BoundedPauseTimeout).ConfigureAwait(false);
                 }
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
-            }
+            })).ConfigureAwait(false);
             return;
         }
 
@@ -1862,50 +1893,101 @@ public sealed class CuePlaybackEngine : IDisposable
             ).WaitAsync(BoundedSeekTimeout);
         }
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekPreviewAsync: seek timed out or failed"); }
-        await Dispatcher.UIThread.InvokeAsync(() =>
+        // Off the UI thread: PrewarmVideoAfterSeek can spin up to 5 s waiting on the jitter
+        // buffer and Play blocks on its prefill (preview open already starts Play off-UI).
+        await Task.Run(() =>
         {
             preview.Player.PrewarmVideoAfterSeek();
             preview.Play();
         });
     }
 
-    private async Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position)
+    private Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position) =>
+        SeekActiveCuesCoreAsync([(entry, position)]);
+
+    /// <summary>
+    /// Coordinated seek for one or more active cues. All audio is silenced before any transport
+    /// moves, all transports seek in parallel (SeekCoordinated leaves them paused), and everything
+    /// resumes through the same collective audio-unpause barrier as <see cref="ExecuteGroupAsync"/> /
+    /// <see cref="SetPausedAsync"/> — so a group lands inside one router chunk window instead of
+    /// each child resuming staggered by its predecessors' seek latency.
+    /// </summary>
+    private async Task SeekActiveCuesCoreAsync(List<(ActiveCue Entry, TimeSpan Position)> seeks)
     {
         // Serialize per cue: an overlapping seek (rapid taps on the progress bar) would read the
         // transient IsPaused=true set by the in-flight one, conclude the cue is user-paused, and
-        // skip the resume — leaving video stopped while audio comes back.
-        await entry.SeekGate.WaitAsync();
+        // skip the resume — leaving video stopped while audio comes back. Gates are taken in a
+        // stable order so two overlapping group seeks can't deadlock on each other's cues.
+        seeks.Sort(static (a, b) => a.Entry.InstanceId.CompareTo(b.Entry.InstanceId));
+        var acquired = 0;
         try
         {
-            position = entry.ClipWindow.ToSourcePosition(position);
-            var resume = !entry.IsPaused;
-            if (resume)
+            foreach (var (entry, _) in seeks)
             {
-                await Dispatcher.UIThread.InvokeAsync(() =>
-                {
-                    entry.SetAudioPaused(true);
-                });
+                await entry.SeekGate.WaitAsync().ConfigureAwait(false);
+                acquired++;
             }
 
-            try
+            // Silence everything first — SetAudioPaused is a volatile flip with no UI affinity
+            // (see SetPausedAsync), so the whole group goes quiet together before any seek runs.
+            var resuming = new List<ActiveCue>(seeks.Count);
+            foreach (var (entry, _) in seeks)
             {
-                await Task.Run(() =>
-                    entry.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
-                ).WaitAsync(BoundedSeekTimeout);
+                if (entry.IsPaused) continue;
+                resuming.Add(entry);
+                entry.SetAudioPaused(true);
             }
-            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCueAsync: seek timed out or failed"); }
-            if (resume)
-                await Dispatcher.UIThread.InvokeAsync(() =>
+
+            await Task.WhenAll(seeks.Select(async seek =>
+            {
+                try
+                {
+                    await Task.Run(() => seek.Entry.Player.SeekCoordinated(
+                            seek.Entry.ClipWindow.ToSourcePosition(seek.Position),
+                            CancellationToken.None,
+                            PauseFlushPolicy.SkipFlush))
+                        .WaitAsync(BoundedSeekTimeout).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCuesCoreAsync: seek timed out or failed for {Cue}", seek.Entry.Cue.Id);
+                }
+
+                // The fanout may still hold pre-seek samples the branches haven't consumed; drop
+                // them while the audio is silenced so every output line resumes on post-seek
+                // content at the same sample position.
+                seek.Entry.AudioFanout?.DiscardBuffered();
+            })).ConfigureAwait(false);
+
+            if (resuming.Count == 0)
+                return;
+
+            // Restart transports in parallel OFF the UI thread — PrewarmVideoAfterSeek can block
+            // up to 5 s and Play blocks on its prefill; the old dispatcher hop froze the UI for
+            // that long. The collective unpause below is the sync barrier.
+            await Task.WhenAll(resuming.Select(entry => Task.Run(() =>
+            {
+                try
                 {
                     entry.Player.PrewarmVideoAfterSeek();
                     entry.StartPlayback();
-                    entry.SetAudioPaused(false);
-                    entry.EnsureAudioRuntimesStarted();
-                });
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogWarning(ex, "CuePlaybackEngine.SeekActiveCuesCoreAsync: resume failed for {Cue}", entry.Cue.Id);
+                }
+            }))).ConfigureAwait(false);
+
+            foreach (var entry in resuming)
+            {
+                entry.SetAudioPaused(false);
+                entry.EnsureAudioRuntimesStarted();
+            }
         }
         finally
         {
-            entry.SeekGate.Release();
+            for (var i = 0; i < acquired; i++)
+                seeks[i].Entry.SeekGate.Release();
         }
     }
 

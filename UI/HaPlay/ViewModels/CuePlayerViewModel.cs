@@ -2252,12 +2252,30 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// </summary>
     public ObservableCollection<object> NowPlayingRows { get; } = new();
 
+    /// <summary>Host-provided coordinated multi-cue seek (engine.SeekCuesAsync): all targets pause,
+    /// seek in parallel and resume through one barrier so group children stay aligned. When null
+    /// (tests), group seeks fall back to sequential per-cue <see cref="SeekCueCallback"/> calls.</summary>
+    public Func<IReadOnlyList<(Guid CueId, TimeSpan Position)>, Task>? SeekCuesCallback { get; set; }
+
     /// <summary>Group-row seek: every child seeks to the same fraction of ITS OWN duration (keeps
     /// proportional alignment for staggered-length children). Same padlock gate as single rows.</summary>
     public async Task SeekActiveGroupToFractionAsync(ActiveGroupViewModel group, double fraction)
     {
         if (!NowPlayingSeekUnlocked)
             return;
+
+        if (SeekCuesCallback is { } batched)
+        {
+            var clamped = Math.Clamp(fraction, 0.0, 1.0);
+            var targets = group.Children
+                .Where(child => child.DurationMs > 0)
+                .Select(child => (child.CueId, TimeSpan.FromMilliseconds(child.DurationMs * clamped)))
+                .ToList();
+            if (targets.Count > 0)
+                await batched(targets).ConfigureAwait(false);
+            return;
+        }
+
         foreach (var child in group.Children.ToArray())
             await SeekActiveCueToFractionAsync(child, fraction).ConfigureAwait(false);
     }
