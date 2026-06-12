@@ -41,10 +41,12 @@
     <KeyBinding Gesture="Ctrl+2" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Cues}" />
     <KeyBinding Gesture="Ctrl+3" Command="{Binding SelectWorkspaceCommand}"
-                CommandParameter="{x:Static models:WorkspaceItem.Control}" />
+                CommandParameter="{x:Static models:WorkspaceItem.Soundboard}" />
     <KeyBinding Gesture="Ctrl+4" Command="{Binding SelectWorkspaceCommand}"
-                CommandParameter="{x:Static models:WorkspaceItem.Io}" />
+                CommandParameter="{x:Static models:WorkspaceItem.Control}" />
     <KeyBinding Gesture="Ctrl+5" Command="{Binding SelectWorkspaceCommand}"
+                CommandParameter="{x:Static models:WorkspaceItem.Io}" />
+    <KeyBinding Gesture="Ctrl+6" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Project}" />
     <!-- P5: leave deck focus. No-op when nothing is focused, so Escape stays free elsewhere. -->
     <KeyBinding Gesture="Escape" Command="{Binding ExitPlayerFocusCommand}" />
@@ -83,11 +85,13 @@
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Players}" />
         <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Cues}}" InputGesture="Ctrl+2"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Cues}" />
-        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Control}}" InputGesture="Ctrl+3"
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Soundboard}}" InputGesture="Ctrl+3"
+                  Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Soundboard}" />
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Control}}" InputGesture="Ctrl+4"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Control}" />
-        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Io}}" InputGesture="Ctrl+4"
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Io}}" InputGesture="Ctrl+5"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Io}" />
-        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Project}}" InputGesture="Ctrl+5"
+        <MenuItem Header="{Binding Label, Source={x:Static models:WorkspaceItem.Project}}" InputGesture="Ctrl+6"
                   Command="{Binding SelectWorkspaceCommand}" CommandParameter="{x:Static models:WorkspaceItem.Project}" />
         <Separator />
         <MenuItem Header="{x:Static res:Strings.MenuToggleSidebarHeader}" Command="{Binding ToggleSidebarCommand}" InputGesture="Ctrl+B" />
@@ -222,6 +226,21 @@
         </StackPanel>
         <ContentControl x:Name="CuesPopoutHost">
           <views:CuePlayerView DataContext="{Binding CuePlayer}" />
+        </ContentControl>
+      </DockPanel>
+
+      <!-- Soundboard workspace: touch-friendly sound clip grids in tabs. Pops out like the cue
+           player (PopoutRegion moves the single view instance into a floating window). -->
+      <DockPanel Margin="8"
+                 IsVisible="{Binding $parent[Grid].((vm:MainViewModel)DataContext).IsSoundboardWorkspaceSelected}">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" HorizontalAlignment="Right"
+                    Spacing="6" Margin="0,0,0,6">
+          <Button Content="{x:Static res:Strings.PopoutButtonLabel}"
+                  ToolTip.Tip="{x:Static res:Strings.PopoutButtonTooltip}"
+                  Click="OnPopOutSoundboardClick" />
+        </StackPanel>
+        <ContentControl x:Name="SoundboardPopoutHost">
+          <views:SoundboardView DataContext="{Binding Soundboard}" />
         </ContentControl>
       </DockPanel>
 

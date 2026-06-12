@@ -23,6 +23,7 @@ public static class ProjectSections
     public const string ActionTargets = "targets";
     public const string Players = "players";
     public const string CueLists = "cueLists";
+    public const string Soundboards = "soundboards";
     public const string Control = "control";
 
     // Sub-sections (finer I/O split — the "checkboxes instead of a menu per combination" ask).
@@ -40,6 +41,7 @@ public static class ProjectSections
         TargetsOsc,
         Players,
         CueLists,
+        Soundboards,
         Control,
     ];
 

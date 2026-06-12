@@ -2340,4 +2340,112 @@
   <data name="MappingNeedsCompositionToast" xml:space="preserve">
     <value>Pick a composition for this output first — the mapping cuts that composition's canvas into sections.</value>
   </data>
+  <data name="SoundboardBoardDefaultOutputLabel" xml:space="preserve">
+    <value>(Board default)</value>
+  </data>
+  <data name="SoundboardDefaultBoardNameFormat" xml:space="preserve">
+    <value>Board {0}</value>
+  </data>
+  <data name="SoundboardAddBoardButton" xml:space="preserve">
+    <value>+ Board</value>
+  </data>
+  <data name="SoundboardRemoveBoardButton" xml:space="preserve">
+    <value>Remove board</value>
+  </data>
+  <data name="SoundboardEditModeToggle" xml:space="preserve">
+    <value>Edit</value>
+  </data>
+  <data name="SoundboardEditModeTooltip" xml:space="preserve">
+    <value>Edit mode: tap a tile to configure it, drag sound files onto tiles, adjust the board grid and defaults</value>
+  </data>
+  <data name="SoundboardStopAllButton" xml:space="preserve">
+    <value>Stop all</value>
+  </data>
+  <data name="SoundboardTileSettingsHeader" xml:space="preserve">
+    <value>Tile</value>
+  </data>
+  <data name="SoundboardTileFileLabel" xml:space="preserve">
+    <value>File</value>
+  </data>
+  <data name="SoundboardTileNameLabel" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="SoundboardTileNameTooltip" xml:space="preserve">
+    <value>Optional alias shown on the tile — leave empty to show the filename</value>
+  </data>
+  <data name="SoundboardBrowseButton" xml:space="preserve">
+    <value>Browse…</value>
+  </data>
+  <data name="SoundboardTileOutputLabel" xml:space="preserve">
+    <value>Output</value>
+  </data>
+  <data name="SoundboardTileVolumeLabel" xml:space="preserve">
+    <value>Volume</value>
+  </data>
+  <data name="SoundboardTileFadeOutLabel" xml:space="preserve">
+    <value>Fade-out (ms)</value>
+  </data>
+  <data name="SoundboardTileLoopLabel" xml:space="preserve">
+    <value>Loop</value>
+  </data>
+  <data name="SoundboardClearTileButton" xml:space="preserve">
+    <value>Clear tile</value>
+  </data>
+  <data name="SoundboardBoardSettingsHeader" xml:space="preserve">
+    <value>Board</value>
+  </data>
+  <data name="SoundboardBoardNameLabel" xml:space="preserve">
+    <value>Name</value>
+  </data>
+  <data name="SoundboardRowsLabel" xml:space="preserve">
+    <value>Rows</value>
+  </data>
+  <data name="SoundboardColumnsLabel" xml:space="preserve">
+    <value>Columns</value>
+  </data>
+  <data name="SoundboardDefaultsHeader" xml:space="preserve">
+    <value>Defaults for new sounds</value>
+  </data>
+  <data name="SoundboardNoTileSelectedHint" xml:space="preserve">
+    <value>Tap a tile to edit it, or drop a sound file onto a tile to bind it.</value>
+  </data>
+  <data name="SoundboardPickFileDialogTitle" xml:space="preserve">
+    <value>Pick a sound file</value>
+  </data>
+  <data name="SectionSoundboardsLabel" xml:space="preserve">
+    <value>Soundboards</value>
+  </data>
+  <data name="SoundboardSaveBoardButton" xml:space="preserve">
+    <value>Save board…</value>
+  </data>
+  <data name="SoundboardSaveAllBoardsButton" xml:space="preserve">
+    <value>Save all…</value>
+  </data>
+  <data name="SoundboardImportBoardsButton" xml:space="preserve">
+    <value>Import…</value>
+  </data>
+  <data name="SoundboardSaveDialogTitle" xml:space="preserve">
+    <value>Save soundboards</value>
+  </data>
+  <data name="SoundboardImportDialogTitle" xml:space="preserve">
+    <value>Import soundboards</value>
+  </data>
+  <data name="HaPlaySoundboardsFileTypeLabel" xml:space="preserve">
+    <value>HaPlay soundboards</value>
+  </data>
+  <data name="SoundboardsCollectionFileNameFallback" xml:space="preserve">
+    <value>soundboards</value>
+  </data>
+  <data name="SoundboardSavedToastFormat" xml:space="preserve">
+    <value>Saved {0}</value>
+  </data>
+  <data name="SoundboardSaveFailedToastFormat" xml:space="preserve">
+    <value>Soundboard save failed: {0}</value>
+  </data>
+  <data name="SoundboardImportedToastFormat" xml:space="preserve">
+    <value>Imported {0} board(s) from {1}</value>
+  </data>
+  <data name="SoundboardImportFailedToastFormat" xml:space="preserve">
+    <value>Soundboard import failed: {0}</value>
+  </data>
 </root>

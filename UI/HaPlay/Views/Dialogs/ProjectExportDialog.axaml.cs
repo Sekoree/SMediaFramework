@@ -34,6 +34,7 @@ public partial class ProjectExportDialog : Window
             new SectionChoice(ProjectSections.TargetsOsc, Strings.SectionOscTargetsLabel, false),
             new SectionChoice(ProjectSections.Players, Strings.SectionPlayersLabel, false),
             new SectionChoice(ProjectSections.CueLists, Strings.SectionCueListsLabel, false),
+            new SectionChoice(ProjectSections.Soundboards, Strings.SectionSoundboardsLabel, false),
             new SectionChoice(ProjectSections.Control, Strings.SectionControlLabel, false),
         ];
         DataContext = this;

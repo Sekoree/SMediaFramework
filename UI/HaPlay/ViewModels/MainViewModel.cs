@@ -27,6 +27,7 @@ public partial class MainViewModel : ViewModelBase
     private int _nextPlayerNumber = 1;
     private readonly object _midiInitSync = new();
     private readonly Playback.CuePlaybackEngine _cuePlaybackEngine;
+    private readonly Playback.SoundboardEngine _soundboardEngine;
     private bool _midiInitialized;
     private CancellationTokenSource? _endpointHealthCts;
     private DispatcherTimer? _endpointHealthTimer;
@@ -87,6 +88,17 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.StopPreviewCallback = _cuePlaybackEngine.StopPreviewAsync;
         CuePlayer.SeekCueCallback = _cuePlaybackEngine.SeekCueAsync;
         CuePlayer.SeekCuesCallback = _cuePlaybackEngine.SeekCuesAsync;
+        Soundboard = new SoundboardWorkspaceViewModel(OutputManagement);
+        _soundboardEngine = new Playback.SoundboardEngine(_cuePlaybackEngine);
+        Soundboard.PlaySoundCallback = _soundboardEngine.PlayAsync;
+        Soundboard.FadeOutSoundCallback = _soundboardEngine.FadeOutAsync;
+        Soundboard.StopSoundCallback = _soundboardEngine.StopAsync;
+        Soundboard.StopAllSoundsCallback = _soundboardEngine.StopAllAsync;
+        Soundboard.SetSoundVolumeCallback = _soundboardEngine.SetVolume;
+        Soundboard.ProbeDurationCallback = CueMediaProbe.TryProbeDurationMsAsync;
+        _soundboardEngine.SoundStarted += (_, id) => Soundboard.OnSoundStarted(id);
+        _soundboardEngine.SoundProgress += (_, p) => Soundboard.OnSoundProgress(p);
+        _soundboardEngine.SoundEnded += (_, id) => Soundboard.OnSoundEnded(id);
         CuePlayer.UpdateActiveCueVideoPlacementCallback = _cuePlaybackEngine.UpdateActiveCueVideoPlacementAsync;
         CuePlayer.UpdateActiveCueAudioRoutesCallback = _cuePlaybackEngine.UpdateActiveCueAudioRoutesAsync;
         CuePlayer.UpdateOutputMappingCallback = _cuePlaybackEngine.UpdateCompositionOutputMapping;
@@ -196,6 +208,7 @@ public partial class MainViewModel : ViewModelBase
     [
         WorkspaceItem.Players,
         WorkspaceItem.Cues,
+        WorkspaceItem.Soundboard,
         WorkspaceItem.Control,
         WorkspaceItem.Io,
         WorkspaceItem.Project,
@@ -212,6 +225,7 @@ public partial class MainViewModel : ViewModelBase
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPlayersWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsCuesWorkspaceSelected))]
+    [NotifyPropertyChangedFor(nameof(IsSoundboardWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsIoWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsControlWorkspaceSelected))]
     [NotifyPropertyChangedFor(nameof(IsProjectWorkspaceSelected))]
@@ -219,6 +233,7 @@ public partial class MainViewModel : ViewModelBase
 
     public bool IsPlayersWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Players;
     public bool IsCuesWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Cues;
+    public bool IsSoundboardWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Soundboard;
     public bool IsIoWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Io;
     public bool IsControlWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Control;
     public bool IsProjectWorkspaceSelected => SelectedWorkspace == WorkspaceItem.Project;
@@ -290,6 +305,7 @@ public partial class MainViewModel : ViewModelBase
 
     public OutputManagementViewModel OutputManagement { get; }
     public CuePlayerViewModel CuePlayer { get; }
+    public SoundboardWorkspaceViewModel Soundboard { get; }
     public ControlWorkspaceViewModel Control { get; }
     public ObservableCollection<MediaPlayerViewModel> Players { get; }
     public ObservableCollection<ActionEndpoint> ActionEndpoints { get; } = new();
@@ -1406,6 +1422,7 @@ public partial class MainViewModel : ViewModelBase
                 .Where(e => e is MidiActionEndpoint ? Has(ProjectSections.TargetsMidi) : Has(ProjectSections.TargetsOsc))
                 .ToList(),
             CueLists = Has(ProjectSections.CueLists) ? CuePlayer.BuildCueListsSnapshot() : [],
+            Soundboards = Has(ProjectSections.Soundboards) ? Soundboard.BuildSnapshot() : [],
             ControlSystem = Has(ProjectSections.Control) ? Control.BuildSnapshot() : new ControlSystemConfig(),
         };
     }
@@ -1466,6 +1483,11 @@ public partial class MainViewModel : ViewModelBase
 
         if (Has(ProjectSections.CueLists))
             CuePlayer.ApplyCueLists(project.CueLists);
+        if (Has(ProjectSections.Soundboards))
+        {
+            _ = _soundboardEngine.StopAllAsync();
+            Soundboard.ApplySnapshot(project.Soundboards);
+        }
         if (Has(ProjectSections.Control))
             Control.LoadConfig(project.ControlSystem);
         RebuildProjectMidiDeviceRows();

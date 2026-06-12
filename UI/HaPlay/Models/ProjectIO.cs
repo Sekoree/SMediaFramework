@@ -211,6 +211,57 @@ public static class CueListsIO
             cancellationToken);
 }
 
+public static class SoundboardsIO
+{
+    public const string FileExtension = "haplayboards";
+
+    public static async Task<SoundboardsCollectionDocument> LoadDocumentAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        await using var stream = File.OpenRead(path);
+        var document = await JsonSerializer
+            .DeserializeAsync(stream, HaPlayProjectJsonContext.Default.SoundboardsCollectionDocument, cancellationToken)
+            .ConfigureAwait(false);
+        if (document is null)
+            throw new InvalidDataException($"Soundboards file '{path}' contains no JSON object.");
+        if (document.SchemaVersion is < 1 or > SoundboardsCollectionDocument.CurrentSchemaVersion)
+            throw new UnsupportedSoundboardsSchemaVersionException(
+                document.SchemaVersion,
+                SoundboardsCollectionDocument.CurrentSchemaVersion);
+        return document;
+    }
+
+    public static async Task<IReadOnlyList<SoundboardConfig>> LoadAsync(
+        string path,
+        CancellationToken cancellationToken = default) =>
+        (await LoadDocumentAsync(path, cancellationToken).ConfigureAwait(false)).Soundboards;
+
+    public static Task SaveAsync(
+        IReadOnlyList<SoundboardConfig> soundboards,
+        string path,
+        string? generator = null,
+        CancellationToken cancellationToken = default) =>
+        AtomicJsonFile.SaveAsync(
+            new SoundboardsCollectionDocument { Generator = generator, Soundboards = soundboards.ToList() },
+            path,
+            HaPlayProjectJsonContext.Default.SoundboardsCollectionDocument,
+            cancellationToken);
+}
+
+public sealed class UnsupportedSoundboardsSchemaVersionException : Exception
+{
+    public UnsupportedSoundboardsSchemaVersionException(int fileVersion, int supportedVersion)
+        : base($"Soundboards schema version {fileVersion} is not supported by this build (max supported: {supportedVersion}).")
+    {
+        FileVersion = fileVersion;
+        SupportedVersion = supportedVersion;
+    }
+
+    public int FileVersion { get; }
+    public int SupportedVersion { get; }
+}
+
 public sealed class UnsupportedCueListsSchemaVersionException : Exception
 {
     public UnsupportedCueListsSchemaVersionException(int fileVersion, int supportedVersion)

@@ -44,6 +44,9 @@ public sealed record HaPlayProject
 
     public List<CueList> CueLists { get; init; } = new();
 
+    /// <summary>Soundboard tabs (touch-friendly sound clip grids).</summary>
+    public List<SoundboardConfig> Soundboards { get; init; } = new();
+
     public List<ControlGraphConfig> ControlGraphs { get; init; } = new();
 
     public ControlSystemConfig ControlSystem { get; init; } = new();
@@ -70,6 +73,9 @@ public sealed record HaPlayProject
 [JsonSerializable(typeof(OscActionEndpoint))]
 [JsonSerializable(typeof(MidiActionEndpoint))]
 [JsonSerializable(typeof(SharedHeadphonesBus))]
+[JsonSerializable(typeof(SoundboardConfig))]
+[JsonSerializable(typeof(SoundboardTileConfig))]
+[JsonSerializable(typeof(SoundboardsCollectionDocument))]
 [JsonSerializable(typeof(CueList))]
 [JsonSerializable(typeof(CueNode))]
 [JsonSerializable(typeof(CueGroupNode))]

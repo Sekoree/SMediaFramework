@@ -1,0 +1,264 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:res="using:HaPlay.Resources"
+             mc:Ignorable="d" d:DesignWidth="980" d:DesignHeight="700"
+             x:Class="HaPlay.Views.SoundboardView"
+             x:DataType="vm:SoundboardWorkspaceViewModel">
+
+  <UserControl.Styles>
+    <!-- Tile chrome by state. An unbound tile outside edit mode stays fully blank but KEEPS its
+         grid cell (UniformGrid arranges by child order), so bound tiles never shift under a
+         touch operator's fingers. -->
+    <Style Selector="Border.tile">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+    </Style>
+    <Style Selector="Border.tile.editing">
+      <Setter Property="Background" Value="#0D808080" />
+      <Setter Property="BorderBrush" Value="#33808080" />
+    </Style>
+    <Style Selector="Border.tile.bound">
+      <Setter Property="Background" Value="#1E808080" />
+      <Setter Property="BorderBrush" Value="#55808080" />
+    </Style>
+    <Style Selector="Border.tile.playing">
+      <Setter Property="Background" Value="#2A4A9A4A" />
+      <Setter Property="BorderBrush" Value="#7F4ACA4A" />
+    </Style>
+    <Style Selector="Border.tile.fading">
+      <Setter Property="Background" Value="#2ABA8A2A" />
+      <Setter Property="BorderBrush" Value="#7FDAAA3A" />
+    </Style>
+    <Style Selector="Border.tile.selected">
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemAccentColor}" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel Margin="8" LastChildFill="True">
+
+    <!-- Top bar: board tabs, add board (edit), stop all, edit toggle. -->
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
+      <ScrollViewer Grid.Column="0" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+        <StackPanel Orientation="Horizontal" Spacing="4">
+          <ListBox ItemsSource="{Binding Boards}"
+                   SelectedItem="{Binding SelectedBoard, Mode=TwoWay}">
+            <ListBox.ItemsPanel>
+              <ItemsPanelTemplate>
+                <StackPanel Orientation="Horizontal" Spacing="4" />
+              </ItemsPanelTemplate>
+            </ListBox.ItemsPanel>
+            <ListBox.ItemTemplate>
+              <DataTemplate DataType="vm:SoundboardViewModel">
+                <TextBlock Text="{Binding Name}" Padding="10,6" MinWidth="48" TextAlignment="Center" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+          <Button Content="{x:Static res:Strings.SoundboardAddBoardButton}"
+                  Command="{Binding AddBoardCommand}"
+                  VerticalAlignment="Center"
+                  IsVisible="{Binding IsEditMode}" />
+        </StackPanel>
+      </ScrollViewer>
+      <Button Grid.Column="2"
+              Content="{x:Static res:Strings.SoundboardStopAllButton}"
+              Command="{Binding StopAllCommand}"
+              MinHeight="36" VerticalAlignment="Center" />
+      <ToggleButton Grid.Column="3"
+                    Content="{x:Static res:Strings.SoundboardEditModeToggle}"
+                    ToolTip.Tip="{x:Static res:Strings.SoundboardEditModeTooltip}"
+                    IsChecked="{Binding IsEditMode, Mode=TwoWay}"
+                    MinHeight="36" VerticalAlignment="Center" />
+    </Grid>
+
+    <!-- Edit panel (right). -->
+    <Border DockPanel.Dock="Right" Width="280" Margin="8,0,0,0"
+            BorderBrush="#33808080" BorderThickness="1" CornerRadius="6" Padding="10"
+            IsVisible="{Binding IsEditMode}">
+      <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="8">
+
+          <!-- Selected tile -->
+          <TextBlock Text="{x:Static res:Strings.SoundboardTileSettingsHeader}"
+                     FontWeight="SemiBold" FontSize="14" />
+          <TextBlock Text="{x:Static res:Strings.SoundboardNoTileSelectedHint}"
+                     TextWrapping="Wrap" Opacity="0.6"
+                     IsVisible="{Binding SelectedTile, Converter={x:Static ObjectConverters.IsNull}}" />
+          <StackPanel Spacing="6"
+                      IsVisible="{Binding SelectedTile, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileFileLabel}" Opacity="0.7" FontSize="11" />
+            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+              <TextBlock Grid.Column="0"
+                         Text="{Binding SelectedTile.FileNameDisplay}"
+                         VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                         ToolTip.Tip="{Binding SelectedTile.FilePath}" />
+              <Button Grid.Column="1" Content="{x:Static res:Strings.SoundboardBrowseButton}"
+                      Click="OnBrowseTileFileClick" />
+            </Grid>
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileNameLabel}" Opacity="0.7" FontSize="11" />
+            <TextBox Text="{Binding SelectedTile.Label, Mode=TwoWay}"
+                     PlaceholderText="{Binding SelectedTile.FileNameDisplay}"
+                     ToolTip.Tip="{x:Static res:Strings.SoundboardTileNameTooltip}" />
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileOutputLabel}" Opacity="0.7" FontSize="11" />
+            <ComboBox ItemsSource="{Binding TileOutputOptions}"
+                      SelectedValue="{Binding SelectedTile.OutputLineId, Mode=TwoWay}"
+                      SelectedValueBinding="{Binding Id, DataType=vm:SoundboardOutputOption}"
+                      HorizontalAlignment="Stretch">
+              <ComboBox.ItemTemplate>
+                <DataTemplate DataType="vm:SoundboardOutputOption">
+                  <TextBlock Text="{Binding Name}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileVolumeLabel}" Opacity="0.7" FontSize="11" />
+            <Grid ColumnDefinitions="*,44" ColumnSpacing="6">
+              <Slider Grid.Column="0" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                      Value="{Binding SelectedTile.VolumePercent, Mode=TwoWay}" />
+              <TextBlock Grid.Column="1" VerticalAlignment="Center"
+                         Text="{Binding SelectedTile.VolumePercent, StringFormat='{}{0:0}%'}" />
+            </Grid>
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileFadeOutLabel}" Opacity="0.7" FontSize="11" />
+            <NumericUpDown Minimum="0" Maximum="60000" Increment="250"
+                           Value="{Binding SelectedTile.FadeOutMs, Mode=TwoWay}" />
+
+            <CheckBox Content="{x:Static res:Strings.SoundboardTileLoopLabel}"
+                      IsChecked="{Binding SelectedTile.Loop, Mode=TwoWay}" />
+
+            <Button Content="{x:Static res:Strings.SoundboardClearTileButton}"
+                    Command="{Binding ClearSelectedTileCommand}" />
+          </StackPanel>
+
+          <Separator Margin="0,4" />
+
+          <!-- Board settings + defaults -->
+          <TextBlock Text="{x:Static res:Strings.SoundboardBoardSettingsHeader}"
+                     FontWeight="SemiBold" FontSize="14" />
+          <StackPanel Spacing="6" IsVisible="{Binding SelectedBoard, Converter={x:Static ObjectConverters.IsNotNull}}">
+            <TextBlock Text="{x:Static res:Strings.SoundboardBoardNameLabel}" Opacity="0.7" FontSize="11" />
+            <TextBox Text="{Binding SelectedBoard.Name, Mode=TwoWay}" />
+
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+              <StackPanel Grid.Column="0" Spacing="4">
+                <TextBlock Text="{x:Static res:Strings.SoundboardRowsLabel}" Opacity="0.7" FontSize="11" />
+                <NumericUpDown Minimum="1" Maximum="12" Increment="1"
+                               Value="{Binding SelectedBoard.Rows, Mode=TwoWay}" />
+              </StackPanel>
+              <StackPanel Grid.Column="1" Spacing="4">
+                <TextBlock Text="{x:Static res:Strings.SoundboardColumnsLabel}" Opacity="0.7" FontSize="11" />
+                <NumericUpDown Minimum="1" Maximum="12" Increment="1"
+                               Value="{Binding SelectedBoard.Columns, Mode=TwoWay}" />
+              </StackPanel>
+            </Grid>
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardDefaultsHeader}"
+                       FontWeight="SemiBold" Margin="0,6,0,0" />
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileOutputLabel}" Opacity="0.7" FontSize="11" />
+            <ComboBox ItemsSource="{Binding BoardOutputOptions}"
+                      SelectedValue="{Binding SelectedBoard.DefaultOutputLineId, Mode=TwoWay}"
+                      SelectedValueBinding="{Binding Id, DataType=vm:SoundboardOutputOption}"
+                      HorizontalAlignment="Stretch">
+              <ComboBox.ItemTemplate>
+                <DataTemplate DataType="vm:SoundboardOutputOption">
+                  <TextBlock Text="{Binding Name}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileVolumeLabel}" Opacity="0.7" FontSize="11" />
+            <Grid ColumnDefinitions="*,44" ColumnSpacing="6">
+              <Slider Grid.Column="0" Minimum="0" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+                      Value="{Binding SelectedBoard.DefaultVolumePercent, Mode=TwoWay}" />
+              <TextBlock Grid.Column="1" VerticalAlignment="Center"
+                         Text="{Binding SelectedBoard.DefaultVolumePercent, StringFormat='{}{0:0}%'}" />
+            </Grid>
+
+            <TextBlock Text="{x:Static res:Strings.SoundboardTileFadeOutLabel}" Opacity="0.7" FontSize="11" />
+            <NumericUpDown Minimum="0" Maximum="60000" Increment="250"
+                           Value="{Binding SelectedBoard.DefaultFadeOutMs, Mode=TwoWay}" />
+
+            <CheckBox Content="{x:Static res:Strings.SoundboardTileLoopLabel}"
+                      IsChecked="{Binding SelectedBoard.DefaultLoop, Mode=TwoWay}" />
+
+            <Button Content="{x:Static res:Strings.SoundboardRemoveBoardButton}"
+                    Command="{Binding RemoveSelectedBoardCommand}"
+                    Margin="0,6,0,0" />
+
+            <Separator Margin="0,4" />
+
+            <!-- Standalone .haplayboards files: one board, the whole collection, or import. -->
+            <WrapPanel ItemSpacing="6" LineSpacing="6">
+              <Button Content="{x:Static res:Strings.SoundboardSaveBoardButton}"
+                      Command="{Binding SaveSelectedBoardAsCommand}" />
+              <Button Content="{x:Static res:Strings.SoundboardSaveAllBoardsButton}"
+                      Command="{Binding SaveAllBoardsAsCommand}" />
+              <Button Content="{x:Static res:Strings.SoundboardImportBoardsButton}"
+                      Command="{Binding ImportBoardsCommand}" />
+            </WrapPanel>
+          </StackPanel>
+        </StackPanel>
+      </ScrollViewer>
+    </Border>
+
+    <!-- Tile grid. -->
+    <ItemsControl x:Name="TileGrid" ItemsSource="{Binding SelectedBoard.Tiles}">
+      <ItemsControl.ItemsPanel>
+        <ItemsPanelTemplate>
+          <UniformGrid Rows="{Binding SelectedBoard.Rows}" Columns="{Binding SelectedBoard.Columns}" />
+        </ItemsPanelTemplate>
+      </ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate DataType="vm:SoundboardTileViewModel">
+          <Border Classes="tile"
+                  Classes.bound="{Binding IsBound}"
+                  Classes.playing="{Binding IsPlaying}"
+                  Classes.fading="{Binding IsFading}"
+                  Classes.editing="{Binding IsEditing}"
+                  Classes.selected="{Binding $parent[ItemsControl].((vm:SoundboardWorkspaceViewModel)DataContext).SelectedTile,
+                                     Converter={x:Static ObjectConverters.Equal}, ConverterParameter={Binding}}"
+                  Margin="3" CornerRadius="6" BorderThickness="1.5" MinHeight="84"
+                  Tapped="OnTileTapped">
+            <Panel Margin="8,6">
+              <!-- Unbound + edit mode: drop-target hint. -->
+              <TextBlock Text="+" FontSize="26" Opacity="0.3"
+                         HorizontalAlignment="Center" VerticalAlignment="Center"
+                         IsVisible="{Binding ShowsDropHint}" />
+
+              <!-- Bound tile face. -->
+              <Grid RowDefinitions="*,Auto,Auto,Auto" IsVisible="{Binding IsBound}">
+                <Grid Grid.Row="0">
+                  <TextBlock Text="{Binding DisplayName}"
+                             FontWeight="SemiBold" TextWrapping="Wrap"
+                             TextTrimming="CharacterEllipsis" MaxLines="3"
+                             TextAlignment="Center"
+                             HorizontalAlignment="Center" VerticalAlignment="Center" />
+                  <TextBlock Text="⟳" FontSize="12" Opacity="0.6"
+                             HorizontalAlignment="Right" VerticalAlignment="Top"
+                             IsVisible="{Binding Loop}" />
+                </Grid>
+                <ProgressBar Grid.Row="1" Height="8" MinWidth="0" Margin="0,4,0,2"
+                             Minimum="0" Maximum="100"
+                             Value="{Binding ProgressPercent}"
+                             Background="#28808080" />
+                <TextBlock Grid.Row="2" Text="{Binding TimeLabel}"
+                           FontSize="11" Opacity="0.75" HorizontalAlignment="Center" />
+                <!-- Fade countdown: only while a tap-to-fade is running. -->
+                <ProgressBar Grid.Row="3" Height="5" MinWidth="0" Margin="0,3,0,0"
+                             Minimum="0" Maximum="100"
+                             Value="{Binding FadeProgressPercent}"
+                             Foreground="#DAAA3A" Background="#28808080"
+                             IsVisible="{Binding IsFading}" />
+              </Grid>
+            </Panel>
+          </Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </DockPanel>
+</UserControl>

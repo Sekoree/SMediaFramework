@@ -12,6 +12,7 @@ public partial class MainView : UserControl
 {
     private readonly PopoutRegion _playersPopout = new();
     private readonly PopoutRegion _cuesPopout = new();
+    private readonly PopoutRegion _soundboardPopout = new();
 
     public MainView()
     {
@@ -26,6 +27,9 @@ public partial class MainView : UserControl
 
     private void OnPopOutCuesClick(object? sender, RoutedEventArgs e) =>
         _cuesPopout.OpenOrActivate(CuesPopoutHost, WorkspaceItem.Cues.Label, TopLevel.GetTopLevel(this) as Window);
+
+    private void OnPopOutSoundboardClick(object? sender, RoutedEventArgs e) =>
+        _soundboardPopout.OpenOrActivate(SoundboardPopoutHost, WorkspaceItem.Soundboard.Label, TopLevel.GetTopLevel(this) as Window);
 
     /// <summary>Toast body click = pin/unpin (stops the auto-dismiss); the ✕ button closes.</summary>
     private void OnToastBodyPressed(object? sender, PointerPressedEventArgs e)

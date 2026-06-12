@@ -1674,9 +1674,19 @@ public sealed class CuePlaybackEngine : IDisposable
         }
     }
 
-    private static bool IsAudioCapableOutput(OutputDefinition definition) =>
+    internal static bool IsAudioCapableOutput(OutputDefinition definition) =>
         definition is PortAudioOutputDefinition
         || definition is NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly };
+
+    /// <summary>Shared-runtime access for the soundboard engine: soundboard audio mixes into the
+    /// same per-line runtime as cue audio (the underlying device lease is exclusive, so a second
+    /// engine acquiring the line directly would fail while a cue plays through it — and vice
+    /// versa). Pair with <see cref="ReleaseUnusedSharedAudioRuntimes"/> after removing sources.</summary>
+    internal ClipAudioOutputRuntime? AcquireSharedAudioRuntime(Guid outputLineId) =>
+        GetOrCreateAudioRuntime(outputLineId);
+
+    /// <summary>Disposes per-line audio runtimes that no longer carry any source (cue or soundboard).</summary>
+    internal void ReleaseUnusedSharedAudioRuntimes() => ReleaseEmptyRuntimes();
 
     private static bool SupportsCueEngineSource(PlaylistItem? source) =>
         source is FilePlaylistItem or ImagePlaylistItem or TextPlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
