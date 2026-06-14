@@ -120,6 +120,31 @@ public class AudioRouterControlTests
     }
 
     [Fact]
+    public void NaturalEof_DoesNotFlush_WhenFlushOutputsOnNaturalEofDisabled()
+    {
+        // Hosts that share a persistent output across routers (e.g. HaPlay reusing a PortAudio device for
+        // the next track) opt out so the autonomous natural-EOF flush can't abort the next router's live
+        // stream on that shared device.
+        using var r = new AudioRouter(SampleRate, chunkSamples: 64) { FlushOutputsOnNaturalEof = false };
+        var src = new FiniteTestSource(Stereo, samplesPerChannelTotal: 200);
+        var output = new FlushableOutput(Stereo);
+
+        r.AddSource(src, "src");
+        r.AddOutput(output, "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        var flushBefore = output.FlushCount;
+        r.Start();
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (r.IsRunning && DateTime.UtcNow < deadline)
+            Thread.Sleep(10);
+
+        Assert.False(r.IsRunning);
+        Assert.True(r.CompletedNaturally);
+        Assert.Equal(flushBefore, output.FlushCount);
+    }
+
+    [Fact]
     public void Pause_WhenNotRunning_IsNoOp()
     {
         using var r = new AudioRouter(SampleRate);

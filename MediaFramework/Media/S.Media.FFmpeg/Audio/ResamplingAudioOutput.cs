@@ -99,7 +99,11 @@ public class ResamplingAudioOutput : IAudioOutput, IAudioOutputChannelCapabiliti
             _swr = null;
         }
 
-        if (Inner is IFlushableOutput f)
+        // Never forward Flush to Inner after disposal: Inner may be a persistent device shared across
+        // playback sessions (e.g. HaPlay's per-line PortAudio runtime). A torn-down session's leftover
+        // Flush — including the audio router's natural-EOF teardown — would otherwise abort the next
+        // session's live stream. The owning session disposes this wrapper as part of its teardown.
+        if (!_disposed && Inner is IFlushableOutput f)
             f.Flush();
     }
 

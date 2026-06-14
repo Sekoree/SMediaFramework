@@ -137,6 +137,15 @@ public sealed partial class AudioRouter : IDisposable
     public bool CompletedNaturally { get; private set; }
     public long ChunksProduced => Volatile.Read(ref _chunksProduced);
 
+    /// <summary>
+    /// When <c>true</c> (default), reaching natural end-of-stream flushes every output so smoke tools
+    /// and one-shot hosts leave the device silent promptly. Hosts that share a <em>persistent</em>
+    /// output across routers (e.g. a device reused for the next track) must set this <c>false</c>: the
+    /// natural-EOF flush runs autonomously on the run-loop thread and would otherwise abort the next
+    /// router's live stream on that shared device. Such hosts already flush on (re)acquire.
+    /// </summary>
+    public bool FlushOutputsOnNaturalEof { get; set; } = true;
+
 
     /// <summary>Raised when a output throws from <see cref="IAudioOutput.Submit"/> (non-fatal; pump keeps running).</summary>
     public event EventHandler<AudioRouterOutputErrorEventArgs>? OutputErrored;
@@ -1464,7 +1473,7 @@ public sealed partial class AudioRouter : IDisposable
             _thread = null;
             _isRunning = false;
             pumps = CollectOutputPumps(_state.Outputs);
-            if (naturalEof)
+            if (naturalEof && FlushOutputsOnNaturalEof)
                 sinksForFlush = CollectOutputs(_state.Outputs);
         }
 

@@ -48,6 +48,15 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     private bool _isRunning;
     private bool _disposed;
 
+    /// <summary>
+    /// Serializes native stream-lifecycle transitions so two managed threads can never call
+    /// Pa_AbortStream / Pa_StopStream / Pa_StartStream on the same handle concurrently — which
+    /// wedges the PortAudio backend. <see cref="Submit"/> runs on the router's per-output drainer
+    /// thread while <see cref="WaitForCapacity"/> runs on the router's run-loop thread, and right
+    /// after a <see cref="Flush"/> both can reach <see cref="EnsureStreamRunningAfterFlush"/>.
+    /// </summary>
+    private readonly Lock _streamLifecycleGate = new();
+
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.PortAudio.PortAudioOutput");
     private long _waitForCapacityWarnTicks;
 
@@ -151,20 +160,26 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     public void Flush()
     {
         if (_disposed || !Volatile.Read(ref _isRunning) || _stream == nint.Zero) return;
-        Trace.LogDebug("Flush: aborting stream (queued={Queued}f target={Target}f played={Played}f epoch={Epoch}f elapsed={Elapsed} active={Active})",
-            QueuedSamples, TargetQueueSamples, Volatile.Read(ref _playedSamples), Volatile.Read(ref _playbackEpochSamples),
-            ElapsedSinceStart, StreamActive);
-        Native.Pa_AbortStream(_stream);
-        // Reset ring positions so the queue starts empty; _playedSamples is preserved
-        // (lifetime stat) but _playbackEpochSamples re-anchors IPlaybackClock to zero.
-        Volatile.Write(ref _writeIndex, 0);
-        Volatile.Write(ref _readIndex, 0);
-        Interlocked.Exchange(ref _underrunSamples, 0);
-        Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
-        Volatile.Write(ref _streamSmoothCalibrated, 0);
-        // Abort stops the stream; do not restart until the next producer call so
-        // underrun silence during pause cannot advance ElapsedSinceStart.
-        Volatile.Write(ref _streamStoppedAfterFlush, 1);
+        lock (_streamLifecycleGate)
+        {
+            // Re-check under the gate: a concurrent EnsureStreamRunningAfterFlush may be mid-restart,
+            // or Stop/Dispose may have closed the stream while we waited for the gate.
+            if (_disposed || !Volatile.Read(ref _isRunning) || _stream == nint.Zero) return;
+            Trace.LogDebug("Flush: aborting stream (queued={Queued}f target={Target}f played={Played}f epoch={Epoch}f elapsed={Elapsed} active={Active})",
+                QueuedSamples, TargetQueueSamples, Volatile.Read(ref _playedSamples), Volatile.Read(ref _playbackEpochSamples),
+                ElapsedSinceStart, StreamActive);
+            Native.Pa_AbortStream(_stream);
+            // Reset ring positions so the queue starts empty; _playedSamples is preserved
+            // (lifetime stat) but _playbackEpochSamples re-anchors IPlaybackClock to zero.
+            Volatile.Write(ref _writeIndex, 0);
+            Volatile.Write(ref _readIndex, 0);
+            Interlocked.Exchange(ref _underrunSamples, 0);
+            Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
+            Volatile.Write(ref _streamSmoothCalibrated, 0);
+            // Abort stops the stream; do not restart until the next producer call so
+            // underrun silence during pause cannot advance ElapsedSinceStart.
+            Volatile.Write(ref _streamStoppedAfterFlush, 1);
+        }
     }
 
     /// <summary>
@@ -488,18 +503,29 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         if (Volatile.Read(ref _streamStoppedAfterFlush) == 0 || _stream == nint.Zero)
             return;
 
-        Trace.LogDebug("EnsureStreamRunningAfterFlush: restarting PA stream (played={Played}f epoch={Epoch}f)",
-            Volatile.Read(ref _playedSamples), Volatile.Read(ref _playbackEpochSamples));
-        Volatile.Write(ref _streamSmoothCalibrated, 0);
-        // Abort leaves the stream stopped; Stop+Start is more reliable than Start alone on some
-        // backends when rebinding stream time after a flush segment reset.
-        var err = Native.Pa_StopStream(_stream);
-        if (err != PaError.paNoError && err != PaError.paStreamIsStopped)
-            PortAudioException.ThrowIfError(err, nameof(Native.Pa_StopStream));
-        err = Native.Pa_StartStream(_stream);
-        if (err != PaError.paNoError)
-            PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
-        Volatile.Write(ref _streamStoppedAfterFlush, 0);
+        lock (_streamLifecycleGate)
+        {
+            // Re-check under the gate. Both the drainer (Submit) and run-loop (WaitForCapacity) threads
+            // observe _streamStoppedAfterFlush==1 after a Flush and would otherwise each issue their own
+            // Pa_StopStream + Pa_StartStream on the same handle; doing that concurrently wedges the native
+            // backend (the deadlock this gate prevents). Whichever thread wins clears the flag, so the
+            // other returns here without touching the stream.
+            if (Volatile.Read(ref _streamStoppedAfterFlush) == 0 || _stream == nint.Zero)
+                return;
+
+            Trace.LogDebug("EnsureStreamRunningAfterFlush: restarting PA stream (played={Played}f epoch={Epoch}f)",
+                Volatile.Read(ref _playedSamples), Volatile.Read(ref _playbackEpochSamples));
+            Volatile.Write(ref _streamSmoothCalibrated, 0);
+            // Abort leaves the stream stopped; Stop+Start is more reliable than Start alone on some
+            // backends when rebinding stream time after a flush segment reset.
+            var err = Native.Pa_StopStream(_stream);
+            if (err != PaError.paNoError && err != PaError.paStreamIsStopped)
+                PortAudioException.ThrowIfError(err, nameof(Native.Pa_StopStream));
+            err = Native.Pa_StartStream(_stream);
+            if (err != PaError.paNoError)
+                PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
+            Volatile.Write(ref _streamStoppedAfterFlush, 0);
+        }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]

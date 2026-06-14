@@ -50,6 +50,14 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         Player = player;
         Router = router;
         _outputs = outputs;
+
+        // Our audio outputs are persistent, shared PortAudio runtimes reused by the next track's session.
+        // The audio router's natural-EOF teardown runs autonomously on its run-loop thread ~when a track
+        // ends; letting it flush those shared devices would abort the next track's already-live stream
+        // (and, before the PortAudioOutput lifecycle gate, could wedge it). The next session flushes the
+        // device on (re)acquire, so the natural-EOF flush is both redundant and harmful here.
+        if (player.AudioRouter is { } audioRouter)
+            audioRouter.FlushOutputsOnNaturalEof = false;
     }
 
     public MediaPlayer Player { get; }
