@@ -106,7 +106,7 @@
             <TextBlock Text="{x:Static res:Strings.SoundboardTileOutputLabel}" Opacity="0.7" FontSize="11" />
             <ComboBox ItemsSource="{Binding TileOutputOptions}"
                       SelectedValue="{Binding SelectedTile.OutputLineId, Mode=TwoWay}"
-                      SelectedValueBinding="{Binding Id, DataType=vm:SoundboardOutputOption}"
+                      SelectedValueBinding="{Binding Id}"
                       HorizontalAlignment="Stretch">
               <ComboBox.ItemTemplate>
                 <DataTemplate DataType="vm:SoundboardOutputOption">
@@ -162,7 +162,7 @@
             <TextBlock Text="{x:Static res:Strings.SoundboardTileOutputLabel}" Opacity="0.7" FontSize="11" />
             <ComboBox ItemsSource="{Binding BoardOutputOptions}"
                       SelectedValue="{Binding SelectedBoard.DefaultOutputLineId, Mode=TwoWay}"
-                      SelectedValueBinding="{Binding Id, DataType=vm:SoundboardOutputOption}"
+                      SelectedValueBinding="{Binding Id}"
                       HorizontalAlignment="Stretch">
               <ComboBox.ItemTemplate>
                 <DataTemplate DataType="vm:SoundboardOutputOption">
