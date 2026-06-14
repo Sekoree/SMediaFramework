@@ -1284,7 +1284,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             devices.Add(new ControlDeviceInstanceConfig
             {
                 Name = values.Name,
-                ProfileId = values.ProfileId,
+                ProfileId = values.ProfileId!,
                 Protocol = ControlDeviceProtocol.Osc,
                 IsEnabled = values.IsEnabled,
                 Binding = new ControlDeviceBindingConfig
@@ -1307,7 +1307,7 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
             devices[index] = existing with
             {
                 Name = values.Name,
-                ProfileId = values.ProfileId,
+                ProfileId = values.ProfileId!,
                 IsEnabled = values.IsEnabled,
                 Binding = existing.Binding with
                 {

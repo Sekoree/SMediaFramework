@@ -84,7 +84,7 @@ internal static class BuiltInProfileLoader
         if (Directory.Exists(candidate))
             return candidate;
 
-        var assemblyDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        var assemblyDirectory = Path.GetDirectoryName(Directory.GetCurrentDirectory());
         if (string.IsNullOrWhiteSpace(assemblyDirectory))
             return null;
 

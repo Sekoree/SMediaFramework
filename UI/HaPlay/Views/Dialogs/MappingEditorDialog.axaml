@@ -15,9 +15,9 @@
       <CheckBox Content="Enable mapping" IsChecked="{Binding MappingEnabled, Mode=TwoWay}" />
       <StackPanel Orientation="Horizontal" Spacing="4">
         <TextBlock Text="Output size" VerticalAlignment="Center" />
-        <NumericUpDown Value="{Binding OutputWidth, Mode=TwoWay}" Watermark="canvas" Minimum="16" Maximum="16384" Width="120" />
+        <NumericUpDown Value="{Binding OutputWidth, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
         <TextBlock Text="×" VerticalAlignment="Center" />
-        <NumericUpDown Value="{Binding OutputHeight, Mode=TwoWay}" Watermark="canvas" Minimum="16" Maximum="16384" Width="120" />
+        <NumericUpDown Value="{Binding OutputHeight, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
       </StackPanel>
       <StackPanel Orientation="Horizontal" Spacing="4">
         <TextBlock Text="Split into" VerticalAlignment="Center" />
