@@ -1,9 +1,10 @@
 using HaPlay.Models;
-using HaPlay.ViewModels;
+using HaPlay.Playback;
 using Xunit;
 
 namespace HaPlay.Tests;
 
+// Resolution lookup behind the media player's auto-size-to-output composition canvas.
 public sealed class CompositionSizingTests
 {
     [Fact]
@@ -13,7 +14,7 @@ public sealed class CompositionSizingTests
             Guid.NewGuid(), "Projector", default, default, ScreenIndex: 0,
             WindowWidth: 1280, WindowHeight: 720);
 
-        Assert.True(CuePlayerViewModel.TryGetOutputResolution(def, out var w, out var h));
+        Assert.True(HaPlayPlaybackSession.TryGetOutputResolution(def, out var w, out var h));
         Assert.Equal((1280, 720), (w, h));
     }
 
@@ -24,7 +25,7 @@ public sealed class CompositionSizingTests
             Guid.NewGuid(), "Projector", default, default, ScreenIndex: 0,
             WindowWidth: null, WindowHeight: null);
 
-        Assert.False(CuePlayerViewModel.TryGetOutputResolution(def, out _, out _));
+        Assert.False(HaPlayPlaybackSession.TryGetOutputResolution(def, out _, out _));
     }
 
     [Fact]
@@ -34,7 +35,7 @@ public sealed class CompositionSizingTests
             Guid.NewGuid(), "Wall", "wall", null, default, AudioChannelCount: 2, AudioSampleRate: 48_000,
             ResolutionLockWidth: 3840, ResolutionLockHeight: 2160);
 
-        Assert.True(CuePlayerViewModel.TryGetOutputResolution(def, out var w, out var h));
+        Assert.True(HaPlayPlaybackSession.TryGetOutputResolution(def, out var w, out var h));
         Assert.Equal((3840, 2160), (w, h));
     }
 
@@ -44,6 +45,6 @@ public sealed class CompositionSizingTests
         var def = new NDIOutputDefinition(
             Guid.NewGuid(), "Wall", "wall", null, default, AudioChannelCount: 2, AudioSampleRate: 48_000);
 
-        Assert.False(CuePlayerViewModel.TryGetOutputResolution(def, out _, out _));
+        Assert.False(HaPlayPlaybackSession.TryGetOutputResolution(def, out _, out _));
     }
 }

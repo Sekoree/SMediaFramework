@@ -12,7 +12,7 @@
   <DockPanel Margin="12">
 
     <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap" Opacity="0.85"
-               Text="Drag each output to the part of the composition canvas it shows; resize with the bottom-right handle. Where outputs overlap is a blend zone; canvas not covered by any output stays black (a gap)." />
+               Text="Drag each output to the part of the composition canvas it shows; the bottom-right handle resizes it (aspect-locked — hold Shift to resize freely). Select an output and use the arrow keys to nudge one pixel (Shift = 10). Where outputs overlap is a blend zone; canvas not covered by any output stays black (a gap)." />
 
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
                 Spacing="8" Margin="0,8,0,0">
@@ -24,7 +24,9 @@
       <Border Grid.Column="0" BorderBrush="#33808080" BorderThickness="1" Background="#0A0A0A">
         <controls:OutputLayoutCanvas Items="{Binding Items}"
                                      SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
-                                     AspectRatio="{Binding AspectRatio}" />
+                                     AspectRatio="{Binding AspectRatio}"
+                                     CanvasWidth="{Binding CanvasWidth}"
+                                     CanvasHeight="{Binding CanvasHeight}" />
       </Border>
 
       <DockPanel Grid.Column="1" Width="240">

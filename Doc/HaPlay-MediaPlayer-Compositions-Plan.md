@@ -3,24 +3,24 @@
 Tracks three asks (2026-06-15). One shipped; two are substantial and staged with concrete designs
 so they can each get a focused, validated turn.
 
-## 1. Composition sizing / auto-fit — DONE (2026-06-15)
+## 1. Composition sizing — auto-size is a MEDIA-PLAYER feature (corrected 2026-06-15)
 
-The composition canvas can now be sized sensibly instead of always defaulting to a fixed value:
+The auto-size-to-output belongs to the **regular media player**, not the cue player (the cue player keeps
+explicit, operator-chosen composition sizes — an earlier "Fit to output" button + default-from-output on the
+cue composition editor was reverted).
 
-* **Default size for a new composition** = the first available video output line that declares a
-  resolution, else **1920×1080**. (`CuePlayerViewModel.AddComposition` → `DefaultCompositionSize`.)
-* **Manual override** — the Width/Height spinners in the cue Output-setup → Compositions list (already
-  existed; unchanged).
-* **Auto-fit button** — each composition row has a **Fit ▾** button that sets the canvas to a bound
-  output's resolution. One candidate → applies directly; several → a picker so the operator chooses the
-  specific output; none with a known resolution → an explanatory toast.
-* Resolution source: `LocalVideoOutputDefinition.WindowWidth/Height` and
-  `NDIOutputDefinition.ResolutionLockWidth/Height` via `CuePlayerViewModel.TryGetOutputResolution`
+* **Media player** (opt-in composition path, §2): the composition canvas auto-sizes to the **first video
+  output that declares a resolution, else 1080p** (`HaPlayPlaybackSession.FirstOutputResolutionOr1080`).
+  Resolution source: `LocalVideoOutputDefinition.WindowWidth/Height` and
+  `NDIOutputDefinition.ResolutionLockWidth/Height` via `HaPlayPlaybackSession.TryGetOutputResolution`
   (unit-tested in `CompositionSizingTests`).
+* **Cue player**: unchanged — composition Width/Height are set explicitly in the Output-setup → Compositions
+  list (default 1080p). No auto-fit button.
 
-> Limitation: a resolution is only known when the output declares one (window size / NDI lock). A
-> running SDL window's *live* size isn't read at edit time. Good enough for the common "configured rig"
-> case; a future enhancement could read the live output size when the line is running.
+> Limitation: a resolution is only known when the output declares one (window size / NDI lock). A running
+> SDL window's *live* size isn't read. Good enough for the common "configured rig" case; a future enhancement
+> could read the live output size, and surface a manual override / explicit auto-fit in a media-player
+> composition settings UI if wanted.
 
 ## 2. Media player uses compositions — OPT-IN MVP WIRED (2026-06-15); refinements next
 
@@ -121,3 +121,23 @@ agree on absolute time — the gap for wall sync.
 > Reminder from `Doc/HaPlay-MultiOutput-Sync.md`: wire-accurate sub-frame alignment across *separate*
 > displays/receivers ultimately needs hardware genlock (display genlock / NDI Discovery + receiver
 > timecode); the framework's job is to feed the right frame at the right time — which the absolute mode now does.
+
+## 4. Multi-output layout editor — corrections (2026-06-15)
+
+* **Moved to the composition list.** The **Layout…** button now lives on each composition row (Output-setup
+  → Compositions), not on the per-output binding rows — the layout is a property of the composition (all its
+  outputs together), so that's where it belongs.
+* **Aspect-locked resize.** Dragging the bottom-right handle in `OutputLayoutCanvas` now preserves the box's
+  aspect ratio by default (no distortion while fine-tuning); hold **Shift** to resize freely.
+* **Keyboard fine-positioning.** A selected output nudges with the **arrow keys** — one canvas pixel per
+  press (the dialog passes the canvas pixel size), **Shift = 10 px**.
+
+## 5. GL compositor crash — fixed (2026-06-15)
+
+Combining two outputs on one composition threw `composite_layer program missing required uniforms`
+(`GlVideoCompositor.BuildPipeline` via `SDL3GLVideoCompositor.TryProbe`). Root cause: `SharedGlProgramCache`
+keyed programs by shader-pair string only, so a program linked in one GL context was returned to a compositor
+in another context (a multi-output composition creates the canvas compositor plus the probe / per-output
+mapping-stage compositors, each with its own context) — every `glGetUniformLocation` then returned -1. Fixed
+by scoping the cache **per `GL` instance** (one `GL` per context here) via `ConditionalWeakTable`, preserving
+legitimate same-context program sharing. See `Doc/Explained/15-Issues-and-Improvements.md`.

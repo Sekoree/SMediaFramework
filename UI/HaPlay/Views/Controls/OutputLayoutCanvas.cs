@@ -46,14 +46,27 @@ public sealed class OutputLayoutCanvas : Control
     public static readonly StyledProperty<double> AspectRatioProperty =
         AvaloniaProperty.Register<OutputLayoutCanvas, double>(nameof(AspectRatio), 16.0 / 9.0);
 
+    /// <summary>Composition canvas pixel size — drives 1-pixel keyboard nudges. 0 = use a small relative step.</summary>
+    public static readonly StyledProperty<int> CanvasWidthProperty =
+        AvaloniaProperty.Register<OutputLayoutCanvas, int>(nameof(CanvasWidth));
+
+    public static readonly StyledProperty<int> CanvasHeightProperty =
+        AvaloniaProperty.Register<OutputLayoutCanvas, int>(nameof(CanvasHeight));
+
     private readonly List<OutputLayoutItemViewModel> _watched = new();
     private OutputLayoutItemViewModel? _drag;
     private bool _resizing;
     private Point _grabNorm; // pointer offset within the box, normalized, at drag start
+    private double _dragAspect = 1; // box aspect captured at resize start (for aspect-locked resize)
 
     static OutputLayoutCanvas()
     {
         AffectsRender<OutputLayoutCanvas>(SelectedItemProperty, AspectRatioProperty);
+    }
+
+    public OutputLayoutCanvas()
+    {
+        Focusable = true; // accept keyboard focus so arrow keys nudge the selected output
     }
 
     public IEnumerable? Items
@@ -72,6 +85,18 @@ public sealed class OutputLayoutCanvas : Control
     {
         get => GetValue(AspectRatioProperty);
         set => SetValue(AspectRatioProperty, value);
+    }
+
+    public int CanvasWidth
+    {
+        get => GetValue(CanvasWidthProperty);
+        set => SetValue(CanvasWidthProperty, value);
+    }
+
+    public int CanvasHeight
+    {
+        get => GetValue(CanvasHeightProperty);
+        set => SetValue(CanvasHeightProperty, value);
     }
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change)
@@ -184,8 +209,10 @@ public sealed class OutputLayoutCanvas : Control
                 SelectedItem = i;
                 _drag = i;
                 _resizing = onHandle;
+                _dragAspect = i.SrcHeight > 0 ? i.SrcWidth / i.SrcHeight : 1;
                 _grabNorm = new Point((pt.X - box.X) / canvas.Width, (pt.Y - box.Y) / canvas.Height);
                 e.Pointer.Capture(this);
+                Focus(); // take keyboard focus so arrow keys nudge this output
                 e.Handled = true;
                 InvalidateVisual();
                 return;
@@ -207,12 +234,49 @@ public sealed class OutputLayoutCanvas : Control
         {
             var w = Math.Clamp(nx - _drag.SrcX, MinNorm, 1.0 - _drag.SrcX);
             var h = Math.Clamp(ny - _drag.SrcY, MinNorm, 1.0 - _drag.SrcY);
+
+            // Aspect-locked by default — keep the slice's proportions so the output isn't distorted while
+            // fine-tuning. Hold Shift to resize width/height freely.
+            if (!e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _dragAspect > 0)
+            {
+                h = w / _dragAspect;
+                if (_drag.SrcY + h > 1.0) { h = 1.0 - _drag.SrcY; w = h * _dragAspect; }
+                if (w < MinNorm) { w = MinNorm; h = w / _dragAspect; }
+                if (h < MinNorm) { h = MinNorm; w = h * _dragAspect; }
+                w = Math.Min(w, 1.0 - _drag.SrcX);
+            }
             _drag.SetSrcRect(_drag.SrcX, _drag.SrcY, w, h);
         }
         else
         {
             _drag.SetSrcRect(nx - _grabNorm.X, ny - _grabNorm.Y, _drag.SrcWidth, _drag.SrcHeight);
         }
+        e.Handled = true;
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        base.OnKeyDown(e);
+        if (SelectedItem is not { } item)
+            return;
+
+        // Fine positioning: one canvas pixel per press (×10 with Shift for coarse). Falls back to a small
+        // relative step when the canvas pixel size isn't supplied.
+        var stepX = CanvasWidth > 0 ? 1.0 / CanvasWidth : 0.002;
+        var stepY = CanvasHeight > 0 ? 1.0 / CanvasHeight : 0.002;
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Shift)) { stepX *= 10; stepY *= 10; }
+
+        double dx = 0, dy = 0;
+        switch (e.Key)
+        {
+            case Key.Left: dx = -stepX; break;
+            case Key.Right: dx = stepX; break;
+            case Key.Up: dy = -stepY; break;
+            case Key.Down: dy = stepY; break;
+            default: return;
+        }
+
+        item.SetSrcRect(item.SrcX + dx, item.SrcY + dy, item.SrcWidth, item.SrcHeight);
         e.Handled = true;
     }
 

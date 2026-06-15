@@ -256,8 +256,13 @@ A `[Obsolete(..., error: true)]` pass next major, then deletion, keeps the surfa
   (which `PortAudioOutput` does).
 * **HW-frame PTS / seek desync** — fixed (`av_frame_copy_props` on hardware frames);
   guarded by `TransportSyncProbe --verify-content`.
-
----
+* **GL compositor "composite_layer program missing required uniforms" (2026-06-15)** —
+  `SharedGlProgramCache` was keyed by shader-pair string only, so a program linked in one
+  GL context was handed to a compositor in another (every `glGetUniformLocation` → -1,
+  crashing `GlVideoCompositor.BuildPipeline`). Surfaced when a multi-output composition
+  created a second compositor (probe / mapping stage) alongside the canvas compositor.
+  Fixed by scoping the cache **per `GL` instance** (`ConditionalWeakTable<GL, …>`), so
+  programs are only shared within one context (their own remark already required this).
 
 ## Optimization notes (mostly "leave it alone")
 

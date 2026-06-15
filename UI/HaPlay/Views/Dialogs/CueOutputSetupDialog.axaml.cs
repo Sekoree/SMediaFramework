@@ -48,61 +48,22 @@ public partial class CueOutputSetupDialog : Window
         dialog.Show(this);
     }
 
-    /// <summary>Fits the clicked composition's canvas to an output's resolution. With one candidate output it
-    /// applies directly; with several it offers a picker so the operator chooses the specific output.</summary>
-    private void FitCompositionClick(object? sender, RoutedEventArgs e)
-    {
-        if (sender is not Control { DataContext: CueCompositionViewModel composition } control
-            || DataContext is not CuePlayerViewModel cuePlayer)
-            return;
-
-        var candidates = cuePlayer.OutputsForFit(composition);
-        if (candidates.Count == 0)
-        {
-            ToastCenter.Info("No video output with a known resolution to fit to (set a window size or NDI resolution lock).");
-            return;
-        }
-
-        if (candidates.Count == 1)
-        {
-            cuePlayer.FitCompositionToOutput(composition, candidates[0]);
-            return;
-        }
-
-        var menu = new MenuFlyout();
-        foreach (var line in candidates)
-        {
-            var target = line;
-            var item = new MenuItem { Header = line.EffectiveName };
-            item.Click += (_, _) => cuePlayer.FitCompositionToOutput(composition, target);
-            menu.Items.Add(item);
-        }
-        menu.ShowAt(control);
-    }
-
-    /// <summary>Opens the multi-output layout editor for the clicked row's composition: every output bound to
-    /// that composition is arranged together over the canvas. On Save, each output's source slice is written
-    /// back to its binding mapping and live-applied to a running composition.</summary>
+    /// <summary>Opens the multi-output layout editor for the clicked composition: every output bound to it is
+    /// arranged together over the canvas. On Save, each output's source slice is written back to its binding
+    /// mapping and live-applied to a running composition.</summary>
     private async void LayoutClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is not Control { DataContext: CueVideoOutputBindingViewModel clicked }
+        if (sender is not Control { DataContext: CueCompositionViewModel composition }
             || DataContext is not CuePlayerViewModel cuePlayer)
             return;
 
-        var composition = cuePlayer.VisibleCompositions.FirstOrDefault(c => c.Id == clicked.CompositionId);
-        if (composition is null)
-        {
-            ToastCenter.Info(HaPlay.Resources.Strings.MappingNeedsCompositionToast);
-            return;
-        }
-
-        // All outputs bound to the same composition form one multi-output layout (video wall / stitched surface).
+        // All outputs bound to this composition form one multi-output layout (video wall / stitched surface).
         var siblings = cuePlayer.VisibleVideoOutputs
-            .Where(b => b.CompositionId == clicked.CompositionId && b.OutputLineId != System.Guid.Empty)
+            .Where(b => b.CompositionId == composition.Id && b.OutputLineId != System.Guid.Empty)
             .ToList();
         if (siblings.Count == 0)
         {
-            ToastCenter.Info(HaPlay.Resources.Strings.MappingNeedsCompositionToast);
+            ToastCenter.Info("Bind one or more outputs to this composition first, then arrange them here.");
             return;
         }
 

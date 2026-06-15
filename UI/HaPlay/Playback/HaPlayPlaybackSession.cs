@@ -705,20 +705,36 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         return composition;
     }
 
-    /// <summary>Default composition canvas size: the first video output line that declares a resolution, else 1080p.</summary>
+    /// <summary>Default media-player composition canvas size: the first video output line that declares a
+    /// resolution, else 1080p. (Auto-size-to-output is a media-player feature; the cue player keeps its
+    /// explicit composition sizes.)</summary>
     private static (int Width, int Height) FirstOutputResolutionOr1080(IReadOnlyList<OutputLineViewModel> lines)
     {
         foreach (var line in lines)
-        {
-            switch (line.Definition)
-            {
-                case LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv:
-                    return (lv.WindowWidth!.Value, lv.WindowHeight!.Value);
-                case NDIOutputDefinition { ResolutionLockWidth: > 0, ResolutionLockHeight: > 0 } nd:
-                    return (nd.ResolutionLockWidth!.Value, nd.ResolutionLockHeight!.Value);
-            }
-        }
+            if (TryGetOutputResolution(line.Definition, out var w, out var h))
+                return (w, h);
         return (1920, 1080);
+    }
+
+    /// <summary>Reads a video output line's declared pixel resolution (local window size, or NDI resolution
+    /// lock). Returns false when the output declares none.</summary>
+    internal static bool TryGetOutputResolution(OutputDefinition definition, out int width, out int height)
+    {
+        switch (definition)
+        {
+            case LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv:
+                width = lv.WindowWidth!.Value;
+                height = lv.WindowHeight!.Value;
+                return true;
+            case NDIOutputDefinition { ResolutionLockWidth: > 0, ResolutionLockHeight: > 0 } nd:
+                width = nd.ResolutionLockWidth!.Value;
+                height = nd.ResolutionLockHeight!.Value;
+                return true;
+            default:
+                width = 0;
+                height = 0;
+                return false;
+        }
     }
 
     private static void DisposePipelineOwned(List<IDisposable> owned)
