@@ -59,11 +59,13 @@ globally (HaPlay mixes both use cases — don't force lock-step on feeds that on
 * **Audio actuator = Option A.** The controller drives each member's `AdaptiveRateAudioOutput` toward
   the reference instead of each output independently reacting to its own drops. Option A's resampler
   is exactly the right knob; B just supplies a better setpoint.
-* **Video actuator = the missing piece.** Today each physical video output's `VideoOutputPump` runs
-  its own present cadence. For a group, all member video outputs must present the frame for the
-  reference timestamp on a **shared** tick, with **lock-step** repeat/drop. This is the
-  *"synchronized drop/repeat across outputs"* the architecture doc explicitly lists as **not
-  implemented** — and it is precisely what stitching needs.
+* **Video actuator = `VideoPresentSyncGroup` (built 2026-06-15).** Each physical video output's
+  `VideoOutputPump` runs its own present cadence; for a group, all member video outputs must instead
+  present the frame for the reference timestamp on a **shared** tick, with **lock-step** repeat/drop.
+  That scheduler now exists (`VideoPresentSyncGroup` + `SyncPresentVideoOutput`, `S.Media.Core.Video`) —
+  the *"synchronized drop/repeat across outputs"* the architecture doc lists as not-implemented, and
+  precisely what stitching needs. (Wrap each member device output in a `SyncPresentVideoOutput` instead of
+  a `VideoOutputPump` and add it to the group.)
 * **Per-group opt-in expresses intent.** A streaming feed + a confidence monitor showing the same
   program should *not* be force-locked (it would only add latency); a 2×2 projector wall *must* be.
   A group boundary is the natural place to declare which.
@@ -103,11 +105,27 @@ one composition drift today; put both devices in one sync group and the controll
   Resets the loop on pause/seek (discontinuity guard). Unit-tested: locks a +40 ppm member to sub-ms
   phase with a ~−40 ppm correction. Drive it from a host loop (`Tick(elapsed)`) or its internal timer
   (`Start(interval)`).
-* **Option B — Phase 2 (remaining).** Lock-step frame *present* for video-only outputs that have **no**
-  audio actuator (pure LED/projector walls): a shared present scheduler across the grouped video pumps
-  that selects the frame for the reference tick with coordinated repeat/drop. Plus host wiring in HaPlay
-  to declare sync groups and route each member's device through the controller. This builds directly on
-  the Phase-1 `OutputSyncGroup`.
+* **Option B — Phase 2b video present scheduler: done (framework, 2026-06-15).** The lock-step frame
+  *present* piece is now built in Core (`S.Media.Core.Video`): `VideoPresentSyncGroup` (the scheduler) +
+  `ISyncPresentableVideoOutput` (the member contract) + `SyncPresentVideoOutput` (a buffering output that
+  presents on the group's tick instead of its own cadence). Per tick the scheduler reads the reference
+  `IReadOnlyPlayhead`, and: presents all members in lock-step at the *oldest* of their newest-due PTS when
+  every member is advance-ready; **holds** (presents nothing new, bounded by `MaxStarveHoldTicks`) when some
+  members are ready but others have fallen behind, so the canvas never tears; then **degrades** to
+  presenting the ready members so a wedged output can't freeze the whole wall; and treats a tick where no
+  member is due as a normal between-frames hold. This is exactly the *"synchronized drop/repeat across
+  outputs"* the architecture doc lists as not-implemented. Unit-tested (12 cases) in
+  `S.Media.Core.Tests/Video/VideoPresentSyncGroupTests.cs`; full Clock+Video sweep green (305).
+  * It composes with Phase 1 through one master playhead: the same `MediaClock` whose `IPlaybackClock`
+    feeds the audio `OutputSyncGroup` is the present scheduler's `IReadOnlyPlayhead` reference. Audio side
+    rate-disciplines crystals; video side phase-aligns the present.
+* **Option B — Phase 2 (remaining = host wiring only).** What's left is **not** framework code: declare
+  sync groups in HaPlay and route each member through the controllers. The audio-actuated path
+  (`ClipAudioOutputRuntime.ratePpmProvider` + `OutputSyncGroup`) and the video path
+  (`SyncPresentVideoOutput` + `VideoPresentSyncGroup`) are both built and tested; wiring them into the live
+  cue engine is deliberately deferred until validated on **real multi-output hardware** (a wrong drift
+  *direction* or a present-phase regression won't surface in the unit suite) and until the genlock-*scope*
+  product decision below is made.
 
 ### Possible Option-A follow-up (small, needs author sign-off)
 

@@ -190,13 +190,24 @@ start/stop/seek must happen in the right order. Core provides:
 ## Drift between multiple outputs (the honest limitation)
 
 Only the *one* slaved output is the master. Every other output runs off its own
-crystal and drifts at ~±50 ppm. The framework intentionally provides **no** global
-coordinated-PPM policy and **no** lock-step drop/repeat across outputs — that's
-host-owned. Tools available: `AudioRouter.PumpPressure` events, FFmpeg's
-`AdaptiveRateAudioOutput` (a few-ppm per-output resample driven by
+crystal and drifts at ~±50 ppm. The baseline per-output tools: `AudioRouter.PumpPressure`
+events, FFmpeg's `AdaptiveRateAudioOutput` (a few-ppm per-output resample driven by
 `PumpPressurePlaybackHintMonitor`), and `GetAggregatePumpStats`. NDI provides
 `NDIFrameSync` for receive-side TBC. See [04](04-Core-Audio-Engine.md) and
 [09](09-Output-Backends.md).
+
+> **Update (2026-06-15) — genlock primitives now exist.** What the original text called
+> "not provided" is now built as opt-in Core primitives (the multi-output sync work in
+> `Doc/HaPlay-MultiOutput-Sync.md`): **`OutputSyncGroup`** (`S.Media.Core.Clock`) is the
+> coordinated master-PPM PI controller — it disciplines member clocks to one reference and
+> emits per-member ppm corrections that drive each member's `AdaptiveRateAudioOutput`
+> (audio rate). **`VideoPresentSyncGroup`** + `SyncPresentVideoOutput`
+> (`S.Media.Core.Video`, see [05](05-Core-Video-Pipeline.md)) add the lock-step
+> *present* across grouped video outputs (the synchronized drop/repeat). They compose
+> through one master playhead. HaPlay auto-enables the per-output adaptive resample
+> ("Option A") already; full *group* wiring (declaring a genlock domain across several
+> devices) is the remaining host step, deferred until validated on real multi-output
+> hardware.
 
 ### Cross-cue alignment caveat (compositions)
 

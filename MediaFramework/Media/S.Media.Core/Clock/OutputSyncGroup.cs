@@ -52,8 +52,9 @@ public readonly record struct OutputSyncMemberHandle(int Id);
 /// </code>
 /// </para>
 /// <para>
-/// Lock-step frame <em>present</em> for video-only outputs that have no audio actuator (pure LED/projector
-/// walls) is the Phase-2 follow-up that builds on this controller — see <c>Doc/HaPlay-MultiOutput-Sync.md</c>.
+/// The video counterpart — lock-step frame <em>present</em> across grouped outputs (for stitched walls, and
+/// for video-only outputs that have no audio actuator) — is <see cref="S.Media.Core.Video.VideoPresentSyncGroup"/>.
+/// They compose through one master playhead; see <c>Doc/HaPlay-MultiOutput-Sync.md</c>.
 /// </para>
 /// </remarks>
 public sealed class OutputSyncGroup : IDisposable

@@ -152,6 +152,40 @@ Notable mechanics (from the source):
   background thread exits on its own once the inner `Submit` returns. (A documented
   trade-off — see [15](15-Issues-and-Improvements.md).)
 
+## Multi-output present sync / genlock (`VideoPresentSyncGroup`)
+
+`VideoOutputPump` presents each output on *its own* cadence — perfect for independent
+feeds, wrong for a **stitched canvas** split across several physical outputs (an
+object crossing a panel seam would be one frame ahead on one side). The fix is to
+present the grouped outputs in **lock-step**. Three Core types (`S.Media.Core.Video`)
+do this — the video half of the multi-output sync work (audio half = `OutputSyncGroup`
++ `AdaptiveRateAudioOutput`, see [06](06-Clocks-and-AV-Sync.md) and
+`Doc/HaPlay-MultiOutput-Sync.md`):
+
+* **`ISyncPresentableVideoOutput`** — a video output that *buffers* frames and presents
+  them only when told to. `TryPeekReadyPts(target)` reports the newest *unpresented*
+  frame due at/before `target`; `PresentUpTo(target)` presents it and drops older ones.
+* **`SyncPresentVideoOutput`** — the concrete member: wrap a directly-presenting device
+  output in it, and it defers the present to the scheduler (the video analogue of
+  `AdaptiveRateAudioOutput`). Owns/drops buffered frames; guards against presenting
+  backwards.
+* **`VideoPresentSyncGroup`** — the scheduler. Referenced to an `IReadOnlyPlayhead`
+  (the show's present timeline — typically the same master `MediaClock` the audio sync
+  group uses). Each `Tick()`:
+  * **all members advance-ready →** present them at the *oldest* of their newest-due PTS
+    (no member gets ahead) — lock-step.
+  * **some ready, some behind →** *hold* (present nothing new) up to `MaxStarveHoldTicks`
+    so the ready members don't tear ahead of the laggard; then *degrade* to presenting
+    the ready ones so a wedged output can't freeze the wall. The laggard rejoins
+    automatically.
+  * **none due →** quiet between-frames hold.
+
+  This is the "synchronized drop/repeat across outputs" the architecture doc lists as
+  not-implemented. It's a built + unit-tested framework primitive; HaPlay host wiring
+  (declaring which outputs form a group) is deferred pending real multi-output hardware
+  validation. For a single output, prefer output mapping / warp ([10](10-Effects-and-Compositing.md))
+  over a sync group — one output carved into panels needs no cross-output sync at all.
+
 ## Deinterlacing
 
 * `IDeinterlacer` — converts an interlaced `VideoFrame` into one or more progressive

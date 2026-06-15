@@ -83,8 +83,18 @@ PortAudio devices in one composition drift relative to each other —
 > **Update (2026-06-15):** Option B's **Phase-1 foundation is built** — `OutputSyncGroup`
 > (`S.Media.Core.Clock`) is the coordinated master-ppm PI controller that disciplines member clocks to a
 > reference and emits a per-member ppm correction for Option A's `AdaptiveRateAudioOutput` to apply.
-> Unit-tested (locks a +40 ppm member to sub-ms phase; resets on pause/seek). Phase 2 — lock-step video
-> present for actuator-less walls + HaPlay group wiring — remains.
+> Unit-tested (locks a +40 ppm member to sub-ms phase; resets on pause/seek).
+>
+> **Update (2026-06-15, Phase 2b):** the **video present scheduler is now built** — `VideoPresentSyncGroup`
+> + `ISyncPresentableVideoOutput` + `SyncPresentVideoOutput` (`S.Media.Core.Video`). This is the
+> "synchronized drop/repeat across outputs" the architecture doc listed as not-implemented: grouped video
+> outputs present the frame for one reference timestamp on a shared tick, holding (bounded) when a member
+> falls behind so a stitched canvas never tears, then degrading to keep the wall live if a member wedges.
+> Unit-tested (12 cases: lock-step advance, hold-on-lag, degrade-after-budget, coordinated drop, two real
+> members present the same frame). **Remaining:** HaPlay host wiring to declare sync groups and route each
+> member's device through the controllers — deliberately deferred until validated on real multi-output
+> hardware (a wrong drift *direction* won't show up in the unit suite), and pending the genlock-*scope*
+> product decision (per-composition vs engine-wide) noted in `Doc/HaPlay-MultiOutput-Sync.md`.
 
 ## 🟡 3. A few framework files are large enough to split
 
