@@ -50,6 +50,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     private bool _videoNdiTimingOriginSet;
     private bool _hasLastResolvedVideoPts;
     private bool _hasVideoFormat;
+    private bool _presentVideoByAbsoluteTimecode;
     private bool _disposed;
     private int _captureThreadStuck;
     private NDIConnectionState _state = NDIConnectionState.Opening;
@@ -114,6 +115,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
         _receiveAudio = options.ReceiveAudio;
         _receiveVideo = options.ReceiveVideo;
+        _presentVideoByAbsoluteTimecode = options.PresentVideoByAbsoluteTimecode;
         _audioCapacityDuration = audioRingCapacityDuration;
         _audioMinBufferedDuration = resolvedMinBuffered;
         _maxQueuedVideoFrames = options.MaxQueuedVideoFrames;
@@ -629,12 +631,25 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
     private TimeSpan ResolveVideoPresentationTime(in NDIVideoFrameV2 video)
     {
-        if (NDIFrameTiming.TryMapPresentationTime(
-                video.Timecode,
-                video.Timestamp,
-                ref _videoNdiTimingOriginTicks,
-                ref _videoNdiTimingOriginSet,
-                out var relative))
+        // Absolute-timecode mode (multi-receiver wall sync): present at the sender's egress timecode directly,
+        // with no per-receiver origin or rebase, so every receiver of one sender agrees on each frame's time.
+        if (_presentVideoByAbsoluteTimecode)
+        {
+            if (NDIFrameTiming.TryGetAbsolutePresentationTime(video.Timecode, video.Timestamp, out var absolute))
+            {
+                _lastResolvedVideoPts = absolute;
+                _hasLastResolvedVideoPts = true;
+                _nextVideoPts = absolute + _videoPtsStep;
+                return absolute;
+            }
+            // No NDI timing on this frame — continue the synthetic timeline below.
+        }
+        else if (NDIFrameTiming.TryMapPresentationTime(
+                     video.Timecode,
+                     video.Timestamp,
+                     ref _videoNdiTimingOriginTicks,
+                     ref _videoNdiTimingOriginSet,
+                     out var relative))
         {
             var pts = _videoRebaseBasePts + relative;
             _lastResolvedVideoPts = pts;

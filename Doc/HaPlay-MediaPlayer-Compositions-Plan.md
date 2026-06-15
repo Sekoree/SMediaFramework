@@ -90,24 +90,34 @@ last real frame, drives a hold toggle, per-branch opacity for video fades).
    fade = layer-0 opacity tween; fault = show layer-1).
 4. Retire `LogoFallbackVideoOutput` from the media-player path once parity is confirmed.
 
-## 3. NDI receiver-side timecode alignment — PLANNED (hardware-gated)
+## 3. NDI receiver-side timecode alignment — FRAMEWORK MODE SHIPPED (2026-06-15); host opt-in + hardware next
 
 **Egress is already timecoded** (`NDIOutputPreviewRuntime` stamps
-`NDIVideoTimecodeMode.PresentationRelativeTicks`), so a composition's NDI outputs already carry a shared
-presentation timecode. The remaining piece is the **receive** side: when HaPlay (or any receiver) plays an
-NDI input that carries presentation timecodes, present each frame at its timecode against a shared
-reference so several receivers of one sender stay aligned.
+`NDIVideoTimecodeMode.PresentationRelativeTicks`), so a composition's NDI outputs carry a shared egress
+timecode. The receive side already presented frames at their timecode — but **first-frame-relative + rebased
+to local play-start** (`NDISource.ResolveVideoPresentationTime` via `NDIFrameTiming.TryMapPresentationTime`).
+That is smooth for a single receiver but uses a **per-receiver origin**, so two receivers of one sender don't
+agree on absolute time — the gap for wall sync.
 
-**Building blocks that already exist:** `NDIIngestPlaybackClock` (receive-side master from receiver
-timecode/timestamp), `NDIFrameTiming` (maps NDI timecode/timestamp fields to presentation timelines),
-`NDIVideoReceiver` (captures into pool-backed frames).
+**Shipped:** an **absolute-timecode receive mode** (opt-in, default off):
+* `NDIFrameTiming.TryGetAbsolutePresentationTime(timecode, timestamp, out TimeSpan)` — maps the raw 100 ns
+  egress timecode straight to a `TimeSpan` with **no session origin / no rebase**, so the *same frame* resolves
+  to the *same* time on every receiver. Unit-tested (`NDIFrameTimingTests`: timecode-direct, two-receivers-agree,
+  timestamp fallback).
+* `NDISourceOptions.PresentVideoByAbsoluteTimecode` (default `false`) → `NDISource.ResolveVideoPresentationTime`
+  uses the absolute mapping instead of the relative+rebase one. Default off keeps single-receiver playback
+  exactly as before (64 NDI tests green).
 
-**Plan:** stamp received frames' PTS from their NDI presentation timecode (via `NDIFrameTiming`) and drive
-their `VideoPlayer`/present from `NDIIngestPlaybackClock`, so presentation follows the egress timecode
-rather than arrival jitter. Validate with two HaPlay receivers of one sender on a real network — arrival
-jitter and timecode behaviour don't reproduce headlessly, so this is hardware-gated like the genlock
-hardware path.
+**Remaining:**
+* **Host opt-in** — expose `PresentVideoByAbsoluteTimecode` on HaPlay NDI-input items (a per-input toggle) and
+  thread it into the `NDISourceOptions` HaPlay builds for that input.
+* **Shared clock reference** — cross-receiver alignment needs the receivers' presentation clocks to share a
+  reference (PTP / display genlock) and the receiving playback clock to run on the same absolute timeline; the
+  framework now supplies the absolute per-frame timeline, the reference is a deployment concern.
+* **Audio** — the analogous absolute-timecode path on the audio receive side, for A/V-locked absolute mode.
+* **Validate** with two receivers of one sender on a real network — arrival jitter / timecode behaviour don't
+  reproduce headlessly, so end-to-end is hardware-gated.
 
 > Reminder from `Doc/HaPlay-MultiOutput-Sync.md`: wire-accurate sub-frame alignment across *separate*
 > displays/receivers ultimately needs hardware genlock (display genlock / NDI Discovery + receiver
-> timecode); the framework's job is to feed the right frame at the right time.
+> timecode); the framework's job is to feed the right frame at the right time — which the absolute mode now does.
