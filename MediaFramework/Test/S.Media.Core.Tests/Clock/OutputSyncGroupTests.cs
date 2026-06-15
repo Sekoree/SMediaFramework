@@ -22,7 +22,7 @@ public class OutputSyncGroupTests
             group.Tick(TimeSpan.FromSeconds(dt));
         }
 
-        var phaseMs = (member.CurrentPosition - reference.CurrentPosition).TotalMilliseconds;
+        var phaseMs = (member.ElapsedSinceStart - reference.ElapsedSinceStart).TotalMilliseconds;
         Assert.True(Math.Abs(phaseMs) < 1.0, $"phase {phaseMs:F4} ms did not converge to the reference");
         // The applied correction should approach -40 ppm, cancelling the +40 ppm crystal offset.
         Assert.InRange(group.GetMemberPpm(h), -50.0, -30.0);
@@ -40,7 +40,7 @@ public class OutputSyncGroupTests
         for (var i = 0; i < 400; i++) { reference.Advance(0.05); member.Advance(0.05); group.Tick(TimeSpan.FromSeconds(0.05)); }
         Assert.NotEqual(0.0, group.GetMemberPpm(h));         // locked to a non-zero correction
 
-        member.IsRunning = false;
+        member.IsAdvancing = false;
         group.Tick(TimeSpan.FromSeconds(0.05));
         Assert.Equal(0.0, group.GetMemberPpm(h));            // paused ⇒ no correction, controller cleared
     }
@@ -62,19 +62,18 @@ public class OutputSyncGroupTests
         Assert.Equal(0.0, group.GetMemberPpm(h));            // discontinuity ⇒ reset, not a saturated chase
     }
 
-    /// <summary>A fake <see cref="IReadOnlyPlayhead"/> whose position advances at (1 + (native+correction) ppm).</summary>
-    private sealed class SimClock : IReadOnlyPlayhead
+    /// <summary>A fake <see cref="IPlaybackClock"/> whose elapsed advances at (1 + (native+correction) ppm).</summary>
+    private sealed class SimClock : IPlaybackClock
     {
         private double _posSeconds;
         public double NativeRatePpm;
         public Func<double> CorrectionPpm = () => 0.0;
-        public bool IsRunning { get; set; } = true;
-        public double PlaybackRate => 1.0;
-        public TimeSpan CurrentPosition => TimeSpan.FromSeconds(_posSeconds);
+        public bool IsAdvancing { get; set; } = true;
+        public TimeSpan ElapsedSinceStart => TimeSpan.FromSeconds(_posSeconds);
 
         public void Advance(double dtSeconds)
         {
-            if (!IsRunning) return;
+            if (!IsAdvancing) return;
             var effectivePpm = NativeRatePpm + CorrectionPpm();
             _posSeconds += dtSeconds * (1.0 + effectivePpm * 1e-6);
         }

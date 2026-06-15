@@ -117,3 +117,39 @@ wrapping it in a resampler is harmless but wasted work. Restricting the auto-wra
 `IClockedOutput` non-master outputs would be strictly more conservative and target exactly the
 outputs that actually drift. Left out of the current change because it alters a framework hot-path
 heuristic shared by all hosts; flagged here for review.
+
+## Phase 2 — concrete cue-engine wiring plan (audio-actuated path)
+
+`OutputSyncGroup` now observes **`IPlaybackClock`** (`ElapsedSinceStart` is the raw genlock metric), which
+is exactly what the cue audio path exposes — so the cross-cue two-device case wires up cleanly. This is the
+spec for the hardware-in-the-loop session; it is **deliberately not yet wired into the live cue engine**
+(the efficacy can only be confirmed with two real devices, and a wrong drift direction wouldn't show up in
+the unit suite — so it needs hardware, behind an opt-in flag, before it ships).
+
+**Integration points (all in `UI/HaPlay/Playback/CuePlaybackEngine*`):**
+- Per device line, `GetOrCreateAudioRuntime(outputLineId)` builds a `ClipAudioOutputRuntime` from
+  `AcquireAudioOutput(...)`, which returns `(IAudioOutput Output, IPlaybackClock? PlaybackClock, …)`. The
+  `PlaybackClock` is the device's physical clock — the per-member genlock input.
+- A composition's reference is already chosen: `ActiveCue.PlaybackClockMaster` is set to the **first**
+  runtime's `PlaybackClock` (`CuePlaybackEngine.AudioRouting.cs` ~77). That's the `OutputSyncGroup` reference.
+
+**Wiring (opt-in, per composition that spans >1 device):**
+1. When the composition acquires a runtime whose `PlaybackClock` differs from `PlaybackClockMaster`, treat it
+   as a sync member: `var h = group.AddMember(runtime.PlaybackClock)`.
+2. Actuate it by wrapping that device's `IAudioOutput` in
+   `new AdaptiveRateAudioOutput(output, () => group.GetMemberPpm(h))` **before** it is handed to
+   `ClipAudioOutputRuntime` (the wrapper must sit between the runtime's router and the device). The FFmpeg
+   plugin is already registered (Option A), so the wrapper is available.
+3. Own one `OutputSyncGroup` per composition (reference = `PlaybackClockMaster`); `group.Start(100 ms)` (or
+   tick it from the engine's existing periodic loop). Dispose it with the composition; `RemoveMember` when a
+   runtime is released by `ReleaseEmptyRuntimes`.
+
+**Guard rails:** keep it behind an opt-in setting (default off) so existing single-device / same-device
+compositions are untouched; the controller already no-ops when a member isn't advancing and resets on a
+seek-sized jump, so a paused/queued cue won't get a bogus correction.
+
+**Phase 2b (video-only walls):** outputs with no audio actuator can't be slewed via `AdaptiveRateAudioOutput`.
+On a single machine, pure software video clocks share the system QPC and don't drift, so the real need is a
+shared present *schedule* (all grouped video pumps present the reference-timestamp frame in lock-step) rather
+than rate disciplining; separate display pixel clocks ultimately need hardware genlock. That present-scheduler
+is the remaining framework piece, layered on the same `OutputSyncGroup` reference.

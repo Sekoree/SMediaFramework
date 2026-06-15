@@ -45,10 +45,10 @@ public readonly record struct OutputSyncMemberHandle(int Id);
 /// This is the Phase-1 foundation — the coordinated master-ppm policy the architecture doc lists as
 /// "not implemented". Wiring sketch for a two-device composition:
 /// <code>
-/// var group = new OutputSyncGroup(referenceClock);              // e.g. cue 0's MediaClock
-/// var h = group.AddMember(secondCueClock);                      // cue 1's MediaClock
+/// var group = new OutputSyncGroup(referenceDeviceClock);       // e.g. device 0's IPlaybackClock
+/// var h = group.AddMember(secondDeviceClock);                  // device 1's IPlaybackClock
 /// var adaptive = new AdaptiveRateAudioOutput(device1, () => group.GetMemberPpm(h));
-/// group.Start(TimeSpan.FromMilliseconds(100));                  // or call Tick() from a host loop
+/// group.Start(TimeSpan.FromMilliseconds(100));                 // or call Tick(elapsed) from a host loop
 /// </code>
 /// </para>
 /// <para>
@@ -58,7 +58,9 @@ public readonly record struct OutputSyncMemberHandle(int Id);
 /// </remarks>
 public sealed class OutputSyncGroup : IDisposable
 {
-    private readonly IReadOnlyPlayhead _reference;
+    // IPlaybackClock (raw monotonic ElapsedSinceStart) is the genlock-correct phase metric — it reflects
+    // the physical crystal directly, unlike a media-time playhead that folds in seeks / base position.
+    private readonly IPlaybackClock _reference;
     private readonly OutputSyncGroupOptions _options;
     private readonly double _kp;   // ppm per second-of-phase
     private readonly double _ki;   // ppm per (second·second-of-phase)
@@ -72,12 +74,12 @@ public sealed class OutputSyncGroup : IDisposable
 
     private sealed class Member
     {
-        public required IReadOnlyPlayhead Clock { get; init; }
+        public required IPlaybackClock Clock { get; init; }
         public double Integral;   // accumulated phase error (s·s) feeding the I term
         public double Ppm;        // latest correction (negative ⇒ slow the member)
     }
 
-    public OutputSyncGroup(IReadOnlyPlayhead reference, OutputSyncGroupOptions? options = null)
+    public OutputSyncGroup(IPlaybackClock reference, OutputSyncGroupOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(reference);
         _reference = reference;
@@ -94,7 +96,7 @@ public sealed class OutputSyncGroup : IDisposable
     }
 
     /// <summary>Registers a clock to discipline toward the reference. Read its correction via <see cref="GetMemberPpm"/>.</summary>
-    public OutputSyncMemberHandle AddMember(IReadOnlyPlayhead memberClock)
+    public OutputSyncMemberHandle AddMember(IPlaybackClock memberClock)
     {
         ArgumentNullException.ThrowIfNull(memberClock);
         lock (_gate)
@@ -132,24 +134,24 @@ public sealed class OutputSyncGroup : IDisposable
         lock (_gate)
         {
             if (_disposed) return;
-            var refRunning = _reference.IsRunning;
-            var refPos = _reference.CurrentPosition;
+            var refAdvancing = _reference.IsAdvancing;
+            var refElapsed = _reference.ElapsedSinceStart;
             foreach (var m in _members.Values)
-                UpdateMemberLocked(m, refRunning, refPos, dt);
+                UpdateMemberLocked(m, refAdvancing, refElapsed, dt);
         }
     }
 
-    private void UpdateMemberLocked(Member m, bool refRunning, TimeSpan refPos, double dt)
+    private void UpdateMemberLocked(Member m, bool refAdvancing, TimeSpan refElapsed, double dt)
     {
-        // Discipline only while both clocks advance; a paused side would accrue bogus phase error.
-        if (!refRunning || !m.Clock.IsRunning)
+        // Discipline only while both clocks advance; a paused/underrun side would accrue bogus phase error.
+        if (!refAdvancing || !m.Clock.IsAdvancing)
         {
             m.Integral = 0;
             m.Ppm = 0;
             return;
         }
 
-        var phaseError = (m.Clock.CurrentPosition - refPos).TotalSeconds; // + ⇒ member ahead of reference
+        var phaseError = (m.Clock.ElapsedSinceStart - refElapsed).TotalSeconds; // + ⇒ member ahead of reference
 
         // A large jump is a seek/flush, not crystal drift — reset rather than chase it.
         if (Math.Abs(phaseError) > _options.ResyncThreshold.TotalSeconds)
