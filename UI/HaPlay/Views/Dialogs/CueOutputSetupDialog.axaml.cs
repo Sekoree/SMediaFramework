@@ -48,6 +48,38 @@ public partial class CueOutputSetupDialog : Window
         dialog.Show(this);
     }
 
+    /// <summary>Fits the clicked composition's canvas to an output's resolution. With one candidate output it
+    /// applies directly; with several it offers a picker so the operator chooses the specific output.</summary>
+    private void FitCompositionClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: CueCompositionViewModel composition } control
+            || DataContext is not CuePlayerViewModel cuePlayer)
+            return;
+
+        var candidates = cuePlayer.OutputsForFit(composition);
+        if (candidates.Count == 0)
+        {
+            ToastCenter.Info("No video output with a known resolution to fit to (set a window size or NDI resolution lock).");
+            return;
+        }
+
+        if (candidates.Count == 1)
+        {
+            cuePlayer.FitCompositionToOutput(composition, candidates[0]);
+            return;
+        }
+
+        var menu = new MenuFlyout();
+        foreach (var line in candidates)
+        {
+            var target = line;
+            var item = new MenuItem { Header = line.EffectiveName };
+            item.Click += (_, _) => cuePlayer.FitCompositionToOutput(composition, target);
+            menu.Items.Add(item);
+        }
+        menu.ShowAt(control);
+    }
+
     /// <summary>Opens the multi-output layout editor for the clicked row's composition: every output bound to
     /// that composition is arranged together over the canvas. On Save, each output's source slice is written
     /// back to its binding mapping and live-applied to a running composition.</summary>

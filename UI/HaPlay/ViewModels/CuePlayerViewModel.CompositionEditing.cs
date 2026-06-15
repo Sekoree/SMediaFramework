@@ -10,6 +10,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using HaPlay.Models;
 using HaPlay.Playback;
 using HaPlay.Resources;
 
@@ -21,16 +22,80 @@ public partial class CuePlayerViewModel
     private void AddComposition()
     {
         if (SelectedCueList is null) return;
+        var (width, height) = DefaultCompositionSize();
         var comp = new CueCompositionViewModel
         {
             Name = Strings.Format(nameof(Strings.CueOutputDefaultVideoNameFormat),
                 SelectedCueList.Compositions.Count + 1),
+            Width = width,
+            Height = height,
         };
         SelectedCueList.Compositions.Add(comp);
         comp.CompositionFrameRateChanged += OnCompositionFrameRateChanged;
         SelectedComposition = comp;
         RefreshVideoFrameRateMismatchWarning();
         SuggestPreRollRefresh();
+    }
+
+    /// <summary>Default canvas size for a new composition: the first available video output line with a known
+    /// resolution, else 1080p. Keeps a fresh composition matched to the rig instead of an arbitrary default.</summary>
+    private (int Width, int Height) DefaultCompositionSize()
+    {
+        foreach (var line in AvailableVideoOutputs)
+            if (TryGetOutputResolution(line.Definition, out var w, out var h))
+                return (w, h);
+        return (1920, 1080);
+    }
+
+    /// <summary>Reads a video output line's known pixel resolution (local window size, or NDI resolution
+    /// lock). Returns false when the output has no declared resolution to fit to.</summary>
+    internal static bool TryGetOutputResolution(OutputDefinition definition, out int width, out int height)
+    {
+        switch (definition)
+        {
+            case LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv:
+                width = lv.WindowWidth!.Value;
+                height = lv.WindowHeight!.Value;
+                return true;
+            case NDIOutputDefinition { ResolutionLockWidth: > 0, ResolutionLockHeight: > 0 } nd:
+                width = nd.ResolutionLockWidth!.Value;
+                height = nd.ResolutionLockHeight!.Value;
+                return true;
+            default:
+                width = 0;
+                height = 0;
+                return false;
+        }
+    }
+
+    /// <summary>Sets a composition's canvas to a chosen output's resolution (the "fit to output" action).</summary>
+    internal void FitCompositionToOutput(CueCompositionViewModel composition, OutputLineViewModel line)
+    {
+        if (composition is null || line is null) return;
+        if (!TryGetOutputResolution(line.Definition, out var width, out var height)) return;
+        composition.Width = width;
+        composition.Height = height;
+        RefreshVideoFrameRateMismatchWarning();
+    }
+
+    /// <summary>Candidate outputs for the fit-to-output picker: the composition's bound outputs that declare a
+    /// resolution, or — if none do — every available video output that does.</summary>
+    internal IReadOnlyList<OutputLineViewModel> OutputsForFit(CueCompositionViewModel composition)
+    {
+        var bound = new List<OutputLineViewModel>();
+        foreach (var binding in VisibleVideoOutputs)
+            if (binding.CompositionId == composition.Id
+                && binding.LineRef is { } line
+                && TryGetOutputResolution(line.Definition, out _, out _))
+                bound.Add(line);
+        if (bound.Count > 0)
+            return bound;
+
+        var available = new List<OutputLineViewModel>();
+        foreach (var line in AvailableVideoOutputs)
+            if (TryGetOutputResolution(line.Definition, out _, out _))
+                available.Add(line);
+        return available;
     }
 
     [RelayCommand(CanExecute = nameof(CanRemoveComposition))]

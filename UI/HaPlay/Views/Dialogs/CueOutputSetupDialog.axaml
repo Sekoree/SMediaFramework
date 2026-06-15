@@ -29,7 +29,7 @@
                    SelectedItem="{Binding SelectedComposition, Mode=TwoWay}">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:CueCompositionViewModel">
-                <Grid ColumnDefinitions="*,Auto,120,Auto,120,Auto,110"
+                <Grid ColumnDefinitions="*,Auto,120,Auto,120,Auto,110,Auto"
                       ColumnSpacing="8"
                       Margin="0,3">
                   <TextBox Grid.Column="0" Text="{Binding Name, Mode=TwoWay}" MinWidth="180" />
@@ -39,6 +39,9 @@
                   <NumericUpDown Grid.Column="4" Value="{Binding Height, Mode=TwoWay}" Minimum="16" Maximum="4320" />
                   <TextBlock Grid.Column="5" Text="{x:Static res:Strings.FrameRateLabel}" VerticalAlignment="Center" />
                   <NumericUpDown Grid.Column="6" Value="{Binding FrameRateNum, Mode=TwoWay}" Minimum="1" Maximum="240" />
+                  <Button Grid.Column="7" Content="Fit ▾"
+                          ToolTip.Tip="Set this composition's canvas to a bound output's resolution."
+                          Click="FitCompositionClick" />
                 </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>
