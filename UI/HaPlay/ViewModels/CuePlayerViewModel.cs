@@ -48,6 +48,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     public Func<Task>? StopPreviewCallback { get; set; }
     public Func<Guid, TimeSpan, Task>? SeekCueCallback { get; set; }
 
+    private bool MediaExecutionConfigured => MediaCueExecutor is not null;
+
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsPreviewingSelectedCue))]
     [NotifyPropertyChangedFor(nameof(IsCueScrubberVisible))]
@@ -1755,15 +1757,12 @@ public partial class CuePlayerViewModel : ViewModelBase
             try
             {
                 var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
-                await SetStatusMessageOnUiAsync(string.IsNullOrWhiteSpace(exec)
-                    ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplay(cue))
-                    : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec));
+                await ApplyCueExecutionResultOnUiAsync(cue, exec, MediaExecutionConfigured).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { /* Stop / Panic cancelled the dispatched cue. */ }
             catch (Exception ex)
             {
-                await SetStatusMessageOnUiAsync(Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat),
-                    CueDisplay(cue), ex.Message));
+                await ApplyCueExecutionFailureOnUiAsync(cue, ex.Message).ConfigureAwait(false);
             }
         }, ct);
     }
@@ -1795,11 +1794,11 @@ public partial class CuePlayerViewModel : ViewModelBase
                     {
                         var exec = await ExecuteCueAsync(cue, ct).ConfigureAwait(false);
                         if (!string.IsNullOrWhiteSpace(exec))
-                            await SetStatusMessageOnUiAsync(Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), exec));
+                            await ApplyCueExecutionResultOnUiAsync(cue, exec, mediaExecutionConfigured: false).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
-                        await SetStatusMessageOnUiAsync(Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), ex.Message));
+                        await ApplyCueExecutionFailureOnUiAsync(cue, ex.Message).ConfigureAwait(false);
                     }
                 }
             }
@@ -1809,6 +1808,57 @@ public partial class CuePlayerViewModel : ViewModelBase
                 await SetStatusMessageOnUiAsync(ex.Message);
             }
         }, ct);
+    }
+
+    private Task ApplyCueExecutionResultOnUiAsync(CueNodeViewModel cue, string? detail, bool mediaExecutionConfigured)
+    {
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            ApplyCueExecutionResult(cue, detail, mediaExecutionConfigured);
+            return Task.CompletedTask;
+        }
+
+        return Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            ApplyCueExecutionResult(cue, detail, mediaExecutionConfigured)).GetTask();
+    }
+
+    private Task ApplyCueExecutionFailureOnUiAsync(CueNodeViewModel cue, string detail)
+    {
+        if (Avalonia.Threading.Dispatcher.UIThread.CheckAccess())
+        {
+            ApplyCueExecutionFailure(cue, detail);
+            return Task.CompletedTask;
+        }
+
+        return Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+            ApplyCueExecutionFailure(cue, detail)).GetTask();
+    }
+
+    private void ApplyCueExecutionResult(CueNodeViewModel cue, string? detail, bool mediaExecutionConfigured)
+    {
+        if (cue.Kind == CueNodeKind.Media
+            && mediaExecutionConfigured
+            && !_activeCueIds.Contains(cue.Id))
+        {
+            ApplyCueExecutionFailure(cue, detail);
+            return;
+        }
+
+        StatusMessage = string.IsNullOrWhiteSpace(detail)
+            ? Strings.Format(nameof(Strings.CueTriggeredStatusFormat), CueDisplay(cue))
+            : Strings.Format(nameof(Strings.CueTriggeredWithDetailStatusFormat), CueDisplay(cue), detail);
+    }
+
+    private void ApplyCueExecutionFailure(CueNodeViewModel cue, string? detail)
+    {
+        if (ReferenceEquals(CurrentCueNode, cue))
+            CurrentCueNode = null;
+        StandbyCueNode = cue;
+        SelectedCueNode = cue;
+        IsTransportPaused = false;
+        StatusMessage = string.IsNullOrWhiteSpace(detail)
+            ? Strings.Format(nameof(Strings.CueExecutionFailedStatusFormat), CueDisplay(cue))
+            : Strings.Format(nameof(Strings.CueExecutionFailedWithDetailStatusFormat), CueDisplay(cue), detail);
     }
 
     private async Task SetStatusMessageOnUiAsync(string? message)

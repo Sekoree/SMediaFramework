@@ -25,7 +25,6 @@ public sealed class OutputLayoutCanvas : Control
 {
     private const double Pad = 8;
     private const double HandleSize = 12;
-    private const double MinNorm = 0.02;
 
     // Distinct, theme-readable hues keyed by OutputLayoutItemViewModel.ColorIndex (wraps).
     private static readonly Color[] Palette =
@@ -57,7 +56,7 @@ public sealed class OutputLayoutCanvas : Control
     private OutputLayoutItemViewModel? _drag;
     private bool _resizing;
     private Point _grabNorm; // pointer offset within the box, normalized, at drag start
-    private double _dragAspect = 1; // box aspect captured at resize start (for aspect-locked resize)
+    private double _dragAspect = 1; // normalized source-rect aspect for the output's physical pixel ratio
 
     static OutputLayoutCanvas()
     {
@@ -209,7 +208,7 @@ public sealed class OutputLayoutCanvas : Control
                 SelectedItem = i;
                 _drag = i;
                 _resizing = onHandle;
-                _dragAspect = i.SrcHeight > 0 ? i.SrcWidth / i.SrcHeight : 1;
+                _dragAspect = NormalizedAspectForOutput(i);
                 _grabNorm = new Point((pt.X - box.X) / canvas.Width, (pt.Y - box.Y) / canvas.Height);
                 e.Pointer.Capture(this);
                 Focus(); // take keyboard focus so arrow keys nudge this output
@@ -232,17 +231,19 @@ public sealed class OutputLayoutCanvas : Control
 
         if (_resizing)
         {
-            var w = Math.Clamp(nx - _drag.SrcX, MinNorm, 1.0 - _drag.SrcX);
-            var h = Math.Clamp(ny - _drag.SrcY, MinNorm, 1.0 - _drag.SrcY);
+            var minW = CanvasWidth > 0 ? 1.0 / CanvasWidth : 0.002;
+            var minH = CanvasHeight > 0 ? 1.0 / CanvasHeight : 0.002;
+            var w = Math.Clamp(nx - _drag.SrcX, minW, 1.0 - _drag.SrcX);
+            var h = Math.Clamp(ny - _drag.SrcY, minH, 1.0 - _drag.SrcY);
 
-            // Aspect-locked by default — keep the slice's proportions so the output isn't distorted while
-            // fine-tuning. Hold Shift to resize width/height freely.
-            if (!e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _dragAspect > 0)
+            // Aspect-locked by default — keep the output's proportions so the output isn't distorted while
+            // fine-tuning. Uncheck the item's aspect lock, or hold Shift, to resize width/height freely.
+            if (_drag.AspectLocked && !e.KeyModifiers.HasFlag(KeyModifiers.Shift) && _dragAspect > 0)
             {
                 h = w / _dragAspect;
                 if (_drag.SrcY + h > 1.0) { h = 1.0 - _drag.SrcY; w = h * _dragAspect; }
-                if (w < MinNorm) { w = MinNorm; h = w / _dragAspect; }
-                if (h < MinNorm) { h = MinNorm; w = h * _dragAspect; }
+                if (w < minW) { w = minW; h = w / _dragAspect; }
+                if (h < minH) { h = minH; w = h * _dragAspect; }
                 w = Math.Min(w, 1.0 - _drag.SrcX);
             }
             _drag.SetSrcRect(_drag.SrcX, _drag.SrcY, w, h);
@@ -278,6 +279,12 @@ public sealed class OutputLayoutCanvas : Control
 
         item.SetSrcRect(item.SrcX + dx, item.SrcY + dy, item.SrcWidth, item.SrcHeight);
         e.Handled = true;
+    }
+
+    private static double NormalizedAspectForOutput(OutputLayoutItemViewModel item)
+    {
+        var canvasAspect = item.CanvasHeight > 0 ? item.CanvasWidth / (double)item.CanvasHeight : 1.0;
+        return canvasAspect > 0 ? item.OutputAspectRatio / canvasAspect : 1.0;
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)

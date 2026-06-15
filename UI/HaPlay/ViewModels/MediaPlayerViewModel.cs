@@ -2935,6 +2935,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void StartHoldPumpTimer()
     {
+        if (_session is { RequiresHoldPump: false })
+            return;
         if (_holdPumpTimer is not null)
             return;
         var period = TimeSpan.FromSeconds(1.0 / 30.0);

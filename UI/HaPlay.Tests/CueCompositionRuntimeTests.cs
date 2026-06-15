@@ -68,6 +68,28 @@ public sealed class CueCompositionRuntimeTests
         Assert.True(runtime.GetStats().ClockMastered);
     }
 
+    [Fact]
+    public void LeasedLineCount_StaysZeroWhenNdiCarrierCannotBeAcquired()
+    {
+        var outputs = new OutputManagementViewModel();
+        var line = new OutputLineViewModel(
+            new NDIOutputDefinition(
+                Guid.NewGuid(),
+                "NDI",
+                "ndi",
+                null,
+                NDIOutputStreamMode.VideoAndAudio,
+                AudioChannelCount: 2,
+                AudioSampleRate: 48000),
+            _ => { },
+            outputs);
+        var composition = new CueComposition { Id = Guid.NewGuid(), Name = "Test", Width = 320, Height = 180, FrameRateNum = 30, FrameRateDen = 1 };
+        using var runtime = new CueCompositionRuntime(composition, [line], outputs);
+
+        Assert.Equal(0, runtime.LeasedLineCount);
+        Assert.False(runtime.DrivesLine(line.Definition.Id));
+    }
+
     private sealed class FakeMasterClock : IPlaybackClock
     {
         public TimeSpan ElapsedSinceStart => TimeSpan.Zero;

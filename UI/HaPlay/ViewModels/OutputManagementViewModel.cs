@@ -496,6 +496,22 @@ public partial class OutputManagementViewModel : ViewModelBase
         line.IsPreviewRunning = false;
     }
 
+    internal void NotifyLocalPreviewResized(OutputLineViewModel line, int width, int height)
+    {
+        if (line.Definition is not LocalVideoOutputDefinition lv
+            || lv.SurfaceMode != VideoSurfaceMode.Windowed
+            || width < 320
+            || height < 240)
+        {
+            return;
+        }
+
+        if (lv.WindowWidth == width && lv.WindowHeight == height)
+            return;
+
+        line.ReplaceDefinition(lv with { WindowWidth = width, WindowHeight = height });
+    }
+
     public async Task StartLocalPreviewAsync(OutputLineViewModel line, CancellationToken cancellationToken = default)
     {
         if (line.Definition is not LocalVideoOutputDefinition d)

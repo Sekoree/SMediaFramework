@@ -154,6 +154,16 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         _router.Play();
     }
 
+    /// <summary>
+    /// Drops audio already queued toward the physical output. Sources/routes remain wired and the
+    /// router keeps running, so this is suitable for cue pause where the source was already muted.
+    /// </summary>
+    public void FlushBufferedAudio()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _router.FlushOutputBuffers();
+    }
+
     /// <summary>Pump throughput stats for the runtime's single physical output (operator HUD / output health).</summary>
     public AudioRouter.OutputPumpStats GetOutputPumpStats()
     {

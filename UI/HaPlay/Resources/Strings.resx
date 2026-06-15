@@ -1884,6 +1884,12 @@
   <data name="CueTriggeredWithDetailStatusFormat" xml:space="preserve">
     <value>Triggered {0} — {1}</value>
   </data>
+  <data name="CueExecutionFailedStatusFormat" xml:space="preserve">
+    <value>Failed to start {0}</value>
+  </data>
+  <data name="CueExecutionFailedWithDetailStatusFormat" xml:space="preserve">
+    <value>Failed to start {0}: {1}</value>
+  </data>
   <data name="CueMediaExecutionNotConfigured" xml:space="preserve">
     <value>media execution not configured</value>
   </data>

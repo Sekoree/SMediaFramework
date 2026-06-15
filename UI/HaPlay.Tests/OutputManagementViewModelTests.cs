@@ -176,6 +176,50 @@ public sealed class OutputManagementViewModelTests
     }
 
     [Fact]
+    public void NotifyLocalPreviewResized_UpdatesWindowedLocalVideoDefinition()
+    {
+        var vm = new OutputManagementViewModel();
+        var id = Guid.NewGuid();
+        vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+        {
+            new LocalVideoOutputDefinition(id, "Program", VideoOutputEngine.SdlOpenGl,
+                VideoSurfaceMode.Windowed, 0, 1280, 720),
+        });
+
+        var line = vm.Outputs[0];
+        vm.NotifyLocalPreviewResized(line, 1920, 1080);
+
+        var local = Assert.IsType<LocalVideoOutputDefinition>(line.Definition);
+        Assert.Equal(1920, local.WindowWidth);
+        Assert.Equal(1080, local.WindowHeight);
+    }
+
+    [Fact]
+    public void NotifyLocalPreviewResized_IgnoresFullscreenAndTooSmallSizes()
+    {
+        var vm = new OutputManagementViewModel();
+        var fullscreenId = Guid.NewGuid();
+        var windowedId = Guid.NewGuid();
+        vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
+        {
+            new LocalVideoOutputDefinition(fullscreenId, "Program", VideoOutputEngine.SdlOpenGl,
+                VideoSurfaceMode.FullScreen, 0, null, null),
+            new LocalVideoOutputDefinition(windowedId, "Preview", VideoOutputEngine.AvaloniaOpenGl,
+                VideoSurfaceMode.Windowed, 0, 1280, 720),
+        });
+
+        vm.NotifyLocalPreviewResized(vm.Outputs[0], 1920, 1080);
+        vm.NotifyLocalPreviewResized(vm.Outputs[1], 200, 100);
+
+        var fullscreen = Assert.IsType<LocalVideoOutputDefinition>(vm.Outputs[0].Definition);
+        Assert.Null(fullscreen.WindowWidth);
+        Assert.Null(fullscreen.WindowHeight);
+        var windowed = Assert.IsType<LocalVideoOutputDefinition>(vm.Outputs[1].Definition);
+        Assert.Equal(1280, windowed.WindowWidth);
+        Assert.Equal(720, windowed.WindowHeight);
+    }
+
+    [Fact]
     public void PortAudioResolveCurrentOutputDevice_PrefersSavedNameOverStaleGlobalIndex()
     {
         var saved = new PortAudioOutputDefinition(

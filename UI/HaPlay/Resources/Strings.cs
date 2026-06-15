@@ -766,6 +766,8 @@ public static class Strings
     public static string CueAddedFromDropStatusFormat => Get(nameof(CueAddedFromDropStatusFormat));
     public static string CueTriggeredStatusFormat => Get(nameof(CueTriggeredStatusFormat));
     public static string CueTriggeredWithDetailStatusFormat => Get(nameof(CueTriggeredWithDetailStatusFormat));
+    public static string CueExecutionFailedStatusFormat => Get(nameof(CueExecutionFailedStatusFormat));
+    public static string CueExecutionFailedWithDetailStatusFormat => Get(nameof(CueExecutionFailedWithDetailStatusFormat));
     public static string CueMediaExecutionNotConfigured => Get(nameof(CueMediaExecutionNotConfigured));
     public static string CueInvalidMediaCue => Get(nameof(CueInvalidMediaCue));
     public static string CueActionExecutionNotConfigured => Get(nameof(CueActionExecutionNotConfigured));

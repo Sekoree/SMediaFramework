@@ -997,6 +997,43 @@ public sealed partial class AudioRouter : IDisposable
         StopInternal(drain: false, flushAfterAbandon: true, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Drops chunks already queued in output pumps and flushes downstream hardware buffers without
+    /// stopping the router run loop. Hosts can use this after muting/pausing sources to make silence
+    /// immediate while keeping shared routers alive for other sources.
+    /// </summary>
+    public void FlushOutputBuffers(CancellationToken cancellationToken = default)
+    {
+        OutputPump[] activePumps;
+        IAudioOutput[] sinksForFlush;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            activePumps = CollectOutputPumps(_state.Outputs);
+            sinksForFlush = CollectOutputs(_state.Outputs);
+        }
+
+        foreach (var p in activePumps)
+        {
+            p.AbandonQueue();
+            p.WaitForIdle(TimeSpan.FromMilliseconds(100), cancellationToken);
+        }
+
+        foreach (var s in sinksForFlush)
+        {
+            if (s is not IFlushableOutput f)
+                continue;
+            try { f.Flush(); }
+            catch (Exception ex)
+            {
+                if (_log is { } l)
+                    l.LogError(ex, "IFlushableOutput.FlushOutputBuffers failed");
+                else
+                    MediaDiagnostics.LogError(ex, "AudioRouter FlushOutputBuffers");
+            }
+        }
+    }
+
     /// <summary>Alias for <see cref="Start"/>. Reads as a pair with <see cref="Pause"/>.</summary>
     /// <remarks>
     /// <para>

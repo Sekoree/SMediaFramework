@@ -86,6 +86,8 @@ internal sealed class CueCompositionRuntime : IDisposable
 
     public int LayerCount => _inner.LayerCount;
 
+    public int LeasedLineCount => _leasedLineIds.Count;
+
     internal long PumpStartCount => _inner.PumpStartCount;
 
     public event EventHandler<CueCompositionDriftWarning>? DriftWarning;

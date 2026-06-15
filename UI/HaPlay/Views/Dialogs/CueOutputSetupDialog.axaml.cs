@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using HaPlay.Playback;
 using HaPlay.ViewModels;
 using HaPlay.ViewModels.Dialogs;
 
@@ -70,10 +71,16 @@ public partial class CueOutputSetupDialog : Window
         var vm = CompositionOutputLayoutViewModel.Build(
             composition.Width,
             composition.Height,
-            siblings.Select(b => (
-                b.OutputLineId,
-                b.LineRef?.Definition.DisplayName ?? HaPlay.Resources.Strings.UnsetLabel,
-                b.Mapping)));
+            siblings.Select(b =>
+            {
+                var (width, height) = ResolveOutputResolution(b.LineRef?.Definition);
+                return (
+                    b.OutputLineId,
+                    b.LineRef?.Definition.DisplayName ?? HaPlay.Resources.Strings.UnsetLabel,
+                    width,
+                    height,
+                    b.Mapping);
+            }));
 
         var dialog = new CompositionOutputLayoutDialog { DataContext = vm };
         var saved = await dialog.ShowDialog<bool>(this);
@@ -90,4 +97,9 @@ public partial class CueOutputSetupDialog : Window
             cuePlayer.UpdateOutputMappingCallback?.Invoke(binding.CompositionId, binding.OutputLineId, mapping);
         }
     }
+
+    private static (int? Width, int? Height) ResolveOutputResolution(OutputDefinition? definition) =>
+        definition is not null && HaPlayPlaybackSession.TryGetOutputResolution(definition, out var width, out var height)
+            ? (width, height)
+            : (null, null);
 }

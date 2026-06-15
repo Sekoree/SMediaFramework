@@ -36,6 +36,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     private readonly List<ResamplingAudioOutput> _ndiAudioResamplers = new();
     private readonly List<IAudioOutput> _ndiAudioOutputs = new();
     private readonly List<MeteringAudioOutput> _meters = new();
+    private MediaPlayerCompositionRuntime? _mediaPlayerComposition;
     /// <summary>Phase A (§4.3.3, §9.6) — per-line wiring metadata so <see cref="TryAddOutput"/> /
     /// <see cref="TryRemoveOutput"/> can unwind exactly what they wired without disturbing the
     /// original-output path. Populated for both originally-routed lines (so removal of an original
@@ -475,9 +476,9 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
         var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoOutput Output)>();
         var acquiredLocalLines = new List<OutputLineViewModel>();
-        // Opt-in (HAPLAY_MEDIAPLAYER_COMPOSITIONS): route the deck's video through a composition — video on
-        // layer 0, hold/logo on layer 1 — instead of per-output logo wrappers. Default off, in which case the
-        // block below runs exactly as before. See Doc/HaPlay-MediaPlayer-Compositions-Plan.md.
+        // Default path: route the deck's video through a composition — video on layer 0, hold/logo on layer 1
+        // — instead of per-output logo wrappers. Set HAPLAY_MEDIAPLAYER_COMPOSITIONS=0/false/off for the
+        // legacy direct-router path while debugging.
         var useComposition = hasVideo && MediaPlayerCompositionsEnabled;
         if (hasVideo && !useComposition)
         {
@@ -577,15 +578,18 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 wiring.AcquiredKind = line.Definition is NDIOutputDefinition ? AcquireKind.NDI : AcquireKind.LocalVideo;
             }
 
-            // Opt-in composition path: build a video-L0 / logo-L1 composition over the deck's outputs and
-            // feed it from the same decoder input. videoChains is empty here, so the loops above were no-ops.
+            // Composition path: build a video-L0 / logo-L1 composition over the deck's outputs and feed it
+            // from the same decoder input. videoChains is empty here, so the loops above were no-ops.
             MediaPlayerCompositionRuntime? composition = null;
             if (useComposition)
             {
                 composition = TryBuildMediaPlayerComposition(
                     decoder, lines, ndiByDefinitionId, outputs, acquiredLocalLines, router, inputId);
                 if (composition is not null)
+                {
+                    pendingPlayback._mediaPlayerComposition = composition;
                     pendingPlayback._playbackOwnedDisposables.Add(composition);
+                }
             }
 
             var isSingleFrameVideo = decoder.HasVideo && decoder.VideoIsAttachedPicture;
@@ -635,10 +639,18 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         }
     }
 
-    private static bool MediaPlayerCompositionsEnabled =>
-        Environment.GetEnvironmentVariable("HAPLAY_MEDIAPLAYER_COMPOSITIONS") is "1" or "true" or "TRUE" or "True";
+    private static bool MediaPlayerCompositionsEnabled
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("HAPLAY_MEDIAPLAYER_COMPOSITIONS");
+            return !string.Equals(raw, "0", StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(raw, "off", StringComparison.OrdinalIgnoreCase);
+        }
+    }
 
-    /// <summary>Opt-in: builds a video-layer-0 / logo-layer-1 composition over the deck's video output lines and
+    /// <summary>Builds a video-layer-0 / logo-layer-1 composition over the deck's video output lines and
     /// routes the decoder video (<paramref name="inputId"/> on <paramref name="router"/>) into its layer-0 sink.
     /// Local lines are acquired here and tracked in <paramref name="acquiredLocalLines"/> (released with the
     /// session); NDI lines reuse the already-acquired carriers. Returns null when no video output leased.</summary>
@@ -1280,10 +1292,11 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
     public void ApplyFallbackImage(string? path)
     {
-        if (_logoSinks.Count == 0)
+        if (_logoSinks.Count == 0 && _mediaPlayerComposition is null)
             return;
         if (string.IsNullOrWhiteSpace(path))
         {
+            _mediaPlayerComposition?.SetHoldFrame(null);
             foreach (var l in _logoSinks)
             {
                 l.TrySetHoldTemplate(null);
@@ -1301,6 +1314,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             return;
         try
         {
+            if (_mediaPlayerComposition is not null)
+                _mediaPlayerComposition.SetHoldFrame(FallbackImageLoader.CloneHoldTemplate(proto));
             foreach (var l in _logoSinks)
             {
                 l.ApplyImageOverrideFormat(proto.Format);
@@ -1379,6 +1394,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
     public void SetHoldFallback(bool hold)
     {
+        _mediaPlayerComposition?.SetHold(hold);
         foreach (var l in _logoSinks)
             l.SetHoldFallback(hold);
         if (!hold)
@@ -1412,6 +1428,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     /// <summary>Pushes the hold template at <paramref name="presentationTime"/> on every logo output (playback timer).</summary>
     public void PumpHoldFrames(TimeSpan presentationTime)
     {
+        // Composition-based media-player hold is driven by the composition pump; only the legacy
+        // per-output logo wrappers need an external template pump.
         foreach (var l in _logoSinks)
         {
             try
@@ -1424,6 +1442,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             }
         }
     }
+
+    public bool RequiresHoldPump => _logoSinks.Count > 0;
 
     public void StartAllPortAudio()
     {

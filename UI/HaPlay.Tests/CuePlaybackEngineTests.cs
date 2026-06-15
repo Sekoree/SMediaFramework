@@ -80,4 +80,39 @@ public sealed class CuePlaybackEngineTests
         Assert.Equal(new[] { 0, 2 }, plan.AudioByOutput[outA].Select(r => r.SourceIndex).ToArray());
         Assert.Equal(new[] { 1 }, plan.AudioByOutput[outB].Select(r => r.SourceIndex).ToArray());
     }
+
+    [Fact]
+    public void ValidateWiredRouteCounts_RejectsVideoOnlyPlanWithNoLayerSlots()
+    {
+        var plan = new CuePlaybackEngine.RoutePlan(
+            new Dictionary<Guid, List<CuePlaybackEngine.AudioRoutePlanEntry>>(),
+            [new CueVideoPlacement { CompositionId = Guid.NewGuid(), LayerIndex = 0 }],
+            [0]);
+
+        var error = CuePlaybackEngine.ValidateWiredRouteCounts(plan, audioSourceCount: 0, layerSlotCount: 0);
+
+        Assert.Equal("No cue video output could be acquired.", error);
+    }
+
+    [Fact]
+    public void ValidateWiredRouteCounts_AllowsMixedPlanWhenOneSideWired()
+    {
+        var outputLineId = Guid.NewGuid();
+        var plan = new CuePlaybackEngine.RoutePlan(
+            new Dictionary<Guid, List<CuePlaybackEngine.AudioRoutePlanEntry>>
+            {
+                [outputLineId] =
+                [
+                    new CuePlaybackEngine.AudioRoutePlanEntry(
+                        new CueAudioRoute { OutputLineId = outputLineId, SourceChannel = 0, OutputChannel = 1 },
+                        SourceIndex: 0),
+                ],
+            },
+            [new CueVideoPlacement { CompositionId = Guid.NewGuid(), LayerIndex = 0 }],
+            [0]);
+
+        var error = CuePlaybackEngine.ValidateWiredRouteCounts(plan, audioSourceCount: 1, layerSlotCount: 0);
+
+        Assert.Null(error);
+    }
 }

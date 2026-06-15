@@ -2,13 +2,15 @@ using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
+using S.Media.Effects;
 using S.Media.FFmpeg.Video;
 using S.Media.Playback;
+using S.Media.SDL3;
 
 namespace HaPlay.Playback;
 
 /// <summary>
-/// Routes a media-player deck's video through the composition pipeline (opt-in alternative to the per-output
+/// Routes a media-player deck's video through the composition pipeline (default alternative to the per-output
 /// <see cref="LogoFallbackVideoOutput"/> path): the decoder video is <strong>layer 0</strong> and the
 /// hold/logo image is <strong>layer 1</strong> (on top), fanned to the deck's output lines by a
 /// <see cref="ClipCompositionRuntime"/>. Unlike the per-output logo wrapper, the composition pump keeps every
@@ -22,7 +24,9 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
 
     private readonly ClipCompositionRuntime _composition;
     private readonly ClipCompositionRuntime.LayerSlot _videoLayer;
-    private readonly ClipCompositionRuntime.LayerSlot? _logoLayer;
+    private ClipCompositionRuntime.LayerSlot? _logoLayer;
+    private VideoFrame? _logoTemplate;
+    private bool _hold;
     private bool _disposed;
 
     /// <param name="canvasFormat">Composition canvas size/rate (from the sizing rules — output res or 1080p).</param>
@@ -45,7 +49,7 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
             canvasFormat.Height,
             canvasFormat.FrameRate.Numerator,
             canvasFormat.FrameRate.Denominator);
-        _composition = new ClipCompositionRuntime(definition, outputs, compositorFactory);
+        _composition = new ClipCompositionRuntime(definition, outputs, compositorFactory ?? CreateDefaultCompositor);
 
         // Layer 0 — the deck's video, covering the canvas. The decoder feeds this via VideoSink.
         _videoLayer = _composition.AddLayer(
@@ -56,23 +60,7 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
         // Layer 1 — the hold/logo image, on top, hidden until SetHold(true). Submitted once; the compositor
         // retains the latest layer frame, so a static logo needs no continuous feed.
         if (logoFrame is not null)
-        {
-            try
-            {
-                _logoLayer = _composition.AddLayer(
-                    logoFrame.Format,
-                    new VideoPlacementSpec(CompositionId, LayerIndex: 1, Opacity: 0.0, Placement: "Letterbox",
-                        DestX: 0, DestY: 0, DestWidth: 1, DestHeight: 1));
-                _logoLayer.Output.Configure(logoFrame.Format);
-                _logoLayer.Output.Submit(VideoCpuFrameConverter.DuplicateCpuBacking(logoFrame, logoFrame.ColorTransferHint));
-            }
-            catch (Exception ex)
-            {
-                Trace.LogWarning(ex, "MediaPlayerCompositionRuntime: logo layer setup failed; continuing without a hold layer");
-                _logoLayer?.Dispose();
-                _logoLayer = null;
-            }
-        }
+            SetHoldFrame(logoFrame);
     }
 
     /// <summary>The layer-0 sink the deck's video router fans its decoded frames into.</summary>
@@ -84,8 +72,55 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
     /// <summary>Raises (hold on) or clears (hold off) the logo layer over the video. No-op without a logo layer.</summary>
     public void SetHold(bool hold)
     {
+        _hold = hold;
         if (_logoLayer is not null)
             _logoLayer.Opacity = hold ? 1f : 0f;
+    }
+
+    /// <summary>Replaces the hold/logo image. Takes ownership of <paramref name="logoFrame"/>.</summary>
+    public void SetHoldFrame(VideoFrame? logoFrame)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        _logoLayer?.Dispose();
+        _logoLayer = null;
+        _logoTemplate?.Dispose();
+        _logoTemplate = null;
+
+        if (logoFrame is null)
+            return;
+
+        try
+        {
+            _logoTemplate = VideoCpuFrameConverter.DuplicateCpuBacking(logoFrame, logoFrame.ColorTransferHint);
+            _logoLayer = _composition.AddLayer(
+                logoFrame.Format,
+                new VideoPlacementSpec(CompositionId, LayerIndex: 1, Opacity: _hold ? 1.0 : 0.0, Placement: "Letterbox",
+                    DestX: 0, DestY: 0, DestWidth: 1, DestHeight: 1));
+            _logoLayer.Output.Configure(logoFrame.Format);
+            VideoFrame? submitted = VideoCpuFrameConverter.DuplicateCpuBacking(_logoTemplate, _logoTemplate.ColorTransferHint);
+            try
+            {
+                _logoLayer.Output.Submit(submitted);
+                submitted = null;
+            }
+            finally
+            {
+                submitted?.Dispose();
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "MediaPlayerCompositionRuntime: logo layer setup failed; continuing without a hold layer");
+            _logoLayer?.Dispose();
+            _logoLayer = null;
+            _logoTemplate?.Dispose();
+            _logoTemplate = null;
+        }
+        finally
+        {
+            logoFrame.Dispose();
+        }
     }
 
     /// <summary>Per-deck video fade: layer-0 opacity (1 = full, 0 = black).</summary>
@@ -103,7 +138,41 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
         if (_disposed) return;
         _disposed = true;
         _logoLayer?.Dispose();
+        _logoTemplate?.Dispose();
         _videoLayer.Dispose();
         _composition.Dispose();
+    }
+
+    private static ClipCompositionCompositor CreateDefaultCompositor(VideoFormat canvasFormat)
+    {
+        var requested = Environment.GetEnvironmentVariable("HAPLAY_MEDIAPLAYER_COMPOSITOR");
+        if (string.Equals(requested, "cpu", StringComparison.OrdinalIgnoreCase))
+            return new ClipCompositionCompositor(
+                new CpuVideoCompositor(canvasFormat),
+                RequiresBgraLayerConversion: true,
+                BackendName: "CPU");
+
+        if (SDL3GLVideoCompositor.TryProbe(out var glError))
+        {
+            var gpu = new SDL3GLVideoCompositor(canvasFormat);
+            return new ClipCompositionCompositor(
+                gpu,
+                RequiresBgraLayerConversion: false,
+                BackendName: "OpenGL",
+                DisposeOnDriverThread: gpu.DisposeOnOwnerThread);
+        }
+
+        if (string.Equals(requested, "gl", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(requested, "gpu", StringComparison.OrdinalIgnoreCase))
+        {
+            Trace.LogWarning(
+                "MediaPlayerCompositionRuntime: OpenGL compositor requested but unavailable: {Error}; falling back to CPU",
+                glError);
+        }
+
+        return new ClipCompositionCompositor(
+            new CpuVideoCompositor(canvasFormat),
+            RequiresBgraLayerConversion: true,
+            BackendName: "CPU");
     }
 }

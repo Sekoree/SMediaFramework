@@ -720,6 +720,8 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 entry.IsPaused = startPaused;
                 WireAudioRoutes(entry, plan.AudioByOutput);
                 WireVideoPlacements(entry, list, plan);
+                if (ValidateWiredRouteCounts(plan, entry.AudioSources.Count, entry.LayerSlots.Count) is { } routeError)
+                    throw new InvalidOperationException(routeError);
                 PrepareFadeInStartLevels(entry);
                 entry.RoutesWired = true;
             });
@@ -817,6 +819,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             // (the old dispatcher hop only added latency before the audio went quiet).
             foreach (var entry in entries)
                 entry.SetAudioPaused(true);
+            FlushBufferedAudio(entries);
 
             // Heavy transport (thread joins, PortAudio flush) off UI thread with bounded timeout —
             // in parallel, so a multi-cue pause freezes everything together instead of staggered
@@ -1287,6 +1290,28 @@ public sealed partial class CuePlaybackEngine : IDisposable
         }
     }
 
+    internal static string? ValidateWiredRouteCounts(RoutePlan plan, int audioSourceCount, int layerSlotCount)
+    {
+        if (plan.AudioByOutput.Count > 0 && audioSourceCount == 0 && plan.Placements.Count == 0)
+            return "No cue audio output could be acquired.";
+        if (plan.Placements.Count > 0 && layerSlotCount == 0 && plan.AudioByOutput.Count == 0)
+            return "No cue video output could be acquired.";
+        if (audioSourceCount == 0 && layerSlotCount == 0)
+            return "No cue output could be acquired.";
+        return null;
+    }
+
+    private static void FlushBufferedAudio(IEnumerable<ActiveCue> entries)
+    {
+        foreach (var runtime in entries
+                     .SelectMany(entry => entry.AudioSources.Select(source => source.Runtime))
+                     .Distinct())
+        {
+            try { runtime.FlushBufferedAudio(); }
+            catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.FlushBufferedAudio: {Output}", runtime.OutputId); }
+        }
+    }
+
     private void WireVideoPlacements(
         ActiveCue entry,
         CueList list,
@@ -1380,7 +1405,14 @@ public sealed partial class CuePlaybackEngine : IDisposable
         lock (_gate)
         {
             if (_compositions.TryGetValue(compositionId, out var existing))
-                return existing;
+            {
+                if (existing.LeasedLineCount > 0)
+                    return existing;
+
+                _compositions.Remove(compositionId);
+                try { existing.Dispose(); }
+                catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.GetOrCreateComposition: dispose empty existing runtime"); }
+            }
         }
 
         var composition = list.Compositions.FirstOrDefault(c => c.Id == compositionId);
@@ -1397,6 +1429,15 @@ public sealed partial class CuePlaybackEngine : IDisposable
             .ToDictionary(g => g.Key, g => g.First().Mapping);
 
         var runtime = new CueCompositionRuntime(composition, targetLines, _outputs, mappingsByLine);
+        if (runtime.LeasedLineCount == 0)
+        {
+            runtime.Dispose();
+            Trace.LogWarning(
+                "CuePlaybackEngine.GetOrCreateComposition: composition {Composition} has no acquired video outputs",
+                composition.Name);
+            return null;
+        }
+
         // Surface drift warnings to the operator via the cue VM's status message — keeps the
         // "your composition is behind by 12 frames" signal close to the transport UI rather
         // than buried in logs only.

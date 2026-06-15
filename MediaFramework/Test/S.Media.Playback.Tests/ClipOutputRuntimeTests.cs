@@ -61,6 +61,34 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public void ClipAudioOutputRuntime_FlushBufferedAudio_FlushesOutputWithoutStoppingRuntime()
+    {
+        var format = new AudioFormat(48_000, 2);
+        var output = new FlushableRecordingAudioOutput(format);
+        using var runtime = new ClipAudioOutputRuntime(
+            "out-a",
+            output,
+            new FakePlaybackClock(),
+            displayName: "Output A");
+
+        runtime.AddSource(
+            new ConstantAudioSource(format),
+            [new AudioRouteSpec("out-a", SourceChannel: 0, OutputChannel: 1)],
+            "cue-a");
+
+        runtime.EnsureStarted();
+        Assert.True(SpinWait.SpinUntil(() => output.SubmittedFloats > 0, TimeSpan.FromSeconds(1)),
+            "shared cue audio router did not start after EnsureStarted");
+        var submittedBefore = output.SubmittedFloats;
+
+        runtime.FlushBufferedAudio();
+
+        Assert.True(output.FlushCount >= 1);
+        Assert.True(SpinWait.SpinUntil(() => output.SubmittedFloats > submittedBefore, TimeSpan.FromSeconds(1)),
+            "runtime should continue after flushing queued audio");
+    }
+
+    [Fact]
     public void ClipAudioOutputRuntime_UpdateAndRemoveRoute_UsesExplicitRouteId()
     {
         var format = new AudioFormat(48_000, 2);
@@ -718,6 +746,23 @@ public sealed class ClipOutputRuntimeTests
 
         public void Submit(ReadOnlySpan<float> packedSamples) =>
             Interlocked.Add(ref _submittedFloats, packedSamples.Length);
+    }
+
+    private sealed class FlushableRecordingAudioOutput(AudioFormat format) : IAudioOutput, IFlushableOutput
+    {
+        private long _submittedFloats;
+        private int _flushCount;
+
+        public AudioFormat Format { get; } = format;
+
+        public long SubmittedFloats => Volatile.Read(ref _submittedFloats);
+
+        public int FlushCount => Volatile.Read(ref _flushCount);
+
+        public void Submit(ReadOnlySpan<float> packedSamples) =>
+            Interlocked.Add(ref _submittedFloats, packedSamples.Length);
+
+        public void Flush() => Interlocked.Increment(ref _flushCount);
     }
 
     private sealed class FakePlaybackClock : IPlaybackClock

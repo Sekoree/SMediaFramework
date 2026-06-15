@@ -9,7 +9,7 @@ The auto-size-to-output belongs to the **regular media player**, not the cue pla
 explicit, operator-chosen composition sizes — an earlier "Fit to output" button + default-from-output on the
 cue composition editor was reverted).
 
-* **Media player** (opt-in composition path, §2): the composition canvas auto-sizes to the **first video
+* **Media player** (default composition path, §2): the composition canvas auto-sizes to the **first video
   output that declares a resolution, else 1080p** (`HaPlayPlaybackSession.FirstOutputResolutionOr1080`).
   Resolution source: `LocalVideoOutputDefinition.WindowWidth/Height` and
   `NDIOutputDefinition.ResolutionLockWidth/Height` via `HaPlayPlaybackSession.TryGetOutputResolution`
@@ -17,44 +17,51 @@ cue composition editor was reverted).
 * **Cue player**: unchanged — composition Width/Height are set explicitly in the Output-setup → Compositions
   list (default 1080p). No auto-fit button.
 
-> Limitation: a resolution is only known when the output declares one (window size / NDI lock). A running
-> SDL window's *live* size isn't read. Good enough for the common "configured rig" case; a future enhancement
-> could read the live output size, and surface a manual override / explicit auto-fit in a media-player
-> composition settings UI if wanted.
+> Limitation: a resolution is only known when the output declares one (window size / NDI lock). Windowed
+> local previews now write resize events back into `LocalVideoOutputDefinition.WindowWidth/Height`, so a
+> manually resized local output becomes the reported size used by later composition/layout decisions.
+> Fullscreen outputs still rely on their configured/declared size policy.
 
-## 2. Media player uses compositions — OPT-IN MVP WIRED (2026-06-15); refinements next
+## 2. Media player uses compositions — DEFAULT PATH WIRED (2026-06-15)
 
 **Goal:** route the regular media-player decks through the composition pipeline like the cue player, with
 the decoder video on **layer 0** and the hold/logo image as a layer on top (**layer 1**; "the top layer"
 so it overlays everything — only higher than 1 if more overlays are added later).
 
-**Shipped (opt-in, default off — `HAPLAY_MEDIAPLAYER_COMPOSITIONS=1`):**
+**Shipped (default on; set `HAPLAY_MEDIAPLAYER_COMPOSITIONS=0`, `false`, or `off` for the legacy path):**
 * `MediaPlayerCompositionRuntime` (`UI/HaPlay/Playback/`) — owns a `ClipCompositionRuntime`, a layer-0
   video slot (`VideoSink`), and an optional layer-1 logo slot, with `SetHold` / `SetVideoOpacity` /
-  `SetClockMaster` / `EnsurePumpStarted`. Unit-tested (`MediaPlayerCompositionRuntimeTests`: layer-0 fans
-  to all outputs; logo layer present only with a logo).
-* `HaPlayPlaybackSession.TryCreate` (file path): when the flag is set and the file has video, it builds the
+  `SetHoldFrame` / `SetClockMaster` / `EnsurePumpStarted`. Unit-tested (`MediaPlayerCompositionRuntimeTests`:
+  layer-0 fans to all outputs; logo layer present only with a logo).
+* `HaPlayPlaybackSession.TryCreate` (file path): when the file has video, it builds the
   composition over the deck's video output lines (`TryBuildMediaPlayerComposition`) and routes the decoder
   video into layer 0 instead of the per-output `LogoFallbackVideoOutput` fan-out. Canvas size defaults to the
-  first output's resolution, else 1080p. **When the flag is off the path is byte-identical to before** (the
-  whole branch is guarded), so the default deck behaviour is untouched. 539 HaPlay tests green.
+  first output's resolution, else 1080p. The env var above keeps the old direct-router path available for
+  debugging.
+* `ApplyFallbackImage` / `SetHoldFallback` now feed the deck hold image into the composition's layer-1 slot
+  and toggle that layer instead of relying on a per-output hold pump. The old logo wrapper path is still used
+  only when composition mode is explicitly disabled.
+* Windowed local output resize events update the output definition, so later media-player sizing and the
+  cue-player layout editor see the current reported raster.
 
 **Remaining refinements (need the running app to validate):**
-* **Feed layer 1** — the session currently builds the composition video-only; pass the deck's hold/logo
-  image into `MediaPlayerCompositionRuntime`'s logo slot, and route the deck's HOLD state to `SetHold` and
-  per-deck video fade to `SetVideoOpacity` (replacing the `LogoFallbackVideoOutput` hold/fade/fault).
 * **Clock master** — currently the composition runs freerun (presents the latest decoded frame at canvas
   rate); call `SetClockMaster(Player.AudioClock, Player.PlayClock)` after audio is wired for tight A/V sync.
 * **Per-line health** — the comp path doesn't populate `LineWiring.LogoOutput`, so per-line presentation
   stats degrade in comp mode; wire comp pump metrics to the health panel.
-* **Live inputs + the live path** (NDI/PortAudio decks) — the opt-in covers file playback only so far.
-* **Flip the default / retire `LogoFallbackVideoOutput`** from the media-player path once parity is confirmed.
+* **Live inputs + the live path** (NDI/PortAudio decks) — the composition path covers file playback only so far.
+* **Media-player mapping UI/model** — the regular media player now uses a composition internally, but it
+  does not yet own saved output mappings/layouts like cue compositions do. Add a media-player mapping model
+  before claiming cue-style Layout editor control for deck outputs.
+* **Retire `LogoFallbackVideoOutput`** from the media-player path once composition parity is confirmed in the
+  running app.
 
-### Validate the opt-in (in-app)
-Set `HAPLAY_MEDIAPLAYER_COMPOSITIONS=1`, play a file deck to one or more video outputs, and confirm: video
-shows on every output; multi-output decks stay frame-locked (same canvas frame per tick, §`HaPlay-MultiOutput-Sync.md`);
-output mapping / the Layout editor now apply to the media player too; teardown releases the outputs cleanly
-(no stuck windows / NDI carriers). Then report so the refinements above can be prioritised.
+### Validate in-app
+Play a file deck to one or more video outputs and confirm: video shows on every output; HOLD shows the
+configured fallback image without the old 30 Hz hold pump; multi-output decks stay frame-locked (same canvas
+frame per tick, §`HaPlay-MultiOutput-Sync.md`); the full canvas fans out to every selected video output;
+teardown releases the outputs cleanly (no stuck windows / NDI carriers). Set `HAPLAY_MEDIAPLAYER_COMPOSITIONS=0`
+only when comparing against the old path.
 
 ---
 
@@ -71,7 +78,8 @@ last real frame, drives a hold toggle, per-branch opacity for video fades).
 * **Layer 1** = the hold/logo image as a `StaticFrameSource` (or image source) slot, shown on
   hold/idle/fault, positioned/scaled like any layer.
 * The composition fans to the outputs (replacing the per-output `LogoFallbackVideoOutput`), which also
-  gives the media player **output mapping / warp / multi-output layout** for free.
+  gives the media player the framework hook needed for **output mapping / warp / multi-output layout** once
+  the regular-media-player side has a saved mapping model/UI.
 
 **Why it's staged, not rushed:**
 * `HaPlayPlaybackSession` (~2,200 lines) is the **live** path every deck plays through; a regression
@@ -85,7 +93,8 @@ last real frame, drives a hold toggle, per-branch opacity for video fades).
 1. A `MediaPlayerCompositionRuntime` adapter (mirroring `CueCompositionRuntime`) that owns a
    `ClipCompositionRuntime`, a layer-0 video slot fed by the deck, and a layer-1 logo slot.
 2. Wire it behind an opt-in per-player flag first (so the existing path stays the default while it's
-   validated), then flip the default once proven.
+   validated), then flip the default once proven. **Current status: default flipped; legacy path remains
+   available via `HAPLAY_MEDIAPLAYER_COMPOSITIONS=0/false/off`.**
 3. Map the existing hold/fade/fault behaviours onto layer ops (layer-1 logo visibility = hold; per-deck
    fade = layer-0 opacity tween; fault = show layer-1).
 4. Retire `LogoFallbackVideoOutput` from the media-player path once parity is confirmed.
@@ -127,8 +136,14 @@ agree on absolute time — the gap for wall sync.
 * **Moved to the composition list.** The **Layout…** button now lives on each composition row (Output-setup
   → Compositions), not on the per-output binding rows — the layout is a property of the composition (all its
   outputs together), so that's where it belongs.
-* **Aspect-locked resize.** Dragging the bottom-right handle in `OutputLayoutCanvas` now preserves the box's
-  aspect ratio by default (no distortion while fine-tuning); hold **Shift** to resize freely.
+* **Physical output sizing.** The layout editor now carries each output's reported raster separately from the
+  composition canvas. A 3840×1080 composition with two 1920×1080 outputs opens as two half-width 1080p tiles,
+  and saved mappings keep `CueOutputMapping.OutputWidth/Height` at the physical output size instead of the
+  source-slice size.
+* **Numeric fine-tuning.** Selecting an output exposes numeric X/Y/W/H fields in canvas pixels.
+* **Aspect-locked resize.** Dragging the bottom-right handle in `OutputLayoutCanvas` now preserves the output's
+  physical pixel aspect ratio by default (no distortion while fine-tuning); uncheck **Lock aspect ratio** or
+  hold **Shift** to resize freely.
 * **Keyboard fine-positioning.** A selected output nudges with the **arrow keys** — one canvas pixel per
   press (the dialog passes the canvas pixel size), **Shift = 10 px**.
 

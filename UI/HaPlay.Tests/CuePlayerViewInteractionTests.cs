@@ -106,6 +106,7 @@ public sealed class CuePlayerViewInteractionTests
             };
 
             vm.StandbySelectedCommand.Execute(null);
+            vm.OnCueStarted(cue.Id);
             vm.GoCommand.Execute(null);
         });
 
@@ -113,6 +114,50 @@ public sealed class CuePlayerViewInteractionTests
 
         Assert.True(seenFinalStatus.IsSet);
         Assert.False(statusRaisedOffUiThread);
+    }
+
+    [Fact]
+    public void Go_MediaExecutorReturnsWithoutCueStarted_RestoresCueToStandby()
+    {
+        var seenFailureStatus = new ManualResetEventSlim(false);
+        CuePlayerViewModel? vm = null;
+        CueNodeViewModel? cue = null;
+
+        DispatchUi(() =>
+        {
+            vm = new CuePlayerViewModel();
+            vm.AddMediaCueCommand.Execute(null);
+            cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            cue.SourceOrAction = "/tmp/test.mp4";
+            vm.MediaCueExecutor = async (_, _) =>
+            {
+                await Task.Run(static () => Thread.Sleep(10));
+                return "No cue video output could be acquired.";
+            };
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName != nameof(CuePlayerViewModel.StatusMessage)
+                    || vm.StatusMessage?.Contains("No cue video output", StringComparison.Ordinal) != true)
+                    return;
+                seenFailureStatus.Set();
+            };
+
+            vm.StandbySelectedCommand.Execute(null);
+            vm.GoCommand.Execute(null);
+        });
+
+        PumpUntil(() => seenFailureStatus.IsSet, TimeSpan.FromSeconds(2));
+
+        DispatchUi(() =>
+        {
+            Assert.NotNull(vm);
+            Assert.NotNull(cue);
+            Assert.Null(vm!.CurrentCueNode);
+            Assert.Same(cue, vm.StandbyCueNode);
+            Assert.Same(cue, vm.SelectedCueNode);
+            Assert.Contains("Failed to start", vm.StatusMessage);
+            Assert.DoesNotContain("Triggered", vm.StatusMessage);
+        });
     }
 
     private static void DispatchUi(Action action) =>
