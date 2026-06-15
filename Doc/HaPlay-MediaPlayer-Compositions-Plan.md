@@ -22,11 +22,43 @@ The composition canvas can now be sized sensibly instead of always defaulting to
 > running SDL window's *live* size isn't read at edit time. Good enough for the common "configured rig"
 > case; a future enhancement could read the live output size when the line is running.
 
-## 2. Media player uses compositions — PLANNED (major live-path refactor)
+## 2. Media player uses compositions — OPT-IN MVP WIRED (2026-06-15); refinements next
 
 **Goal:** route the regular media-player decks through the composition pipeline like the cue player, with
 the decoder video on **layer 0** and the hold/logo image as a layer on top (**layer 1**; "the top layer"
 so it overlays everything — only higher than 1 if more overlays are added later).
+
+**Shipped (opt-in, default off — `HAPLAY_MEDIAPLAYER_COMPOSITIONS=1`):**
+* `MediaPlayerCompositionRuntime` (`UI/HaPlay/Playback/`) — owns a `ClipCompositionRuntime`, a layer-0
+  video slot (`VideoSink`), and an optional layer-1 logo slot, with `SetHold` / `SetVideoOpacity` /
+  `SetClockMaster` / `EnsurePumpStarted`. Unit-tested (`MediaPlayerCompositionRuntimeTests`: layer-0 fans
+  to all outputs; logo layer present only with a logo).
+* `HaPlayPlaybackSession.TryCreate` (file path): when the flag is set and the file has video, it builds the
+  composition over the deck's video output lines (`TryBuildMediaPlayerComposition`) and routes the decoder
+  video into layer 0 instead of the per-output `LogoFallbackVideoOutput` fan-out. Canvas size defaults to the
+  first output's resolution, else 1080p. **When the flag is off the path is byte-identical to before** (the
+  whole branch is guarded), so the default deck behaviour is untouched. 539 HaPlay tests green.
+
+**Remaining refinements (need the running app to validate):**
+* **Feed layer 1** — the session currently builds the composition video-only; pass the deck's hold/logo
+  image into `MediaPlayerCompositionRuntime`'s logo slot, and route the deck's HOLD state to `SetHold` and
+  per-deck video fade to `SetVideoOpacity` (replacing the `LogoFallbackVideoOutput` hold/fade/fault).
+* **Clock master** — currently the composition runs freerun (presents the latest decoded frame at canvas
+  rate); call `SetClockMaster(Player.AudioClock, Player.PlayClock)` after audio is wired for tight A/V sync.
+* **Per-line health** — the comp path doesn't populate `LineWiring.LogoOutput`, so per-line presentation
+  stats degrade in comp mode; wire comp pump metrics to the health panel.
+* **Live inputs + the live path** (NDI/PortAudio decks) — the opt-in covers file playback only so far.
+* **Flip the default / retire `LogoFallbackVideoOutput`** from the media-player path once parity is confirmed.
+
+### Validate the opt-in (in-app)
+Set `HAPLAY_MEDIAPLAYER_COMPOSITIONS=1`, play a file deck to one or more video outputs, and confirm: video
+shows on every output; multi-output decks stay frame-locked (same canvas frame per tick, §`HaPlay-MultiOutput-Sync.md`);
+output mapping / the Layout editor now apply to the media player too; teardown releases the outputs cleanly
+(no stuck windows / NDI carriers). Then report so the refinements above can be prioritised.
+
+---
+
+### Original design notes (retained)
 
 **Current path** (`UI/HaPlay/Playback/HaPlayPlaybackSession.cs`): `decoder.Video` → `player.VideoRouter`
 (one input) → fan-out to each video output line, each wrapped in a `LogoFallbackVideoOutput`. The hold /

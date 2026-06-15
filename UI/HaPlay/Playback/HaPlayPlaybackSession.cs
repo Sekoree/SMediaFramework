@@ -475,7 +475,11 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
         var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoOutput Output)>();
         var acquiredLocalLines = new List<OutputLineViewModel>();
-        if (hasVideo)
+        // Opt-in (HAPLAY_MEDIAPLAYER_COMPOSITIONS): route the deck's video through a composition — video on
+        // layer 0, hold/logo on layer 1 — instead of per-output logo wrappers. Default off, in which case the
+        // block below runs exactly as before. See Doc/HaPlay-MediaPlayer-Compositions-Plan.md.
+        var useComposition = hasVideo && MediaPlayerCompositionsEnabled;
+        if (hasVideo && !useComposition)
         {
             foreach (var line in lines)
             {
@@ -573,6 +577,17 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 wiring.AcquiredKind = line.Definition is NDIOutputDefinition ? AcquireKind.NDI : AcquireKind.LocalVideo;
             }
 
+            // Opt-in composition path: build a video-L0 / logo-L1 composition over the deck's outputs and
+            // feed it from the same decoder input. videoChains is empty here, so the loops above were no-ops.
+            MediaPlayerCompositionRuntime? composition = null;
+            if (useComposition)
+            {
+                composition = TryBuildMediaPlayerComposition(
+                    decoder, lines, ndiByDefinitionId, outputs, acquiredLocalLines, router, inputId);
+                if (composition is not null)
+                    pendingPlayback._playbackOwnedDisposables.Add(composition);
+            }
+
             var isSingleFrameVideo = decoder.HasVideo && decoder.VideoIsAttachedPicture;
             foreach (var output in videoChains.Select(t => t.Output))
             {
@@ -591,6 +606,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             // outputs for a video-only file) produce no warnings and keep the legacy zero-output session.
             if (openWarnings.Count > 0
                 && videoChains.Count == 0
+                && composition is null
                 && pendingPlayback._acquiredPortAudioLines.Count == 0
                 && pendingPlayback._ndiAudioOutputs.Count == 0)
             {
@@ -617,6 +633,92 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             ReleaseAcquiredCarriers(outputs, acquired);
             return false;
         }
+    }
+
+    private static bool MediaPlayerCompositionsEnabled =>
+        Environment.GetEnvironmentVariable("HAPLAY_MEDIAPLAYER_COMPOSITIONS") is "1" or "true" or "TRUE" or "True";
+
+    /// <summary>Opt-in: builds a video-layer-0 / logo-layer-1 composition over the deck's video output lines and
+    /// routes the decoder video (<paramref name="inputId"/> on <paramref name="router"/>) into its layer-0 sink.
+    /// Local lines are acquired here and tracked in <paramref name="acquiredLocalLines"/> (released with the
+    /// session); NDI lines reuse the already-acquired carriers. Returns null when no video output leased.</summary>
+    private static MediaPlayerCompositionRuntime? TryBuildMediaPlayerComposition(
+        MediaContainerDecoder decoder,
+        IReadOnlyList<OutputLineViewModel> lines,
+        Dictionary<Guid, NDIOutput> ndiByDefinitionId,
+        OutputManagementViewModel outputs,
+        List<OutputLineViewModel> acquiredLocalLines,
+        VideoRouter router,
+        string inputId)
+    {
+        var leases = new List<ClipCompositionOutputLease>();
+        foreach (var line in lines)
+        {
+            switch (line.Definition)
+            {
+                case LocalVideoOutputDefinition lv:
+                {
+                    var output = outputs.TryAcquireLocalVideoOutputForPlayback(line);
+                    if (output is null)
+                    {
+                        Trace.LogWarning("TryBuildMediaPlayerComposition: local video '{Name}' unavailable — skipped", lv.DisplayName);
+                        continue;
+                    }
+                    acquiredLocalLines.Add(line);
+                    // Preview runtime owns the output (released via the line) — the composition must not dispose it.
+                    leases.Add(new ClipCompositionOutputLease(
+                        $"sdl_{lv.Id:N}", lv.DisplayName, output, Release: null, DisposeOutputOnRuntimeDispose: false));
+                    break;
+                }
+                case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.AudioOnly:
+                {
+                    if (!ndiByDefinitionId.TryGetValue(nd.Id, out var ndi))
+                        continue;
+                    var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-comp-{nd.Id:N}");
+                    var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-comp-{nd.Id:N}",
+                        log: null, disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
+                    // Carrier released via the session's acquired-carriers list; the composition owns the pump.
+                    leases.Add(new ClipCompositionOutputLease(
+                        $"ndi_{nd.Id:N}", nd.DisplayName, pump, Release: null, DisposeOutputOnRuntimeDispose: true));
+                    break;
+                }
+            }
+        }
+
+        if (leases.Count == 0)
+            return null;
+
+        var (width, height) = FirstOutputResolutionOr1080(lines);
+        var rate = decoder.HasVideo ? decoder.Video.Format.FrameRate : new Rational(60, 1);
+        var canvas = new VideoFormat(width, height, PixelFormat.Bgra32, rate);
+        var sourceFormat = decoder.HasVideo ? decoder.Video.Format : canvas;
+
+        var composition = new MediaPlayerCompositionRuntime(canvas, leases, sourceFormat);
+        var outId = router.AddOutput(composition.VideoSink, "mediaplayer_comp", disposeOutputOnRouterDispose: false);
+        if (!router.TryAddRoute(inputId, outId, out var routeErr))
+        {
+            composition.Dispose();
+            throw new InvalidOperationException(routeErr ?? "media player composition route failed");
+        }
+        composition.EnsurePumpStarted();
+        Trace.LogInformation("TryBuildMediaPlayerComposition: {Count} output(s), canvas {W}x{H}", leases.Count, width, height);
+        return composition;
+    }
+
+    /// <summary>Default composition canvas size: the first video output line that declares a resolution, else 1080p.</summary>
+    private static (int Width, int Height) FirstOutputResolutionOr1080(IReadOnlyList<OutputLineViewModel> lines)
+    {
+        foreach (var line in lines)
+        {
+            switch (line.Definition)
+            {
+                case LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv:
+                    return (lv.WindowWidth!.Value, lv.WindowHeight!.Value);
+                case NDIOutputDefinition { ResolutionLockWidth: > 0, ResolutionLockHeight: > 0 } nd:
+                    return (nd.ResolutionLockWidth!.Value, nd.ResolutionLockHeight!.Value);
+            }
+        }
+        return (1920, 1080);
     }
 
     private static void DisposePipelineOwned(List<IDisposable> owned)
