@@ -121,10 +121,13 @@ heuristic shared by all hosts; flagged here for review.
 ## Phase 2 — concrete cue-engine wiring plan (audio-actuated path)
 
 `OutputSyncGroup` now observes **`IPlaybackClock`** (`ElapsedSinceStart` is the raw genlock metric), which
-is exactly what the cue audio path exposes — so the cross-cue two-device case wires up cleanly. This is the
-spec for the hardware-in-the-loop session; it is **deliberately not yet wired into the live cue engine**
-(the efficacy can only be confirmed with two real devices, and a wrong drift direction wouldn't show up in
-the unit suite — so it needs hardware, behind an opt-in flag, before it ships).
+is exactly what the cue audio path exposes. **The actuation primitive is now built (2026-06-15):**
+`ClipAudioOutputRuntime` takes an opt-in `ratePpmProvider` constructor argument (default-off) that wraps its
+device output in an `AdaptiveRateAudioOutput` and explicitly `SlaveTo`s the router to that wrapper (the usual
+AutoWirePrimary auto-slave skips `IAdaptiveRateWrappedOutput` by design). What remains is the **host wiring**
+(create the group, choose membership, pass the provider, drive `Tick`) — deliberately **not** yet wired into
+the live cue engine, because its efficacy (correct drift *direction*, no drops) can only be confirmed with
+**two real audio devices**, and a wrong direction would not show up in the unit suite.
 
 **Integration points (all in `UI/HaPlay/Playback/CuePlaybackEngine*`):**
 - Per device line, `GetOrCreateAudioRuntime(outputLineId)` builds a `ClipAudioOutputRuntime` from
@@ -136,10 +139,18 @@ the unit suite — so it needs hardware, behind an opt-in flag, before it ships)
 **Wiring (opt-in, per composition that spans >1 device):**
 1. When the composition acquires a runtime whose `PlaybackClock` differs from `PlaybackClockMaster`, treat it
    as a sync member: `var h = group.AddMember(runtime.PlaybackClock)`.
-2. Actuate it by wrapping that device's `IAudioOutput` in
-   `new AdaptiveRateAudioOutput(output, () => group.GetMemberPpm(h))` **before** it is handed to
-   `ClipAudioOutputRuntime` (the wrapper must sit between the runtime's router and the device). The FFmpeg
-   plugin is already registered (Option A), so the wrapper is available.
+2. Actuate it by passing `ratePpmProvider: () => group.GetMemberPpm(h)` to the `ClipAudioOutputRuntime`
+   constructor (**implemented 2026-06-15**, default-off): the runtime wraps its device output in an
+   `AdaptiveRateAudioOutput` driven by that provider and explicitly slaves the router to the wrapper. So the
+   only remaining host work is to thread the provider through where the runtime is created
+   (`GetOrCreateAudioRuntime` / `AcquireAudioOutput`).
+
+**Open design decision (yours):** genlock *scope*. Per-composition (reference = each composition's
+`PlaybackClockMaster`) is the literal fix for the documented caveat, but `ClipAudioOutputRuntime`s are
+**pooled per device and shared across compositions**, so a per-composition correction on a shared device is
+ambiguous. Engine-wide genlock (one reference device, all other active devices disciplined to it) sidesteps
+that and is the natural "lock the whole show to one master" model — but it's a product choice. This needs
+deciding **and** two-device hardware validation before the host wiring ships.
 3. Own one `OutputSyncGroup` per composition (reference = `PlaybackClockMaster`); `group.Start(100 ms)` (or
    tick it from the engine's existing periodic loop). Dispose it with the composition; `RemoveMember` when a
    runtime is released by `ReleaseEmptyRuntimes`.
