@@ -23,6 +23,15 @@
         <PackageReference Include="Vortice.DXGI" />
     </ItemGroup>
 
+    <!-- Windows publishes ship FFmpeg shared libraries via NuGet (FFmpeg.GPL) so the win-x64
+         artifact no longer needs the libav* DLLs hand-added. Win RIDs only — Linux/macOS keep
+         using the system FFmpeg. NOTE: the FFmpeg.GPL version pinned in Directory.Packages.props
+         must provide FFmpeg 8.x to match FFmpeg.AutoGen 8.1.0; bump it in lock-step if AutoGen's
+         major changes. (Verified: this build ships avcodec-62 / avutil-60 = FFmpeg 8.x.) -->
+    <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
+        <PackageReference Include="FFmpeg.GPL" />
+    </ItemGroup>
+
     <ItemGroup>
         <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
     </ItemGroup>

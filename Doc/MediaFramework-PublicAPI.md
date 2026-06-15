@@ -1,6 +1,6 @@
 # MediaFramework public API map
 
-Post-refactor v2 surface (May 2026). Obsolete `TryOpen*` / `TryOpenFile` shims on `MediaPlayer` remain for compatibility; prefer builders (`MediaPlayer.OpenFile(path).TryBuild()` / `OpenAsync()`).
+Post-refactor v2 surface (May 2026; `TryOpen*` demoted to internal 2026-06-15). The public open entry points are the builders (`MediaPlayer.OpenFile(path).TryBuild()` / `OpenAsync()`); the former `TryOpen*` / `TryOpenFile` overloads are now `internal` builder cores, no longer public API.
 
 ## Shipping assemblies
 
@@ -46,7 +46,7 @@ Post-refactor v2 surface (May 2026). Obsolete `TryOpen*` / `TryOpenFile` shims o
 | `VideoPtsClock` | `IPlaybackClock` | Video-only / freerun PTS |
 | `NDIIngestPlaybackClock` | `IPlaybackClock` | NDI receive (`S.Media.NDI.Clock`) |
 
-Legacy aliases (obsolete): `IPlaybackPlayhead`, `IPlaybackTimeline` → use `IPlayhead` / clock types above.
+Legacy aliases `IPlaybackPlayhead` / `IPlaybackTimeline` were **removed 2026-06-15** — use `IPlayhead` / `IReadOnlyPlayhead` / the clock types above.
 
 ## Outputs renamed (Phase 1)
 
@@ -54,8 +54,8 @@ Legacy aliases (obsolete): `IPlaybackPlayhead`, `IPlaybackTimeline` → use `IPl
 
 ## Deprecation policy (Phase 13)
 
-- **Keep for v2.0**: `MediaPlayer.TryOpen*` family (builder internals and HaPlay still reference them).
-- **Remove in next major**: duplicate open overloads, `IVideoCpuFrameConverter` on wrong assembly, `AudioRouterAutoResample` type alias if unused.
+- **Done (2026-06-15)**: the `MediaPlayer.TryOpen*` family was demoted from `[Obsolete] public` to `internal` builder cores (the builders call them directly; HaPlay/tools already use the public builders, so no public callers remained). Full solution + 99 Playback + 524 HaPlay tests stayed green.
+- **Removed (2026-06-15)**: the `IPlaybackTimeline` / `IPlaybackPlayhead` aliases (and the `AsPlayhead(IPlaybackTimeline)` shim), `AudioRouterAutoResample`, the wrong-assembly `IVideoCpuFrameConverter` registry properties (`Factory`/`CanConvertProbe`), the `IDeinterlacer` registry `Factory`, and the `MediaContainerPlaybackBundle.AudioPlayer` enum alias — all confirmed unused, deleted, with 4 dangling doc crefs repointed to `MediaFrameworkPlugins`. Full solution + 508 Core + 99 Playback + 524 HaPlay tests green.
 - **Documented replacements**: builders + `MediaContainer` / `AudioSource` facades (Phase 2).
 
 ## Snapshot counts (2026-05-22)

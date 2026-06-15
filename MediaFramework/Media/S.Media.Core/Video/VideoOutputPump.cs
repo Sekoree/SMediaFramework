@@ -42,7 +42,7 @@ public readonly record struct VideoOutputPumpAttachOptions(
 /// Subscribe to <see cref="VideoOutputPump.PumpPressure"/> (or <see cref="VideoRouter.PumpPressure"/> when registered via the router)
 /// for per-drop callbacks on the <see cref="Submit"/> thread (same idea as <c>AudioRouter.PumpPressure</c>).
 /// </remarks>
-public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl, IDisposable
+public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSetup, IVideoOutputQueueControl, IVideoOutputCooperativeAbort, IDisposable
 {
     private readonly IVideoOutput _inner;
     private readonly bool _disposeInner;
@@ -50,11 +50,15 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     private readonly ILogger? _log;
     private readonly string _name;
     private readonly object _gate = new();
-    private readonly Queue<VideoFrame> _queue = new();
+    private readonly Queue<(VideoFrame Frame, int Version)> _queue = new();
     private readonly ManualResetEventSlim _pending = new(false);
     private Thread? _thread;
     private CancellationTokenSource? _cts;
     private bool _configured;
+    // Bumped under _gate on a real format change. Each queued frame carries the version it was enqueued at,
+    // so the drain thread can drop a frame that was already dequeued before a reconfigure (the in-flight
+    // stale-format frame the queue-drop in Configure cannot reach).
+    private int _formatVersion;
     private bool _disposed;
     private long _dropped;
     private long _submitted;
@@ -127,9 +131,10 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                 // format-versioned queues would close that residual window.)
                 if (format != _inner.Format)
                 {
+                    _formatVersion++;
                     while (_queue.Count > 0)
                     {
-                        _queue.Dequeue().Dispose();
+                        _queue.Dequeue().Frame.Dispose();
                         Interlocked.Increment(ref _dropped);
                     }
                 }
@@ -218,14 +223,14 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
             while (_queue.Count >= _maxQueued)
             {
-                var victim = _queue.Dequeue();
+                var victim = _queue.Dequeue().Frame;
                 victim.Dispose();
                 var total = Interlocked.Increment(ref _dropped);
                 RaisePumpPressure(total);
                 ThrottledWarnQueueDrop();
             }
 
-            _queue.Enqueue(frame);
+            _queue.Enqueue((frame, _formatVersion));
             _pending.Set();
         }
     }
@@ -237,7 +242,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             ObjectDisposedException.ThrowIf(_disposed, this);
             while (_queue.Count > 0)
             {
-                _queue.Dequeue().Dispose();
+                _queue.Dequeue().Frame.Dispose();
                 Interlocked.Increment(ref _dropped);
             }
 
@@ -247,6 +252,13 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         if (_inner is IVideoOutputQueueControl innerControl)
             innerControl.AbandonQueuedFrames();
     }
+
+    /// <summary>
+    /// Forwards a cooperative-abort request to the inner output (for when this pump is itself the inner of
+    /// an outer wrapper). The pump's own <see cref="Dispose"/> also signals the inner directly.
+    /// </summary>
+    public void RequestSubmitAbort() =>
+        (_inner as IVideoOutputCooperativeAbort)?.RequestSubmitAbort();
 
     public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -313,6 +325,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             while (true)
             {
                 VideoFrame? next = null;
+                var enqueuedVersion = 0;
                 lock (_gate)
                 {
                     if (_queue.Count == 0)
@@ -321,7 +334,9 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                         break;
                     }
 
-                    next = _queue.Dequeue();
+                    var item = _queue.Dequeue();
+                    next = item.Frame;
+                    enqueuedVersion = item.Version;
                     Interlocked.Increment(ref _activeSubmits);
                 }
 
@@ -351,6 +366,19 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                         }
                     }
 
+                    // Format-versioned queue: a real reconfigure since this frame was enqueued makes it
+                    // stale for the now-reconfigured inner output — drop it rather than submit a
+                    // wrong-format frame. Closes the "frame already dequeued before a format change"
+                    // window the queue-drop in Configure cannot reach.
+                    bool staleFormat;
+                    lock (_gate) staleFormat = enqueuedVersion != _formatVersion;
+                    if (staleFormat)
+                    {
+                        toSubmit.Dispose();
+                        Interlocked.Increment(ref _dropped);
+                        continue;
+                    }
+
                     try
                     {
                         _inner.Submit(toSubmit);
@@ -378,7 +406,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         lock (_gate)
         {
             while (_queue.Count > 0)
-                _queue.Dequeue().Dispose();
+                _queue.Dequeue().Frame.Dispose();
         }
     }
 
@@ -400,6 +428,10 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         {
             cts?.Cancel();
             _pending.Set();
+            // Ask a cooperative inner output to abandon any in-flight Submit so the drainer returns
+            // promptly — otherwise a slow blocking Submit forces the join cap to expire and we leak pump
+            // state below. Outputs that don't implement this keep the prior leak-avoidance fallback.
+            (_inner as IVideoOutputCooperativeAbort)?.RequestSubmitAbort();
             if (thread is { } t)
             {
                 // Drainer is parked at most one SDK-paced Submit (typically ≤33 ms at the negotiated frame
@@ -427,7 +459,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         lock (_gate)
         {
             while (_queue.Count > 0)
-                _queue.Dequeue().Dispose();
+                _queue.Dequeue().Frame.Dispose();
         }
 
         // Drain thread has exited (threadExited above), so the branch converter is no longer in use.

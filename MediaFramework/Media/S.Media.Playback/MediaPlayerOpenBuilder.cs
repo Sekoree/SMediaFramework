@@ -165,7 +165,6 @@ public sealed class MediaPlayerOpenFileBuilder(string filePath) : MediaPlayerOpe
             return false;
         }
 
-#pragma warning disable CS0618
         var opened = MediaPlayer.TryOpen(
             FilePath,
             Options,
@@ -174,7 +173,6 @@ public sealed class MediaPlayerOpenFileBuilder(string filePath) : MediaPlayerOpe
             DecoderOwnership,
             out player,
             out error);
-#pragma warning restore CS0618
         return TryBuildWithCompanions(opened, player, out player, out error);
     }
 }
@@ -210,7 +208,6 @@ public sealed class MediaPlayerOpenUriBuilder(Uri mediaUri) : MediaPlayerOpenBui
 
     public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error)
     {
-#pragma warning disable CS0618
         var opened = MediaPlayer.TryOpenUri(
             MediaUri,
             Options,
@@ -218,7 +215,6 @@ public sealed class MediaPlayerOpenUriBuilder(Uri mediaUri) : MediaPlayerOpenBui
             DisposeVideoLead,
             out player,
             out error);
-#pragma warning restore CS0618
         return TryBuildWithCompanions(opened, player, out player, out error);
     }
 }
@@ -254,7 +250,6 @@ public sealed class MediaPlayerOpenStreamBuilder(Stream mediaStream) : MediaPlay
 
     public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error)
     {
-#pragma warning disable CS0618
         var opened = MediaPlayer.TryOpenStream(
             MediaStream,
             StreamInputName,
@@ -263,7 +258,6 @@ public sealed class MediaPlayerOpenStreamBuilder(Stream mediaStream) : MediaPlay
             DisposeVideoLead,
             out player,
             out error);
-#pragma warning restore CS0618
         return TryBuildWithCompanions(opened, player, out player, out error);
     }
 }
@@ -316,7 +310,6 @@ public sealed class MediaPlayerOpenLiveBuilder(
             return false;
         }
 
-#pragma warning disable CS0618
         var opened = MediaPlayer.TryOpenLive(
             AudioSource,
             VideoSource,
@@ -326,7 +319,6 @@ public sealed class MediaPlayerOpenLiveBuilder(
             DisposeLiveSources,
             out player,
             out error);
-#pragma warning restore CS0618
         return TryBuildWithCompanions(opened, player, out player, out error);
     }
 }
@@ -368,7 +360,6 @@ public sealed class MediaPlayerOpenDecoderBuilder(MediaContainerDecoder decoder)
 
     public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error)
     {
-#pragma warning disable CS0618
         var opened = MediaPlayer.TryOpen(
             Decoder,
             Options,
@@ -378,7 +369,6 @@ public sealed class MediaPlayerOpenDecoderBuilder(MediaContainerDecoder decoder)
             out player,
             out error,
             VideoSourceOverride);
-#pragma warning restore CS0618
         return TryBuildWithCompanions(opened, player, out player, out error);
     }
 }

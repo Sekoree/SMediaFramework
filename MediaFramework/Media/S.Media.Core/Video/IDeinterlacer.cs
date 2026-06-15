@@ -51,17 +51,9 @@ public interface IDeinterlacer : IDisposable
 /// </summary>
 public static class VideoDeinterlacerRegistry
 {
-    /// <summary>Returns a fresh <see cref="IDeinterlacer"/> instance configured for <paramref name="input"/>. <c>null</c> until a package installs one.</summary>
-    [Obsolete("Use MediaFrameworkPlugins.VideoDeinterlacerFactory")]
-    public static Func<VideoFormat, IDeinterlacer>? Factory
-    {
-        get => MediaFrameworkPlugins.VideoDeinterlacerFactory;
-        set => MediaFrameworkPlugins.VideoDeinterlacerFactory = value;
-    }
-
     /// <summary>
     /// Creates a deinterlacer. Resolution order is scoped factory, process-wide
-    /// <see cref="Factory"/>, then the built-in <see cref="BobDeinterlacer"/> fallback.
+    /// <see cref="S.Media.Core.Diagnostics.MediaFrameworkPlugins.VideoDeinterlacerFactory"/>, then the built-in <see cref="BobDeinterlacer"/> fallback.
     /// </summary>
     public static IDeinterlacer Create(VideoFormat input, Func<VideoFormat, IDeinterlacer>? scopedFactory = null) =>
         scopedFactory?.Invoke(input) ?? MediaFrameworkPlugins.VideoDeinterlacerFactory?.Invoke(input) ?? new BobDeinterlacer(input);

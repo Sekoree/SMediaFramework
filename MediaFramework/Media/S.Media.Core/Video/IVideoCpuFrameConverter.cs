@@ -28,25 +28,6 @@ public interface IVideoCpuFrameConverter : IDisposable
 /// </summary>
 public static class VideoCpuFrameConverterRegistry
 {
-    /// <summary>Returns a fresh <see cref="IVideoCpuFrameConverter"/> instance. <c>null</c> until a package installs one.</summary>
-    [Obsolete("Use MediaFrameworkPlugins.VideoCpuFrameConverterFactory")]
-    public static Func<IVideoCpuFrameConverter>? Factory
-    {
-        get => MediaFrameworkPlugins.VideoCpuFrameConverterFactory;
-        set => MediaFrameworkPlugins.VideoCpuFrameConverterFactory = value;
-    }
-
-    /// <summary>
-    /// Probes whether the registered converter can build a scaler for the given pair. <c>null</c>
-    /// until installed; treated as "no" by the fan-out picker so it falls through to alternatives.
-    /// </summary>
-    [Obsolete("Use MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe")]
-    public static Func<PixelFormat, PixelFormat, int, int, bool>? CanConvertProbe
-    {
-        get => MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe;
-        set => MediaFrameworkPlugins.VideoCpuFrameCanConvertProbe = value;
-    }
-
     /// <summary>Creates a converter from <see cref="MediaFrameworkPlugins.VideoCpuFrameConverterFactory"/>; throws when none is registered.</summary>
     public static IVideoCpuFrameConverter Create() =>
         MediaFrameworkPlugins.VideoCpuFrameConverterFactory?.Invoke()

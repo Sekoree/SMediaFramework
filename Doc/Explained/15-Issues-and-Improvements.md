@@ -71,6 +71,15 @@ Either would also help the **cross-cue compositor alignment** caveat (two cues o
 PortAudio devices in one composition drift relative to each other —
 [06](06-Clocks-and-AV-Sync.md)).
 
+> **Status (2026-06-15):** Option A is now **on by default in HaPlay** — startup registers
+> the FFmpeg adaptive-rate plugin and the playback session enables
+> `EnableAdaptiveRateOnNonMasterOutputs`, so secondary-output drift self-corrects out of the
+> box. The A-vs-B decision and the long-term design for **stitched multi-output compositions**
+> (an `OutputSyncGroup` / genlock domain that reuses A as its audio actuator and adds lock-step
+> video present) are written up in [`Doc/HaPlay-MultiOutput-Sync.md`](../HaPlay-MultiOutput-Sync.md).
+> Short version: A and B are not either/or — A is a building block of B; ship A now, build B
+> when a genuinely stitched surface across separate physical outputs becomes a hard requirement.
+
 ## 🟡 3. A few framework files are large enough to split
 
 These are well-factored *internally*, so this is lower priority than the VMs, but they
@@ -88,6 +97,13 @@ raise the bar to contribute:
 * `YuvVideoRenderer.cs` (1,525) — format-specific shader/upload setup could split by
   pixel-format family.
 
+> **Status (2026-06-15):** the two clean nested-type extractions are done. `AudioRouter`'s
+> `OutputPump` moved to `AudioRouter.OutputPump.cs` (1,961 → 1,694); `MediaContainerSharedDemux`'s
+> `AudioTrack`/`VideoTrack` source classes moved to `MediaContainerSharedDemux.Tracks.cs` (2,560 →
+> 2,296), making that class `partial`. Build clean; 213 Core-audio + 181 FFmpeg tests green. The
+> remaining two (`ChannelMap.SimdAccumulate`, `YuvVideoRenderer`) are deliberately hand-tuned method
+> cascades the doc itself flags as diminishing-returns — left intact, lower value.
+
 ## 🟡 4. `VideoOutputPump.Dispose` can deliberately leak pump state
 
 `MediaFramework/Media/S.Media.Core/Video/VideoOutputPump.cs` (~414–423): if the drainer
@@ -104,6 +120,15 @@ queues aren't format-versioned. If bulletproofing is wanted:
   the drainer exit promptly so `Dispose` never needs to leak.
 
 Low frequency (needs a genuinely wedged output) — track, don't rush.
+
+> **Status (2026-06-15): both done.** (1) `VideoOutputPump._queue` now carries a per-frame
+> `_formatVersion` (bumped under the gate on a real `Configure` format change); the drain thread drops a
+> frame that turned stale before `_inner.Submit`, closing the "frame already dequeued before a format
+> change" window. (2) New optional capability `IVideoOutputCooperativeAbort` — `Dispose` calls the
+> inner's `RequestSubmitAbort()` before the join, so a cooperative output (e.g. a future NDI sender)
+> abandons its in-flight `Submit` promptly and the pump takes the clean teardown path instead of the
+> leak fallback. A new `VideoOutputPumpTests` case proves `Dispose` returns well under the 2 s cap when
+> the inner supports abort. Build clean; pump/router/Core-video/HaPlay tests green across reruns.
 
 ## 🟡 5. Sync-over-async in `Dispose()`
 
@@ -132,6 +157,12 @@ best-effort. The improvement is to add one or two HaPlay-local helpers, e.g.
 `MediaDiagnostics.SwallowDisposeErrors` or log through the app logger. That keeps the
 same behaviour while making future teardown failures visible in DEBUG/log files.
 
+> **Status (2026-06-15):** `UI/HaPlay/HaPlayCleanup.cs` adds `TryDispose` / `TryRun` /
+> `TryCancel` delegating to `MediaDiagnostics.SwallowDisposeErrors`. The truly-empty catches
+> called out above (`PlaylistDecoderCache` 94/116/129, `CuePlaybackEngine` 2142/2143) now route
+> through it, so teardown failures log in DEBUG instead of vanishing. Prefer these helpers for
+> any new best-effort cleanup.
+
 ## 🟢 7. Schedule the obsolete-API removal
 
 The deprecation policy (`Doc/MediaFramework-PublicAPI.md`) is well-managed, but the
@@ -146,15 +177,33 @@ The deprecation policy (`Doc/MediaFramework-PublicAPI.md`) is well-managed, but 
 A `[Obsolete(..., error: true)]` pass next major, then deletion, keeps the surface lean
 (it also trims the AOT/reflection surface slightly).
 
+> **Status (2026-06-15):** The headline item is done — the **`MediaPlayer.TryOpen*` family (9
+> overloads) was demoted from `[Obsolete] public` to `internal` builder cores**, and the builders'
+> `#pragma warning disable CS0618` suppressions were removed. HaPlay/tools already used the public
+> builders, so there were no public callers to migrate; the full solution + 99 Playback + 524 HaPlay
+> tests stayed green. The remaining items (`IPlaybackTimeline`/`IPlaybackPlayhead` aliases,
+> `AudioRouterAutoResample`, the wrong-assembly `IVideoCpuFrameConverter` members, the `IDeinterlacer`
+> static, the `MediaContainerPlaybackBundle` member) were all confirmed unused and **deleted** — the
+> two interface-alias files + `AudioRouterAutoResample.cs` removed, the registry-property/enum shims
+> edited out, and 4 dangling doc crefs repointed to `MediaFrameworkPlugins`. Full solution + 508 Core
+> + 99 Playback + 524 HaPlay tests stayed green. **#7 done.**
+
 ## 🟢 8. Headless-vs-GL verification gaps
 
 * The **warp mesh is GL-only**; the CPU chained stage silently falls back to the affine
   transform and ignores mesh points ([10](10-Effects-and-Compositing.md)). A host that
   runs the CPU compositor headless and expects warp gets affine instead — worth a
   one-line warning when a mesh is set on a non-warp-capable backend.
+  *(Status 2026-06-15: this warning already exists — `ClipCompositionRuntime.Composite`
+  logs it once per stage when a mesh section hits the CPU fallback. The CI item below is now
+  wired.)*
 * GL composite/flip correctness can't be caught by headless CPU tests (project memory:
   composition orientation GL vs CPU). `CompositorSmoke --pattern` under `xvfb` in CI is
   the mitigation — make sure it's actually wired into CI, not just available.
+  *(Status 2026-06-15: now wired — `.github/workflows/build.yml` has a `gl-smoke` job that runs
+  `CompositorSmoke --pattern` under `xvfb` + Mesa software GL; SDL3/Skia natives come from NuGet,
+  so no FFmpeg is needed for the media-free `--pattern` path. Windows publishes now also pull
+  FFmpeg natives from the `FFmpeg.GPL` NuGet instead of hand-adding them.)*
 
 ## ✅ Already fixed (verified during this review — noted so the record is current)
 

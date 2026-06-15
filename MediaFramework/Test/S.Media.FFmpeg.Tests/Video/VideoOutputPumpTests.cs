@@ -85,6 +85,56 @@ public class VideoOutputPumpTests
         Assert.True(pump.DroppedFrames >= totals[^1]);
     }
 
+    [Fact]
+    public void Dispose_signals_cooperative_abort_so_drainer_exits_promptly()
+    {
+        var inner = new BlockingAbortableOutput([PixelFormat.I420]);
+        var pump = new VideoOutputPump(inner, maxQueuedFrames: 2, disposeInnerOnDispose: true);
+        var vf = new VideoFormat(32, 32, PixelFormat.I420, new Rational(24, 1));
+        pump.Configure(vf);
+
+        // One frame: the drain thread enters BlockingAbortableOutput.Submit and parks until aborted.
+        var f = new VideoFrame(TimeSpan.Zero, vf, [new byte[32 * 32], new byte[16 * 16], new byte[16 * 16]], [32, 16, 16]);
+        pump.Submit(f);
+        Assert.True(inner.SubmitEntered.Wait(TimeSpan.FromSeconds(2)), "drainer never entered inner Submit");
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        pump.Dispose();
+        sw.Stop();
+
+        Assert.True(inner.AbortRequested, "Dispose did not call RequestSubmitAbort on the inner");
+        // The abort unblocks the inner Submit immediately, so the drainer exits and Dispose returns well
+        // under the 2 s join cap — i.e. it took the clean teardown path, not the leak fallback.
+        Assert.True(sw.Elapsed < TimeSpan.FromMilliseconds(1500), $"Dispose took {sw.ElapsedMilliseconds} ms; cooperative abort did not unblock the drainer");
+    }
+
+    private sealed class BlockingAbortableOutput : IVideoOutput, IVideoOutputCooperativeAbort
+    {
+        private readonly PixelFormat[] _acc;
+        private readonly ManualResetEventSlim _release = new(false);
+
+        public BlockingAbortableOutput(PixelFormat[] acc) => _acc = acc;
+
+        public ManualResetEventSlim SubmitEntered { get; } = new(false);
+        public volatile bool AbortRequested;
+        public VideoFormat Format { get; private set; }
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _acc;
+        public void Configure(VideoFormat format) => Format = format;
+
+        public void Submit(VideoFrame frame)
+        {
+            SubmitEntered.Set();
+            _release.Wait();   // block until RequestSubmitAbort releases us (or would block out the join cap)
+            frame.Dispose();
+        }
+
+        public void RequestSubmitAbort()
+        {
+            AbortRequested = true;
+            _release.Set();
+        }
+    }
+
     private sealed class SlowOutput : IVideoOutput
     {
         private readonly PixelFormat[] _acc;

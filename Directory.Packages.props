@@ -22,6 +22,9 @@
     <PackageVersion Include="Tmds.DBus.Protocol" Version="0.92.0" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="FFmpeg.AutoGen" Version="8.1.0" />
+    <!-- Native FFmpeg for Windows publishes (see S.Media.FFmpeg.csproj). Keep the FFmpeg major in
+         sync with FFmpeg.AutoGen above (currently 8.x). -->
+    <PackageVersion Include="FFmpeg.GPL" Version="20260615.1.0" />
     <PackageVersion Include="SDL3-CS" Version="3.4.2" />
     <PackageVersion Include="SDL3-CS.Native" Version="3.4.2" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
