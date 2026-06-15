@@ -1282,6 +1282,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         foreach (var kv in emptyAudio)
         {
             lock (_gate) _audioOutputs.Remove(kv.Key);
+            _genlock?.Unregister(kv.Key);
             try { kv.Value.Dispose(); } catch (Exception ex) { Trace.LogWarning(ex, "ReleaseEmptyRuntimes: audio"); }
         }
     }
@@ -1440,12 +1441,25 @@ public sealed partial class CuePlaybackEngine : IDisposable
         try
         {
             var (audioOutput, playbackClock, releaseOutput) = AcquireAudioOutput(line, _outputs);
+
+            // Engine-wide audio genlock (opt-in, default off): register the device and, when it joins as a
+            // disciplined MEMBER (i.e. not the reference), wrap it so the OutputSyncGroup correction slews its
+            // rate. The reference device is left unwrapped so the master clock never runs through a resampler.
+            // When disabled (_genlock null) ratePpmProvider stays null and the runtime is built exactly as before.
+            Func<double>? ratePpmProvider = null;
+            if (_genlock is not null && playbackClock is not null
+                && _genlock.Register(outputLineId, playbackClock))
+            {
+                ratePpmProvider = () => _genlock.GetPpm(outputLineId);
+            }
+
             var runtime = new ClipAudioOutputRuntime(
                 outputLineId.ToString("N"),
                 audioOutput,
                 playbackClock,
                 releaseOutput,
-                line.Definition.DisplayName);
+                line.Definition.DisplayName,
+                ratePpmProvider: ratePpmProvider);
             lock (_gate)
             {
                 if (_audioOutputs.TryGetValue(outputLineId, out var existing))
@@ -1459,6 +1473,14 @@ public sealed partial class CuePlaybackEngine : IDisposable
         }
         catch (Exception ex)
         {
+            // Undo the genlock registration only if no pooled runtime claimed this line (don't strand a
+            // concurrently-created runtime's membership).
+            if (_genlock is not null)
+            {
+                bool pooled;
+                lock (_gate) pooled = _audioOutputs.ContainsKey(outputLineId);
+                if (!pooled) _genlock.Unregister(outputLineId);
+            }
             Trace.LogWarning(ex, "GetOrCreateAudioRuntime: failed to acquire {Line}", line.Definition.DisplayName);
             return null;
         }
@@ -1931,6 +1953,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         }
         foreach (var r in compsLeft) HaPlayCleanup.TryRun("CuePlaybackEngine.Dispose: composition runtime", r.Dispose);
         foreach (var r in audioLeft) HaPlayCleanup.TryRun("CuePlaybackEngine.Dispose: audio output runtime", r.Dispose);
+        _genlock?.Dispose();
     }
 
     private static string BuildPreparedCueKey(MediaCueNode cue, CueList list, RoutePlan plan)

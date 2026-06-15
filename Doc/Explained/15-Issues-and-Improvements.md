@@ -95,6 +95,24 @@ PortAudio devices in one composition drift relative to each other —
 > member's device through the controllers — deliberately deferred until validated on real multi-output
 > hardware (a wrong drift *direction* won't show up in the unit suite), and pending the genlock-*scope*
 > product decision (per-composition vs engine-wide) noted in `Doc/HaPlay-MultiOutput-Sync.md`.
+>
+> **Update (2026-06-15, audio host wiring):** scope decided — **engine-wide** (one reference device, all
+> other active audio devices disciplined to it; fits the per-device pooled `ClipAudioOutputRuntime` model).
+> Wired into HaPlay's cue engine via `EngineAudioGenlock` (`UI/HaPlay/Playback/`): the reference device is
+> left unwrapped (so the master clock is never resampled — `AdaptiveRateAudioOutput` resamples even at
+> 0 ppm), members are wrapped via the runtime's `ratePpmProvider`, with reference handoff on release.
+> **Opt-in, off by default** (`HAPLAY_MULTIOUTPUT_GENLOCK=1`) so the default audio path is byte-identical;
+> unit-tested (`EngineAudioGenlockTests`, 5 cases).
+>
+> **Update (2026-06-15, multi-output layout UI):** the operator can now *define* a multi-output composition
+> in the cue player — Output setup → **Layout…** opens a draggable editor (`CompositionOutputLayoutDialog` /
+> `OutputLayoutCanvas`) placing each bound output over the canvas (overlaps blend, gaps stay black), writing
+> each output's source slice back to its `CueOutputMapping`. Unit-tested (`CompositionOutputLayoutViewModelTests`).
+> **Video present-sync host wiring re-planned:** wiring it at the HaPlay lease level is unsafe — a video-only
+> wall gets no timeline (`SetClockMaster` is only called when the cue has an audio master), so a naive
+> `SyncPresentVideoOutput` wrap would present black. Correct home is a hook **inside `ClipCompositionRuntime`**
+> (which already owns the clock-mastered fan-out + a canvas cadence for the audioless case). That framework
+> change is hardware-gated and deferred with a concrete design in `Doc/HaPlay-MultiOutput-Sync.md`.
 
 ## 🟡 3. A few framework files are large enough to split
 

@@ -64,7 +64,7 @@
                    SelectedItem="{Binding SelectedVideoOutput, Mode=TwoWay}">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:CueVideoOutputBindingViewModel">
-                <Grid ColumnDefinitions="Auto,Auto,*,Auto,*,Auto"
+                <Grid ColumnDefinitions="Auto,Auto,*,Auto,*,Auto,Auto"
                       ColumnSpacing="8"
                       Margin="0,3">
                   <Ellipse Grid.Column="0" Width="9" Height="9" VerticalAlignment="Center"
@@ -98,6 +98,10 @@
                           Content="{x:Static res:Strings.MappingButtonLabel}"
                           ToolTip.Tip="{x:Static res:Strings.MappingButtonTooltip}"
                           Click="MappingClick" />
+                  <Button Grid.Column="6"
+                          Content="Layout…"
+                          ToolTip.Tip="Arrange all of this composition's outputs over the canvas (multi-output / video wall): drag each output to the part of the canvas it shows; overlaps blend, gaps stay black."
+                          Click="LayoutClick" />
                 </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>

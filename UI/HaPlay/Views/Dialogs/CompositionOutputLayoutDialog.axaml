@@ -1,0 +1,46 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vmd="using:HaPlay.ViewModels.Dialogs"
+        xmlns:controls="using:HaPlay.Views.Controls"
+        x:Class="HaPlay.Views.Dialogs.CompositionOutputLayoutDialog"
+        x:DataType="vmd:CompositionOutputLayoutViewModel"
+        Title="Output layout"
+        Width="940" Height="600"
+        MinWidth="640" MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+  <DockPanel Margin="12">
+
+    <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap" Opacity="0.85"
+               Text="Drag each output to the part of the composition canvas it shows; resize with the bottom-right handle. Where outputs overlap is a blend zone; canvas not covered by any output stays black (a gap)." />
+
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
+                Spacing="8" Margin="0,8,0,0">
+      <Button Content="Save" Click="SaveClick" IsDefault="True" />
+      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+    </StackPanel>
+
+    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+      <Border Grid.Column="0" BorderBrush="#33808080" BorderThickness="1" Background="#0A0A0A">
+        <controls:OutputLayoutCanvas Items="{Binding Items}"
+                                     SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                                     AspectRatio="{Binding AspectRatio}" />
+      </Border>
+
+      <DockPanel Grid.Column="1" Width="240">
+        <TextBlock DockPanel.Dock="Top" Text="Outputs" FontWeight="SemiBold" Margin="0,0,0,4" />
+        <ListBox ItemsSource="{Binding Items}" SelectedItem="{Binding SelectedItem, Mode=TwoWay}">
+          <ListBox.ItemTemplate>
+            <DataTemplate x:DataType="vmd:OutputLayoutItemViewModel">
+              <StackPanel Spacing="1" Margin="0,2">
+                <TextBlock Text="{Binding DisplayName}" />
+                <TextBlock Opacity="0.6" FontSize="11"
+                           Text="{Binding SrcWidth, StringFormat='slice {0:P0} wide'}" />
+              </StackPanel>
+            </DataTemplate>
+          </ListBox.ItemTemplate>
+        </ListBox>
+      </DockPanel>
+    </Grid>
+  </DockPanel>
+</Window>

@@ -119,13 +119,42 @@ one composition drift today; put both devices in one sync group and the controll
   * It composes with Phase 1 through one master playhead: the same `MediaClock` whose `IPlaybackClock`
     feeds the audio `OutputSyncGroup` is the present scheduler's `IReadOnlyPlayhead` reference. Audio side
     rate-disciplines crystals; video side phase-aligns the present.
-* **Option B — Phase 2 (remaining = host wiring only).** What's left is **not** framework code: declare
-  sync groups in HaPlay and route each member through the controllers. The audio-actuated path
-  (`ClipAudioOutputRuntime.ratePpmProvider` + `OutputSyncGroup`) and the video path
-  (`SyncPresentVideoOutput` + `VideoPresentSyncGroup`) are both built and tested; wiring them into the live
-  cue engine is deliberately deferred until validated on **real multi-output hardware** (a wrong drift
-  *direction* or a present-phase regression won't surface in the unit suite) and until the genlock-*scope*
-  product decision below is made.
+* **Option B — Phase 2 audio host wiring: done (engine-wide, opt-in, 2026-06-15).** Scope decision made:
+  **engine-wide** (one reference device, every other active audio device disciplined to it). The cue engine
+  owns one `EngineAudioGenlock` (`UI/HaPlay/Playback/EngineAudioGenlock.cs`) — the first registered device
+  becomes the reference (left **unwrapped**, so the master clock is never run through a resampler; note
+  `AdaptiveRateAudioOutput` resamples even at 0 ppm), every other device joins one `OutputSyncGroup` as a
+  member and is wrapped via `ClipAudioOutputRuntime.ratePpmProvider`. Wired into `GetOrCreateAudioRuntime`
+  (register member + thread provider), `ReleaseEmptyRuntimes` (unregister + reference handoff), and engine
+  `Dispose`. **Opt-in and off by default** via `HAPLAY_MULTIOUTPUT_GENLOCK=1`; when unset the manager is
+  never constructed and the audio path is byte-identical to before. Unit-tested (`EngineAudioGenlockTests`,
+  5 cases: reference selection, member discipline, idempotent register, reference handoff on release,
+  zero-for-unknown). **Still needs two-device hardware validation** before the toggle is promoted to a
+  default / UI setting (a wrong drift *direction* won't surface in the unit suite).
+* **Multi-output composition layout editor: done (2026-06-15).** The UI that *defines* a multi-output
+  composition — which part of the canvas each physical output shows — ships in the cue player. From the cue
+  **Output setup** dialog, each output row has a **Layout…** button opening
+  `CompositionOutputLayoutDialog`: a draggable, aspect-correct view of the composition canvas with every
+  output bound to that composition drawn as a movable/resizable box (its normalized source slice).
+  Overlapping boxes are blend zones; canvas not covered by any box is a gap (stays black). On Save each
+  output's slice is written back to its `CueOutputMapping` (one full-output section sized to the slice — the
+  video-wall tile model) and live-applied via `UpdateOutputMappingCallback`. Built from the proven
+  `CompositionPlacementCanvas` pattern: `OutputLayoutCanvas` (control) + `CompositionOutputLayoutViewModel`
+  / `OutputLayoutItemViewModel`. Unit-tested (`CompositionOutputLayoutViewModelTests`, 4 cases: slice
+  round-trip, defaults, overlaps/gaps). *Note:* applying a layout slice resets that output's mapping to a
+  single tile section — use the per-output **Mapping…** editor afterwards for warp/mesh on a tile.
+* **Option B — Phase 2 video present-sync host wiring (remaining; re-planned 2026-06-15).** The framework
+  pieces (`SyncPresentVideoOutput` + `VideoPresentSyncGroup`) are built and tested, but wiring them at the
+  HaPlay **lease level** turns out to be the wrong layer: `ClipCompositionRuntime` already owns a
+  *clock-mastered fan-out present* (one cadence → per-lease pumps), and — critically — its master/timeline
+  is only set when the cue has an **audio** master (`CuePlaybackEngine` calls `SetClockMaster` only under
+  `entry.PlaybackClockMaster`). A **video-only** wall (the primary present-sync use case) therefore gets no
+  timeline, so a naive `SyncPresentVideoOutput` wrap would buffer frames that never present (black outputs).
+  Correct home: a small hook **inside `ClipCompositionRuntime`** to present its fan-out through a
+  `VideoPresentSyncGroup` referenced to the canvas cadence (it already derives a freerun `MediaClock` /
+  `_canvasPeriod` for the audioless case). That's a framework change, hardware-gated (a present-phase
+  regression won't surface in unit tests), so it's deferred with this concrete design rather than wired
+  unsafely. The layout editor above is the prerequisite and is done.
 
 ### Possible Option-A follow-up (small, needs author sign-off)
 
@@ -142,10 +171,11 @@ heuristic shared by all hosts; flagged here for review.
 is exactly what the cue audio path exposes. **The actuation primitive is now built (2026-06-15):**
 `ClipAudioOutputRuntime` takes an opt-in `ratePpmProvider` constructor argument (default-off) that wraps its
 device output in an `AdaptiveRateAudioOutput` and explicitly `SlaveTo`s the router to that wrapper (the usual
-AutoWirePrimary auto-slave skips `IAdaptiveRateWrappedOutput` by design). What remains is the **host wiring**
-(create the group, choose membership, pass the provider, drive `Tick`) — deliberately **not** yet wired into
-the live cue engine, because its efficacy (correct drift *direction*, no drops) can only be confirmed with
-**two real audio devices**, and a wrong direction would not show up in the unit suite.
+AutoWirePrimary auto-slave skips `IAdaptiveRateWrappedOutput` by design). The **host wiring is now done**
+(engine-wide, opt-in `HAPLAY_MULTIOUTPUT_GENLOCK`) via `EngineAudioGenlock` — see the Status section. The
+notes below record the integration points; they remain accurate for the (still-pending) **video** host
+wiring and as a reference for the audio path that shipped. Two-device hardware validation of drift
+*direction* is the remaining gate before the toggle becomes a default.
 
 **Integration points (all in `UI/HaPlay/Playback/CuePlaybackEngine*`):**
 - Per device line, `GetOrCreateAudioRuntime(outputLineId)` builds a `ClipAudioOutputRuntime` from
@@ -163,15 +193,14 @@ the live cue engine, because its efficacy (correct drift *direction*, no drops) 
    only remaining host work is to thread the provider through where the runtime is created
    (`GetOrCreateAudioRuntime` / `AcquireAudioOutput`).
 
-**Open design decision (yours):** genlock *scope*. Per-composition (reference = each composition's
+**Design decision (made 2026-06-15): engine-wide.** Per-composition (reference = each composition's
 `PlaybackClockMaster`) is the literal fix for the documented caveat, but `ClipAudioOutputRuntime`s are
-**pooled per device and shared across compositions**, so a per-composition correction on a shared device is
-ambiguous. Engine-wide genlock (one reference device, all other active devices disciplined to it) sidesteps
-that and is the natural "lock the whole show to one master" model — but it's a product choice. This needs
-deciding **and** two-device hardware validation before the host wiring ships.
-3. Own one `OutputSyncGroup` per composition (reference = `PlaybackClockMaster`); `group.Start(100 ms)` (or
-   tick it from the engine's existing periodic loop). Dispose it with the composition; `RemoveMember` when a
-   runtime is released by `ReleaseEmptyRuntimes`.
+**pooled per device and shared across compositions** (and the soundboard), so a per-composition correction on
+a shared device is ambiguous — a device can only take one correction. **Engine-wide** (one reference device,
+all other active devices disciplined to it) is unambiguous, fits the pooled model, and is the natural "lock
+the whole show to one master" model. Implemented as `EngineAudioGenlock`. The reference is the first device
+registered, with reference handoff on release. *Two-device hardware validation is still required* before the
+opt-in becomes a default.
 
 **Guard rails:** keep it behind an opt-in setting (default off) so existing single-device / same-device
 compositions are untouched; the controller already no-ops when a member isn't advancing and resets on a
