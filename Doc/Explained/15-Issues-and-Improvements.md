@@ -108,11 +108,14 @@ PortAudio devices in one composition drift relative to each other —
 > in the cue player — Output setup → **Layout…** opens a draggable editor (`CompositionOutputLayoutDialog` /
 > `OutputLayoutCanvas`) placing each bound output over the canvas (overlaps blend, gaps stay black), writing
 > each output's source slice back to its `CueOutputMapping`. Unit-tested (`CompositionOutputLayoutViewModelTests`).
-> **Video present-sync host wiring re-planned:** wiring it at the HaPlay lease level is unsafe — a video-only
-> wall gets no timeline (`SetClockMaster` is only called when the cue has an audio master), so a naive
-> `SyncPresentVideoOutput` wrap would present black. Correct home is a hook **inside `ClipCompositionRuntime`**
-> (which already owns the clock-mastered fan-out + a canvas cadence for the audioless case). That framework
-> change is hardware-gated and deferred with a concrete design in `Doc/HaPlay-MultiOutput-Sync.md`.
+> **Video present-sync for compositions — resolved (not needed):** investigating the `ClipCompositionRuntime`
+> hook showed the composition fan-out is **already frame-locked** — `PumpOneFrame` composites once per canvas
+> tick and submits that one frame to every output (zero-copy, same backing), it runs freerun for video-only
+> walls too, the guarantee is already covered by `ClipCompositionRuntime_MultiOutputPump_SharesCanvasBackingAcrossOutputs`,
+> and NDI egress is already timecoded. A `VideoPresentSyncGroup` here would buffer already-synchronized frames
+> for no lock gain; the residual cross-output skew is device vsync / NDI network timing = **hardware genlock**,
+> outside software scope. The primitive stays valid for independent-per-output architectures. See
+> `Doc/HaPlay-MultiOutput-Sync.md`.
 
 ## 🟡 3. A few framework files are large enough to split
 

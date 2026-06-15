@@ -143,18 +143,32 @@ one composition drift today; put both devices in one sync group and the controll
   / `OutputLayoutItemViewModel`. Unit-tested (`CompositionOutputLayoutViewModelTests`, 4 cases: slice
   round-trip, defaults, overlaps/gaps). *Note:* applying a layout slice resets that output's mapping to a
   single tile section — use the per-output **Mapping…** editor afterwards for warp/mesh on a tile.
-* **Option B — Phase 2 video present-sync host wiring (remaining; re-planned 2026-06-15).** The framework
-  pieces (`SyncPresentVideoOutput` + `VideoPresentSyncGroup`) are built and tested, but wiring them at the
-  HaPlay **lease level** turns out to be the wrong layer: `ClipCompositionRuntime` already owns a
-  *clock-mastered fan-out present* (one cadence → per-lease pumps), and — critically — its master/timeline
-  is only set when the cue has an **audio** master (`CuePlaybackEngine` calls `SetClockMaster` only under
-  `entry.PlaybackClockMaster`). A **video-only** wall (the primary present-sync use case) therefore gets no
-  timeline, so a naive `SyncPresentVideoOutput` wrap would buffer frames that never present (black outputs).
-  Correct home: a small hook **inside `ClipCompositionRuntime`** to present its fan-out through a
-  `VideoPresentSyncGroup` referenced to the canvas cadence (it already derives a freerun `MediaClock` /
-  `_canvasPeriod` for the audioless case). That's a framework change, hardware-gated (a present-phase
-  regression won't surface in unit tests), so it's deferred with this concrete design rather than wired
-  unsafely. The layout editor above is the prerequisite and is done.
+* **Option B — Phase 2 video present-sync for compositions: NOT NEEDED (resolved by design, verified 2026-06-15).**
+  Investigating where to add the present-sync hook inside `ClipCompositionRuntime` showed the composition
+  fan-out is **already frame-locked** — there is nothing for a `VideoPresentSyncGroup` to add here. Evidence:
+  1. **Single-cadence fan-out.** `ClipCompositionRuntime.PumpOneFrame` composites the canvas **once per tick**
+     and submits **that one frame to every output** in a single loop (zero-copy `TryCreateCpuFanOutViews`
+     over the same canvas backing). Every output therefore shows canvas-frame-N on the same tick by
+     construction — the strongest software-level frame-lock.
+  2. **It runs for video-only too.** `EnsurePumpStarted` starts a freerun `MediaClock` at the canvas rate
+     even with no audio master, so an audioless wall is pumped and locked (no black-output risk — the earlier
+     lease-level concern is moot because no separate present group is involved).
+  3. **Proven by an existing test.** `S.Media.Playback.Tests` →
+     `ClipCompositionRuntime_MultiOutputPump_SharesCanvasBackingAcrossOutputs` asserts both outputs receive
+     **same-PTS** frames over the **same backing** — i.e. the frame-lock guarantee is already covered.
+  4. **NDI egress already timecoded.** `NDIOutputPreviewRuntime` stamps `NDIVideoTimecodeMode.PresentationRelativeTicks`,
+     so NDI receivers already get a shared presentation timecode.
+
+  A `SyncPresentVideoOutput` wrapped around the leases would only buffer already-synchronized frames and
+  couldn't see each output's *downstream* device congestion, so it adds latency with no lock benefit; and
+  coordinated drop across a mixed local+NDI wall (freeze the local projectors because the NDI network
+  hiccuped) is usually undesirable. The **residual** cross-output skew is device vsync phase / NDI network
+  timing — a **hardware-genlock** concern (display genlock / Quadro Sync; NDI Discovery + receiver-side
+  timecode), outside what the framework can do in software.
+
+  `VideoPresentSyncGroup` + `SyncPresentVideoOutput` remain valid Core primitives for a *different*
+  architecture — outputs driven by **independent** per-output clock ticks (e.g. N separate `VideoPlayer`s);
+  they're just not what the composition fan-out needs.
 
 ### Possible Option-A follow-up (small, needs author sign-off)
 
