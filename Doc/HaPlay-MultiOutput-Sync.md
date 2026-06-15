@@ -95,9 +95,19 @@ one composition drift today; put both devices in one sync group and the controll
     the wrapper to act on — enabling it there is a no-op. Two cues on two devices are *separate*
     routers with *separate* masters; that cross-router coordination is exactly what Option B (the
     sync group) exists to solve, and it cannot be reached from Option A.
-* **Option B — design project, not yet built.** Tackle when a stitched multi-physical-output surface
-  becomes a hard requirement. Likely first step: lift the per-output present cadence into a shared
-  group scheduler behind an `OutputSyncGroup`, then add the phase/rate controller driving Option A.
+* **Option B — Phase 1 foundation built (2026-06-15).** `OutputSyncGroup` (`S.Media.Core.Clock`) is the
+  coordinated master-ppm controller the architecture doc listed as not-implemented: a reference clock +
+  member clocks + a bounded **PI rate controller** (tuned by loop bandwidth + damping) whose per-member
+  ppm output feeds Option A's `AdaptiveRateAudioOutput` via its ppm-provider constructor — slewing a
+  member's device rate paces its master clock, which paces its video, so audio and video both converge.
+  Resets the loop on pause/seek (discontinuity guard). Unit-tested: locks a +40 ppm member to sub-ms
+  phase with a ~−40 ppm correction. Drive it from a host loop (`Tick(elapsed)`) or its internal timer
+  (`Start(interval)`).
+* **Option B — Phase 2 (remaining).** Lock-step frame *present* for video-only outputs that have **no**
+  audio actuator (pure LED/projector walls): a shared present scheduler across the grouped video pumps
+  that selects the frame for the reference tick with coordinated repeat/drop. Plus host wiring in HaPlay
+  to declare sync groups and route each member's device through the controller. This builds directly on
+  the Phase-1 `OutputSyncGroup`.
 
 ### Possible Option-A follow-up (small, needs author sign-off)
 

@@ -79,6 +79,12 @@ PortAudio devices in one composition drift relative to each other —
 > video present) are written up in [`Doc/HaPlay-MultiOutput-Sync.md`](../HaPlay-MultiOutput-Sync.md).
 > Short version: A and B are not either/or — A is a building block of B; ship A now, build B
 > when a genuinely stitched surface across separate physical outputs becomes a hard requirement.
+>
+> **Update (2026-06-15):** Option B's **Phase-1 foundation is built** — `OutputSyncGroup`
+> (`S.Media.Core.Clock`) is the coordinated master-ppm PI controller that disciplines member clocks to a
+> reference and emits a per-member ppm correction for Option A's `AdaptiveRateAudioOutput` to apply.
+> Unit-tested (locks a +40 ppm member to sub-ms phase; resets on pause/seek). Phase 2 — lock-step video
+> present for actuator-less walls + HaPlay group wiring — remains.
 
 ## 🟡 3. A few framework files are large enough to split
 
