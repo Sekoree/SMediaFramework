@@ -348,6 +348,10 @@ public sealed record CueVideoPlacement
     public double CropRight { get; init; }
 
     public double CropBottom { get; init; }
+
+    /// <summary>Clockwise rotation (degrees) of this layer about its destination-rect centre. Default 0
+    /// = upright (older cues load unchanged). The rotated image overflows its dest rect, as expected.</summary>
+    public double RotationDegrees { get; init; }
 }
 
 public enum CueTriggerMode

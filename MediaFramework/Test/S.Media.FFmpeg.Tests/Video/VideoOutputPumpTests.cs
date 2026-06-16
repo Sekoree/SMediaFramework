@@ -108,6 +108,50 @@ public class VideoOutputPumpTests
         Assert.True(sw.Elapsed < TimeSpan.FromMilliseconds(1500), $"Dispose took {sw.ElapsedMilliseconds} ms; cooperative abort did not unblock the drainer");
     }
 
+    [Fact]
+    public void Dispose_does_not_abort_a_borrowed_inner_so_a_shared_sender_survives_teardown()
+    {
+        // A shared, long-lived cooperative output (e.g. the NDI carrier's reused NDIVideoSender) is
+        // borrowed by a transient pump (disposeInnerOnDispose: false). Tearing the pump down must NOT
+        // request its terminal submit-abort — otherwise the shared output stays a no-op for every later
+        // session (the regression that blacked out NDI output until an app restart).
+        var inner = new RecordingAbortableOutput([PixelFormat.I420]);
+        var pump = new VideoOutputPump(inner, maxQueuedFrames: 2, disposeInnerOnDispose: false);
+        var vf = new VideoFormat(32, 32, PixelFormat.I420, new Rational(24, 1));
+        pump.Configure(vf);
+
+        var f = new VideoFrame(TimeSpan.Zero, vf, [new byte[32 * 32], new byte[16 * 16], new byte[16 * 16]], [32, 16, 16]);
+        pump.Submit(f);
+        Thread.Sleep(100);
+
+        pump.Dispose();
+
+        Assert.False(inner.AbortRequested, "Dispose aborted a borrowed inner; a shared sender would be permanently disabled.");
+        Assert.True(inner.SubmitCount >= 1, "frame should still have drained to the borrowed inner before dispose");
+    }
+
+    private sealed class RecordingAbortableOutput : IVideoOutput, IVideoOutputCooperativeAbort
+    {
+        private readonly PixelFormat[] _acc;
+        private int _submitCount;
+
+        public RecordingAbortableOutput(PixelFormat[] acc) => _acc = acc;
+
+        public volatile bool AbortRequested;
+        public int SubmitCount => Volatile.Read(ref _submitCount);
+        public VideoFormat Format { get; private set; }
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _acc;
+        public void Configure(VideoFormat format) => Format = format;
+
+        public void Submit(VideoFrame frame)
+        {
+            Interlocked.Increment(ref _submitCount);
+            frame.Dispose();
+        }
+
+        public void RequestSubmitAbort() => AbortRequested = true;
+    }
+
     private sealed class BlockingAbortableOutput : IVideoOutput, IVideoOutputCooperativeAbort
     {
         private readonly PixelFormat[] _acc;

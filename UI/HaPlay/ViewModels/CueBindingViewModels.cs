@@ -278,6 +278,10 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     [ObservableProperty]
     private double _cropBottom;
 
+    /// <summary>Clockwise rotation (degrees) of this layer about its destination-rect centre.</summary>
+    [ObservableProperty]
+    private double _rotationDegrees;
+
     /// <summary>Sets the destination rectangle, clamped to the canvas with a sane minimum size.</summary>
     public void SetDestRect(double x, double y, double width, double height)
     {
@@ -351,7 +355,17 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         CropTop = Math.Clamp(CropTop, 0.0, 0.99),
         CropRight = Math.Clamp(CropRight, 0.0, 0.99),
         CropBottom = Math.Clamp(CropBottom, 0.0, 0.99),
+        RotationDegrees = NormalizeRotation(RotationDegrees),
     };
+
+    /// <summary>Wraps rotation into (-180, 180] so the editor and serialized value stay tidy.</summary>
+    private static double NormalizeRotation(double degrees)
+    {
+        var wrapped = degrees % 360.0;
+        if (wrapped > 180.0) wrapped -= 360.0;
+        else if (wrapped <= -180.0) wrapped += 360.0;
+        return wrapped;
+    }
 
     public static CueVideoPlacementViewModel FromModel(CueVideoPlacement model)
     {
@@ -365,6 +379,7 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
             CropTop = model.CropTop,
             CropRight = model.CropRight,
             CropBottom = model.CropBottom,
+            RotationDegrees = model.RotationDegrees,
         };
         vm.SetDestRect(
             model.DestX,

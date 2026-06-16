@@ -611,7 +611,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropLeft)
             or nameof(CueVideoPlacementViewModel.CropTop)
             or nameof(CueVideoPlacementViewModel.CropRight)
-            or nameof(CueVideoPlacementViewModel.CropBottom);
+            or nameof(CueVideoPlacementViewModel.CropBottom)
+            or nameof(CueVideoPlacementViewModel.RotationDegrees);
 
     private static bool IsLiveEditableVideoPlacementProperty(string? propertyName) =>
         propertyName is nameof(CueVideoPlacementViewModel.LayerIndex)
@@ -624,7 +625,8 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropLeft)
             or nameof(CueVideoPlacementViewModel.CropTop)
             or nameof(CueVideoPlacementViewModel.CropRight)
-            or nameof(CueVideoPlacementViewModel.CropBottom);
+            or nameof(CueVideoPlacementViewModel.CropBottom)
+            or nameof(CueVideoPlacementViewModel.RotationDegrees);
 
     private void PushActiveVideoPlacementUpdate(CueVideoPlacementViewModel placement)
     {

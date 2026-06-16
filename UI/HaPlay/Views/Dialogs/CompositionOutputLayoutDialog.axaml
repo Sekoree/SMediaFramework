@@ -36,8 +36,18 @@
             <DataTemplate x:DataType="vmd:OutputLayoutItemViewModel">
               <StackPanel Spacing="8">
                 <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding OutputSummary, StringFormat='Output raster: {0}'}"
-                           Opacity="0.65" />
+
+                <TextBlock Text="Output resolution (pixels this output is sent at)" Opacity="0.65" />
+                <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*">
+                  <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
+                  <NumericUpDown Grid.Column="2" Minimum="16" Maximum="7680" Increment="2" FormatString="0"
+                                 Value="{Binding OutputWidth, Mode=TwoWay}" />
+                  <TextBlock Grid.Column="4" Text="H" VerticalAlignment="Center" />
+                  <NumericUpDown Grid.Column="6" Minimum="16" Maximum="4320" Increment="2" FormatString="0"
+                                 Value="{Binding OutputHeight, Mode=TwoWay}" />
+                </Grid>
+
+                <TextBlock Text="Canvas slice (source region this output shows, pixels)" Opacity="0.65" Margin="0,4,0,0" />
                 <CheckBox Content="Lock aspect ratio"
                           IsChecked="{Binding AspectLocked, Mode=TwoWay}" />
                 <Grid ColumnDefinitions="Auto,8,*" RowDefinitions="Auto,6,Auto,6,Auto,6,Auto">

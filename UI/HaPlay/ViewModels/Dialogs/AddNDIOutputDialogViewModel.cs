@@ -37,7 +37,15 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
     /// <see cref="TryCommit"/>; the other entries map to their <see cref="PixelFormat"/>.</summary>
     [ObservableProperty] private NDIPixelFormatChoice _selectedPixelFormat = NDIPixelFormatChoice.Auto;
 
-    [ObservableProperty] private NDIResolutionChoice _selectedResolution = NDIResolutionChoice.Auto;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCustomResolution))]
+    private NDIResolutionChoice _selectedResolution = NDIResolutionChoice.Auto;
+
+    /// <summary>Editable resolution shown when the "Custom…" row is selected.</summary>
+    [ObservableProperty] private int _customResolutionWidth = 1920;
+    [ObservableProperty] private int _customResolutionHeight = 1080;
+
+    public bool ShowCustomResolution => SelectedResolution.IsCustom;
 
     [ObservableProperty] private string? _validationMessage;
 
@@ -60,6 +68,11 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
             ? NDIPixelFormatChoice.FromPixelFormat(pf) ?? NDIPixelFormatChoice.Auto
             : NDIPixelFormatChoice.Auto;
         SelectedResolution = NDIResolutionChoice.FromLock(existing.ResolutionLockWidth, existing.ResolutionLockHeight);
+        if (SelectedResolution.IsCustom)
+        {
+            CustomResolutionWidth = existing.ResolutionLockWidth!.Value;
+            CustomResolutionHeight = existing.ResolutionLockHeight!.Value;
+        }
 
         OnPropertyChanged(nameof(IsEditing));
         OnPropertyChanged(nameof(DialogTitle));
@@ -96,6 +109,27 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
             }
         }
 
+        int? resolutionLockWidth;
+        int? resolutionLockHeight;
+        if (SelectedResolution.IsCustom)
+        {
+            // NDI senders require even dimensions (the BGRA carrier packs full-width rows; planar formats
+            // need even chroma), so reject odd/out-of-range custom sizes rather than failing later at Configure.
+            if (CustomResolutionWidth is < 16 or > 7680 || CustomResolutionHeight is < 16 or > 4320
+                || CustomResolutionWidth % 2 != 0 || CustomResolutionHeight % 2 != 0)
+            {
+                ValidationMessage = Strings.ValidationNdiResolutionInvalid;
+                return null;
+            }
+            resolutionLockWidth = CustomResolutionWidth;
+            resolutionLockHeight = CustomResolutionHeight;
+        }
+        else
+        {
+            resolutionLockWidth = SelectedResolution.Width;
+            resolutionLockHeight = SelectedResolution.Height;
+        }
+
         return new NDIOutputDefinition(
             _existingId ?? Guid.NewGuid(),
             DisplayName.Trim(),
@@ -105,8 +139,8 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
             StreamMode == NDIOutputStreamMode.VideoOnly ? 0 : AudioChannelCount,
             StreamMode == NDIOutputStreamMode.VideoOnly ? 48_000 : AudioSampleRate,
             PixelFormatLock: SelectedPixelFormat.PixelFormat,
-            ResolutionLockWidth: SelectedResolution.Width,
-            ResolutionLockHeight: SelectedResolution.Height);
+            ResolutionLockWidth: resolutionLockWidth,
+            ResolutionLockHeight: resolutionLockHeight);
     }
 }
 
@@ -141,11 +175,14 @@ public sealed record NDIPixelFormatChoice(string Label, PixelFormat? PixelFormat
 /// <summary>Combo option for <see cref="AddNDIOutputDialogViewModel.ResolutionChoices"/>. Mirrors
 /// the project-side <c>ResolutionLockWidth</c>/<c>ResolutionLockHeight</c> nullable pair as a single
 /// well-typed choice row.</summary>
-public sealed record NDIResolutionChoice(string Label, int? Width, int? Height)
+public sealed record NDIResolutionChoice(string Label, int? Width, int? Height, bool IsCustom = false)
 {
     public override string ToString() => Label;
 
     public static readonly NDIResolutionChoice Auto = new(Strings.NdiResolutionAutoLabel, null, null);
+
+    /// <summary>The "Custom…" row: width/height come from the dialog's editable fields, not this record.</summary>
+    public static readonly NDIResolutionChoice Custom = new(Strings.NdiResolutionCustomEntryLabel, null, null, IsCustom: true);
 
     public static readonly NDIResolutionChoice[] All =
     [
@@ -154,18 +191,17 @@ public sealed record NDIResolutionChoice(string Label, int? Width, int? Height)
         new(Strings.NdiResolution720Label, 1280, 720),
         new(Strings.NdiResolution4kLabel, 3840, 2160),
         new(Strings.NdiResolution576Label, 1024, 576),
+        Custom,
     ];
 
+    /// <summary>Maps a saved lock back to a row: a matching preset, else the "Custom…" row (the dialog
+    /// populates its editable width/height from the saved values).</summary>
     public static NDIResolutionChoice FromLock(int? width, int? height)
     {
         if (width is null || height is null) return Auto;
         foreach (var c in All)
-            if (c.Width == width && c.Height == height)
+            if (!c.IsCustom && c.Width == width && c.Height == height)
                 return c;
-        // Unknown saved lock — surface as a one-off label so the user sees the values without losing them.
-        return new NDIResolutionChoice(
-            string.Format(System.Globalization.CultureInfo.CurrentUICulture, Strings.NdiResolutionCustomLabel, width, height),
-            width,
-            height);
+        return Custom;
     }
 }

@@ -126,7 +126,8 @@ internal sealed class CueCompositionRuntime : IDisposable
             placement.CropLeft,
             placement.CropTop,
             placement.CropRight,
-            placement.CropBottom);
+            placement.CropBottom,
+            placement.RotationDegrees);
     }
 
     public void Dispose()

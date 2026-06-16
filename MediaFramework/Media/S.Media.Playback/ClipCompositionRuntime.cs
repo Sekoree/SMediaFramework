@@ -924,6 +924,21 @@ public sealed class ClipCompositionRuntime : IDisposable
                 (float)_placement.CropBottom,
                 _source,
                 _owner._canvasFormat);
+
+            // Per-layer rotation: spin the already-placed image about its destination-rect centre (in canvas
+            // pixels). The compositor applies the full affine, so this works on both the GL and CPU backends.
+            if (_placement.RotationDegrees != 0)
+            {
+                var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
+                var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
+                var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
+                transform = LayerTransform2D.Compose(
+                    LayerTransform2D.Translate(cx, cy),
+                    LayerTransform2D.Compose(
+                        LayerTransform2D.Rotate(rad),
+                        LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
+            }
+
             RawSlot.Transform = transform;
             RawSlot.SourceCrop = crop;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);

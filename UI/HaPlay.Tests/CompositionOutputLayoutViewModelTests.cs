@@ -82,6 +82,51 @@ public sealed class CompositionOutputLayoutViewModelTests
     }
 
     [Fact]
+    public void Build_prefers_a_saved_mapping_resolution_over_the_reported_output_size()
+    {
+        var mapping = new CueOutputMapping
+        {
+            OutputWidth = 1920,
+            OutputHeight = 1080,
+            Sections = { new CueOutputMappingSection { SrcX = 0, SrcY = 0, SrcWidth = 1.0, SrcHeight = 0.5 } },
+        };
+
+        // Reported raster is the full 2160-tall canvas, but the saved mapping says 1080 — reopening the
+        // editor must show the resolution last saved, not reset to the reported/canvas size.
+        var vm = CompositionOutputLayoutViewModel.Build(1920, 2160, new[]
+        {
+            (Left, "Top half", (int?)1920, (int?)2160, (CueOutputMapping?)mapping),
+        });
+
+        var item = vm.Items[0];
+        Assert.Equal(1920, item.OutputWidth);
+        Assert.Equal(1080, item.OutputHeight);
+    }
+
+    [Fact]
+    public void Editing_output_resolution_flows_into_ToMapping()
+    {
+        // No lock / no mapping → defaults to the canvas size (the 1920x2160 stacked-output trap).
+        var vm = CompositionOutputLayoutViewModel.Build(1920, 2160, new[]
+        {
+            (Left, "Top half", (int?)null, (int?)null, (CueOutputMapping?)null),
+        });
+        var item = vm.Items[0];
+        Assert.Equal(2160, item.OutputHeight);
+
+        item.SetSrcRect(0.0, 0.0, 1.0, 0.5);   // top half of the canvas
+        item.OutputWidth = 1920;
+        item.OutputHeight = 1080;               // operator sizes the output raster to a 1080 slice
+
+        var mapping = vm.ToMapping(item);
+        Assert.Equal(1920, mapping.OutputWidth);
+        Assert.Equal(1080, mapping.OutputHeight);
+        var section = Assert.Single(mapping.Sections);
+        Assert.Equal(1080, section.DestHeight); // slice drawn across the chosen 1080 raster
+        Assert.Equal(0.5, section.SrcHeight, 6);
+    }
+
+    [Fact]
     public void Overlaps_and_gaps_are_allowed_between_items()
     {
         var vm = CompositionOutputLayoutViewModel.Build(1000, 1000, new[]

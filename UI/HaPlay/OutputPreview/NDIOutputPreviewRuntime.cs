@@ -42,6 +42,13 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     private bool _audioAcquired;
     private bool _disposeOnRelease;
     private VideoFrame? _logoTemplate;
+    // Reentrancy guards: a periodic System.Threading.Timer fires the next callback even while the previous
+    // one is still running. Each carrier tick holds _gate across a clockVideo-paced Submit (~one frame
+    // interval), so overlapping ticks would pile up on _gate faster than they drain and saturate the thread
+    // pool (a core dump showed 13 stacked tick callbacks holding every pooled worker, which stalled cue
+    // probes / pre-roll). 1 = a tick of that kind is in flight; an overlapping fire is skipped.
+    private int _videoTickActive;
+    private int _audioTickActive;
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.OutputPreview.NDIOutputPreviewRuntime");
 
@@ -290,33 +297,44 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
     private void OnVideoTick(object? _)
     {
-        var tickStart = Environment.TickCount64;
-        lock (_gate)
+        // Skip this fire if a prior video tick is still running (see _videoTickActive) — overlapping ticks
+        // would otherwise stack up on _gate behind the in-flight clockVideo-paced Submit and exhaust the pool.
+        if (Interlocked.CompareExchange(ref _videoTickActive, 1, 0) != 0)
+            return;
+        try
         {
-            if (_disposed || _videoAcquired || _output is null)
-                return;
-
-            try
+            var tickStart = Environment.TickCount64;
+            lock (_gate)
             {
-                var idx = _videoOrdinal++;
-                var pt = TimeSpan.FromTicks(idx * TimeSpan.TicksPerSecond * CarrierVideoFpsDenominator / CarrierVideoFpsNumerator);
+                if (_disposed || _videoAcquired || _output is null)
+                    return;
 
-                var frame = _logoTemplate is { } tpl
-                    ? CloneLogoFrame(tpl, pt)
-                    : PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat, pt);
-                _output.Video.Submit(frame);
-                var dur = Environment.TickCount64 - tickStart;
-                // ~33ms is one frame period. NDI SDK's clockVideo:true can pace the send internally,
-                // so a slow tick here just means the SDK was throttling — only worth reading at Trace.
-                if (dur > 100 && Trace.IsEnabled(LogLevel.Trace))
-                    Trace.LogTrace("OnVideoTick: '{Name}' ran for {Ms}ms while holding gate",
-                        _definition.SourceName, dur);
+                try
+                {
+                    var idx = _videoOrdinal++;
+                    var pt = TimeSpan.FromTicks(idx * TimeSpan.TicksPerSecond * CarrierVideoFpsDenominator / CarrierVideoFpsNumerator);
+
+                    var frame = _logoTemplate is { } tpl
+                        ? CloneLogoFrame(tpl, pt)
+                        : PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat, pt);
+                    _output.Video.Submit(frame);
+                    var dur = Environment.TickCount64 - tickStart;
+                    // ~33ms is one frame period. NDI SDK's clockVideo:true can pace the send internally,
+                    // so a slow tick here just means the SDK was throttling — only worth reading at Trace.
+                    if (dur > 100 && Trace.IsEnabled(LogLevel.Trace))
+                        Trace.LogTrace("OnVideoTick: '{Name}' ran for {Ms}ms while holding gate",
+                            _definition.SourceName, dur);
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogError(ex, $"NDIOutputPreviewRuntime '{_definition.SourceName}' video tick");
+                    Debug.WriteLine($"NDIOutputPreviewRuntime video tick: {ex}");
+                }
             }
-            catch (Exception ex)
-            {
-                Trace.LogError(ex, $"NDIOutputPreviewRuntime '{_definition.SourceName}' video tick");
-                Debug.WriteLine($"NDIOutputPreviewRuntime video tick: {ex}");
-            }
+        }
+        finally
+        {
+            Volatile.Write(ref _videoTickActive, 0);
         }
     }
 
@@ -326,25 +344,36 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
 
     private void OnAudioTick(object? _)
     {
-        lock (_gate)
+        // Skip this fire if a prior audio tick is still running (see _audioTickActive) — overlapping ticks
+        // would otherwise stack up on _gate behind the in-flight video tick's Submit and exhaust the pool.
+        if (Interlocked.CompareExchange(ref _audioTickActive, 1, 0) != 0)
+            return;
+        try
         {
-            if (_disposed || _audioAcquired || _output is null || _audio is null)
-                return;
-
-            try
+            lock (_gate)
             {
-                var rate = _definition.AudioSampleRate;
-                if (rate <= 0)
+                if (_disposed || _audioAcquired || _output is null || _audio is null)
                     return;
-                var spc = Math.Max(1, rate / CarrierAudioChunkHz);
-                var pt = TimeSpan.FromTicks(_audioSamplePosition * TimeSpan.TicksPerSecond / rate);
-                _audioSamplePosition += spc;
-                SubmitSilence(pt, spc);
+
+                try
+                {
+                    var rate = _definition.AudioSampleRate;
+                    if (rate <= 0)
+                        return;
+                    var spc = Math.Max(1, rate / CarrierAudioChunkHz);
+                    var pt = TimeSpan.FromTicks(_audioSamplePosition * TimeSpan.TicksPerSecond / rate);
+                    _audioSamplePosition += spc;
+                    SubmitSilence(pt, spc);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"NDIOutputPreviewRuntime audio tick: {ex}");
+                }
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"NDIOutputPreviewRuntime audio tick: {ex}");
-            }
+        }
+        finally
+        {
+            Volatile.Write(ref _audioTickActive, 0);
         }
     }
 

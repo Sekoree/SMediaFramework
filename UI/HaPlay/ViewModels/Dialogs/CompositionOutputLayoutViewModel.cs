@@ -35,6 +35,19 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
         OutputHeight = Math.Max(1, outputHeight ?? CanvasHeight);
     }
 
+    /// <summary>The output raster this region is sent at — editable, so an output can render its canvas
+    /// slice at a chosen resolution (e.g. a 1920×1080 slice of a 1920×2160 stacked canvas) instead of
+    /// inheriting the canvas size. Stored back into the binding's <see cref="CueOutputMapping.OutputWidth"/>.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OutputSummary))]
+    [NotifyPropertyChangedFor(nameof(OutputAspectRatio))]
+    private int _outputWidth;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(OutputSummary))]
+    [NotifyPropertyChangedFor(nameof(OutputAspectRatio))]
+    private int _outputHeight;
+
     public Guid OutputLineId { get; }
 
     public string DisplayName { get; }
@@ -45,11 +58,6 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
     public int CanvasWidth { get; }
 
     public int CanvasHeight { get; }
-
-    /// <summary>The physical/reported output raster. Mapping output size is based on this, not on the composition size.</summary>
-    public int OutputWidth { get; }
-
-    public int OutputHeight { get; }
 
     public string OutputSummary => $"{OutputWidth}×{OutputHeight}";
 
@@ -208,14 +216,17 @@ public sealed partial class CompositionOutputLayoutViewModel : ViewModelBase
         var rowHeight = 0.0;
         foreach (var (lineId, name, outputWidth, outputHeight, mapping) in outputs)
         {
+            // Round-trip: a previously-saved mapping resolution wins, then the output's reported raster
+            // (NDI lock / window size), then the canvas size (in the ctor). So reopening the editor shows
+            // the resolution you set last time instead of resetting to the lock/canvas default.
             var item = new OutputLayoutItemViewModel(
                 lineId,
                 name,
                 index++,
                 vm.CanvasWidth,
                 vm.CanvasHeight,
-                outputWidth,
-                outputHeight);
+                mapping?.OutputWidth ?? outputWidth,
+                mapping?.OutputHeight ?? outputHeight);
             var section = mapping?.Sections.FirstOrDefault();
             if (section is not null)
             {

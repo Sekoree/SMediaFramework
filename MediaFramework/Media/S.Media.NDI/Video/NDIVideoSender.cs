@@ -90,7 +90,10 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     private long _submittedCount;
     // Cooperative abort (S.Media.Core.Video.IVideoOutputCooperativeAbort): set on teardown so an in-flight
     // paced Submit bails out of its wall-clock spacing wait immediately instead of holding up the pump's
-    // dispose join (worst with low-FPS attached_pic streams). Terminal — once set, Submit becomes a no-op.
+    // dispose join (worst with low-FPS attached_pic streams). Terminal WITHIN a session — once set, Submit
+    // becomes a no-op — but cleared by Configure, which begins a fresh session. This sender is shared and
+    // long-lived (the carrier reuses one instance across cue/deck acquisitions), so the abort must not be a
+    // permanent kill-switch: a borrowed pump's teardown could otherwise black out the whole NDI output.
     private readonly ManualResetEventSlim _abortSignal = new(false);
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Video.NDIVideoSender");
@@ -186,6 +189,9 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
         _sharedPresentationTimeline?.Reset();
         _presentationAnchor = null;
         _configured = true;
+        // Fresh session: clear any cooperative abort left set by a prior pump's teardown so this reused,
+        // long-lived sender emits again (otherwise every Submit stays a no-op and the output is black).
+        _abortSignal.Reset();
         Interlocked.Exchange(ref _firstSubmitLogged, 0);
         Trace.LogDebug("Configure: {Format} timecodeMode={Mode} spacing={Spacing}ms",
             format, _timecodeMode, _minimumSubmitSpacing.TotalMilliseconds);

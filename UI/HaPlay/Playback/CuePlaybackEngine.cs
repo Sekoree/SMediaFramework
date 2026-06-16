@@ -1687,15 +1687,13 @@ public sealed partial class CuePlaybackEngine : IDisposable
             : new RoutePlan(audioByOutput, placements, placementSourceIndices);
     }
 
-    private IReadOnlyList<OutputDefinition> SnapshotOutputDefinitions()
-    {
-        if (Dispatcher.UIThread.CheckAccess())
-            return _outputs.Outputs.Select(output => output.Definition).ToList();
-
-        return Dispatcher.UIThread.InvokeAsync(() => _outputs.Outputs.Select(output => output.Definition).ToList())
-            .GetAwaiter()
-            .GetResult();
-    }
+    // Thread-safe, lock-free read of the current output definitions. This runs on background pre-roll /
+    // sanitize threads; the previous implementation marshaled onto the UI thread with a blocking
+    // InvokeAsync(...).GetResult() to enumerate the ObservableCollection, which — being uncancellable and
+    // fired on every cue add/select/edit when audio routes exist — could pile up while the UI thread was
+    // busy (e.g. behind a modal file picker) and starve the thread pool, so probes never completed and the
+    // cue never updated. OutputManagementViewModel keeps DefinitionsSnapshot current on the UI thread.
+    private IReadOnlyList<OutputDefinition> SnapshotOutputDefinitions() => _outputs.DefinitionsSnapshot;
 
     private static int GetAudioOutputChannelCount(OutputDefinition definition) =>
         definition switch

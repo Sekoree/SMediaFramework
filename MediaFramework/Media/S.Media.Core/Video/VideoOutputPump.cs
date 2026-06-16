@@ -431,7 +431,13 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             // Ask a cooperative inner output to abandon any in-flight Submit so the drainer returns
             // promptly — otherwise a slow blocking Submit forces the join cap to expire and we leak pump
             // state below. Outputs that don't implement this keep the prior leak-avoidance fallback.
-            (_inner as IVideoOutputCooperativeAbort)?.RequestSubmitAbort();
+            //
+            // Only signal this when THIS pump owns the inner (disposeInner): the abort is terminal on the
+            // inner, and a borrowed inner outlives the pump. A shared, long-lived NDIVideoSender (owned by
+            // the NDI carrier and reused across every cue/deck acquisition) must NOT be permanently disabled
+            // by a transient pump's teardown — doing so turned the whole NDI output black until app restart.
+            if (_disposeInner)
+                (_inner as IVideoOutputCooperativeAbort)?.RequestSubmitAbort();
             if (thread is { } t)
             {
                 // Drainer is parked at most one SDK-paced Submit (typically ≤33 ms at the negotiated frame
