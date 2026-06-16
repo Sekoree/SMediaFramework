@@ -1424,9 +1424,11 @@ public sealed partial class CuePlaybackEngine : IDisposable
         var targetLineIds = compositionBindings.Select(b => b.OutputLineId).ToHashSet();
         var targetLines = _outputs.Outputs.Where(l => targetLineIds.Contains(l.Definition.Id)).ToList();
         // Per-line output mapping (warp sections) — first binding wins when a line is bound twice.
+        // A binding keeps its mapping geometry even while disabled (so the editor can restore it), so the
+        // mapping is honoured only when MappingEnabled — otherwise the line takes the raw canvas.
         var mappingsByLine = compositionBindings
             .GroupBy(b => b.OutputLineId)
-            .ToDictionary(g => g.Key, g => g.First().Mapping);
+            .ToDictionary(g => g.Key, g => g.First() is { MappingEnabled: true } b ? b.Mapping : null);
 
         var runtime = new CueCompositionRuntime(composition, targetLines, _outputs, mappingsByLine);
         if (runtime.LeasedLineCount == 0)

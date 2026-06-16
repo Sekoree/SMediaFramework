@@ -142,9 +142,14 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
     partial void OnOutputLineIdChanged(Guid value) => LineRef = _resolveLine?.Invoke(value);
 
     /// <summary>Output mapping (warp sections) for this binding — edited by the mapping editor
-    /// dialog, persisted with the cue list. Null = no mapping stage.</summary>
+    /// dialog, persisted with the cue list. Null = no mapping stage. Geometry is retained while
+    /// <see cref="MappingEnabled"/> is false so disabling then re-enabling restores the slice.</summary>
     [ObservableProperty]
     private CueOutputMapping? _mapping;
+
+    /// <summary>Whether <see cref="Mapping"/> is active (see the model field). Default true.</summary>
+    [ObservableProperty]
+    private bool _mappingEnabled = true;
 
     internal void SetLineResolver(Func<Guid, OutputLineViewModel?> resolveLine)
     {
@@ -158,6 +163,7 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
         OutputLineId = OutputLineId,
         CompositionId = CompositionId,
         Mapping = Mapping,
+        MappingEnabled = MappingEnabled,
     };
 
     public static CueVideoOutputBindingViewModel FromModel(
@@ -170,6 +176,7 @@ public sealed partial class CueVideoOutputBindingViewModel : ObservableObject
             OutputLineId = model.OutputLineId,
             CompositionId = model.CompositionId,
             Mapping = model.Mapping,
+            MappingEnabled = model.MappingEnabled,
         };
         if (resolveLine is not null)
             vm.SetLineResolver(resolveLine);

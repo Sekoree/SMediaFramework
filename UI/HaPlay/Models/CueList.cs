@@ -86,6 +86,13 @@ public sealed record CueVideoOutputBinding
     /// surfaces). Null = no mapping stage (identical pipeline and cost to before the feature).
     /// See Doc/HaPlay-Output-Mapping-Plan.md.</summary>
     public CueOutputMapping? Mapping { get; init; }
+
+    /// <summary>Whether <see cref="Mapping"/> is active. The geometry is retained when this is false so
+    /// toggling mapping off then on restores the exact configured slice instead of losing it to a null
+    /// mapping. Mapping applies only when this is <c>true</c> <em>and</em> <see cref="Mapping"/> is
+    /// non-null. Defaults <c>true</c> so pre-flag saves (which stored a mapping only when they wanted it
+    /// active) load unchanged.</summary>
+    public bool MappingEnabled { get; init; } = true;
 }
 
 /// <summary>Output mapping for one composition→output binding (Doc/HaPlay-Output-Mapping-Plan.md §3).</summary>

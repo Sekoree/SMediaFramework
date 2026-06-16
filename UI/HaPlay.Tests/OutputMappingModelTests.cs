@@ -1,6 +1,7 @@
 using System.Text.Json;
 using HaPlay.Models;
 using HaPlay.Playback;
+using HaPlay.ViewModels;
 using HaPlay.ViewModels.Dialogs;
 using Xunit;
 
@@ -175,13 +176,63 @@ public sealed class OutputMappingModelTests
     }
 
     [Fact]
+    public void EditorViewModel_DisabledSeed_AppliesLayoutSliceWhenEnabled()
+    {
+        CueOutputMapping? applied = null;
+        var seed = new CueOutputMapping
+        {
+            OutputWidth = 960,
+            OutputHeight = 1080,
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    Name = "Right tile",
+                    SrcX = 0.5,
+                    SrcY = 0,
+                    SrcWidth = 0.5,
+                    SrcHeight = 1,
+                    DestWidth = 960,
+                    DestHeight = 1080,
+                },
+            },
+        };
+
+        var appliedEnabled = false;
+        var vm = new MappingEditorViewModel(
+            "Out",
+            1920,
+            1080,
+            initial: null,
+            apply: (m, enabled) => { applied = m; appliedEnabled = enabled; },
+            disabledSeed: seed,
+            initialEnabled: false);
+
+        Assert.False(vm.MappingEnabled);
+        // Geometry is retained even while disabled (so re-enabling restores it); it's seeded from the layout.
+        Assert.Equal((960, 1080), (vm.OutputWidth, vm.OutputHeight));
+        Assert.Equal(0.5, vm.ToMapping().Sections[0].SrcX, precision: 6);
+        Assert.Equal(0.5, vm.SelectedSection!.SrcX, precision: 6);
+
+        vm.MappingEnabled = true;
+
+        Assert.True(appliedEnabled);
+        var section = Assert.Single(applied!.Sections);
+        Assert.Equal((960, 1080), (applied.OutputWidth, applied.OutputHeight));
+        Assert.Equal(0.5, section.SrcX, precision: 6);
+        Assert.Equal(0.5, section.SrcWidth, precision: 6);
+        Assert.Equal(960, section.DestWidth, precision: 6);
+    }
+
+    [Fact]
     public void EditorViewModel_EnablingMesh_SeedsIdentityGridAndApplies()
     {
         CueOutputMapping? applied = null;
         var vm = new MappingEditorViewModel(
             "Out", 1920, 1080,
             CueOutputMapping.Identity(),
-            m => applied = m);
+            (m, _) => applied = m,
+            initialEnabled: true);
         var section = vm.SelectedSection!;
 
         section.MeshEnabled = true;
@@ -215,7 +266,7 @@ public sealed class OutputMappingModelTests
                 },
             },
         };
-        var vm = new MappingEditorViewModel("Out", 1920, 1080, initial, m => applied = m);
+        var vm = new MappingEditorViewModel("Out", 1920, 1080, initial, (m, _) => applied = m, initialEnabled: true);
         var section = vm.SelectedSection!;
 
         Assert.True(section.MeshEnabled);
@@ -232,5 +283,55 @@ public sealed class OutputMappingModelTests
         model = Assert.Single(applied!.Sections);
         Assert.Equal(6, model.MeshPoints!.Count);
         Assert.Equal(0.5, model.MeshPoints[1].X, precision: 6);
+    }
+
+    [Fact]
+    public void EditorViewModel_DisableThenEnable_PreservesGeometryAndTogglesActive()
+    {
+        CueOutputMapping? applied = null;
+        var appliedEnabled = true;
+        var initial = new CueOutputMapping
+        {
+            OutputWidth = 1920,
+            OutputHeight = 1080,
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    SrcX = 0, SrcY = 0.5, SrcWidth = 1, SrcHeight = 0.5, DestWidth = 1920, DestHeight = 1080,
+                },
+            },
+        };
+        var vm = new MappingEditorViewModel(
+            "Out", 1920, 2160, initial,
+            (m, enabled) => { applied = m; appliedEnabled = enabled; },
+            initialEnabled: true);
+
+        Assert.True(vm.MappingEnabled);
+
+        // Disable: the geometry is still handed to the caller (so it can be retained), enabled = false.
+        vm.MappingEnabled = false;
+        Assert.False(appliedEnabled);
+        Assert.Equal(0.5, Assert.Single(applied!.Sections).SrcY, precision: 6);
+
+        // Re-enable: the same bottom-half slice comes back active (not a reset to full canvas).
+        vm.MappingEnabled = true;
+        Assert.True(appliedEnabled);
+        Assert.Equal(0.5, Assert.Single(applied!.Sections).SrcY, precision: 6);
+    }
+
+    [Fact]
+    public void Binding_MappingEnabled_DefaultsTrueAndRoundTrips()
+    {
+        Assert.True(new CueVideoOutputBinding().MappingEnabled);
+
+        var vm = new CueVideoOutputBindingViewModel
+        {
+            Mapping = CueOutputMapping.Identity(),
+            MappingEnabled = false,
+        };
+        var roundTripped = CueVideoOutputBindingViewModel.FromModel(vm.ToModel());
+        Assert.False(roundTripped.MappingEnabled);
+        Assert.NotNull(roundTripped.Mapping); // geometry retained while disabled
     }
 }

@@ -32,21 +32,62 @@ public partial class CueOutputSetupDialog : Window
         }
 
         var outputName = binding.LineRef?.Definition.DisplayName ?? HaPlay.Resources.Strings.UnsetLabel;
+        var disabledSeed = binding.Mapping is null
+            ? BuildLayoutSeed(cuePlayer, composition, binding)
+            : null;
         var vm = new MappingEditorViewModel(
             outputName,
             composition.Width,
             composition.Height,
             binding.Mapping,
-            apply: mapping =>
+            apply: (mapping, enabled) =>
             {
+                // Retain the edited geometry even when disabled so re-enabling restores the exact slice;
+                // only feed the live composition a mapping while enabled (null = raw canvas).
                 binding.Mapping = mapping;
-                cuePlayer.UpdateOutputMappingCallback?.Invoke(binding.CompositionId, binding.OutputLineId, mapping);
+                binding.MappingEnabled = enabled;
+                cuePlayer.UpdateOutputMappingCallback?.Invoke(
+                    binding.CompositionId, binding.OutputLineId, enabled ? mapping : null);
             },
             setTestPattern: show =>
-                cuePlayer.SetCompositionTestPatternCallback?.Invoke(binding.CompositionId, show) ?? false);
+                cuePlayer.SetCompositionTestPatternCallback?.Invoke(binding.CompositionId, show) ?? false,
+            disabledSeed: disabledSeed,
+            initialEnabled: binding.Mapping is not null && binding.MappingEnabled);
 
         var dialog = new MappingEditorDialog { DataContext = vm };
         dialog.Show(this);
+    }
+
+    private static CueOutputMapping? BuildLayoutSeed(
+        CuePlayerViewModel cuePlayer,
+        CueCompositionViewModel composition,
+        CueVideoOutputBindingViewModel target)
+    {
+        if (target.OutputLineId == Guid.Empty)
+            return null;
+
+        var siblings = cuePlayer.VisibleVideoOutputs
+            .Where(b => b.CompositionId == composition.Id && b.OutputLineId != Guid.Empty)
+            .ToList();
+        if (siblings.Count == 0)
+            return null;
+
+        var layout = CompositionOutputLayoutViewModel.Build(
+            composition.Width,
+            composition.Height,
+            siblings.Select(b =>
+            {
+                var (width, height) = ResolveOutputResolution(b.LineRef?.Definition);
+                return (
+                    b.OutputLineId,
+                    b.LineRef?.Definition.DisplayName ?? HaPlay.Resources.Strings.UnsetLabel,
+                    width,
+                    height,
+                    b.Mapping);
+            }));
+
+        var item = layout.Items.FirstOrDefault(i => i.OutputLineId == target.OutputLineId);
+        return item is null ? null : layout.ToMapping(item);
     }
 
     /// <summary>Opens the multi-output layout editor for the clicked composition: every output bound to it is
@@ -94,6 +135,7 @@ public partial class CueOutputSetupDialog : Window
                 continue;
             var mapping = vm.ToMapping(item);
             binding.Mapping = mapping;
+            binding.MappingEnabled = true; // arranging an output in the layout enables its mapping
             cuePlayer.UpdateOutputMappingCallback?.Invoke(binding.CompositionId, binding.OutputLineId, mapping);
         }
     }

@@ -13,17 +13,22 @@ namespace HaPlay.ViewModels.Dialogs;
 /// </summary>
 public sealed partial class MappingEditorViewModel : ObservableObject
 {
-    private readonly Action<CueOutputMapping?> _apply;
+    private readonly Action<CueOutputMapping?, bool> _apply;
     private readonly Func<bool, bool>? _setTestPattern;
     private bool _suppressApply;
 
+    /// <param name="apply">Persist + live-apply callback: (edited geometry, enabled). The geometry is
+    /// always supplied (even when disabled) so the caller can retain it for a later re-enable.</param>
+    /// <param name="initialEnabled">Whether mapping is currently active for this binding.</param>
     public MappingEditorViewModel(
         string outputName,
         int canvasWidth,
         int canvasHeight,
         CueOutputMapping? initial,
-        Action<CueOutputMapping?> apply,
-        Func<bool, bool>? setTestPattern = null)
+        Action<CueOutputMapping?, bool> apply,
+        Func<bool, bool>? setTestPattern = null,
+        CueOutputMapping? disabledSeed = null,
+        bool initialEnabled = false)
     {
         OutputName = outputName;
         CanvasWidth = canvasWidth;
@@ -32,10 +37,10 @@ public sealed partial class MappingEditorViewModel : ObservableObject
         _setTestPattern = setTestPattern;
 
         _suppressApply = true;
-        _mappingEnabled = initial is not null;
-        _outputWidth = initial?.OutputWidth;
-        _outputHeight = initial?.OutputHeight;
-        var seed = initial ?? CueOutputMapping.Identity();
+        _mappingEnabled = initialEnabled;
+        var seed = initial ?? disabledSeed ?? CueOutputMapping.Identity();
+        _outputWidth = seed.OutputWidth;
+        _outputHeight = seed.OutputHeight;
         foreach (var section in seed.Sections)
             Sections.Add(Wrap(MappingSectionViewModel.FromModel(section)));
         SelectedSection = Sections.FirstOrDefault();
@@ -184,23 +189,22 @@ public sealed partial class MappingEditorViewModel : ObservableObject
         Apply();
     }
 
-    /// <summary>The mapping as currently edited — null when disabled.</summary>
-    public CueOutputMapping? ToMapping() =>
-        !MappingEnabled
-            ? null
-            : new CueOutputMapping
-            {
-                Sections = Sections.Select(s => s.ToModel()).ToList(),
-                OutputWidth = OutputWidth,
-                OutputHeight = OutputHeight,
-            };
+    /// <summary>The mapping geometry as currently edited (independent of <see cref="MappingEnabled"/>),
+    /// so the caller can retain it while disabled and restore it on re-enable.</summary>
+    public CueOutputMapping ToMapping() =>
+        new()
+        {
+            Sections = Sections.Select(s => s.ToModel()).ToList(),
+            OutputWidth = OutputWidth,
+            OutputHeight = OutputHeight,
+        };
 
     /// <summary>Persist + live-apply. Called by section VMs on every field change.</summary>
     internal void Apply()
     {
         if (_suppressApply)
             return;
-        _apply(ToMapping());
+        _apply(ToMapping(), MappingEnabled);
         MappingChanged?.Invoke();
     }
 
