@@ -24,7 +24,7 @@ internal readonly record struct LocalVideoPresentationStats(
     long DroppedPendingFrames,
     TimeSpan? LastPresentedPresentationTime);
 
-internal sealed class HaPlayPlaybackSession : IDisposable
+internal sealed partial class HaPlayPlaybackSession : IDisposable
 {
     private readonly List<LogoFallbackVideoOutput> _logoSinks = new();
     private readonly List<OutputLineViewModel> _acquiredCarriers = new();
@@ -36,6 +36,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     private readonly List<ResamplingAudioOutput> _ndiAudioResamplers = new();
     private readonly List<IAudioOutput> _ndiAudioOutputs = new();
     private readonly List<MeteringAudioOutput> _meters = new();
+    private MediaPlayerCompositionRuntime? _mediaPlayerComposition;
     /// <summary>Phase A (§4.3.3, §9.6) — per-line wiring metadata so <see cref="TryAddOutput"/> /
     /// <see cref="TryRemoveOutput"/> can unwind exactly what they wired without disturbing the
     /// original-output path. Populated for both originally-routed lines (so removal of an original
@@ -475,7 +476,11 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
         var videoChains = new List<(OutputLineViewModel Line, string Id, LogoFallbackVideoOutput Output)>();
         var acquiredLocalLines = new List<OutputLineViewModel>();
-        if (hasVideo)
+        // Default path: route the deck's video through a composition — video on layer 0, hold/logo on layer 1
+        // — instead of per-output logo wrappers. Set HAPLAY_MEDIAPLAYER_COMPOSITIONS=0/false/off for the
+        // legacy direct-router path while debugging.
+        var useComposition = hasVideo && MediaPlayerCompositionsEnabled;
+        if (hasVideo && !useComposition)
         {
             foreach (var line in lines)
             {
@@ -547,6 +552,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             return false;
         }
 
+        EnableMultiOutputDriftCorrection(player);
+
         HaPlayPlaybackSession? pendingPlayback = null;
         try
         {
@@ -571,6 +578,20 @@ internal sealed class HaPlayPlaybackSession : IDisposable
                 wiring.AcquiredKind = line.Definition is NDIOutputDefinition ? AcquireKind.NDI : AcquireKind.LocalVideo;
             }
 
+            // Composition path: build a video-L0 / logo-L1 composition over the deck's outputs and feed it
+            // from the same decoder input. videoChains is empty here, so the loops above were no-ops.
+            MediaPlayerCompositionRuntime? composition = null;
+            if (useComposition)
+            {
+                composition = TryBuildMediaPlayerComposition(
+                    decoder, lines, ndiByDefinitionId, outputs, acquiredLocalLines, router, inputId);
+                if (composition is not null)
+                {
+                    pendingPlayback._mediaPlayerComposition = composition;
+                    pendingPlayback._playbackOwnedDisposables.Add(composition);
+                }
+            }
+
             var isSingleFrameVideo = decoder.HasVideo && decoder.VideoIsAttachedPicture;
             foreach (var output in videoChains.Select(t => t.Output))
             {
@@ -589,6 +610,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             // outputs for a video-only file) produce no warnings and keep the legacy zero-output session.
             if (openWarnings.Count > 0
                 && videoChains.Count == 0
+                && composition is null
                 && pendingPlayback._acquiredPortAudioLines.Count == 0
                 && pendingPlayback._ndiAudioOutputs.Count == 0)
             {
@@ -614,6 +636,116 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
             ReleaseAcquiredCarriers(outputs, acquired);
             return false;
+        }
+    }
+
+    private static bool MediaPlayerCompositionsEnabled
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable("HAPLAY_MEDIAPLAYER_COMPOSITIONS");
+            return !string.Equals(raw, "0", StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(raw, "false", StringComparison.OrdinalIgnoreCase)
+                   && !string.Equals(raw, "off", StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>Builds a video-layer-0 / logo-layer-1 composition over the deck's video output lines and
+    /// routes the decoder video (<paramref name="inputId"/> on <paramref name="router"/>) into its layer-0 sink.
+    /// Local lines are acquired here and tracked in <paramref name="acquiredLocalLines"/> (released with the
+    /// session); NDI lines reuse the already-acquired carriers. Returns null when no video output leased.</summary>
+    private static MediaPlayerCompositionRuntime? TryBuildMediaPlayerComposition(
+        MediaContainerDecoder decoder,
+        IReadOnlyList<OutputLineViewModel> lines,
+        Dictionary<Guid, NDIOutput> ndiByDefinitionId,
+        OutputManagementViewModel outputs,
+        List<OutputLineViewModel> acquiredLocalLines,
+        VideoRouter router,
+        string inputId)
+    {
+        var leases = new List<ClipCompositionOutputLease>();
+        foreach (var line in lines)
+        {
+            switch (line.Definition)
+            {
+                case LocalVideoOutputDefinition lv:
+                {
+                    var output = outputs.TryAcquireLocalVideoOutputForPlayback(line);
+                    if (output is null)
+                    {
+                        Trace.LogWarning("TryBuildMediaPlayerComposition: local video '{Name}' unavailable — skipped", lv.DisplayName);
+                        continue;
+                    }
+                    acquiredLocalLines.Add(line);
+                    // Preview runtime owns the output (released via the line) — the composition must not dispose it.
+                    leases.Add(new ClipCompositionOutputLease(
+                        $"sdl_{lv.Id:N}", lv.DisplayName, output, Release: null, DisposeOutputOnRuntimeDispose: false));
+                    break;
+                }
+                case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.AudioOnly:
+                {
+                    if (!ndiByDefinitionId.TryGetValue(nd.Id, out var ndi))
+                        continue;
+                    var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-comp-{nd.Id:N}");
+                    var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-comp-{nd.Id:N}",
+                        log: null, disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
+                    // Carrier released via the session's acquired-carriers list; the composition owns the pump.
+                    leases.Add(new ClipCompositionOutputLease(
+                        $"ndi_{nd.Id:N}", nd.DisplayName, pump, Release: null, DisposeOutputOnRuntimeDispose: true));
+                    break;
+                }
+            }
+        }
+
+        if (leases.Count == 0)
+            return null;
+
+        var (width, height) = FirstOutputResolutionOr1080(lines);
+        var rate = decoder.HasVideo ? decoder.Video.Format.FrameRate : new Rational(60, 1);
+        var canvas = new VideoFormat(width, height, PixelFormat.Bgra32, rate);
+        var sourceFormat = decoder.HasVideo ? decoder.Video.Format : canvas;
+
+        var composition = new MediaPlayerCompositionRuntime(canvas, leases, sourceFormat);
+        var outId = router.AddOutput(composition.VideoSink, "mediaplayer_comp", disposeOutputOnRouterDispose: false);
+        if (!router.TryAddRoute(inputId, outId, out var routeErr))
+        {
+            composition.Dispose();
+            throw new InvalidOperationException(routeErr ?? "media player composition route failed");
+        }
+        composition.EnsurePumpStarted();
+        Trace.LogInformation("TryBuildMediaPlayerComposition: {Count} output(s), canvas {W}x{H}", leases.Count, width, height);
+        return composition;
+    }
+
+    /// <summary>Default media-player composition canvas size: the first video output line that declares a
+    /// resolution, else 1080p. (Auto-size-to-output is a media-player feature; the cue player keeps its
+    /// explicit composition sizes.)</summary>
+    private static (int Width, int Height) FirstOutputResolutionOr1080(IReadOnlyList<OutputLineViewModel> lines)
+    {
+        foreach (var line in lines)
+            if (TryGetOutputResolution(line.Definition, out var w, out var h))
+                return (w, h);
+        return (1920, 1080);
+    }
+
+    /// <summary>Reads a video output line's declared pixel resolution (local window size, or NDI resolution
+    /// lock). Returns false when the output declares none.</summary>
+    internal static bool TryGetOutputResolution(OutputDefinition definition, out int width, out int height)
+    {
+        switch (definition)
+        {
+            case LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv:
+                width = lv.WindowWidth!.Value;
+                height = lv.WindowHeight!.Value;
+                return true;
+            case NDIOutputDefinition { ResolutionLockWidth: > 0, ResolutionLockHeight: > 0 } nd:
+                width = nd.ResolutionLockWidth!.Value;
+                height = nd.ResolutionLockHeight!.Value;
+                return true;
+            default:
+                width = 0;
+                height = 0;
+                return false;
         }
     }
 
@@ -861,6 +993,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
             return false;
         }
+
+        EnableMultiOutputDriftCorrection(player);
 
         HaPlayPlaybackSession? pendingPlayback = null;
         try
@@ -1154,224 +1288,15 @@ internal sealed class HaPlayPlaybackSession : IDisposable
         return new ChannelMap(arr);
     }
 
-    /// <summary>
-    /// Build the channel map for a given mix mode against an arbitrary output width.
-    /// </summary>
-    internal static ChannelMap MixModeToChannelMap(AudioRouteMixMode mode, int sourceChannels, int sinkChannels)
-    {
-        var count = Math.Max(1, sinkChannels);
-        var arr = new int[count];
-        for (var i = 0; i < count; i++)
-            arr[i] = ChannelMap.Silence;
-
-        if (mode == AudioRouteMixMode.Silence)
-            return new ChannelMap(arr);
-
-        if (sourceChannels <= 0)
-            return new ChannelMap(arr);
-
-        if (sourceChannels == 1)
-        {
-            for (var i = 0; i < count; i++) arr[i] = 0;
-            return new ChannelMap(arr);
-        }
-
-        switch (mode)
-        {
-            case AudioRouteMixMode.Swap:
-                if (count > 0) arr[0] = Math.Min(1, sourceChannels - 1);
-                if (count > 1) arr[1] = 0;
-                for (var i = 2; i < count; i++)
-                    arr[i] = i < sourceChannels ? i : ChannelMap.Silence;
-                break;
-            case AudioRouteMixMode.MonoLeft:
-                for (var i = 0; i < count; i++) arr[i] = 0;
-                break;
-            case AudioRouteMixMode.MonoRight:
-                var right = Math.Min(1, sourceChannels - 1);
-                for (var i = 0; i < count; i++) arr[i] = right;
-                break;
-            default: // Stereo / identity
-                for (var i = 0; i < count; i++)
-                    arr[i] = i < sourceChannels ? i : ChannelMap.Silence;
-                break;
-        }
-
-        return new ChannelMap(arr);
-    }
-
-    /// <summary>
-    /// Phase C (§4.3.4) — reconfigure the channel map of an already-wired audio route without tearing
-    /// the route down. Calls <see cref="AudioPlayer.Connect"/> which replaces the existing route's
-    /// <c>ChannelMap</c> in-place via <c>AudioRouter.AddRoute</c>. Caller must re-apply gain immediately
-    /// after — <c>AddRoute</c> resets the route's current gain to the supplied value (default 1.0),
-    /// so without a follow-up <see cref="TrySetOutputGain"/> the level would jump.
-    /// </summary>
-    public bool TrySetOutputChannelMap(OutputLineViewModel line, AudioRouteMixMode mode, float gain,
-        out string? errorMessage)
-    {
-        errorMessage = null;
-        if (_disposed)
-        {
-            errorMessage = "Session is disposed.";
-            return false;
-        }
-
-        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.AudioOutputId is null)
-            return true;
-        if (Player.AudioRouter is null || string.IsNullOrEmpty(Player.AudioSourceId))
-            return true;
-
-        // When the matrix path owns this line's routes, the legacy single-route mix-mode reroute is a no-op.
-        // The caller should be using TrySetOutputMatrix instead — silently honour both paths so VMs that
-        // still poke MixMode (e.g. via "preset" buttons) don't fight the matrix.
-        if (wiring.Cells.Count > 0)
-            return true;
-
-        try
-        {
-            var srcChannels = SourceChannelCountOrFallback(2);
-            var sinkChannels = wiring.SinkChannelCount > 0 ? wiring.SinkChannelCount : GetOutputChannelCount(line.Definition);
-            var map = MixModeToChannelMap(mode, srcChannels, sinkChannels);
-            Player.AudioRouter!.Connect(Player.AudioSourceId!, wiring.AudioOutputId, map, gain);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            errorMessage = ex.Message;
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Phase C (§4.3.4) — install per-cell routing. Replaces any cell routes that were previously
-    /// registered for <paramref name="line"/> (idempotent rebuild). Each non-muted, above-floor cell becomes
-    /// one router route via <see cref="AudioRouter.AddRoute(string,string,string,ChannelMap,float)"/> with a
-    /// stable id so subsequent gain rides via <see cref="TrySetOutputMatrixCompoundGain"/> only touch
-    /// <see cref="AudioRouter.SetRouteGainById"/> (click-free per-cell fades).
-    /// </summary>
-    /// <param name="cells">The intended matrix layout for this line. An empty / all-muted list leaves the
-    /// line silent (all per-cell routes removed; the legacy single route, if any, is also dropped).</param>
-    /// <param name="compoundEnvelope">Master × per-output linear gain applied on top of each cell's own gain.</param>
-    public bool TrySetOutputMatrix(OutputLineViewModel line,
-        IReadOnlyList<AudioMatrixCellConfig> cells, float compoundEnvelope, out string? errorMessage)
-    {
-        errorMessage = null;
-        if (_disposed)
-        {
-            errorMessage = "Session is disposed.";
-            return false;
-        }
-
-        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.AudioOutputId is null)
-            return true; // video-only line
-        if (Player.AudioRouter is null || string.IsNullOrEmpty(Player.AudioSourceId))
-            return true;
-
-        try
-        {
-            var router = Player.AudioRouter;
-            // The legacy single route (if WireAudio's initial Connect installed one) must go — the
-            // matrix owns this line's contribution now. ApplyMatrix only touches its own prefix.
-            try { router.RemoveRoute(Player.AudioSourceId!, wiring.AudioOutputId); }
-            catch { /* tolerate "no route" — back-compat removal sweeps */ }
-
-            wiring.Cells.Clear();
-
-            var srcChannels = SourceChannelCountOrFallback(0);
-            wiring.SinkChannelCount = wiring.SinkChannelCount > 0
-                ? wiring.SinkChannelCount
-                : GetOutputChannelCount(line.Definition);
-
-            // P5c: per-cell routes via the framework's atomic reconcile (AudioRouter.ApplyMatrix):
-            // changed cells ramp click-free, new cells fade in from silence, dropped cells removed —
-            // all in one router-state swap instead of the old remove-everything-re-add hard cut.
-            var gains = BuildMatrixGains(cells, srcChannels, wiring.SinkChannelCount, compoundEnvelope, wiring.Cells);
-            router.ApplyMatrix(Player.AudioSourceId!, wiring.AudioOutputId, gains);
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            errorMessage = ex.Message;
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Phase C (§4.3.4) — click-free gain ride across every cell route belonging to <paramref name="line"/>.
-    /// Each cell route ends up at <c>compoundEnvelope × cell.linearGain</c> via
-    /// <see cref="AudioRouter.SetRouteGainById"/>. No-op when the line has no cell routes installed (caller
-    /// should fall back to <see cref="TrySetOutputGain"/> in that case).
-    /// </summary>
-    public bool TrySetOutputMatrixCompoundGain(OutputLineViewModel line, float compoundEnvelope,
-        out string? errorMessage)
-    {
-        errorMessage = null;
-        if (_disposed)
-        {
-            errorMessage = "Session is disposed.";
-            return false;
-        }
-
-        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.Cells.Count == 0)
-            return false; // no matrix; caller picks the legacy gain path
-        if (Player.AudioRouter is null || string.IsNullOrEmpty(Player.AudioSourceId) || wiring.AudioOutputId is null)
-            return true;
-
-        try
-        {
-            // Same reconcile as TrySetOutputMatrix: identical cell set, rescaled gains → ApplyMatrix
-            // only moves each route's GainSlot.Target (click-free ramps), no add/remove churn.
-            var gains = BuildMatrixGains(wiring.Cells, SourceChannelCountOrFallback(0),
-                wiring.SinkChannelCount, compoundEnvelope, liveCellsOut: null);
-            Player.AudioRouter.ApplyMatrix(Player.AudioSourceId!, wiring.AudioOutputId, gains);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            errorMessage = ex.Message;
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Builds the linear gain matrix for <see cref="AudioRouter.ApplyMatrix"/> from cell configs:
-    /// muted/floor/out-of-range cells are zero; live cells get <c>envelope × 10^(dB/20)</c>.
-    /// When <paramref name="liveCellsOut"/> is non-null it receives the surviving cells (the set the
-    /// compound-gain ride later rescales).
-    /// </summary>
-    private static float[,] BuildMatrixGains(
-        IReadOnlyList<AudioMatrixCellConfig> cells,
-        int srcChannels,
-        int sinkChannels,
-        float compoundEnvelope,
-        List<AudioMatrixCellConfig>? liveCellsOut)
-    {
-        var gains = new float[Math.Max(0, srcChannels), Math.Max(0, sinkChannels)];
-        foreach (var cell in cells)
-        {
-            if (cell.Muted) continue;
-            if (cell.GainDb <= AudioMatrixDefaults.MutedFloorDb) continue;
-            if (cell.InputChannel < 0 || cell.InputChannel >= srcChannels) continue;
-            if (cell.OutputChannel < 0 || cell.OutputChannel >= sinkChannels) continue;
-
-            var cellLinear = (float)Math.Pow(10.0, cell.GainDb / 20.0);
-            gains[cell.InputChannel, cell.OutputChannel] = compoundEnvelope * cellLinear;
-            liveCellsOut?.Add(cell);
-        }
-
-        return gains;
-    }
-
 
 
     public void ApplyFallbackImage(string? path)
     {
-        if (_logoSinks.Count == 0)
+        if (_logoSinks.Count == 0 && _mediaPlayerComposition is null)
             return;
         if (string.IsNullOrWhiteSpace(path))
         {
+            _mediaPlayerComposition?.SetHoldFrame(null);
             foreach (var l in _logoSinks)
             {
                 l.TrySetHoldTemplate(null);
@@ -1389,6 +1314,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             return;
         try
         {
+            if (_mediaPlayerComposition is not null)
+                _mediaPlayerComposition.SetHoldFrame(FallbackImageLoader.CloneHoldTemplate(proto));
             foreach (var l in _logoSinks)
             {
                 l.ApplyImageOverrideFormat(proto.Format);
@@ -1467,6 +1394,7 @@ internal sealed class HaPlayPlaybackSession : IDisposable
 
     public void SetHoldFallback(bool hold)
     {
+        _mediaPlayerComposition?.SetHold(hold);
         foreach (var l in _logoSinks)
             l.SetHoldFallback(hold);
         if (!hold)
@@ -1500,6 +1428,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     /// <summary>Pushes the hold template at <paramref name="presentationTime"/> on every logo output (playback timer).</summary>
     public void PumpHoldFrames(TimeSpan presentationTime)
     {
+        // Composition-based media-player hold is driven by the composition pump; only the legacy
+        // per-output logo wrappers need an external template pump.
         foreach (var l in _logoSinks)
         {
             try
@@ -1512,6 +1442,8 @@ internal sealed class HaPlayPlaybackSession : IDisposable
             }
         }
     }
+
+    public bool RequiresHoldPump => _logoSinks.Count > 0;
 
     public void StartAllPortAudio()
     {
@@ -1629,432 +1561,19 @@ internal sealed class HaPlayPlaybackSession : IDisposable
     }
 
     /// <summary>
-    /// Phase A (§4.3.3, §9.6) — wires a new output into a running session without teardown. Mirrors the
-    /// per-line work <see cref="TryCreate"/> does at session open: acquires the underlying runtime,
-    /// registers an audio output / video output on the router, adds the appropriate routes, and (for video)
-    /// primes the new branch with a black frame so it doesn't appear at the next paint.
+    /// Multi-output drift correction (issues-and-improvements #2, Option A). Every non-master output runs
+    /// off its own crystal and drifts ~±50 ppm; left alone it eventually drops or starves. Enabling adaptive
+    /// rate auto-wraps each secondary output in a per-output resampler driven by its pump pressure, so drift
+    /// self-corrects out of the box. The master output is never wrapped and single-output graphs are
+    /// unaffected (the lone output IS the master). Guarded on the FFmpeg adaptive-rate plugin so a host that
+    /// never registered it degrades to prior behaviour instead of throwing. Must run before the secondary
+    /// outputs are added (wrapping happens at <see cref="AudioRouter.AddOutput"/> time).
     /// </summary>
-    /// <remarks>
-    /// <para>Returns <c>false</c> when the line's runtime can't be acquired (e.g. another session holds it)
-    /// or when <paramref name="line"/> is already wired. The session state stays consistent on failure —
-    /// any partial acquisition is rolled back before returning.</para>
-    /// <para>Idempotency is enforced via <c>_lineWiring</c>: a second TryAddOutput for the same line
-    /// fails with "already added". The Phase B caller can call <see cref="TryRemoveOutput"/> first to
-    /// rebuild.</para>
-    /// </remarks>
-    public bool TryAddOutput(OutputLineViewModel line, out string? errorMessage)
+    private static void EnableMultiOutputDriftCorrection(MediaPlayer player)
     {
-        errorMessage = null;
-        if (_disposed)
-        {
-            errorMessage = "Session is disposed.";
-            return false;
-        }
-
-        if (_lineWiring.ContainsKey(line))
-        {
-            errorMessage = $"Output '{line.Definition.DisplayName}' is already wired to this session.";
-            return false;
-        }
-
-        var hasVideo = IsLive ? LiveHasVideo : Player.Decoder.HasVideo;
-        var hasAudio = IsLive ? LiveHasAudio : Player.Decoder.HasAudio;
-        var wiring = new LineWiring();
-
-        try
-        {
-            switch (line.Definition)
-            {
-                case PortAudioOutputDefinition pa:
-                    if (!hasAudio)
-                        return Reject(out errorMessage,
-                            $"PortAudio output '{pa.DisplayName}' has no audio side to wire (source has no audio).");
-                    if (!TryWirePortAudio(line, pa, wiring, out errorMessage))
-                        return false;
-                    break;
-
-                case LocalVideoOutputDefinition lv:
-                    if (!hasVideo)
-                        return Reject(out errorMessage,
-                            $"Local video output '{lv.DisplayName}' has no video side to wire (source has no video).");
-                    if (!TryWireLocalVideo(line, lv, wiring, out errorMessage))
-                        return false;
-                    break;
-
-                case NDIOutputDefinition nd:
-                    if (!TryWireNDI(line, nd, hasVideo, hasAudio, wiring, out errorMessage))
-                        return false;
-                    break;
-
-                default:
-                    return Reject(out errorMessage,
-                        $"Unknown output kind for '{line.Definition.DisplayName}'.");
-            }
-
-            _lineWiring[line] = wiring;
-            Trace.LogInformation("TryAddOutput: '{Name}' wired (audioOut={AS} videoOut={VO})",
-                line.Definition.DisplayName, wiring.AudioOutputId ?? "(none)", wiring.VideoOutputId ?? "(none)");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Trace.LogError(ex, "TryAddOutput: '{Name}' threw; rolling back partial wiring",
-                line.Definition.DisplayName);
-            UnwireLineFromRouters(wiring);
-            ReleaseRuntimeForLine(line);
-            errorMessage = ex.Message;
-            return false;
-        }
-    }
-
-    private static bool Reject(out string? errorMessage, string message)
-    {
-        errorMessage = message;
-        return false;
-    }
-
-    private bool TryWirePortAudio(OutputLineViewModel line, PortAudioOutputDefinition pa, LineWiring wiring,
-        out string? errorMessage)
-    {
-        errorMessage = null;
-        if (Player.AudioRouter is null || string.IsNullOrEmpty(Player.AudioSourceId))
-        {
-            errorMessage = "Session has no audio router — cannot add audio output.";
-            return false;
-        }
-
-        var outDev = _outputs.TryAcquirePortAudioForPlayback(line);
-        if (outDev is null)
-        {
-            errorMessage = $"PortAudio '{pa.DisplayName}' is unavailable (another session may hold it).";
-            return false;
-        }
-
-        _acquiredPortAudioLines.Add(line);
-        wiring.AcquiredKind = AcquireKind.PortAudio;
-        wiring.PortAudioOutput = outDev;
-        wiring.PortAudioUnderrunBaseline = outDev.UnderrunSamples;
-
-        if (!TryGetSourceAudioFormat(out var dec))
-        {
-            _acquiredPortAudioLines.Remove(line);
-            wiring.PortAudioOutput = null;
-            try { _outputs.ReleasePortAudioForPlayback(line); } catch { /* best effort */ }
-            errorMessage = "Source audio format is unavailable.";
-            return false;
-        }
-        var sinkChannels = GetOutputChannelCount(pa);
-        var targetFmt = new AudioFormat(dec.SampleRate, sinkChannels);
-        var map = DefaultChannelMap(dec.Channels, sinkChannels);
-        var needsResample = outDev.Format.SampleRate != dec.SampleRate || outDev.Format.Channels != sinkChannels;
-        IAudioOutput routerSink = outDev;
-        if (needsResample)
-        {
-            var resampler = ResamplingAudioOutput.Wrap(outDev, targetFmt);
-            _portAudioResamplers.Add(resampler);
-            routerSink = resampler;
-            wiring.Resampler = resampler;
-        }
-
-        var outputId = Player.AudioRouter!.AddOutput(routerSink);
-        Player.AudioRouter!.Connect(Player.AudioSourceId!, outputId, map);
-        wiring.AudioOutputId = outputId;
-        wiring.SinkChannelCount = sinkChannels;
-        return true;
-    }
-
-    public bool TrySetOutputGain(OutputLineViewModel line, float gain, out string? errorMessage)
-    {
-        errorMessage = null;
-        if (_disposed)
-        {
-            errorMessage = "Session is disposed.";
-            return false;
-        }
-
-        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.AudioOutputId is null)
-            return true; // video-only lines have no audio route to adjust
-
-        if (Player.AudioRouter is null || string.IsNullOrEmpty(Player.AudioSourceId))
-            return true;
-
-        try
-        {
-            Player.AudioRouter!.SetRouteGain(Player.AudioSourceId!, wiring.AudioOutputId, gain);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            errorMessage = ex.Message;
-            return false;
-        }
-    }
-
-    private bool TryWireLocalVideo(OutputLineViewModel line, LocalVideoOutputDefinition lv, LineWiring wiring,
-        out string? errorMessage)
-    {
-        errorMessage = null;
-        var output = _outputs.TryAcquireLocalVideoOutputForPlayback(line);
-        if (output is null)
-        {
-            errorMessage = $"Local video '{lv.DisplayName}' is unavailable (preview not running or already held).";
-            return false;
-        }
-
-        _acquiredLocalVideoLines.Add(line);
-        wiring.AcquiredKind = AcquireKind.LocalVideo;
-
-        var prefix = lv.Engine == VideoOutputEngine.SdlOpenGl ? "sdl" : "ava";
-        var logo = new LogoFallbackVideoOutput(output, disposeInnerOnDispose: false);
-        var outputId = Player.VideoRouter.AddOutput(logo, $"{prefix}_{lv.Id:N}_hot", disposeOutputOnRouterDispose: true);
-        if (!Player.VideoRouter.TryAddRoute(Player.VideoRouterInputId, outputId, out var routeErr))
-        {
-            Player.VideoRouter.RemoveOutput(outputId);
-            _acquiredLocalVideoLines.Remove(line);
-            try { _outputs.ReleaseLocalVideoOutputForPlayback(line); }
-            catch { /* best effort */ }
-            errorMessage = routeErr ?? "VideoRouter.TryAddRoute failed.";
-            return false;
-        }
-
-        wiring.VideoOutputId = outputId;
-        wiring.LogoOutput = logo;
-        _logoSinks.Add(logo);
-        // Keep single-frame source mode in sync with the existing branches so attached-pic sources don't
-        // show garbage on the newly added branch.
-        logo.SetSingleFrameSourceMode(!IsLive && Player.Decoder.HasVideo && Player.Decoder.VideoIsAttachedPicture);
-        return true;
-    }
-
-    private bool TryWireNDI(OutputLineViewModel line, NDIOutputDefinition nd, bool hasVideo, bool hasAudio,
-        LineWiring wiring, out string? errorMessage)
-    {
-        errorMessage = null;
-        var needsVideo = hasVideo && nd.StreamMode != NDIOutputStreamMode.AudioOnly;
-        var needsAudio = hasAudio && nd.StreamMode != NDIOutputStreamMode.VideoOnly;
-        if (!needsVideo && !needsAudio)
-        {
-            errorMessage = $"NDI '{nd.DisplayName}' stream mode and source have no overlap.";
-            return false;
-        }
-
-        var ndi = _outputs.TryAcquireNDICarrierForPlayback(line, needsVideo, needsAudio);
-        if (ndi is null)
-        {
-            errorMessage = $"NDI carrier '{nd.DisplayName}' is unavailable.";
-            return false;
-        }
-
-        _acquiredCarriers.Add(line);
-        wiring.AcquiredKind = AcquireKind.NDI;
-
-        if (needsVideo)
-        {
-            var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-hot");
-            var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-hot", log: null,
-                disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
-            var logo = new LogoFallbackVideoOutput(pump, disposeInnerOnDispose: true);
-            var outputId = Player.VideoRouter.AddOutput(logo, $"ndi_{nd.Id:N}_hot", disposeOutputOnRouterDispose: true);
-            if (!Player.VideoRouter.TryAddRoute(Player.VideoRouterInputId, outputId, out var routeErr))
-            {
-                Player.VideoRouter.RemoveOutput(outputId);
-                _acquiredCarriers.Remove(line);
-                try { _outputs.ReleaseNDICarrierForPlayback(line); }
-                catch { /* best effort */ }
-                errorMessage = routeErr ?? "VideoRouter.TryAddRoute failed (NDI).";
-                return false;
-            }
-
-            wiring.VideoOutputId = outputId;
-            wiring.LogoOutput = logo;
-            _logoSinks.Add(logo);
-            logo.SetSingleFrameSourceMode(!IsLive && Player.Decoder.HasVideo && Player.Decoder.VideoIsAttachedPicture);
-        }
-
-        if (needsAudio && Player.AudioRouter is not null && !string.IsNullOrEmpty(Player.AudioSourceId))
-        {
-            if (!TryGetSourceAudioFormat(out var dec))
-            {
-                errorMessage = "Source audio format is unavailable.";
-                return false;
-            }
-            var sinkChannels = GetOutputChannelCount(nd);
-            var ndiAudioFmt = new AudioFormat(nd.AudioSampleRate, sinkChannels);
-            var targetFmt = new AudioFormat(dec.SampleRate, sinkChannels);
-            var map = DefaultChannelMap(dec.Channels, sinkChannels);
-            var ndiOutput = ndi.EnableAudio(ndiAudioFmt);
-            _ndiAudioOutputs.Add(ndiOutput);
-
-            IAudioOutput routerSink = ndiOutput;
-            if (ndiAudioFmt.SampleRate != dec.SampleRate)
-            {
-                var resampler = ResamplingAudioOutput.Wrap(ndiOutput, targetFmt);
-                _ndiAudioResamplers.Add(resampler);
-                routerSink = resampler;
-                wiring.Resampler = resampler;
-            }
-
-            var outputId = Player.AudioRouter!.AddOutput(routerSink);
-            Player.AudioRouter!.Connect(Player.AudioSourceId!, outputId, map);
-            wiring.AudioOutputId = outputId;
-            wiring.SinkChannelCount = sinkChannels;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Phase A (§9.6) — removes a previously-wired output from the running session. Mirror of
-    /// <see cref="TryAddOutput"/>. Returns <c>false</c> when the line isn't currently wired.
-    /// </summary>
-    public bool TryRemoveOutput(OutputLineViewModel line, out string? errorMessage)
-    {
-        errorMessage = null;
-        if (_disposed)
-        {
-            errorMessage = "Session is disposed.";
-            return false;
-        }
-
-        if (!_lineWiring.Remove(line, out var wiring))
-        {
-            errorMessage = $"Output '{line.Definition.DisplayName}' is not currently wired to this session.";
-            return false;
-        }
-
-        UnwireLineFromRouters(wiring);
-        ReleaseRuntimeForLine(line);
-
-        // Drop the line's logo output from the hold-image pump list so the next PumpHoldFrames doesn't
-        // hit a output whose underlying output we just released. (Router.RemoveOutput already disposed
-        // the wrapping VideoOutputPump for NDI; for local video the LogoFallbackVideoOutput wrapped a output
-        // we don't own.)
-        if (wiring.LogoOutput is not null)
-            _logoSinks.Remove(wiring.LogoOutput);
-
-        Trace.LogInformation("TryRemoveOutput: '{Name}' unwired", line.Definition.DisplayName);
-        return true;
-    }
-
-    private void UnwireLineFromRouters(LineWiring wiring)
-    {
-        if (wiring.AudioOutputId is { } audioSinkId && Player.AudioRouter is not null)
-        {
-            try { Player.AudioRouter!.RemoveOutput(audioSinkId); }
-            catch (Exception ex) { Trace.LogWarning(ex, "UnwireLineFromRouters: AudioPlayer.RemoveOutput({Id})", audioSinkId); }
-        }
-
-        if (wiring.VideoOutputId is { } videoOutputId)
-        {
-            try { Player.VideoRouter.RemoveOutput(videoOutputId); }
-            catch (Exception ex) { Trace.LogWarning(ex, "UnwireLineFromRouters: VideoRouter.RemoveOutput({Id})", videoOutputId); }
-        }
-
-        if (wiring.Resampler is not null)
-        {
-            // Resampler is in _portAudioResamplers or _ndiAudioResamplers; drop the reference so Dispose
-            // doesn't double-free, then dispose it locally so its internal swr_ctx is released promptly.
-            _portAudioResamplers.Remove(wiring.Resampler);
-            _ndiAudioResamplers.Remove(wiring.Resampler);
-            try { wiring.Resampler.Dispose(); }
-            catch { /* best effort */ }
-        }
-
-        RestorePortAudioTargetQueueIfNeeded(wiring);
-    }
-
-    /// <summary>Phase C.5 — undo the live-session <c>TargetQueueSamples</c> override so the next
-    /// (possibly file-based) acquirer of the persistent PortAudio runtime sees the original target.</summary>
-    private static void RestorePortAudioTargetQueueIfNeeded(LineWiring wiring)
-    {
-        if (wiring.PortAudioForTargetRestore is { } pa && wiring.PreviousPortAudioTargetQueue is { } prev)
-        {
-            try { pa.TargetQueueSamples = prev; }
-            catch (Exception ex)
-            {
-                Trace.LogWarning(ex, "RestorePortAudioTargetQueueIfNeeded: TargetQueueSamples reset to {Prev} threw", prev);
-            }
-
-            wiring.PortAudioForTargetRestore = null;
-            wiring.PreviousPortAudioTargetQueue = null;
-        }
-    }
-
-    private void ReleaseRuntimeForLine(OutputLineViewModel line)
-    {
-        switch (line.Definition)
-        {
-            case PortAudioOutputDefinition:
-                if (_acquiredPortAudioLines.Remove(line))
-                {
-                    try { _outputs.ReleasePortAudioForPlayback(line); }
-                    catch { /* best effort */ }
-                }
-                break;
-            case LocalVideoOutputDefinition:
-                if (_acquiredLocalVideoLines.Remove(line))
-                {
-                    try { _outputs.ReleaseLocalVideoOutputForPlayback(line); }
-                    catch { /* best effort */ }
-                }
-                break;
-            case NDIOutputDefinition:
-                if (_acquiredCarriers.Remove(line))
-                {
-                    try { _outputs.ReleaseNDICarrierForPlayback(line); }
-                    catch { /* best effort */ }
-                }
-                break;
-        }
-    }
-
-    private sealed class LineWiring
-    {
-        public string? AudioOutputId { get; set; }
-        public string? VideoOutputId { get; set; }
-        public LogoFallbackVideoOutput? LogoOutput { get; set; }
-        public ResamplingAudioOutput? Resampler { get; set; }
-        public AcquireKind AcquiredKind { get; set; }
-
-        /// <summary>Phase C.5 — live sessions lower the wrapped PortAudio's <c>TargetQueueSamples</c>
-        /// to avoid the startup chunk-burst that would overflow the per-output pump. Held here so we can
-        /// restore the original target when the wiring is torn down (the persistent runtime keeps the
-        /// stream and would otherwise hand the modified target to the next session).</summary>
-        public PortAudioOutput? PortAudioForTargetRestore { get; set; }
-
-        /// <summary>Previous <c>TargetQueueSamples</c> recorded before the live-session override —
-        /// paired with <see cref="PortAudioForTargetRestore"/>. <c>null</c> when no override was applied.</summary>
-        public int? PreviousPortAudioTargetQueue { get; set; }
-
-        /// <summary>Phase C (§4.3.4) — when the per-cell matrix is in use, the list of router route ids
-        /// installed for each non-zero cell. Empty when the line is using the single-route mix-mode path.</summary>
-        /// <summary>Phase C (§4.3.4) — cached cell configs so master/per-output gain rides can recompute
-        /// the per-route gain via <see cref="AudioRouter.SetRouteGainById"/> without re-adding routes.</summary>
-        public List<AudioMatrixCellConfig> Cells { get; } = new();
-        /// <summary>Output channel count cached at first wiring (needed for building per-cell ChannelMaps without
-        /// re-querying the router each time).</summary>
-        public int SinkChannelCount { get; set; }
-
-        public PortAudioOutput? PortAudioOutput { get; set; }
-        public long PortAudioUnderrunBaseline { get; set; }
-        public long VideoSubmittedBaseline { get; set; }
-        public long VideoDroppedBaseline { get; set; }
-        public long AudioEnqueuedBaseline { get; set; }
-        public long AudioProcessedBaseline { get; set; }
-        public long AudioDroppedBaseline { get; set; }
-    }
-
-    private enum AcquireKind { None, PortAudio, LocalVideo, NDI }
-
-    private LineWiring GetOrCreateLineWiring(OutputLineViewModel line)
-    {
-        if (!_lineWiring.TryGetValue(line, out var wiring))
-        {
-            wiring = new LineWiring();
-            _lineWiring[line] = wiring;
-        }
-
-        return wiring;
+        if (player.AudioRouter is not { } audioRouter || MediaFrameworkPlugins.WrapAdaptiveRateOutput is null)
+            return;
+        audioRouter.EnableAdaptiveRateOnNonMasterOutputs();
     }
 
     public void ResetAllUnderrunBaselines()

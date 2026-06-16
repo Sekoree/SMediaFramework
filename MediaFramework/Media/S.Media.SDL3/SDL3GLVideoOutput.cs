@@ -1043,9 +1043,10 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             case SDL.EventType.WindowPixelSizeChanged:
                 if (ev.Window.WindowID == GetWindowId())
                 {
-                    _viewportWidth = ev.Window.Data1;
-                    _viewportHeight = ev.Window.Data2;
-                    SafeRaiseResized(ev.Window.Data1, ev.Window.Data2);
+                    var (width, height) = CurrentWindowPixelSize(ev.Window.Data1, ev.Window.Data2);
+                    _viewportWidth = width;
+                    _viewportHeight = height;
+                    SafeRaiseResized(width, height);
                     return true;
                 }
 
@@ -1056,6 +1057,19 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     }
 
     private uint GetWindowId() => _window == nint.Zero ? 0u : SDL.GetWindowID(_window);
+
+    private (int Width, int Height) CurrentWindowPixelSize(int fallbackWidth, int fallbackHeight)
+    {
+        if (_window != nint.Zero
+            && SDL.GetWindowSizeInPixels(_window, out var width, out var height)
+            && width > 0
+            && height > 0)
+        {
+            return (width, height);
+        }
+
+        return (fallbackWidth, fallbackHeight);
+    }
 
     private void DrainPendingRenderThreadActions()
     {

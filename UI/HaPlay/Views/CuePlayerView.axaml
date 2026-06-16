@@ -427,6 +427,7 @@
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddVideoPlacementButton}" Command="{Binding AddVideoPlacementCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveVideoPlacementCommand}" />
+                  <Button Content="Video FX…" Command="{Binding EditSelectedPlacementVideoFxCommand}" />
                 </WrapPanel>
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"
@@ -474,6 +475,9 @@
                   <TextBlock Text="Height" VerticalAlignment="Center" Opacity="0.7" />
                   <NumericUpDown Width="92" Minimum="0.02" Maximum="1" Increment="0.01" FormatString="0.00"
                                  Value="{Binding SelectedVideoPlacement.DestHeight, Mode=TwoWay}" />
+                  <TextBlock Text="Rotation°" VerticalAlignment="Center" Opacity="0.7" />
+                  <NumericUpDown Width="92" Minimum="-180" Maximum="180" Increment="1" FormatString="0"
+                                 Value="{Binding SelectedVideoPlacement.RotationDegrees, Mode=TwoWay}" />
                 </WrapPanel>
 
                 <!-- Crop presets + fine crop / fit for the selected placement -->

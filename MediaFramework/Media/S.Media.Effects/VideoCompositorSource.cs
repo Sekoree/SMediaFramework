@@ -160,6 +160,83 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
     public bool TryReadNextFrame(out VideoFrame frame) =>
         TryReadNextFrame(masterAlignmentTime: null, out frame);
 
+    public bool TryReadNextFrames(
+        TimeSpan? masterAlignmentTime,
+        IReadOnlyList<WarpOutputRequest> outputs,
+        out IReadOnlyList<VideoFrame> frames)
+    {
+        ArgumentNullException.ThrowIfNull(outputs);
+        if (_compositor is not IWarpPassVideoCompositor warpCompositor)
+            throw new InvalidOperationException("The configured compositor does not support multi-output warp composition.");
+
+        // Single-consumer read (class contract): serialize so the reused scratch below is exclusive.
+        lock (_readGate)
+        {
+            if (_disposed)
+            {
+                frames = Array.Empty<VideoFrame>();
+                return false;
+            }
+
+            // Snapshot slot refs under _slotsGate (brief — keeps AddSlot/RemoveSlot from contending
+            // with the whole composite), then acquire each slot's held frame outside it. AddRange from
+            // an ICollection copies without per-element/enumerator alloc once the scratch is warm.
+            _snapshotScratch.Clear();
+            lock (_slotsGate)
+                _snapshotScratch.AddRange(_slots);
+
+            _layerScratch.Clear();
+            _acquiredScratch.Clear();
+            try
+            {
+                foreach (var slot in _snapshotScratch)
+                {
+                    // Acquire holds a read-ref on the slot's frame (the slot won't dispose it until we
+                    // ReleaseFrame below). Track the slot, not a per-call lease object, to release it.
+                    var f = slot.KeepPolicy == SlotKeepPolicy.MasterAligned && masterAlignmentTime is { } masterPts
+                        ? slot.AcquireMasterAlignedFrame(masterPts, _ptsStep)
+                        : slot.AcquireLatestFrame();
+                    if (f is null) continue;
+                    _acquiredScratch.Add(slot);
+                    AddSlotLayers(slot, f);
+                }
+
+                // When the caller drives composition from a master timeline (the declarative
+                // VideoCompositor), stamp the composite with that master time so downstream players
+                // align to a real clock rather than a synthetic free-running counter. For read-paced
+                // scaler/preset paths (OutputPresetVideoSource), propagate the background layer's
+                // source PTS so shared-demux seeks stay aligned with audio.
+                TimeSpan pts;
+                if (masterAlignmentTime is { } master)
+                {
+                    pts = master;
+                }
+                else if (_layerScratch.Count > 0)
+                {
+                    pts = _layerScratch[0].Frame.PresentationTime;
+                    _nextPts = pts + _ptsStep;
+                }
+                else
+                {
+                    pts = _nextPts;
+                    _nextPts += _ptsStep;
+                }
+
+                frames = warpCompositor.CompositeMulti(_layerScratch, outputs, pts);
+                Interlocked.Increment(ref _compositesEmitted);
+                return true;
+            }
+            finally
+            {
+                foreach (var slot in _acquiredScratch)
+                    slot.ReleaseFrame();
+                _acquiredScratch.Clear();
+                _layerScratch.Clear();
+                _snapshotScratch.Clear();
+            }
+        }
+    }
+
     /// <param name="masterAlignmentTime">When set, slots with
     /// <see cref="Slot.KeepPolicy"/> = <see cref="SlotKeepPolicy.MasterAligned"/> pick the
     /// frame whose PTS is closest to this position.</param>
@@ -194,10 +271,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
                     _acquiredScratch.Add(slot);
-                    _layerScratch.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode)
-                    {
-                        SourceCrop = slot.SourceCrop,
-                    });
+                    AddSlotLayers(slot, f);
                 }
 
                 // When the caller drives composition from a master timeline (the declarative
@@ -262,6 +336,35 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         return TimeSpan.FromSeconds((double)frameRate.Denominator / frameRate.Numerator);
     }
 
+    private void AddSlotLayers(Slot slot, VideoFrame frame)
+    {
+        var opacity = slot.Opacity;
+        var blendMode = slot.BlendMode;
+        var mapping = slot.MappingSections;
+        if (mapping is not null)
+        {
+            foreach (var section in mapping)
+            {
+                _layerScratch.Add(new CompositorLayer(
+                    frame,
+                    section.Transform,
+                    opacity * section.Opacity,
+                    blendMode)
+                {
+                    SourceCrop = section.SourceCrop,
+                    Mesh = section.Mesh,
+                });
+            }
+
+            return;
+        }
+
+        _layerScratch.Add(new CompositorLayer(frame, slot.Transform, opacity, blendMode)
+        {
+            SourceCrop = slot.SourceCrop,
+        });
+    }
+
     /// <summary>One input slot — combines an <see cref="IVideoOutput"/> target with mutable composite parameters.</summary>
     public sealed class Slot
     {
@@ -276,6 +379,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private LayerTransform2D _transform = LayerTransform2D.Identity;
         private BlendMode _blendMode = BlendMode.SourceOver;
         private RectNormalized _sourceCrop = RectNormalized.Full;
+        private IReadOnlyList<WarpSection>? _mappingSections;
         private bool _closed;
 
         internal Slot(string id, IReadOnlyList<PixelFormat> accepted)
@@ -316,6 +420,16 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             get { lock (_gate) return _sourceCrop; }
             set { lock (_gate) _sourceCrop = value; }
+        }
+
+        /// <summary>
+        /// Optional per-slot section mapping. When present, each section becomes one compositor layer
+        /// sampling this slot's current frame; null keeps the historical single-layer path.
+        /// </summary>
+        public IReadOnlyList<WarpSection>? MappingSections
+        {
+            get { lock (_gate) return _mappingSections; }
+            set { lock (_gate) _mappingSections = value; }
         }
 
         /// <summary>Which submitted frame is exposed at composite time. Default

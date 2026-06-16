@@ -427,8 +427,7 @@ public sealed class MediaPlayer : IDisposable
         MediaPlayerOpen.Decoder(decoder);
 
     /// <summary>Opens from a media file path (decoder owned by the bundle).</summary>
-    [Obsolete("Use MediaPlayer.OpenFile(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpen(
+    internal static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
         IVideoOutput? videoNegotiationLead,
@@ -448,8 +447,7 @@ public sealed class MediaPlayer : IDisposable
     /// Opens from a local media file path (decoder owned by the bundle). Prefer this explicit helper
     /// when user input is known to be a file path; use <see cref="TryOpenUri"/> for network/protocol URLs.
     /// </summary>
-    [Obsolete("Use MediaPlayer.OpenFile(path).WithOptions(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpenFile(
+    internal static bool TryOpenFile(
         string mediaPath,
         in MediaPlayerOpenOptions options,
         IVideoOutput? videoNegotiationLead,
@@ -459,8 +457,7 @@ public sealed class MediaPlayer : IDisposable
         TryOpen(mediaPath, options, videoNegotiationLead, disposeNegotiationLead, out player, out errorMessage);
 
     /// <summary>Opens from a media file path with explicit decoder ownership.</summary>
-    [Obsolete("Use MediaPlayer.OpenFile(path).WithDecoderOwnership(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpen(
+    internal static bool TryOpen(
         string mediaPath,
         in MediaPlayerOpenOptions options,
         IVideoOutput? videoNegotiationLead,
@@ -517,8 +514,7 @@ public sealed class MediaPlayer : IDisposable
     /// Opens from a media URI. <c>file:</c> URIs are validated as local files; non-file absolute URIs
     /// are passed through to FFmpeg protocol I/O (for example <c>http:</c>, <c>https:</c>, or <c>rtsp:</c>).
     /// </summary>
-    [Obsolete("Use MediaPlayer.OpenUri(uri).WithOptions(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpenUri(
+    internal static bool TryOpenUri(
         Uri mediaUri,
         in MediaPlayerOpenOptions options,
         IVideoOutput? videoNegotiationLead,
@@ -542,8 +538,7 @@ public sealed class MediaPlayer : IDisposable
     /// <see cref="MediaPlayerOpenOptions.SpoolStreamToDisk"/> to spool to a temp file).
     /// For live/network streams, prefer <see cref="TryOpenUri"/> so FFmpeg can use protocol-native I/O.
     /// </summary>
-    [Obsolete("Use MediaPlayer.OpenStream(stream).WithInputName(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpenStream(
+    internal static bool TryOpenStream(
         Stream mediaStream,
         string? inputName,
         in MediaPlayerOpenOptions options,
@@ -573,8 +568,7 @@ public sealed class MediaPlayer : IDisposable
     /// <summary>
     /// Opens from a finite readable media stream (AVIO by default).
     /// </summary>
-    [Obsolete("Use MediaPlayer.OpenStream(stream).WithOptions(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpenStream(
+    internal static bool TryOpenStream(
         Stream mediaStream,
         in MediaPlayerOpenOptions options,
         IVideoOutput? videoNegotiationLead,
@@ -596,8 +590,7 @@ public sealed class MediaPlayer : IDisposable
     /// receivers, and other inputs that already expose <see cref="IAudioSource"/>
     /// / <see cref="IVideoSource"/>.
     /// </summary>
-    [Obsolete("Use MediaPlayer.OpenLive(audio, video).WithOptions(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpenLive(
+    internal static bool TryOpenLive(
         IAudioSource? audioSource,
         IVideoSource? videoSource,
         in MediaPlayerOpenOptions options,
@@ -621,8 +614,7 @@ public sealed class MediaPlayer : IDisposable
     /// is disposed with the player; the live audio source is owned by
     /// <see cref="AudioRouter"/> when it is wired.
     /// </summary>
-    [Obsolete("Use MediaPlayer.OpenLive(audio, video).WithDisposeSourcesOnPlayerDispose(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpenLive(
+    internal static bool TryOpenLive(
         IAudioSource? audioSource,
         IVideoSource? videoSource,
         in MediaPlayerOpenOptions options,
@@ -760,8 +752,7 @@ public sealed class MediaPlayer : IDisposable
     /// When non-null, drives <see cref="VideoPlayer"/> instead of <see cref="MediaContainerDecoder.Video"/>
     /// (preset scaling, fade wrappers, etc.). The decoder is still used for audio and container metadata.
     /// </param>
-    [Obsolete("Use MediaPlayer.Open(decoder).WithOptions(...).TryBuild(...) or OpenAsync().")]
-    public static bool TryOpen(
+    internal static bool TryOpen(
         MediaContainerDecoder decoder,
         in MediaPlayerOpenOptions options,
         IVideoOutput? videoNegotiationLead,

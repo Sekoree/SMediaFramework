@@ -26,10 +26,6 @@ public enum MediaContainerPlaybackBundleOwnedParts
     /// <summary>Dispose <see cref="MediaContainerPlaybackBundle.AudioRouter"/> and its <see cref="MediaClock"/> when non-null.</summary>
     AudioRouter = 1 << 2,
 
-    /// <summary>Obsolete name for <see cref="AudioRouter"/>.</summary>
-    [Obsolete("Use AudioRouter")]
-    AudioPlayer = AudioRouter,
-
     /// <summary>Dispose <see cref="MediaContainerPlaybackBundle.VideoRouter"/> when non-null.</summary>
     VideoRouter = 1 << 3,
 

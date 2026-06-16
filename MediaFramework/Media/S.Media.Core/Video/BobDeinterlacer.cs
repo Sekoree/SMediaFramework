@@ -11,7 +11,7 @@ namespace S.Media.Core.Video;
 /// <remarks>
 /// <para>
 /// Production paths should prefer the FFmpeg <c>yadif</c> implementation
-/// (<c>S.Media.FFmpeg.Video.YadifDeinterlacer</c>) registered via <see cref="VideoDeinterlacerRegistry.Factory"/>.
+/// (<c>S.Media.FFmpeg.Video.YadifDeinterlacer</c>) registered via <see cref="S.Media.Core.Diagnostics.MediaFrameworkPlugins.VideoDeinterlacerFactory"/>.
 /// Bob exists so headless test paths and FFmpeg-less Core consumers have a deinterlacer at all.
 /// </para>
 /// <para>

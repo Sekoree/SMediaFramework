@@ -158,6 +158,64 @@ public sealed class EditDialogViewModelTests
     }
 
     [Fact]
+    public void NDI_TryCommit_CustomResolution_PersistsEditedEvenValues()
+    {
+        var vm = new AddNDIOutputDialogViewModel
+        {
+            DisplayName = "NDI Custom",
+            SourceName = "Studio (Cam1)",
+            SelectedResolution = NDIResolutionChoice.Custom,
+            CustomResolutionWidth = 1920,
+            CustomResolutionHeight = 1200,
+        };
+        Assert.True(vm.ShowCustomResolution);
+
+        var committed = vm.TryCommit();
+
+        Assert.NotNull(committed);
+        Assert.Equal(1920, committed!.ResolutionLockWidth);
+        Assert.Equal(1200, committed.ResolutionLockHeight);
+    }
+
+    [Fact]
+    public void NDI_TryCommit_CustomResolution_RejectsOddDimensions()
+    {
+        var vm = new AddNDIOutputDialogViewModel
+        {
+            DisplayName = "NDI Custom",
+            SourceName = "Studio (Cam1)",
+            SelectedResolution = NDIResolutionChoice.Custom,
+            CustomResolutionWidth = 1921, // odd — NDI senders require even dimensions
+            CustomResolutionHeight = 1080,
+        };
+
+        var committed = vm.TryCommit();
+
+        Assert.Null(committed);
+        Assert.False(string.IsNullOrWhiteSpace(vm.ValidationMessage));
+    }
+
+    [Fact]
+    public void NDI_LoadFromExisting_NonPresetLock_SelectsCustomAndPopulatesFields()
+    {
+        var existing = new NDIOutputDefinition(
+            Guid.NewGuid(), "NDI", "Studio (Cam1)", null, NDIOutputStreamMode.VideoAndAudio, 2, 48_000,
+            ResolutionLockWidth: 2560, ResolutionLockHeight: 1440);
+
+        var vm = new AddNDIOutputDialogViewModel();
+        vm.LoadFromExisting(existing);
+
+        Assert.True(vm.SelectedResolution.IsCustom);
+        Assert.True(vm.ShowCustomResolution);
+        Assert.Equal(2560, vm.CustomResolutionWidth);
+        Assert.Equal(1440, vm.CustomResolutionHeight);
+
+        var committed = vm.TryCommit();
+        Assert.Equal(2560, committed!.ResolutionLockWidth);
+        Assert.Equal(1440, committed.ResolutionLockHeight);
+    }
+
+    [Fact]
     public void PortAudio_LoadFromExisting_SwitchesToEditMode()
     {
         var vm = new AddPortAudioOutputDialogViewModel();

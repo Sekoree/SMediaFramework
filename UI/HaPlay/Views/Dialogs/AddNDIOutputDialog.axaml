@@ -72,6 +72,15 @@
                 </DataTemplate>
               </ComboBox.ItemTemplate>
             </ComboBox>
+            <Grid ColumnDefinitions="Auto,8,*,14,Auto,8,*" Margin="0,4,0,0"
+                  IsVisible="{Binding ShowCustomResolution}">
+              <TextBlock Grid.Column="0" Text="W" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="2" Minimum="16" Maximum="7680" Increment="2" FormatString="0"
+                             Value="{Binding CustomResolutionWidth}" />
+              <TextBlock Grid.Column="4" Text="H" VerticalAlignment="Center" />
+              <NumericUpDown Grid.Column="6" Minimum="16" Maximum="4320" Increment="2" FormatString="0"
+                             Value="{Binding CustomResolutionHeight}" />
+            </Grid>
           </StackPanel>
         </Border>
       </StackPanel>

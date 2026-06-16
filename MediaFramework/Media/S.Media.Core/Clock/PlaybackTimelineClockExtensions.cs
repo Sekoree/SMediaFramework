@@ -16,11 +16,6 @@ public static class PlaybackTimelineClockExtensions
         return new PlaybackPlayheadAdapter(playhead);
     }
 
-    /// <summary>Obsolete overload — use <see cref="AsPlayhead(IPlayhead)"/>.</summary>
-    [Obsolete("Use AsPlayhead(IPlayhead).")]
-    public static IReadOnlyPlayhead AsPlayhead(this IPlaybackTimeline timeline) =>
-        AsPlayhead((IPlayhead)timeline);
-
     /// <summary>
     /// Subscribes <paramref name="handler"/> to <see cref="IAvPlaybackSession.Clock"/> <see cref="IMediaClock.PositionChanged"/>.
     /// </summary>

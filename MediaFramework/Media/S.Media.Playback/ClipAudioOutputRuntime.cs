@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
 using S.Media.Core.Diagnostics;
+using S.Media.FFmpeg.Audio;
 
 namespace S.Media.Playback;
 
@@ -16,18 +17,31 @@ public sealed class ClipAudioOutputRuntime : IDisposable
     private readonly IAudioOutput _audioOutput;
     private readonly AudioRouter _router;
     private readonly string _routerOutputId;
+    // Non-null when genlock actuation is requested (Option B Phase-2): wraps the device output so an
+    // OutputSyncGroup's ppm correction slews this device's effective rate. The router is SlaveTo'd to it
+    // explicitly (AutoWirePrimary skips IAdaptiveRateWrappedOutput by design). Default null ⇒ unchanged.
+    private readonly AdaptiveRateAudioOutput? _adaptiveWrapper;
     private readonly Action? _releaseOutput;
     private readonly object _gate = new();
     private readonly HashSet<string> _sources = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, RouteGainTarget>> _sourceRouteGains = new(StringComparer.Ordinal);
     private bool _disposed;
 
+    /// <param name="ratePpmProvider">
+    /// Opt-in genlock actuation (Option B Phase-2). When non-null, the device output is wrapped in an
+    /// <see cref="AdaptiveRateAudioOutput"/> driven by this ppm provider (e.g.
+    /// <c>() =&gt; outputSyncGroup.GetMemberPpm(handle)</c>), so a coordinated clock controller can slew this
+    /// device's effective rate. Default <c>null</c> leaves the device output unwrapped (unchanged behaviour).
+    /// </param>
+    /// <param name="maxRateDeltaHz">Maximum resample delta (Hz) applied by the genlock wrapper; only used when <paramref name="ratePpmProvider"/> is set.</param>
     public ClipAudioOutputRuntime(
         string outputId,
         IAudioOutput audioOutput,
         IPlaybackClock? playbackClock = null,
         Action? releaseOutput = null,
-        string? displayName = null)
+        string? displayName = null,
+        Func<double>? ratePpmProvider = null,
+        int maxRateDeltaHz = 3)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputId);
         OutputId = outputId;
@@ -47,10 +61,24 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         try
         {
             _router = new AudioRouter(format.SampleRate);
-            _routerOutputId = _router.AddOutput(_audioOutput, id: $"shared_{outputId}");
+
+            // Phase-2 genlock actuation (opt-in): wrap the device output so an OutputSyncGroup correction can
+            // slew its effective rate, then slave the router to the wrapper explicitly — AutoWirePrimary skips
+            // IAdaptiveRateWrappedOutput by design, so the usual auto-slave wouldn't fire on it.
+            IAudioOutput routerOutput = _audioOutput;
+            if (ratePpmProvider is not null)
+            {
+                _adaptiveWrapper = new AdaptiveRateAudioOutput(_audioOutput, ratePpmProvider, maxRateDeltaHz);
+                routerOutput = _adaptiveWrapper;
+            }
+
+            _routerOutputId = _router.AddOutput(routerOutput, id: $"shared_{outputId}");
+            if (_adaptiveWrapper is not null)
+                _router.SlaveTo(_routerOutputId);
         }
         catch
         {
+            MediaDiagnostics.SwallowDisposeErrors(() => _adaptiveWrapper?.Dispose(), "ClipAudioOutputRuntime ctor: adaptive-rate wrapper");
             _releaseOutput?.Invoke();
             throw;
         }
@@ -124,6 +152,16 @@ public sealed class ClipAudioOutputRuntime : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         _router.Play();
+    }
+
+    /// <summary>
+    /// Drops audio already queued toward the physical output. Sources/routes remain wired and the
+    /// router keeps running, so this is suitable for cue pause where the source was already muted.
+    /// </summary>
+    public void FlushBufferedAudio()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _router.FlushOutputBuffers();
     }
 
     /// <summary>Pump throughput stats for the runtime's single physical output (operator HUD / output health).</summary>
@@ -269,6 +307,8 @@ public sealed class ClipAudioOutputRuntime : IDisposable
         _disposed = true;
 
         MediaDiagnostics.SwallowDisposeErrors(_router.Dispose, "ClipAudioOutputRuntime.Dispose: router");
+        if (_adaptiveWrapper is not null)
+            MediaDiagnostics.SwallowDisposeErrors(_adaptiveWrapper.Dispose, "ClipAudioOutputRuntime.Dispose: adaptive-rate wrapper");
         if (_releaseOutput is not null)
             MediaDiagnostics.SwallowDisposeErrors(_releaseOutput, "ClipAudioOutputRuntime.Dispose: release");
     }

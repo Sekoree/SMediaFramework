@@ -438,8 +438,10 @@ public static class Strings
     public static string NdiResolution4kLabel => Get(nameof(NdiResolution4kLabel));
     public static string NdiResolution576Label => Get(nameof(NdiResolution576Label));
     public static string NdiResolutionCustomLabel => Get(nameof(NdiResolutionCustomLabel));
+    public static string NdiResolutionCustomEntryLabel => Get(nameof(NdiResolutionCustomEntryLabel));
 
     public static string ValidationDisplayNameRequired => Get(nameof(ValidationDisplayNameRequired));
+    public static string ValidationNdiResolutionInvalid => Get(nameof(ValidationNdiResolutionInvalid));
     public static string ValidationSelectHostApiAndOutputDevice => Get(nameof(ValidationSelectHostApiAndOutputDevice));
     public static string ValidationSelectHostApiAndInputDevice => Get(nameof(ValidationSelectHostApiAndInputDevice));
     public static string ValidationChannelCountRangeForDevice => Get(nameof(ValidationChannelCountRangeForDevice));
@@ -766,6 +768,8 @@ public static class Strings
     public static string CueAddedFromDropStatusFormat => Get(nameof(CueAddedFromDropStatusFormat));
     public static string CueTriggeredStatusFormat => Get(nameof(CueTriggeredStatusFormat));
     public static string CueTriggeredWithDetailStatusFormat => Get(nameof(CueTriggeredWithDetailStatusFormat));
+    public static string CueExecutionFailedStatusFormat => Get(nameof(CueExecutionFailedStatusFormat));
+    public static string CueExecutionFailedWithDetailStatusFormat => Get(nameof(CueExecutionFailedWithDetailStatusFormat));
     public static string CueMediaExecutionNotConfigured => Get(nameof(CueMediaExecutionNotConfigured));
     public static string CueInvalidMediaCue => Get(nameof(CueInvalidMediaCue));
     public static string CueActionExecutionNotConfigured => Get(nameof(CueActionExecutionNotConfigured));

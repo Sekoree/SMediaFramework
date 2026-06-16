@@ -80,7 +80,14 @@ public sealed record VideoPlacementSpec(
     double CropLeft = 0,
     double CropTop = 0,
     double CropRight = 0,
-    double CropBottom = 0);
+    double CropBottom = 0,
+    // Clockwise rotation (degrees) of the placed layer about its destination-rect centre. The rotated
+    // image overflows its axis-aligned dest rect, as expected — unlike the unrotated fit which trims to
+    // the rect for clean split-screen. Default 0 keeps existing placements pixel-identical.
+    double RotationDegrees = 0,
+    // Optional media-layer mapping/video FX. The mapping is resolved in source-video space, then placed
+    // by the normal destination rectangle and fit mode so existing layout controls keep their meaning.
+    ClipOutputMappingSpec? VideoFx = null);
 
 /// <summary>
 /// What to open and how the host intends to route it. The standby engine owns the open/seek/hold

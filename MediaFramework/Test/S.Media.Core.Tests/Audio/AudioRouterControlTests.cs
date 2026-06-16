@@ -97,6 +97,30 @@ public class AudioRouterControlTests
     }
 
     [Fact]
+    public void FlushOutputBuffers_FlushesWithoutStoppingProduction()
+    {
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        var src = new TestSource(Stereo, _ => 1f);
+        var output = new FlushableOutput(Stereo);
+
+        r.AddSource(src, "src");
+        r.AddOutput(output, "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        r.Start();
+        Thread.Sleep(50);
+        var producedBefore = r.ChunksProduced;
+        Assert.True(producedBefore > 0);
+
+        r.FlushOutputBuffers();
+
+        Assert.True(r.IsRunning);
+        Assert.True(output.FlushCount >= 1, "FlushOutputBuffers should call Flush on flushable outputs");
+        Thread.Sleep(50);
+        Assert.True(r.ChunksProduced > producedBefore);
+    }
+
+    [Fact]
     public void NaturalEof_FlushesFlushableOutputs()
     {
         using var r = new AudioRouter(SampleRate, chunkSamples: 64);

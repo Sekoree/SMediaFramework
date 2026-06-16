@@ -91,7 +91,7 @@ internal sealed class PlaylistDecoderCache : IDisposable
                 if (_entries.Remove(oldest.Key, out var evicted))
                 {
                     Trace.LogDebug("PlaylistDecoderCache: evicted {Path}", oldest.Key);
-                    try { evicted.Decoder.Dispose(); } catch { }
+                    HaPlayCleanup.TryDispose(evicted.Decoder, "PlaylistDecoderCache: dispose evicted decoder");
                 }
             }
         }
@@ -113,7 +113,7 @@ internal sealed class PlaylistDecoderCache : IDisposable
         {
             foreach (var entry in _entries.Values)
             {
-                try { entry.Decoder.Dispose(); } catch { }
+                HaPlayCleanup.TryDispose(entry.Decoder, "PlaylistDecoderCache.InvalidateAll: dispose decoder");
             }
             _entries.Clear();
         }
@@ -126,7 +126,7 @@ internal sealed class PlaylistDecoderCache : IDisposable
             _disposed = true;
             foreach (var entry in _entries.Values)
             {
-                try { entry.Decoder.Dispose(); } catch { }
+                HaPlayCleanup.TryDispose(entry.Decoder, "PlaylistDecoderCache.Dispose: dispose decoder");
             }
             _entries.Clear();
         }

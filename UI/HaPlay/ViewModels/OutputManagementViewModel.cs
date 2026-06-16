@@ -22,6 +22,16 @@ namespace HaPlay.ViewModels;
 public partial class OutputManagementViewModel : ViewModelBase
 {
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
+
+    private volatile IReadOnlyList<OutputDefinition> _definitionsSnapshot = Array.Empty<OutputDefinition>();
+
+    /// <summary>Thread-safe immutable snapshot of every output line's <see cref="OutputLineViewModel.Definition"/>,
+    /// rebuilt on the UI thread whenever the line-up or a definition changes. Background callers (cue route
+    /// sanitize / pre-roll) read this instead of marshaling onto the UI thread to enumerate
+    /// <see cref="Outputs"/>: the old blocking <c>InvokeAsync(...).GetResult()</c> could pile up and starve
+    /// the thread pool (it is uncancellable and the UI thread may be busy, e.g. behind a modal file dialog).</summary>
+    public IReadOnlyList<OutputDefinition> DefinitionsSnapshot => _definitionsSnapshot;
+
     /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
     /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
     public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();
@@ -162,9 +172,35 @@ public partial class OutputManagementViewModel : ViewModelBase
             RebuildPortAudioOutputLines();
             RaiseSharedHeadphonesBusesChanged();
         };
+        Outputs.CollectionChanged += OnOutputsChangedForSnapshot;
         RebuildPortAudioOutputLines();
+        RebuildDefinitionsSnapshot();
         SharedHeadphonesBuses.CollectionChanged += OnSharedHeadphonesBusesCollectionChanged;
     }
+
+    // Keep DefinitionsSnapshot current: a line-up change (add/remove) or any line's Definition edit
+    // (alias, channel count, resolution lock) rebuilds the immutable snapshot on the UI thread.
+    private void OnOutputsChangedForSnapshot(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        _ = sender;
+        if (e.OldItems is not null)
+            foreach (var removed in e.OldItems.OfType<OutputLineViewModel>())
+                removed.PropertyChanged -= OnOutputLineDefinitionChangedForSnapshot;
+        if (e.NewItems is not null)
+            foreach (var added in e.NewItems.OfType<OutputLineViewModel>())
+                added.PropertyChanged += OnOutputLineDefinitionChangedForSnapshot;
+        RebuildDefinitionsSnapshot();
+    }
+
+    private void OnOutputLineDefinitionChangedForSnapshot(object? sender, PropertyChangedEventArgs e)
+    {
+        _ = sender;
+        if (e.PropertyName is null or nameof(OutputLineViewModel.Definition))
+            RebuildDefinitionsSnapshot();
+    }
+
+    private void RebuildDefinitionsSnapshot() =>
+        _definitionsSnapshot = Outputs.Select(o => o.Definition).ToArray();
 
     private void OnSharedHeadphonesBusesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -494,6 +530,22 @@ public partial class OutputManagementViewModel : ViewModelBase
     {
         _localPreviews.Remove(line, out _);
         line.IsPreviewRunning = false;
+    }
+
+    internal void NotifyLocalPreviewResized(OutputLineViewModel line, int width, int height)
+    {
+        if (line.Definition is not LocalVideoOutputDefinition lv
+            || lv.SurfaceMode != VideoSurfaceMode.Windowed
+            || width < 320
+            || height < 240)
+        {
+            return;
+        }
+
+        if (lv.WindowWidth == width && lv.WindowHeight == height)
+            return;
+
+        line.ReplaceDefinition(lv with { WindowWidth = width, WindowHeight = height });
     }
 
     public async Task StartLocalPreviewAsync(OutputLineViewModel line, CancellationToken cancellationToken = default)

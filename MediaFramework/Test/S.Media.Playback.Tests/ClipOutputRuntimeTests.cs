@@ -61,6 +61,34 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public void ClipAudioOutputRuntime_FlushBufferedAudio_FlushesOutputWithoutStoppingRuntime()
+    {
+        var format = new AudioFormat(48_000, 2);
+        var output = new FlushableRecordingAudioOutput(format);
+        using var runtime = new ClipAudioOutputRuntime(
+            "out-a",
+            output,
+            new FakePlaybackClock(),
+            displayName: "Output A");
+
+        runtime.AddSource(
+            new ConstantAudioSource(format),
+            [new AudioRouteSpec("out-a", SourceChannel: 0, OutputChannel: 1)],
+            "cue-a");
+
+        runtime.EnsureStarted();
+        Assert.True(SpinWait.SpinUntil(() => output.SubmittedFloats > 0, TimeSpan.FromSeconds(1)),
+            "shared cue audio router did not start after EnsureStarted");
+        var submittedBefore = output.SubmittedFloats;
+
+        runtime.FlushBufferedAudio();
+
+        Assert.True(output.FlushCount >= 1);
+        Assert.True(SpinWait.SpinUntil(() => output.SubmittedFloats > submittedBefore, TimeSpan.FromSeconds(1)),
+            "runtime should continue after flushing queued audio");
+    }
+
+    [Fact]
     public void ClipAudioOutputRuntime_UpdateAndRemoveRoute_UsesExplicitRouteId()
     {
         var format = new AudioFormat(48_000, 2);
@@ -230,6 +258,61 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public async Task ClipCompositionRuntime_LayerVideoFx_ExpandsSlotIntoMappedSections()
+    {
+        var output = new RecordingVideoOutput();
+        var compositor = new FakeWarpCompositor(new VideoFormat(320, 180, PixelFormat.Bgra32, new Rational(60, 1)));
+        var sourceFormat = new VideoFormat(200, 100, PixelFormat.Bgra32, new Rational(60, 1));
+        var videoFx = new ClipOutputMappingSpec(
+            [
+                new ClipOutputMappingSection("left", true, 0, 0, 0.5, 1, 0, 0, 100, 100),
+                new ClipOutputMappingSection(
+                    "right",
+                    true,
+                    0.5,
+                    0,
+                    0.5,
+                    1,
+                    100,
+                    0,
+                    100,
+                    100,
+                    MeshColumns: 2,
+                    MeshRows: 2,
+                    MeshPoints: [new(0, 0), new(1, 0), new(0.1, 1), new(1, 1)]),
+            ],
+            OutputWidth: 200,
+            OutputHeight: 100);
+
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 60, 1),
+            [new ClipCompositionOutputLease("out-a", "A", output)],
+            canvas => new ClipCompositionCompositor(compositor, RequiresBgraLayerConversion: true, BackendName: "Fake"));
+
+        using var layer = runtime.AddLayer(
+            sourceFormat,
+            new VideoPlacementSpec("comp-a", LayerIndex: 1, Placement: "Stretch", VideoFx: videoFx));
+        layer.Output.Configure(sourceFormat);
+        layer.Output.Submit(SolidFrame(TimeSpan.Zero, sourceFormat, blue: 99));
+        runtime.EnsurePumpStarted();
+
+        var mapped = await WaitUntilAsync(
+            () => compositor.LastCompositeLayerCount == 2 && output.Snapshot().Length > 0,
+            TimeSpan.FromSeconds(2));
+
+        try
+        {
+            Assert.True(mapped, "video FX mapping did not expand the slot into two compositor layers");
+            Assert.Equal(2, compositor.LastCompositeLayerCount);
+            Assert.Equal(1, compositor.LastCompositeMeshLayerCount);
+        }
+        finally
+        {
+            output.DisposeCaptured();
+        }
+    }
+
+    [Fact]
     public async Task ClipCompositionRuntime_MultiOutputPump_SharesCanvasBackingAcrossOutputs()
     {
         var a = new RecordingVideoOutput();
@@ -355,6 +438,75 @@ public sealed class ClipOutputRuntimeTests
         finally
         {
             output.DisposeCaptured();
+        }
+    }
+
+    [Fact]
+    public async Task ClipCompositionRuntime_MultiMappedOutputs_UseIntegratedMultiWarpPass()
+    {
+        var mappedA = new RecordingVideoOutput();
+        var mappedB = new RecordingVideoOutput();
+        var raw = new RecordingVideoOutput();
+        var compositor = new FakeWarpCompositor(new VideoFormat(320, 180, PixelFormat.Bgra32, new Rational(60, 1)));
+        var mappingA = new ClipOutputMappingSpec(
+            [new ClipOutputMappingSection("a", true, 0, 0, 0.5, 1, 0, 0, 0, 0)],
+            OutputWidth: 640,
+            OutputHeight: 360);
+        var mappingB = new ClipOutputMappingSpec(
+            [new ClipOutputMappingSection("b", true, 0.5, 0, 0.5, 1, 0, 0, 0, 0)],
+            OutputWidth: 160,
+            OutputHeight: 90);
+        var factoryCalls = 0;
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 60, 1),
+            [
+                new ClipCompositionOutputLease("out-a", "A", mappedA, Mapping: mappingA),
+                new ClipCompositionOutputLease("out-b", "B", mappedB, Mapping: mappingB),
+                new ClipCompositionOutputLease("out-raw", "Raw", raw),
+            ],
+            _ =>
+            {
+                factoryCalls++;
+                return new ClipCompositionCompositor(compositor, RequiresBgraLayerConversion: true, BackendName: "Fake");
+            });
+
+        Assert.Null(compositor.WarpOutput);
+
+        runtime.EnsurePumpStarted();
+        var deadline = Environment.TickCount64 + 5000;
+        while ((mappedA.Snapshot().Length == 0 || mappedB.Snapshot().Length == 0 || raw.Snapshot().Length == 0)
+               && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        try
+        {
+            Assert.True(mappedA.Snapshot().Length > 0, "pump did not deliver frames to mapped output A");
+            Assert.True(mappedB.Snapshot().Length > 0, "pump did not deliver frames to mapped output B");
+            Assert.True(raw.Snapshot().Length > 0, "pump did not deliver frames to raw output");
+
+            Assert.Equal(1, factoryCalls);
+            Assert.Equal(0, compositor.CompositeCalls);
+            Assert.True(compositor.CompositeMultiCalls > 0);
+            var requests = Assert.IsAssignableFrom<IReadOnlyList<WarpOutputRequest>>(compositor.LastMultiOutputs);
+            Assert.Equal(3, requests.Count);
+            Assert.NotNull(requests[0].Sections);
+            Assert.NotNull(requests[1].Sections);
+            Assert.Null(requests[2].Sections);
+            Assert.Equal((640, 360), (requests[0].OutputFormat.Width, requests[0].OutputFormat.Height));
+            Assert.Equal((160, 90), (requests[1].OutputFormat.Width, requests[1].OutputFormat.Height));
+            Assert.Equal((320, 180), (requests[2].OutputFormat.Width, requests[2].OutputFormat.Height));
+
+            Assert.Equal((640, 360), (mappedA.Format.Width, mappedA.Format.Height));
+            Assert.Equal((160, 90), (mappedB.Format.Width, mappedB.Format.Height));
+            Assert.Equal((320, 180), (raw.Format.Width, raw.Format.Height));
+        }
+        finally
+        {
+            mappedA.DisposeCaptured();
+            mappedB.DisposeCaptured();
+            raw.DisposeCaptured();
         }
     }
 
@@ -568,6 +720,16 @@ public sealed class ClipOutputRuntimeTests
 
         public IReadOnlyList<WarpSection>? LastWarpSections { get; private set; }
 
+        public int CompositeCalls { get; private set; }
+
+        public int CompositeMultiCalls { get; private set; }
+
+        public int LastCompositeLayerCount { get; private set; }
+
+        public int LastCompositeMeshLayerCount { get; private set; }
+
+        public IReadOnlyList<WarpOutputRequest>? LastMultiOutputs { get; private set; }
+
         public VideoFormat OutputFormat => _output;
 
         public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats => [PixelFormat.Bgra32];
@@ -583,7 +745,30 @@ public sealed class ClipOutputRuntimeTests
 
         public VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime)
         {
+            CompositeCalls++;
+            LastCompositeLayerCount = layersBackToFront.Count;
+            LastCompositeMeshLayerCount = layersBackToFront.Count(l => l.Mesh is not null);
             var fmt = WarpOutput ?? _output;
+            return CreateFrame(fmt, presentationTime);
+        }
+
+        public IReadOnlyList<VideoFrame> CompositeMulti(
+            IReadOnlyList<CompositorLayer> layersBackToFront,
+            IReadOnlyList<WarpOutputRequest> outputs,
+            TimeSpan presentationTime)
+        {
+            CompositeMultiCalls++;
+            LastCompositeLayerCount = layersBackToFront.Count;
+            LastCompositeMeshLayerCount = layersBackToFront.Count(l => l.Mesh is not null);
+            LastMultiOutputs = outputs.ToArray();
+            var frames = new VideoFrame[outputs.Count];
+            for (var i = 0; i < outputs.Count; i++)
+                frames[i] = CreateFrame(outputs[i].OutputFormat, presentationTime);
+            return frames;
+        }
+
+        private static VideoFrame CreateFrame(VideoFormat fmt, TimeSpan presentationTime)
+        {
             var stride = fmt.Width * 4;
             return new VideoFrame(presentationTime, fmt, new ReadOnlyMemory<byte>(new byte[stride * fmt.Height]), stride);
         }
@@ -718,6 +903,23 @@ public sealed class ClipOutputRuntimeTests
 
         public void Submit(ReadOnlySpan<float> packedSamples) =>
             Interlocked.Add(ref _submittedFloats, packedSamples.Length);
+    }
+
+    private sealed class FlushableRecordingAudioOutput(AudioFormat format) : IAudioOutput, IFlushableOutput
+    {
+        private long _submittedFloats;
+        private int _flushCount;
+
+        public AudioFormat Format { get; } = format;
+
+        public long SubmittedFloats => Volatile.Read(ref _submittedFloats);
+
+        public int FlushCount => Volatile.Read(ref _flushCount);
+
+        public void Submit(ReadOnlySpan<float> packedSamples) =>
+            Interlocked.Add(ref _submittedFloats, packedSamples.Length);
+
+        public void Flush() => Interlocked.Increment(ref _flushCount);
     }
 
     private sealed class FakePlaybackClock : IPlaybackClock

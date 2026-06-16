@@ -53,7 +53,7 @@ namespace S.Media.NDI.Video;
 /// <strong>Debug</strong> via <see cref="MediaDiagnostics.LogError"/> while <strong>Release</strong> continues freeing remaining slots.
 /// </para>
 /// </remarks>
-internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
+internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperativeAbort, IDisposable
 {
     private static readonly PixelFormat[] AcceptedFormats =
     [
@@ -88,6 +88,13 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
     private TimeSpan? _presentationAnchor;
     private int _firstSubmitLogged;
     private long _submittedCount;
+    // Cooperative abort (S.Media.Core.Video.IVideoOutputCooperativeAbort): set on teardown so an in-flight
+    // paced Submit bails out of its wall-clock spacing wait immediately instead of holding up the pump's
+    // dispose join (worst with low-FPS attached_pic streams). Terminal WITHIN a session — once set, Submit
+    // becomes a no-op — but cleared by Configure, which begins a fresh session. This sender is shared and
+    // long-lived (the carrier reuses one instance across cue/deck acquisitions), so the abort must not be a
+    // permanent kill-switch: a borrowed pump's teardown could otherwise black out the whole NDI output.
+    private readonly ManualResetEventSlim _abortSignal = new(false);
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Video.NDIVideoSender");
 
@@ -139,19 +146,14 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
             var wait = _minimumSubmitSpacing - since;
             if (wait > TimeSpan.Zero)
             {
-                var deadlineTicks = now + (long)(wait.TotalSeconds * Stopwatch.Frequency);
-                // Thread.Sleep resolves whole milliseconds (~±0.5 ms); coarse sleep then sleep remainder
-                // (avoid busy SpinWait on the async video pump thread).
-                var coarseMs = (int)Math.Truncate(wait.TotalMilliseconds);
-                if (coarseMs >= 2)
-                    Thread.Sleep(coarseMs - 1);
-
-                var t = Stopwatch.GetTimestamp();
-                if (t < deadlineTicks)
+                // Interruptible pace wait (kernel-backed, not a busy spin): a cooperative abort on teardown
+                // sets _abortSignal so we return immediately rather than sleeping out the frame interval —
+                // which would otherwise hold up the pump's dispose join. Wait returns true only when aborted;
+                // a normal spacing timeout returns false.
+                if (_abortSignal.Wait(wait))
                 {
-                    var remainder = Stopwatch.GetElapsedTime(t, deadlineTicks);
-                    if (remainder > TimeSpan.Zero)
-                        Thread.Sleep(remainder);
+                    _lastSubmitTimestamp = Stopwatch.GetTimestamp();
+                    return;
                 }
 
                 now = Stopwatch.GetTimestamp();
@@ -187,6 +189,9 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
         _sharedPresentationTimeline?.Reset();
         _presentationAnchor = null;
         _configured = true;
+        // Fresh session: clear any cooperative abort left set by a prior pump's teardown so this reused,
+        // long-lived sender emits again (otherwise every Submit stays a no-op and the output is black).
+        _abortSignal.Reset();
         Interlocked.Exchange(ref _firstSubmitLogged, 0);
         Trace.LogDebug("Configure: {Format} timecodeMode={Mode} spacing={Spacing}ms",
             format, _timecodeMode, _minimumSubmitSpacing.TotalMilliseconds);
@@ -200,6 +205,9 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_configured)
                 throw new InvalidOperationException("NDIVideoSender.Submit called before Configure");
+            // Cooperative abort engaged (teardown): drop the frame without sending or pacing.
+            if (_abortSignal.IsSet)
+                return;
             if (frame.Format.Width != _format.Width || frame.Format.Height != _format.Height
                 || frame.Format.PixelFormat != _format.PixelFormat)
                 throw new ArgumentException(
@@ -254,6 +262,16 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
         {
             frame.Dispose();
         }
+    }
+
+    /// <summary>
+    /// <see cref="IVideoOutputCooperativeAbort"/>: ask an in-flight (and any subsequent) <see cref="Submit"/>
+    /// to bail immediately — wakes the pace wait and turns further submits into no-ops. Idempotent; one-way.
+    /// </summary>
+    public void RequestSubmitAbort()
+    {
+        if (_disposed) return;
+        _abortSignal.Set();
     }
 
     private (long timecode, long timestamp) BuildTimecode(VideoFrame frame)
@@ -529,6 +547,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IDisposable
             _staging[i] = null;
             _stagingCapacity[i] = 0;
         }
+        _abortSignal.Dispose();
     }
 
     private static int StagingBytes(VideoFormat fmt) => fmt.PixelFormat switch

@@ -68,6 +68,13 @@ public sealed record CueComposition
     public int FrameRateNum { get; init; } = 60;
 
     public int FrameRateDen { get; init; } = 1;
+
+    /// <summary>Optional composition-level video FX mapping applied to the full canvas before it
+    /// fans out to output mappings. Null = no extra composition stage.</summary>
+    public CueOutputMapping? VideoFx { get; init; }
+
+    /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
+    public bool VideoFxEnabled { get; init; }
 }
 
 public sealed record CueVideoOutputBinding
@@ -86,6 +93,13 @@ public sealed record CueVideoOutputBinding
     /// surfaces). Null = no mapping stage (identical pipeline and cost to before the feature).
     /// See Doc/HaPlay-Output-Mapping-Plan.md.</summary>
     public CueOutputMapping? Mapping { get; init; }
+
+    /// <summary>Whether <see cref="Mapping"/> is active. The geometry is retained when this is false so
+    /// toggling mapping off then on restores the exact configured slice instead of losing it to a null
+    /// mapping. Mapping applies only when this is <c>true</c> <em>and</em> <see cref="Mapping"/> is
+    /// non-null. Defaults <c>true</c> so pre-flag saves (which stored a mapping only when they wanted it
+    /// active) load unchanged.</summary>
+    public bool MappingEnabled { get; init; } = true;
 }
 
 /// <summary>Output mapping for one composition→output binding (Doc/HaPlay-Output-Mapping-Plan.md §3).</summary>
@@ -348,6 +362,17 @@ public sealed record CueVideoPlacement
     public double CropRight { get; init; }
 
     public double CropBottom { get; init; }
+
+    /// <summary>Clockwise rotation (degrees) of this layer about its destination-rect centre. Default 0
+    /// = upright (older cues load unchanged). The rotated image overflows its dest rect, as expected.</summary>
+    public double RotationDegrees { get; init; }
+
+    /// <summary>Optional per-placement video FX mapping. Sections sample this source video and are
+    /// then placed inside the normal destination rectangle.</summary>
+    public CueOutputMapping? VideoFx { get; init; }
+
+    /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
+    public bool VideoFxEnabled { get; init; }
 }
 
 public enum CueTriggerMode

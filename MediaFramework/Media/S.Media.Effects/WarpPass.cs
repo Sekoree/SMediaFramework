@@ -11,6 +11,15 @@ public readonly record struct WarpSection(
     RectNormalized SourceCrop, LayerTransform2D Transform, float Opacity, WarpMesh? Mesh = null);
 
 /// <summary>
+/// One output requested from a single composited canvas. <see cref="Sections"/> = null means
+/// full-canvas passthrough scaled to <see cref="OutputFormat"/>; an empty section list means
+/// a mapped output with no enabled sections, so the result is transparent black.
+/// </summary>
+public readonly record struct WarpOutputRequest(
+    VideoFormat OutputFormat,
+    IReadOnlyList<WarpSection>? Sections);
+
+/// <summary>
 /// Mesh warp control grid for one section (Doc/HaPlay-Output-Mapping-Plan.md Phase 4): an
 /// interpolating Catmull-Rom surface through <see cref="Points"/> — <c>Columns</c>×<c>Rows</c>
 /// control points, row-major, in absolute warp-output pixels. The surface passes through every
@@ -56,4 +65,14 @@ public interface IWarpPassVideoCompositor : IVideoCompositor
     /// Thread-safe snapshot swap — callable while another thread composites.
     /// </summary>
     void SetWarpPass(VideoFormat warpOutput, IReadOnlyList<WarpSection>? sections);
+
+    /// <summary>
+    /// Composite <paramref name="layersBackToFront"/> once into the internal canvas, then emit one
+    /// CPU-readable frame for each requested output by running each output's warp pass against the
+    /// retained canvas texture. Implementations must return frames in request order.
+    /// </summary>
+    IReadOnlyList<VideoFrame> CompositeMulti(
+        IReadOnlyList<CompositorLayer> layersBackToFront,
+        IReadOnlyList<WarpOutputRequest> outputs,
+        TimeSpan presentationTime);
 }

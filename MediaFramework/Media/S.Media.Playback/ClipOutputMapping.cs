@@ -86,15 +86,17 @@ public static class OutputMappingResolver
     public static List<ResolvedMappingSection> Resolve(
         ClipOutputMappingSpec spec,
         int canvasWidth,
-        int canvasHeight)
+        int canvasHeight,
+        RectNormalized? sourceBounds = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
         var resolved = new List<ResolvedMappingSection>(spec.Sections.Count);
+        var bounds = (sourceBounds ?? RectNormalized.Full).Clamped();
         foreach (var section in spec.Sections)
         {
             if (!section.Enabled)
                 continue;
-            if (TryResolveSection(section, canvasWidth, canvasHeight, out var r))
+            if (TryResolveSection(section, canvasWidth, canvasHeight, bounds, out var r))
                 resolved.Add(r);
         }
 
@@ -105,6 +107,7 @@ public static class OutputMappingResolver
         ClipOutputMappingSection s,
         int canvasWidth,
         int canvasHeight,
+        RectNormalized sourceBounds,
         out ResolvedMappingSection resolved)
     {
         resolved = default;
@@ -115,10 +118,10 @@ public static class OutputMappingResolver
             return false;
 
         var crop = new RectNormalized(
-            (float)s.SrcX,
-            (float)s.SrcY,
-            (float)(s.SrcX + s.SrcWidth),
-            (float)(s.SrcY + s.SrcHeight)).Clamped();
+            sourceBounds.X0 + (float)s.SrcX * sourceBounds.Width,
+            sourceBounds.Y0 + (float)s.SrcY * sourceBounds.Height,
+            sourceBounds.X0 + (float)(s.SrcX + s.SrcWidth) * sourceBounds.Width,
+            sourceBounds.Y0 + (float)(s.SrcY + s.SrcHeight) * sourceBounds.Height).Clamped();
 
         // Slice size in canvas pixels (post-clamp so an out-of-range model can't go degenerate).
         var sliceW = crop.Width * canvasWidth;

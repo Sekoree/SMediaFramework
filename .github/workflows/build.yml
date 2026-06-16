@@ -50,9 +50,55 @@ jobs:
           -o publish
 
       # Plain build artifacts, not releases — runtime natives that can't live in the repo
-      # (NDI, FFmpeg, PortAudio, SDL3) are added to the unpacked artifact by hand.
+      # (NDI, PortAudio, SDL3, and FFmpeg on Linux) are added to the unpacked artifact by hand.
+      # Windows FFmpeg now ships via the FFmpeg.GPL NuGet (see S.Media.FFmpeg.csproj).
       - uses: actions/upload-artifact@v4
         with:
           name: HaPlay-${{ matrix.label }}
           path: publish/
+          if-no-files-found: error
+
+  # GL compositor / warp-mesh correctness can't be caught by the headless CPU tests (the CPU path
+  # ignores the mesh — see Doc/Explained/10). CompositorSmoke --pattern runs the real GL stack and
+  # writes a PNG; this job is the CI mitigation referenced in Doc/Explained/15 issue #8.
+  gl-smoke:
+    name: gl-smoke (linux)
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # SDL3 + SkiaSharp natives come from NuGet (SDL3-CS.Native, SkiaSharp.NativeAssets.Linux);
+      # only a virtual X server and Mesa's software GL (llvmpipe) need installing. --pattern is
+      # media-free, so no FFmpeg native is required.
+      - name: Install headless GL prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libgl1-mesa-dri libglx-mesa0 libegl1 libgbm1 \
+            libxext6 libxrandr2 libxi6 libxcursor1 libxfixes3 libxkbcommon0
+
+      - name: GL compositor / warp smoke
+        env:
+          LIBGL_ALWAYS_SOFTWARE: 1
+          GALLIUM_DRIVER: llvmpipe
+          SDL_VIDEODRIVER: x11
+        run: >
+          xvfb-run -a -s "-screen 0 1280x720x24"
+          dotnet run -c Release
+          --project MediaFramework/Tools/CompositorSmoke/CompositorSmoke.csproj
+          -- --pattern 640x360 --out "${{ runner.temp }}/compositor-smoke.png"
+
+      - name: Verify smoke output
+        run: test -s "${{ runner.temp }}/compositor-smoke.png"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compositor-smoke
+          path: ${{ runner.temp }}/compositor-smoke.png
           if-no-files-found: error

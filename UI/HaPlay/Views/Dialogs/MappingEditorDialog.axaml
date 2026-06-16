@@ -3,7 +3,7 @@
         xmlns:vmd="using:HaPlay.ViewModels.Dialogs"
         x:Class="HaPlay.Views.Dialogs.MappingEditorDialog"
         x:DataType="vmd:MappingEditorViewModel"
-        Title="{Binding OutputName, StringFormat='Output mapping — {0}'}"
+        Title="{Binding DialogTitle}"
         Width="1060" Height="640"
         MinWidth="820" MinHeight="480"
         WindowStartupLocation="CenterOwner"
@@ -12,9 +12,9 @@
 
     <!-- Top bar: enable, output size, splitter, grid toggle. -->
     <WrapPanel DockPanel.Dock="Top" ItemSpacing="10" LineSpacing="6" Margin="0,0,0,10">
-      <CheckBox Content="Enable mapping" IsChecked="{Binding MappingEnabled, Mode=TwoWay}" />
-      <StackPanel Orientation="Horizontal" Spacing="4">
-        <TextBlock Text="Output size" VerticalAlignment="Center" />
+      <CheckBox Content="{Binding EnableLabel}" IsChecked="{Binding MappingEnabled, Mode=TwoWay}" />
+      <StackPanel Orientation="Horizontal" Spacing="4" IsVisible="{Binding CanEditOutputSize}">
+        <TextBlock Text="{Binding SizeLabel}" VerticalAlignment="Center" />
         <NumericUpDown Value="{Binding OutputWidth, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
         <TextBlock Text="×" VerticalAlignment="Center" />
         <NumericUpDown Value="{Binding OutputHeight, Mode=TwoWay}" PlaceholderText="canvas" Minimum="16" Maximum="16384" Width="120" />
@@ -30,8 +30,9 @@
       </StackPanel>
       <Button Content="Reset" Command="{Binding ResetToIdentityCommand}"
               ToolTip.Tip="Back to a single full-canvas section" />
-      <CheckBox Content="Show calibration grid on output"
+      <CheckBox Content="{Binding TestPatternLabel}"
                 IsChecked="{Binding ShowTestPattern, Mode=TwoWay}"
+                IsVisible="{Binding CanShowTestPattern}"
                 ToolTip.Tip="Pushes a labeled grid through the composition (and its mapping) so sections can be aligned against the physical surface" />
     </WrapPanel>
 

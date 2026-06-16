@@ -13,7 +13,7 @@ namespace S.Media.FFmpeg.Video;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Registered as the default <see cref="VideoDeinterlacerRegistry.Factory"/> by
+/// Registered as the default <see cref="S.Media.Core.Diagnostics.MediaFrameworkPlugins.VideoDeinterlacerFactory"/> by
 /// <see cref="FFmpegRuntime.EnsureInitialized"/>. Core consumers get yadif when they reference
 /// <c>S.Media.FFmpeg</c>; consumers that don't fall back to <see cref="BobDeinterlacer"/>.
 /// </para>

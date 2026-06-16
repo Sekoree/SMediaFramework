@@ -51,6 +51,12 @@ public readonly record struct CompositorLayer(
     /// </summary>
     public RectNormalized SourceCrop { get; init; } = RectNormalized.Full;
 
+    /// <summary>
+    /// Optional mesh geometry for this layer. When set, the affine transform is still the CPU fallback,
+    /// but warp-capable GPU compositors draw the layer through these absolute destination-pixel points.
+    /// </summary>
+    public WarpMesh? Mesh { get; init; }
+
     /// <summary>Convenience: identity transform, full opacity, source-over blend, no crop.</summary>
     public static CompositorLayer Default(VideoFrame frame) =>
         new(frame, LayerTransform2D.Identity, 1f, BlendMode.SourceOver);

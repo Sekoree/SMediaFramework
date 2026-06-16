@@ -74,10 +74,15 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// chained per-lease stage is skipped. Saves a full readback + re-upload per frame.</summary>
     private volatile bool _integratedWarpActive;
 
+    /// <summary>Optional composition-level video FX: a canvas-sized mapping applied after all layers
+    /// are composited and before per-output mappings/fan-out.</summary>
+    private volatile OutputMappingStage? _compositionMappingStage;
+
     public ClipCompositionRuntime(
         ClipCompositionDefinition definition,
         IReadOnlyList<ClipCompositionOutputLease> outputs,
-        Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null)
+        Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null,
+        ClipOutputMappingSpec? compositionMapping = null)
     {
         _definition = definition ?? throw new ArgumentNullException(nameof(definition));
         ArgumentNullException.ThrowIfNull(outputs);
@@ -111,19 +116,27 @@ public sealed class ClipCompositionRuntime : IDisposable
             acquired.SubscribePumpPressure(this);
         }
 
+        SetCompositionMappingCore(compositionMapping, out _);
         ReevaluateIntegratedWarp();
     }
 
     /// <summary>
-    /// Routes the warp through the canvas compositor itself when possible: with exactly one output
-    /// and a warp-capable compositor, the canvas pass renders straight into the warped output (one
-    /// GPU pass, one readback). Multi-output compositions keep the per-lease chained stages — each
-    /// output may need a different (or no) warp from the same canvas.
+    /// Routes the warp through the canvas compositor itself when possible: with exactly one mapped
+    /// output and a warp-capable compositor, the canvas pass renders straight into the warped output
+    /// (one GPU pass, one readback). Multi-output mappings use <see cref="TryPumpIntegratedMultiWarp"/>.
     /// </summary>
     private void ReevaluateIntegratedWarp()
     {
         if (_compositor is not IWarpPassVideoCompositor warp)
             return;
+
+        if (_compositionMappingStage is not null)
+        {
+            if (_integratedWarpActive)
+                warp.SetWarpPass(_canvasFormat, null);
+            _integratedWarpActive = false;
+            return;
+        }
 
         OutputMappingStage? single;
         lock (_gate)
@@ -217,6 +230,51 @@ public sealed class ClipCompositionRuntime : IDisposable
         ReevaluateIntegratedWarp();
         return true;
     }
+
+    /// <summary>
+    /// Live-swaps the composition-level video FX mapping. Null clears it. The stage output is always
+    /// the composition canvas size, regardless of any editor-side output-size fields.
+    /// </summary>
+    public bool UpdateCompositionMapping(ClipOutputMappingSpec? mapping)
+    {
+        OutputMappingStage? retired;
+        lock (_gate)
+        {
+            if (_disposed) return false;
+            SetCompositionMappingCore(mapping, out retired);
+        }
+
+        if (retired is not null)
+            _retiredMappingStages.Enqueue(retired);
+        ReevaluateIntegratedWarp();
+        return true;
+    }
+
+    private void SetCompositionMappingCore(ClipOutputMappingSpec? mapping, out OutputMappingStage? retired)
+    {
+        retired = null;
+        var current = _compositionMappingStage;
+        if (mapping is null)
+        {
+            _compositionMappingStage = null;
+            retired = current;
+            return;
+        }
+
+        var canvasMapping = ForceCanvasSizedMapping(mapping);
+        var sections = OutputMappingResolver.Resolve(canvasMapping, _canvasFormat.Width, _canvasFormat.Height);
+        if (current is not null && current.OutputFormat == _canvasFormat)
+        {
+            _compositionMappingStage = current.WithSections(sections);
+            return;
+        }
+
+        _compositionMappingStage = new OutputMappingStage(_canvasFormat, sections);
+        retired = current;
+    }
+
+    private ClipOutputMappingSpec ForceCanvasSizedMapping(ClipOutputMappingSpec mapping) =>
+        mapping with { OutputWidth = _canvasFormat.Width, OutputHeight = _canvasFormat.Height };
 
     private void DrainRetiredMappingStages()
     {
@@ -388,17 +446,35 @@ public sealed class ClipCompositionRuntime : IDisposable
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
         }
 
-        if (!_mixer.TryReadNextFrame(masterPts, out var frame))
-            return;
-        Interlocked.Increment(ref _framesComposited);
-
         List<AcquiredOutput> snapshot;
         lock (_gate) snapshot = _acquired.ToList();
 
         if (snapshot.Count == 0)
-        {
-            frame.Dispose();
             return;
+
+        if (TryPumpIntegratedMultiWarp(masterPts, snapshot, sw))
+            return;
+
+        if (!_mixer.TryReadNextFrame(masterPts, out var frame))
+            return;
+        Interlocked.Increment(ref _framesComposited);
+
+        var compositionStage = _compositionMappingStage;
+        if (compositionStage is not null)
+        {
+            try
+            {
+                var fxFrame = compositionStage.Composite(frame, _compositorFactory);
+                frame.Dispose();
+                frame = fxFrame;
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(
+                    ex,
+                    "ClipCompositionRuntime.Pump: composition mapping stage failed for {Composition}",
+                    CompositionName);
+            }
         }
 
         // Output-mapping stages run first, while the canvas frame is alive: each mapped output
@@ -479,6 +555,73 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         sw.Stop();
         RecordPumpTiming(sw.Elapsed, _canvasPeriod);
+    }
+
+    private bool TryPumpIntegratedMultiWarp(TimeSpan? masterPts, List<AcquiredOutput> snapshot, Stopwatch sw)
+    {
+        if (_compositionMappingStage is not null
+            || _integratedWarpActive
+            || _compositor is not IWarpPassVideoCompositor
+            || snapshot.Count < 2)
+            return false;
+
+        var requests = new WarpOutputRequest[snapshot.Count];
+        var hasMappedOutput = false;
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            var stage = snapshot[i].MappingStage;
+            if (stage is null)
+            {
+                requests[i] = new WarpOutputRequest(_canvasFormat, null);
+                continue;
+            }
+
+            hasMappedOutput = true;
+            requests[i] = new WarpOutputRequest(stage.OutputFormat, stage.WarpSections);
+        }
+
+        if (!hasMappedOutput)
+            return false;
+
+        IReadOnlyList<VideoFrame> frames;
+        try
+        {
+            if (!_mixer.TryReadNextFrames(masterPts, requests, out frames))
+                return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(
+                ex,
+                "ClipCompositionRuntime.Pump: integrated multi-output warp failed for {Composition}; falling back to chained mapping",
+                CompositionName);
+            return false;
+        }
+
+        if (frames.Count != snapshot.Count)
+        {
+            DisposeFrames(frames);
+            Trace.LogWarning(
+                "ClipCompositionRuntime.Pump: integrated multi-output warp returned {FrameCount} frames for {OutputCount} outputs in {Composition}; falling back to chained mapping",
+                frames.Count,
+                snapshot.Count,
+                CompositionName);
+            return false;
+        }
+
+        Interlocked.Increment(ref _framesComposited);
+        for (var i = 0; i < snapshot.Count; i++)
+            SubmitToOutput(snapshot[i], frames[i]);
+
+        sw.Stop();
+        RecordPumpTiming(sw.Elapsed, _canvasPeriod);
+        return true;
+    }
+
+    private static void DisposeFrames(IReadOnlyList<VideoFrame> frames)
+    {
+        for (var i = 0; i < frames.Count; i++)
+            frames[i].Dispose();
     }
 
     /// <summary>Configures the output on format change (idempotent per format) and submits;
@@ -585,6 +728,11 @@ public sealed class ClipCompositionRuntime : IDisposable
                 if (acquired.DetachMappingStage() is { } stage)
                     _retiredMappingStages.Enqueue(stage);
             }
+            if (_compositionMappingStage is { } compositionStage)
+            {
+                _compositionMappingStage = null;
+                _retiredMappingStages.Enqueue(compositionStage);
+            }
         }
 
         if (slaveClock is not null && _disposeCompositorOnDriverThread is not null)
@@ -641,6 +789,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         private readonly List<ResolvedMappingSection> _sections;
+        private readonly WarpSection[] _warpSections;
         private readonly CompositorBox _box;
         private readonly List<CompositorLayer> _layerScratch = new();
 
@@ -653,10 +802,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             OutputFormat = outputFormat;
             _sections = sections;
+            _warpSections = CreateWarpSections(sections);
             _box = box;
         }
 
         public VideoFormat OutputFormat { get; }
+
+        public WarpSection[] WarpSections => _warpSections;
 
         /// <summary>Section-only update at the same output size: the new stage shares the live
         /// compositor (boxed), so nothing needs disposal.</summary>
@@ -664,13 +816,18 @@ public sealed class ClipCompositionRuntime : IDisposable
             new(OutputFormat, sections, _box);
 
         /// <summary>Sections in the shape the integrated GPU warp pass consumes.</summary>
-        public WarpSection[] BuildWarpSections()
+        public WarpSection[] BuildWarpSections() => _warpSections;
+
+        private static WarpSection[] CreateWarpSections(IReadOnlyList<ResolvedMappingSection> resolvedSections)
         {
-            var sections = new WarpSection[_sections.Count];
-            for (var i = 0; i < _sections.Count; i++)
-                sections[i] = new WarpSection(
-                    _sections[i].SourceCrop, _sections[i].Transform, _sections[i].Opacity, _sections[i].Mesh);
-            return sections;
+            var warpSections = new WarpSection[resolvedSections.Count];
+            for (var i = 0; i < resolvedSections.Count; i++)
+                warpSections[i] = new WarpSection(
+                    resolvedSections[i].SourceCrop,
+                    resolvedSections[i].Transform,
+                    resolvedSections[i].Opacity,
+                    resolvedSections[i].Mesh);
+            return warpSections;
         }
 
         /// <summary>True when any section carries a mesh warp — needs the GL warp pass; the CPU
@@ -915,6 +1072,12 @@ public sealed class ClipCompositionRuntime : IDisposable
                 (float)_placement.DestY,
                 (float)(_placement.DestX + _placement.DestWidth),
                 (float)(_placement.DestY + _placement.DestHeight));
+            if (_placement.VideoFx is { } videoFx)
+            {
+                ApplyMappedPlacement(destRect, videoFx);
+                return;
+            }
+
             var (transform, crop) = PlacementResolver.Resolve(
                 destRect,
                 MapFit(_placement.Placement),
@@ -924,10 +1087,100 @@ public sealed class ClipCompositionRuntime : IDisposable
                 (float)_placement.CropBottom,
                 _source,
                 _owner._canvasFormat);
+
+            // Per-layer rotation: spin the already-placed image about its destination-rect centre (in canvas
+            // pixels). The compositor applies the full affine, so this works on both the GL and CPU backends.
+            if (_placement.RotationDegrees != 0)
+            {
+                var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
+                var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
+                var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
+                transform = LayerTransform2D.Compose(
+                    LayerTransform2D.Translate(cx, cy),
+                    LayerTransform2D.Compose(
+                        LayerTransform2D.Rotate(rad),
+                        LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
+            }
+
+            RawSlot.MappingSections = null;
             RawSlot.Transform = transform;
             RawSlot.SourceCrop = crop;
             RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
             RawSlot.BlendMode = BlendMode.SourceOver;
+        }
+
+        private void ApplyMappedPlacement(RectNormalized destRect, ClipOutputMappingSpec videoFx)
+        {
+            var effectFormat = OutputMappingResolver.ResolveOutputFormat(videoFx, _source);
+            var (effectTransform, _) = PlacementResolver.Resolve(
+                destRect,
+                MapFit(_placement.Placement),
+                0f,
+                0f,
+                0f,
+                0f,
+                effectFormat,
+                _owner._canvasFormat);
+
+            effectTransform = ApplyPlacementRotation(effectTransform);
+
+            var sourceBounds = new RectNormalized(
+                Math.Clamp((float)_placement.CropLeft, 0f, 0.99f),
+                Math.Clamp((float)_placement.CropTop, 0f, 0.99f),
+                1f - Math.Clamp((float)_placement.CropRight, 0f, 0.99f),
+                1f - Math.Clamp((float)_placement.CropBottom, 0f, 0.99f)).Clamped();
+
+            var resolved = OutputMappingResolver.Resolve(
+                videoFx,
+                _source.Width,
+                _source.Height,
+                sourceBounds);
+
+            var sections = new WarpSection[resolved.Count];
+            for (var i = 0; i < resolved.Count; i++)
+            {
+                var section = resolved[i];
+                var transform = LayerTransform2D.Compose(effectTransform, section.Transform);
+                sections[i] = new WarpSection(
+                    section.SourceCrop,
+                    transform,
+                    section.Opacity,
+                    section.Mesh is null ? null : TransformMesh(section.Mesh, effectTransform));
+            }
+
+            RawSlot.MappingSections = sections;
+            RawSlot.Transform = LayerTransform2D.Identity;
+            RawSlot.SourceCrop = RectNormalized.Full;
+            RawSlot.Opacity = Math.Clamp((float)_placement.Opacity, 0f, 1f);
+            RawSlot.BlendMode = BlendMode.SourceOver;
+        }
+
+        private LayerTransform2D ApplyPlacementRotation(LayerTransform2D transform)
+        {
+            if (_placement.RotationDegrees == 0)
+                return transform;
+
+            var rad = (float)(_placement.RotationDegrees * Math.PI / 180.0);
+            var cx = (float)((_placement.DestX + _placement.DestWidth * 0.5) * _owner._canvasFormat.Width);
+            var cy = (float)((_placement.DestY + _placement.DestHeight * 0.5) * _owner._canvasFormat.Height);
+            return LayerTransform2D.Compose(
+                LayerTransform2D.Translate(cx, cy),
+                LayerTransform2D.Compose(
+                    LayerTransform2D.Rotate(rad),
+                    LayerTransform2D.Compose(LayerTransform2D.Translate(-cx, -cy), transform)));
+        }
+
+        private static WarpMesh TransformMesh(WarpMesh mesh, LayerTransform2D transform)
+        {
+            var points = new System.Numerics.Vector2[mesh.Points.Length];
+            for (var i = 0; i < points.Length; i++)
+            {
+                var p = mesh.Points[i];
+                var (x, y) = transform.Apply(p.X, p.Y);
+                points[i] = new System.Numerics.Vector2(x, y);
+            }
+
+            return new WarpMesh(mesh.Columns, mesh.Rows, points);
         }
 
         public void Dispose()

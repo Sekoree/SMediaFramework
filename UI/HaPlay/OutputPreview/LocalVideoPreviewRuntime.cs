@@ -169,6 +169,7 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
                 ViewportFit = S.Media.OpenGL.VideoViewportFit.Contain,
             };
             output.CloseRequested += OnSdlCloseRequested;
+            output.Resized += OnSdlResized;
             var format = PreviewVideoFrames.PreviewFormat(iw, ih);
             output.Configure(format);
             ApplySdlWindowPlacement(output, _definition, _definition.SurfaceMode == VideoSurfaceMode.FullScreen,
@@ -198,7 +199,13 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
 
     public void Dispose()
     {
-        Interlocked.Exchange(ref _sink, null)?.Dispose();
+        var sink = Interlocked.Exchange(ref _sink, null);
+        if (sink is not null)
+        {
+            sink.CloseRequested -= OnSdlCloseRequested;
+            sink.Resized -= OnSdlResized;
+            sink.Dispose();
+        }
     }
 
     public Task ReconfigureAsync(LocalVideoOutputDefinition newDefinition, CancellationToken cancellationToken = default)
@@ -320,13 +327,38 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
         {
             try
             {
-                Interlocked.Exchange(ref _sink, null)?.Dispose();
+                var sink = Interlocked.Exchange(ref _sink, null);
+                if (sink is not null)
+                {
+                    sink.CloseRequested -= OnSdlCloseRequested;
+                    sink.Resized -= OnSdlResized;
+                    sink.Dispose();
+                }
             }
             finally
             {
                 Dispatcher.UIThread.Post(() => _owner.NotifyLocalPreviewEnded(_line));
             }
         });
+    }
+
+    private void OnSdlResized(object? sender, (int Width, int Height) size)
+    {
+        if (!TryRecordWindowedResize(size.Width, size.Height))
+            return;
+        Dispatcher.UIThread.Post(() => _owner.NotifyLocalPreviewResized(_line, size.Width, size.Height),
+            DispatcherPriority.Background);
+    }
+
+    private bool TryRecordWindowedResize(int width, int height)
+    {
+        if (_definition.SurfaceMode != VideoSurfaceMode.Windowed || width < 320 || height < 240)
+            return false;
+        if (_definition.WindowWidth == width && _definition.WindowHeight == height)
+            return false;
+
+        _definition = _definition with { WindowWidth = width, WindowHeight = height };
+        return true;
     }
 
 }
@@ -378,6 +410,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
             win.Video.Configure(format);
             win.Video.Submit(PreviewVideoFrames.CreateIdleFrame(format, _definition.BackgroundImagePath));
             win.Closed += OnWindowClosed;
+            win.SizeChanged += OnWindowSizeChanged;
             _window = win;
             win.Show();
         }, DispatcherPriority.Normal);
@@ -403,6 +436,8 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
     {
         Dispatcher.UIThread.Post(() =>
         {
+            if (_window is not null)
+                _window.SizeChanged -= OnWindowSizeChanged;
             _window?.Close();
         }, DispatcherPriority.Normal);
     }
@@ -479,7 +514,29 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
     {
         if (Interlocked.Exchange(ref _ended, 1) != 0)
             return;
+        if (sender is LocalVideoPreviewWindow win)
+            win.SizeChanged -= OnWindowSizeChanged;
         _window = null;
         _owner.NotifyLocalPreviewEnded(_line);
+    }
+
+    private void OnWindowSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        var width = (int)Math.Round(e.NewSize.Width);
+        var height = (int)Math.Round(e.NewSize.Height);
+        if (!TryRecordWindowedResize(width, height))
+            return;
+        _owner.NotifyLocalPreviewResized(_line, width, height);
+    }
+
+    private bool TryRecordWindowedResize(int width, int height)
+    {
+        if (_definition.SurfaceMode != VideoSurfaceMode.Windowed || width < 320 || height < 240)
+            return false;
+        if (_definition.WindowWidth == width && _definition.WindowHeight == height)
+            return false;
+
+        _definition = _definition with { WindowWidth = width, WindowHeight = height };
+        return true;
     }
 }

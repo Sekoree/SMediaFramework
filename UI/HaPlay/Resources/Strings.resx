@@ -939,6 +939,12 @@
   <data name="NdiResolutionCustomLabel" xml:space="preserve">
     <value>{0} × {1}</value>
   </data>
+  <data name="NdiResolutionCustomEntryLabel" xml:space="preserve">
+    <value>Custom…</value>
+  </data>
+  <data name="ValidationNdiResolutionInvalid" xml:space="preserve">
+    <value>Custom resolution must be even numbers between 16 and 7680 × 4320.</value>
+  </data>
   <data name="ValidationDisplayNameRequired" xml:space="preserve">
     <value>Display name is required.</value>
   </data>
@@ -1883,6 +1889,12 @@
   </data>
   <data name="CueTriggeredWithDetailStatusFormat" xml:space="preserve">
     <value>Triggered {0} — {1}</value>
+  </data>
+  <data name="CueExecutionFailedStatusFormat" xml:space="preserve">
+    <value>Failed to start {0}</value>
+  </data>
+  <data name="CueExecutionFailedWithDetailStatusFormat" xml:space="preserve">
+    <value>Failed to start {0}: {1}</value>
   </data>
   <data name="CueMediaExecutionNotConfigured" xml:space="preserve">
     <value>media execution not configured</value>
