@@ -151,6 +151,17 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         return _inner!.Composite(layersBackToFront, presentationTime);
     }
 
+    public IReadOnlyList<VideoFrame> CompositeMulti(
+        IReadOnlyList<CompositorLayer> layersBackToFront,
+        IReadOnlyList<WarpOutputRequest> outputs,
+        TimeSpan presentationTime)
+    {
+        if (_disposeRequested)
+            throw new ObjectDisposedException(nameof(SDL3GLVideoCompositor));
+        EnsureInitialized();
+        return _inner!.CompositeMulti(layersBackToFront, outputs, presentationTime);
+    }
+
     private readonly object _warpGate = new();
     private VideoFormat _pendingWarpOutput;
     private IReadOnlyList<WarpSection>? _pendingWarpSections;

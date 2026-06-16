@@ -387,6 +387,75 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public async Task ClipCompositionRuntime_MultiMappedOutputs_UseIntegratedMultiWarpPass()
+    {
+        var mappedA = new RecordingVideoOutput();
+        var mappedB = new RecordingVideoOutput();
+        var raw = new RecordingVideoOutput();
+        var compositor = new FakeWarpCompositor(new VideoFormat(320, 180, PixelFormat.Bgra32, new Rational(60, 1)));
+        var mappingA = new ClipOutputMappingSpec(
+            [new ClipOutputMappingSection("a", true, 0, 0, 0.5, 1, 0, 0, 0, 0)],
+            OutputWidth: 640,
+            OutputHeight: 360);
+        var mappingB = new ClipOutputMappingSpec(
+            [new ClipOutputMappingSection("b", true, 0.5, 0, 0.5, 1, 0, 0, 0, 0)],
+            OutputWidth: 160,
+            OutputHeight: 90);
+        var factoryCalls = 0;
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 60, 1),
+            [
+                new ClipCompositionOutputLease("out-a", "A", mappedA, Mapping: mappingA),
+                new ClipCompositionOutputLease("out-b", "B", mappedB, Mapping: mappingB),
+                new ClipCompositionOutputLease("out-raw", "Raw", raw),
+            ],
+            _ =>
+            {
+                factoryCalls++;
+                return new ClipCompositionCompositor(compositor, RequiresBgraLayerConversion: true, BackendName: "Fake");
+            });
+
+        Assert.Null(compositor.WarpOutput);
+
+        runtime.EnsurePumpStarted();
+        var deadline = Environment.TickCount64 + 5000;
+        while ((mappedA.Snapshot().Length == 0 || mappedB.Snapshot().Length == 0 || raw.Snapshot().Length == 0)
+               && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        try
+        {
+            Assert.True(mappedA.Snapshot().Length > 0, "pump did not deliver frames to mapped output A");
+            Assert.True(mappedB.Snapshot().Length > 0, "pump did not deliver frames to mapped output B");
+            Assert.True(raw.Snapshot().Length > 0, "pump did not deliver frames to raw output");
+
+            Assert.Equal(1, factoryCalls);
+            Assert.Equal(0, compositor.CompositeCalls);
+            Assert.True(compositor.CompositeMultiCalls > 0);
+            var requests = Assert.IsAssignableFrom<IReadOnlyList<WarpOutputRequest>>(compositor.LastMultiOutputs);
+            Assert.Equal(3, requests.Count);
+            Assert.NotNull(requests[0].Sections);
+            Assert.NotNull(requests[1].Sections);
+            Assert.Null(requests[2].Sections);
+            Assert.Equal((640, 360), (requests[0].OutputFormat.Width, requests[0].OutputFormat.Height));
+            Assert.Equal((160, 90), (requests[1].OutputFormat.Width, requests[1].OutputFormat.Height));
+            Assert.Equal((320, 180), (requests[2].OutputFormat.Width, requests[2].OutputFormat.Height));
+
+            Assert.Equal((640, 360), (mappedA.Format.Width, mappedA.Format.Height));
+            Assert.Equal((160, 90), (mappedB.Format.Width, mappedB.Format.Height));
+            Assert.Equal((320, 180), (raw.Format.Width, raw.Format.Height));
+        }
+        finally
+        {
+            mappedA.DisposeCaptured();
+            mappedB.DisposeCaptured();
+            raw.DisposeCaptured();
+        }
+    }
+
+    [Fact]
     public async Task ClipCompositionRuntime_BackwardSeek_RecoversVideoAtOutput()
     {
         // Cue-player-shaped wiring: a real VideoPlayer paced by a MediaClock that is slaved to a
@@ -596,6 +665,12 @@ public sealed class ClipOutputRuntimeTests
 
         public IReadOnlyList<WarpSection>? LastWarpSections { get; private set; }
 
+        public int CompositeCalls { get; private set; }
+
+        public int CompositeMultiCalls { get; private set; }
+
+        public IReadOnlyList<WarpOutputRequest>? LastMultiOutputs { get; private set; }
+
         public VideoFormat OutputFormat => _output;
 
         public IReadOnlyList<PixelFormat> AcceptedLayerPixelFormats => [PixelFormat.Bgra32];
@@ -611,7 +686,26 @@ public sealed class ClipOutputRuntimeTests
 
         public VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime)
         {
+            CompositeCalls++;
             var fmt = WarpOutput ?? _output;
+            return CreateFrame(fmt, presentationTime);
+        }
+
+        public IReadOnlyList<VideoFrame> CompositeMulti(
+            IReadOnlyList<CompositorLayer> layersBackToFront,
+            IReadOnlyList<WarpOutputRequest> outputs,
+            TimeSpan presentationTime)
+        {
+            CompositeMultiCalls++;
+            LastMultiOutputs = outputs.ToArray();
+            var frames = new VideoFrame[outputs.Count];
+            for (var i = 0; i < outputs.Count; i++)
+                frames[i] = CreateFrame(outputs[i].OutputFormat, presentationTime);
+            return frames;
+        }
+
+        private static VideoFrame CreateFrame(VideoFormat fmt, TimeSpan presentationTime)
+        {
             var stride = fmt.Width * 4;
             return new VideoFrame(presentationTime, fmt, new ReadOnlyMemory<byte>(new byte[stride * fmt.Height]), stride);
         }

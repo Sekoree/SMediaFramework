@@ -115,10 +115,9 @@ public sealed class ClipCompositionRuntime : IDisposable
     }
 
     /// <summary>
-    /// Routes the warp through the canvas compositor itself when possible: with exactly one output
-    /// and a warp-capable compositor, the canvas pass renders straight into the warped output (one
-    /// GPU pass, one readback). Multi-output compositions keep the per-lease chained stages — each
-    /// output may need a different (or no) warp from the same canvas.
+    /// Routes the warp through the canvas compositor itself when possible: with exactly one mapped
+    /// output and a warp-capable compositor, the canvas pass renders straight into the warped output
+    /// (one GPU pass, one readback). Multi-output mappings use <see cref="TryPumpIntegratedMultiWarp"/>.
     /// </summary>
     private void ReevaluateIntegratedWarp()
     {
@@ -388,18 +387,18 @@ public sealed class ClipCompositionRuntime : IDisposable
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
         }
 
-        if (!_mixer.TryReadNextFrame(masterPts, out var frame))
-            return;
-        Interlocked.Increment(ref _framesComposited);
-
         List<AcquiredOutput> snapshot;
         lock (_gate) snapshot = _acquired.ToList();
 
         if (snapshot.Count == 0)
-        {
-            frame.Dispose();
             return;
-        }
+
+        if (TryPumpIntegratedMultiWarp(masterPts, snapshot, sw))
+            return;
+
+        if (!_mixer.TryReadNextFrame(masterPts, out var frame))
+            return;
+        Interlocked.Increment(ref _framesComposited);
 
         // Output-mapping stages run first, while the canvas frame is alive: each mapped output
         // composites its warp sections from the canvas (compositors never take frame ownership)
@@ -479,6 +478,70 @@ public sealed class ClipCompositionRuntime : IDisposable
 
         sw.Stop();
         RecordPumpTiming(sw.Elapsed, _canvasPeriod);
+    }
+
+    private bool TryPumpIntegratedMultiWarp(TimeSpan? masterPts, List<AcquiredOutput> snapshot, Stopwatch sw)
+    {
+        if (_integratedWarpActive || _compositor is not IWarpPassVideoCompositor || snapshot.Count < 2)
+            return false;
+
+        var requests = new WarpOutputRequest[snapshot.Count];
+        var hasMappedOutput = false;
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            var stage = snapshot[i].MappingStage;
+            if (stage is null)
+            {
+                requests[i] = new WarpOutputRequest(_canvasFormat, null);
+                continue;
+            }
+
+            hasMappedOutput = true;
+            requests[i] = new WarpOutputRequest(stage.OutputFormat, stage.WarpSections);
+        }
+
+        if (!hasMappedOutput)
+            return false;
+
+        IReadOnlyList<VideoFrame> frames;
+        try
+        {
+            if (!_mixer.TryReadNextFrames(masterPts, requests, out frames))
+                return true;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(
+                ex,
+                "ClipCompositionRuntime.Pump: integrated multi-output warp failed for {Composition}; falling back to chained mapping",
+                CompositionName);
+            return false;
+        }
+
+        if (frames.Count != snapshot.Count)
+        {
+            DisposeFrames(frames);
+            Trace.LogWarning(
+                "ClipCompositionRuntime.Pump: integrated multi-output warp returned {FrameCount} frames for {OutputCount} outputs in {Composition}; falling back to chained mapping",
+                frames.Count,
+                snapshot.Count,
+                CompositionName);
+            return false;
+        }
+
+        Interlocked.Increment(ref _framesComposited);
+        for (var i = 0; i < snapshot.Count; i++)
+            SubmitToOutput(snapshot[i], frames[i]);
+
+        sw.Stop();
+        RecordPumpTiming(sw.Elapsed, _canvasPeriod);
+        return true;
+    }
+
+    private static void DisposeFrames(IReadOnlyList<VideoFrame> frames)
+    {
+        for (var i = 0; i < frames.Count; i++)
+            frames[i].Dispose();
     }
 
     /// <summary>Configures the output on format change (idempotent per format) and submits;
@@ -641,6 +704,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
 
         private readonly List<ResolvedMappingSection> _sections;
+        private readonly WarpSection[] _warpSections;
         private readonly CompositorBox _box;
         private readonly List<CompositorLayer> _layerScratch = new();
 
@@ -653,10 +717,13 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             OutputFormat = outputFormat;
             _sections = sections;
+            _warpSections = CreateWarpSections(sections);
             _box = box;
         }
 
         public VideoFormat OutputFormat { get; }
+
+        public WarpSection[] WarpSections => _warpSections;
 
         /// <summary>Section-only update at the same output size: the new stage shares the live
         /// compositor (boxed), so nothing needs disposal.</summary>
@@ -664,13 +731,18 @@ public sealed class ClipCompositionRuntime : IDisposable
             new(OutputFormat, sections, _box);
 
         /// <summary>Sections in the shape the integrated GPU warp pass consumes.</summary>
-        public WarpSection[] BuildWarpSections()
+        public WarpSection[] BuildWarpSections() => _warpSections;
+
+        private static WarpSection[] CreateWarpSections(IReadOnlyList<ResolvedMappingSection> resolvedSections)
         {
-            var sections = new WarpSection[_sections.Count];
-            for (var i = 0; i < _sections.Count; i++)
-                sections[i] = new WarpSection(
-                    _sections[i].SourceCrop, _sections[i].Transform, _sections[i].Opacity, _sections[i].Mesh);
-            return sections;
+            var warpSections = new WarpSection[resolvedSections.Count];
+            for (var i = 0; i < resolvedSections.Count; i++)
+                warpSections[i] = new WarpSection(
+                    resolvedSections[i].SourceCrop,
+                    resolvedSections[i].Transform,
+                    resolvedSections[i].Opacity,
+                    resolvedSections[i].Mesh);
+            return warpSections;
         }
 
         /// <summary>True when any section carries a mesh warp — needs the GL warp pass; the CPU
