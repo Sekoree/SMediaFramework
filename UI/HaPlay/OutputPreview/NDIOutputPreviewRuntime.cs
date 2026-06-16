@@ -41,6 +41,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     private bool _videoAcquired;
     private bool _audioAcquired;
     private bool _disposeOnRelease;
+    private VideoFrame? _blackTemplate;
     private VideoFrame? _logoTemplate;
     // Reentrancy guards: a periodic System.Threading.Timer fires the next callback even while the previous
     // one is still running. Each carrier tick holds _gate across a clockVideo-paced Submit (~one frame
@@ -315,8 +316,8 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                     var pt = TimeSpan.FromTicks(idx * TimeSpan.TicksPerSecond * CarrierVideoFpsDenominator / CarrierVideoFpsNumerator);
 
                     var frame = _logoTemplate is { } tpl
-                        ? CloneLogoFrame(tpl, pt)
-                        : PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat, pt);
+                        ? CloneTemplateFrame(tpl, pt)
+                        : CloneTemplateFrame(_blackTemplate ??= PreviewVideoFrames.CreateBlackBgra(CarrierVideoFormat), pt);
                     _output.Video.Submit(frame);
                     var dur = Environment.TickCount64 - tickStart;
                     // ~33ms is one frame period. NDI SDK's clockVideo:true can pace the send internally,
@@ -338,7 +339,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         }
     }
 
-    private static VideoFrame CloneLogoFrame(VideoFrame template, TimeSpan presentationTime) =>
+    private static VideoFrame CloneTemplateFrame(VideoFrame template, TimeSpan presentationTime) =>
         new(presentationTime, template.Format, template.Planes, template.Strides,
             release: null, metadata: template.Metadata);
 
@@ -445,6 +446,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
             }
 
             VideoFrame? logoToCarryOver;
+            VideoFrame? blackToDispose;
             lock (_gate)
             {
                 // Tear down the old carrier (timers + NDIOutput + audio output) while the gate is held so
@@ -456,6 +458,8 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
                 _audioTimer = null;
                 logoToCarryOver = _logoTemplate;
                 _logoTemplate = null;
+                blackToDispose = _blackTemplate;
+                _blackTemplate = null;
 
                 try { _output?.Dispose(); }
                 catch (Exception ex)
@@ -481,6 +485,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            blackToDispose?.Dispose();
 
             // Start a fresh carrier with the new definition. Reuse Start() so the wiring path stays single-source.
             Start();
@@ -495,6 +500,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
     public void Dispose()
     {
         VideoFrame? logoToDispose;
+        VideoFrame? blackToDispose;
         lock (_gate)
         {
             if (_disposed)
@@ -513,6 +519,8 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
             _audioTimer = null;
             logoToDispose = _logoTemplate;
             _logoTemplate = null;
+            blackToDispose = _blackTemplate;
+            _blackTemplate = null;
             try
             {
                 _output?.Dispose();
@@ -527,6 +535,7 @@ internal sealed class NDIOutputPreviewRuntime : IDisposable
         }
 
         logoToDispose?.Dispose();
+        blackToDispose?.Dispose();
 
         if (_connectionMetadataUtf8 != nint.Zero)
         {

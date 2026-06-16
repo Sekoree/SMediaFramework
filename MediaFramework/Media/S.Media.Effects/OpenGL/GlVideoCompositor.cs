@@ -49,8 +49,8 @@ namespace S.Media.Effects.OpenGL;
 /// </para>
 /// <para>
 /// <strong>State hygiene:</strong> <see cref="Composite"/> saves and restores the current framebuffer
-/// binding, viewport, program, VAO, blend enable/func, and scissor enable so it can be embedded
-/// inside another output's render path without trashing host state.
+/// binding, viewport, program, VAO, pixel-pack buffer, blend enable/func, and scissor enable so it can
+/// be embedded inside another output's render path without trashing host state.
 /// </para>
 /// </remarks>
 public sealed class GlVideoCompositor : IWarpPassVideoCompositor
@@ -58,6 +58,39 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
     /// <summary>Immutable warp-pass snapshot (swapped atomically by <see cref="SetWarpPass"/>;
     /// read once per <see cref="Composite"/> so a mid-frame swap can't tear).</summary>
     private sealed record WarpPassState(VideoFormat Output, WarpSection[] Sections);
+
+    private sealed class PboReadbackException(string message) : InvalidOperationException(message);
+
+    private sealed class PboReadbackState(WarpOutputRequest[] shape)
+    {
+        public WarpOutputRequest[] Shape { get; } = shape;
+        public PboOutputSlot[] Outputs { get; } = CreateSlots(shape.Length);
+        public PboReadback[]? Pending { get; set; }
+
+        private static PboOutputSlot[] CreateSlots(int count)
+        {
+            var slots = new PboOutputSlot[count];
+            for (var i = 0; i < slots.Length; i++)
+                slots[i] = new PboOutputSlot();
+            return slots;
+        }
+    }
+
+    private sealed class PboOutputSlot
+    {
+        public readonly uint[] Buffers = new uint[2];
+        public readonly int[] Capacities = new int[2];
+        public int NextBufferIndex;
+    }
+
+    private sealed class PboReadback
+    {
+        public required uint Buffer { get; init; }
+        public required nint Sync { get; set; }
+        public required VideoFormat Format { get; init; }
+        public required int Stride { get; init; }
+        public required int ByteCount { get; init; }
+    }
 
     private volatile WarpPassState? _warpPass;
     private uint _warpFbo;
@@ -111,6 +144,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
     private readonly Dictionary<(int W, int H), (uint Tex, uint Fbo)> _yuvIntermediates = new();
     /// <summary>Cached accepted-formats array — mirrors <see cref="YuvVideoRenderer.SupportedPixelFormats"/>.</summary>
     private static readonly CorePixelFormat[] AcceptedFormatsArr = YuvVideoRenderer.SupportedPixelFormats.ToArray();
+    private PboReadbackState? _multiPboReadback;
+    private bool _multiPboReadbackUnavailable;
     private bool _configured;
     private bool _disposed;
 
@@ -178,6 +213,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         _gl.GetInteger(GetPName.UnpackRowLength, out var savedUnpackRowLength);
         _gl.GetInteger(GetPName.PackAlignment, out var savedPackAlignment);
         _gl.GetInteger(GetPName.PackRowLength, out var savedPackRowLength);
+        _gl.GetInteger(GetPName.PixelPackBufferBinding, out var savedPixelPackBuffer);
 
         try
         {
@@ -219,6 +255,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             // in another GL renderer can't corrupt that renderer's later readbacks.
             _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
             _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
+            _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, (uint)savedPixelPackBuffer);
             if (savedBlendEnabled) _gl.Enable(EnableCap.Blend);
             else _gl.Disable(EnableCap.Blend);
             _gl.BlendFuncSeparate((BlendingFactor)savedBlendSrcRgb, (BlendingFactor)savedBlendDstRgb,
@@ -263,29 +300,61 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         _gl.GetInteger(GetPName.UnpackRowLength, out var savedUnpackRowLength);
         _gl.GetInteger(GetPName.PackAlignment, out var savedPackAlignment);
         _gl.GetInteger(GetPName.PackRowLength, out var savedPackRowLength);
+        _gl.GetInteger(GetPName.PixelPackBufferBinding, out var savedPixelPackBuffer);
 
+        try
+        {
+            RenderLayersToCanvas(layersBackToFront, savedScissor);
+            if (_multiPboReadbackUnavailable)
+                return CompositeMultiSynchronousAfterCanvas(outputs, presentationTime);
+
+            try
+            {
+                return CompositeMultiPboAfterCanvas(outputs, presentationTime);
+            }
+            catch (PboReadbackException)
+            {
+                // Driver variance is the main PBO risk. Disable it for this compositor instance and
+                // re-run the already-correct sync path so playback degrades instead of failing.
+                _multiPboReadbackUnavailable = true;
+                DisposeMultiPboReadback();
+                RenderLayersToCanvas(layersBackToFront, savedScissor);
+                return CompositeMultiSynchronousAfterCanvas(outputs, presentationTime);
+            }
+        }
+        finally
+        {
+            // --- Restore host state. ---
+            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, savedUnpackAlignment);
+            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, savedUnpackRowLength);
+            _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
+            _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
+            _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, (uint)savedPixelPackBuffer);
+            if (savedBlendEnabled) _gl.Enable(EnableCap.Blend);
+            else _gl.Disable(EnableCap.Blend);
+            _gl.BlendFuncSeparate((BlendingFactor)savedBlendSrcRgb, (BlendingFactor)savedBlendDstRgb,
+                (BlendingFactor)savedBlendSrcAlpha, (BlendingFactor)savedBlendDstAlpha);
+            if (savedScissor) _gl.Enable(EnableCap.ScissorTest);
+            _gl.BindVertexArray((uint)savedVao);
+            _gl.UseProgram((uint)savedProgram);
+            _gl.ActiveTexture((TextureUnit)savedActiveTexture);
+            _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+        }
+    }
+
+    private VideoFrame[] CompositeMultiSynchronousAfterCanvas(
+        IReadOnlyList<WarpOutputRequest> outputs,
+        TimeSpan presentationTime)
+    {
         var frames = new VideoFrame[outputs.Count];
         var created = 0;
         try
         {
-            RenderLayersToCanvas(layersBackToFront, savedScissor);
-
             for (var i = 0; i < outputs.Count; i++)
             {
                 var request = outputs[i];
-                ValidateWarpOutput(request.OutputFormat, nameof(outputs));
-
-                if (request.Sections is null
-                    && request.OutputFormat.Width == _output.Width
-                    && request.OutputFormat.Height == _output.Height
-                    && request.OutputFormat.PixelFormat == _output.PixelFormat)
-                {
-                    _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
-                }
-                else
-                {
-                    RunWarpPass(CreateWarpPassState(request));
-                }
+                RenderOutputRequest(request, nameof(outputs));
 
                 var stride = OutputStrideForWidth(request.OutputFormat.Width);
                 frames[i] = ReadCurrentFramebuffer(
@@ -306,24 +375,119 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
                 frames[i]?.Dispose();
             throw;
         }
-        finally
+    }
+
+    private unsafe VideoFrame[] CompositeMultiPboAfterCanvas(
+        IReadOnlyList<WarpOutputRequest> outputs,
+        TimeSpan presentationTime)
+    {
+        var state = EnsureMultiPboReadback(outputs);
+        var previousPending = state.Pending;
+        state.Pending = null;
+        var returnPrevious = previousPending is { Length: > 0 };
+        var currentPending = new PboReadback[outputs.Count];
+        var currentPendingCount = 0;
+        var frames = new VideoFrame[outputs.Count];
+        var created = 0;
+
+        try
         {
-            // --- Restore host state. ---
-            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, savedUnpackAlignment);
-            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, savedUnpackRowLength);
-            _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
-            _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
-            if (savedBlendEnabled) _gl.Enable(EnableCap.Blend);
-            else _gl.Disable(EnableCap.Blend);
-            _gl.BlendFuncSeparate((BlendingFactor)savedBlendSrcRgb, (BlendingFactor)savedBlendDstRgb,
-                (BlendingFactor)savedBlendSrcAlpha, (BlendingFactor)savedBlendDstAlpha);
-            if (savedScissor) _gl.Enable(EnableCap.ScissorTest);
-            _gl.BindVertexArray((uint)savedVao);
-            _gl.UseProgram((uint)savedProgram);
-            _gl.ActiveTexture((TextureUnit)savedActiveTexture);
-            _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
-            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+            for (var i = 0; i < outputs.Count; i++)
+            {
+                var request = outputs[i];
+                RenderOutputRequest(request, nameof(outputs));
+
+                var stride = OutputStrideForWidth(request.OutputFormat.Width);
+                var byteCount = stride * request.OutputFormat.Height;
+
+                if (!returnPrevious)
+                {
+                    frames[i] = ReadCurrentFramebuffer(
+                        request.OutputFormat,
+                        request.OutputFormat.Width,
+                        request.OutputFormat.Height,
+                        stride,
+                        byteCount,
+                        presentationTime);
+                    created++;
+                }
+
+                currentPending[i] = IssuePboReadback(
+                    state.Outputs[i],
+                    request.OutputFormat,
+                    stride,
+                    byteCount);
+                currentPendingCount++;
+            }
+
+            if (returnPrevious)
+            {
+                frames = CompletePboReadbacks(previousPending!, presentationTime);
+                created = frames.Length;
+            }
+
+            state.Pending = currentPending;
+            currentPending = [];
+            currentPendingCount = 0;
+            return frames;
         }
+        catch
+        {
+            for (var i = 0; i < created; i++)
+                frames[i]?.Dispose();
+            DisposePendingReadbacks(previousPending);
+            DisposePendingReadbacks(currentPending, 0, currentPendingCount);
+            throw;
+        }
+    }
+
+    private void RenderOutputRequest(WarpOutputRequest request, string paramName)
+    {
+        ValidateWarpOutput(request.OutputFormat, paramName);
+
+        if (request.Sections is null
+            && request.OutputFormat.Width == _output.Width
+            && request.OutputFormat.Height == _output.Height
+            && request.OutputFormat.PixelFormat == _output.PixelFormat)
+        {
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        }
+        else
+        {
+            RunWarpPass(CreateWarpPassState(request));
+        }
+    }
+
+    private PboReadbackState EnsureMultiPboReadback(IReadOnlyList<WarpOutputRequest> outputs)
+    {
+        if (_multiPboReadback is { } state && MultiPboShapeMatches(state.Shape, outputs))
+            return state;
+
+        DisposeMultiPboReadback();
+        _multiPboReadback = new PboReadbackState(SnapshotOutputRequests(outputs));
+        return _multiPboReadback;
+    }
+
+    private static bool MultiPboShapeMatches(WarpOutputRequest[] shape, IReadOnlyList<WarpOutputRequest> outputs)
+    {
+        if (shape.Length != outputs.Count)
+            return false;
+
+        for (var i = 0; i < shape.Length; i++)
+        {
+            if (!shape[i].Equals(outputs[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static WarpOutputRequest[] SnapshotOutputRequests(IReadOnlyList<WarpOutputRequest> outputs)
+    {
+        var snapshot = new WarpOutputRequest[outputs.Count];
+        for (var i = 0; i < snapshot.Length; i++)
+            snapshot[i] = outputs[i];
+        return snapshot;
     }
 
     private void RenderLayersToCanvas(IReadOnlyList<CompositorLayer> layersBackToFront, bool savedScissor)
@@ -365,6 +529,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         var buffer = ArrayPool<byte>.Shared.Rent(readBytes);
         _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
         _gl.PixelStore(PixelStoreParameter.PackRowLength, 0);
+        _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, 0);
         fixed (byte* p = buffer)
             _gl.ReadPixels(0, 0, (uint)readW, (uint)readH, _readPixelFormat, _readPixelType, p);
 
@@ -376,6 +541,171 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             plane,
             readStride,
             release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)));
+    }
+
+    private unsafe PboReadback IssuePboReadback(
+        PboOutputSlot slot,
+        VideoFormat frameFormat,
+        int readStride,
+        int readBytes)
+    {
+        var bufferIndex = slot.NextBufferIndex;
+        slot.NextBufferIndex ^= 1;
+
+        var pbo = slot.Buffers[bufferIndex];
+        if (pbo == 0)
+        {
+            pbo = _gl.GenBuffer();
+            slot.Buffers[bufferIndex] = pbo;
+        }
+
+        _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, pbo);
+        // Orphan even at equal size so the DMA target never aliases a buffer the CPU may map next frame.
+        _gl.BufferData(BufferTargetARB.PixelPackBuffer, (nuint)readBytes, null, BufferUsageARB.StreamRead);
+        slot.Capacities[bufferIndex] = Math.Max(slot.Capacities[bufferIndex], readBytes);
+
+        _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
+        _gl.PixelStore(PixelStoreParameter.PackRowLength, 0);
+        _gl.ReadPixels(0, 0, (uint)frameFormat.Width, (uint)frameFormat.Height,
+            _readPixelFormat, _readPixelType, (void*)0);
+
+        var sync = _gl.FenceSync(GLEnum.SyncGpuCommandsComplete, 0u);
+        if (sync == nint.Zero)
+            throw new PboReadbackException("glFenceSync returned null for compositor PBO readback.");
+
+        return new PboReadback
+        {
+            Buffer = pbo,
+            Sync = sync,
+            Format = frameFormat,
+            Stride = readStride,
+            ByteCount = readBytes,
+        };
+    }
+
+    private VideoFrame[] CompletePboReadbacks(PboReadback[] pending, TimeSpan presentationTime)
+    {
+        var frames = new VideoFrame[pending.Length];
+        var created = 0;
+        try
+        {
+            for (var i = 0; i < pending.Length; i++)
+            {
+                frames[i] = CompletePboReadback(pending[i], presentationTime);
+                created++;
+            }
+
+            return frames;
+        }
+        catch
+        {
+            for (var i = 0; i < created; i++)
+                frames[i]?.Dispose();
+            DisposePendingReadbacks(pending, created, pending.Length - created);
+            throw;
+        }
+    }
+
+    private unsafe VideoFrame CompletePboReadback(PboReadback pending, TimeSpan presentationTime)
+    {
+        byte[]? buffer = null;
+        var mapped = false;
+        try
+        {
+            var wait = _gl.ClientWaitSync(pending.Sync, 1u, ulong.MaxValue);
+            if (wait != GLEnum.AlreadySignaled && wait != GLEnum.ConditionSatisfied)
+                throw new PboReadbackException($"glClientWaitSync failed for compositor PBO readback: {wait}.");
+
+            _gl.DeleteSync(pending.Sync);
+            pending.Sync = nint.Zero;
+
+            _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, pending.Buffer);
+            var ptr = (byte*)_gl.MapBufferRange(
+                BufferTargetARB.PixelPackBuffer,
+                0,
+                (nuint)pending.ByteCount,
+                1u);
+            if (ptr is null)
+                throw new PboReadbackException("glMapBufferRange returned null for compositor PBO readback.");
+
+            mapped = true;
+            buffer = ArrayPool<byte>.Shared.Rent(pending.ByteCount);
+            new ReadOnlySpan<byte>(ptr, pending.ByteCount).CopyTo(buffer.AsSpan(0, pending.ByteCount));
+
+            var unmapOk = _gl.UnmapBuffer(BufferTargetARB.PixelPackBuffer);
+            mapped = false;
+            if (!unmapOk)
+                throw new PboReadbackException("glUnmapBuffer reported corrupted compositor PBO readback data.");
+
+            var owned = buffer;
+            buffer = null;
+            return new VideoFrame(
+                presentationTime,
+                pending.Format,
+                new ReadOnlyMemory<byte>(owned, 0, pending.ByteCount),
+                pending.Stride,
+                release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)));
+        }
+        finally
+        {
+            if (mapped)
+                _gl.UnmapBuffer(BufferTargetARB.PixelPackBuffer);
+            if (pending.Sync != nint.Zero)
+            {
+                _gl.DeleteSync(pending.Sync);
+                pending.Sync = nint.Zero;
+            }
+            if (buffer is not null)
+                ArrayPool<byte>.Shared.Return(buffer, clearArray: false);
+        }
+    }
+
+    private void DisposeMultiPboReadback()
+    {
+        var state = _multiPboReadback;
+        if (state is null)
+            return;
+
+        DisposePendingReadbacks(state.Pending);
+        state.Pending = null;
+        foreach (var slot in state.Outputs)
+        {
+            for (var i = 0; i < slot.Buffers.Length; i++)
+            {
+                var buffer = slot.Buffers[i];
+                if (buffer == 0)
+                    continue;
+                _gl.DeleteBuffer(buffer);
+                slot.Buffers[i] = 0;
+                slot.Capacities[i] = 0;
+            }
+        }
+
+        _multiPboReadback = null;
+    }
+
+    private void DisposePendingReadbacks(PboReadback[]? pending)
+    {
+        if (pending is null)
+            return;
+        DisposePendingReadbacks(pending, 0, pending.Length);
+    }
+
+    private void DisposePendingReadbacks(PboReadback[]? pending, int start, int count)
+    {
+        if (pending is null)
+            return;
+
+        var end = Math.Min(pending.Length, start + count);
+        for (var i = Math.Max(0, start); i < end; i++)
+        {
+            var readback = pending[i];
+            if (readback?.Sync is { } sync && sync != nint.Zero)
+            {
+                _gl.DeleteSync(sync);
+                readback.Sync = nint.Zero;
+            }
+        }
     }
 
     private WarpPassState CreateWarpPassState(WarpOutputRequest request)
@@ -974,6 +1304,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             _gl.DeleteTexture(inter.Tex);
         }
         _yuvIntermediates.Clear();
+        DisposeMultiPboReadback();
         if (_fboTexture != 0) { _gl.DeleteTexture(_fboTexture); _fboTexture = 0; }
         if (_fbo != 0) { _gl.DeleteFramebuffer(_fbo); _fbo = 0; }
         if (_warpFboTexture != 0) { _gl.DeleteTexture(_warpFboTexture); _warpFboTexture = 0; }
