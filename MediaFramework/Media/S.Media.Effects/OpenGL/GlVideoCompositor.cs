@@ -745,8 +745,18 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             PrepareYuvLayerIntermediate(src, srcW, srcH);
         }
 
-        DrawQuad(srcW, srcH, _output.Width, _output.Height,
-            layer.Transform, layer.SourceCrop, opacity, flipV: directBgraUpload, layer.BlendMode);
+        if (layer.Mesh is { } mesh)
+        {
+            DrawLayerMesh(mesh, layer.SourceCrop, _output.Width, _output.Height,
+                opacity, flipV: directBgraUpload, layer.BlendMode);
+            _gl.UseProgram(_program);
+            _gl.BindVertexArray(_vao);
+        }
+        else
+        {
+            DrawQuad(srcW, srcH, _output.Width, _output.Height,
+                layer.Transform, layer.SourceCrop, opacity, flipV: directBgraUpload, layer.BlendMode);
+        }
     }
 
     /// <summary>Core textured-quad draw shared by the layer pass and the warp pass: bakes the
@@ -1098,6 +1108,80 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
 
         _gl.DrawElements(PrimitiveType.Triangles, (uint)draw.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
+    }
+
+    private unsafe void DrawLayerMesh(
+        WarpMesh mesh,
+        RectNormalized sourceCrop,
+        int destW,
+        int destH,
+        float opacity,
+        bool flipV,
+        BlendMode blendMode)
+    {
+        EnsureMeshPipeline();
+        WarpMeshTessellator.Tessellate(mesh, out var vertices, out var indices);
+
+        var vao = _gl.GenVertexArray();
+        var vbo = _gl.GenBuffer();
+        var ebo = _gl.GenBuffer();
+        try
+        {
+            _gl.BindVertexArray(vao);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+            fixed (float* p = vertices)
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(vertices.Length * sizeof(float)), p, BufferUsageARB.StreamDraw);
+            _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ebo);
+            fixed (uint* p = indices)
+                _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), p, BufferUsageARB.StreamDraw);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)0);
+            _gl.EnableVertexAttribArray(1);
+            _gl.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, (uint)(4 * sizeof(float)), (void*)(2 * sizeof(float)));
+
+            _gl.UseProgram(_meshProgram);
+            _gl.BindVertexArray(vao);
+
+            // Layer pass convention: write mirrored in Y so bottom-up glReadPixels returns top-down frames.
+            Span<float> m = stackalloc float[9];
+            m[0] = 2f / destW; m[1] = 0f; m[2] = 0f;
+            m[3] = 0f; m[4] = -2f / destH; m[5] = 0f;
+            m[6] = -1f; m[7] = 1f; m[8] = 1f;
+            _gl.UniformMatrix3(_meshXformLoc, 1, false, m);
+            var crop = sourceCrop.Clamped();
+            _gl.Uniform4(_meshCropLoc, crop.X0, crop.Y0, crop.X1, crop.Y1);
+            _gl.Uniform1(_meshOpacityLoc, opacity);
+            _gl.Uniform1(_meshLayerFlipVLoc, flipV ? 1f : 0f);
+            _gl.Uniform1(_meshLayerLoc, 0);
+
+            switch (blendMode)
+            {
+                case BlendMode.Source:
+                    _gl.Disable(EnableCap.Blend);
+                    _gl.Uniform1(_meshBlendKindLoc, 0);
+                    break;
+                case BlendMode.SourceOver:
+                    _gl.Enable(EnableCap.Blend);
+                    _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+                    _gl.Uniform1(_meshBlendKindLoc, 0);
+                    break;
+                case BlendMode.Multiply:
+                    _gl.Enable(EnableCap.Blend);
+                    _gl.BlendFunc(BlendingFactor.DstColor, BlendingFactor.Zero);
+                    _gl.Uniform1(_meshBlendKindLoc, 1);
+                    break;
+                default:
+                    throw new NotSupportedException($"BlendMode {blendMode} not supported.");
+            }
+
+            _gl.DrawElements(PrimitiveType.Triangles, (uint)indices.Length, DrawElementsType.UnsignedInt, (void*)0);
+        }
+        finally
+        {
+            if (ebo != 0) _gl.DeleteBuffer(ebo);
+            if (vbo != 0) _gl.DeleteBuffer(vbo);
+            if (vao != 0) _gl.DeleteVertexArray(vao);
+        }
     }
 
     private void EnsureMeshPipeline()

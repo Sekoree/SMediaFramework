@@ -373,6 +373,50 @@ public partial class CuePlayerViewModel
     private bool CanRemoveVideoPlacement() =>
         SelectedCueNode is { Kind: CueNodeKind.Media } && SelectedVideoPlacement is not null;
 
+    [RelayCommand(CanExecute = nameof(CanEditSelectedPlacement))]
+    private void EditSelectedPlacementVideoFx()
+    {
+        if (SelectedVideoPlacement is not { } placement)
+            return;
+        var owner = TryGetMainWindow();
+        if (owner is null)
+            return;
+
+        var sourceWidth = SelectedCueNode?.SourceVideoWidth ?? 0;
+        var sourceHeight = SelectedCueNode?.SourceVideoHeight ?? 0;
+        if (sourceWidth <= 0 || sourceHeight <= 0)
+        {
+            sourceWidth = 1920;
+            sourceHeight = 1080;
+        }
+        else
+        {
+            sourceWidth = Math.Max(16, sourceWidth);
+            sourceHeight = Math.Max(16, sourceHeight);
+        }
+
+        var targetName = string.IsNullOrWhiteSpace(SelectedCueNode?.Label)
+            ? "Selected placement"
+            : SelectedCueNode.Label;
+        var vm = new Dialogs.MappingEditorViewModel(
+            targetName,
+            sourceWidth,
+            sourceHeight,
+            placement.VideoFx,
+            apply: (mapping, enabled) =>
+            {
+                placement.VideoFx = mapping;
+                placement.VideoFxEnabled = enabled;
+            },
+            initialEnabled: placement.VideoFx is not null && placement.VideoFxEnabled,
+            dialogTitlePrefix: "Video FX",
+            enableLabel: "Enable video FX",
+            sizeLabel: "FX size");
+
+        var dialog = new Views.Dialogs.MappingEditorDialog { DataContext = vm };
+        dialog.Show(owner);
+    }
+
     /// <summary>Quick destination-rect layouts for the selected placement (full / halves / quadrants).</summary>
     [RelayCommand(CanExecute = nameof(CanEditSelectedPlacement))]
     private void ApplyPlacementLayout(string? preset)

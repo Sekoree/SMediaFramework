@@ -28,9 +28,21 @@ public sealed partial class MappingEditorViewModel : ObservableObject
         Action<CueOutputMapping?, bool> apply,
         Func<bool, bool>? setTestPattern = null,
         CueOutputMapping? disabledSeed = null,
-        bool initialEnabled = false)
+        bool initialEnabled = false,
+        string? dialogTitlePrefix = null,
+        string? enableLabel = null,
+        string? sizeLabel = null,
+        string? testPatternLabel = null,
+        bool canEditOutputSize = true)
     {
         OutputName = outputName;
+        DialogTitle = $"{(string.IsNullOrWhiteSpace(dialogTitlePrefix) ? "Output mapping" : dialogTitlePrefix)} — {outputName}";
+        EnableLabel = string.IsNullOrWhiteSpace(enableLabel) ? "Enable mapping" : enableLabel;
+        SizeLabel = string.IsNullOrWhiteSpace(sizeLabel) ? "Output size" : sizeLabel;
+        TestPatternLabel = string.IsNullOrWhiteSpace(testPatternLabel)
+            ? "Show calibration grid on output"
+            : testPatternLabel;
+        CanEditOutputSize = canEditOutputSize;
         CanvasWidth = canvasWidth;
         CanvasHeight = canvasHeight;
         _apply = apply;
@@ -48,6 +60,18 @@ public sealed partial class MappingEditorViewModel : ObservableObject
     }
 
     public string OutputName { get; }
+
+    public string DialogTitle { get; }
+
+    public string EnableLabel { get; }
+
+    public string SizeLabel { get; }
+
+    public string TestPatternLabel { get; }
+
+    public bool CanEditOutputSize { get; }
+
+    public bool CanShowTestPattern => _setTestPattern is not null;
 
     public int CanvasWidth { get; }
 

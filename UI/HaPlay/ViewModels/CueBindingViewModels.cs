@@ -35,6 +35,12 @@ public sealed partial class CueCompositionViewModel : ObservableObject
     [ObservableProperty]
     private int _frameRateDen = 1;
 
+    [ObservableProperty]
+    private CueOutputMapping? _videoFx;
+
+    [ObservableProperty]
+    private bool _videoFxEnabled;
+
     public string Summary =>
         $"{Width}×{Height} @ {(FrameRateDen > 0 ? FrameRateNum / (double)FrameRateDen : 0):0.##}fps";
 
@@ -89,6 +95,8 @@ public sealed partial class CueCompositionViewModel : ObservableObject
         Height = Height,
         FrameRateNum = FrameRateNum,
         FrameRateDen = FrameRateDen,
+        VideoFx = VideoFx,
+        VideoFxEnabled = VideoFxEnabled,
     };
 
     public static CueCompositionViewModel FromModel(CueComposition model) => new()
@@ -99,6 +107,8 @@ public sealed partial class CueCompositionViewModel : ObservableObject
         Height = model.Height,
         FrameRateNum = model.FrameRateNum,
         FrameRateDen = model.FrameRateDen,
+        VideoFx = model.VideoFx,
+        VideoFxEnabled = model.VideoFxEnabled,
     };
 }
 
@@ -289,6 +299,12 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
     [ObservableProperty]
     private double _rotationDegrees;
 
+    [ObservableProperty]
+    private CueOutputMapping? _videoFx;
+
+    [ObservableProperty]
+    private bool _videoFxEnabled;
+
     /// <summary>Sets the destination rectangle, clamped to the canvas with a sane minimum size.</summary>
     public void SetDestRect(double x, double y, double width, double height)
     {
@@ -363,6 +379,8 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
         CropRight = Math.Clamp(CropRight, 0.0, 0.99),
         CropBottom = Math.Clamp(CropBottom, 0.0, 0.99),
         RotationDegrees = NormalizeRotation(RotationDegrees),
+        VideoFx = VideoFx,
+        VideoFxEnabled = VideoFxEnabled,
     };
 
     /// <summary>Wraps rotation into (-180, 180] so the editor and serialized value stay tidy.</summary>
@@ -387,6 +405,8 @@ public sealed partial class CueVideoPlacementViewModel : ObservableObject
             CropRight = model.CropRight,
             CropBottom = model.CropBottom,
             RotationDegrees = model.RotationDegrees,
+            VideoFx = model.VideoFx,
+            VideoFxEnabled = model.VideoFxEnabled,
         };
         vm.SetDestRect(
             model.DestX,

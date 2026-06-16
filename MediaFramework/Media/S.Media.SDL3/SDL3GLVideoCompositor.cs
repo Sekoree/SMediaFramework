@@ -140,7 +140,13 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         }
 
         _output = output;
-        _inner?.Configure(output);
+        if (_inner is not null)
+        {
+            // _inner.Configure recreates GL FBOs — it must run against our own context, which another
+            // compositor sharing this thread may have displaced (see EnsureContextCurrent remarks).
+            EnsureContextCurrent();
+            _inner.Configure(output);
+        }
     }
 
     public VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime)
@@ -148,6 +154,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         if (_disposeRequested)
             throw new ObjectDisposedException(nameof(SDL3GLVideoCompositor));
         EnsureInitialized();
+        EnsureContextCurrent();
         return _inner!.Composite(layersBackToFront, presentationTime);
     }
 
@@ -159,7 +166,25 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         if (_disposeRequested)
             throw new ObjectDisposedException(nameof(SDL3GLVideoCompositor));
         EnsureInitialized();
+        EnsureContextCurrent();
         return _inner!.CompositeMulti(layersBackToFront, outputs, presentationTime);
+    }
+
+    /// <summary>
+    /// Re-asserts this compositor's GL context as current on the calling thread before any GL work.
+    /// Each compositor owns a private hidden-window context; when several share one pump thread (a
+    /// composition-FX or per-output mapping stage running alongside the canvas mixer), whichever
+    /// initialized last leaves <em>its</em> context current. Without this, <see cref="_inner"/> would
+    /// render and read back through the wrong context — its same-named FBOs there are a different size,
+    /// so the readback returns the other compositor's pixels (the "red / flipped / flickering" bug).
+    /// </summary>
+    private void EnsureContextCurrent()
+    {
+        if (_window == nint.Zero || _glContext == nint.Zero)
+            return;
+        if (!SDL.GLMakeCurrent(_window, _glContext))
+            throw new InvalidOperationException(
+                $"SDL_GL_MakeCurrent failed for compositor before GL work: {SDL.GetError()}");
     }
 
     private readonly object _warpGate = new();

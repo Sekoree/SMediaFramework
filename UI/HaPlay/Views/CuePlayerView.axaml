@@ -427,6 +427,7 @@
                 <WrapPanel ItemSpacing="6">
                   <Button Content="{x:Static res:Strings.AddVideoPlacementButton}" Command="{Binding AddVideoPlacementCommand}" />
                   <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveVideoPlacementCommand}" />
+                  <Button Content="Video FX…" Command="{Binding EditSelectedPlacementVideoFxCommand}" />
                 </WrapPanel>
                 <TextBlock Opacity="0.65"
                            TextWrapping="Wrap"

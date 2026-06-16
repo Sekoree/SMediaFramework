@@ -540,7 +540,9 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 placement.CropLeft,
                 placement.CropTop,
                 placement.CropRight,
-                placement.CropBottom))
+                placement.CropBottom,
+                placement.RotationDegrees,
+                placement.VideoFxEnabled ? CueCompositionRuntime.ToMappingSpec(placement.VideoFx) : null))
             .ToArray();
 
         return new ClipSpec(
@@ -878,6 +880,17 @@ public sealed partial class CuePlaybackEngine : IDisposable
             _compositions.TryGetValue(compositionId, out runtime);
 
         return runtime is not null && runtime.UpdateOutputMapping(outputLineId, mapping);
+    }
+
+    /// <summary>Live-applies a composition-level video FX mapping to a running composition. Returns
+    /// false when the composition is not currently live; the persisted model is picked up next time.</summary>
+    public bool UpdateCompositionVideoFx(Guid compositionId, CueOutputMapping? mapping)
+    {
+        CueCompositionRuntime? runtime;
+        lock (_gate)
+            _compositions.TryGetValue(compositionId, out runtime);
+
+        return runtime is not null && runtime.UpdateCompositionMapping(mapping);
     }
 
     /// <summary>Calibration grid slots held open per composition output while the mapping editor's
@@ -2045,7 +2058,9 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 p.CropLeft.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
                 p.CropTop.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
                 p.CropRight.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
-                p.CropBottom.ToString("R", System.Globalization.CultureInfo.InvariantCulture))));
+                p.CropBottom.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                p.RotationDegrees.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+                MappingKey(p.VideoFx, p.VideoFxEnabled))));
         var compositions = string.Join(";", list.Compositions
             .OrderBy(c => c.Id)
             .Select(c => string.Join(",",
@@ -2053,7 +2068,8 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 c.Width,
                 c.Height,
                 c.FrameRateNum,
-                c.FrameRateDen)));
+                c.FrameRateDen,
+                MappingKey(c.VideoFx, c.VideoFxEnabled))));
         var videoOutputs = string.Join(";", list.VideoOutputs
             .OrderBy(o => o.OutputLineId)
             .ThenBy(o => o.CompositionId)
@@ -2070,6 +2086,40 @@ public sealed partial class CuePlaybackEngine : IDisposable
             $"video:{placements}",
             $"comps:{compositions}",
             $"outputs:{videoOutputs}");
+    }
+
+    private static string MappingKey(CueOutputMapping? mapping, bool enabled)
+    {
+        if (!enabled || mapping is null)
+            return "off";
+
+        static string D(double value) => value.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        var sections = string.Join(":", mapping.Sections.Select(s =>
+        {
+            var mesh = s.MeshPoints is { Count: > 0 } points
+                ? string.Join("/", points.Select(p => $"{D(p.X)}.{D(p.Y)}"))
+                : string.Empty;
+            return string.Join(".",
+                s.Enabled ? "1" : "0",
+                D(s.SrcX),
+                D(s.SrcY),
+                D(s.SrcWidth),
+                D(s.SrcHeight),
+                D(s.DestX),
+                D(s.DestY),
+                D(s.DestWidth),
+                D(s.DestHeight),
+                D(s.RotationDegrees),
+                D(s.Opacity),
+                D(s.Brightness),
+                s.MeshColumns,
+                s.MeshRows,
+                mesh);
+        }));
+        return string.Join(",",
+            mapping.OutputWidth?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
+            mapping.OutputHeight?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "",
+            sections);
     }
 
     internal sealed record RoutePlan(

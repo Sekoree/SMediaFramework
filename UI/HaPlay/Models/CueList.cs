@@ -68,6 +68,13 @@ public sealed record CueComposition
     public int FrameRateNum { get; init; } = 60;
 
     public int FrameRateDen { get; init; } = 1;
+
+    /// <summary>Optional composition-level video FX mapping applied to the full canvas before it
+    /// fans out to output mappings. Null = no extra composition stage.</summary>
+    public CueOutputMapping? VideoFx { get; init; }
+
+    /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
+    public bool VideoFxEnabled { get; init; }
 }
 
 public sealed record CueVideoOutputBinding
@@ -359,6 +366,13 @@ public sealed record CueVideoPlacement
     /// <summary>Clockwise rotation (degrees) of this layer about its destination-rect centre. Default 0
     /// = upright (older cues load unchanged). The rotated image overflows its dest rect, as expected.</summary>
     public double RotationDegrees { get; init; }
+
+    /// <summary>Optional per-placement video FX mapping. Sections sample this source video and are
+    /// then placed inside the normal destination rectangle.</summary>
+    public CueOutputMapping? VideoFx { get; init; }
+
+    /// <summary>Whether <see cref="VideoFx"/> is active. Geometry is retained while disabled.</summary>
+    public bool VideoFxEnabled { get; init; }
 }
 
 public enum CueTriggerMode

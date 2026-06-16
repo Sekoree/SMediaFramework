@@ -57,6 +57,69 @@ public sealed class OutputMappingModelTests
     }
 
     [Fact]
+    public void CueListJson_RoundTripsCompositionAndPlacementVideoFx()
+    {
+        var compId = Guid.NewGuid();
+        var fx = new CueOutputMapping
+        {
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    SrcWidth = 0.5,
+                    DestWidth = 960,
+                    DestHeight = 1080,
+                    MeshColumns = 2,
+                    MeshRows = 2,
+                    MeshPoints = [new(0, 0), new(1, 0), new(0.1, 1), new(1, 1)],
+                },
+            },
+        };
+        var list = new CueList
+        {
+            Compositions =
+            {
+                new CueComposition
+                {
+                    Id = compId,
+                    Name = "Program",
+                    VideoFx = fx,
+                    VideoFxEnabled = true,
+                },
+            },
+            Nodes =
+            {
+                new MediaCueNode
+                {
+                    VideoPlacements =
+                    {
+                        new CueVideoPlacement
+                        {
+                            CompositionId = compId,
+                            VideoFx = fx,
+                            VideoFxEnabled = true,
+                        },
+                    },
+                },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(list);
+        var loaded = JsonSerializer.Deserialize<CueList>(json);
+
+        var composition = Assert.Single(loaded!.Compositions);
+        Assert.True(composition.VideoFxEnabled);
+        Assert.NotNull(composition.VideoFx);
+        Assert.Equal(2, Assert.Single(composition.VideoFx!.Sections).MeshColumns);
+
+        var media = Assert.IsType<MediaCueNode>(Assert.Single(loaded.Nodes));
+        var placement = Assert.Single(media.VideoPlacements);
+        Assert.True(placement.VideoFxEnabled);
+        Assert.NotNull(placement.VideoFx);
+        Assert.Equal(0.1, placement.VideoFx!.Sections[0].MeshPoints![2].X);
+    }
+
+    [Fact]
     public void CueListJson_WithoutMapping_LoadsAsNull()
     {
         // Pre-mapping project files have no Mapping property — must load unchanged.

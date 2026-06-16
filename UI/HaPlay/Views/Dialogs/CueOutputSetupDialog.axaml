@@ -29,7 +29,7 @@
                    SelectedItem="{Binding SelectedComposition, Mode=TwoWay}">
             <ListBox.ItemTemplate>
               <DataTemplate DataType="vm:CueCompositionViewModel">
-                <Grid ColumnDefinitions="*,Auto,120,Auto,120,Auto,110,Auto"
+                <Grid ColumnDefinitions="*,Auto,120,Auto,120,Auto,110,Auto,Auto"
                       ColumnSpacing="8"
                       Margin="0,3">
                   <TextBox Grid.Column="0" Text="{Binding Name, Mode=TwoWay}" MinWidth="180" />
@@ -42,6 +42,9 @@
                   <Button Grid.Column="7" Content="Layout…"
                           ToolTip.Tip="Arrange this composition's outputs over the canvas (multi-output / video wall): drag each output to the part of the canvas it shows; overlaps blend, gaps stay black."
                           Click="LayoutClick" />
+                  <Button Grid.Column="8" Content="FX…"
+                          ToolTip.Tip="Split or mesh-warp this composition before it is sent to outputs."
+                          Click="CompositionFxClick" />
                 </Grid>
               </DataTemplate>
             </ListBox.ItemTemplate>

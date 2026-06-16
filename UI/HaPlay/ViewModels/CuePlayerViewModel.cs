@@ -612,7 +612,9 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropTop)
             or nameof(CueVideoPlacementViewModel.CropRight)
             or nameof(CueVideoPlacementViewModel.CropBottom)
-            or nameof(CueVideoPlacementViewModel.RotationDegrees);
+            or nameof(CueVideoPlacementViewModel.RotationDegrees)
+            or nameof(CueVideoPlacementViewModel.VideoFx)
+            or nameof(CueVideoPlacementViewModel.VideoFxEnabled);
 
     private static bool IsLiveEditableVideoPlacementProperty(string? propertyName) =>
         propertyName is nameof(CueVideoPlacementViewModel.LayerIndex)
@@ -626,7 +628,9 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueVideoPlacementViewModel.CropTop)
             or nameof(CueVideoPlacementViewModel.CropRight)
             or nameof(CueVideoPlacementViewModel.CropBottom)
-            or nameof(CueVideoPlacementViewModel.RotationDegrees);
+            or nameof(CueVideoPlacementViewModel.RotationDegrees)
+            or nameof(CueVideoPlacementViewModel.VideoFx)
+            or nameof(CueVideoPlacementViewModel.VideoFxEnabled);
 
     private void PushActiveVideoPlacementUpdate(CueVideoPlacementViewModel placement)
     {
@@ -789,6 +793,7 @@ public partial class CuePlayerViewModel : ViewModelBase
         _ = value;
         RemoveVideoPlacementCommand.NotifyCanExecuteChanged();
         ApplyPlacementLayoutCommand.NotifyCanExecuteChanged();
+        EditSelectedPlacementVideoFxCommand.NotifyCanExecuteChanged();
         ApplyCropPresetCommand.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(PlacementCanvasAspect));
         RefreshVideoFrameRateMismatchWarning();
@@ -1076,6 +1081,9 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host callback — live-applies an output mapping (warp sections) to a running
     /// composition: (compositionId, outputLineId, mapping). No-op when the composition isn't live.</summary>
     public Func<Guid, Guid, CueOutputMapping?, bool>? UpdateOutputMappingCallback { get; set; }
+
+    /// <summary>Host callback — live-applies a composition-level video FX mapping to a running composition.</summary>
+    public Func<Guid, CueOutputMapping?, bool>? UpdateCompositionVideoFxCallback { get; set; }
 
     /// <summary>Host callback — shows/hides the mapping calibration grid for one composition output.</summary>
     public Func<Guid, Guid, CueOutputMapping?, bool, bool>? SetCompositionTestPatternCallback { get; set; }

@@ -46,7 +46,8 @@ internal sealed class CueCompositionRuntime : IDisposable
         _inner = new ClipCompositionRuntime(
             definition,
             leases,
-            canvas => CreateCompositor(canvas, composition));
+            canvas => CreateCompositor(canvas, composition),
+            composition.VideoFxEnabled ? ToMappingSpec(composition.VideoFx) : null);
         _inner.DriftWarning += OnInnerDriftWarning;
         _inner.PumpPressureWarning += OnInnerPumpPressureWarning;
     }
@@ -58,6 +59,10 @@ internal sealed class CueCompositionRuntime : IDisposable
     /// composition doesn't drive the line.</summary>
     public bool UpdateOutputMapping(Guid outputLineId, CueOutputMapping? mapping) =>
         _inner.UpdateOutputMapping(outputLineId.ToString("N"), ToMappingSpec(mapping));
+
+    /// <summary>Live-swaps this composition's own video FX mapping (null clears).</summary>
+    public bool UpdateCompositionMapping(CueOutputMapping? mapping) =>
+        _inner.UpdateCompositionMapping(ToMappingSpec(mapping));
 
     /// <summary>HaPlay model → framework spec (null-preserving).</summary>
     internal static ClipOutputMappingSpec? ToMappingSpec(CueOutputMapping? mapping) =>
@@ -127,7 +132,8 @@ internal sealed class CueCompositionRuntime : IDisposable
             placement.CropTop,
             placement.CropRight,
             placement.CropBottom,
-            placement.RotationDegrees);
+            placement.RotationDegrees,
+            placement.VideoFxEnabled ? ToMappingSpec(placement.VideoFx) : null);
     }
 
     public void Dispose()

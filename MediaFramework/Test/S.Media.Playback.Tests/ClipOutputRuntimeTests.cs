@@ -258,6 +258,61 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public async Task ClipCompositionRuntime_LayerVideoFx_ExpandsSlotIntoMappedSections()
+    {
+        var output = new RecordingVideoOutput();
+        var compositor = new FakeWarpCompositor(new VideoFormat(320, 180, PixelFormat.Bgra32, new Rational(60, 1)));
+        var sourceFormat = new VideoFormat(200, 100, PixelFormat.Bgra32, new Rational(60, 1));
+        var videoFx = new ClipOutputMappingSpec(
+            [
+                new ClipOutputMappingSection("left", true, 0, 0, 0.5, 1, 0, 0, 100, 100),
+                new ClipOutputMappingSection(
+                    "right",
+                    true,
+                    0.5,
+                    0,
+                    0.5,
+                    1,
+                    100,
+                    0,
+                    100,
+                    100,
+                    MeshColumns: 2,
+                    MeshRows: 2,
+                    MeshPoints: [new(0, 0), new(1, 0), new(0.1, 1), new(1, 1)]),
+            ],
+            OutputWidth: 200,
+            OutputHeight: 100);
+
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 60, 1),
+            [new ClipCompositionOutputLease("out-a", "A", output)],
+            canvas => new ClipCompositionCompositor(compositor, RequiresBgraLayerConversion: true, BackendName: "Fake"));
+
+        using var layer = runtime.AddLayer(
+            sourceFormat,
+            new VideoPlacementSpec("comp-a", LayerIndex: 1, Placement: "Stretch", VideoFx: videoFx));
+        layer.Output.Configure(sourceFormat);
+        layer.Output.Submit(SolidFrame(TimeSpan.Zero, sourceFormat, blue: 99));
+        runtime.EnsurePumpStarted();
+
+        var mapped = await WaitUntilAsync(
+            () => compositor.LastCompositeLayerCount == 2 && output.Snapshot().Length > 0,
+            TimeSpan.FromSeconds(2));
+
+        try
+        {
+            Assert.True(mapped, "video FX mapping did not expand the slot into two compositor layers");
+            Assert.Equal(2, compositor.LastCompositeLayerCount);
+            Assert.Equal(1, compositor.LastCompositeMeshLayerCount);
+        }
+        finally
+        {
+            output.DisposeCaptured();
+        }
+    }
+
+    [Fact]
     public async Task ClipCompositionRuntime_MultiOutputPump_SharesCanvasBackingAcrossOutputs()
     {
         var a = new RecordingVideoOutput();
@@ -669,6 +724,10 @@ public sealed class ClipOutputRuntimeTests
 
         public int CompositeMultiCalls { get; private set; }
 
+        public int LastCompositeLayerCount { get; private set; }
+
+        public int LastCompositeMeshLayerCount { get; private set; }
+
         public IReadOnlyList<WarpOutputRequest>? LastMultiOutputs { get; private set; }
 
         public VideoFormat OutputFormat => _output;
@@ -687,6 +746,8 @@ public sealed class ClipOutputRuntimeTests
         public VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime)
         {
             CompositeCalls++;
+            LastCompositeLayerCount = layersBackToFront.Count;
+            LastCompositeMeshLayerCount = layersBackToFront.Count(l => l.Mesh is not null);
             var fmt = WarpOutput ?? _output;
             return CreateFrame(fmt, presentationTime);
         }
@@ -697,6 +758,8 @@ public sealed class ClipOutputRuntimeTests
             TimeSpan presentationTime)
         {
             CompositeMultiCalls++;
+            LastCompositeLayerCount = layersBackToFront.Count;
+            LastCompositeMeshLayerCount = layersBackToFront.Count(l => l.Mesh is not null);
             LastMultiOutputs = outputs.ToArray();
             var frames = new VideoFrame[outputs.Count];
             for (var i = 0; i < outputs.Count; i++)

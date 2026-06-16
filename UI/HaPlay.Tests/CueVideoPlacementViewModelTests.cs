@@ -38,4 +38,25 @@ public sealed class CueVideoPlacementViewModelTests
         Assert.Equal(0, new CueVideoPlacement().RotationDegrees, 6);
         Assert.Equal(0, new CueVideoPlacementViewModel().ToModel().RotationDegrees, 6);
     }
+
+    [Fact]
+    public void VideoFx_RoundTripsThroughViewModel()
+    {
+        var mapping = new CueOutputMapping
+        {
+            Sections = { new CueOutputMappingSection { SrcWidth = 0.5, DestWidth = 100 } },
+        };
+
+        var vm = CueVideoPlacementViewModel.FromModel(new CueVideoPlacement
+        {
+            VideoFx = mapping,
+            VideoFxEnabled = true,
+        });
+
+        var model = vm.ToModel();
+        Assert.True(model.VideoFxEnabled);
+        Assert.NotNull(model.VideoFx);
+        Assert.Equal(0.5, model.VideoFx!.Sections[0].SrcWidth);
+        Assert.Equal(100, model.VideoFx.Sections[0].DestWidth);
+    }
 }

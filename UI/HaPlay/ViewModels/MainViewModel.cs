@@ -102,6 +102,7 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.UpdateActiveCueVideoPlacementCallback = _cuePlaybackEngine.UpdateActiveCueVideoPlacementAsync;
         CuePlayer.UpdateActiveCueAudioRoutesCallback = _cuePlaybackEngine.UpdateActiveCueAudioRoutesAsync;
         CuePlayer.UpdateOutputMappingCallback = _cuePlaybackEngine.UpdateCompositionOutputMapping;
+        CuePlayer.UpdateCompositionVideoFxCallback = _cuePlaybackEngine.UpdateCompositionVideoFx;
         CuePlayer.SetCompositionTestPatternCallback = (compositionId, outputLineId, mapping, show) =>
             _cuePlaybackEngine.SetCompositionTestPattern(
                 show ? CuePlayer.SelectedCueList?.ToModel() : null, compositionId, outputLineId, mapping, show);

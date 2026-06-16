@@ -63,6 +63,39 @@ public partial class CueOutputSetupDialog : Window
         dialog.Show(this);
     }
 
+    private void CompositionFxClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Control { DataContext: CueCompositionViewModel composition }
+            || DataContext is not CuePlayerViewModel cuePlayer)
+            return;
+
+        static CueOutputMapping? CanvasSized(CueOutputMapping? mapping) =>
+            mapping is null ? null : mapping with { OutputWidth = null, OutputHeight = null };
+
+        var initial = CanvasSized(composition.VideoFx);
+        var targetName = composition.DisplayName;
+        var vm = new MappingEditorViewModel(
+            targetName,
+            composition.Width,
+            composition.Height,
+            initial,
+            apply: (mapping, enabled) =>
+            {
+                var fx = CanvasSized(mapping);
+                composition.VideoFx = fx;
+                composition.VideoFxEnabled = enabled;
+                cuePlayer.UpdateCompositionVideoFxCallback?.Invoke(composition.Id, enabled ? fx : null);
+            },
+            initialEnabled: initial is not null && composition.VideoFxEnabled,
+            dialogTitlePrefix: "Composition FX",
+            enableLabel: "Enable composition FX",
+            sizeLabel: "FX size",
+            canEditOutputSize: false);
+
+        var dialog = new MappingEditorDialog { DataContext = vm };
+        dialog.Show(this);
+    }
+
     private static CueOutputMapping? BuildLayoutSeed(
         CuePlayerViewModel cuePlayer,
         CueCompositionViewModel composition,

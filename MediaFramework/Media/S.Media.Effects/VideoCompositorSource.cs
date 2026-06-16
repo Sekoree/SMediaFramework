@@ -198,10 +198,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
                     _acquiredScratch.Add(slot);
-                    _layerScratch.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode)
-                    {
-                        SourceCrop = slot.SourceCrop,
-                    });
+                    AddSlotLayers(slot, f);
                 }
 
                 // When the caller drives composition from a master timeline (the declarative
@@ -274,10 +271,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
                         : slot.AcquireLatestFrame();
                     if (f is null) continue;
                     _acquiredScratch.Add(slot);
-                    _layerScratch.Add(new CompositorLayer(f, slot.Transform, slot.Opacity, slot.BlendMode)
-                    {
-                        SourceCrop = slot.SourceCrop,
-                    });
+                    AddSlotLayers(slot, f);
                 }
 
                 // When the caller drives composition from a master timeline (the declarative
@@ -342,6 +336,35 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         return TimeSpan.FromSeconds((double)frameRate.Denominator / frameRate.Numerator);
     }
 
+    private void AddSlotLayers(Slot slot, VideoFrame frame)
+    {
+        var opacity = slot.Opacity;
+        var blendMode = slot.BlendMode;
+        var mapping = slot.MappingSections;
+        if (mapping is not null)
+        {
+            foreach (var section in mapping)
+            {
+                _layerScratch.Add(new CompositorLayer(
+                    frame,
+                    section.Transform,
+                    opacity * section.Opacity,
+                    blendMode)
+                {
+                    SourceCrop = section.SourceCrop,
+                    Mesh = section.Mesh,
+                });
+            }
+
+            return;
+        }
+
+        _layerScratch.Add(new CompositorLayer(frame, slot.Transform, opacity, blendMode)
+        {
+            SourceCrop = slot.SourceCrop,
+        });
+    }
+
     /// <summary>One input slot — combines an <see cref="IVideoOutput"/> target with mutable composite parameters.</summary>
     public sealed class Slot
     {
@@ -356,6 +379,7 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         private LayerTransform2D _transform = LayerTransform2D.Identity;
         private BlendMode _blendMode = BlendMode.SourceOver;
         private RectNormalized _sourceCrop = RectNormalized.Full;
+        private IReadOnlyList<WarpSection>? _mappingSections;
         private bool _closed;
 
         internal Slot(string id, IReadOnlyList<PixelFormat> accepted)
@@ -396,6 +420,16 @@ public sealed class VideoCompositorSource : IVideoSource, IDisposable
         {
             get { lock (_gate) return _sourceCrop; }
             set { lock (_gate) _sourceCrop = value; }
+        }
+
+        /// <summary>
+        /// Optional per-slot section mapping. When present, each section becomes one compositor layer
+        /// sampling this slot's current frame; null keeps the historical single-layer path.
+        /// </summary>
+        public IReadOnlyList<WarpSection>? MappingSections
+        {
+            get { lock (_gate) return _mappingSections; }
+            set { lock (_gate) _mappingSections = value; }
         }
 
         /// <summary>Which submitted frame is exposed at composite time. Default
