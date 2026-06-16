@@ -24,7 +24,8 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
         int canvasWidth,
         int canvasHeight,
         int? outputWidth,
-        int? outputHeight)
+        int? outputHeight,
+        CueOutputMapping? mapping = null)
     {
         OutputLineId = outputLineId;
         DisplayName = displayName;
@@ -33,6 +34,9 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
         CanvasHeight = Math.Max(1, canvasHeight);
         OutputWidth = Math.Max(1, outputWidth ?? CanvasWidth);
         OutputHeight = Math.Max(1, outputHeight ?? CanvasHeight);
+        InitialOutputWidth = OutputWidth;
+        InitialOutputHeight = OutputHeight;
+        ExistingMapping = mapping;
     }
 
     /// <summary>The output raster this region is sent at — editable, so an output can render its canvas
@@ -58,6 +62,12 @@ public sealed partial class OutputLayoutItemViewModel : ObservableObject
     public int CanvasWidth { get; }
 
     public int CanvasHeight { get; }
+
+    internal int InitialOutputWidth { get; }
+
+    internal int InitialOutputHeight { get; }
+
+    internal CueOutputMapping? ExistingMapping { get; }
 
     public string OutputSummary => $"{OutputWidth}×{OutputHeight}";
 
@@ -226,7 +236,8 @@ public sealed partial class CompositionOutputLayoutViewModel : ViewModelBase
                 vm.CanvasWidth,
                 vm.CanvasHeight,
                 mapping?.OutputWidth ?? outputWidth,
-                mapping?.OutputHeight ?? outputHeight);
+                mapping?.OutputHeight ?? outputHeight,
+                mapping);
             var section = mapping?.Sections.FirstOrDefault();
             if (section is not null)
             {
@@ -272,25 +283,41 @@ public sealed partial class CompositionOutputLayoutViewModel : ViewModelBase
         ArgumentNullException.ThrowIfNull(item);
         var outW = Math.Max(1, item.OutputWidth);
         var outH = Math.Max(1, item.OutputHeight);
+        var section = item.ExistingMapping?.Sections.FirstOrDefault() ?? new CueOutputMappingSection();
+        var replaceDestinationWithFullOutput = item.ExistingMapping is null || DestinationCoversInitialOutput(item, section);
+
         return new CueOutputMapping
         {
             OutputWidth = outW,
             OutputHeight = outH,
             Sections =
             {
-                new CueOutputMappingSection
+                section with
                 {
                     Enabled = true,
                     SrcX = item.SrcX,
                     SrcY = item.SrcY,
                     SrcWidth = item.SrcWidth,
                     SrcHeight = item.SrcHeight,
-                    DestX = 0,
-                    DestY = 0,
-                    DestWidth = outW,
-                    DestHeight = outH,
+                    DestX = replaceDestinationWithFullOutput ? 0 : section.DestX,
+                    DestY = replaceDestinationWithFullOutput ? 0 : section.DestY,
+                    DestWidth = replaceDestinationWithFullOutput ? outW : section.DestWidth,
+                    DestHeight = replaceDestinationWithFullOutput ? outH : section.DestHeight,
                 },
             },
         };
     }
+
+    private static bool DestinationCoversInitialOutput(OutputLayoutItemViewModel item, CueOutputMappingSection section)
+    {
+        var destW = section.DestWidth > 0 ? section.DestWidth : section.SrcWidth * item.CanvasWidth;
+        var destH = section.DestHeight > 0 ? section.DestHeight : section.SrcHeight * item.CanvasHeight;
+        return NearlyEqual(section.DestX, 0)
+               && NearlyEqual(section.DestY, 0)
+               && NearlyEqual(destW, item.InitialOutputWidth)
+               && NearlyEqual(destH, item.InitialOutputHeight);
+    }
+
+    private static bool NearlyEqual(double left, double right) =>
+        Math.Abs(left - right) < 0.000001;
 }

@@ -880,21 +880,27 @@ public sealed partial class CuePlaybackEngine : IDisposable
         return runtime is not null && runtime.UpdateOutputMapping(outputLineId, mapping);
     }
 
-    /// <summary>Calibration grid slots held open per composition while the mapping editor's
+    /// <summary>Calibration grid slots held open per composition output while the mapping editor's
     /// "show grid" toggle is on (UI thread only).</summary>
-    private readonly Dictionary<Guid, CueCompositionRuntime.LayerSlot> _testPatternSlots = new();
+    private readonly Dictionary<(Guid CompositionId, Guid OutputLineId), CueCompositionRuntime.LayerSlot> _testPatternSlots = new();
 
     /// <summary>
-    /// Shows/hides the mapping calibration grid on a composition: a generated test frame is held in
-    /// a top-most layer slot, so the composition runtime spins up (acquiring its real outputs) and
-    /// renders the grid through any configured mapping — the operator aligns sections against the
-    /// physical surface. UI thread only (same as route wiring).
+    /// Shows/hides the mapping calibration grid for one composition output: a generated test frame is
+    /// held in a top-most layer slot, masked to that output's mapped source sections, so the operator
+    /// calibrates one physical output without painting the whole composition. UI thread only (same as
+    /// route wiring).
     /// </summary>
-    public bool SetCompositionTestPattern(CueList? list, Guid compositionId, bool show)
+    public bool SetCompositionTestPattern(
+        CueList? list,
+        Guid compositionId,
+        Guid outputLineId,
+        CueOutputMapping? visibleMapping,
+        bool show)
     {
+        var key = (compositionId, outputLineId);
         if (!show)
         {
-            if (!_testPatternSlots.Remove(compositionId, out var slot))
+            if (!_testPatternSlots.Remove(key, out var slot))
                 return false;
             try { slot.Dispose(); }
             catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: test pattern slot dispose"); }
@@ -902,9 +908,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             return true;
         }
 
-        if (_testPatternSlots.ContainsKey(compositionId))
-            return true;
-        if (list is null)
+        if (list is null || outputLineId == Guid.Empty)
             return false;
 
         var runtime = GetOrCreateComposition(list, compositionId);
@@ -914,6 +918,17 @@ public sealed partial class CuePlaybackEngine : IDisposable
         try
         {
             var canvas = runtime.CanvasFormat;
+            var bindingMapping = list.VideoOutputs.FirstOrDefault(b =>
+                b.CompositionId == compositionId && b.OutputLineId == outputLineId)?.Mapping;
+            var frame = MappingTestPattern.Render(canvas, visibleMapping ?? bindingMapping);
+            if (_testPatternSlots.TryGetValue(key, out var existing))
+            {
+                existing.Output.Configure(canvas);
+                existing.Output.Submit(frame);
+                runtime.EnsurePumpStarted();
+                return true;
+            }
+
             var slot = runtime.AddLayer(canvas, new CueVideoPlacement
             {
                 CompositionId = compositionId,
@@ -921,9 +936,9 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 Position = CueLayerPosition.Stretch,
             });
             slot.Output.Configure(canvas);
-            slot.Output.Submit(MappingTestPattern.Render(canvas));
+            slot.Output.Submit(frame);
             runtime.EnsurePumpStarted();
-            _testPatternSlots[compositionId] = slot;
+            _testPatternSlots[key] = slot;
             return true;
         }
         catch (Exception ex)

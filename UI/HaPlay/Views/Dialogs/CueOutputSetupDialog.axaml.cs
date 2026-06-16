@@ -35,7 +35,8 @@ public partial class CueOutputSetupDialog : Window
         var disabledSeed = binding.Mapping is null
             ? BuildLayoutSeed(cuePlayer, composition, binding)
             : null;
-        var vm = new MappingEditorViewModel(
+        MappingEditorViewModel? vm = null;
+        vm = new MappingEditorViewModel(
             outputName,
             composition.Width,
             composition.Height,
@@ -50,7 +51,11 @@ public partial class CueOutputSetupDialog : Window
                     binding.CompositionId, binding.OutputLineId, enabled ? mapping : null);
             },
             setTestPattern: show =>
-                cuePlayer.SetCompositionTestPatternCallback?.Invoke(binding.CompositionId, show) ?? false,
+                cuePlayer.SetCompositionTestPatternCallback?.Invoke(
+                    binding.CompositionId,
+                    binding.OutputLineId,
+                    show ? vm?.ToMapping() ?? binding.Mapping : null,
+                    show) ?? false,
             disabledSeed: disabledSeed,
             initialEnabled: binding.Mapping is not null && binding.MappingEnabled);
 

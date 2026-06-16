@@ -1077,8 +1077,8 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// composition: (compositionId, outputLineId, mapping). No-op when the composition isn't live.</summary>
     public Func<Guid, Guid, CueOutputMapping?, bool>? UpdateOutputMappingCallback { get; set; }
 
-    /// <summary>Host callback — shows/hides the mapping calibration grid on a composition.</summary>
-    public Func<Guid, bool, bool>? SetCompositionTestPatternCallback { get; set; }
+    /// <summary>Host callback — shows/hides the mapping calibration grid for one composition output.</summary>
+    public Func<Guid, Guid, CueOutputMapping?, bool, bool>? SetCompositionTestPatternCallback { get; set; }
 
     /// <summary>Engine callback — cue began playing. Marks its row Current and pushes a new
     /// <see cref="ActiveCueViewModel"/> into <see cref="ActiveCues"/>.</summary>

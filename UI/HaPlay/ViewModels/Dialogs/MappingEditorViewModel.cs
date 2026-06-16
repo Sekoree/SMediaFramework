@@ -150,6 +150,7 @@ public sealed partial class MappingEditorViewModel : ObservableObject
     {
         var cols = Math.Clamp(SplitColumns, 1, 64);
         var rows = Math.Clamp(SplitRows, 1, 64);
+        var sourceBounds = CurrentSourceBounds();
 
         _suppressApply = true;
         Sections.Clear();
@@ -160,10 +161,10 @@ public sealed partial class MappingEditorViewModel : ObservableObject
                 Sections.Add(Wrap(MappingSectionViewModel.FromModel(new CueOutputMappingSection
                 {
                     Name = rows > 1 ? $"R{r + 1} C{c + 1}" : $"Panel {c + 1}",
-                    SrcX = (double)c / cols,
-                    SrcY = (double)r / rows,
-                    SrcWidth = 1.0 / cols,
-                    SrcHeight = 1.0 / rows,
+                    SrcX = sourceBounds.X + sourceBounds.Width * c / cols,
+                    SrcY = sourceBounds.Y + sourceBounds.Height * r / rows,
+                    SrcWidth = sourceBounds.Width / cols,
+                    SrcHeight = sourceBounds.Height / rows,
                     DestX = (double)c / cols * EffectiveOutputWidth,
                     DestY = (double)r / rows * EffectiveOutputHeight,
                     DestWidth = (double)EffectiveOutputWidth / cols,
@@ -174,6 +175,36 @@ public sealed partial class MappingEditorViewModel : ObservableObject
         SelectedSection = Sections.FirstOrDefault();
         _suppressApply = false;
         Apply();
+    }
+
+    private (double X, double Y, double Width, double Height) CurrentSourceBounds()
+    {
+        if (Sections.Count == 0)
+            return (0, 0, 1, 1);
+
+        var minX = 1.0;
+        var minY = 1.0;
+        var maxX = 0.0;
+        var maxY = 0.0;
+        foreach (var section in Sections)
+        {
+            if (!section.Enabled || section.SrcWidth <= 0 || section.SrcHeight <= 0)
+                continue;
+            var x0 = Math.Clamp(section.SrcX, 0.0, 1.0);
+            var y0 = Math.Clamp(section.SrcY, 0.0, 1.0);
+            var x1 = Math.Clamp(section.SrcX + section.SrcWidth, 0.0, 1.0);
+            var y1 = Math.Clamp(section.SrcY + section.SrcHeight, 0.0, 1.0);
+            if (x1 <= x0 || y1 <= y0)
+                continue;
+            minX = Math.Min(minX, x0);
+            minY = Math.Min(minY, y0);
+            maxX = Math.Max(maxX, x1);
+            maxY = Math.Max(maxY, y1);
+        }
+
+        return maxX > minX && maxY > minY
+            ? (minX, minY, maxX - minX, maxY - minY)
+            : (0, 0, 1, 1);
     }
 
     [RelayCommand]
@@ -205,6 +236,8 @@ public sealed partial class MappingEditorViewModel : ObservableObject
         if (_suppressApply)
             return;
         _apply(ToMapping(), MappingEnabled);
+        if (ShowTestPattern && _setTestPattern?.Invoke(true) == false)
+            ShowTestPattern = false;
         MappingChanged?.Invoke();
     }
 

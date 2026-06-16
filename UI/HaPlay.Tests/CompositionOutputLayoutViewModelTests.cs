@@ -82,6 +82,92 @@ public sealed class CompositionOutputLayoutViewModelTests
     }
 
     [Fact]
+    public void ToMapping_preserves_existing_mesh_calibration_when_layout_changes()
+    {
+        var original = new CueOutputMapping
+        {
+            OutputWidth = 960,
+            OutputHeight = 1080,
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    Name = "Right tile",
+                    SrcX = 0.5,
+                    SrcY = 0,
+                    SrcWidth = 0.5,
+                    SrcHeight = 1,
+                    DestWidth = 960,
+                    DestHeight = 1080,
+                    Brightness = 0.75,
+                    MeshColumns = 2,
+                    MeshRows = 2,
+                    MeshPoints = [new(0, 0), new(1, 0), new(0, 1), new(1.1, 0.95)],
+                },
+            },
+        };
+
+        var vm = CompositionOutputLayoutViewModel.Build(1920, 1080, new[]
+        {
+            (Left, "Tile", (int?)960, (int?)1080, (CueOutputMapping?)original),
+        });
+        vm.Items[0].SetSrcRect(0.45, 0.0, 0.55, 1.0);
+
+        var round = vm.ToMapping(vm.Items[0]);
+
+        var section = Assert.Single(round.Sections);
+        Assert.Equal("Right tile", section.Name);
+        Assert.Equal(0.45, section.SrcX, 6);
+        Assert.Equal(0.55, section.SrcWidth, 6);
+        Assert.Equal(0.75, section.Brightness, 6);
+        Assert.Equal((2, 2), (section.MeshColumns, section.MeshRows));
+        Assert.NotNull(section.MeshPoints);
+        Assert.Equal(1.1, section.MeshPoints![3].X, 6);
+        Assert.Equal((960, 1080), (section.DestWidth, section.DestHeight));
+    }
+
+    [Fact]
+    public void ToMapping_preserves_custom_destination_calibration_when_layout_changes()
+    {
+        var original = new CueOutputMapping
+        {
+            OutputWidth = 960,
+            OutputHeight = 1080,
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    SrcX = 0.5,
+                    SrcY = 0,
+                    SrcWidth = 0.5,
+                    SrcHeight = 1,
+                    DestX = 12,
+                    DestY = 18,
+                    DestWidth = 900,
+                    DestHeight = 1040,
+                    RotationDegrees = 1.25,
+                },
+            },
+        };
+
+        var vm = CompositionOutputLayoutViewModel.Build(1920, 1080, new[]
+        {
+            (Left, "Tile", (int?)960, (int?)1080, (CueOutputMapping?)original),
+        });
+        vm.Items[0].SetSrcRect(0.4, 0.0, 0.6, 1.0);
+
+        var section = Assert.Single(vm.ToMapping(vm.Items[0]).Sections);
+
+        Assert.Equal(0.4, section.SrcX, 6);
+        Assert.Equal(0.6, section.SrcWidth, 6);
+        Assert.Equal(12, section.DestX, 6);
+        Assert.Equal(18, section.DestY, 6);
+        Assert.Equal(900, section.DestWidth, 6);
+        Assert.Equal(1040, section.DestHeight, 6);
+        Assert.Equal(1.25, section.RotationDegrees, 6);
+    }
+
+    [Fact]
     public void Build_prefers_a_saved_mapping_resolution_over_the_reported_output_size()
     {
         var mapping = new CueOutputMapping

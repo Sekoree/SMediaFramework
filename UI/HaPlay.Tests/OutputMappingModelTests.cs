@@ -3,6 +3,7 @@ using HaPlay.Models;
 using HaPlay.Playback;
 using HaPlay.ViewModels;
 using HaPlay.ViewModels.Dialogs;
+using S.Media.Core.Video;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -176,6 +177,34 @@ public sealed class OutputMappingModelTests
     }
 
     [Fact]
+    public void MappingTestPattern_CanBeMaskedToOutputSourceSlice()
+    {
+        var canvas = new VideoFormat(16, 8, PixelFormat.Bgra32, new Rational(60, 1));
+        var mapping = new CueOutputMapping
+        {
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    SrcX = 0.5,
+                    SrcY = 0,
+                    SrcWidth = 0.5,
+                    SrcHeight = 1,
+                    DestWidth = 16,
+                    DestHeight = 8,
+                },
+            },
+        };
+
+        using var frame = MappingTestPattern.Render(canvas, mapping);
+        var span = frame.Planes[0].Span;
+        var stride = frame.Strides[0];
+
+        Assert.Equal(0, span[4 * stride + 4 * 4 + 3]);     // outside target source slice
+        Assert.Equal(255, span[4 * stride + 12 * 4 + 3]);  // inside target source slice
+    }
+
+    [Fact]
     public void EditorViewModel_DisabledSeed_AppliesLayoutSliceWhenEnabled()
     {
         CueOutputMapping? applied = null;
@@ -248,6 +277,124 @@ public sealed class OutputMappingModelTests
         Assert.Equal(0, model.MeshColumns);
         Assert.Null(model.MeshPoints);
         Assert.Equal(16, section.MeshPoints.Count);
+    }
+
+    [Fact]
+    public void EditorViewModel_EnablingMesh_PreservesLayoutSlice()
+    {
+        CueOutputMapping? applied = null;
+        var layoutSlice = new CueOutputMapping
+        {
+            OutputWidth = 960,
+            OutputHeight = 1080,
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    Name = "Right tile",
+                    SrcX = 0.5,
+                    SrcY = 0,
+                    SrcWidth = 0.5,
+                    SrcHeight = 1,
+                    DestX = 0,
+                    DestY = 0,
+                    DestWidth = 960,
+                    DestHeight = 1080,
+                },
+            },
+        };
+        var vm = new MappingEditorViewModel(
+            "Out", 1920, 1080,
+            layoutSlice,
+            (m, _) => applied = m,
+            initialEnabled: true);
+
+        vm.SelectedSection!.MeshEnabled = true;
+
+        var model = Assert.Single(applied!.Sections);
+        Assert.Equal((960, 1080), (applied.OutputWidth, applied.OutputHeight));
+        Assert.Equal(0.5, model.SrcX, precision: 6);
+        Assert.Equal(0.5, model.SrcWidth, precision: 6);
+        Assert.Equal(960, model.DestWidth, precision: 6);
+        Assert.Equal((4, 4), (model.MeshColumns, model.MeshRows));
+    }
+
+    [Fact]
+    public void EditorViewModel_SplitIntoGrid_SplitsWithinLayoutSlice()
+    {
+        CueOutputMapping? applied = null;
+        var layoutSlice = new CueOutputMapping
+        {
+            OutputWidth = 960,
+            OutputHeight = 1080,
+            Sections =
+            {
+                new CueOutputMappingSection
+                {
+                    Name = "Right tile",
+                    SrcX = 0.5,
+                    SrcY = 0,
+                    SrcWidth = 0.5,
+                    SrcHeight = 1,
+                    DestX = 0,
+                    DestY = 0,
+                    DestWidth = 960,
+                    DestHeight = 1080,
+                },
+            },
+        };
+        var vm = new MappingEditorViewModel(
+            "Out", 1920, 1080,
+            layoutSlice,
+            (m, _) => applied = m,
+            initialEnabled: true)
+        {
+            SplitColumns = 2,
+            SplitRows = 1,
+        };
+
+        vm.SplitIntoGridCommand.Execute(null);
+
+        Assert.NotNull(applied);
+        Assert.Equal((960, 1080), (applied!.OutputWidth, applied.OutputHeight));
+        Assert.Collection(
+            applied.Sections,
+            left =>
+            {
+                Assert.Equal(0.5, left.SrcX, precision: 6);
+                Assert.Equal(0.25, left.SrcWidth, precision: 6);
+                Assert.Equal(0, left.DestX, precision: 6);
+                Assert.Equal(480, left.DestWidth, precision: 6);
+            },
+            right =>
+            {
+                Assert.Equal(0.75, right.SrcX, precision: 6);
+                Assert.Equal(0.25, right.SrcWidth, precision: 6);
+                Assert.Equal(480, right.DestX, precision: 6);
+                Assert.Equal(480, right.DestWidth, precision: 6);
+            });
+    }
+
+    [Fact]
+    public void EditorViewModel_WhenGridShown_RefreshesTestPatternOnMappingChanges()
+    {
+        var refreshCount = 0;
+        var vm = new MappingEditorViewModel(
+            "Out", 1920, 1080,
+            CueOutputMapping.Identity(),
+            (_, _) => { },
+            show =>
+            {
+                if (show)
+                    refreshCount++;
+                return true;
+            },
+            initialEnabled: true);
+
+        vm.ShowTestPattern = true;
+        vm.SelectedSection!.SrcX = 0.25;
+
+        Assert.Equal(2, refreshCount);
     }
 
     [Fact]

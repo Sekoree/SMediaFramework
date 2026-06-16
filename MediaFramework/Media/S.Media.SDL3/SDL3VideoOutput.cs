@@ -361,7 +361,10 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
                 case SDL.EventType.WindowResized:
                 case SDL.EventType.WindowPixelSizeChanged:
                     if (ev.Window.WindowID == GetWindowId())
-                        SafeRaiseResized(ev.Window.Data1, ev.Window.Data2);
+                    {
+                        var (width, height) = CurrentWindowPixelSize(ev.Window.Data1, ev.Window.Data2);
+                        SafeRaiseResized(width, height);
+                    }
                     break;
                 case SDL.EventType.Quit:
                     // App-level quit (e.g. last window closed) — surface as
@@ -373,6 +376,19 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
     }
 
     private uint GetWindowId() => _window == nint.Zero ? 0u : SDL.GetWindowID(_window);
+
+    private (int Width, int Height) CurrentWindowPixelSize(int fallbackWidth, int fallbackHeight)
+    {
+        if (_window != nint.Zero
+            && SDL.GetWindowSizeInPixels(_window, out var width, out var height)
+            && width > 0
+            && height > 0)
+        {
+            return (width, height);
+        }
+
+        return (fallbackWidth, fallbackHeight);
+    }
 
     private void SafeRaise(EventHandler? handler)
     {

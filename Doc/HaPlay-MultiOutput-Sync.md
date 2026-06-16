@@ -140,9 +140,14 @@ one composition drift today; put both devices in one sync group and the controll
   output's slice is written back to its `CueOutputMapping` (one full-output section sized to the slice — the
   video-wall tile model) and live-applied via `UpdateOutputMappingCallback`. Built from the proven
   `CompositionPlacementCanvas` pattern: `OutputLayoutCanvas` (control) + `CompositionOutputLayoutViewModel`
-  / `OutputLayoutItemViewModel`. Unit-tested (`CompositionOutputLayoutViewModelTests`, 4 cases: slice
-  round-trip, defaults, overlaps/gaps). *Note:* applying a layout slice resets that output's mapping to a
-  single tile section — use the per-output **Mapping…** editor afterwards for warp/mesh on a tile.
+  / `OutputLayoutItemViewModel`. Unit-tested (`CompositionOutputLayoutViewModelTests`: slice round-trip,
+  defaults, overlaps/gaps, calibration preservation). *Note:* applying a layout slice creates a
+  single tile section when no mapping exists yet; when a tile already has per-output mapping, the layout
+  save updates that tile's source slice and output raster while preserving its first section's destination,
+  mesh, and brightness calibration. The per-output **Mapping…** editor's Split action also splits inside
+  the current tile source bounds, so it no longer expands a laid-out tile back to the full composition.
+  Its calibration grid is output-scoped: the generated grid layer is masked to the edited output's source
+  sections and refreshed while editing, instead of covering the whole composition canvas.
 * **Option B — Phase 2 video present-sync for compositions: NOT NEEDED (resolved by design, verified 2026-06-15).**
   Investigating where to add the present-sync hook inside `ClipCompositionRuntime` showed the composition
   fan-out is **already frame-locked** — there is nothing for a `VideoPresentSyncGroup` to add here. Evidence:
