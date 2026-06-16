@@ -8,10 +8,12 @@ using Xunit.Abstractions;
 namespace HaPlay.Tests;
 
 // Repro for the chained-stage scenario (mixer compositor + composition-FX / per-output mapping
-// compositor) that runs two SDL3GLVideoCompositor instances on the SAME thread. Each instance owns
-// its own hidden GL context; if a Composite does not make its own context current first, the second
-// instance leaves its context current and the first instance renders/reads back through the wrong
-// context — producing corrupted ("red/flipped/flickering") frames. Skips on pure-CPU CI.
+// compositor) that runs two SDL3GLVideoCompositor instances on the SAME thread. Compositors on one
+// thread now share a single GL context (SharedSdlGlContext), so they can no longer displace each
+// other's "current" binding; before that fix the second instance left its private context current and
+// the first rendered/read back through the wrong (differently sized) context — producing corrupted
+// ("red/flipped/flickering") frames. This guards both the sharing and the per-Composite make-current.
+// Skips on pure-CPU CI.
 public sealed class SDL3GLVideoCompositorMultiContextTests
 {
     private readonly ITestOutputHelper _o;

@@ -30,12 +30,9 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
     private static readonly PixelFormat[] AcceptedFormats = YuvVideoRenderer.SupportedPixelFormats.ToArray();
 
     private VideoFormat _output;
-    private SilkGL? _gl;
     private GlVideoCompositor? _inner;
-    private nint _window;
-    private nint _glContext;
+    private SharedSdlGlContext? _context;
     private int _ownerThreadId;
-    private bool _sdlAcquired;
     private bool _disposeRequested;
     private bool _resourcesDisposed;
 
@@ -171,21 +168,12 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
     }
 
     /// <summary>
-    /// Re-asserts this compositor's GL context as current on the calling thread before any GL work.
-    /// Each compositor owns a private hidden-window context; when several share one pump thread (a
-    /// composition-FX or per-output mapping stage running alongside the canvas mixer), whichever
-    /// initialized last leaves <em>its</em> context current. Without this, <see cref="_inner"/> would
-    /// render and read back through the wrong context — its same-named FBOs there are a different size,
-    /// so the readback returns the other compositor's pixels (the "red / flipped / flickering" bug).
+    /// Re-asserts the shared GL context as current on the calling thread before any GL work. Compositors
+    /// on one thread now share a single <see cref="SharedSdlGlContext"/>, so sibling compositors can no
+    /// longer displace each other's binding; this guards only against an unrelated GL user (e.g. the
+    /// <see cref="TryProbe(out string)"/> transient context) leaving a different context current.
     /// </summary>
-    private void EnsureContextCurrent()
-    {
-        if (_window == nint.Zero || _glContext == nint.Zero)
-            return;
-        if (!SDL.GLMakeCurrent(_window, _glContext))
-            throw new InvalidOperationException(
-                $"SDL_GL_MakeCurrent failed for compositor before GL work: {SDL.GetError()}");
-    }
+    private void EnsureContextCurrent() => _context?.MakeCurrent();
 
     private readonly object _warpGate = new();
     private VideoFormat _pendingWarpOutput;
@@ -231,26 +219,14 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
             return;
 
         _ownerThreadId = Environment.CurrentManagedThreadId;
-        SDL3Runtime.Acquire();
-        _sdlAcquired = true;
 
-        ApplyGlAttributes();
-        _window = SDL.CreateWindow(
-            "S.Media SDL3 GL Compositor",
-            16,
-            16,
-            SDL.WindowFlags.OpenGL | SDL.WindowFlags.Hidden);
-        if (_window == 0)
-            throw new InvalidOperationException($"SDL_CreateWindow failed: {SDL.GetError()}");
+        // Share one GL context with every other compositor on this thread (the canvas mixer and its
+        // mapping stages). The context is reference-counted and made current here; subsequent Composite
+        // calls re-assert it (EnsureContextCurrent) so a probe or sibling compositor can't displace it.
+        _context = SharedSdlGlContext.Acquire();
+        _context.MakeCurrent();
 
-        _glContext = SDL.GLCreateContext(_window);
-        if (_glContext == 0)
-            throw new InvalidOperationException($"SDL_GL_CreateContext failed: {SDL.GetError()}");
-        if (!SDL.GLMakeCurrent(_window, _glContext))
-            throw new InvalidOperationException($"SDL_GL_MakeCurrent failed: {SDL.GetError()}");
-
-        _gl = SilkGL.GetApi(SDL.GLGetProcAddress);
-        _inner = new GlVideoCompositor(_gl, _output, PrecisionForOutput(_output.PixelFormat));
+        _inner = new GlVideoCompositor(_context.Gl, _output, PrecisionForOutput(_output.PixelFormat));
         lock (_warpGate)
         {
             if (_hasPendingWarp)
@@ -271,44 +247,19 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         _resourcesDisposed = true;
         _disposeRequested = true;
 
-        if (_window != 0 && _glContext != 0)
-        {
-            try
-            {
-                if (!SDL.GLMakeCurrent(_window, _glContext))
-                    MediaDiagnostics.LogWarning("SDL3GLVideoCompositor: SDL_GL_MakeCurrent before dispose failed: {0}", SDL.GetError());
-            }
-            catch { /* best effort */ }
-        }
+        // Delete our GL objects against the shared context, then drop our reference to it. The context
+        // (and the SDL video subsystem ref it holds) is torn down only when the last compositor releases.
+        var context = _context;
+        _context = null;
+        try { context?.MakeCurrent(); }
+        catch (Exception ex) { Trace.LogWarning(ex, "SDL3GLVideoCompositor.Dispose: make context current"); }
 
         try { _inner?.Dispose(); }
         catch (Exception ex) { Trace.LogWarning(ex, "SDL3GLVideoCompositor.Dispose: GL compositor"); }
         _inner = null;
 
-        try { _gl?.Dispose(); }
-        catch (Exception ex) { Trace.LogWarning(ex, "SDL3GLVideoCompositor.Dispose: GL api"); }
-        _gl = null;
-
-        if (_glContext != 0)
-        {
-            try { SDL.GLDestroyContext(_glContext); }
-            catch (Exception ex) { Trace.LogWarning(ex, "SDL3GLVideoCompositor.Dispose: GL context"); }
-            _glContext = 0;
-        }
-
-        if (_window != 0)
-        {
-            try { SDL.DestroyWindow(_window); }
-            catch (Exception ex) { Trace.LogWarning(ex, "SDL3GLVideoCompositor.Dispose: window"); }
-            _window = 0;
-        }
-
-        if (_sdlAcquired)
-        {
-            _sdlAcquired = false;
-            try { SDL3Runtime.Release(); }
-            catch (Exception ex) { Trace.LogWarning(ex, "SDL3GLVideoCompositor.Dispose: SDL release"); }
-        }
+        try { context?.Release(); }
+        catch (Exception ex) { Trace.LogWarning(ex, "SDL3GLVideoCompositor.Dispose: shared context release"); }
     }
 
     private static void ValidateOutputFormat(VideoFormat output)
@@ -329,7 +280,7 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         _ => GlCompositorOutputPrecision.Rgba8,
     };
 
-    private static void ApplyGlAttributes()
+    internal static void ApplyGlAttributes()
     {
         SDL.GLSetAttribute(SDL.GLAttr.ContextMajorVersion, 3);
         SDL.GLSetAttribute(SDL.GLAttr.ContextMinorVersion, 3);
