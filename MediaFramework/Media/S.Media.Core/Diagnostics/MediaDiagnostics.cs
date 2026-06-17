@@ -67,6 +67,39 @@ public static class MediaDiagnostics
     /// <summary>Resolve a logger keyed on the fully-qualified <typeparamref name="T"/> name.</summary>
     public static ILogger CreateLogger<T>() => _factory.CreateLogger<T>();
 
+    /// <summary>
+    /// Starts a low-overhead timing scope for lifecycle/native-boundary operations. Returns
+    /// <see langword="null"/> when the logger would not emit trace, the completion level, or slow warnings.
+    /// </summary>
+    /// <remarks>
+    /// Use this around operations that can block or hide native I/O latency (open, seek, stop, pump drain,
+    /// hardware start). Avoid placing it in per-frame or per-audio-chunk hot paths unless the call is already
+    /// guarded by <see cref="ILogger.IsEnabled(LogLevel)"/>.
+    /// </remarks>
+    public static TimedLogScope? BeginTimedOperation(
+        ILogger? logger,
+        string operation,
+        LogLevel completionLevel = LogLevel.Debug,
+        double slowWarningMs = 250,
+        bool logStartAtTrace = true)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(operation);
+        logger ??= _logger;
+        if (logger is null)
+            return null;
+
+        if (!logger.IsEnabled(LogLevel.Trace) &&
+            !logger.IsEnabled(completionLevel) &&
+            !(slowWarningMs > 0 && logger.IsEnabled(LogLevel.Warning)))
+            return null;
+
+        return new TimedLogScope(logger, operation, completionLevel, slowWarningMs, logStartAtTrace);
+    }
+
+    /// <summary>Returns elapsed milliseconds since a <see cref="Stopwatch.GetTimestamp"/> value.</summary>
+    public static double ElapsedMillisecondsSince(long startTimestamp) =>
+        Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+
     public static void LogTrace(string message, params object?[] args)
     {
         if (_logger is { } log)
@@ -151,5 +184,89 @@ public static class MediaDiagnostics
             // best-effort shutdown
         }
 #endif
+    }
+
+    /// <summary>
+    /// Disposable timing helper returned by <see cref="BeginTimedOperation"/>. Call
+    /// <see cref="SetOutcome"/> before disposal when the final log should include a result label.
+    /// </summary>
+    public sealed class TimedLogScope : IDisposable
+    {
+        private readonly ILogger _logger;
+        private readonly string _operation;
+        private readonly LogLevel _completionLevel;
+        private readonly double _slowWarningMs;
+        private readonly long _startTimestamp;
+        private string? _outcome;
+        private int _disposed;
+
+        internal TimedLogScope(
+            ILogger logger,
+            string operation,
+            LogLevel completionLevel,
+            double slowWarningMs,
+            bool logStartAtTrace)
+        {
+            _logger = logger;
+            _operation = operation;
+            _completionLevel = completionLevel;
+            _slowWarningMs = slowWarningMs;
+            _startTimestamp = Stopwatch.GetTimestamp();
+
+            if (logStartAtTrace && _logger.IsEnabled(LogLevel.Trace))
+                _logger.LogTrace("{Operation}: started", _operation);
+        }
+
+        /// <summary>Elapsed milliseconds from scope creation to now.</summary>
+        public double ElapsedMilliseconds => ElapsedMillisecondsSince(_startTimestamp);
+
+        /// <summary>Adds a short result label to the eventual completion log.</summary>
+        public void SetOutcome(string outcome)
+        {
+            if (!string.IsNullOrWhiteSpace(outcome))
+                _outcome = outcome;
+        }
+
+        /// <summary>Emits an in-flight checkpoint with the elapsed time so far.</summary>
+        public void Checkpoint(string checkpoint, LogLevel level = LogLevel.Trace)
+        {
+            if (!_logger.IsEnabled(level))
+                return;
+
+            _logger.Log(level,
+                "{Operation}: {Checkpoint} at {ElapsedMs:0.00}ms",
+                _operation,
+                checkpoint,
+                ElapsedMilliseconds);
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            var elapsedMs = ElapsedMilliseconds;
+            var outcome = _outcome ?? "completed";
+            if (_slowWarningMs > 0 && elapsedMs >= _slowWarningMs && _logger.IsEnabled(LogLevel.Warning))
+            {
+                _logger.LogWarning(
+                    "{Operation}: slow completion in {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, outcome={Outcome})",
+                    _operation,
+                    elapsedMs,
+                    _slowWarningMs,
+                    outcome);
+                return;
+            }
+
+            if (_logger.IsEnabled(_completionLevel))
+            {
+                _logger.Log(
+                    _completionLevel,
+                    "{Operation}: completed in {ElapsedMs:0.00}ms (outcome={Outcome})",
+                    _operation,
+                    elapsedMs,
+                    outcome);
+            }
+        }
     }
 }

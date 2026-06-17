@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 
@@ -17,6 +18,8 @@ namespace S.Media.PortAudio;
 /// </remarks>
 public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.PortAudio.PortAudioInput");
+
     private static readonly delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int>
         CallbackPtr = &Callback;
 
@@ -197,7 +200,12 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (Volatile.Read(ref _isRunning)) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioInput.Start", slowWarningMs: 1000);
+        if (Volatile.Read(ref _isRunning))
+        {
+            timing?.SetOutcome($"device={_deviceIndex} already-running");
+            return;
+        }
 
         Interlocked.Exchange(ref _callbackFaultException, null);
         Volatile.Write(ref _callbackFaulted, 0);
@@ -240,11 +248,20 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
         }
 
         Volatile.Write(ref _isRunning, true);
+        Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f",
+            _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
+            _ringBuffer.Length / _format.Channels);
+        timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ringBuffer.Length / _format.Channels}");
     }
 
     public void Stop()
     {
-        if (!Volatile.Read(ref _isRunning)) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioInput.Stop", slowWarningMs: 1000);
+        if (!Volatile.Read(ref _isRunning))
+        {
+            timing?.SetOutcome($"device={_deviceIndex} not-running");
+            return;
+        }
         try
         {
             if (_stream != nint.Zero)
@@ -259,6 +276,9 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
             if (_selfHandle.IsAllocated) _selfHandle.Free();
             Volatile.Write(ref _isRunning, false);
         }
+        Trace.LogDebug("Stop: device={Device} emitted={Emitted}f overflow={Overflow}f active={Active}",
+            _deviceIndex, Volatile.Read(ref _samplesEmitted), Volatile.Read(ref _overflowSamples), StreamActive);
+        timing?.SetOutcome($"device={_deviceIndex} emitted={Volatile.Read(ref _samplesEmitted)} overflow={Volatile.Read(ref _overflowSamples)}");
     }
 
     /// <summary>
@@ -380,9 +400,15 @@ public sealed unsafe class PortAudioInput : IAudioSource, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioInput.Dispose", slowWarningMs: 1000);
+        if (_disposed)
+        {
+            timing?.SetOutcome($"device={_deviceIndex} already-disposed");
+            return;
+        }
         _disposed = true;
         MediaDiagnostics.SwallowDisposeErrors(Stop, "PortAudioInput.Dispose: Stop");
         MediaDiagnostics.SwallowDisposeErrors(PortAudioRuntime.Release, "PortAudioInput.Dispose: PortAudioRuntime.Release");
+        timing?.SetOutcome($"device={_deviceIndex} emitted={Volatile.Read(ref _samplesEmitted)} overflow={Volatile.Read(ref _overflowSamples)}");
     }
 }

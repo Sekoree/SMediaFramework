@@ -166,6 +166,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         TimeSpan? minBufferedDuration = null,
         NDIIngestPlaybackClock? ingestClock = null)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIAudioReceiver.Open", slowWarningMs: 1000);
         if (ringCapacityDuration == default)
             ringCapacityDuration = TimeSpan.FromSeconds(2);
         if (ringCapacityDuration <= TimeSpan.Zero)
@@ -215,6 +216,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
             Name = "NDIAudioReceiver",
         };
         _captureThread.Start();
+        timing?.SetOutcome($"source={source.Name} capacity={_capacityDuration} minBuffered={_minBufferedDuration}");
     }
 
     public int ReadInto(Span<float> dst)
@@ -251,6 +253,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 
     private void CaptureLoop(CancellationToken token)
     {
+        Trace.LogDebug("CaptureLoop: entered");
         var interleaved = new NDIAudioInterleaved32f();
         var heldBuffer = Array.Empty<float>();
         GCHandle pin = default;
@@ -344,6 +347,10 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         finally
         {
             if (pin.IsAllocated) pin.Free();
+            Trace.LogDebug(
+                "CaptureLoop: exiting (overflowSamples={Overflow}, conversionDrops={Drops})",
+                Volatile.Read(ref _overflowSamples),
+                Volatile.Read(ref _conversionDrops));
         }
     }
 
@@ -364,6 +371,11 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
         var minBufferedFrames = ComputeMinBufferedFrames(_minBufferedDuration, sampleRate, capacityFrames);
         var snap = new FormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
         Volatile.Write(ref _state, snap);
+        Trace.LogInformation(
+            "NDIAudioReceiver: audio format {Format} capacity={CapacityFrames}f minBuffered={MinBufferedFrames}f",
+            snap.Format,
+            capacityFrames,
+            minBufferedFrames);
         return snap;
     }
 
@@ -462,7 +474,12 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIAudioReceiver.Dispose", slowWarningMs: 1000);
+        if (_disposed)
+        {
+            timing?.SetOutcome("already-disposed");
+            return;
+        }
         _disposed = true;
         NDICaptureThreadLifecycle.StopAndDispose(
             nameof(NDIAudioReceiver),
@@ -483,6 +500,7 @@ internal sealed unsafe class NDIAudioReceiver : IAudioSource, IDisposable
                 _faultEx ??= ex;
             },
             Trace);
+        timing?.SetOutcome($"stuck={IsCaptureStuck} overflow={OverflowSamples}");
     }
 
     /// <summary>

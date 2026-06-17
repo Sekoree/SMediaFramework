@@ -55,14 +55,26 @@ public sealed class MediaContainerSession
         Action? prefillBeforeHardware = null,
         Action? startHardware = null,
         IPlaybackClock? videoOnlyMaster = null,
-        Func<bool>? verifyPrebufferAfterPrefill = null) =>
+        Func<bool>? verifyPrebufferAfterPrefill = null)
+    {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSession.Play", slowWarningMs: 500);
         Session.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
+        timing?.SetOutcome($"clockRunning={Session.Clock.IsRunning} videoRunning={Session.Video.IsRunning} audioRunning={Session.AudioRouter?.IsRunning == true}");
+    }
 
-    public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null) =>
+    public void Pause(CancellationToken cancellationToken = default, Action? flushSharedMuxAfterPause = null)
+    {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSession.Pause", slowWarningMs: 500);
         Session.Pause(cancellationToken, flushSharedMuxAfterPause ?? _defaultFlushSharedMuxAfterPause);
+        timing?.SetOutcome($"clockRunning={Session.Clock.IsRunning} videoRunning={Session.Video.IsRunning} audioRunning={Session.AudioRouter?.IsRunning == true}");
+    }
 
-    public void Pause(CancellationToken cancellationToken, PauseFlushPolicy flushPolicy) =>
+    public void Pause(CancellationToken cancellationToken, PauseFlushPolicy flushPolicy)
+    {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSession.Pause", slowWarningMs: 500);
         Session.Pause(cancellationToken, ResolveFlush(flushPolicy));
+        timing?.SetOutcome($"policy={flushPolicy} clockRunning={Session.Clock.IsRunning} videoRunning={Session.Video.IsRunning} audioRunning={Session.AudioRouter?.IsRunning == true}");
+    }
 
     public void PauseSkippingSharedMuxFlush(CancellationToken cancellationToken = default) =>
         Session.Pause(cancellationToken, flushSharedMuxAfterPause: null);
@@ -99,12 +111,14 @@ public sealed class MediaContainerSession
         Action? flushSharedMuxAfterPause,
         bool resumeIfWasRunning)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSession.Seek", slowWarningMs: 1000);
         var resume = resumeIfWasRunning
                      && (Session.Clock.IsRunning
                          || Session.Video.IsRunning
                          || Session.AudioRouter?.IsRunning == true);
 
         Session.Pause(cancellationToken, flushSharedMuxAfterPause);
+        timing?.Checkpoint("paused", LogLevel.Trace);
         if (!_hasContainer)
         {
             Session.Seek(position);
@@ -113,11 +127,13 @@ public sealed class MediaContainerSession
                 Session.AudioClock.Seek(position);
             if (resume)
                 Session.Play();
+            timing?.SetOutcome($"target={position} container=false resumed={resume}");
             return;
         }
 
         using (RegisterSeekCancellation(cancellationToken))
             Container.SeekPresentation(position);
+        timing?.Checkpoint("container seek completed", LogLevel.Trace);
 
         var syncPos = ResolvePresentationClockPosition(position);
         if (Trace.IsEnabled(LogLevel.Debug) && _hasContainer)
@@ -139,6 +155,7 @@ public sealed class MediaContainerSession
             PrewarmVideoAfterSeek();
             Session.Play();
         }
+        timing?.SetOutcome($"target={position} sync={syncPos} resumed={resume}");
     }
 
     /// <summary>
@@ -165,6 +182,7 @@ public sealed class MediaContainerSession
             video.Play();
 
         var deadline = Environment.TickCount64 + 5000;
+        var started = Environment.TickCount64;
         while (Environment.TickCount64 < deadline)
         {
             // Stop early when the buffer is ready OR there is no video to prewarm (audio-only / attached-pic
@@ -175,6 +193,13 @@ public sealed class MediaContainerSession
                 return;
             Thread.Sleep(5);
         }
+        Trace.LogWarning(
+            "PrewarmVideoAfterSeek: timed out after {ElapsedMs}ms (target={Target}, queued={Queued}, latestDecoded={Latest}, sourceExhausted={SourceExhausted})",
+            Environment.TickCount64 - started,
+            target,
+            video.QueuedFrameCount,
+            video.LatestDecodedPresentationTime,
+            video.IsSourceExhausted);
     }
 
     private Action? ResolveFlush(PauseFlushPolicy policy) =>

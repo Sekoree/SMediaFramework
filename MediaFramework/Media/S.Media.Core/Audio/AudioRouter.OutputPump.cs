@@ -41,6 +41,7 @@ public sealed partial class AudioRouter
         /// a buffer (backpressure) before falling back to dropping — keeps a dead device from hanging the
         /// router thread while being far longer than any healthy drainer scheduling gap.</summary>
         private const int BackpressureCapMs = 1000;
+        private const double SlowSubmitWarningMs = 100;
         // Start/dispose are serialized so a late EnsureStarted can never launch the
         // drainer after Dispose has completed the collection / disposed the cts —
         // that would crash the freshly started thread (disposed _ready / _cts.Token).
@@ -50,6 +51,8 @@ public sealed partial class AudioRouter
         private long _enqueued;
         private long _processed;
         private long _dropped;
+        private long _lastBackpressureWarnTicks;
+        private long _lastSlowSubmitWarnTicks;
         private int _stuck;
         private volatile bool _disposed;
 
@@ -184,6 +187,7 @@ public sealed partial class AudioRouter
                 spin.SpinOnce(); // escalates to Thread.Yield/Sleep — never a hot busy-spin
             }
             buf = null;
+            MaybeLogBackpressureTimeout();
             return false;
         }
 
@@ -212,11 +216,23 @@ public sealed partial class AudioRouter
         /// </summary>
         public void WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
         {
+            var started = Stopwatch.GetTimestamp();
             var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
             while (Volatile.Read(ref _processed) < Volatile.Read(ref _enqueued))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (Environment.TickCount64 > deadline) return;
+                if (Environment.TickCount64 > deadline)
+                {
+                    Trace.LogWarning(
+                        "AudioRouter.OutputPump {OutputId}: WaitForIdle timed out after {ElapsedMs:0.00}ms (timeout={TimeoutMs:0.00}ms, enqueued={Enqueued}, processed={Processed}, dropped={Dropped})",
+                        _sinkId,
+                        MediaDiagnostics.ElapsedMillisecondsSince(started),
+                        timeout.TotalMilliseconds,
+                        Volatile.Read(ref _enqueued),
+                        Volatile.Read(ref _processed),
+                        Volatile.Read(ref _dropped));
+                    return;
+                }
                 Thread.Sleep(1);
             }
         }
@@ -227,13 +243,59 @@ public sealed partial class AudioRouter
             {
                 foreach (var buf in _ready.GetConsumingEnumerable(token))
                 {
+                    var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
                     try { _sink.Submit(buf); }
                     catch (Exception ex) { _router.RaiseOutputErrored(_sinkId, ex); }
+                    finally
+                    {
+                        if (submitStarted != 0)
+                            MaybeLogSlowSubmit(submitStarted);
+                    }
                     Interlocked.Increment(ref _processed);
                     _free.Enqueue(buf);
                 }
             }
             catch (OperationCanceledException) { /* normal shutdown */ }
+        }
+
+        private void MaybeLogBackpressureTimeout()
+        {
+            if (!Trace.IsEnabled(LogLevel.Warning) || !TryUpdateThrottle(ref _lastBackpressureWarnTicks, TimeSpan.FromSeconds(2)))
+                return;
+
+            Trace.LogWarning(
+                "AudioRouter.OutputPump {OutputId}: primary-output backpressure waited {TimeoutMs}ms without a recycled buffer; dropping chunk (enqueued={Enqueued}, processed={Processed}, dropped={Dropped})",
+                _sinkId,
+                BackpressureCapMs,
+                Volatile.Read(ref _enqueued),
+                Volatile.Read(ref _processed),
+                Volatile.Read(ref _dropped));
+        }
+
+        private void MaybeLogSlowSubmit(long started)
+        {
+            var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+            if (elapsedMs < SlowSubmitWarningMs ||
+                !TryUpdateThrottle(ref _lastSlowSubmitWarnTicks, TimeSpan.FromSeconds(2)))
+                return;
+
+            Trace.LogWarning(
+                "AudioRouter.OutputPump {OutputId}: Submit took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, enqueued={Enqueued}, processed={Processed}, dropped={Dropped})",
+                _sinkId,
+                elapsedMs,
+                SlowSubmitWarningMs,
+                Volatile.Read(ref _enqueued),
+                Volatile.Read(ref _processed),
+                Volatile.Read(ref _dropped));
+        }
+
+        private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+        {
+            var now = Stopwatch.GetTimestamp();
+            var prev = Volatile.Read(ref ticksSlot);
+            if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+                return false;
+            return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
         }
 
         public void Dispose()

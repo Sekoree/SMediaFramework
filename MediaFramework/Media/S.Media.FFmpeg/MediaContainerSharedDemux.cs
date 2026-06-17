@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
@@ -29,6 +30,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     private const int DefaultVideoPacketsQueued = 384;
     private static readonly AVIOInterruptCB_callback InterruptCallbackDelegate = InterruptBlockingIo;
     private static readonly AVIOInterruptCB_callback_func InterruptCallback = InterruptCallbackDelegate;
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.FFmpeg.MediaContainerSharedDemux");
 
     /// <summary>Configured from <see cref="VideoDecoderOpenOptions"/>; tight defaults for sane streams, raise for HEVC 4K B-frame reorder.</summary>
     private int _maxAudioPacketsQueued = DefaultAudioPacketsQueued;
@@ -229,12 +231,14 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
     private void OpenInternal(string path, VideoDecoderOpenOptions? videoOptions)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.OpenFile", slowWarningMs: 1000);
         ApplyQueueDepthOptions(videoOptions);
 
         var fileReadBuffer = videoOptions?.FileReadBufferBytes ?? 0;
         if (fileReadBuffer > 0)
         {
             OpenInternalLargeBufferFile(path, fileReadBuffer, videoOptions);
+            timing?.SetOutcome($"path={Path.GetFileName(path)} buffered={fileReadBuffer} audio={_hasAudio} video={_hasVideo}");
             return;
         }
 
@@ -254,6 +258,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         FFmpegException.ThrowIfError(ret, nameof(avformat_find_stream_info));
 
         OpenInternalAfterFormatOpen(videoOptions);
+        timing?.SetOutcome($"path={Path.GetFileName(path)} audio={_hasAudio} video={_hasVideo} duration={Duration}");
     }
 
     /// <summary>
@@ -264,6 +269,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     /// </summary>
     private void OpenInternalLargeBufferFile(string path, int ioBufferSize, VideoDecoderOpenOptions? videoOptions)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.OpenLargeBufferFile", slowWarningMs: 1000);
         // bufferSize:1 disables FileStream's own buffering so the large AVIO read maps to a large OS read;
         // SequentialScan hints the kernel readahead. The bridge does not own the stream — we do.
         var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
@@ -274,6 +280,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         _fmt = _streamIo.OpenFormatContext(Path.GetFileName(path));
         InstallInterruptCallback(_fmt);
         OpenInternalAfterFormatOpen(videoOptions);
+        timing?.SetOutcome($"path={Path.GetFileName(path)} ioBuffer={ioBufferSize} seekable={_inputSeekable} audio={_hasAudio} video={_hasVideo}");
     }
 
     private void OpenInternalFromStream(
@@ -282,6 +289,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         string? probeHintName,
         VideoDecoderOpenOptions? videoOptions)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.OpenStream", slowWarningMs: 1000);
         ArgumentNullException.ThrowIfNull(stream);
         ApplyQueueDepthOptions(videoOptions);
         _inputSeekable = isSeekable && stream.CanSeek;
@@ -289,6 +297,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         _fmt = _streamIo.OpenFormatContext(probeHintName);
         InstallInterruptCallback(_fmt);
         OpenInternalAfterFormatOpen(videoOptions);
+        timing?.SetOutcome($"hint={probeHintName ?? "(none)"} seekable={_inputSeekable} audio={_hasAudio} video={_hasVideo}");
     }
 
     private void ApplyQueueDepthOptions(VideoDecoderOpenOptions? videoOptions)
@@ -409,6 +418,8 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
             }
 
             StartDemuxerThread();
+            Trace.LogDebug("Open: streams audio={AudioStream}({AudioCodec}) video=none duration={Duration} queues=({AudioQ},{VideoQ})",
+                _aStream, AudioCodecName, Duration, _maxAudioPacketsQueued, _maxVideoPacketsQueued);
             return;
         }
 
@@ -594,6 +605,19 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         }
 
         StartDemuxerThread();
+        Trace.LogDebug(
+            "Open: streams audio={AudioStream}({AudioCodec}) video={VideoStream}({VideoCodec}) attachedPic={AttachedPic} hw={Hardware} drm={Drm} d3d11={D3D11} duration={Duration} queues=({AudioQ},{VideoQ})",
+            _aStream,
+            AudioCodecName,
+            _vStream,
+            VideoCodecName,
+            _videoIsAttachedPicture,
+            _hwAccel is not null,
+            _drmGpuNv12Path,
+            _d3d11GpuNv12Path,
+            Duration,
+            _maxAudioPacketsQueued,
+            _maxVideoPacketsQueued);
     }
 
     /// <summary>
@@ -879,10 +903,12 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
             Name = "MediaContainerSharedDemux.Read",
         };
         _demuxerThread.Start();
+        Trace.LogTrace("StartDemuxerThread: started (audioStream={AudioStream}, videoStream={VideoStream})", _aStream, _vStream);
     }
 
     private bool StopDemuxerAndDrainQueues()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.StopDemuxer", slowWarningMs: 1000);
         _demuxerStopRequest = true;
         lock (_queueGate)
             Monitor.PulseAll(_queueGate);
@@ -898,6 +924,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 MediaDiagnostics.LogError(
                     new TimeoutException("demux thread did not exit within the stop timeout"),
                     "MediaContainerSharedDemux.StopDemuxerAndDrainQueues: demux thread is stuck; native demux state will not be restarted or freed");
+                timing?.SetOutcome($"stuck audioQ={_audioPacketQ.Count} videoQ={_videoPacketQ.Count}");
                 return false;
             }
             _demuxerThread = null;
@@ -905,6 +932,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
         _demuxerStopRequest = false;
         FreeAllQueuedPacketsLocked();
+        timing?.SetOutcome("stopped");
         return true;
     }
 
@@ -1033,6 +1061,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         if (!_inputSeekable)
             throw new NotSupportedException("cannot seek a non-seekable stream-backed container");
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.SeekPresentation", slowWarningMs: 1000);
         RequestReadYield();
         _readSeekGate.EnterWriteLock();
         try
@@ -1048,7 +1077,10 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 // "primed, not yet consumed" flag rather than the keeper frames so a prime that bailed early
                 // (deadline / cancellation) still dedups instead of redoing an equally-doomed full seek.
                 if (_seekPrimedPosition == position && _seekPrimePending)
+                {
+                    timing?.SetOutcome($"target={position} deduped");
                     return;
+                }
 
                 // Fresh seek: clear any leftover cancel request so a prior cancellation can't abort it.
                 Volatile.Write(ref _seekCancelRequested, 0);
@@ -1057,6 +1089,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                     throw new InvalidOperationException(
                         "Cannot seek: the demux thread did not stop, so the shared FFmpeg demux state cannot be safely reused.");
                 AdvanceSeekGeneration();
+                timing?.Checkpoint("demuxer stopped", LogLevel.Trace);
 
                 var timestampUs = (long)(position.TotalSeconds * AvTimeBase);
                 var ret = avformat_seek_file(_fmt, -1, long.MinValue, timestampUs, long.MaxValue, AVSEEK_FLAG_BACKWARD);
@@ -1079,6 +1112,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                         FFmpegException.ThrowIfError(ret, nameof(avformat_seek_file));
                     }
                 }
+                timing?.Checkpoint("container seek completed", LogLevel.Trace);
 
                 av_packet_unref(_demuxPkt);
 
@@ -1125,6 +1159,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
                 _fileReadCompleted = false;
                 StartDemuxerThread();
+                timing?.Checkpoint("demuxer restarted", LogLevel.Trace);
 
                 // Advance both decoders to the exact target in one interleaved, bounded pass so audio and
                 // video resume together (not at the keyframe). Both decode locks are held: no reader can be
@@ -1132,12 +1167,14 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 lock (_videoDecodeLock)
                 lock (_audioDecodeLock)
                     PrimeBothAfterSeekLocked(position);
+                timing?.Checkpoint("prime completed", LogLevel.Trace);
 
                 // Record where the demux is now primed so the paired (audio/video) call of a coordinated
                 // seek to the same target can dedup. The first real read clears _seekPrimePending, so a
                 // later genuine reseek to the same position still runs in full.
                 _seekPrimedPosition = position;
                 _seekPrimePending = true;
+                timing?.SetOutcome($"target={position} audio={Audio.Position} video={ResolveVideoAlignmentPosition()}");
             }
         }
         finally
@@ -1402,6 +1439,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     /// </remarks>
     private void PrimeBothAfterSeekLocked(TimeSpan target)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerSharedDemux.PrimeAfterSeek", slowWarningMs: 1000);
         // Attached-picture cover art is a single still for the whole file — there is no video packet at a seek
         // target to advance to. Trying would drain the entire remaining file looking for one (or hit the 12 s
         // deadline) on every seek/realign. Treat video as already primed; the cover was decoded once and is
@@ -1409,39 +1447,87 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         var videoDone = !_hasVideo || _videoIsAttachedPicture;
         var audioDone = !_hasAudio;
         if (videoDone && audioDone)
+        {
+            timing?.SetOutcome($"target={target} nothing-to-prime");
             return;
+        }
 
         var deadline = Environment.TickCount64 + 12000;
+        var audioSteps = 0;
+        var videoSteps = 0;
+        var waits = 0;
         while (!videoDone || !audioDone)
         {
             if (IsReadYieldRequested || Volatile.Read(ref _videoDecodeYieldRequested) != 0
                 || Volatile.Read(ref _seekCancelRequested) != 0)
+            {
+                timing?.SetOutcome($"target={target} cancelled videoDone={videoDone} audioDone={audioDone} vSteps={videoSteps} aSteps={audioSteps} waits={waits}");
+                Trace.LogDebug("PrimeAfterSeek: cancelled/yielded target={Target} videoDone={VideoDone} audioDone={AudioDone} vSteps={VideoSteps} aSteps={AudioSteps}",
+                    target, videoDone, audioDone, videoSteps, audioSteps);
                 return; // superseded by a newer seek / stop, or cancelled by the caller — keep the
                         // best-effort position; a later op (or the dedup) re-primes from its target
+            }
 
             var progressed = false;
             if (!videoDone)
+            {
                 progressed |= TryAdvanceVideoTowardTarget(target, ref videoDone);
+                if (progressed) videoSteps++;
+            }
             if (!audioDone)
+            {
+                var before = progressed;
                 progressed |= TryAdvanceAudioTowardTarget(target, ref audioDone);
+                if (progressed && !before) audioSteps++;
+                else if (progressed) audioSteps++;
+            }
 
             if (videoDone && audioDone)
+            {
+                timing?.SetOutcome($"target={target} video={Video.Position} audio={Audio.Position} vSteps={videoSteps} aSteps={audioSteps} waits={waits}");
                 return;
+            }
 
             if (!progressed)
             {
                 if (Environment.TickCount64 >= deadline)
+                {
+                    int audioQ;
+                    int videoQ;
+                    bool fileComplete;
+                    lock (_queueGate)
+                    {
+                        audioQ = _audioPacketQ.Count;
+                        videoQ = _videoPacketQ.Count;
+                        fileComplete = _fileReadCompleted;
+                    }
+                    timing?.SetOutcome($"target={target} deadline videoDone={videoDone} audioDone={audioDone} vSteps={videoSteps} aSteps={audioSteps} waits={waits}");
+                    Trace.LogWarning(
+                        "PrimeAfterSeek: deadline reached for target={Target} (videoDone={VideoDone}, audioDone={AudioDone}, audioQ={AudioQ}, videoQ={VideoQ}, fileComplete={FileComplete}, vSteps={VideoSteps}, aSteps={AudioSteps})",
+                        target,
+                        videoDone,
+                        audioDone,
+                        audioQ,
+                        videoQ,
+                        fileComplete,
+                        videoSteps,
+                        audioSteps);
                     return; // demux stalled — keep the best-effort position rather than hang the (uncancellable) seek
+                }
 
                 lock (_queueGate)
                 {
                     var aEmpty = _audioPacketQ.Count == 0 && _aPendingPacket == nint.Zero;
                     var vEmpty = _videoPacketQ.Count == 0 && _vPendingPacket == nint.Zero;
                     if (aEmpty && vEmpty && !_fileReadCompleted && !_demuxerStopRequest && !IsReadYieldRequested)
+                    {
+                        waits++;
                         Monitor.Wait(_queueGate, 10);
+                    }
                 }
             }
         }
+        timing?.SetOutcome($"target={target} video={Video.Position} audio={Audio.Position} vSteps={videoSteps} aSteps={audioSteps} waits={waits}");
     }
 
     /// <summary>One non-blocking step of the video seek catch-up: decodes one already-available video frame,

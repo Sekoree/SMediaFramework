@@ -159,6 +159,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// </summary>
     public void Flush()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.Flush", slowWarningMs: 250);
         if (_disposed || !Volatile.Read(ref _isRunning) || _stream == nint.Zero) return;
         lock (_streamLifecycleGate)
         {
@@ -179,6 +180,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             // Abort stops the stream; do not restart until the next producer call so
             // underrun silence during pause cannot advance ElapsedSinceStart.
             Volatile.Write(ref _streamStoppedAfterFlush, 1);
+            timing?.SetOutcome($"device={_deviceIndex} queued={QueuedSamples}");
         }
     }
 
@@ -241,7 +243,12 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_isRunning) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.Start", slowWarningMs: 1000);
+        if (_isRunning)
+        {
+            timing?.SetOutcome($"device={_deviceIndex} already-running");
+            return;
+        }
 
         Interlocked.Exchange(ref _callbackFaultException, null);
         Volatile.Write(ref _callbackFaulted, 0);
@@ -291,11 +298,17 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f targetQueue={TargetFrames}f",
             _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
             _ringBuffer.Length / _format.Channels, TargetQueueSamples);
+        timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ringBuffer.Length / _format.Channels} target={TargetQueueSamples}");
     }
 
     public void Stop()
     {
-        if (!Volatile.Read(ref _isRunning)) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.Stop", slowWarningMs: 1000);
+        if (!Volatile.Read(ref _isRunning))
+        {
+            timing?.SetOutcome($"device={_deviceIndex} not-running");
+            return;
+        }
         Trace.LogDebug("Stop: device={Device} played={Played}f underrun={Underrun}f dropped={Dropped}f callbacks={Callbacks}",
             _deviceIndex, Volatile.Read(ref _playedSamples), Volatile.Read(ref _underrunSamples),
             Volatile.Read(ref _droppedSamples), Volatile.Read(ref _callbackCount));
@@ -317,6 +330,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             Volatile.Write(ref _writeIndex, 0);
             Volatile.Write(ref _readIndex, 0);
         }
+        timing?.SetOutcome($"device={_deviceIndex} played={Volatile.Read(ref _playedSamples)} underrun={Volatile.Read(ref _underrunSamples)} dropped={Volatile.Read(ref _droppedSamples)}");
     }
 
     /// <summary>Convenience overload: submits a frame's samples after validating its format.</summary>
@@ -389,6 +403,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         IAudioOutput? mirrorPackedFloats = null,
         int? targetQueuedSamplesOverride = null)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.PrefillFrom", slowWarningMs: 500);
         ArgumentNullException.ThrowIfNull(source);
         if (source.Format != _format)
             throw new ArgumentException("Source format must match this output's format.", nameof(source));
@@ -421,6 +436,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         {
             System.Buffers.ArrayPool<float>.Shared.Return(buf);
         }
+        timing?.SetOutcome($"device={_deviceIndex} queued={QueuedSamples} target={targetQueued}");
     }
 
     /// <summary>
@@ -503,6 +519,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
         if (Volatile.Read(ref _streamStoppedAfterFlush) == 0 || _stream == nint.Zero)
             return;
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.RestartAfterFlush", slowWarningMs: 250);
         lock (_streamLifecycleGate)
         {
             // Re-check under the gate. Both the drainer (Submit) and run-loop (WaitForCapacity) threads
@@ -525,6 +542,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             if (err != PaError.paNoError)
                 PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
             Volatile.Write(ref _streamStoppedAfterFlush, 0);
+            timing?.SetOutcome($"device={_deviceIndex} active={StreamActive}");
         }
     }
 
@@ -606,9 +624,15 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
 
     public void Dispose()
     {
-        if (_disposed) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.Dispose", slowWarningMs: 1000);
+        if (_disposed)
+        {
+            timing?.SetOutcome($"device={_deviceIndex} already-disposed");
+            return;
+        }
         _disposed = true;
         MediaDiagnostics.SwallowDisposeErrors(Stop, "PortAudioOutput.Dispose: Stop");
         MediaDiagnostics.SwallowDisposeErrors(PortAudioRuntime.Release, "PortAudioOutput.Dispose: PortAudioRuntime.Release");
+        timing?.SetOutcome($"device={_deviceIndex} played={Volatile.Read(ref _playedSamples)} dropped={Volatile.Read(ref _droppedSamples)} underrun={Volatile.Read(ref _underrunSamples)}");
     }
 }

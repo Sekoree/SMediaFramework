@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using Microsoft.Extensions.Logging;
@@ -74,6 +75,7 @@ public sealed class VideoRouter : IDisposable
     internal int SubmitPlanRebuilds => Volatile.Read(ref _submitPlanRebuilds);
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoRouter");
+    private const double SlowSubmitPhaseWarningMs = 50;
 
     public VideoRouter(ILogger? logger = null, VideoRouterOptions? options = null)
     {
@@ -164,16 +166,26 @@ public sealed class VideoRouter : IDisposable
     public bool RemoveOutput(string outputId)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputId);
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoRouter.RemoveOutput", slowWarningMs: 250);
         IDisposable? ownedToDispose = null;
+        var removedInputs = 0;
+        var removedRoutes = 0;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (!_outputs.TryGetValue(outputId, out var removed)) return false;
+            if (!_outputs.TryGetValue(outputId, out var removed))
+            {
+                timing?.SetOutcome($"output={outputId} not-found");
+                return false;
+            }
 
             foreach (var kv in _inputs.ToArray())
             {
                 if (kv.Value.PrimaryOutputId == outputId)
+                {
+                    removedInputs++;
                     RemoveInputLocked(kv.Key);
+                }
             }
 
             _outputs.Remove(outputId);
@@ -182,7 +194,10 @@ public sealed class VideoRouter : IDisposable
             foreach (var reg in _inputs.Values.ToArray())
             {
                 if (reg.RemoveOutputFromRoutes(outputId))
+                {
+                    removedRoutes++;
                     ReconfigureInputIfNeededLocked(reg);
+                }
             }
 
             // The router owns the registered output/pump when it was added with
@@ -199,6 +214,9 @@ public sealed class VideoRouter : IDisposable
         if (ownedToDispose is not null)
             MediaDiagnostics.SwallowDisposeErrors(ownedToDispose.Dispose, $"VideoRouter.RemoveOutput: output '{outputId}'");
 
+        timing?.SetOutcome($"output={outputId} inputs={removedInputs} routes={removedRoutes}");
+        Trace.LogDebug("RemoveOutput: id={OutputId} removedInputs={RemovedInputs} removedRoutes={RemovedRoutes}",
+            outputId, removedInputs, removedRoutes);
         return true;
     }
 
@@ -353,6 +371,8 @@ public sealed class VideoRouter : IDisposable
             reg.RoutedOutputIds.Remove(outputId);
             _outputOwner.Remove(outputId);
             ReconfigureInputIfNeededLocked(reg);
+            Trace.LogDebug("TryRemoveRoute: input={InputId} -> output={OutputId} (remainingRoutes={Total})",
+                inputId, outputId, reg.RoutedOutputIds.Count);
             return true;
         }
     }
@@ -364,7 +384,10 @@ public sealed class VideoRouter : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            return RemoveInputLocked(inputId);
+            var removed = RemoveInputLocked(inputId);
+            if (removed)
+                Trace.LogDebug("RemoveInput: id={InputId}", inputId);
+            return removed;
         }
     }
 
@@ -416,11 +439,18 @@ public sealed class VideoRouter : IDisposable
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoRouter.Dispose", slowWarningMs: 1000);
         lock (_gate)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                timing?.SetOutcome("already-disposed");
+                return;
+            }
             _disposed = true;
             _pumpPressure = null;
+            var inputCount = _inputs.Count;
+            var outputCount = _outputs.Count;
             foreach (var reg in _inputs.Values)
             {
                 MediaDiagnostics.SwallowDisposeErrors(() =>
@@ -440,6 +470,7 @@ public sealed class VideoRouter : IDisposable
             }
 
             _outputs.Clear();
+            timing?.SetOutcome($"inputs={inputCount} outputs={outputCount}");
         }
     }
 
@@ -483,6 +514,15 @@ public sealed class VideoRouter : IDisposable
 
     private void RaisePumpPressure(string outputId, long droppedFramesTotal) =>
         _pumpPressure?.Invoke(this, new VideoRouterPumpPressureEventArgs(outputId, droppedFramesTotal));
+
+    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
+    }
 
     private IVideoCpuFrameConverter CreateCpuFrameConverter() =>
         _options.VideoCpuFrameConverterFactory?.Invoke()
@@ -553,6 +593,7 @@ public sealed class VideoRouter : IDisposable
         private bool[] _planPumpConverts = [];
         private bool _planAnySyncConverter;
         private bool _planAnyConverterOrPump;
+        private long _lastSlowSubmitPhaseLogTicks;
         /// <summary>Branch-frame scratch reused across submits (serialized by <see cref="_submitLock"/>;
         /// every slot is null outside a submit).</summary>
         private VideoFrame?[] _branchFrameScratch = [];
@@ -699,6 +740,7 @@ public sealed class VideoRouter : IDisposable
 
         public bool WaitForIdle(VideoRouterInputOutput sink, TimeSpan timeout, CancellationToken cancellationToken)
         {
+            var started = Stopwatch.GetTimestamp();
             var outputs = SnapshotRoutedOutputs(sink);
             var deadline = Environment.TickCount64 + Math.Max(0, (long)timeout.TotalMilliseconds);
             foreach (var output in outputs)
@@ -707,7 +749,16 @@ public sealed class VideoRouter : IDisposable
                     continue;
                 var remainingMs = Math.Max(0, deadline - Environment.TickCount64);
                 if (!control.WaitForIdle(TimeSpan.FromMilliseconds(remainingMs), cancellationToken))
+                {
+                    VideoRouter.Trace.LogWarning(
+                        "WaitForIdle: input={InputId} timed out after {ElapsedMs:0.00}ms (timeout={TimeoutMs:0.00}ms, routedOutputs={OutputCount}, blockedOutput={OutputType})",
+                        Id,
+                        MediaDiagnostics.ElapsedMillisecondsSince(started),
+                        timeout.TotalMilliseconds,
+                        outputs.Length,
+                        output.GetType().Name);
                     return false;
+                }
             }
 
             return true;
@@ -743,166 +794,192 @@ public sealed class VideoRouter : IDisposable
         /// </summary>
         public void SubmitPhased(VideoFrame frame, VideoRouterInputOutput sink)
         {
-            lock (_submitLock)
+            var submitStarted = VideoRouter.Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+            try
             {
-                SubmitPlan plan;
-                lock (_owner._gate)
+                lock (_submitLock)
                 {
-                    ObjectDisposedException.ThrowIf(sink.IsSinkDisposed, sink);
-                    ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
-                    if (!Configured || NegotiatedFormat is null)
-                    {
-                        frame.Dispose();
-                        throw new InvalidOperationException($"VideoRouter input '{Id}'.Submit called before Configure");
-                    }
-
-                    // Single output: no branch conversion — deliver directly under the lock (fast path).
-                    if (RoutedOutputIds.Count == 1)
-                    {
-                        _owner._outputs[RoutedOutputIds[0]].Output.Submit(frame);
-                        return;
-                    }
-
-                    plan = GetSubmitPlanLocked(frame);
-                    _convertInFlight = true; // lease the snapshotted converters from disposal by TearDownPaths
-                }
-
-                var n = plan.OutputIds.Length;
-                var hint = frame.ColorTransferHint;
-                VideoFrame? primary = frame;
-                if (_branchFrameScratch.Length != n - 1)
-                    _branchFrameScratch = new VideoFrame?[n - 1];
-                var branchFrames = _branchFrameScratch;
-                VideoFrame? converterReadback = null;
-                try
-                {
-                    // ---- Phase 2: readback + build branch frames, NO _gate held ----
-                    if (plan.NeedsHwReadback)
-                    {
-                        if (frame.Win32Nv12 is not null)
-                        {
-                            frame.Dispose();
-                            throw new NotSupportedException(
-                                $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 outputs for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
-                        }
-                        if (frame.DmabufNv12 is not null && !VideoDmabufCpuReadback.TryCreateNv12CpuCopy(frame, out converterReadback))
-                        {
-                            frame.Dispose();
-                            throw new NotSupportedException(
-                                $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
-                        }
-                        if (frame.DmabufP010 is not null && !VideoDmabufCpuReadback.TryCreateP010CpuCopy(frame, out converterReadback))
-                        {
-                            frame.Dispose();
-                            throw new NotSupportedException(
-                                $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
-                        }
-                        if (frame.DmabufP016 is not null && !VideoDmabufCpuReadback.TryCreateP016CpuCopy(frame, out converterReadback))
-                        {
-                            frame.Dispose();
-                            throw new NotSupportedException(
-                                $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
-                        }
-                    }
-
-                    if (plan.CanCpuFanOut &&
-                        VideoFrame.TryCreateCpuFanOutViews(frame, n, hint, out var fanViews))
-                    {
-                        // Zero-copy: every output (primary + branches) shares the one backing. A pump-converts
-                        // branch receives its raw view here and repacks it on its own drain thread.
-                        for (var i = 1; i < n; i++)
-                            branchFrames[i - 1] = fanViews[i];
-                        frame.Dispose();
-                        primary = fanViews[0];
-                    }
-                    else
-                    {
-                        for (var i = 1; i < n; i++)
-                        {
-                            var conv = plan.BranchConverters[i - 1];
-                            if (conv != null)
-                            {
-                                // Synchronous branch conversion on the submit thread.
-                                branchFrames[i - 1] = conv.Convert(converterReadback ?? frame, hint);
-                            }
-                            else if (plan.PumpConvertsBranch[i - 1])
-                            {
-                                // Pump-converts branch on the per-branch path (a sync-converter sibling blocked
-                                // fan-out, or the frame was hardware-backed and read back): hand the pump a CPU
-                                // frame it can repack on its own thread (converterReadback is the dma-buf / Win32
-                                // CPU copy when applicable, else the CPU frame itself).
-                                branchFrames[i - 1] = VideoFrameCpuClone.DuplicateCpuBacking(converterReadback ?? frame, hint);
-                            }
-                            else
-                            {
-                                branchFrames[i - 1] = frame.DmabufNv12 is not null
-                                    ? VideoFrame.CreateNv12DmabufSharedReference(frame)
-                                    : frame.DmabufP010 is not null
-                                        ? VideoFrame.CreateP010DmabufSharedReference(frame)
-                                        : frame.DmabufP016 is not null
-                                            ? VideoFrame.CreateP016DmabufSharedReference(frame)
-                                            : frame.Win32Nv12 is not null
-                                                ? VideoFrame.CreateNv12Win32SharedReference(frame)
-                                                : VideoFrameCpuClone.DuplicateCpuBacking(frame, hint);
-                            }
-                        }
-                    }
-
-                    converterReadback?.Dispose();
-                    converterReadback = null;
-
-                    // ---- Phase 3: release the lease, free deferred converters, deliver under _gate ----
+                    SubmitPlan plan;
                     lock (_owner._gate)
                     {
-                        _convertInFlight = false;
-                        DrainDeferredConvertersLocked();
-
-                        // Re-validate each output: it may have been removed during the out-of-lock convert.
-                        if (primary is not null)
+                        ObjectDisposedException.ThrowIf(sink.IsSinkDisposed, sink);
+                        ObjectDisposedException.ThrowIf(_owner._disposed, _owner);
+                        if (!Configured || NegotiatedFormat is null)
                         {
-                            if (IsStillCurrentRouteLocked(PrimaryOutputId) &&
-                                _owner._outputs.TryGetValue(PrimaryOutputId, out var pe))
-                                pe.Output.Submit(primary);
-                            else
-                                primary.Dispose();
-                            primary = null;
+                            frame.Dispose();
+                            throw new InvalidOperationException($"VideoRouter input '{Id}'.Submit called before Configure");
                         }
 
+                        // Single output: no branch conversion — deliver directly under the lock (fast path).
+                        if (RoutedOutputIds.Count == 1)
+                        {
+                            _owner._outputs[RoutedOutputIds[0]].Output.Submit(frame);
+                            return;
+                        }
+
+                        plan = GetSubmitPlanLocked(frame);
+                        _convertInFlight = true; // lease the snapshotted converters from disposal by TearDownPaths
+                    }
+
+                    var n = plan.OutputIds.Length;
+                    var hint = frame.ColorTransferHint;
+                    VideoFrame? primary = frame;
+                    if (_branchFrameScratch.Length != n - 1)
+                        _branchFrameScratch = new VideoFrame?[n - 1];
+                    var branchFrames = _branchFrameScratch;
+                    VideoFrame? converterReadback = null;
+                    try
+                    {
+                        // ---- Phase 2: readback + build branch frames, NO _gate held ----
+                        if (plan.NeedsHwReadback)
+                        {
+                            if (frame.Win32Nv12 is not null)
+                            {
+                                frame.Dispose();
+                                throw new NotSupportedException(
+                                    $"VideoRouter input '{Id}': cannot convert Win32 D3D11 shared-handle NV12 for a branch output — use NV12 outputs for all routes, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                            }
+                            if (frame.DmabufNv12 is not null && !VideoDmabufCpuReadback.TryCreateNv12CpuCopy(frame, out converterReadback))
+                            {
+                                frame.Dispose();
+                                throw new NotSupportedException(
+                                    $"VideoRouter input '{Id}': DRM dma-buf NV12 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode (e.g. VideoPlaybackSmoke --no-hw).");
+                            }
+                            if (frame.DmabufP010 is not null && !VideoDmabufCpuReadback.TryCreateP010CpuCopy(frame, out converterReadback))
+                            {
+                                frame.Dispose();
+                                throw new NotSupportedException(
+                                    $"VideoRouter input '{Id}': DRM dma-buf P010 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
+                            }
+                            if (frame.DmabufP016 is not null && !VideoDmabufCpuReadback.TryCreateP016CpuCopy(frame, out converterReadback))
+                            {
+                                frame.Dispose();
+                                throw new NotSupportedException(
+                                    $"VideoRouter input '{Id}': DRM dma-buf P016 could not be mmap-read for a branch CPU converter — use matching outputs, a single output, or software decode.");
+                            }
+                        }
+
+                        if (plan.CanCpuFanOut &&
+                            VideoFrame.TryCreateCpuFanOutViews(frame, n, hint, out var fanViews))
+                        {
+                            // Zero-copy: every output (primary + branches) shares the one backing. A pump-converts
+                            // branch receives its raw view here and repacks it on its own drain thread.
+                            for (var i = 1; i < n; i++)
+                                branchFrames[i - 1] = fanViews[i];
+                            frame.Dispose();
+                            primary = fanViews[0];
+                        }
+                        else
+                        {
+                            for (var i = 1; i < n; i++)
+                            {
+                                var conv = plan.BranchConverters[i - 1];
+                                if (conv != null)
+                                {
+                                    // Synchronous branch conversion on the submit thread.
+                                    branchFrames[i - 1] = conv.Convert(converterReadback ?? frame, hint);
+                                }
+                                else if (plan.PumpConvertsBranch[i - 1])
+                                {
+                                    // Pump-converts branch on the per-branch path (a sync-converter sibling blocked
+                                    // fan-out, or the frame was hardware-backed and read back): hand the pump a CPU
+                                    // frame it can repack on its own thread (converterReadback is the dma-buf / Win32
+                                    // CPU copy when applicable, else the CPU frame itself).
+                                    branchFrames[i - 1] = VideoFrameCpuClone.DuplicateCpuBacking(converterReadback ?? frame, hint);
+                                }
+                                else
+                                {
+                                    branchFrames[i - 1] = frame.DmabufNv12 is not null
+                                        ? VideoFrame.CreateNv12DmabufSharedReference(frame)
+                                        : frame.DmabufP010 is not null
+                                            ? VideoFrame.CreateP010DmabufSharedReference(frame)
+                                            : frame.DmabufP016 is not null
+                                                ? VideoFrame.CreateP016DmabufSharedReference(frame)
+                                                : frame.Win32Nv12 is not null
+                                                    ? VideoFrame.CreateNv12Win32SharedReference(frame)
+                                                    : VideoFrameCpuClone.DuplicateCpuBacking(frame, hint);
+                                }
+                            }
+                        }
+
+                        converterReadback?.Dispose();
+                        converterReadback = null;
+
+                        // ---- Phase 3: release the lease, free deferred converters, deliver under _gate ----
+                        lock (_owner._gate)
+                        {
+                            _convertInFlight = false;
+                            DrainDeferredConvertersLocked();
+
+                            // Re-validate each output: it may have been removed during the out-of-lock convert.
+                            if (primary is not null)
+                            {
+                                if (IsStillCurrentRouteLocked(PrimaryOutputId) &&
+                                    _owner._outputs.TryGetValue(PrimaryOutputId, out var pe))
+                                    pe.Output.Submit(primary);
+                                else
+                                    primary.Dispose();
+                                primary = null;
+                            }
+
+                            for (var i = 0; i < branchFrames.Length; i++)
+                            {
+                                var f = branchFrames[i];
+                                if (f is null) continue;
+                                if (IsStillCurrentRouteLocked(plan.OutputIds[i + 1]) &&
+                                    _owner._outputs.TryGetValue(plan.OutputIds[i + 1], out var be))
+                                {
+                                    be.Output.Submit(f);
+                                    branchFrames[i] = null;
+                                }
+                                else
+                                {
+                                    f.Dispose();
+                                    branchFrames[i] = null;
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        lock (_owner._gate)
+                        {
+                            _convertInFlight = false;
+                            DrainDeferredConvertersLocked();
+                        }
+                        converterReadback?.Dispose();
                         for (var i = 0; i < branchFrames.Length; i++)
                         {
-                            var f = branchFrames[i];
-                            if (f is null) continue;
-                            if (IsStillCurrentRouteLocked(plan.OutputIds[i + 1]) &&
-                                _owner._outputs.TryGetValue(plan.OutputIds[i + 1], out var be))
-                            {
-                                be.Output.Submit(f);
-                                branchFrames[i] = null;
-                            }
-                            else
-                            {
-                                f.Dispose();
-                                branchFrames[i] = null;
-                            }
+                            branchFrames[i]?.Dispose();
+                            branchFrames[i] = null; // scratch is reused — leave every slot null
                         }
+                        primary?.Dispose();
+                        throw;
                     }
-                }
-                catch
-                {
-                    lock (_owner._gate)
-                    {
-                        _convertInFlight = false;
-                        DrainDeferredConvertersLocked();
-                    }
-                    converterReadback?.Dispose();
-                    for (var i = 0; i < branchFrames.Length; i++)
-                    {
-                        branchFrames[i]?.Dispose();
-                        branchFrames[i] = null; // scratch is reused — leave every slot null
-                    }
-                    primary?.Dispose();
-                    throw;
                 }
             }
+            finally
+            {
+                if (submitStarted != 0)
+                    MaybeLogSlowSubmitPhase(submitStarted);
+            }
+        }
+
+        private void MaybeLogSlowSubmitPhase(long started)
+        {
+            var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+            if (elapsedMs < SlowSubmitPhaseWarningMs ||
+                !TryUpdateThrottle(ref _lastSlowSubmitPhaseLogTicks, TimeSpan.FromSeconds(2)))
+                return;
+
+            VideoRouter.Trace.LogWarning(
+                "SubmitPhased: input={InputId} took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, routes={Routes}, configured={Configured}, format={Format})",
+                Id,
+                elapsedMs,
+                SlowSubmitPhaseWarningMs,
+                RoutedOutputIds.Count,
+                Configured,
+                NegotiatedFormat);
         }
 
         /// <summary>Returns the submit plan for <paramref name="frame"/>: the route-derived arrays come from

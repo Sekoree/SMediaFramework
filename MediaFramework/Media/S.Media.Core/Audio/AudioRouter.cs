@@ -267,11 +267,13 @@ public sealed partial class AudioRouter : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(id);
         IDisposable? ownedWrapper;
+        var removedRoutes = 0;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_state.Sources.TryGetValue(id, out var entry)) return false;
             ownedWrapper = entry.OwnedWrapper;
+            removedRoutes = _state.Routes.Count(r => r.Route.SourceId == id);
             Volatile.Write(ref _state, _state with
             {
                 Sources = _state.Sources.Remove(id),
@@ -282,6 +284,8 @@ public sealed partial class AudioRouter : IDisposable
         {
             MediaDiagnostics.SwallowDisposeErrors(ownedWrapper.Dispose, "AudioRouter.RemoveSource: owned wrapper");
         }
+        Trace.LogDebug("RemoveSource: id={SourceId} removedRoutes={RemovedRoutes} ownedWrapper={OwnedWrapper}",
+            id, removedRoutes, ownedWrapper is not null);
         return true;
     }
 
@@ -400,12 +404,14 @@ public sealed partial class AudioRouter : IDisposable
         OutputPump? pump;
         IAudioOutput? removedOutput;
         bool wasRunning;
+        var removedRoutes = 0;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_state.Outputs.TryGetValue(id, out var entry)) return false;
             pump = entry.Pump;
             removedOutput = entry.Output;
+            removedRoutes = _state.Routes.Count(r => r.Route.OutputId == id);
             Volatile.Write(ref _state, _state with
             {
                 Outputs = _state.Outputs.Remove(id),
@@ -420,6 +426,7 @@ public sealed partial class AudioRouter : IDisposable
         // complete. The next run-loop iteration sees the new state and won't
         // enqueue further; the pump's thread join is deferred so RemoveOutput
         // can return promptly.
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioRouter.RemoveOutput", slowWarningMs: 250);
         pump.AbandonQueue();
         pump.WaitForIdle(TimeSpan.FromMilliseconds(100), cancellationToken);
         if (wasRunning) _pumpsAwaitingDispose.Enqueue(pump);
@@ -430,6 +437,9 @@ public sealed partial class AudioRouter : IDisposable
         // pump doesn't own its inner and we must never dispose the caller's own output.
         if (removedOutput is IAdaptiveRateWrappedOutput and IDisposable wrapper)
             MediaDiagnostics.SwallowDisposeErrors(wrapper.Dispose, "AudioRouter.RemoveOutput: adaptive wrapper");
+        timing?.SetOutcome($"id={id} routes={removedRoutes} running={wasRunning}");
+        Trace.LogDebug("RemoveOutput: id={OutputId} removedRoutes={RemovedRoutes} wasRunning={WasRunning}",
+            id, removedRoutes, wasRunning);
         return true;
     }
 
@@ -553,6 +563,8 @@ public sealed partial class AudioRouter : IDisposable
                 ? _state.Routes.SetItem(existing, resolved)
                 : _state.Routes.Add(resolved);
             Volatile.Write(ref _state, _state with { Routes = newRoutes });
+            Trace.LogDebug("AddRoute: id={RouteId} {SourceId}->{OutputId} gain={Gain} replaced={Replaced} routes={RouteCount}",
+                routeId, sourceId, outputId, gain, existing >= 0, newRoutes.Length);
         }
     }
 
@@ -921,6 +933,7 @@ public sealed partial class AudioRouter : IDisposable
 
     public void Start()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioRouter.Start", slowWarningMs: 250);
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -930,6 +943,7 @@ public sealed partial class AudioRouter : IDisposable
                     _fault);
             if (_isRunning)
             {
+                timing?.SetOutcome("already-running");
                 Trace.LogTrace("Start: already running (outputCount={OutputCount} sourceCount={SourceCount})",
                     _state.Outputs.Count, _state.Sources.Count);
                 return;
@@ -957,6 +971,7 @@ public sealed partial class AudioRouter : IDisposable
             _thread.Start();
             Trace.LogDebug("Start: rate={SampleRate}Hz chunk={Chunk} clock={ClockType} outputs={OutputCount} sources={SourceCount} routes={RouteCount}",
                 _sampleRate, _chunkSamples, _clock.GetType().Name, _state.Outputs.Count, _state.Sources.Count, _state.Routes.Length);
+            timing?.SetOutcome($"outputs={_state.Outputs.Count} sources={_state.Sources.Count} routes={_state.Routes.Length}");
         }
     }
 
@@ -1004,6 +1019,7 @@ public sealed partial class AudioRouter : IDisposable
     /// </summary>
     public void FlushOutputBuffers(CancellationToken cancellationToken = default)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioRouter.FlushOutputBuffers", slowWarningMs: 250);
         OutputPump[] activePumps;
         IAudioOutput[] sinksForFlush;
         lock (_gate)
@@ -1032,6 +1048,7 @@ public sealed partial class AudioRouter : IDisposable
                     MediaDiagnostics.LogError(ex, "AudioRouter FlushOutputBuffers");
             }
         }
+        timing?.SetOutcome($"pumps={activePumps.Length} flushable={sinksForFlush.Count(s => s is IFlushableOutput)}");
     }
 
     /// <summary>Alias for <see cref="Start"/>. Reads as a pair with <see cref="Pause"/>.</summary>
@@ -1069,6 +1086,7 @@ public sealed partial class AudioRouter : IDisposable
         ArgumentException.ThrowIfNullOrEmpty(sourceId);
         if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(position));
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioRouter.SeekSource", slowWarningMs: 500);
         ISeekableSource seekable;
         lock (_gate)
         {
@@ -1083,6 +1101,7 @@ public sealed partial class AudioRouter : IDisposable
         if (wasRunning) Pause();
         seekable.Seek(position);
         if (wasRunning) Resume();
+        timing?.SetOutcome($"source={sourceId} target={position} resumed={wasRunning}");
     }
 
     /// <summary>Read-only position for resume drift checks (see <see cref="Playback.AvPlaybackCoordinator"/>).</summary>
@@ -1103,6 +1122,9 @@ public sealed partial class AudioRouter : IDisposable
 
     private void StopInternal(bool drain, bool flushAfterAbandon, CancellationToken cancellationToken = default)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace,
+            drain ? "AudioRouter.Stop" : "AudioRouter.Pause",
+            slowWarningMs: drain ? 1000 : 250);
         Thread? toJoin;
         CancellationTokenSource? toDispose;
         OutputPump[] activePumps;
@@ -1110,7 +1132,11 @@ public sealed partial class AudioRouter : IDisposable
         IAudioOutput[]? sinksForFlush = null;
         lock (_gate)
         {
-            if (!_isRunning) return;
+            if (!_isRunning)
+            {
+                timing?.SetOutcome("not-running");
+                return;
+            }
             toDispose = _cts;
             toJoin = _thread;
             _cts = null;
@@ -1139,6 +1165,7 @@ public sealed partial class AudioRouter : IDisposable
         }
         finally
         {
+            timing?.Checkpoint("run-loop join completed", LogLevel.Trace);
             if (toJoin is not { IsAlive: true })
             {
                 toDispose?.Dispose();
@@ -1163,8 +1190,13 @@ public sealed partial class AudioRouter : IDisposable
             }
         }
         while (_pumpsAwaitingDispose.TryDequeue(out var pending)) pending.Dispose();
+        timing?.Checkpoint("output pumps drained", LogLevel.Trace);
 
-        if (sinksForFlush is null) return;
+        if (sinksForFlush is null)
+        {
+            timing?.SetOutcome($"drain={drain} pumps={activePumps.Length} cooperativeSources={cooperativeSources.Length}");
+            return;
+        }
 
         foreach (var s in sinksForFlush)
         {
@@ -1180,6 +1212,7 @@ public sealed partial class AudioRouter : IDisposable
                 }
             }
         }
+        timing?.SetOutcome($"drain={drain} pumps={activePumps.Length} flush={sinksForFlush.Length} cooperativeSources={cooperativeSources.Length}");
     }
 
     /// <summary>
@@ -1228,17 +1261,25 @@ public sealed partial class AudioRouter : IDisposable
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioRouter.Dispose", slowWarningMs: 1000);
         lock (_gate)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                timing?.SetOutcome("already-disposed");
+                return;
+            }
             _disposed = true;
         }
         Stop();
+        var disposedOutputs = 0;
+        var disposedSources = 0;
         lock (_gate)
         {
             foreach (var (_, entry) in _state.Outputs)
             {
                 MediaDiagnostics.SwallowDisposeErrors(entry.Pump.Dispose, "AudioRouter.Dispose: OutputPump.Dispose");
+                disposedOutputs++;
                 // Dispose router-created adaptive-rate wrappers (monitor subscription / resampler); never
                 // the caller's own output (the pump doesn't own its inner).
                 if (entry.Output is IAdaptiveRateWrappedOutput and IDisposable wrapper)
@@ -1249,12 +1290,14 @@ public sealed partial class AudioRouter : IDisposable
             {
                 if (entry.OwnedWrapper is null) continue;
                 MediaDiagnostics.SwallowDisposeErrors(entry.OwnedWrapper.Dispose, "AudioRouter.Dispose: owned source wrapper");
+                disposedSources++;
             }
 
             _state = RouterState.Empty;
         }
 
         DisposeOwnedSources();
+        timing?.SetOutcome($"outputs={disposedOutputs} ownedSources={disposedSources}");
     }
 
     private static OutputPump[] CollectOutputPumps(ImmutableDictionary<string, OutputEntry> outputs)

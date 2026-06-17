@@ -51,7 +51,7 @@ sealed class Program
             return;
         }
 
-        var level = ParseLevel(GetArg(args, "--media-log-level"), LogLevel.Debug);
+        var level = ParseLevel(GetArg(args, "--media-log-level"), LogLevel.Trace);
         var dir = GetArg(args, "--media-log-dir")
                   ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
 

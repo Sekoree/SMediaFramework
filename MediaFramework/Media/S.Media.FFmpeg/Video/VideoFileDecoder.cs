@@ -1,7 +1,9 @@
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
@@ -46,6 +48,9 @@ namespace S.Media.FFmpeg.Video;
 public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHardwareD3D11GlInteropSource,
     ICooperativeVideoReadInterrupt, IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.FFmpeg.Video.VideoFileDecoder");
+    private const double SlowReadWarningMs = 250;
+
     private AVFormatContext* _formatCtx;
     private AVCodecContext* _codecCtx;
     private SwsContext* _swsCtx;
@@ -69,6 +74,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     private bool _drmGpuNv12Path;
     private bool _d3d11GpuNv12Path;
     private bool _win32Nv12SharedHandleOnly;
+    private long _lastSlowReadLogTicks;
 
     private const int SwsResizeFilter = (int)SwsFlags.SWS_BICUBIC;
 
@@ -152,44 +158,56 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
     public bool TryReadNextFrame(out VideoFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        var readStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+        var gotFrame = false;
 
-        if (_primedAfterSeek is { } primed)
+        try
         {
-            frame = primed;
-            _primedAfterSeek = null;
-            return true;
-        }
-
-        while (true)
-        {
-            if (Volatile.Read(ref _readYieldRequested) != 0)
+            if (_primedAfterSeek is { } primed)
             {
-                frame = null!;
-                return false;
-            }
-
-            var ret = avcodec_receive_frame(_codecCtx, _frame);
-            if (ret == 0)
-            {
-                var workFrame = ResolveWorkFrame();
-                var meta = ExtractMetadata(_frame);
-                SyncCodecPixelFormatIfNeeded(workFrame);
-                frame = BuildFrame(workFrame, meta);
-                av_frame_unref(_frame);
+                frame = primed;
+                _primedAfterSeek = null;
+                gotFrame = true;
                 return true;
             }
-            if (ret == AVERROR_EOF)
+
+            while (true)
             {
-                _eofReached = true;
-                frame = null!;
-                return false;
+                if (Volatile.Read(ref _readYieldRequested) != 0)
+                {
+                    frame = null!;
+                    return false;
+                }
+
+                var ret = avcodec_receive_frame(_codecCtx, _frame);
+                if (ret == 0)
+                {
+                    var workFrame = ResolveWorkFrame();
+                    var meta = ExtractMetadata(_frame);
+                    SyncCodecPixelFormatIfNeeded(workFrame);
+                    frame = BuildFrame(workFrame, meta);
+                    av_frame_unref(_frame);
+                    gotFrame = true;
+                    return true;
+                }
+                if (ret == AVERROR_EOF)
+                {
+                    _eofReached = true;
+                    frame = null!;
+                    return false;
+                }
+                if (ret == AVERROR(EAGAIN))
+                {
+                    FeedDecoder();
+                    continue;
+                }
+                FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
             }
-            if (ret == AVERROR(EAGAIN))
-            {
-                FeedDecoder();
-                continue;
-            }
-            FFmpegException.ThrowIfError(ret, nameof(avcodec_receive_frame));
+        }
+        finally
+        {
+            if (readStarted != 0)
+                MaybeLogSlowRead(readStarted, gotFrame);
         }
     }
 
@@ -206,17 +224,22 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (format == PixelFormat.Unknown)
             throw new ArgumentException("cannot select Unknown pixel format", nameof(format));
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoFileDecoder.SelectOutputFormat", slowWarningMs: 250);
         if (_drmGpuNv12Path)
         {
             if (format is not (PixelFormat.Nv12 or PixelFormat.P010 or PixelFormat.P016))
                 throw new NotSupportedException(
                     "DRM PRIME zero-copy decoding only supports PixelFormat.Nv12, P010, or P016 output matching the GPU-exported semi-planar dma-bufs.");
             if (_outPixelFormat == format)
+            {
+                timing?.SetOutcome($"unchanged format={format}");
                 return;
+            }
             _passThrough = true;
             ReleaseSws();
             _outPixelFormat = format;
             Format = Format with { PixelFormat = format };
+            timing?.SetOutcome($"format={format} drm=true");
             return;
         }
 
@@ -226,15 +249,23 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
                 throw new NotSupportedException(
                     "D3D11 shared-handle zero-copy decoding only supports PixelFormat.Nv12 output matching the DXGI NV12 texture export.");
             if (_outPixelFormat == format)
+            {
+                timing?.SetOutcome($"unchanged format={format}");
                 return;
+            }
             _passThrough = true;
             ReleaseSws();
             _outPixelFormat = format;
             Format = Format with { PixelFormat = format };
+            timing?.SetOutcome($"format={format} d3d11=true");
             return;
         }
 
-        if (format == _outPixelFormat) return;
+        if (format == _outPixelFormat)
+        {
+            timing?.SetOutcome($"unchanged format={format}");
+            return;
+        }
 
         if (format == _nativePixelFormat)
         {
@@ -257,6 +288,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
         _outPixelFormat = format;
         Format = Format with { PixelFormat = format };
+        timing?.SetOutcome($"format={format} passThrough={_passThrough}");
     }
 
     public void Seek(TimeSpan position)
@@ -264,6 +296,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(position));
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoFileDecoder.Seek", slowWarningMs: 500);
         ResetReadYield();
 
         var ts = (long)(position.TotalSeconds * _videoTimeBase.den / _videoTimeBase.num);
@@ -280,6 +313,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         _framesEmitted = fallbackFps > 0 ? (long)Math.Round(position.TotalSeconds * fallbackFps) : 0;
         Position = position;
         ConsumeDecoderUntilPts(position);
+        timing?.SetOutcome($"target={position} position={Position} eof={_eofReached}");
     }
 
     public void Dispose()
@@ -332,6 +366,7 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
     private void OpenInternal(string path, VideoDecoderOpenOptions? options)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoFileDecoder.Open", slowWarningMs: 1000);
         AVFormatContext* fmt = null;
         var ret = avformat_open_input(&fmt, path, null, null);
         FFmpegException.ThrowIfError(ret, nameof(avformat_open_input));
@@ -472,6 +507,33 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
 
         if (_hwAccel != null && !_drmGpuNv12Path && !_d3d11GpuNv12Path)
             PrimeHardwareTransferPixelFormat();
+        timing?.SetOutcome($"path={Path.GetFileName(path)} stream={_videoStreamIndex} codec={CodecName} format={Format} hw={_hwAccel is not null} drm={_drmGpuNv12Path} d3d11={_d3d11GpuNv12Path}");
+    }
+
+    private void MaybeLogSlowRead(long started, bool gotFrame)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowReadWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowReadLogTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "TryReadNextFrame: took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, gotFrame={GotFrame}, eof={Eof}, position={Position}, emitted={FramesEmitted})",
+            elapsedMs,
+            SlowReadWarningMs,
+            gotFrame,
+            _eofReached,
+            Position,
+            _framesEmitted);
+    }
+
+    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
     }
 
     private void FeedDecoder()

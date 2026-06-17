@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NDILib;
@@ -47,10 +48,12 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
     private int _packedCapacityBytes;
     private bool _disposed;
     private int _firstSubmitLogged;
+    private long _lastSlowSubmitLogTicks;
 
     private long _samplesSentPerChannel;
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Audio.NDIAudioOutput");
+    private const double SlowSubmitWarningMs = 50;
 
     public AudioFormat Format => _format;
     public AudioOutputChannelCapabilities ChannelCapabilities => AudioOutputChannelCapabilities.Fixed(_format.Channels);
@@ -107,6 +110,7 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
             Trace.LogDebug("First Submit: format={Format} samples={Samples} tc100ns={TC}",
                 _format, samplesPerChannel, timecode100Ns);
 
+        var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
         var packedBytes = packedSamples.Length * sizeof(float);
         EnsurePackedCapacity(packedBytes);
         packedSamples.CopyTo(new Span<float>(_packedBuffer, packedSamples.Length));
@@ -121,6 +125,8 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
         };
         NDIAudioUtils.SendInterleaved32f(_sender, interleaved);
         _samplesSentPerChannel += samplesPerChannel;
+        if (submitStarted != 0)
+            MaybeLogSlowSubmit(submitStarted, samplesPerChannel);
     }
 
     private void EnsurePackedCapacity(int neededBytes)
@@ -139,6 +145,7 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIAudioOutput.Dispose", slowWarningMs: 1000);
         if (_disposed) return;
         _disposed = true;
         if (_packedBuffer != null)
@@ -148,5 +155,31 @@ internal sealed unsafe class NDIAudioOutput : IAudioOutput, IAudioOutputChannelC
             _packedCapacityBytes = 0;
         }
         // The NDISender is owned by NDIOutput — do NOT dispose it here.
+        timing?.SetOutcome($"format={_format} sentFrames={_samplesSentPerChannel}");
+    }
+
+    private void MaybeLogSlowSubmit(long started, int samplesPerChannel)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowSubmitWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowSubmitLogTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "Submit: took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, format={Format}, samples={Samples}, sentFrames={SentFrames})",
+            elapsedMs,
+            SlowSubmitWarningMs,
+            _format,
+            samplesPerChannel,
+            _samplesSentPerChannel);
+    }
+
+    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
     }
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using NDILib;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
@@ -42,6 +43,8 @@ namespace S.Media.NDI;
 /// </remarks>
 public sealed class NDIOutput : IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.NDIOutput");
+
     private readonly TimeSpan? _minimumVideoSubmitSpacing;
     private readonly NDIVideoTimecodeMode _videoTimecodeMode;
 
@@ -104,6 +107,7 @@ public sealed class NDIOutput : IDisposable
         TimeSpan? minimumVideoSubmitSpacing = null,
         NDIVideoTimecodeMode videoTimecodeMode = NDIVideoTimecodeMode.Synthesize)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIOutput.Open", slowWarningMs: 1000);
         ArgumentException.ThrowIfNullOrEmpty(sourceName);
         SourceName = sourceName;
 
@@ -124,6 +128,13 @@ public sealed class NDIOutput : IDisposable
             rc = NDISender.Create(out var sender, sourceName, groups, clockVideo: clockVideo, clockAudio: clockAudio);
             if (rc != 0 || sender is null) throw new NDIException(rc, "NDISender.Create");
             _sender = sender;
+            Trace.LogInformation(
+                "NDIOutput: source='{Source}' groups={Groups} clockVideo={ClockVideo} clockAudio={ClockAudio} videoTimecodeMode={Mode}",
+                sourceName,
+                groups ?? "(default)",
+                clockVideo,
+                clockAudio,
+                videoTimecodeMode);
         }
         catch (Exception ex)
         {
@@ -135,6 +146,7 @@ public sealed class NDIOutput : IDisposable
             _runtime.Dispose();
             throw;
         }
+        timing?.SetOutcome($"source={sourceName} clockVideo={clockVideo} clockAudio={clockAudio}");
     }
 
     /// <summary>
@@ -156,6 +168,7 @@ public sealed class NDIOutput : IDisposable
             }
 
             _audioOutput = new NDIAudioOutput(_sender, format, _egressPresentationTimeline);
+            Trace.LogDebug("EnableAudio: source='{Source}' format={Format}", SourceName, format);
             return _audioOutput;
         }
     }
@@ -164,8 +177,14 @@ public sealed class NDIOutput : IDisposable
     {
         lock (_gate)
         {
-            return _videoOutput ??= new NDIVideoSender(_sender, _minimumVideoSubmitSpacing, _videoTimecodeMode,
+            if (_videoOutput is not null)
+                return _videoOutput;
+
+            _videoOutput = new NDIVideoSender(_sender, _minimumVideoSubmitSpacing, _videoTimecodeMode,
                 _egressPresentationTimeline);
+            Trace.LogDebug("CreateVideoOutput: source='{Source}' spacing={Spacing}ms timecodeMode={Mode}",
+                SourceName, _minimumVideoSubmitSpacing?.TotalMilliseconds ?? 0, _videoTimecodeMode);
+            return _videoOutput;
         }
     }
 
@@ -275,7 +294,12 @@ public sealed class NDIOutput : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIOutput.Dispose", slowWarningMs: 1000);
+        if (_disposed)
+        {
+            timing?.SetOutcome($"source={SourceName} already-disposed");
+            return;
+        }
         _disposed = true;
         // Tear down the video output first so any in-flight async send is
         // flushed against a still-valid sender.
@@ -283,5 +307,6 @@ public sealed class NDIOutput : IDisposable
         MediaDiagnostics.SwallowDisposeErrors(() => _audioOutput?.Dispose(), "NDIOutput.Dispose: audio output");
         MediaDiagnostics.SwallowDisposeErrors(_sender.Dispose, "NDIOutput.Dispose: NDISender");
         MediaDiagnostics.SwallowDisposeErrors(_runtime.Dispose, "NDIOutput.Dispose: NDIRuntime");
+        timing?.SetOutcome($"source={SourceName}");
     }
 }

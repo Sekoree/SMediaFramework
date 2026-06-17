@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Threading;
@@ -63,6 +64,8 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     private long _dropped;
     private long _submitted;
     private long _lastDropLogTicks;
+    private long _lastSlowSubmitLogTicks;
+    private long _lastSlowConvertLogTicks;
     private int _activeSubmits;
     private int _firstSubmitLogged;
     private EventHandler<VideoOutputPumpPressureEventArgs>? _pumpPressure;
@@ -78,6 +81,8 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
     private bool _branchConverterPending;
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoOutputPump");
+    private const double SlowInnerSubmitWarningMs = 50;
+    private const double SlowBranchConvertWarningMs = 100;
 
     public VideoOutputPump(IVideoOutput inner, int maxQueuedFrames = 3, string name = "VideoOutputPump", ILogger? log = null,
         bool disposeInnerOnDispose = false)
@@ -119,6 +124,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
     public void Configure(VideoFormat format)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoOutputPump.Configure", slowWarningMs: 250);
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -140,6 +146,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                 }
                 Trace.LogTrace("Configure: name={Name} re-configure (already running) format={Format}", _name, format);
                 _inner.Configure(format);
+                timing?.SetOutcome($"name={_name} reconfigure format={format}");
                 return;
             }
             Trace.LogDebug("Configure: name={Name} format={Format} maxQueued={MaxQueued} innerType={InnerType}",
@@ -156,6 +163,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                 Priority = ThreadPriority.AboveNormal,
             };
             _thread.Start();
+            timing?.SetOutcome($"name={_name} format={format} maxQueued={_maxQueued}");
         }
     }
 
@@ -262,6 +270,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
     public bool WaitForIdle(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
+        var started = Stopwatch.GetTimestamp();
         var deadline = Environment.TickCount64 + Math.Max(0, (long)timeout.TotalMilliseconds);
         while (true)
         {
@@ -275,7 +284,18 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                 break;
 
             if (Environment.TickCount64 >= deadline)
+            {
+                Trace.LogWarning(
+                    "VideoOutputPump {Name}: WaitForIdle timed out after {ElapsedMs:0.00}ms (timeout={TimeoutMs:0.00}ms, queued={Queued}, activeSubmits={ActiveSubmits}, submitted={Submitted}, dropped={Dropped})",
+                    _name,
+                    MediaDiagnostics.ElapsedMillisecondsSince(started),
+                    timeout.TotalMilliseconds,
+                    CurrentQueuedDepth,
+                    Volatile.Read(ref _activeSubmits),
+                    Interlocked.Read(ref _submitted),
+                    Interlocked.Read(ref _dropped));
                 return false;
+            }
 
             Thread.Sleep(1);
         }
@@ -352,7 +372,10 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
                     {
                         try
                         {
+                            var convertStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
                             var converted = conv.Convert(next, next.ColorTransferHint);
+                            if (convertStarted != 0)
+                                MaybeLogSlowBranchConvert(convertStarted);
                             next.Dispose();
                             toSubmit = converted;
                         }
@@ -381,7 +404,10 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
                     try
                     {
+                        var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
                         _inner.Submit(toSubmit);
+                        if (submitStarted != 0)
+                            MaybeLogSlowInnerSubmit(submitStarted);
                         var n = Interlocked.Increment(ref _submitted);
                         if (n == 1)
                         {
@@ -412,11 +438,16 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoOutputPump.Dispose", slowWarningMs: 1000);
         Thread? thread;
         CancellationTokenSource? cts;
         lock (_gate)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                timing?.SetOutcome($"name={_name} already-disposed");
+                return;
+            }
             _disposed = true;
             _pumpPressure = null;
             thread = _thread;
@@ -457,6 +488,7 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             // inner output. Leak those deliberately rather than crash: it's a background thread that
             // will exit on its own once the inner Submit finally returns (it re-checks cancellation).
             Trace.LogError("VideoOutputPump '{Name}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.", _name);
+            timing?.SetOutcome($"name={_name} drainer-stuck");
             return;
         }
 
@@ -479,5 +511,49 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
         {
             MediaDiagnostics.SwallowDisposeErrors(d.Dispose, $"VideoOutputPump.Dispose: inner output ({_name})");
         }
+        timing?.SetOutcome($"name={_name} submitted={Interlocked.Read(ref _submitted)} dropped={Interlocked.Read(ref _dropped)}");
+    }
+
+    private void MaybeLogSlowInnerSubmit(long started)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowInnerSubmitWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowSubmitLogTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "VideoOutputPump {Name}: inner Submit took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, queued={Queued}, activeSubmits={ActiveSubmits}, submitted={Submitted}, dropped={Dropped})",
+            _name,
+            elapsedMs,
+            SlowInnerSubmitWarningMs,
+            CurrentQueuedDepth,
+            Volatile.Read(ref _activeSubmits),
+            Interlocked.Read(ref _submitted),
+            Interlocked.Read(ref _dropped));
+    }
+
+    private void MaybeLogSlowBranchConvert(long started)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowBranchConvertWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowConvertLogTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "VideoOutputPump {Name}: branch conversion took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, queued={Queued}, dropped={Dropped})",
+            _name,
+            elapsedMs,
+            SlowBranchConvertWarningMs,
+            CurrentQueuedDepth,
+            Interlocked.Read(ref _dropped));
+    }
+
+    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
     }
 }

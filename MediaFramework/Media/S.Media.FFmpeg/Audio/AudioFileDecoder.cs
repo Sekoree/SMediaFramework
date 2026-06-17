@@ -1,8 +1,11 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.FFmpeg.Audio;
 
@@ -34,6 +37,9 @@ namespace S.Media.FFmpeg.Audio;
 /// </remarks>
 public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.FFmpeg.Audio.AudioFileDecoder");
+    private const double SlowReadWarningMs = 250;
+
     private AVFormatContext* _formatCtx;
     private AVCodecContext* _codecCtx;
     private SwrContext* _swrCtx;
@@ -46,6 +52,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
     private bool _drainedTail;
     private bool _disposed;
     private bool _drainPacketSent;
+    private long _lastSlowReadLogTicks;
 
     public AudioFormat Format { get; private set; }
     /// <summary>
@@ -84,46 +91,55 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
 
         if (IsExhausted) return 0;
 
+        var readStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
         var written = 0;
-        while (written < dst.Length)
+        try
         {
-            var remainingFrames = (dst.Length - written) / Format.Channels;
-            if (remainingFrames == 0) break;
-
-            // 1. Drain whatever swr already has queued from previous calls.
-            var drained = SwrConvertInto(dst[written..], remainingFrames, null, 0);
-            if (drained > 0)
+            while (written < dst.Length)
             {
-                written += drained * Format.Channels;
-                _samplesEmitted += drained;
-            }
-            if (drained == remainingFrames) continue; // dst full from drain alone
+                var remainingFrames = (dst.Length - written) / Format.Channels;
+                if (remainingFrames == 0) break;
 
-            // 2. swr is empty (or returned a partial). If codec is at EOF, we're done.
-            if (_eofReached)
-            {
-                if (drained == 0)
+                // 1. Drain whatever swr already has queued from previous calls.
+                var drained = SwrConvertInto(dst[written..], remainingFrames, null, 0);
+                if (drained > 0)
                 {
-                    _drainedTail = true;
-                    break;
+                    written += drained * Format.Channels;
+                    _samplesEmitted += drained;
                 }
-                continue; // produced some tail; loop to see if there's more
-            }
+                if (drained == remainingFrames) continue; // dst full from drain alone
 
-            // 3. Pull the next codec frame. If TryReceiveDecodedFrame reports EOF,
-            //    loop iterates and the next drain handles the tail.
-            if (!TryReceiveDecodedFrame()) continue;
+                // 2. swr is empty (or returned a partial). If codec is at EOF, we're done.
+                if (_eofReached)
+                {
+                    if (drained == 0)
+                    {
+                        _drainedTail = true;
+                        break;
+                    }
+                    continue; // produced some tail; loop to see if there's more
+                }
 
-            // 4. Feed the whole frame to swr; output up to remaining capacity into dst.
-            //    swr keeps any surplus internally for the next iteration / call.
-            var capacity = (dst.Length - written) / Format.Channels;
-            var produced = SwrConvertInto(dst[written..], capacity, _frame->extended_data, _frame->nb_samples);
-            if (produced > 0)
-            {
-                written += produced * Format.Channels;
-                _samplesEmitted += produced;
+                // 3. Pull the next codec frame. If TryReceiveDecodedFrame reports EOF,
+                //    loop iterates and the next drain handles the tail.
+                if (!TryReceiveDecodedFrame()) continue;
+
+                // 4. Feed the whole frame to swr; output up to remaining capacity into dst.
+                //    swr keeps any surplus internally for the next iteration / call.
+                var capacity = (dst.Length - written) / Format.Channels;
+                var produced = SwrConvertInto(dst[written..], capacity, _frame->extended_data, _frame->nb_samples);
+                if (produced > 0)
+                {
+                    written += produced * Format.Channels;
+                    _samplesEmitted += produced;
+                }
+                av_frame_unref(_frame);
             }
-            av_frame_unref(_frame);
+        }
+        finally
+        {
+            if (readStarted != 0)
+                MaybeLogSlowRead(readStarted, written);
         }
 
         if (written > 0)
@@ -156,11 +172,26 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
     public bool TryReadNextFrame(out AudioFrame frame)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!TryReceiveDecodedFrame())
-            return TryDrainTailFrame(out frame);
-        frame = ConvertFrame();
-        av_frame_unref(_frame);
-        return true;
+        frame = default;
+        var readStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+        var gotFrame = false;
+        try
+        {
+            if (!TryReceiveDecodedFrame())
+            {
+                gotFrame = TryDrainTailFrame(out frame);
+                return gotFrame;
+            }
+            frame = ConvertFrame();
+            av_frame_unref(_frame);
+            gotFrame = true;
+            return true;
+        }
+        finally
+        {
+            if (readStarted != 0)
+                MaybeLogSlowRead(readStarted, gotFrame ? frame.SamplesPerChannel * Format.Channels : 0);
+        }
     }
 
     public void Seek(TimeSpan position)
@@ -168,6 +199,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(position));
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioFileDecoder.Seek", slowWarningMs: 500);
         var ts = (long)(position.TotalSeconds * _audioTimeBase.den / _audioTimeBase.num);
         var ret = av_seek_frame(_formatCtx, _audioStreamIndex, ts, AVSEEK_FLAG_BACKWARD);
         FFmpegException.ThrowIfError(ret, nameof(av_seek_frame));
@@ -186,10 +218,12 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         _drainPacketSent = false;
         _samplesEmitted = (long)(position.TotalSeconds * Format.SampleRate);
         Position = position;
+        timing?.SetOutcome($"target={position} stream={_audioStreamIndex}");
     }
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioFileDecoder.Dispose", slowWarningMs: 1000);
         if (_disposed) return;
         _disposed = true;
 
@@ -198,12 +232,14 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         if (_swrCtx != null)    { var s = _swrCtx;     swr_free(&s);                _swrCtx = null; }
         if (_codecCtx != null)  { var c = _codecCtx;   avcodec_free_context(&c);    _codecCtx = null; }
         if (_formatCtx != null) { var f = _formatCtx;  avformat_close_input(&f);    _formatCtx = null; }
+        timing?.SetOutcome($"stream={_audioStreamIndex} codec={CodecName}");
     }
 
     // --- internals ---------------------------------------------------------
 
     private void OpenInternal(string path, AudioFileDecoderOpenOptions options)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "AudioFileDecoder.Open", slowWarningMs: 1000);
         AVFormatContext* fmt = null;
         var ret = avformat_open_input(&fmt, path, null, null);
         FFmpegException.ThrowIfError(ret, nameof(avformat_open_input));
@@ -286,6 +322,33 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         if (_packet == null) throw new OutOfMemoryException("av_packet_alloc returned NULL");
         _frame = av_frame_alloc();
         if (_frame == null) throw new OutOfMemoryException("av_frame_alloc returned NULL");
+        timing?.SetOutcome($"path={Path.GetFileName(path)} stream={_audioStreamIndex} codec={CodecName} format={Format} duration={Duration} threads={CodecThreadCountOption}");
+    }
+
+    private void MaybeLogSlowRead(long started, int writtenFloats)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowReadWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowReadLogTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "Read: took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, writtenFloats={Written}, eof={Eof}, drainedTail={DrainedTail}, position={Position})",
+            elapsedMs,
+            SlowReadWarningMs,
+            writtenFloats,
+            _eofReached,
+            _drainedTail,
+            Position);
+    }
+
+    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
     }
 
     /// <summary>Pulls the next decoded frame from the codec into <see cref="_frame"/>. Sets <see cref="_eofReached"/> on EOF.</summary>

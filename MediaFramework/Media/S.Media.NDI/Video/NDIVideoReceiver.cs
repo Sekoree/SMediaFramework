@@ -109,6 +109,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         int maxQueuedFrames = DefaultQueueDepth,
         NDIIngestPlaybackClock? ingestClock = null)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIVideoReceiver.Open", slowWarningMs: 1000);
         if (maxQueuedFrames < 1)
             throw new ArgumentOutOfRangeException(nameof(maxQueuedFrames));
 
@@ -154,6 +155,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
             Name = "NDIVideoReceiver",
         };
         _captureThread.Start();
+        timing?.SetOutcome($"source={source.Name} queue={_maxQueued}");
     }
 
     public void SelectOutputFormat(PixelFormat format)
@@ -213,6 +215,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
     private void CaptureLoopCore(CancellationToken token)
     {
+        Trace.LogDebug("CaptureLoop: entered");
         while (!token.IsCancellationRequested)
         {
             var frameType = _receiver.Capture(
@@ -264,6 +267,10 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
                 _receiver.FreeMetadata(metadata);
             }
         }
+        Trace.LogDebug(
+            "CaptureLoop: exiting (overflowFrames={Overflow}, unpackDrops={Drops})",
+            Interlocked.Read(ref _overflowFrames),
+            Interlocked.Read(ref _unpackDrops));
     }
 
     private void EnsureFormat(VideoFormat format)
@@ -280,6 +287,7 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
         if (_hasLastResolvedPts)
             _nextPts = _lastResolvedPts + _ptsStep;
         _hasFormat = true;
+        Trace.LogInformation("NDIVideoReceiver: video format {Format} ptsStep={PtsStep}", format, _ptsStep);
     }
 
     private TimeSpan ResolvePresentationTime(in NDIVideoFrameV2 video)
@@ -320,8 +328,12 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIVideoReceiver.Dispose", slowWarningMs: 1000);
         if (_disposed)
+        {
+            timing?.SetOutcome("already-disposed");
             return;
+        }
         _disposed = true;
 
         NDICaptureThreadLifecycle.StopAndDispose(
@@ -351,5 +363,6 @@ internal sealed unsafe class NDIVideoReceiver : IVideoSource, IDisposable
                 _faultEx ??= ex;
             },
             Trace);
+        timing?.SetOutcome($"stuck={IsCaptureStuck} overflow={OverflowFrames}");
     }
 }

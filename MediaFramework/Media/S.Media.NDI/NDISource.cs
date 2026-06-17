@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using NDILib;
@@ -97,6 +98,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
     private NDISource(NDIDiscoveredSource source, NDISourceOptions options, bool legacy)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDISource.Open", slowWarningMs: 1000);
         _ = legacy;
         if (!options.ReceiveAudio && !options.ReceiveVideo)
             throw new ArgumentException("At least one of audio or video must be enabled.");
@@ -172,6 +174,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             Name = "NDISource",
         };
         _captureThread.Start();
+        timing?.SetOutcome($"source={source.Name} audio={_receiveAudio} video={_receiveVideo} bandwidth={ResolveBandwidth(options)} queue={_maxQueuedVideoFrames}");
     }
 
     public IAudioSource Audio { get; }
@@ -264,6 +267,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     /// </summary>
     public bool WaitForStreams(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
+        var started = Stopwatch.GetTimestamp();
         var wantAudio = ReceiveAudio;
         var wantVideo = ReceiveVideo;
         var deadline = Environment.TickCount64 + (long)Math.Ceiling(timeout.TotalMilliseconds);
@@ -274,8 +278,30 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             if (_faultEx is not null) return false;
             var audioReady = !wantAudio || IsAudioConnected;
             var videoReady = !wantVideo || IsVideoConnected;
-            if (audioReady && videoReady) return true;
-            if (Environment.TickCount64 >= deadline) return false;
+            if (audioReady && videoReady)
+            {
+                Trace.LogDebug(
+                    "WaitForStreams: ready in {ElapsedMs:0.00}ms (wantAudio={WantAudio}, wantVideo={WantVideo}, audioReady={AudioReady}, videoReady={VideoReady})",
+                    MediaDiagnostics.ElapsedMillisecondsSince(started),
+                    wantAudio,
+                    wantVideo,
+                    audioReady,
+                    videoReady);
+                return true;
+            }
+            if (Environment.TickCount64 >= deadline)
+            {
+                Trace.LogWarning(
+                    "WaitForStreams: timed out after {ElapsedMs:0.00}ms (timeout={TimeoutMs:0.00}ms, wantAudio={WantAudio}, wantVideo={WantVideo}, audioReady={AudioReady}, videoReady={VideoReady}, state={State})",
+                    MediaDiagnostics.ElapsedMillisecondsSince(started),
+                    timeout.TotalMilliseconds,
+                    wantAudio,
+                    wantVideo,
+                    audioReady,
+                    videoReady,
+                    State);
+                return false;
+            }
             Thread.Sleep(20);
         }
     }
@@ -407,6 +433,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
     private void CaptureLoop(CancellationToken token)
     {
+        Trace.LogDebug("CaptureLoop: entered (audio={Audio}, video={Video})", _receiveAudio, _receiveVideo);
         var interleaved = new NDIAudioInterleaved32f();
         var heldAudioBuffer = Array.Empty<float>();
         GCHandle audioPin = default;
@@ -474,6 +501,12 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         finally
         {
             if (audioPin.IsAllocated) audioPin.Free();
+            Trace.LogDebug(
+                "CaptureLoop: exiting (audioOverflow={AudioOverflow}, videoOverflow={VideoOverflow}, videoUnpackDrops={VideoDrops}, videoFrames={VideoFrames})",
+                Volatile.Read(ref _audioOverflowFloats),
+                Interlocked.Read(ref _videoOverflowFrames),
+                Interlocked.Read(ref _videoUnpackDrops),
+                Interlocked.Read(ref _videoFramesUnpacked));
         }
     }
 
@@ -563,6 +596,11 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             _audioMinBufferedDuration, sampleRate, capacityFrames);
         var snap = new AudioFormatSnapshot(new AudioFormat(sampleRate, channels), capacityFrames, minBufferedFrames);
         Volatile.Write(ref _audioState, snap);
+        Trace.LogInformation(
+            "NDISource: audio format {Format} capacity={CapacityFrames}f minBuffered={MinBufferedFrames}f",
+            snap.Format,
+            capacityFrames,
+            minBufferedFrames);
         return snap;
     }
 
@@ -627,6 +665,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         if (_hasLastResolvedVideoPts)
             _nextVideoPts = _lastResolvedVideoPts + _videoPtsStep;
         _hasVideoFormat = true;
+        Trace.LogInformation("NDISource: video format {Format} ptsStep={PtsStep}", format, _videoPtsStep);
     }
 
     private TimeSpan ResolveVideoPresentationTime(in NDIVideoFrameV2 video)
@@ -680,8 +719,12 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDISource.Dispose", slowWarningMs: 1000);
         if (_disposed)
+        {
+            timing?.SetOutcome("already-disposed");
             return;
+        }
         _disposed = true;
         _state = NDIConnectionState.Disposed;
 
@@ -713,6 +756,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
                 _faultEx ??= ex;
             },
             Trace);
+        timing?.SetOutcome($"state={State} audioOverflow={AudioOverflowFloats} videoOverflow={VideoOverflowFrames}");
     }
 
     private static readonly AudioFormat StandbyAudioFormat = new(48_000, 2);

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
@@ -24,6 +25,8 @@ namespace S.Media.FFmpeg;
 /// </remarks>
 public sealed class MediaContainerDecoder : IDisposable
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.FFmpeg.MediaContainerDecoder");
+
     private readonly MediaContainerSharedDemux _shared;
     private readonly string? _ownedTempPath;
 
@@ -127,7 +130,9 @@ public sealed class MediaContainerDecoder : IDisposable
 
         FFmpegRuntime.EnsureInitialized();
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerDecoder.OpenStream", slowWarningMs: 1000);
         var shared = MediaContainerSharedDemux.Open(stream, isSeekable, probeHintName, videoOptions ?? new VideoDecoderOpenOptions());
+        timing?.SetOutcome($"hint={probeHintName ?? "(none)"} seekable={isSeekable} audio={shared.HasAudio} video={shared.HasVideo}");
         return new MediaContainerDecoder(shared);
     }
 
@@ -156,13 +161,16 @@ public sealed class MediaContainerDecoder : IDisposable
 
         FFmpegRuntime.EnsureInitialized();
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerDecoder.OpenStreamSpooled", slowWarningMs: 1000);
         var tempPath = BuildTempInputPath(inputName);
         try
         {
             using (var file = File.Create(tempPath))
                 stream.CopyTo(file);
 
-            return OpenInput(tempPath, videoOptions, validateLocalFile: true, ownedTempPath: tempPath);
+            var decoder = OpenInput(tempPath, videoOptions, validateLocalFile: true, ownedTempPath: tempPath);
+            timing?.SetOutcome($"input={inputName ?? "(stream)"} temp={Path.GetFileName(tempPath)} bytes={new FileInfo(tempPath).Length}");
+            return decoder;
         }
         catch
         {
@@ -177,6 +185,7 @@ public sealed class MediaContainerDecoder : IDisposable
         bool validateLocalFile,
         string? ownedTempPath)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerDecoder.OpenInput", slowWarningMs: 1000);
         ArgumentException.ThrowIfNullOrEmpty(input);
         if (validateLocalFile && !File.Exists(input))
             throw new FileNotFoundException("media file not found", input);
@@ -185,6 +194,7 @@ public sealed class MediaContainerDecoder : IDisposable
 
         var opt = videoOptions ?? new VideoDecoderOpenOptions();
         var shared = MediaContainerSharedDemux.Open(input, opt);
+        timing?.SetOutcome($"input={Path.GetFileName(input)} local={validateLocalFile} audio={shared.HasAudio} video={shared.HasVideo} duration={shared.Duration}");
         return new MediaContainerDecoder(shared, ownedTempPath);
     }
 
@@ -219,12 +229,14 @@ public sealed class MediaContainerDecoder : IDisposable
     /// </remarks>
     public void FlushCodecPipelines()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerDecoder.FlushCodecPipelines", slowWarningMs: 500);
         var vp = Video is ISeekableSource vs ? vs.Position : TimeSpan.Zero;
         var ap = Audio is ISeekableSource ais ? ais.Position : TimeSpan.Zero;
         var resume = vp >= ap ? vp : ap;
         if (resume < TimeSpan.Zero)
             resume = TimeSpan.Zero;
         SeekPresentation(resume);
+        timing?.SetOutcome($"resume={resume} audio={ap} video={vp}");
     }
 
     /// <summary>When Windows D3D11VA NV12 shared-handle decode is active, libav's <c>ID3D11Device</c> COM pointer for GL upload.</summary>
@@ -237,9 +249,11 @@ public sealed class MediaContainerDecoder : IDisposable
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerDecoder.Dispose", slowWarningMs: 1000);
         _shared.Dispose();
         if (_ownedTempPath is not null)
             TryDeleteTempFile(_ownedTempPath);
+        timing?.SetOutcome($"ownedTemp={_ownedTempPath is not null}");
     }
 
     private static string BuildTempInputPath(string? inputName)

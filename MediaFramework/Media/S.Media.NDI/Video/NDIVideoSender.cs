@@ -88,6 +88,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     private TimeSpan? _presentationAnchor;
     private int _firstSubmitLogged;
     private long _submittedCount;
+    private long _lastSlowSubmitLogTicks;
     // Cooperative abort (S.Media.Core.Video.IVideoOutputCooperativeAbort): set on teardown so an in-flight
     // paced Submit bails out of its wall-clock spacing wait immediately instead of holding up the pump's
     // dispose join (worst with low-FPS attached_pic streams). Terminal WITHIN a session — once set, Submit
@@ -97,6 +98,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
     private readonly ManualResetEventSlim _abortSignal = new(false);
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.NDI.Video.NDIVideoSender");
+    private const double SlowSubmitWarningMs = 50;
 
     public VideoFormat Format
     {
@@ -223,6 +225,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
                 throw new NotSupportedException(
                     "NDIVideoSender requires CPU-backed pixel planes; GPU NV12/P010/P016 (Linux dma-buf or Windows D3D11 shared) has no readable bytes here. Use software decode or a CPU VideoFrame path.");
 
+            var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
             PaceBeforePack();
 
             var totalBytes = StagingBytes(_format);
@@ -257,6 +260,8 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
                     _format, frame.PresentationTime, timecode);
             else if (Trace.IsEnabled(LogLevel.Trace) && n % 300 == 0)
                 Trace.LogTrace("Submit: #{N} pts={Pts}", n, frame.PresentationTime);
+            if (submitStarted != 0)
+                MaybeLogSlowSubmit(submitStarted, frame.PresentationTime);
         }
         finally
         {
@@ -531,6 +536,7 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "NDIVideoSender.Dispose", slowWarningMs: 1000);
         if (_disposed) return;
         _disposed = true;
         // Flush any in-flight async send so NDI releases its reference to our
@@ -548,6 +554,33 @@ internal sealed unsafe class NDIVideoSender : IVideoOutput, IVideoOutputCooperat
             _stagingCapacity[i] = 0;
         }
         _abortSignal.Dispose();
+        timing?.SetOutcome($"format={(_configured ? _format.ToString() : "(unconfigured)")} submitted={Interlocked.Read(ref _submittedCount)}");
+    }
+
+    private void MaybeLogSlowSubmit(long started, TimeSpan pts)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowSubmitWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowSubmitLogTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "Submit: took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, format={Format}, pts={Pts}, spacing={SpacingMs:0.00}ms, submitted={Submitted})",
+            elapsedMs,
+            SlowSubmitWarningMs,
+            _format,
+            pts,
+            _minimumSubmitSpacing.TotalMilliseconds,
+            Interlocked.Read(ref _submittedCount));
+    }
+
+    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
     }
 
     private static int StagingBytes(VideoFormat fmt) => fmt.PixelFormat switch

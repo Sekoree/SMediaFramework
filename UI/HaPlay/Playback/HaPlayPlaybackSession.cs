@@ -412,6 +412,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
         var lines = selectedOutputs.ToList();
         var anyNDI = lines.Exists(static l => l.Definition is NDIOutputDefinition);
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.TryCreate",
+            slowWarningMs: 1000);
         Trace.LogInformation("TryCreate: path={Path} selectedOutputs={Count} ([{Kinds}]) anyNDI={AnyNDI} preOpened={PreOpened} audioTrack={Track}",
             mediaPath, lines.Count,
             string.Join(",", lines.Select(l => l.Definition.GetType().Name)),
@@ -429,6 +433,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             {
                 Trace.LogError(ex, $"TryCreate: decoder open failed for {mediaPath}");
                 errorMessage = ex.Message;
+                timing?.SetOutcome("decoder-open-failed");
                 return false;
             }
         }
@@ -437,6 +442,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         var hasAudio = decoder.HasAudio;
         Trace.LogDebug("TryCreate: decoder opened (hasVideo={V} hasAudio={A} attachedPic={Attached})",
             hasVideo, hasAudio, hasVideo && decoder.VideoIsAttachedPicture);
+        timing?.Checkpoint("decoder opened");
 
         // Acquire each NDI carrier with only the sides playback actually drives — keeps the other side's
         // black/silence flowing so receivers don't see resolution flicker or audio-format flicker.
@@ -549,8 +555,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             DisposePipelineOwned(pipelineOwned);
             ReleaseAcquiredLocalVideoLines(outputs, acquiredLocalLines);
             ReleaseAcquiredCarriers(outputs, acquired);
+            timing?.SetOutcome("player-build-failed");
             return false;
         }
+        timing?.Checkpoint("player built");
 
         EnableMultiOutputDriftCorrection(player);
 
@@ -624,12 +632,15 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 pendingPlayback._ndiAudioOutputs.Count, player.AudioSourceId ?? "(none)", openWarnings.Count);
             session = pendingPlayback;
             pendingPlayback = null;
+            timing?.SetOutcome(
+                $"success videoChains={videoChains.Count} portAudio={session._acquiredPortAudioLines.Count} ndiAudio={session._ndiAudioOutputs.Count}");
             return true;
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "TryCreate: post-open wiring failed, tearing down");
             errorMessage = ex.Message;
+            timing?.SetOutcome("post-open-wiring-failed");
             DisposePipelineOwned(pipelineOwned);
             pendingPlayback?.DisposePartialBeforePlayerDispose();
             player.Dispose();
@@ -774,6 +785,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         session = null;
         errorMessage = null;
         var lines = selectedOutputs.ToList();
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.TryCreateLive.PortAudio",
+            slowWarningMs: 750);
 
         PortAudioInput? input = preconnectedInput;
         try
@@ -783,34 +798,43 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 Trace.LogInformation("TryCreateLive(PortAudio): device='{Dev}' channels={Ch} rate={SR}",
                     item.DeviceName, item.Channels, item.SampleRate);
                 if (!PortAudioInputConnector.TryOpen(item, out input, out var fmt, out errorMessage))
+                {
+                    timing?.SetOutcome("capture-open-failed");
                     return false;
+                }
 
-                return TryCreateLiveCore(
+                var ok = TryCreateLiveCore(
                     new LiveOpenSources(input, fmt, null, DisposeSourcesOnDispose: true),
                     lines,
                     outputs,
                     out session,
                     out errorMessage);
+                timing?.SetOutcome(ok ? "success/opened-capture" : "live-core-failed");
+                return ok;
             }
 
             Trace.LogInformation("TryCreateLive(PortAudio): using pre-connected capture for '{Dev}'", item.DeviceName);
             if (!input.IsRunning)
             {
                 errorMessage = $"PortAudio input '{item.DeviceName}' pre-connect is no longer running.";
+                timing?.SetOutcome("preconnect-not-running");
                 return false;
             }
 
-            return TryCreateLiveCore(
+            var preconnectedOk = TryCreateLiveCore(
                 new LiveOpenSources(input, input.Format, null, DisposeSourcesOnDispose: true),
                 lines,
                 outputs,
                 out session,
                 out errorMessage);
+            timing?.SetOutcome(preconnectedOk ? "success/preconnected" : "live-core-failed");
+            return preconnectedOk;
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "TryCreateLive(PortAudio) failed");
             errorMessage = ex.Message;
+            timing?.SetOutcome("exception");
             if (preconnectedInput is null)
             {
                 try { input?.Dispose(); } catch { /* best effort */ }
@@ -842,6 +866,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         var lines = selectedOutputs.ToList();
         var wantAudio = !item.VideoOnly;
         var wantVideo = !item.AudioOnly;
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.TryCreateLive.NDI",
+            slowWarningMs: 1000);
 
         NDISource? receiver = preconnectedReceiver;
         try
@@ -851,19 +879,24 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 Trace.LogInformation("TryCreateLive(NDI): source='{Src}' audio={Audio} video={Video}",
                     item.SourceName, wantAudio, wantVideo);
                 if (!NdiInputConnector.TryConnectLive(item, out receiver, out _, out _, out errorMessage))
+                {
+                    timing?.SetOutcome("connect-failed");
                     return false;
+                }
             }
             else
             {
                 if (wantAudio && !receiver.IsAudioConnected)
                 {
                     errorMessage = $"NDI source '{item.SourceName}' pre-connect audio is no longer connected.";
+                    timing?.SetOutcome("preconnect-audio-lost");
                     return false;
                 }
 
                 if (wantVideo && !receiver.IsVideoConnected)
                 {
                     errorMessage = $"NDI source '{item.SourceName}' pre-connect video is no longer connected.";
+                    timing?.SetOutcome("preconnect-video-lost");
                     return false;
                 }
             }
@@ -871,6 +904,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             if (!wantAudio && !wantVideo)
             {
                 errorMessage = "NDI input has neither audio nor video enabled.";
+                timing?.SetOutcome("no-enabled-streams");
                 return false;
             }
 
@@ -886,12 +920,16 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 out errorMessage);
             if (!ok && preconnectedReceiver is null)
                 try { receiver.Dispose(); } catch { /* best effort */ }
+            timing?.SetOutcome(ok
+                ? (preconnectedReceiver is null ? "success/connected" : "success/preconnected")
+                : "live-core-failed");
             return ok;
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "TryCreateLive(NDI) failed");
             errorMessage = ex.Message;
+            timing?.SetOutcome("exception");
             if (preconnectedReceiver is null)
                 try { receiver?.Dispose(); } catch { /* best effort */ }
             return false;
@@ -915,12 +953,17 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     {
         session = null;
         errorMessage = null;
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.TryCreateLiveCore",
+            slowWarningMs: 750);
 
         var hasAudio = sources.Audio is not null;
         var hasVideo = sources.Video is not null;
         if (!hasAudio && !hasVideo)
         {
             errorMessage = "Live open requires at least one of audio or video.";
+            timing?.SetOutcome("no-sources");
             return false;
         }
 
@@ -945,11 +988,17 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                     {
                         ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
                         errorMessage = $"NDI output '{nd.DisplayName}' has no live carrier.";
+                        timing?.SetOutcome("ndi-carrier-unavailable");
                         return false;
                     }
 
                     ndiByDefinitionId[nd.Id] = ndi;
                     acquiredCarriers.Add(line);
+                    Trace.LogDebug(
+                        "TryCreateLiveCore: NDI carrier '{Name}' acquired (needsVideo={Video} needsAudio={Audio})",
+                        nd.DisplayName,
+                        needsVideo,
+                        needsAudio);
                     if (needsVideo)
                     {
                         var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-live");
@@ -968,6 +1017,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                     {
                         ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
                         errorMessage = $"Local video '{lv.DisplayName}' is unavailable.";
+                        timing?.SetOutcome("local-video-unavailable");
                         return false;
                     }
 
@@ -975,10 +1025,14 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                     var prefix = lv.Engine == VideoOutputEngine.SdlOpenGl ? "sdl" : "ava";
                     var logo = new LogoFallbackVideoOutput(output, disposeInnerOnDispose: false);
                     videoChains.Add((line, $"{prefix}_{lv.Id:N}_live", logo));
+                    Trace.LogDebug("TryCreateLiveCore: local video '{Name}' ({Engine}) acquired",
+                        lv.DisplayName,
+                        lv.Engine);
                     break;
                 }
             }
         }
+        timing?.Checkpoint("outputs acquired");
 
         var videoForPlayer = PlaybackVideoPipeline.WrapLiveVideoForLocalDisplay(sources.Video);
 
@@ -991,8 +1045,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 .TryBuild(out var player, out errorMessage))
         {
             ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
+            timing?.SetOutcome("player-build-failed");
             return false;
         }
+        timing?.Checkpoint("player built");
 
         EnableMultiOutputDriftCorrection(player);
 
@@ -1037,12 +1093,15 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 pendingPlayback._acquiredPortAudioLines.Count, pendingPlayback._ndiAudioOutputs.Count);
             session = pendingPlayback;
             pendingPlayback = null;
+            timing?.SetOutcome(
+                $"success video={hasVideo} audio={hasAudio} videoChains={videoChains.Count} portAudio={session._acquiredPortAudioLines.Count} ndiAudio={session._ndiAudioOutputs.Count}");
             return true;
         }
         catch (Exception ex)
         {
             Trace.LogError(ex, "TryCreateLiveCore: post-open wiring failed");
             errorMessage = ex.Message;
+            timing?.SetOutcome("post-open-wiring-failed");
             pendingPlayback?.DisposePartialBeforePlayerDispose();
             player.Dispose();
             ReleaseLiveAcquires(outputs, acquiredCarriers, acquiredLocalLines, videoChains);
@@ -1361,26 +1420,38 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     {
         if (holdFallbackShowsImage || _logoSinks.Count == 0)
             return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.PrimeVideoOutputsBeforePlay",
+            slowWarningMs: 100);
         // Audio-only sources (no real video stream) negotiate to a stub format the output doesn't care
         // about — priming black frames at the stub resolution would just glitch NDI receivers between
         // the carrier's real size and the stub size. Skip when there's no decodable video.
         var hasVideo = IsLive ? LiveHasVideo : Player.Decoder.HasVideo;
         if (!hasVideo)
+        {
+            timing?.SetOutcome("no-video");
             return;
+        }
         var fmt = Player.Video.Format;
         var input = Player.VideoInput;
+        var submitted = 0;
         for (var i = 0; i < frameCount; i++)
         {
             var pt = TimeSpan.FromMilliseconds(pacingMs * i);
             var black = FallbackImageLoader.TrySolidCpuFrame(fmt, pt);
             if (black is null)
+            {
+                timing?.SetOutcome($"frame-allocation-failed submitted={submitted}");
                 return;
+            }
             try
             {
                 // Router takes ownership of the frame whether SubmitLocked succeeds or throws an
                 // InvalidOperationException; only shutdown-race ObjectDisposedExceptions can leave
                 // the frame undisposed, so defensively clean up in the catch.
                 input.Submit(black);
+                submitted++;
             }
             catch
             {
@@ -1390,6 +1461,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             if (pacingMs > 0 && i < frameCount - 1)
                 Thread.Sleep(pacingMs);
         }
+        timing?.SetOutcome($"submitted={submitted}");
     }
 
     public void SetHoldFallback(bool hold)
@@ -1465,6 +1537,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     public void RebaseLiveSourcesForPlay()
     {
         if (!IsLive) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.RebaseLiveSourcesForPlay",
+            slowWarningMs: 100);
         try
         {
             if (_liveNdiReceiver is not null)
@@ -1479,12 +1555,14 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                         _liveNdiReceiver.VideoUnpackDrops,
                         _liveNdiReceiver.VideoOverflowFrames);
                 }
+                timing?.SetOutcome("ndi");
                 return;
             }
 
             if (_liveNdiReceiver is not null)
             {
                 _liveNdiReceiver.RebaseToLatest(Player.PlayClock.CurrentPosition);
+                timing?.SetOutcome("ndi/default-buffer");
             }
             else
             {
@@ -1492,6 +1570,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 {
                     case PortAudioInput paIn:
                         paIn.RebaseToLatest();
+                        timing?.SetOutcome("portaudio");
+                        break;
+                    default:
+                        timing?.SetOutcome("no-live-audio-source");
                         break;
                 }
             }
@@ -1499,6 +1581,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "RebaseLiveSourcesForPlay: rebase threw (continuing)");
+            timing?.SetOutcome("exception");
         }
     }
 
@@ -1511,6 +1594,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         if (!IsLive || _liveAudioSource is null || Player.AudioRouter is null)
             return;
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.PrefillLiveAudioBeforePlay",
+            slowWarningMs: 150);
         try
         {
             var timeout = TimeSpan.FromMilliseconds(500);
@@ -1518,11 +1605,17 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             {
                 Trace.LogDebug("PrefillLiveAudioBeforePlay: PortAudio prefill completed (timeout={Timeout}ms)",
                     timeout.TotalMilliseconds);
+                timing?.SetOutcome("prefilled");
+            }
+            else
+            {
+                timing?.SetOutcome("no-primary-portaudio-prefill");
             }
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "PrefillLiveAudioBeforePlay: prefill threw (continuing)");
+            timing?.SetOutcome("exception");
         }
     }
 
@@ -1537,6 +1630,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     public void PrepareLiveTransportBeforePlay()
     {
         if (!IsLive) return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.PrepareLiveTransportBeforePlay",
+            slowWarningMs: 200);
         RebaseLiveSourcesForPlay();
         PrefillLiveAudioBeforePlay();
         ResetPlayHealthBaselines();
@@ -1612,6 +1709,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     /// </summary>
     internal void DisposePartialBeforePlayerDispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.DisposePartialBeforePlayerDispose",
+            slowWarningMs: 250);
         foreach (var r in _ndiAudioResamplers)
         {
             try { r.Dispose(); }
@@ -1639,6 +1740,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
         _acquiredPortAudioLines.Clear();
         _ndiAudioOutputs.Clear();
+        timing?.SetOutcome("partial-dispose-complete");
     }
 
     public void Dispose()
@@ -1646,6 +1748,16 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "HaPlayPlaybackSession.Dispose",
+            slowWarningMs: 500);
+        var ownedDisposableCount = _playbackOwnedDisposables.Count;
+        var ndiResamplerCount = _ndiAudioResamplers.Count;
+        var portAudioResamplerCount = _portAudioResamplers.Count;
+        var portAudioLineCount = _acquiredPortAudioLines.Count;
+        var ndiCarrierCount = _acquiredCarriers.Count;
+        var localVideoLineCount = _acquiredLocalVideoLines.Count;
         foreach (var d in _playbackOwnedDisposables)
         {
             try { d.Dispose(); }
@@ -1711,5 +1823,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         _acquiredLocalVideoLines.Clear();
         _ndiAudioOutputs.Clear();
         _logoSinks.Clear();
+        timing?.SetOutcome(
+            $"owned={ownedDisposableCount} ndiResamplers={ndiResamplerCount} portAudioResamplers={portAudioResamplerCount} portAudioLines={portAudioLineCount} ndiCarriers={ndiCarrierCount} localVideoLines={localVideoLineCount}");
     }
 }

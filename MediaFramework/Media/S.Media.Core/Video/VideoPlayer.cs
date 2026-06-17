@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
@@ -77,9 +78,15 @@ public sealed class VideoPlayer : IDisposable
     private long _submitFailureStreak;
     private int _firstDecodedLogged;
     private int _syncDebugTicksRemaining;
+    private long _lastSlowDecodeReadWarningTicks;
+    private long _lastQueueSlotWaitWarningTicks;
+    private long _lastSlowOutputSubmitWarningTicks;
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoPlayer");
     private static readonly TimeSpan SyncOutputPreDrainTimeout = TimeSpan.FromMilliseconds(120);
+    private const double SlowDecodeReadWarningMs = 250;
+    private const double SlowQueueSlotWaitWarningMs = 250;
+    private const double SlowOutputSubmitWarningMs = 50;
 
     /// <summary>
     /// Frozen plane data captured from the final submitted frame when <see cref="HoldLastFrameAtEnd"/> is on.
@@ -226,6 +233,7 @@ public sealed class VideoPlayer : IDisposable
     public void Play()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoPlayer.Play", slowWarningMs: 250);
         lock (_gate)
         {
             if (_decodeThreadStuck)
@@ -238,6 +246,7 @@ public sealed class VideoPlayer : IDisposable
                     _fault);
             if (_isRunning)
             {
+                timing?.SetOutcome("already-running");
                 Trace.LogTrace("Play: already running");
                 return;
             }
@@ -278,6 +287,7 @@ public sealed class VideoPlayer : IDisposable
             _decodeThread.Start();
             Trace.LogDebug("Play: format={Format} queueCap={Cap} clockRunning={ClockRunning} clockType={ClockType}",
                 _sink.Format, _queueCapacity, _clock.IsRunning, _clock.GetType().Name);
+            timing?.SetOutcome($"format={_sink.Format} queueCap={_queueCapacity}");
         }
     }
 
@@ -307,10 +317,12 @@ public sealed class VideoPlayer : IDisposable
         if (_source is not ISeekableSource seekable)
             throw new InvalidOperationException("source does not implement ISeekableSource");
 
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoPlayer.Seek", slowWarningMs: 500);
         var wasRunning = IsRunning;
         if (wasRunning) StopInternal(CancellationToken.None);
         seekable.Seek(position);
         if (wasRunning) Play();
+        timing?.SetOutcome($"target={position} resumed={wasRunning}");
     }
 
     public void Dispose()
@@ -325,6 +337,7 @@ public sealed class VideoPlayer : IDisposable
 
     private void StopInternal(CancellationToken cancellationToken = default)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "VideoPlayer.Stop", slowWarningMs: 1000);
         var interrupt = _source as ICooperativeVideoReadInterrupt;
         interrupt?.RequestYieldBetweenReads();
 
@@ -336,6 +349,7 @@ public sealed class VideoPlayer : IDisposable
             if (!_isRunning)
             {
                 interrupt?.ClearYieldRequest();
+                timing?.SetOutcome("not-running");
                 return;
             }
             _isRunning = false;
@@ -382,6 +396,7 @@ public sealed class VideoPlayer : IDisposable
         }
         finally
         {
+            timing?.Checkpoint("decode-thread join completed", LogLevel.Trace);
             if (toJoin is not { IsAlive: true })
                 toDispose?.Dispose();
             else
@@ -404,6 +419,9 @@ public sealed class VideoPlayer : IDisposable
             Trace.LogError(ex, "StopInternal: decode thread did not exit within the join cap; player is now non-restartable (dispose it).");
             RaiseFaulted(ex);
         }
+
+        timing?.SetOutcome(
+            $"decoded={Volatile.Read(ref _decoded)} displayed={Volatile.Read(ref _displayed)} droppedLate={Volatile.Read(ref _droppedLate)} droppedDrain={Volatile.Read(ref _droppedQueueDrain)}");
     }
 
     private void DrainQueue()
@@ -441,13 +459,18 @@ public sealed class VideoPlayer : IDisposable
                     return;
                 }
 
+                var readStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
                 if (!_source.TryReadNextFrame(out var frame))
                 {
+                    if (readStarted != 0)
+                        MaybeLogSlowDecodeRead(readStarted, gotFrame: false);
                     // Live source not ready (or end-of-stream lag). Brief sleep
                     // so we don't spin; cancellation is honoured promptly.
                     if (token.WaitHandle.WaitOne(_decodePollInterval)) return;
                     continue;
                 }
+                if (readStarted != 0)
+                    MaybeLogSlowDecodeRead(readStarted, gotFrame: true);
 
                 Interlocked.Increment(ref _decoded);
                 Volatile.Write(ref _latestDecodedPtsTicks, frame.PresentationTime.Ticks);
@@ -456,7 +479,10 @@ public sealed class VideoPlayer : IDisposable
 
                 try
                 {
+                    var waitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
                     _slotsAvailable.Wait(token);
+                    if (waitStarted != 0)
+                        MaybeLogSlowQueueSlotWait(waitStarted);
                 }
                 catch (OperationCanceledException)
                 {
@@ -721,7 +747,19 @@ public sealed class VideoPlayer : IDisposable
     {
         try
         {
-            return output.WaitForIdle(timeout, cancellationToken);
+            var started = Stopwatch.GetTimestamp();
+            var ready = output.WaitForIdle(timeout, cancellationToken);
+            if (!ready)
+            {
+                Trace.LogWarning(
+                    "{Operation}: video output idle wait timed out after {ElapsedMs:0.00}ms (timeout={TimeoutMs:0.00}ms, queued={Queued}, latestDecoded={Latest})",
+                    operation,
+                    MediaDiagnostics.ElapsedMillisecondsSince(started),
+                    timeout.TotalMilliseconds,
+                    QueuedFrameCount,
+                    LatestDecodedPresentationTime);
+            }
+            return ready;
         }
         catch (OperationCanceledException)
         {
@@ -760,7 +798,10 @@ public sealed class VideoPlayer : IDisposable
         var submitted = false;
         try
         {
+            var submitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
             _sink.Submit(frame);
+            if (submitStarted != 0)
+                MaybeLogSlowOutputSubmit(operation, submitStarted);
             submitted = true;
             Interlocked.Exchange(ref _submitFailureStreak, 0);
         }
@@ -886,6 +927,65 @@ public sealed class VideoPlayer : IDisposable
     {
         try { Faulted?.Invoke(this, new VideoPlayerFaultedEventArgs(ex)); }
         catch (Exception hex) { MediaDiagnostics.LogError(hex, "VideoPlayer.Faulted handler threw"); }
+    }
+
+    private void MaybeLogSlowDecodeRead(long started, bool gotFrame)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowDecodeReadWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowDecodeReadWarningTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "DecodeLoop: TryReadNextFrame took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, gotFrame={GotFrame}, decoded={Decoded}, queued={Queued}, latestDecoded={Latest})",
+            elapsedMs,
+            SlowDecodeReadWarningMs,
+            gotFrame,
+            Volatile.Read(ref _decoded),
+            _queue.Count,
+            LatestDecodedPresentationTime);
+    }
+
+    private void MaybeLogSlowQueueSlotWait(long started)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowQueueSlotWaitWarningMs ||
+            !TryUpdateThrottle(ref _lastQueueSlotWaitWarningTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "DecodeLoop: waited {ElapsedMs:0.00}ms for a video queue slot (threshold={ThresholdMs:0.00}ms, queueCap={QueueCap}, queued={Queued}, displayed={Displayed})",
+            elapsedMs,
+            SlowQueueSlotWaitWarningMs,
+            _queueCapacity,
+            _queue.Count,
+            Volatile.Read(ref _displayed));
+    }
+
+    private void MaybeLogSlowOutputSubmit(string operation, long started)
+    {
+        var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+        if (elapsedMs < SlowOutputSubmitWarningMs ||
+            !TryUpdateThrottle(ref _lastSlowOutputSubmitWarningTicks, TimeSpan.FromSeconds(2)))
+            return;
+
+        Trace.LogWarning(
+            "{Operation}: output Submit took {ElapsedMs:0.00}ms (threshold={ThresholdMs:0.00}ms, queued={Queued}, displayed={Displayed}, droppedLate={DroppedLate})",
+            operation,
+            elapsedMs,
+            SlowOutputSubmitWarningMs,
+            _queue.Count,
+            Volatile.Read(ref _displayed),
+            Volatile.Read(ref _droppedLate));
+    }
+
+    private static bool TryUpdateThrottle(ref long ticksSlot, TimeSpan interval)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var prev = Volatile.Read(ref ticksSlot);
+        if (prev != 0 && Stopwatch.GetElapsedTime(prev, now) < interval)
+            return false;
+        return Interlocked.CompareExchange(ref ticksSlot, now, prev) == prev;
     }
 
     private void ReleaseHeldFrame()

@@ -378,33 +378,53 @@ public sealed partial class CuePlaybackEngine : IDisposable
 
     private async Task<string?> ExecuteCoreAsync(MediaCueNode cue, CancellationToken ct, bool deferPlay)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.ExecuteCoreAsync",
+            slowWarningMs: 1000);
         if (cue.Source is null)
+        {
+            timing?.SetOutcome("no-source");
             return "Cue has no source.";
+        }
 
         if (!SupportsCueEngineSource(cue.Source))
+        {
+            timing?.SetOutcome("unsupported-source");
             return $"Unsupported cue source: {cue.Source.GetType().Name}.";
+        }
 
         await StopPreviewAsync().ConfigureAwait(false);
 
         var list = await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.SelectedCueList?.ToModel());
         if (list is null)
+        {
+            timing?.SetOutcome("no-cue-list");
             return "No cue list selected.";
+        }
 
         var plan = BuildRoutePlan(cue);
         if (!plan.HasAnyRoute)
+        {
+            timing?.SetOutcome("no-routes");
             return "Cue has no audio routes or video placements wired to outputs.";
+        }
 
         // Play-what-you-can: unsatisfiable routes are dropped with warnings and the cue fires with
         // whatever remains; it only fails when nothing at all can be wired.
         plan = SanitizeRoutePlan(cue, plan, out var routeWarnings);
         if (!plan.HasAnyRoute)
+        {
+            timing?.SetOutcome("no-satisfiable-routes");
             return "No cue route could be wired. " + string.Join(" ", routeWarnings);
+        }
         if (routeWarnings.Count > 0)
         {
             var warningText = string.Join(" ", routeWarnings);
             Trace.LogWarning("ExecuteCoreAsync: cue {Cue} firing degraded — {Warnings}", cue.Id, warningText);
             await Dispatcher.UIThread.InvokeAsync(() => _cuePlayer.StatusMessage = warningText);
         }
+        timing?.Checkpoint("route plan built");
 
         // If the same cue id is already running, stop its prior instance. A matching prepared
         // standby instance is kept and consumed below.
@@ -423,8 +443,10 @@ public sealed partial class CuePlaybackEngine : IDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Trace.LogError(ex, "CuePlaybackEngine: clip arm failed");
+            timing?.SetOutcome("clip-arm-failed");
             return ex.Message;
         }
+        timing?.Checkpoint("clip armed");
 
         // Files report their decoded length; live/held sources (image, text, NDI) report none, so fall
         // back to the cue's custom duration. NDI/PortAudio cues leave DurationMs at 0 (unbounded), while
@@ -437,8 +459,10 @@ public sealed partial class CuePlaybackEngine : IDisposable
         if (wireErr is not null)
         {
             await DisposeEntryAsync(entry, notifyEnded: false).ConfigureAwait(false);
+            timing?.SetOutcome("route-wire-failed");
             return wireErr;
         }
+        timing?.Checkpoint("routes wired");
 
         lock (_gate)
             _active[cue.Id] = entry;
@@ -463,6 +487,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             {
                 Trace.LogError(ex, "CuePlaybackEngine: Play threw");
                 await StopCueAsync(cue.Id).ConfigureAwait(false);
+                timing?.SetOutcome("play-threw");
                 return ex.Message;
             }
 
@@ -476,6 +501,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         targets.AddRange(plan.Placements.Select(p => p.CompositionId).Distinct()
             .Select(id => list.Compositions.FirstOrDefault(c => c.Id == id)?.Name ?? "")
             .Where(n => n.Length > 0));
+        timing?.SetOutcome($"success deferPlay={deferPlay} audioRoutes={plan.AudioByOutput.Count} videoPlacements={plan.Placements.Count}");
         return $"playing {cue.Source.DisplayName} → {string.Join(", ", targets)}";
     }
 
@@ -763,16 +789,23 @@ public sealed partial class CuePlaybackEngine : IDisposable
     /// <summary>Stop all active cues — used by the Cue VM's Stop / Panic commands.</summary>
     public async Task StopAsync()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.StopAsync",
+            slowWarningMs: 1000);
         // Calibration grids hold composition runtimes (and their leased outputs) open — panic/stop
         // must release them too. Synchronous section: runs on the calling UI thread before awaits.
+        var testPatternCount = _testPatternSlots.Count;
         foreach (var slot in _testPatternSlots.Values)
         {
             try { slot.Dispose(); }
             catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.StopAsync: test pattern slot dispose"); }
         }
         _testPatternSlots.Clear();
+        timing?.Checkpoint("test patterns disposed");
 
         await StopPreviewAsync().ConfigureAwait(false);
+        timing?.Checkpoint("preview stopped");
 
         List<ActiveCue> toDispose;
         lock (_gate)
@@ -782,7 +815,9 @@ public sealed partial class CuePlaybackEngine : IDisposable
         }
         await Task.WhenAll(toDispose.Select(entry => DisposeEntryAsync(entry, releaseFade: ReleaseFadeFor(entry))))
             .ConfigureAwait(false);
+        timing?.Checkpoint("active cues disposed");
         await _standby.RefreshStandbyAsync([], new ClipStandbyPolicy()).ConfigureAwait(false);
+        timing?.SetOutcome($"active={toDispose.Count} testPatterns={testPatternCount}");
     }
 
     /// <summary>Stop a specific cue.</summary>
@@ -796,21 +831,33 @@ public sealed partial class CuePlaybackEngine : IDisposable
 
     private async Task StopActiveCueAsync(Guid cueId, TimeSpan releaseFade)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.StopActiveCueAsync",
+            slowWarningMs: 750);
         ActiveCue? entry;
         lock (_gate)
         {
             if (!_active.Remove(cueId, out entry))
+            {
+                timing?.SetOutcome("not-active");
                 return;
+            }
         }
         // Soft stops honor the cue's own FadeOutMs; hard stops (releaseFade = 0) stay immediate.
         if (releaseFade > TimeSpan.Zero)
             releaseFade = ReleaseFadeFor(entry);
         await DisposeEntryAsync(entry, releaseFade: releaseFade).ConfigureAwait(false);
+        timing?.SetOutcome($"disposed releaseFadeMs={releaseFade.TotalMilliseconds:0}");
     }
 
     /// <summary>Pause or resume every active cue without tearing down decoders or routes.</summary>
     public async Task SetPausedAsync(bool paused)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.SetPausedAsync",
+            slowWarningMs: 750);
         List<ActiveCue> entries;
         lock (_gate)
             entries = _active.Values.ToList();
@@ -837,6 +884,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 }
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SetPausedAsync: cue {Cue}", entry.Cue.Id); }
             })).ConfigureAwait(false);
+            timing?.SetOutcome($"paused entries={entries.Count}");
             return;
         }
 
@@ -862,6 +910,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             entry.SetAudioPaused(false);
             entry.EnsureAudioRuntimesStarted();
         }
+        timing?.SetOutcome($"resumed entries={entries.Count}");
     }
 
     private bool HasActiveCue(Guid cueId)
@@ -1072,6 +1121,10 @@ public sealed partial class CuePlaybackEngine : IDisposable
     {
         if (!entry.TryBeginDispose())
             return;
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.DisposeEntryAsync",
+            slowWarningMs: 1000);
 
         try { entry.Cts.Cancel(); } catch { /* best effort */ }
         try { entry.FadeInCts?.Cancel(); } catch { /* best effort */ }
@@ -1080,6 +1133,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         // natural-end watcher already ran the FadeOutMs fade.
         if (releaseFade > TimeSpan.Zero && entry.TryBeginFadeOut())
             await FadeEntryOutputsAsync(entry, releaseFade).ConfigureAwait(false);
+        timing?.Checkpoint("fade released");
 
         try { entry.Cts.Dispose(); } catch { /* best effort */ }
 
@@ -1102,6 +1156,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 Trace.LogWarning(ex, "CuePlaybackEngine.DisposeEntryAsync: bounded pre-dispose pause failed");
             }
         }
+        timing?.Checkpoint("transport paused");
 
         // Detach from shared runtimes on UI thread (lightweight ops).
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1124,6 +1179,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: audio adapter dispose"); }
             }
         });
+        timing?.Checkpoint("routes detached");
 
         // Heavy player teardown off UI thread with bounded timeout.
         try
@@ -1144,6 +1200,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         {
             Trace.LogWarning("CuePlaybackEngine.DisposeEntryAsync: player dispose timed out after {Timeout}", BoundedDisposeTimeout);
         }
+        timing?.Checkpoint("armed clip disposed");
 
         // UI cleanup: release empty shared runtimes and notify.
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -1156,6 +1213,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine: CueEnded handler"); }
             }
         });
+        timing?.SetOutcome($"notifyEnded={notifyEnded} releaseFadeMs={releaseFade.TotalMilliseconds:0}");
     }
 
     /// <summary>Cue FadeInMs: zero the freshly wired levels (route gains + layer opacities) before
@@ -1776,12 +1834,17 @@ public sealed partial class CuePlaybackEngine : IDisposable
 
     private async Task SeekPreviewAsync(CuePreviewSession preview, TimeSpan position)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.SeekPreviewAsync",
+            slowWarningMs: 1000);
         position = preview.ClipWindow.ToSourcePosition(position);
         try
         {
             await Task.Run(() =>
                 preview.Player.SeekCoordinated(position, CancellationToken.None, PauseFlushPolicy.SkipFlush)
             ).WaitAsync(BoundedSeekTimeout);
+            timing?.Checkpoint("seek completed");
         }
         catch (Exception ex) { Trace.LogWarning(ex, "CuePlaybackEngine.SeekPreviewAsync: seek timed out or failed"); }
         // Off the UI thread: PrewarmVideoAfterSeek can spin up to 5 s waiting on the jitter
@@ -1791,6 +1854,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             preview.Player.PrewarmVideoAfterSeek();
             preview.Play();
         });
+        timing?.SetOutcome("preview-resumed");
     }
 
     private Task SeekActiveCueAsync(ActiveCue entry, TimeSpan position) =>
@@ -1805,6 +1869,10 @@ public sealed partial class CuePlaybackEngine : IDisposable
     /// </summary>
     private async Task SeekActiveCuesCoreAsync(List<(ActiveCue Entry, TimeSpan Position)> seeks)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.SeekActiveCuesCoreAsync",
+            slowWarningMs: 1000);
         // Serialize per cue: an overlapping seek (rapid taps on the progress bar) would read the
         // transient IsPaused=true set by the in-flight one, conclude the cue is user-paused, and
         // skip the resume — leaving video stopped while audio comes back. Gates are taken in a
@@ -1818,6 +1886,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 await entry.SeekGate.WaitAsync().ConfigureAwait(false);
                 acquired++;
             }
+            timing?.Checkpoint("seek gates acquired");
 
             // Silence everything first — SetAudioPaused is a volatile flip with no UI affinity
             // (see SetPausedAsync), so the whole group goes quiet together before any seek runs.
@@ -1849,9 +1918,13 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 // content at the same sample position.
                 seek.Entry.AudioFanout?.DiscardBuffered();
             })).ConfigureAwait(false);
+            timing?.Checkpoint("transports seeked");
 
             if (resuming.Count == 0)
+            {
+                timing?.SetOutcome($"seeked entries={seeks.Count} resumed=0");
                 return;
+            }
 
             // Restart transports in parallel OFF the UI thread — PrewarmVideoAfterSeek can block
             // up to 5 s and Play blocks on its prefill; the old dispatcher hop froze the UI for
@@ -1874,6 +1947,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 entry.SetAudioPaused(false);
                 entry.EnsureAudioRuntimesStarted();
             }
+            timing?.SetOutcome($"seeked entries={seeks.Count} resumed={resuming.Count}");
         }
         finally
         {
@@ -2007,6 +2081,10 @@ public sealed partial class CuePlaybackEngine : IDisposable
 
     public void Dispose()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(
+            Trace,
+            "CuePlaybackEngine.Dispose",
+            slowWarningMs: 1000);
         try { StopPreviewAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { StopAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { _standby.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { /* best effort */ }
@@ -2023,6 +2101,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         foreach (var r in compsLeft) HaPlayCleanup.TryRun("CuePlaybackEngine.Dispose: composition runtime", r.Dispose);
         foreach (var r in audioLeft) HaPlayCleanup.TryRun("CuePlaybackEngine.Dispose: audio output runtime", r.Dispose);
         _genlock?.Dispose();
+        timing?.SetOutcome($"compositions={compsLeft.Count} audioRuntimes={audioLeft.Count}");
     }
 
     private static string BuildPreparedCueKey(MediaCueNode cue, CueList list, RoutePlan plan)
