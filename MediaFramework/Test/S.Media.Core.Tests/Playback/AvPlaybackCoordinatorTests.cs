@@ -275,6 +275,35 @@ public class AvPlaybackCoordinatorTests
     }
 
     [Fact]
+    public void IsVideoBufferReadyForSync_AcceptsSaturatedBufferWhenFirstFrameBeyondLead()
+    {
+        // Mirrors mambo.mp4: 25 fps (lead = 1.5/25 = 60 ms), video starts two frame periods after the
+        // clock origin so the earliest queued frame (80 ms) sits beyond the lead window. The buffer
+        // saturates and the decode thread blocks; without the saturated-buffer escape the gate would
+        // spin its full 8 s timeout waiting for a sub-60 ms frame that can never arrive.
+        var fmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(25, 1));
+        var stride = 16 * 4;
+        var bytes = new byte[stride * 16];
+        const int cap = 4;
+        var frames = Enumerable.Range(2, cap + 4)
+            .Select(i => (TimeSpan.FromMilliseconds(i * 40), bytes, stride))
+            .ToArray();
+        var src = new FakeVideoSource(fmt, frames);
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        using var video = new VideoPlayer(src, output, clock, queueCapacity: cap);
+
+        video.Play();
+        output.WaitForConfigured();
+        WaitFor(() => video.IsJitterBufferSaturated, TimeSpan.FromSeconds(2));
+
+        // No frame within 60 ms of target 0 (earliest is 80 ms), but the buffer is full.
+        Assert.False(video.HasFrameWithinLeadOf(TimeSpan.Zero, video.SyncStartupLead));
+        Assert.True(AvPlaybackCoordinator.IsVideoBufferReadyForSync(video, TimeSpan.Zero));
+        video.Pause();
+    }
+
+    [Fact]
     public void Play_OnResume_RealignsAudioSourceWhenAheadOfClock()
     {
         var vFmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(24, 1));

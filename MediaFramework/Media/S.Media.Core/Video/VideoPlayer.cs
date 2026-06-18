@@ -139,6 +139,15 @@ public sealed class VideoPlayer : IDisposable
     public int QueuedFrameCount => _queue.Count;
 
     /// <summary>
+    /// True when the presentation queue is at capacity, so the decode thread is blocked waiting for a
+    /// slot and cannot deliver any further frames until one is consumed. Frames are buffered in
+    /// increasing-PTS order, so a saturated buffer means the earliest queued frame is the lowest PTS
+    /// the source will ever deliver for the current position — used by the pre-audio sync gate to stop
+    /// waiting for an earlier frame that can never arrive.
+    /// </summary>
+    internal bool IsJitterBufferSaturated => _queue.Count >= _queueCapacity;
+
+    /// <summary>
     /// True when the underlying source reports it will produce no further frames — e.g. an audio-only
     /// file's stub video source (which is exhausted from the start), or genuine end of stream. Lets the
     /// pre-audio sync wait skip a video buffer that can never fill instead of blocking for its full timeout.

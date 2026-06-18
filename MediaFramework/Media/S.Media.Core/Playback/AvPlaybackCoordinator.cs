@@ -85,10 +85,19 @@ internal static class AvPlaybackCoordinator
             return false;
 
         var lead = video.SyncStartupLead;
-        if (!video.HasFrameWithinLeadOf(playhead, lead))
-            return false;
+        if (video.HasFrameWithinLeadOf(playhead, lead))
+            return video.LatestDecodedPresentationTime + lead >= playhead;
 
-        return video.LatestDecodedPresentationTime + lead >= playhead;
+        // The earliest queued frame sits beyond the lead window of the sync target. Frames are buffered
+        // in increasing-PTS order, so that earliest frame is the lowest PTS the source will ever deliver
+        // here — waiting cannot lower it, and once the jitter buffer saturates the decode thread just
+        // blocks on a slot it can never get (the queue only drains once the clock runs, which is gated on
+        // this very check). This happens for streams whose first presentable frame starts a frame period
+        // or two after the clock origin: e.g. an MP4 with video start_time=0.04 where demux priming
+        // consumes the 0.04 keyframe, leaving the first delivered frame at ~0.08 against a 60 ms lead.
+        // Treat a saturated buffer as sync-ready so audio starts against the earliest available frame
+        // instead of spinning the full pre-audio timeout.
+        return video.IsJitterBufferSaturated;
     }
 
     /// <summary>
