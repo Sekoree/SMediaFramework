@@ -26,6 +26,21 @@ public sealed class ShellAndToastTests
         });
     }
 
+    [Fact]
+    public void AddPlayer_AddsAndSelectsNewPlayerTab()
+    {
+        DispatchUi(static () =>
+        {
+            var vm = new MainViewModel();
+
+            vm.AddPlayerCommand.Execute(null);
+
+            Assert.Equal(2, vm.PlayerTabs.Count);
+            Assert.Same(vm.Players[1], vm.PlayerTabs[1]);
+            Assert.Same(vm.Players[1], vm.SelectedPlayer);
+        });
+    }
+
     [Theory]
     [InlineData("outputs", "io")]
     [InlineData("midi", "io")]

@@ -1350,6 +1350,18 @@
   <data name="OutputEditInUseDialogMessageFormat" xml:space="preserve">
     <value>'{0}' is currently delivering audio/video to a running player. Applying the edit will cause a brief silence / black-frame on that output (typically 1–2 frames). Continue?</value>
   </data>
+  <data name="VideoOutputRouteConflictTitle" xml:space="preserve">
+    <value>Rewire video output?</value>
+  </data>
+  <data name="VideoOutputRouteConflictRewireButton" xml:space="preserve">
+    <value>Rewire</value>
+  </data>
+  <data name="VideoOutputRouteConflictMessageFormat" xml:space="preserve">
+    <value>'{0}' is already selected on {1}. A video output can only be routed to one media player at a time. Rewire it to {2}?</value>
+  </data>
+  <data name="VideoOutputRouteConflictStatusFormat" xml:space="preserve">
+    <value>Rewired '{0}' to {1}.</value>
+  </data>
   <data name="OutputHealthVideoPumpOkFormat" xml:space="preserve">
     <value>Video pump OK ({0} submitted, queue {1}/{2})</value>
   </data>
@@ -2152,7 +2164,7 @@
     <value>This project used virtual audio channels (VOut); that model was replaced by output aliases and routing matrix presets. Review your player routing.</value>
   </data>
   <data name="PlayersDeckHint" xml:space="preserve">
-    <value>Double-tap a player to focus it; Esc returns to the grid. Drop media files on a player to quick-play.</value>
+    <value>Players are shown as tabs. Drop media files here to quick-play on the selected player.</value>
   </data>
   <data name="HoldButtonLabel" xml:space="preserve">
     <value>HOLD</value>

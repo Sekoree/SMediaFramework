@@ -586,6 +586,10 @@ public static class Strings
     public static string OutputEditInUseDialogTitle => Get(nameof(OutputEditInUseDialogTitle));
     public static string OutputEditInUseApplyButton => Get(nameof(OutputEditInUseApplyButton));
     public static string OutputEditInUseDialogMessageFormat => Get(nameof(OutputEditInUseDialogMessageFormat));
+    public static string VideoOutputRouteConflictTitle => Get(nameof(VideoOutputRouteConflictTitle));
+    public static string VideoOutputRouteConflictRewireButton => Get(nameof(VideoOutputRouteConflictRewireButton));
+    public static string VideoOutputRouteConflictMessageFormat => Get(nameof(VideoOutputRouteConflictMessageFormat));
+    public static string VideoOutputRouteConflictStatusFormat => Get(nameof(VideoOutputRouteConflictStatusFormat));
     public static string OutputHealthVideoPumpOkFormat => Get(nameof(OutputHealthVideoPumpOkFormat));
     public static string OutputHealthVideoDropsFormat => Get(nameof(OutputHealthVideoDropsFormat));
     public static string OutputHealthAudioPumpOkFormat => Get(nameof(OutputHealthAudioPumpOkFormat));

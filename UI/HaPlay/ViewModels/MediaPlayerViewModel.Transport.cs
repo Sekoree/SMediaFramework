@@ -170,22 +170,23 @@ public partial class MediaPlayerViewModel
 
     private PlayerOutputBinding? PickAutoRoute(bool preferVideo, bool preferAudio)
     {
+        PlayerOutputBinding? FirstAvailable(Func<PlayerOutputBinding, bool> predicate) =>
+            Outputs.FirstOrDefault(b => predicate(b) && !WouldConflictWithAnotherPlayer(b));
+
         // First compatible match wins. Video outputs cover video; PortAudio covers audio; NDI covers both.
-        foreach (var b in Outputs)
-        {
-            if (b.Line.Definition is Models.NDIOutputDefinition) return b;
-        }
+        var ndi = FirstAvailable(b => b.Line.Definition is Models.NDIOutputDefinition);
+        if (ndi is not null) return ndi;
         if (preferVideo)
         {
-            foreach (var b in Outputs)
-                if (b.Line.Definition is Models.LocalVideoOutputDefinition) return b;
+            var localVideo = FirstAvailable(b => b.Line.Definition is Models.LocalVideoOutputDefinition);
+            if (localVideo is not null) return localVideo;
         }
         if (preferAudio)
         {
-            foreach (var b in Outputs)
-                if (b.Line.Definition is Models.PortAudioOutputDefinition) return b;
+            var portAudio = FirstAvailable(b => b.Line.Definition is Models.PortAudioOutputDefinition);
+            if (portAudio is not null) return portAudio;
         }
-        return Outputs.FirstOrDefault();
+        return Outputs.FirstOrDefault(b => !WouldConflictWithAnotherPlayer(b));
     }
 
     private async Task StartPlaybackAsync()

@@ -49,8 +49,6 @@
                 CommandParameter="{x:Static models:WorkspaceItem.Io}" />
     <KeyBinding Gesture="Ctrl+6" Command="{Binding SelectWorkspaceCommand}"
                 CommandParameter="{x:Static models:WorkspaceItem.Project}" />
-    <!-- P5: leave deck focus. No-op when nothing is focused, so Escape stays free elsewhere. -->
-    <KeyBinding Gesture="Escape" Command="{Binding ExitPlayerFocusCommand}" />
   </UserControl.KeyBindings>
 
   <!-- Root grid so the toast overlay can stack above the shell without touching layout (P1). -->
@@ -139,9 +137,8 @@
     </Border>
 
     <Grid>
-      <!-- UI rewrite P5 (plan §2.1): ONE responsive deck grid. 1 deck fills, 2 sit side-by-side,
-           3–4 make a 2×2, 5+ wrap into more columns (⌈√N⌉). Double-tap a deck header area to focus
-           it full-workspace; Esc or double-tap again returns to the grid. -->
+      <!-- Players workspace: tabs keep multiple decks manageable while preserving a single selected
+           player for quick-play drops, cue defaults, and remote routing. -->
       <DockPanel Margin="8" IsVisible="{Binding IsPlayersWorkspaceSelected}">
         <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" Margin="0,0,0,6">
           <TextBlock Grid.Column="0" VerticalAlignment="Center" Classes="CaptionText"
@@ -158,41 +155,26 @@
         <ContentControl x:Name="PlayersPopoutHost">
         <Grid x:Name="PlayersQuickPlayHost"
               ToolTip.Tip="{x:Static res:Strings.QuickPlayDropTooltip}">
-
-          <!-- Focused deck: fills the workspace. Content is null-gated by the VM so the grid branch
-               never materializes a second MediaPlayerView for the same player. -->
-          <Border IsVisible="{Binding IsPlayerFocused}"
-                  BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1" CornerRadius="6"
-                  Padding="4"
-                  DoubleTapped="OnDeckDoubleTapped">
-            <ContentControl Content="{Binding FocusedDeckContent}"
-                            HorizontalContentAlignment="Stretch"
-                            VerticalContentAlignment="Stretch" />
-          </Border>
-
-          <!-- Deck grid (ItemsSource null while focused). -->
-          <ScrollViewer IsVisible="{Binding !IsPlayerFocused}"
-                        HorizontalScrollBarVisibility="Disabled"
-                        VerticalScrollBarVisibility="Auto">
-            <ItemsControl ItemsSource="{Binding DeckGridContent}">
-              <ItemsControl.ItemsPanel>
-                <ItemsPanelTemplate>
-                  <UniformGrid Columns="{Binding DeckColumns}" />
-                </ItemsPanelTemplate>
-              </ItemsControl.ItemsPanel>
-              <ItemsControl.ItemTemplate>
-                <DataTemplate DataType="vm:MediaPlayerViewModel">
-                  <Border BorderBrush="{StaticResource BorderSubtle}" BorderThickness="1"
-                          CornerRadius="6" Margin="4" Padding="4" MinHeight="480"
-                          Background="Transparent"
-                          PointerPressed="OnDeckPointerPressed"
-                          DoubleTapped="OnDeckDoubleTapped">
-                    <ContentControl Content="{Binding}" />
-                  </Border>
-                </DataTemplate>
-              </ItemsControl.ItemTemplate>
-            </ItemsControl>
-          </ScrollViewer>
+          <TabControl ItemsSource="{Binding PlayerTabs}"
+                      SelectedItem="{Binding SelectedPlayer, Mode=TwoWay}">
+            <TabControl.ItemTemplate>
+              <DataTemplate x:DataType="vm:MediaPlayerViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" MinWidth="96">
+                  <TextBlock FontWeight="SemiBold"
+                             MaxWidth="180"
+                             Text="{Binding Name}"
+                             TextTrimming="CharacterEllipsis" />
+                  <TextBlock FontSize="11" Opacity="0.65" VerticalAlignment="Center"
+                             Text="{Binding PlaybackStateLabel}" />
+                </StackPanel>
+              </DataTemplate>
+            </TabControl.ItemTemplate>
+            <TabControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:MediaPlayerViewModel">
+                <views:MediaPlayerView DataContext="{Binding}" />
+              </DataTemplate>
+            </TabControl.ContentTemplate>
+          </TabControl>
         </Grid>
         </ContentControl>
       </DockPanel>

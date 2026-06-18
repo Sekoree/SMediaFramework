@@ -20,6 +20,11 @@ using S.Media.PortAudio;
 
 namespace HaPlay.ViewModels;
 
+internal sealed record VideoOutputRouteConflict(
+    MediaPlayerViewModel TargetPlayer,
+    OutputLineViewModel OutputLine,
+    IReadOnlyList<MediaPlayerViewModel> ExistingPlayers);
+
 public partial class MediaPlayerViewModel : ViewModelBase
 {
     private readonly OutputManagementViewModel _outputs;
@@ -46,6 +51,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private Timer? _holdPumpTimer;
     private int _holdPumpReentry;
     private PlaylistTabViewModel? _activePlaybackTab;
+    private int _suppressVideoRouteConflictPrompt;
+
+    internal Func<VideoOutputRouteConflict, Task<bool>> VideoOutputRouteConflictPrompt { get; set; } =
+        DefaultVideoOutputRouteConflictPromptAsync;
 
     /// <summary>When true, natural file-end raises <see cref="NaturalPlaybackEnded"/> instead of playlist auto-advance.</summary>
     private bool _cuePlaybackActive;
@@ -892,8 +901,8 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     public OutputManagementViewModel OutputsRepository => _outputs;
 
-    /// <summary>Per-player checkbox bindings. Each player tracks its own selection so two players can route
-    /// to overlapping subsets of outputs (e.g. main → NDI, preview → local SDL).</summary>
+    /// <summary>Per-player checkbox bindings. Audio outputs may be selected on several players; video-capable
+    /// outputs are guarded by a rewire prompt so one physical video sink is owned by one player at a time.</summary>
     public ObservableCollection<PlayerOutputBinding> Outputs { get; } = new();
 
     /// <summary>True when no outputs are registered yet — view shows the "click Play to auto-route" hint.</summary>
@@ -1946,6 +1955,164 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RebuildAudioMatrixRouteRows();
     }
 
+    private bool TryGetVideoOutputRouteConflict(
+        PlayerOutputBinding binding,
+        [NotNullWhen(true)] out VideoOutputRouteConflict? conflict)
+    {
+        conflict = null;
+        if (!IsVideoOutputLine(binding.Line))
+            return false;
+
+        var players = _outputs.ActivePlayersProbe?.Invoke();
+        if (players is null || players.Count == 0)
+            return false;
+
+        var existing = players
+            .Where(p => !ReferenceEquals(p, this) && p.IsVideoOutputSelected(binding.Line.Definition.Id))
+            .ToList();
+        if (existing.Count == 0)
+            return false;
+
+        conflict = new VideoOutputRouteConflict(this, binding.Line, existing);
+        return true;
+    }
+
+    private bool WouldConflictWithAnotherPlayer(PlayerOutputBinding binding) =>
+        TryGetVideoOutputRouteConflict(binding, out _);
+
+    private bool IsVideoOutputSelected(Guid outputLineId) =>
+        Outputs.Any(b => b.Line.Definition.Id == outputLineId && b.IsSelected && IsVideoOutputLine(b.Line));
+
+    internal void DeselectVideoOutputForRewire(Guid outputLineId)
+    {
+        var binding = Outputs.FirstOrDefault(b => b.Line.Definition.Id == outputLineId);
+        if (binding is { IsSelected: true } && IsVideoOutputLine(binding.Line))
+            binding.IsSelected = false;
+    }
+
+    private static bool IsVideoOutputLine(OutputLineViewModel line) =>
+        line.Definition switch
+        {
+            LocalVideoOutputDefinition => true,
+            NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.AudioOnly } => true,
+            _ => false,
+        };
+
+    private void SetBindingSelectedWithoutVideoConflictPrompt(PlayerOutputBinding binding, bool selected)
+    {
+        _suppressVideoRouteConflictPrompt++;
+        try
+        {
+            binding.IsSelected = selected;
+        }
+        finally
+        {
+            _suppressVideoRouteConflictPrompt--;
+        }
+    }
+
+    private void SuppressVideoRouteConflictPrompt(Action action)
+    {
+        _suppressVideoRouteConflictPrompt++;
+        try
+        {
+            action();
+        }
+        finally
+        {
+            _suppressVideoRouteConflictPrompt--;
+        }
+    }
+
+    private async Task PromptAndApplyVideoOutputRewireAsync(
+        PlayerOutputBinding binding,
+        VideoOutputRouteConflict conflict)
+    {
+        bool confirmed;
+        try
+        {
+            confirmed = await VideoOutputRouteConflictPrompt(conflict).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => StatusMessage = ex.Message);
+            return;
+        }
+
+        if (!confirmed)
+            return;
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            foreach (var player in conflict.ExistingPlayers)
+                player.DeselectVideoOutputForRewire(conflict.OutputLine.Definition.Id);
+
+            if (Outputs.Contains(binding))
+            {
+                binding.IsSelected = true;
+                StatusMessage = Strings.Format(
+                    nameof(Strings.VideoOutputRouteConflictStatusFormat),
+                    conflict.OutputLine.Definition.EffectiveName,
+                    Name);
+            }
+        });
+    }
+
+    private static async Task<bool> DefaultVideoOutputRouteConflictPromptAsync(VideoOutputRouteConflict conflict)
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null)
+            return false;
+
+        var existingNames = string.Join(", ", conflict.ExistingPlayers.Select(p => p.Name));
+        var dlg = new Window
+        {
+            Title = Strings.VideoOutputRouteConflictTitle,
+            Width = 520,
+            Height = 220,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false,
+        };
+
+        var rewire = new Button { Content = Strings.VideoOutputRouteConflictRewireButton, IsDefault = true };
+        var cancel = new Button { Content = Strings.CancelButton, IsCancel = true };
+
+        var tcs = new TaskCompletionSource<bool>();
+        rewire.Click += (_, _) => { tcs.TrySetResult(true); dlg.Close(); };
+        cancel.Click += (_, _) => { tcs.TrySetResult(false); dlg.Close(); };
+        dlg.Closed += (_, _) => tcs.TrySetResult(false);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Spacing = 8,
+            Margin = new Avalonia.Thickness(0, 16, 0, 0),
+        };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(rewire);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+
+        var message = new TextBlock
+        {
+            Text = Strings.Format(
+                nameof(Strings.VideoOutputRouteConflictMessageFormat),
+                conflict.OutputLine.Definition.EffectiveName,
+                existingNames,
+                conflict.TargetPlayer.Name),
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+
+        var root = new DockPanel { Margin = new Avalonia.Thickness(16) };
+        root.Children.Add(buttons);
+        root.Children.Add(message);
+        dlg.Content = root;
+
+        await dlg.ShowDialog(owner);
+        return await tcs.Task;
+    }
+
     private void OnOutputBindingPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (sender is not PlayerOutputBinding binding)
@@ -1953,6 +2120,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         if (e.PropertyName == nameof(PlayerOutputBinding.IsSelected))
         {
+            if (_suppressVideoRouteConflictPrompt == 0
+                && binding.IsSelected
+                && TryGetVideoOutputRouteConflict(binding, out var conflict))
+            {
+                SetBindingSelectedWithoutVideoConflictPrompt(binding, false);
+                _ = PromptAndApplyVideoOutputRewireAsync(binding, conflict);
+                return;
+            }
+
             OnPropertyChanged(nameof(RoutingSummary));
             if (binding.IsSelected)
                 binding.Matrix.Resize(MatrixInputChannelCountFor(_session), OutputChannelCountOrZero(binding.Line));
@@ -2410,13 +2586,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
         if (missingToReplacement.Count == 0)
             return;
 
-        foreach (var (_, replacement) in missingToReplacement)
+        SuppressVideoRouteConflictPrompt(() =>
         {
-            var binding = Outputs.FirstOrDefault(b =>
-                string.Equals(b.Line.Definition.DisplayName, replacement, StringComparison.OrdinalIgnoreCase));
-            if (binding is not null)
-                binding.IsSelected = true;
-        }
+            foreach (var (_, replacement) in missingToReplacement)
+            {
+                var binding = Outputs.FirstOrDefault(b =>
+                    string.Equals(b.Line.Definition.DisplayName, replacement, StringComparison.OrdinalIgnoreCase));
+                if (binding is not null)
+                    binding.IsSelected = true;
+            }
+        });
 
         RebuildAudioMatrixRows();
         ApplyAllOutputMatricesToSession();
@@ -2577,13 +2756,16 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         var wanted = new HashSet<string>(config.SelectedOutputDisplayNames, StringComparer.OrdinalIgnoreCase);
         var missing = new HashSet<string>(wanted, StringComparer.OrdinalIgnoreCase);
-        foreach (var binding in Outputs)
+        SuppressVideoRouteConflictPrompt(() =>
         {
-            var name = binding.Line.Definition.DisplayName;
-            var selected = wanted.Contains(name);
-            binding.IsSelected = selected;
-            if (selected) missing.Remove(name);
-        }
+            foreach (var binding in Outputs)
+            {
+                var name = binding.Line.Definition.DisplayName;
+                var selected = wanted.Contains(name);
+                binding.IsSelected = selected;
+                if (selected) missing.Remove(name);
+            }
+        });
 
         var savedInputChannels = config.AudioMatrixInputChannels > 0
             ? config.AudioMatrixInputChannels

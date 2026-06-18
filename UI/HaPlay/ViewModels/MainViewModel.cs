@@ -55,7 +55,7 @@ public partial class MainViewModel : ViewModelBase
         };
         CuePlayer.SetAvailableOutputs(OutputManagement.Outputs);
         Players = new ObservableCollection<MediaPlayerViewModel>();
-        Players.CollectionChanged += (_, _) => OnPlayersChangedForDeckGrid();
+        Players.CollectionChanged += (_, _) => OnPlayersChangedForPlayerTabs();
         RecentProjects.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasNoRecentProjects));
         // First player can't be removed — there's always at least one in the UI.
         Players.Add(CreatePlayer(removable: false));
@@ -480,71 +480,41 @@ public partial class MainViewModel : ViewModelBase
         AppearanceController.ApplyDensity(value);
     }
 
-    // ----- UI rewrite P5 (plan §2.1): one responsive deck grid + focus mode ----------------------
-    // Replaces the Tabs/Stacked/Split layout chooser. All players render as decks in a uniform
-    // grid; double-tapping a deck focuses it full-workspace (Esc or double-tap again returns).
-    // Focus is session-only — it's a glance gesture, not a persisted mode.
+    // ----- Player tabs --------------------------------------------------------------------------
+    // The full player list remains the project/remote/source of truth. The tab collection excludes
+    // detached players so a player VM has exactly one live view: either a tab or its floating window.
 
-    /// <summary>Deck currently filling the workspace, or null for the grid. Cleared automatically
-    /// when that player is removed.</summary>
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(IsPlayerFocused))]
-    [NotifyPropertyChangedFor(nameof(FocusedDeckContent))]
-    [NotifyPropertyChangedFor(nameof(DeckGridContent))]
-    private MediaPlayerViewModel? _focusedPlayer;
+    private readonly ObservableCollection<MediaPlayerViewModel> _playerTabs = new();
 
-    public bool IsPlayerFocused => FocusedPlayer is not null;
+    public ObservableCollection<MediaPlayerViewModel> PlayerTabs => _playerTabs;
 
-    /// <summary>Null-gated content projections: only one branch may materialize a
-    /// <c>MediaPlayerView</c> per VM at a time (IsVisible=false still keeps the visual tree
-    /// attached, which would double-render the same player).</summary>
-    public MediaPlayerViewModel? FocusedDeckContent => FocusedPlayer;
-
-    /// <summary>Players shown in the deck grid: everyone except detached ones — a detached player's
-    /// only view lives in its floating window (same one-view-per-VM rule as focus mode). The player
-    /// stays in <see cref="Players"/> so project saves, the output-health probe, and cue pre-roll
-    /// keep seeing it.</summary>
-    private readonly ObservableCollection<MediaPlayerViewModel> _visibleDeckPlayers = new();
-
-    public ObservableCollection<MediaPlayerViewModel>? DeckGridContent =>
-        IsPlayerFocused ? null : _visibleDeckPlayers;
-
-    /// <summary>Grid columns for N visible decks: 1 → 1, 2–4 → 2, 5–9 → 3 … (⌈√N⌉).</summary>
-    public int DeckColumns => Math.Max(1, (int)Math.Ceiling(Math.Sqrt(_visibleDeckPlayers.Count)));
-
-    private void RebuildVisibleDeckPlayers()
+    private void RebuildPlayerTabs()
     {
-        _visibleDeckPlayers.Clear();
+        _playerTabs.Clear();
         foreach (var player in Players)
         {
             if (!_detachedPlayerWindows.ContainsKey(player))
-                _visibleDeckPlayers.Add(player);
+                _playerTabs.Add(player);
         }
-        OnPropertyChanged(nameof(DeckColumns));
     }
 
-    [RelayCommand]
-    private void ToggleFocusPlayer(MediaPlayerViewModel? player)
+    private void EnsureSelectedPlayerVisible()
     {
-        if (player is null)
+        if (SelectedPlayer is null || !Players.Contains(SelectedPlayer))
+        {
+            SelectedPlayer = _playerTabs.FirstOrDefault() ?? Players.FirstOrDefault();
             return;
-        SelectedPlayer = player;
-        FocusedPlayer = ReferenceEquals(FocusedPlayer, player) ? null : player;
+        }
+
+        if (_playerTabs.Count > 0 && !_playerTabs.Contains(SelectedPlayer))
+            SelectedPlayer = _playerTabs[0];
     }
 
-    /// <summary>Bound to Escape on the shell; a no-op outside focus so the gesture stays free
-    /// elsewhere.</summary>
-    [RelayCommand]
-    private void ExitPlayerFocus() => FocusedPlayer = null;
-
-    /// <summary>Called from the Players.CollectionChanged hook: keeps focus/selection valid and
-    /// re-derives the grid shape.</summary>
-    private void OnPlayersChangedForDeckGrid()
+    /// <summary>Called from the Players.CollectionChanged hook: keeps the tab collection and selection valid.</summary>
+    private void OnPlayersChangedForPlayerTabs()
     {
-        if (FocusedPlayer is { } focused && !Players.Contains(focused))
-            FocusedPlayer = null;
-        RebuildVisibleDeckPlayers();
-        OnPropertyChanged(nameof(DeckGridContent));
+        RebuildPlayerTabs();
+        EnsureSelectedPlayerVisible();
     }
 
     /// <summary>OSC endpoints with persistent health LEDs for the OSC sidebar workspace.</summary>
@@ -1013,17 +983,17 @@ public partial class MainViewModel : ViewModelBase
             return;
 
         // Non-modal: the operator keeps using the shell while players float on other screens.
-        // The player stays in Players (saves/probes/pre-roll); it only leaves the deck grid.
-        if (ReferenceEquals(FocusedPlayer, player))
-            FocusedPlayer = null;
-
+        // The player stays in Players (saves/probes/pre-roll); it only leaves the tab list.
         var window = new Views.Dialogs.DetachedPlayerWindow { DataContext = player };
         _detachedPlayerWindows[player] = window;
-        RebuildVisibleDeckPlayers();
+        RebuildPlayerTabs();
+        EnsureSelectedPlayerVisible();
         window.Closed += (_, _) =>
         {
             _detachedPlayerWindows.Remove(player);
-            RebuildVisibleDeckPlayers();
+            RebuildPlayerTabs();
+            if (SelectedPlayer is null || !Players.Contains(SelectedPlayer))
+                EnsureSelectedPlayerVisible();
         };
 
         if (TryGetOwnerWindow() is { } owner)
