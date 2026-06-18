@@ -1,5 +1,6 @@
 using HaPlay.Playback;
 using S.Media.Core.Video;
+using S.Media.Effects;
 using S.Media.Playback;
 using Xunit;
 
@@ -21,7 +22,8 @@ public sealed class MediaPlayerCompositionRuntimeTests
                 new ClipCompositionOutputLease("out-a", "A", a),
                 new ClipCompositionOutputLease("out-b", "B", b),
             },
-            videoSourceFormat: Canvas);
+            videoSourceFormat: Canvas,
+            compositorFactory: CpuCompositor);
 
         // The deck's video router would feed VideoSink; here we drive it directly.
         runtime.VideoSink.Configure(Canvas);
@@ -41,6 +43,37 @@ public sealed class MediaPlayerCompositionRuntimeTests
     }
 
     [Fact]
+    public async Task Video_layer0_letterboxes_wide_sources_instead_of_cropping_sides()
+    {
+        var output = new RecordingVideoOutput();
+        var canvas = new VideoFormat(100, 100, PixelFormat.Bgra32, new Rational(30, 1));
+        var source = new VideoFormat(200, 100, PixelFormat.Bgra32, new Rational(30, 1));
+        using var runtime = new MediaPlayerCompositionRuntime(
+            canvas,
+            new[] { new ClipCompositionOutputLease("out-a", "A", output) },
+            videoSourceFormat: source,
+            compositorFactory: CpuCompositor);
+
+        runtime.VideoSink.Configure(source);
+        runtime.VideoSink.Submit(WideSideMarkerFrame(source));
+        runtime.EnsurePumpStarted();
+
+        var delivered = await WaitUntilAsync(() => output.Count > 0, TimeSpan.FromSeconds(5));
+        try
+        {
+            Assert.True(delivered, "composition did not deliver a frame");
+            var bytes = output.FirstFrameBytes();
+            AssertPixel(bytes, canvas.Width, x: 0, y: 50, b: 0, g: 0, r: 255, a: 255);
+            AssertPixel(bytes, canvas.Width, x: 99, y: 50, b: 255, g: 0, r: 0, a: 255);
+            AssertPixel(bytes, canvas.Width, x: 50, y: 0, b: 0, g: 0, r: 0, a: 0);
+        }
+        finally
+        {
+            output.DisposeCaptured();
+        }
+    }
+
+    [Fact]
     public void Hold_layer_is_present_only_when_a_logo_is_supplied_and_toggling_is_safe()
     {
         var a = new RecordingVideoOutput();
@@ -48,7 +81,8 @@ public sealed class MediaPlayerCompositionRuntimeTests
             Canvas,
             new[] { new ClipCompositionOutputLease("out-a", "A", a) },
             videoSourceFormat: Canvas,
-            logoFrame: SolidBgra(TimeSpan.Zero));
+            logoFrame: SolidBgra(TimeSpan.Zero),
+            compositorFactory: CpuCompositor);
 
         Assert.True(withLogo.HasHoldLayer);
         withLogo.SetHold(true);
@@ -59,7 +93,8 @@ public sealed class MediaPlayerCompositionRuntimeTests
         using var noLogo = new MediaPlayerCompositionRuntime(
             Canvas,
             new[] { new ClipCompositionOutputLease("out-b", "B", b) },
-            videoSourceFormat: Canvas);
+            videoSourceFormat: Canvas,
+            compositorFactory: CpuCompositor);
 
         Assert.False(noLogo.HasHoldLayer);
         noLogo.SetHold(true);   // no logo layer → no-op, must not throw
@@ -73,6 +108,46 @@ public sealed class MediaPlayerCompositionRuntimeTests
         for (var i = 3; i < bytes.Length; i += 4)
             bytes[i] = 255; // opaque
         return new VideoFrame(pts, fmt, bytes, stride);
+    }
+
+    private static ClipCompositionCompositor CpuCompositor(VideoFormat fmt) =>
+        new(new CpuVideoCompositor(fmt), RequiresBgraLayerConversion: true, BackendName: "CPU");
+
+    private static VideoFrame WideSideMarkerFrame(VideoFormat fmt)
+    {
+        var stride = fmt.Width * 4;
+        var bytes = new byte[stride * fmt.Height];
+        for (var y = 0; y < fmt.Height; y++)
+        {
+            for (var x = 0; x < fmt.Width; x++)
+            {
+                var idx = y * stride + x * 4;
+                if (x < fmt.Width / 4)
+                {
+                    bytes[idx + 2] = 255; // red left side
+                }
+                else if (x >= fmt.Width * 3 / 4)
+                {
+                    bytes[idx + 0] = 255; // blue right side
+                }
+                else
+                {
+                    bytes[idx + 1] = 255; // green center
+                }
+                bytes[idx + 3] = 255;
+            }
+        }
+
+        return new VideoFrame(TimeSpan.Zero, fmt, bytes, stride);
+    }
+
+    private static void AssertPixel(byte[] bytes, int width, int x, int y, byte b, byte g, byte r, byte a)
+    {
+        var idx = (y * width + x) * 4;
+        Assert.Equal(b, bytes[idx + 0]);
+        Assert.Equal(g, bytes[idx + 1]);
+        Assert.Equal(r, bytes[idx + 2]);
+        Assert.Equal(a, bytes[idx + 3]);
     }
 
     private static async Task<bool> WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
@@ -97,6 +172,16 @@ public sealed class MediaPlayerCompositionRuntimeTests
         public int Count
         {
             get { lock (_gate) return _captured.Count; }
+        }
+
+        public byte[] FirstFrameBytes()
+        {
+            lock (_gate)
+            {
+                var frame = _captured.FirstOrDefault();
+                Assert.NotNull(frame);
+                return frame.Planes[0].ToArray();
+            }
         }
 
         public void Configure(VideoFormat format) => Format = format;

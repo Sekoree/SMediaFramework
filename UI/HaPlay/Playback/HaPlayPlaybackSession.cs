@@ -592,7 +592,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             if (useComposition)
             {
                 composition = TryBuildMediaPlayerComposition(
-                    decoder, lines, ndiByDefinitionId, outputs, acquiredLocalLines, router, inputId);
+                    decoder, videoOverride?.Format, lines, ndiByDefinitionId, outputs, acquiredLocalLines, router, inputId);
                 if (composition is not null)
                 {
                     pendingPlayback._mediaPlayerComposition = composition;
@@ -667,6 +667,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     /// session); NDI lines reuse the already-acquired carriers. Returns null when no video output leased.</summary>
     private static MediaPlayerCompositionRuntime? TryBuildMediaPlayerComposition(
         MediaContainerDecoder decoder,
+        VideoFormat? effectiveVideoFormat,
         IReadOnlyList<OutputLineViewModel> lines,
         Dictionary<Guid, NDIOutput> ndiByDefinitionId,
         OutputManagementViewModel outputs,
@@ -711,10 +712,17 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         if (leases.Count == 0)
             return null;
 
-        var (width, height) = FirstOutputResolutionOr1080(lines);
-        var rate = decoder.HasVideo ? decoder.Video.Format.FrameRate : new Rational(60, 1);
+        var fallbackRate = new Rational(60, 1);
+        var sourceFormat = decoder.HasVideo
+            ? effectiveVideoFormat ?? decoder.Video.Format
+            : new VideoFormat(1920, 1080, PixelFormat.Bgra32, fallbackRate);
+        var rate = sourceFormat.FrameRate.Numerator > 0 && sourceFormat.FrameRate.Denominator > 0
+            ? sourceFormat.FrameRate
+            : fallbackRate;
+        var (width, height) = MediaPlayerCompositionCanvasSize(lines, sourceFormat);
         var canvas = new VideoFormat(width, height, PixelFormat.Bgra32, rate);
-        var sourceFormat = decoder.HasVideo ? decoder.Video.Format : canvas;
+        if (!decoder.HasVideo)
+            sourceFormat = canvas;
 
         var composition = new MediaPlayerCompositionRuntime(canvas, leases, sourceFormat);
         var outId = router.AddOutput(composition.VideoSink, "mediaplayer_comp", disposeOutputOnRouterDispose: false);
@@ -728,14 +736,29 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         return composition;
     }
 
-    /// <summary>Default media-player composition canvas size: the first video output line that declares a
-    /// resolution, else 1080p. (Auto-size-to-output is a media-player feature; the cue player keeps its
-    /// explicit composition sizes.)</summary>
-    private static (int Width, int Height) FirstOutputResolutionOr1080(IReadOnlyList<OutputLineViewModel> lines)
+    /// <summary>Default media-player composition canvas size: locked NDI raster when present, otherwise the
+    /// source/program raster. Local windows are resizable viewports, so their current window dimensions must
+    /// not be baked into the composition frames while playback is running.</summary>
+    internal static (int Width, int Height) MediaPlayerCompositionCanvasSize(
+        IReadOnlyList<OutputLineViewModel> lines,
+        VideoFormat sourceFormat)
     {
         foreach (var line in lines)
-            if (TryGetOutputResolution(line.Definition, out var w, out var h))
-                return (w, h);
+        {
+            if (line.Definition is NDIOutputDefinition
+                {
+                    StreamMode: not NDIOutputStreamMode.AudioOnly,
+                    ResolutionLockWidth: > 0,
+                    ResolutionLockHeight: > 0,
+                } nd)
+            {
+                return (nd.ResolutionLockWidth!.Value, nd.ResolutionLockHeight!.Value);
+            }
+        }
+
+        if (sourceFormat.Width > 0 && sourceFormat.Height > 0)
+            return (sourceFormat.Width, sourceFormat.Height);
+
         return (1920, 1080);
     }
 

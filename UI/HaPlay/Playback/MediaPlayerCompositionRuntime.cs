@@ -29,7 +29,7 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
     private bool _hold;
     private bool _disposed;
 
-    /// <param name="canvasFormat">Composition canvas size/rate (from the sizing rules — output res or 1080p).</param>
+    /// <param name="canvasFormat">Composition canvas size/rate (locked output raster or source/program raster).</param>
     /// <param name="outputs">The deck's video output leases (local / NDI), fanned by the composition.</param>
     /// <param name="videoSourceFormat">The decoder's video format for the layer-0 source slot.</param>
     /// <param name="logoFrame">Optional hold/logo image placed on layer 1 (raised by <see cref="SetHold"/>).</param>
@@ -51,10 +51,11 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
             canvasFormat.FrameRate.Denominator);
         _composition = new ClipCompositionRuntime(definition, outputs, compositorFactory ?? CreateDefaultCompositor);
 
-        // Layer 0 — the deck's video, covering the canvas. The decoder feeds this via VideoSink.
+        // Layer 0 — the deck's video, full-frame inside the canvas. The local/NDI output may be resized
+        // independently, so do not bake a cover-crop into the composition.
         _videoLayer = _composition.AddLayer(
             videoSourceFormat,
-            new VideoPlacementSpec(CompositionId, LayerIndex: 0, Opacity: 1.0, Placement: "Cover",
+            new VideoPlacementSpec(CompositionId, LayerIndex: 0, Opacity: 1.0, Placement: "Letterbox",
                 DestX: 0, DestY: 0, DestWidth: 1, DestHeight: 1));
 
         // Layer 1 — the hold/logo image, on top, hidden until SetHold(true). Submitted once; the compositor
