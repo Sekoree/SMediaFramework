@@ -33,6 +33,12 @@ internal static class NDICaptureThreadLifecycle
         {
             var ex = new TimeoutException($"{ownerName} capture thread did not exit during Dispose; native receiver/runtime were intentionally leaked.");
             markCaptureStuck(ex);
+            NativeResourceHealth.ReportStuck(
+                ownerName,
+                "NDI capture thread",
+                captureThread.Name,
+                joinTimeout,
+                ex);
             if (logger is { } l)
                 l.LogError(ex, "{Owner}.Dispose: capture thread still alive after join cap; leaking native receiver/runtime and CTS to avoid use-after-dispose.", ownerName);
             else

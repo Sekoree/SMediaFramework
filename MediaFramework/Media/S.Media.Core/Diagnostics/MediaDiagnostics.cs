@@ -161,9 +161,8 @@ public static class MediaDiagnostics
     }
 
     /// <summary>
-    /// Run <paramref name="dispose"/> and swallow any exception. In <c>DEBUG</c> builds the
-    /// exception is forwarded to <see cref="LogError(Exception, string)"/> with <paramref name="label"/>;
-    /// in release the action is best-effort silent. Used by every <c>Dispose</c>/teardown that
+    /// Run <paramref name="dispose"/> and swallow any exception after logging it with
+    /// <paramref name="label"/>. Used by every <c>Dispose</c>/teardown that
     /// must tolerate sub-disposable failures without aborting the rest of the cleanup chain.
     /// </summary>
     public static void SwallowDisposeErrors(Action dispose, string label)
@@ -173,17 +172,10 @@ public static class MediaDiagnostics
         {
             dispose();
         }
-#if DEBUG
         catch (Exception ex)
         {
             LogError(ex, label);
         }
-#else
-        catch
-        {
-            // best-effort shutdown
-        }
-#endif
     }
 
     /// <summary>

@@ -328,8 +328,18 @@
                   <TextBlock Text="{x:Static res:Strings.RemoteApiPortLabel}" VerticalAlignment="Center" />
                   <NumericUpDown Minimum="1024" Maximum="65535" Increment="1" FormatString="0"
                                  Value="{Binding RestApiPort, Mode=TwoWay}" MinWidth="120" />
+                  <CheckBox Content="{x:Static res:Strings.RemoteApiAllowLanLabel}"
+                            IsChecked="{Binding RestApiAllowLan, Mode=TwoWay}" />
                 </StackPanel>
                 <SelectableTextBlock Text="{Binding RestApiBaseUrlDisplay}" FontFamily="monospace" FontSize="12" />
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                  <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RemoteApiTokenLabel}"
+                             VerticalAlignment="Center" Opacity="0.75" FontSize="12" />
+                  <SelectableTextBlock Grid.Column="1" Text="{Binding RestApiAccessToken}"
+                                       FontFamily="monospace" FontSize="12" />
+                </Grid>
+                <TextBlock Text="{Binding RestApiSecurityStatus}" Opacity="0.75" FontSize="12"
+                           TextWrapping="Wrap" />
                 <TextBlock Text="{Binding RestApiStatusNote}" Foreground="#DAAA3A" FontSize="12"
                            TextWrapping="Wrap"
                            IsVisible="{Binding RestApiStatusNote, Converter={x:Static ObjectConverters.IsNotNull}}" />

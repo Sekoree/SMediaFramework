@@ -2469,11 +2469,23 @@
   <data name="RemoteApiPortLabel" xml:space="preserve">
     <value>Port</value>
   </data>
+  <data name="RemoteApiAllowLanLabel" xml:space="preserve">
+    <value>Allow LAN access</value>
+  </data>
+  <data name="RemoteApiTokenLabel" xml:space="preserve">
+    <value>Access token</value>
+  </data>
+  <data name="RemoteApiSecurityLoopback" xml:space="preserve">
+    <value>Loopback only. Every request requires the token; copied URLs include ?key= automatically.</value>
+  </data>
+  <data name="RemoteApiSecurityLan" xml:space="preserve">
+    <value>LAN access enabled. Every request requires the token; use only on a trusted show network.</value>
+  </data>
   <data name="RemoteApiDisabledStatus" xml:space="preserve">
     <value>(disabled)</value>
   </data>
   <data name="RemoteApiHint" xml:space="preserve">
-    <value>Unauthenticated HTTP control for show controllers on this network. GET or POST; all indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL.</value>
+    <value>Token-protected HTTP control for show controllers. GET or POST; all indices are 1-based, matching the UI labels. Right-click soundboard tiles or playlist items to copy their exact URL.</value>
   </data>
   <data name="RemoteApiDocCues" xml:space="preserve">
     <value>Cue player transport (go fires the standby/selected cue)</value>

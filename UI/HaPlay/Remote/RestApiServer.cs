@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -9,9 +10,8 @@ namespace HaPlay.Remote;
 
 /// <summary>
 /// Minimal HTTP front-end for <see cref="RemoteApiDispatcher"/> built on <see cref="HttpListener"/>
-/// (no web-framework dependency — the app publishes NativeAOT). Listens on all interfaces so show
-/// controllers (Companion, touch panels, curl) on the LAN can reach it; on Windows, where the
-/// wildcard prefix needs a URL ACL, it falls back to loopback-only and says so.
+/// (no web-framework dependency — the app publishes NativeAOT). Binds loopback by default; LAN
+/// binding is an explicit operator choice and every request must carry the per-machine access token.
 /// </summary>
 public sealed class RestApiServer : IDisposable
 {
@@ -29,32 +29,51 @@ public sealed class RestApiServer : IDisposable
     public bool IsRunning => _listener is not null;
 
     /// <summary>Starts (or restarts) the listener. Returns false when no prefix could be bound.</summary>
-    public bool Start(int port, RemoteApiDispatcher dispatcher)
+    public bool Start(
+        int port,
+        RemoteApiDispatcher dispatcher,
+        string accessToken,
+        bool bindAllInterfaces = false)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
         Stop();
         StatusNote = null;
 
-        var listener = TryStart($"http://*:{port}/", out var error);
-        if (listener is null)
+        HttpListener? listener;
+        if (bindAllInterfaces)
         {
-            // Windows refuses wildcard prefixes without an ACL (netsh http add urlacl) — degrade
-            // to loopback so the API still works locally rather than not at all.
+            listener = TryStart($"http://*:{port}/", out var error);
+            if (listener is null)
+            {
+                // Windows refuses wildcard prefixes without an ACL (netsh http add urlacl) — degrade
+                // to loopback so the API still works locally rather than not at all.
+                listener = TryStart($"http://localhost:{port}/", out var loopbackError);
+                if (listener is null)
+                {
+                    StatusNote = loopbackError ?? error;
+                    Trace.LogWarning("RestApiServer: could not bind port {Port}: {Error}", port, StatusNote);
+                    return false;
+                }
+
+                StatusNote = "Bound to localhost only (wildcard binding was refused; on Windows add a URL ACL for LAN access).";
+            }
+        }
+        else
+        {
             listener = TryStart($"http://localhost:{port}/", out var loopbackError);
             if (listener is null)
             {
-                StatusNote = loopbackError ?? error;
-                Trace.LogWarning("RestApiServer: could not bind port {Port}: {Error}", port, StatusNote);
+                StatusNote = loopbackError;
+                Trace.LogWarning("RestApiServer: could not bind loopback port {Port}: {Error}", port, StatusNote);
                 return false;
             }
-
-            StatusNote = "Bound to localhost only (wildcard binding was refused; on Windows add a URL ACL for LAN access).";
         }
 
         _listener = listener;
         _cts = new CancellationTokenSource();
-        BaseUrl = $"http://{ResolveAdvertisedHost()}:{port}";
-        _ = AcceptLoopAsync(listener, dispatcher, _cts.Token);
-        Trace.LogInformation("RestApiServer: listening on port {Port} (advertised {BaseUrl})", port, BaseUrl);
+        BaseUrl = $"http://{ResolveAdvertisedHost(bindAllInterfaces && StatusNote is null)}:{port}";
+        _ = AcceptLoopAsync(listener, dispatcher, accessToken, _cts.Token);
+        Trace.LogInformation("RestApiServer: listening on port {Port} (advertised {BaseUrl}, lan={Lan})", port, BaseUrl, bindAllInterfaces && StatusNote is null);
         return true;
     }
 
@@ -93,7 +112,11 @@ public sealed class RestApiServer : IDisposable
         }
     }
 
-    private async Task AcceptLoopAsync(HttpListener listener, RemoteApiDispatcher dispatcher, CancellationToken ct)
+    private async Task AcceptLoopAsync(
+        HttpListener listener,
+        RemoteApiDispatcher dispatcher,
+        string accessToken,
+        CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -112,23 +135,30 @@ public sealed class RestApiServer : IDisposable
                 continue;
             }
 
-            _ = HandleRequestAsync(context, dispatcher);
+            _ = HandleRequestAsync(context, dispatcher, accessToken);
         }
     }
 
-    private static async Task HandleRequestAsync(HttpListenerContext context, RemoteApiDispatcher dispatcher)
+    private static async Task HandleRequestAsync(
+        HttpListenerContext context,
+        RemoteApiDispatcher dispatcher,
+        string accessToken)
     {
         var response = context.Response;
+        var started = Stopwatch.GetTimestamp();
+        var method = context.Request.HttpMethod;
+        var path = context.Request.Url?.AbsolutePath ?? "/";
+        var remote = context.Request.RemoteEndPoint?.ToString() ?? "<unknown>";
+        var statusCode = 500;
+        var authorized = false;
         try
         {
-            // Permissive CORS so browser-based remotes (tablet dashboards) can call straight in.
-            response.Headers["Access-Control-Allow-Origin"] = "*";
-            response.Headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-            response.Headers["Access-Control-Allow-Headers"] = "Content-Type";
-
-            if (context.Request.HttpMethod == "OPTIONS")
+            Trace.LogTrace("RestApiServer: request started method={Method} path={Path} remote={Remote}", method, path, remote);
+            if (method == "OPTIONS")
             {
-                response.StatusCode = 204;
+                statusCode = 204;
+                response.StatusCode = statusCode;
+                response.Headers["Allow"] = "GET, POST, OPTIONS";
                 response.Close();
                 return;
             }
@@ -141,28 +171,95 @@ public sealed class RestApiServer : IDisposable
                     query[key] = value;
             }
 
+            if (!IsAuthorized(context.Request, query, accessToken))
+            {
+                statusCode = 401;
+                await WriteResultAsync(response, RemoteApiResult.Fail(statusCode, "Remote API token required.")).ConfigureAwait(false);
+                return;
+            }
+            authorized = true;
+
             var result = await dispatcher.ExecuteAsync(
-                context.Request.HttpMethod,
-                context.Request.Url?.AbsolutePath ?? "/",
+                method,
+                path,
                 query).ConfigureAwait(false);
 
-            var payload = Encoding.UTF8.GetBytes(result.Body);
-            response.StatusCode = result.Status;
-            response.ContentType = "application/json";
-            response.ContentLength64 = payload.Length;
-            await response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
-            response.Close();
+            statusCode = result.Status;
+            await WriteResultAsync(response, result).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "RestApiServer: request failed");
             try { response.Abort(); } catch { /* best effort */ }
         }
+        finally
+        {
+            var elapsedMs = MediaDiagnostics.ElapsedMillisecondsSince(started);
+            var level = elapsedMs >= 250 || statusCode >= 500 ? LogLevel.Warning : LogLevel.Debug;
+            if (Trace.IsEnabled(level))
+            {
+                Trace.Log(
+                    level,
+                    "RestApiServer: request completed method={Method} path={Path} remote={Remote} status={Status} authorized={Authorized} elapsedMs={ElapsedMs:0.00}",
+                    method,
+                    path,
+                    remote,
+                    statusCode,
+                    authorized,
+                    elapsedMs);
+            }
+        }
+    }
+
+    private static async Task WriteResultAsync(HttpListenerResponse response, RemoteApiResult result)
+    {
+        var payload = Encoding.UTF8.GetBytes(result.Body);
+        response.StatusCode = result.Status;
+        response.ContentType = "application/json";
+        response.ContentLength64 = payload.Length;
+        await response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
+        response.Close();
+    }
+
+    private static bool IsAuthorized(HttpListenerRequest request, IReadOnlyDictionary<string, string> query, string accessToken)
+    {
+        if (query.TryGetValue("key", out var key) && FixedTimeEquals(key, accessToken))
+            return true;
+        if (query.TryGetValue("token", out var token) && FixedTimeEquals(token, accessToken))
+            return true;
+
+        var header = request.Headers["Authorization"];
+        if (header is not null
+            && header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            && FixedTimeEquals(header["Bearer ".Length..].Trim(), accessToken))
+            return true;
+
+        return FixedTimeEquals(request.Headers["X-HaPlay-Api-Key"], accessToken);
+    }
+
+    private static bool FixedTimeEquals(string? candidate, string expected)
+    {
+        if (string.IsNullOrEmpty(candidate))
+            return false;
+
+        var max = Math.Max(candidate.Length, expected.Length);
+        var diff = candidate.Length ^ expected.Length;
+        for (var i = 0; i < max; i++)
+        {
+            var a = i < candidate.Length ? candidate[i] : 0;
+            var b = i < expected.Length ? expected[i] : 0;
+            diff |= a ^ b;
+        }
+
+        return diff == 0;
     }
 
     /// <summary>Best host to advertise in copy-paste URLs: the first up, non-loopback IPv4.</summary>
-    internal static string ResolveAdvertisedHost()
+    internal static string ResolveAdvertisedHost(bool preferLan = true)
     {
+        if (!preferLan)
+            return "localhost";
+
         try
         {
             foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())

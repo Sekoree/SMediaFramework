@@ -921,9 +921,16 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
                 _fileReadCompleted = true;
                 lock (_queueGate)
                     Monitor.PulseAll(_queueGate);
+                var ex = new TimeoutException("demux thread did not exit within the stop timeout");
                 MediaDiagnostics.LogError(
-                    new TimeoutException("demux thread did not exit within the stop timeout"),
+                    ex,
                     "MediaContainerSharedDemux.StopDemuxerAndDrainQueues: demux thread is stuck; native demux state will not be restarted or freed");
+                NativeResourceHealth.ReportStuck(
+                    nameof(MediaContainerSharedDemux),
+                    "FFmpeg demux thread",
+                    $"audioQ={_audioPacketQ.Count} videoQ={_videoPacketQ.Count}",
+                    TimeSpan.FromSeconds(4),
+                    ex);
                 timing?.SetOutcome($"stuck audioQ={_audioPacketQ.Count} videoQ={_videoPacketQ.Count}");
                 return false;
             }

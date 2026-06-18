@@ -60,6 +60,10 @@ public static class Strings
     public static string RemoteApiSectionHeader => Get(nameof(RemoteApiSectionHeader));
     public static string RemoteApiEnableLabel => Get(nameof(RemoteApiEnableLabel));
     public static string RemoteApiPortLabel => Get(nameof(RemoteApiPortLabel));
+    public static string RemoteApiAllowLanLabel => Get(nameof(RemoteApiAllowLanLabel));
+    public static string RemoteApiTokenLabel => Get(nameof(RemoteApiTokenLabel));
+    public static string RemoteApiSecurityLoopback => Get(nameof(RemoteApiSecurityLoopback));
+    public static string RemoteApiSecurityLan => Get(nameof(RemoteApiSecurityLan));
     public static string RemoteApiDisabledStatus => Get(nameof(RemoteApiDisabledStatus));
     public static string RemoteApiHint => Get(nameof(RemoteApiHint));
     public static string RemoteApiDocCues => Get(nameof(RemoteApiDocCues));

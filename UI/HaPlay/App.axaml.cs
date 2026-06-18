@@ -9,6 +9,7 @@ using Avalonia.Diagnostics;
 using Avalonia.Markup.Xaml;
 using HaPlay.ViewModels;
 using HaPlay.Views;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg;
 
@@ -16,20 +17,26 @@ namespace HaPlay;
 
 public partial class App : Application
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.App");
+
     public override void Initialize()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "App.Initialize", slowWarningMs: 250);
         AvaloniaXamlLoader.Load(this);
 #if DEBUG
         this.AttachDeveloperTools();
 #endif
+        timing?.SetOutcome("xaml-loaded");
     }
 
     public override void OnFrameworkInitializationCompleted()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "App.OnFrameworkInitializationCompleted", slowWarningMs: 1000);
         InitializeMediaFramework();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            Trace.LogDebug("App lifetime: classic desktop");
             desktop.MainWindow = new MainWindow
             {
                 DataContext = new MainViewModel()
@@ -37,11 +44,13 @@ public partial class App : Application
         }
         else if (ApplicationLifetime is IActivityApplicationLifetime singleViewFactoryApplicationLifetime)
         {
+            Trace.LogDebug("App lifetime: activity single-view factory");
             singleViewFactoryApplicationLifetime.MainViewFactory =
                 () => new MainView { DataContext = new MainViewModel() };
         }
         else if (ApplicationLifetime is ISingleViewApplicationLifetime singleViewPlatform)
         {
+            Trace.LogDebug("App lifetime: single-view");
             singleViewPlatform.MainView = new MainView
             {
                 DataContext = new MainViewModel()
@@ -49,6 +58,7 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+        timing?.SetOutcome($"lifetime={ApplicationLifetime?.GetType().Name ?? "<none>"}");
     }
 
     /// <summary>
@@ -60,13 +70,16 @@ public partial class App : Application
     /// </summary>
     private static void InitializeMediaFramework()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "App.InitializeMediaFramework", slowWarningMs: 1000);
         try
         {
             MediaFrameworkRuntime.Init().UseFFmpeg();
+            timing?.SetOutcome("ffmpeg-registered");
         }
         catch (System.Exception ex)
         {
-            MediaDiagnostics.LogWarning("HaPlay: media framework init (UseFFmpeg) failed: {0}", ex.Message);
+            Trace.LogWarning(ex, "HaPlay media framework init failed during UseFFmpeg; continuing with degraded plugin availability");
+            timing?.SetOutcome("ffmpeg-registration-failed");
         }
     }
 }

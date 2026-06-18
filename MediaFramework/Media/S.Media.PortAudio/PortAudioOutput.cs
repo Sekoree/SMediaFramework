@@ -244,93 +244,99 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.Start", slowWarningMs: 1000);
-        if (_isRunning)
+        lock (_streamLifecycleGate)
         {
-            timing?.SetOutcome($"device={_deviceIndex} already-running");
-            return;
+            if (_isRunning)
+            {
+                timing?.SetOutcome($"device={_deviceIndex} already-running");
+                return;
+            }
+
+            Interlocked.Exchange(ref _callbackFaultException, null);
+            Volatile.Write(ref _callbackFaulted, 0);
+
+            _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
+
+            var outParams = new PaStreamParameters
+            {
+                device = _deviceIndex,
+                channelCount = _format.Channels,
+                sampleFormat = PaSampleFormat.paFloat32,
+                suggestedLatency = _suggestedLatency,
+                hostApiSpecificStreamInfo = nint.Zero,
+            };
+
+            delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int> cbPtr = &Callback;
+
+            var err = Native.Pa_OpenStream(
+                out _stream,
+                inputParameters: null,
+                outputParameters: outParams,
+                sampleRate: _format.SampleRate,
+                framesPerBuffer: _framesPerBuffer,
+                streamFlags: PaStreamFlags.paNoFlag,
+                streamCallback: cbPtr,
+                userData: GCHandle.ToIntPtr(_selfHandle));
+
+            if (err != PaError.paNoError)
+            {
+                _selfHandle.Free();
+                PortAudioException.ThrowIfError(err, nameof(Native.Pa_OpenStream));
+            }
+
+            err = Native.Pa_StartStream(_stream);
+            if (err != PaError.paNoError)
+            {
+                Native.Pa_CloseStream(_stream);
+                _stream = nint.Zero;
+                _selfHandle.Free();
+                PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
+            }
+
+            Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
+            Volatile.Write(ref _streamSmoothCalibrated, 0);
+            Volatile.Write(ref _streamStoppedAfterFlush, 0);
+            Volatile.Write(ref _isRunning, true);
+            Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f targetQueue={TargetFrames}f",
+                _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
+                _ringBuffer.Length / _format.Channels, TargetQueueSamples);
+            timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ringBuffer.Length / _format.Channels} target={TargetQueueSamples}");
         }
-
-        Interlocked.Exchange(ref _callbackFaultException, null);
-        Volatile.Write(ref _callbackFaulted, 0);
-
-        _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
-
-        var outParams = new PaStreamParameters
-        {
-            device = _deviceIndex,
-            channelCount = _format.Channels,
-            sampleFormat = PaSampleFormat.paFloat32,
-            suggestedLatency = _suggestedLatency,
-            hostApiSpecificStreamInfo = nint.Zero,
-        };
-
-        delegate* unmanaged[Cdecl]<nint, nint, nuint, nint, PaStreamCallbackFlags, nint, int> cbPtr = &Callback;
-
-        var err = Native.Pa_OpenStream(
-            out _stream,
-            inputParameters: null,
-            outputParameters: outParams,
-            sampleRate: _format.SampleRate,
-            framesPerBuffer: _framesPerBuffer,
-            streamFlags: PaStreamFlags.paNoFlag,
-            streamCallback: cbPtr,
-            userData: GCHandle.ToIntPtr(_selfHandle));
-
-        if (err != PaError.paNoError)
-        {
-            _selfHandle.Free();
-            PortAudioException.ThrowIfError(err, nameof(Native.Pa_OpenStream));
-        }
-
-        err = Native.Pa_StartStream(_stream);
-        if (err != PaError.paNoError)
-        {
-            Native.Pa_CloseStream(_stream);
-            _stream = nint.Zero;
-            _selfHandle.Free();
-            PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
-        }
-
-        Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
-        Volatile.Write(ref _streamSmoothCalibrated, 0);
-        Volatile.Write(ref _streamStoppedAfterFlush, 0);
-        Volatile.Write(ref _isRunning, true);
-        Trace.LogDebug("Start: device={Device} channels={Ch} rate={Rate}Hz framesPerBuffer={Fpb} suggestedLatency={Latency}s ringCap={RingCapFrames}f targetQueue={TargetFrames}f",
-            _deviceIndex, _format.Channels, _format.SampleRate, _framesPerBuffer, _suggestedLatency,
-            _ringBuffer.Length / _format.Channels, TargetQueueSamples);
-        timing?.SetOutcome($"device={_deviceIndex} format={_format} ring={_ringBuffer.Length / _format.Channels} target={TargetQueueSamples}");
     }
 
     public void Stop()
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "PortAudioOutput.Stop", slowWarningMs: 1000);
-        if (!Volatile.Read(ref _isRunning))
+        lock (_streamLifecycleGate)
         {
-            timing?.SetOutcome($"device={_deviceIndex} not-running");
-            return;
-        }
-        Trace.LogDebug("Stop: device={Device} played={Played}f underrun={Underrun}f dropped={Dropped}f callbacks={Callbacks}",
-            _deviceIndex, Volatile.Read(ref _playedSamples), Volatile.Read(ref _underrunSamples),
-            Volatile.Read(ref _droppedSamples), Volatile.Read(ref _callbackCount));
-        try
-        {
-            if (_stream != nint.Zero)
+            if (!Volatile.Read(ref _isRunning))
             {
-                Native.Pa_StopStream(_stream);
-                Native.Pa_CloseStream(_stream);
-                _stream = nint.Zero;
+                timing?.SetOutcome($"device={_deviceIndex} not-running");
+                return;
             }
+            Trace.LogDebug("Stop: device={Device} played={Played}f underrun={Underrun}f dropped={Dropped}f callbacks={Callbacks}",
+                _deviceIndex, Volatile.Read(ref _playedSamples), Volatile.Read(ref _underrunSamples),
+                Volatile.Read(ref _droppedSamples), Volatile.Read(ref _callbackCount));
+            try
+            {
+                if (_stream != nint.Zero)
+                {
+                    Native.Pa_StopStream(_stream);
+                    Native.Pa_CloseStream(_stream);
+                    _stream = nint.Zero;
+                }
+            }
+            finally
+            {
+                if (_selfHandle.IsAllocated) _selfHandle.Free();
+                Volatile.Write(ref _isRunning, false);
+                Volatile.Write(ref _streamSmoothCalibrated, 0);
+                Volatile.Write(ref _streamStoppedAfterFlush, 0);
+                Volatile.Write(ref _writeIndex, 0);
+                Volatile.Write(ref _readIndex, 0);
+            }
+            timing?.SetOutcome($"device={_deviceIndex} played={Volatile.Read(ref _playedSamples)} underrun={Volatile.Read(ref _underrunSamples)} dropped={Volatile.Read(ref _droppedSamples)}");
         }
-        finally
-        {
-            if (_selfHandle.IsAllocated) _selfHandle.Free();
-            Volatile.Write(ref _isRunning, false);
-            Volatile.Write(ref _streamSmoothCalibrated, 0);
-            Volatile.Write(ref _streamStoppedAfterFlush, 0);
-            Volatile.Write(ref _writeIndex, 0);
-            Volatile.Write(ref _readIndex, 0);
-        }
-        timing?.SetOutcome($"device={_deviceIndex} played={Volatile.Read(ref _playedSamples)} underrun={Volatile.Read(ref _underrunSamples)} dropped={Volatile.Read(ref _droppedSamples)}");
     }
 
     /// <summary>Convenience overload: submits a frame's samples after validating its format.</summary>

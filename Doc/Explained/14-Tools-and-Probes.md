@@ -20,6 +20,9 @@ Most are a single `Program.cs`; `VideoPlaybackSmoke` is a small structured host.
 | `FormatSwitchProbe` | Probe native pixel-format switching | Mid-stream format-change handling |
 | `TransportSyncProbe` | Seek/pause cycles with A/V drift + content verification | **The seek-desync probe** |
 
+All tools in this table are included in `MFPlayer.sln`, so a solution restore/build also
+restores and compiles the documented probes.
+
 ## `VideoPlaybackSmoke` — the reference host
 
 The most complete example and the one to copy from. It's split into small files so the

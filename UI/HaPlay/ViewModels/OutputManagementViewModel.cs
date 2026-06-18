@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -13,6 +12,8 @@ using HaPlay.Playback;
 using HaPlay.Resources;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
+using Microsoft.Extensions.Logging;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
 using S.Media.PortAudio;
@@ -21,6 +22,8 @@ namespace HaPlay.ViewModels;
 
 public partial class OutputManagementViewModel : ViewModelBase
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.ViewModels.OutputManagementViewModel");
+
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
 
     private volatile IReadOnlyList<OutputDefinition> _definitionsSnapshot = Array.Empty<OutputDefinition>();
@@ -350,11 +353,14 @@ public partial class OutputManagementViewModel : ViewModelBase
     public async Task<IReadOnlyList<string>> StartRuntimesForLoadedDefinitionsAsync(
         CancellationToken cancellationToken = default)
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "OutputManagement.StartRuntimesForLoadedDefinitionsAsync", slowWarningMs: 3000);
         var errors = new List<string>();
+        var started = 0;
         foreach (var line in Outputs.ToList())
         {
             try
             {
+                Trace.LogDebug("Start loaded output runtime: name={Name} kind={Kind}", line.Definition.DisplayName, line.Definition.Kind);
                 switch (line.Definition)
                 {
                     case PortAudioOutputDefinition pa:
@@ -367,14 +373,16 @@ public partial class OutputManagementViewModel : ViewModelBase
                         await StartLocalPreviewAsync(line, cancellationToken).ConfigureAwait(false);
                         break;
                 }
+                started++;
             }
             catch (Exception ex)
             {
                 errors.Add($"{line.Definition.DisplayName}: {ex.Message}");
-                Debug.WriteLine($"HaPlay: failed to start loaded output '{line.Definition.DisplayName}': {ex}");
+                Trace.LogError(ex, "Failed to start loaded output runtime: name={Name} kind={Kind}", line.Definition.DisplayName, line.Definition.Kind);
             }
         }
 
+        timing?.SetOutcome($"started={started} errors={errors.Count}");
         return errors;
     }
 
@@ -800,11 +808,13 @@ public partial class OutputManagementViewModel : ViewModelBase
 
         try
         {
+            using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "OutputManagement.EditSelectedAsync.ReconfigureLineAsync", slowWarningMs: 2000);
             await ReconfigureLineAsync(line, edited, cancellationToken).ConfigureAwait(false);
+            timing?.SetOutcome($"line={line.Definition.DisplayName}");
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"HaPlay: ReconfigureLineAsync failed for '{line.Definition.DisplayName}': {ex}");
+            Trace.LogError(ex, "ReconfigureLineAsync failed for line={Name} kind={Kind}", line.Definition.DisplayName, line.Definition.Kind);
         }
     }
 
@@ -919,7 +929,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         catch (Exception ex)
         {
             await Dispatcher.UIThread.InvokeAsync(() => Outputs.Remove(line));
-            Debug.WriteLine($"HaPlay: failed to start PortAudio output '{result.DisplayName}': {ex}");
+            Trace.LogError(ex, "Failed to start PortAudio output: name={Name} device={DeviceName} channels={Channels} sampleRate={SampleRate}",
+                result.DisplayName, result.DeviceName, result.ChannelCount, result.SampleRate);
         }
     }
 
@@ -948,7 +959,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"HaPlay: failed to open preview for '{result.DisplayName}': {ex}");
+            Trace.LogError(ex, "Failed to open local video preview: name={Name} engine={Engine} surfaceMode={SurfaceMode} windowWidth={WindowWidth} windowHeight={WindowHeight}",
+                result.DisplayName, result.Engine, result.SurfaceMode, result.WindowWidth, result.WindowHeight);
         }
     }
 
@@ -986,7 +998,8 @@ public partial class OutputManagementViewModel : ViewModelBase
         catch (Exception ex)
         {
             await Dispatcher.UIThread.InvokeAsync(() => Outputs.Remove(line));
-            Debug.WriteLine($"HaPlay: failed to start NDI output '{result.SourceName}': {ex}");
+            Trace.LogError(ex, "Failed to start NDI output: name={Name} source={SourceName} streamMode={StreamMode}",
+                result.DisplayName, result.SourceName, result.StreamMode);
         }
     }
 

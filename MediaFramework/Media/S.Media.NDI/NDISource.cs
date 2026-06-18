@@ -759,14 +759,12 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
         timing?.SetOutcome($"state={State} audioOverflow={AudioOverflowFloats} videoOverflow={VideoOverflowFrames}");
     }
 
-    private static readonly AudioFormat StandbyAudioFormat = new(48_000, 2);
-    private static readonly VideoFormat StandbyVideoFormat =
-        new(16, 16, PixelFormat.Bgra32, new Rational(30, 1));
-
     private sealed class AudioSourceAdapter(NDISource owner) : IAudioSource, IDisposable
     {
         public AudioFormat Format =>
-            owner._receiveAudio && owner.IsAudioConnected ? owner.AudioFormat : StandbyAudioFormat;
+            owner._receiveAudio
+                ? owner.AudioFormat
+                : throw new InvalidOperationException("NDISource audio is disabled.");
 
         public bool IsExhausted => owner.IsDisposed || owner.Fault is not null;
 
@@ -787,10 +785,14 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     private sealed class VideoSourceAdapter(NDISource owner) : IVideoSource, IDisposable
     {
         public VideoFormat Format =>
-            owner._receiveVideo && owner.IsVideoConnected ? owner.VideoFormat : StandbyVideoFormat;
+            owner._receiveVideo
+                ? owner.VideoFormat
+                : throw new InvalidOperationException("NDISource video is disabled.");
 
         public IReadOnlyList<PixelFormat> NativePixelFormats =>
-            owner._receiveVideo ? owner.NativeVideoPixelFormats : [PixelFormat.Bgra32];
+            owner._receiveVideo && owner.IsVideoConnected
+                ? owner.NativeVideoPixelFormats
+                : throw new InvalidOperationException("NDI source has not delivered a video frame yet.");
 
         public bool IsExhausted => owner.IsDisposed || owner.Fault is not null || !owner._receiveVideo;
 

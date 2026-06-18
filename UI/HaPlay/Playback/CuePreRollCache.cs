@@ -66,6 +66,7 @@ internal sealed class CuePreRollCache : IDisposable
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(item);
+        HaPlayPlaybackSession? toDispose = null;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -73,70 +74,84 @@ internal sealed class CuePreRollCache : IDisposable
             {
                 if (ReferenceEquals(existing.Session, session))
                     return;
-                try { existing.Session.Dispose(); }
-                catch { /* best effort */ }
+                toDispose = existing.Session;
                 _entries.Remove(cueId);
             }
 
             _entries[cueId] = new Entry(cacheKey, session, item);
         }
+        try { toDispose?.Dispose(); }
+        catch { /* best effort */ }
         RaiseEntriesChanged();
     }
 
     public void InvalidateAll()
     {
-        bool hadEntries;
+        Entry[] entries;
         lock (_gate)
         {
-            hadEntries = _entries.Count > 0;
-            foreach (var entry in _entries.Values)
-            {
-                try { entry.Session.Dispose(); }
-                catch { /* best effort */ }
-            }
+            entries = _entries.Values.ToArray();
             _entries.Clear();
         }
-        if (hadEntries) RaiseEntriesChanged();
+        foreach (var entry in entries)
+        {
+            try { entry.Session.Dispose(); }
+            catch { /* best effort */ }
+        }
+        if (entries.Length > 0) RaiseEntriesChanged();
     }
 
     public void EvictExcept(IReadOnlyCollection<Guid> keepCueIds, int maxEntries)
     {
         int countBefore, countAfter;
+        var toDispose = new List<HaPlayPlaybackSession>();
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             countBefore = _entries.Count;
             var keep = keepCueIds is HashSet<Guid> hs ? hs : keepCueIds.ToHashSet();
             foreach (var id in _entries.Keys.Where(id => !keep.Contains(id)).ToList())
-                RemoveEntryLocked(id);
+                RemoveEntryLocked(id, toDispose);
 
             while (_entries.Count > maxEntries)
             {
                 var oldest = _entries.OrderBy(kv => kv.Value.CreatedUtc).First().Key;
-                RemoveEntryLocked(oldest);
+                RemoveEntryLocked(oldest, toDispose);
             }
             countAfter = _entries.Count;
+        }
+        foreach (var session in toDispose)
+        {
+            try { session.Dispose(); }
+            catch { /* best effort */ }
         }
         if (countAfter != countBefore) RaiseEntriesChanged();
     }
 
-    private void RemoveEntryLocked(Guid cueId)
+    private void RemoveEntryLocked(Guid cueId, ICollection<HaPlayPlaybackSession> toDispose)
     {
         if (!_entries.Remove(cueId, out var entry))
             return;
-        try { entry.Session.Dispose(); }
-        catch { /* best effort */ }
+        toDispose.Add(entry.Session);
     }
 
     public void Dispose()
     {
+        Entry[] entries;
         lock (_gate)
         {
             if (_disposed)
                 return;
             _disposed = true;
-            InvalidateAll();
+            entries = _entries.Values.ToArray();
+            _entries.Clear();
         }
+        foreach (var entry in entries)
+        {
+            try { entry.Session.Dispose(); }
+            catch { /* best effort */ }
+        }
+        if (entries.Length > 0) RaiseEntriesChanged();
     }
 
     public static string BuildCacheKey(
@@ -168,7 +183,7 @@ internal static class PlaylistItemPreRollExtensions
             _ => item.GetType().Name,
         };
 
-    /// <summary>File media suitable for pre-roll (live inputs are excluded — they hold devices/NDI).</summary>
+    /// <summary>Items that can be warmed before GO: files pre-open decoders, live inputs pre-connect devices.</summary>
     public static bool SupportsPreRoll(this PlaylistItem? item) =>
         item is FilePlaylistItem
         || item is NDIInputPlaylistItem { VideoOnly: false }

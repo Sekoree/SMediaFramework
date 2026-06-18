@@ -208,7 +208,7 @@ public sealed class RemoteApiDispatcherTests
     public async Task HttpServer_RoundTrips_StatusCommandAndNotFound()
     {
         var session = HeadlessUnitTestSession.GetOrStartForAssembly(typeof(RemoteApiDispatcherTests).Assembly);
-        var (statusCode, statusBody, tapCode, notFoundCode) = await session.Dispatch(async () =>
+        var (unauthorizedCode, statusCode, statusBody, tapCode, notFoundCode) = await session.Dispatch(async () =>
         {
             var cues = new CuePlayerViewModel();
             var soundboard = new SoundboardWorkspaceViewModel();
@@ -219,20 +219,47 @@ public sealed class RemoteApiDispatcherTests
 
             using var server = new RestApiServer();
             var port = GetFreePort();
-            Assert.True(server.Start(port, dispatcher));
+            const string token = "test-token";
+            Assert.True(server.Start(port, dispatcher, token));
+            var baseUrl = server.BaseUrl!;
 
             using var http = new HttpClient();
-            var status = await http.GetAsync($"http://127.0.0.1:{port}/api/v1/status");
+            var unauthorized = await http.GetAsync($"{baseUrl}/api/v1/status");
+            var status = await http.GetAsync($"{baseUrl}/api/v1/status?key={token}");
             var body = await status.Content.ReadAsStringAsync();
-            var tap = await http.PostAsync($"http://127.0.0.1:{port}/api/v1/soundboards/1/1/tap", content: null);
-            var notFound = await http.GetAsync($"http://127.0.0.1:{port}/api/v1/bogus");
-            return ((int)status.StatusCode, body, (int)tap.StatusCode, (int)notFound.StatusCode);
+            using var bearer = new HttpRequestMessage(HttpMethod.Post, $"{baseUrl}/api/v1/soundboards/1/1/tap");
+            bearer.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            var tap = await http.SendAsync(bearer);
+            var notFound = await http.GetAsync($"{baseUrl}/api/v1/bogus?key={token}");
+            return ((int)unauthorized.StatusCode, (int)status.StatusCode, body, (int)tap.StatusCode, (int)notFound.StatusCode);
         }, CancellationToken.None);
 
+        Assert.Equal(401, unauthorizedCode);
         Assert.Equal(200, statusCode);
         Assert.Contains("\"ok\":true", statusBody);
         Assert.Equal(200, tapCode);
         Assert.Equal(404, notFoundCode);
+    }
+
+    [Fact]
+    public void RemoteApi_CopyUrls_IncludeAccessToken()
+    {
+        var previousBase = RemoteApi.BaseUrl;
+        var previousToken = RemoteApi.AccessToken;
+        try
+        {
+            RemoteApi.BaseUrl = "http://localhost:8990";
+            RemoteApi.AccessToken = "abc 123";
+
+            var url = RemoteApi.TileTapUrl(2, 4);
+
+            Assert.Equal("http://localhost:8990/api/v1/soundboards/2/4/tap?key=abc%20123", url);
+        }
+        finally
+        {
+            RemoteApi.BaseUrl = previousBase;
+            RemoteApi.AccessToken = previousToken;
+        }
     }
 
     private static int GetFreePort()

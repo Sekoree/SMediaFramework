@@ -487,7 +487,14 @@ public sealed class VideoOutputPump : IVideoOutput, IVideoOutputD3D11GlBorrowSet
             // ObjectDisposedException on the drainer's _pending.Wait, or use-after-dispose inside the
             // inner output. Leak those deliberately rather than crash: it's a background thread that
             // will exit on its own once the inner Submit finally returns (it re-checks cancellation).
-            Trace.LogError("VideoOutputPump '{Name}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.", _name);
+            var ex = new TimeoutException($"VideoOutputPump '{_name}' drainer did not exit within the join cap.");
+            NativeResourceHealth.ReportStuck(
+                nameof(VideoOutputPump),
+                "video output pump drainer",
+                _name,
+                TimeSpan.FromSeconds(2),
+                ex);
+            Trace.LogError(ex, "VideoOutputPump '{Name}': drainer did not exit within the join cap; leaking pump state to avoid use-after-dispose.", _name);
             timing?.SetOutcome($"name={_name} drainer-stuck");
             return;
         }

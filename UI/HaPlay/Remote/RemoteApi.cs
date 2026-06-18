@@ -12,12 +12,22 @@ public sealed record RemoteApiEndpointDoc(string Path, string Description);
 public static class RemoteApi
 {
     public static string? BaseUrl { get; set; }
+    public static string? AccessToken { get; set; }
 
     public static string TileTapUrl(int boardNumber, int tileNumber) =>
-        $"{BaseUrl}/api/v1/soundboards/{boardNumber}/{tileNumber}/tap";
+        WithAccessToken($"{BaseUrl}/api/v1/soundboards/{boardNumber}/{tileNumber}/tap");
 
     public static string PlaylistItemPlayUrl(int playerNumber, int playlistNumber, int itemNumber) =>
-        $"{BaseUrl}/api/v1/players/{playerNumber}/{playlistNumber}/{itemNumber}/play";
+        WithAccessToken($"{BaseUrl}/api/v1/players/{playerNumber}/{playlistNumber}/{itemNumber}/play");
 
-    public static string CueGoUrl() => $"{BaseUrl}/api/v1/cues/go";
+    public static string CueGoUrl() => WithAccessToken($"{BaseUrl}/api/v1/cues/go");
+
+    private static string WithAccessToken(string url)
+    {
+        if (string.IsNullOrWhiteSpace(AccessToken))
+            return url;
+
+        var separator = url.Contains('?') ? '&' : '?';
+        return $"{url}{separator}key={Uri.EscapeDataString(AccessToken)}";
+    }
 }

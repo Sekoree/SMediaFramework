@@ -45,6 +45,7 @@ internal sealed class PortAudioInputPreConnectCache : IDisposable
     public void Store(Guid cueId, string cacheKey, PortAudioInput input, AudioFormat format)
     {
         ArgumentNullException.ThrowIfNull(input);
+        PortAudioInput? toDispose = null;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -52,58 +53,72 @@ internal sealed class PortAudioInputPreConnectCache : IDisposable
             {
                 if (ReferenceEquals(existing.Input, input))
                     return;
-                try { existing.Input.Dispose(); } catch { /* best effort */ }
+                toDispose = existing.Input;
                 _entries.Remove(cueId);
             }
 
             _entries[cueId] = new Entry(cacheKey, input, format);
         }
+        try { toDispose?.Dispose(); } catch { /* best effort */ }
     }
 
     public void InvalidateAll()
     {
+        Entry[] entries;
         lock (_gate)
         {
-            foreach (var e in _entries.Values)
-            {
-                try { e.Input.Dispose(); } catch { /* best effort */ }
-            }
+            entries = _entries.Values.ToArray();
             _entries.Clear();
+        }
+        foreach (var e in entries)
+        {
+            try { e.Input.Dispose(); } catch { /* best effort */ }
         }
     }
 
     public void EvictExcept(IReadOnlyCollection<Guid> keepCueIds, int maxEntries)
     {
+        var toDispose = new List<PortAudioInput>();
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             var keep = keepCueIds.ToHashSet();
             foreach (var id in _entries.Keys.Where(id => !keep.Contains(id)).ToList())
-                RemoveEntryLocked(id);
+                RemoveEntryLocked(id, toDispose);
 
             while (_entries.Count > maxEntries)
             {
                 var oldest = _entries.OrderBy(kv => kv.Value.CreatedUtc).First().Key;
-                RemoveEntryLocked(oldest);
+                RemoveEntryLocked(oldest, toDispose);
             }
+        }
+        foreach (var input in toDispose)
+        {
+            try { input.Dispose(); } catch { /* best effort */ }
         }
     }
 
-    private void RemoveEntryLocked(Guid cueId)
+    private void RemoveEntryLocked(Guid cueId, ICollection<PortAudioInput> toDispose)
     {
         if (!_entries.Remove(cueId, out var entry))
             return;
-        try { entry.Input.Dispose(); } catch { /* best effort */ }
+        toDispose.Add(entry.Input);
     }
 
     public void Dispose()
     {
+        Entry[] entries;
         lock (_gate)
         {
             if (_disposed)
                 return;
             _disposed = true;
-            InvalidateAll();
+            entries = _entries.Values.ToArray();
+            _entries.Clear();
+        }
+        foreach (var e in entries)
+        {
+            try { e.Input.Dispose(); } catch { /* best effort */ }
         }
     }
 

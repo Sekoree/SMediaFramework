@@ -51,6 +51,9 @@ public sealed class NDISourceApiTests
         {
             Assert.False(source.TryGetVideoFormat(out var fmt));
             Assert.Equal(default, fmt);
+            Assert.Throws<InvalidOperationException>(() => source.Video.Format);
+            Assert.Throws<InvalidOperationException>(() => source.Video.NativePixelFormats);
+            Assert.Throws<InvalidOperationException>(() => source.Audio.Format);
             Assert.False(source.WaitForStreams(TimeSpan.FromMilliseconds(150)));
         }
     }

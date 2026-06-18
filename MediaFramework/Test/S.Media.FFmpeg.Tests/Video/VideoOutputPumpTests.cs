@@ -1,3 +1,4 @@
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.FFmpeg.Video;
 using Xunit;
@@ -130,6 +131,40 @@ public class VideoOutputPumpTests
         Assert.True(inner.SubmitCount >= 1, "frame should still have drained to the borrowed inner before dispose");
     }
 
+    [Fact]
+    public void Dispose_reports_native_health_when_drainer_exceeds_join_cap()
+    {
+        NativeResourceHealth.Clear();
+        var pumpName = $"health-pump-{Guid.NewGuid():N}";
+        var inner = new BlockingOutput([PixelFormat.I420]);
+        var pump = new VideoOutputPump(inner, maxQueuedFrames: 2, name: pumpName, disposeInnerOnDispose: true);
+        var vf = new VideoFormat(32, 32, PixelFormat.I420, new Rational(24, 1));
+        pump.Configure(vf);
+
+        var f = new VideoFrame(TimeSpan.Zero, vf, [new byte[32 * 32], new byte[16 * 16], new byte[16 * 16]], [32, 16, 16]);
+        pump.Submit(f);
+        Assert.True(inner.SubmitEntered.Wait(TimeSpan.FromSeconds(2)), "drainer never entered inner Submit");
+
+        try
+        {
+            pump.Dispose();
+
+            var records = NativeResourceHealth.Snapshot();
+            var record = Assert.Single(records, r =>
+                r.Owner == nameof(VideoOutputPump) &&
+                r.ResourceKind == "video output pump drainer" &&
+                r.Detail == pumpName);
+            Assert.Equal(TimeSpan.FromSeconds(2), record.JoinTimeout);
+            Assert.IsType<TimeoutException>(record.Exception);
+        }
+        finally
+        {
+            inner.Release();
+            Assert.True(inner.SubmitExited.Wait(TimeSpan.FromSeconds(2)), "blocked inner Submit did not exit after release");
+            NativeResourceHealth.Clear();
+        }
+    }
+
     private sealed class RecordingAbortableOutput : IVideoOutput, IVideoOutputCooperativeAbort
     {
         private readonly PixelFormat[] _acc;
@@ -177,6 +212,30 @@ public class VideoOutputPumpTests
             AbortRequested = true;
             _release.Set();
         }
+    }
+
+    private sealed class BlockingOutput : IVideoOutput
+    {
+        private readonly PixelFormat[] _acc;
+        private readonly ManualResetEventSlim _release = new(false);
+
+        public BlockingOutput(PixelFormat[] acc) => _acc = acc;
+
+        public ManualResetEventSlim SubmitEntered { get; } = new(false);
+        public ManualResetEventSlim SubmitExited { get; } = new(false);
+        public VideoFormat Format { get; private set; }
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats => _acc;
+        public void Configure(VideoFormat format) => Format = format;
+
+        public void Submit(VideoFrame frame)
+        {
+            SubmitEntered.Set();
+            _release.Wait();
+            frame.Dispose();
+            SubmitExited.Set();
+        }
+
+        public void Release() => _release.Set();
     }
 
     private sealed class SlowOutput : IVideoOutput

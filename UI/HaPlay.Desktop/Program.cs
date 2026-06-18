@@ -15,8 +15,16 @@ sealed class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        ConfigureLogging(args);
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        try
+        {
+            ConfigureLogging(args);
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        }
+        catch (Exception ex)
+        {
+            DesktopCrashDiagnostics.RecordFatalException("Program.Main", ex);
+            throw;
+        }
     }
 
     // Avalonia configuration, don't remove; also used by visual designer.
@@ -34,8 +42,10 @@ sealed class Program
     /// <remarks>
     /// CLI overrides:
     /// <c>--media-log-level trace|debug|information|warning|error</c> sets the framework verbosity
-    /// (default <c>debug</c>); <c>--media-log-dir &lt;path&gt;</c> overrides the file destination
-    /// (default <c>%TMPDIR%/HaPlay/logs</c>);
+    /// (default <c>trace</c>); <c>--media-log-dir &lt;path&gt;</c> overrides the file destination
+    /// (default <c>./logs</c>); <c>--media-log-queue &lt;n&gt;</c> and
+    /// <c>--media-log-retain &lt;n&gt;</c> tune soak-run retention; <c>--media-log-first-chance</c>
+    /// emits every first-chance exception at trace for targeted crash hunts;
     /// <c>--media-live-uyvy-passthrough</c> skips live UYVY→BGRA conversion (native SDL UYVY path).
     /// </remarks>
     private static void ConfigureLogging(string[] args)
@@ -47,6 +57,9 @@ sealed class Program
             string.Equals(raw, "none", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(raw, "disabled", StringComparison.OrdinalIgnoreCase))
         {
+            var crashDir = GetArg(args, "--media-log-dir")
+                           ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
+            DesktopCrashDiagnostics.Install(crashDir, rollingLogFilePath: null, args);
             Console.WriteLine("HaPlay.Desktop logging disabled via --media-log off");
             return;
         }
@@ -54,13 +67,16 @@ sealed class Program
         var level = ParseLevel(GetArg(args, "--media-log-level"), LogLevel.Trace);
         var dir = GetArg(args, "--media-log-dir")
                   ?? Path.Combine(Directory.GetCurrentDirectory(), "logs");
+        var queueCapacity = GetIntArg(args, "--media-log-queue", fallback: 131_072, min: 1024);
+        var retainCount = GetIntArg(args, "--media-log-retain", fallback: 50, min: 1);
 
         var fileProvider = new RollingFileLoggerProvider(new RollingFileLoggerOptions
         {
             Directory = dir,
             FileNamePrefix = "haplay",
             MinimumLevel = level,
-            RetainCount = 10,
+            QueueCapacity = queueCapacity,
+            RetainCount = retainCount,
         });
 
         var factory = LoggerFactory.Create(builder =>
@@ -76,6 +92,7 @@ sealed class Program
         });
 
         MediaDiagnostics.LoggerFactory = factory;
+        DesktopCrashDiagnostics.Install(dir, fileProvider.FilePath, args);
 
         if (HasArg(args, "--media-live-uyvy-passthrough"))
         {
@@ -85,7 +102,12 @@ sealed class Program
         }
 
         MediaDiagnostics.LogInformation(
-            $"HaPlay.Desktop logging configured: minLevel={level} fileSink={fileProvider.FilePath}");
+            "HaPlay.Desktop logging configured: minLevel={Level} fileSink={FilePath} crashSink={CrashPath} queueCapacity={QueueCapacity} retainCount={RetainCount}",
+            level,
+            fileProvider.FilePath,
+            DesktopCrashDiagnostics.CrashFilePath ?? "<none>",
+            queueCapacity,
+            retainCount);
 
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
@@ -112,6 +134,12 @@ sealed class Program
                 return args[i + 1];
         }
         return null;
+    }
+
+    private static int GetIntArg(string[] args, string name, int fallback, int min)
+    {
+        var raw = GetArg(args, name);
+        return int.TryParse(raw, out var value) && value >= min ? value : fallback;
     }
 
     private static LogLevel ParseLevel(string? raw, LogLevel fallback) =>

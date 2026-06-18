@@ -25,15 +25,16 @@ line count:
 
 | File | Lines |
 |------|------:|
-| `UI/HaPlay/ViewModels/CuePlayerViewModel.cs` | 4,862 |
-| `UI/HaPlay/ViewModels/MediaPlayerViewModel.cs` | 4,449 |
-| `UI/HaPlay/ViewModels/ControlWorkspaceViewModel.cs` | 4,165 |
-| `UI/HaPlay/Playback/CuePlaybackEngine.cs` | 2,395 |
-| `UI/HaPlay/Playback/HaPlayPlaybackSession.cs` | 2,196 |
-| `UI/HaPlay/ViewModels/MainViewModel.cs` | 2,091 |
+| `UI/HaPlay/ViewModels/MediaPlayerViewModel.cs` | 3,157 |
+| `UI/HaPlay/ViewModels/ControlWorkspaceViewModel.cs` | 2,908 |
+| `UI/HaPlay/Playback/CuePlaybackEngine.cs` | 2,360 |
+| `UI/HaPlay/ViewModels/CuePlayerViewModel.cs` | 2,011 |
+| `UI/HaPlay/Playback/HaPlayPlaybackSession.cs` | 1,829 |
+| `UI/HaPlay/ViewModels/MainViewModel.cs` | 1,527 |
 
-A 4,800-line view-model is very hard to test, reason about, or change safely. The
-author already flagged the UI as the rough part. Concrete, low-risk decompositions:
+These are much smaller than the earliest HaPlay snapshots, but they are still large
+enough to make testing and review harder than necessary. Concrete, low-risk
+decompositions:
 
 * Split each big VM by **feature area** into partials or child VMs: e.g.
   `CuePlayerViewModel` → cue-list/tree, transport, composition/layers, output-mapping,

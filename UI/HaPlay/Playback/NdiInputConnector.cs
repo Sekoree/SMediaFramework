@@ -73,10 +73,20 @@ internal static class NdiInputConnector
                 return false;
             }
 
-            if (wantAudio)
-                receiver.TryGetAudioFormat(out audioFormat);
-            if (wantVideo)
-                receiver.TryGetVideoFormat(out videoFormat);
+            if (wantAudio && !receiver.TryGetAudioFormat(out audioFormat))
+            {
+                errorMessage = $"NDI source '{item.SourceName}' did not expose its audio format.";
+                CleanupReceiver(receiver);
+                receiver = null;
+                return false;
+            }
+            if (wantVideo && !receiver.TryGetVideoFormat(out videoFormat))
+            {
+                errorMessage = $"NDI source '{item.SourceName}' did not expose its video format.";
+                CleanupReceiver(receiver);
+                receiver = null;
+                return false;
+            }
 
             return true;
         }

@@ -41,7 +41,7 @@ namespace S.Media.Core.Video;
 /// <see cref="ICooperativeVideoReadInterrupt"/>, a yield is requested before cancelling the decode loop so
 /// blocking reads (for example shared-demux FFmpeg) can return <c>false</c> promptly.
 /// The decode thread may be waiting on the presentation-queue semaphore when ticks stop; <see cref="Pause"/>
-/// drains the queue and recreates that semaphore before joining decode so shutdown cannot deadlock on a full queue.
+/// drains queued frames and returns their slots while cancellation wakes any blocked decode wait.
 /// </para>
 /// </remarks>
 public sealed class VideoPlayer : IDisposable
@@ -50,6 +50,7 @@ public sealed class VideoPlayer : IDisposable
     private readonly IVideoOutput _sink;
     private readonly IMediaClock _clock;
     private readonly ConcurrentQueue<VideoFrame> _queue = new();
+    private readonly object _queueGate = new();
     private SemaphoreSlim _slotsAvailable;
     private readonly int _queueCapacity;
     private readonly TimeSpan _decodePollInterval;
@@ -365,10 +366,9 @@ public sealed class VideoPlayer : IDisposable
             _clock.VideoTick -= handler;
         toDispose?.Cancel();
 
-        // Once IsRunning is false, OnVideoTick returns without dequeuing — no more
-        // _slotsAvailable.Release() from the clock. Decode may be blocked on Wait
-        // for a slot while the queue still holds frames; dispose/recreate the
-        // semaphore so Wait throws ObjectDisposedException and the thread can exit.
+        // Once cancellation is requested, the decode thread wakes from Wait(token).
+        // Drain returns one queue slot for each dropped frame; the queue gate keeps an
+        // already-running tick from releasing the same logical slot concurrently.
         DrainQueue();
 
         var joinCancelled = false;
@@ -426,24 +426,25 @@ public sealed class VideoPlayer : IDisposable
 
     private void DrainQueue()
     {
-        // Reset the slot semaphore wholesale: anything we drop here returns
-        // a slot, and the next Play wants the full capacity available.
+        // Anything we drop here returns a slot. Do not dispose/recreate the semaphore:
+        // a clock tick may already be inside a dequeue loop after its IsRunning check.
         var dropped = 0;
-        while (_queue.TryDequeue(out var f))
+        lock (_queueGate)
         {
-            f.Dispose();
-            dropped++;
+            while (_queue.TryDequeue(out var f))
+            {
+                f.Dispose();
+                dropped++;
+            }
+
+            if (dropped > 0)
+                _slotsAvailable.Release(dropped);
         }
         if (dropped > 0)
         {
             Interlocked.Add(ref _droppedQueueDrain, dropped);
             Volatile.Write(ref _latestDecodedPtsTicks, Volatile.Read(ref _lastPresentedPtsTicks));
         }
-
-        // Reissue the semaphore so the new run's decode loop has a clean
-        // tally — simpler than counting precisely how many tokens to release.
-        _slotsAvailable.Dispose();
-        _slotsAvailable = new SemaphoreSlim(_queueCapacity, _queueCapacity);
     }
 
     private void DecodeLoop(CancellationToken token)
@@ -489,10 +490,15 @@ public sealed class VideoPlayer : IDisposable
                     frame.Dispose();
                     return;
                 }
-                _queue.Enqueue(frame);
+                lock (_queueGate)
+                    _queue.Enqueue(frame);
             }
         }
-        catch (ObjectDisposedException) { /* StopInternal disposed semaphore mid-wait */ }
+        catch (ObjectDisposedException ex) when (token.IsCancellationRequested)
+        {
+            Trace.LogTrace(ex, "DecodeLoop: source disposed during cooperative shutdown");
+            return;
+        }
         catch (Exception ex)
         {
             EventHandler? handler = null;
@@ -567,31 +573,34 @@ public sealed class VideoPlayer : IDisposable
         // frame — older candidates are dropped as "skipped" when we find a
         // newer one. Frames more than LateThreshold behind are held as the
         // newest-late fallback (newest wins) rather than discarded outright.
-        while (_queue.TryPeek(out var head))
+        lock (_queueGate)
         {
-            if (head.PresentationTime > early) break;
-
-            if (!_queue.TryDequeue(out var frame))
-                break;
-            _slotsAvailable.Release();
-
-            if (frame.PresentationTime < lateCutoff)
+            while (_queue.TryPeek(out var head))
             {
-                if (newestLate is not null)
+                if (head.PresentationTime > early) break;
+
+                if (!_queue.TryDequeue(out var frame))
+                    break;
+                _slotsAvailable.Release();
+
+                if (frame.PresentationTime < lateCutoff)
                 {
-                    newestLate.Dispose();
+                    if (newestLate is not null)
+                    {
+                        newestLate.Dispose();
+                        Interlocked.Increment(ref _droppedLate);
+                    }
+                    newestLate = frame;
+                    continue;
+                }
+
+                if (toShow is not null)
+                {
+                    toShow.Dispose();
                     Interlocked.Increment(ref _droppedLate);
                 }
-                newestLate = frame;
-                continue;
+                toShow = frame;
             }
-
-            if (toShow is not null)
-            {
-                toShow.Dispose();
-                Interlocked.Increment(ref _droppedLate);
-            }
-            toShow = frame;
         }
 
         if (toShow is not null)
@@ -701,42 +710,45 @@ public sealed class VideoPlayer : IDisposable
         var early = playhead + EarlyTolerance;
         var lateCutoff = playhead - LateThreshold;
 
-        while (_queue.TryPeek(out var head))
+        lock (_queueGate)
         {
-            if (head.PresentationTime > early)
-                break;
-
-            if (!_queue.TryDequeue(out var frame))
-                break;
-            _slotsAvailable.Release();
-
-            if (frame.PresentationTime < lateCutoff)
+            while (_queue.TryPeek(out var head))
             {
-                frame.Dispose();
-                Interlocked.Increment(ref _droppedLate);
-                continue;
+                if (head.PresentationTime > early)
+                    break;
+
+                if (!_queue.TryDequeue(out var frame))
+                    break;
+                _slotsAvailable.Release();
+
+                if (frame.PresentationTime < lateCutoff)
+                {
+                    frame.Dispose();
+                    Interlocked.Increment(ref _droppedLate);
+                    continue;
+                }
+
+                if (toShow is not null)
+                {
+                    toShow.Dispose();
+                    Interlocked.Increment(ref _droppedLate);
+                }
+
+                toShow = frame;
             }
 
             if (toShow is not null)
-            {
-                toShow.Dispose();
-                Interlocked.Increment(ref _droppedLate);
-            }
+                return true;
 
-            toShow = frame;
-        }
+            var futureCutoff = playhead + SyncStartupLead;
+            if (!_queue.TryPeek(out var future) || future.PresentationTime > futureCutoff)
+                return false;
 
-        if (toShow is not null)
+            if (!_queue.TryDequeue(out toShow))
+                return false;
+            _slotsAvailable.Release();
             return true;
-
-        var futureCutoff = playhead + SyncStartupLead;
-        if (!_queue.TryPeek(out var future) || future.PresentationTime > futureCutoff)
-            return false;
-
-        if (!_queue.TryDequeue(out toShow))
-            return false;
-        _slotsAvailable.Release();
-        return true;
+        }
     }
 
     private bool WaitForOutputIdle(
@@ -775,11 +787,14 @@ public sealed class VideoPlayer : IDisposable
     private void PresentLatestQueuedFrame()
     {
         VideoFrame? latest = null;
-        while (_queue.TryDequeue(out var frame))
+        lock (_queueGate)
         {
-            _slotsAvailable.Release();
-            latest?.Dispose();
-            latest = frame;
+            while (_queue.TryDequeue(out var frame))
+            {
+                _slotsAvailable.Release();
+                latest?.Dispose();
+                latest = frame;
+            }
         }
 
         if (latest is null)

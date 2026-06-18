@@ -1,29 +1,32 @@
 # 13 · HaPlay UI
 
 HaPlay is the Avalonia demo / show-control application that drives the whole
-framework. It started as a "quick and dirty way to test playback" and grew into a
-real multi-deck media server. The app library is the largest single module (~39k
+framework. It started as a quick way to test playback and grew into a real
+multi-deck media server. The app library is the largest single module (~39k
 lines, 339 production types), with a small desktop entry-point project on top
 (5 more types). It is **MVVM** (CommunityToolkit.Mvvm) and **NativeAOT-published**.
 
-> The author's own disclaimer: "the UI and UX is a crime against humanity" — much of
-> it was AI-assisted "I need to test X, add it." So treat this doc as a map of *what's
-> there*, and see [15](15-Issues-and-Improvements.md) for where it would benefit from
-> decomposition. The framework underneath is the polished part; HaPlay is the
-> exerciser.
+HaPlay is also the integration surface with the most workflow churn. Treat this doc
+as a map of what is there today, and see [15](15-Issues-and-Improvements.md) for the
+remaining decomposition work.
 
 ## App shell & the six workspaces
 
 * **`HaPlay.Desktop/Program.cs`** — the NativeAOT entry point; configures
   `MediaDiagnostics.LoggerFactory` before `BuildAvaloniaApp` so static framework
   loggers resolve to the app logger. CLI flags include `--media-log off`,
-  `--media-log-level`, and `--media-log-dir`.
+  `--media-log-level`, `--media-log-dir`, `--media-log-queue`, `--media-log-retain`,
+  and `--media-log-first-chance` for targeted exception-noise crash hunts.
 * **`HaPlay.Desktop/RollingFileLogger.cs`** — `RollingFileLoggerProvider`,
   `RollingFileLoggerOptions`, and the internal `RollingFileLogger`; a bounded,
   drop-oldest background writer that keeps one log file per process and prunes old
   files on startup.
+* **`HaPlay.Desktop/DesktopCrashDiagnostics.cs`** — process-level crash diagnostics:
+  AppDomain unhandled exceptions, Avalonia dispatcher exceptions, unobserved task
+  exceptions, and `NativeResourceHealth` stuck-resource records are written to both the
+  rolling logger and a synchronous `haplay-crash-*.log` file.
 * **`App.axaml(.cs)`** — Avalonia app, theme, DI-less composition root.
-* **`MainWindow` / `MainView`** (+ `.axaml.cs`) — the shell. `MainViewModel` (~2,091
+* **`MainWindow` / `MainView`** (+ `.axaml.cs`) — the shell. `MainViewModel` (~1,527
   lines) owns the workspace switching and the sub-view-models.
 
 The sidebar selects one of six **workspaces** (`WorkspaceItem`, `Ctrl+1..6`):
@@ -38,7 +41,7 @@ The sidebar selects one of six **workspaces** (`WorkspaceItem`, `Ctrl+1..6`):
 | **Project** | (MainViewModel) | Save/open the whole show. |
 
 `ViewModelBase` is the MVVM base; `AppearanceController` handles theme/density;
-`ToastCenter`/`ToastViewModel` are the notification system; `Strings` (~853 lines) is
+`ToastCenter`/`ToastViewModel` are the notification system; `Strings` (~861 lines) is
 the localized text. Converters (`EnumDisplayConverter`, `BrushFromHexConverter`,
 `AggregateBrushConverter`, `FilenameConverter`) bridge model values to XAML.
 
@@ -47,12 +50,12 @@ the localized text. Converters (`EnumDisplayConverter`, `BrushFromHexConverter`,
 This is the most important non-UI part of HaPlay — it wires framework objects to UI
 lines and is where the real complexity lives.
 
-* **`HaPlayPlaybackSession`** (~2,196 lines) — per-line wiring metadata so
+* **`HaPlayPlaybackSession`** (~1,829 lines) — per-line wiring metadata so
   `TryAddOutput`/`TryRemoveOutput` can unwind *exactly* what they wired without
   disturbing other lines. This is the object that connects a `MediaPlayer` to the set
   of selected output lines (audio routers, video routers, NDI senders) and tears it
   down cleanly.
-* **`CuePlaybackEngine`** (~2,395 lines) — the cue-side runtime: manages N concurrent
+* **`CuePlaybackEngine`** (~2,360 lines) — the cue-side runtime: manages N concurrent
   media cues plus two shared-resource pools — per active **composition** (shared video
   mixer + acquired outputs) and per active **audio output line** (shared `AudioRouter`
   so N cues mix into one device). Independent of player tabs; only shares the registry
@@ -158,18 +161,29 @@ The `Models/` namespace is the persisted show data, serialized AOT-safely via
 ## Remote control (REST API)
 
 A headless control surface so show controllers (Companion, touch panels, `curl`) can
-drive HaPlay over the LAN — the "REST API addition" in the latest commit:
+drive HaPlay:
 
 * **`RemoteApiDispatcher`** — transport-agnostic routing of API paths onto the view
   models. Every handler hops to the UI thread, validates its target, and **kicks off
   the command without awaiting playback** (a remote controller needs the request to
   return immediately, but a transport can block for seconds on prefill).
 * **`RestApiServer`** — a minimal `HttpListener`-based front end (no web-framework dep,
-  for NativeAOT). Listens on all interfaces; on Windows (where the wildcard prefix needs
-  a URL ACL) it falls back to loopback and says so. `RemoteApi` / `RemoteApiEndpointDoc`
-  / `RemoteApiResult` are the contract. URL scheme (1-based indices matching UI labels):
+  for NativeAOT). It binds loopback by default and can be explicitly switched to a LAN
+  wildcard bind. LAN wildcard binding still falls back to loopback when the platform
+  refuses the prefix (for example without a Windows URL ACL). `RemoteApi` /
+  `RemoteApiEndpointDoc` / `RemoteApiResult` are the contract. URL scheme (1-based
+  indices matching UI labels):
   `/api/v1/cues/go|pause|...`, `/api/v1/players/{p}/play|volume|hold|...`,
   `/api/v1/soundboards/{b}/{tile}/tap|play|stop|fade`, `/api/v1/control/arm|disarm`.
+
+### REST API security model
+
+The API is off by default. When enabled, every request must carry the generated
+per-machine token, either as `?key=...` / `?token=...`, `Authorization: Bearer ...`, or
+`X-HaPlay-Api-Key`. The Project workspace shows the active bind URL, the token, and the
+loopback/LAN mode. Copied operator URLs include the token. CORS is not opened by default;
+browser-based controllers should use explicit token-bearing URLs or a trusted local
+bridge.
 
 ## NativeAOT specifics
 

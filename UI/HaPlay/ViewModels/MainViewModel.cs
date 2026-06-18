@@ -3,6 +3,7 @@ using System.Collections.Specialized;
 using System.Globalization;
 using System.Net;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
@@ -13,7 +14,9 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using Microsoft.Extensions.Logging;
 using S.Control;
+using S.Media.Core.Diagnostics;
 using OSCLib;
 using PMLib;
 using PMLib.Devices;
@@ -24,6 +27,8 @@ namespace HaPlay.ViewModels;
 
 public partial class MainViewModel : ViewModelBase
 {
+    private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.ViewModels.MainViewModel");
+
     private int _nextPlayerNumber = 1;
     private readonly object _midiInitSync = new();
     private readonly Playback.CuePlaybackEngine _cuePlaybackEngine;
@@ -41,6 +46,7 @@ public partial class MainViewModel : ViewModelBase
 
     public MainViewModel()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.ctor", slowWarningMs: 1000);
         OutputManagement = new OutputManagementViewModel();
         CuePlayer = new CuePlayerViewModel();
         Control = new ControlWorkspaceViewModel
@@ -108,7 +114,8 @@ public partial class MainViewModel : ViewModelBase
                 show ? CuePlayer.SelectedCueList?.ToModel() : null, compositionId, outputLineId, mapping, show);
         _cuePlaybackEngine.ReleaseConflictingPlayerOutputsAsync = ReleaseMediaPlayerOutputsForCueAsync;
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
-        CuePlayer.PreRollRefreshSuggested += (_, _) => _ = RefreshCuePreRollAsync();
+        CuePlayer.PreRollRefreshSuggested += (_, _) =>
+            FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync suggested");
         CuePlayer.CueStandbyInvalidated += (_, cueId) => _cuePlaybackEngine.MarkPreparedCueStale(cueId);
         CuePlayer.RefreshPreviewAudioDevices();
         foreach (var player in Players)
@@ -118,11 +125,11 @@ public partial class MainViewModel : ViewModelBase
         ActionEndpoints.CollectionChanged += OnActionEndpointsCollectionChanged;
         SelectedActionEndpoint = ActionEndpoints.FirstOrDefault();
         RefreshMidiDeviceCatalog();
-        _ = RefreshAllEndpointHealthAsync();
+        FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync startup");
         // Keep endpoint LEDs current even when devices/network state changes after project load.
         _endpointHealthTimer = new DispatcherTimer(TimeSpan.FromSeconds(5), DispatcherPriority.Background, (_, _) =>
         {
-            _ = RefreshAllEndpointHealthAsync();
+            FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync timer");
         })
         {
             IsEnabled = true,
@@ -155,7 +162,34 @@ public partial class MainViewModel : ViewModelBase
         // re-save during construction, then bring the listener up if it was left enabled.
         _restApiEnabled = _appSettings.RestApiEnabled;
         _restApiPort = _appSettings.RestApiPort is >= 1 and <= 65535 ? _appSettings.RestApiPort : 8990;
+        _restApiAllowLan = _appSettings.RestApiAllowLan;
+        _restApiAccessToken = EnsureRestApiAccessToken(_appSettings);
         RestartRestApi();
+        timing?.SetOutcome($"players={Players.Count} outputs={OutputManagement.Outputs.Count} endpoints={ActionEndpoints.Count} restApi={RestApiEnabled}");
+    }
+
+    private static void FireAndLog(Task task, string operation)
+    {
+        if (task.IsCompletedSuccessfully)
+            return;
+
+        _ = ObserveFireAndForgetAsync(task, operation);
+    }
+
+    private static async Task ObserveFireAndForgetAsync(Task task, string operation)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex)
+        {
+            Trace.LogDebug(ex, "{Operation}: background task cancelled", operation);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogError(ex, "{Operation}: background task failed", operation);
+        }
     }
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
@@ -163,13 +197,22 @@ public partial class MainViewModel : ViewModelBase
     private readonly Remote.RestApiServer _restApiServer = new();
     private Remote.RemoteApiDispatcher? _restApiDispatcher;
 
-    /// <summary>Per-machine: serve the HTTP remote API. Off by default (unauthenticated LAN surface).</summary>
+    /// <summary>Per-machine: serve the HTTP remote API. Off by default; token-protected when enabled.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(RestApiBaseUrlDisplay))]
     private bool _restApiEnabled;
 
     [ObservableProperty]
     private int _restApiPort = 8990;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RestApiBaseUrlDisplay))]
+    [NotifyPropertyChangedFor(nameof(RestApiSecurityStatus))]
+    private bool _restApiAllowLan;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(RestApiSecurityStatus))]
+    private string _restApiAccessToken = string.Empty;
 
     /// <summary>Shown in the Project workspace card (and the base for Copy-API-URL menus).</summary>
     public string RestApiBaseUrlDisplay =>
@@ -179,6 +222,11 @@ public partial class MainViewModel : ViewModelBase
 
     /// <summary>Degradation note (e.g. Windows loopback fallback) or bind error; null when clean.</summary>
     public string? RestApiStatusNote => _restApiServer.StatusNote;
+
+    public string RestApiSecurityStatus =>
+        RestApiAllowLan
+            ? Strings.RemoteApiSecurityLan
+            : Strings.RemoteApiSecurityLoopback;
 
     /// <summary>Endpoint cheat-sheet rendered as a list by the Project workspace card. Paths are
     /// protocol, not prose — only the descriptions localize.</summary>
@@ -209,19 +257,39 @@ public partial class MainViewModel : ViewModelBase
         RestartRestApi();
     }
 
+    partial void OnRestApiAllowLanChanged(bool value)
+    {
+        _appSettings.RestApiAllowLan = value;
+        _appSettings.Save();
+        RestartRestApi();
+    }
+
     private void RestartRestApi()
     {
         _restApiDispatcher ??= new Remote.RemoteApiDispatcher(CuePlayer, () => Players, Soundboard, Control);
         _restApiServer.Stop();
         if (RestApiEnabled && RestApiPort is >= 1 and <= 65535)
-            _restApiServer.Start(RestApiPort, _restApiDispatcher);
+            _restApiServer.Start(RestApiPort, _restApiDispatcher, RestApiAccessToken, RestApiAllowLan);
 
         // Copy-API-URL menus keep working while the listener is off — the copied URL targets the
         // configured port and becomes live the moment the API is enabled.
+        Remote.RemoteApi.AccessToken = RestApiAccessToken;
         Remote.RemoteApi.BaseUrl = _restApiServer.BaseUrl
-                                   ?? $"http://{Remote.RestApiServer.ResolveAdvertisedHost()}:{RestApiPort}";
+                                   ?? $"http://{Remote.RestApiServer.ResolveAdvertisedHost(RestApiAllowLan)}:{RestApiPort}";
         OnPropertyChanged(nameof(RestApiBaseUrlDisplay));
         OnPropertyChanged(nameof(RestApiStatusNote));
+        OnPropertyChanged(nameof(RestApiSecurityStatus));
+    }
+
+    private static string EnsureRestApiAccessToken(AppSettings settings)
+    {
+        if (!string.IsNullOrWhiteSpace(settings.RestApiAccessToken))
+            return settings.RestApiAccessToken;
+
+        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(24)).ToLowerInvariant();
+        settings.RestApiAccessToken = token;
+        settings.Save();
+        return token;
     }
 
     // ----- UI rewrite P1 (plan §1): toast overlay queue -----------------------------------------
@@ -639,7 +707,7 @@ public partial class MainViewModel : ViewModelBase
         RebuildEndpointWorkspaceLists();
         CuePlayer.SetActionEndpoints(ActionEndpoints);
         RemoveActionEndpointCommand.NotifyCanExecuteChanged();
-        _ = RefreshAllEndpointHealthAsync();
+        FireAndLog(RefreshAllEndpointHealthAsync(), "RefreshAllEndpointHealthAsync endpoints-changed");
     }
 
     private void RebuildEndpointWorkspaceLists()
@@ -791,8 +859,12 @@ public partial class MainViewModel : ViewModelBase
 
     public async Task RefreshAllEndpointHealthAsync()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.RefreshAllEndpointHealthAsync", slowWarningMs: 1500);
         if (Interlocked.CompareExchange(ref _endpointHealthRefreshInFlight, 1, 0) != 0)
+        {
+            timing?.SetOutcome("already-in-flight");
             return;
+        }
 
         CancellationTokenSource? newCts = null;
         _endpointHealthCts?.Cancel();
@@ -802,12 +874,18 @@ public partial class MainViewModel : ViewModelBase
 
         try
         {
+            var probed = 0;
             foreach (var row in OscEndpointRows.Concat(MidiEndpointRows))
             {
                 if (ct.IsCancellationRequested)
+                {
+                    timing?.SetOutcome($"cancelled probed={probed}");
                     return;
+                }
                 await ProbeEndpointRowAsync(row, ct).ConfigureAwait(false);
+                probed++;
             }
+            timing?.SetOutcome($"probed={probed}");
         }
         finally
         {
@@ -823,6 +901,9 @@ public partial class MainViewModel : ViewModelBase
 
     private async Task ProbeEndpointRowAsync(ActionEndpointRowViewModel row, CancellationToken ct)
     {
+        if (Trace.IsEnabled(LogLevel.Trace))
+            Trace.LogTrace("ProbeEndpointRowAsync: endpoint={EndpointId} kind={Kind} name={Name}", row.Endpoint.Id, row.Endpoint.KindLabel, row.Endpoint.Name);
+
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             row.Health = ActionEndpointHealthState.Checking;
@@ -844,6 +925,7 @@ public partial class MainViewModel : ViewModelBase
             row.Health = ok ? ActionEndpointHealthState.Ok : ActionEndpointHealthState.Failed;
             row.HealthDetail = detail;
         });
+        Trace.LogDebug("ProbeEndpointRowAsync: endpoint={EndpointId} kind={Kind} ok={Ok} detail={Detail}", row.Endpoint.Id, row.Endpoint.KindLabel, ok, detail);
     }
 
     [ObservableProperty]
@@ -883,6 +965,7 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            Trace.LogWarning(ex, "OnPlayerNaturalPlaybackEnded: cue auto-follow failed");
             CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
         }
     }
@@ -895,6 +978,7 @@ public partial class MainViewModel : ViewModelBase
         }
         catch (Exception ex)
         {
+            Trace.LogWarning(ex, "OnCuePlaybackEngineNaturalEndAsync: cue auto-follow failed");
             CuePlayer.StatusMessage = Strings.Format(nameof(Strings.CueAutoFollowFailedFormat), ex.Message);
         }
     }
@@ -950,6 +1034,7 @@ public partial class MainViewModel : ViewModelBase
 
     private async Task RefreshCuePreRollAsync()
     {
+        using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MainViewModel.RefreshCuePreRollAsync", slowWarningMs: 1000);
         // Latest-request-wins: install our own token and cancel whatever was in flight. We only
         // Cancel the predecessor here (never Dispose) — each invocation disposes its own CTS in its
         // finally once it's done reading the token, which avoids a use-after-dispose race.
@@ -966,38 +1051,58 @@ public partial class MainViewModel : ViewModelBase
             }
             catch (OperationCanceledException)
             {
+                timing?.SetOutcome("cancelled-before-gate");
                 return; // superseded before we acquired the gate
             }
 
             try
             {
                 if (ct.IsCancellationRequested)
+                {
+                    timing?.SetOutcome("cancelled");
                     return;
+                }
 
                 var player = SelectedPlayer;
                 var list = CuePlayer.SelectedCueList;
                 if (list is null)
+                {
+                    timing?.SetOutcome("no-cue-list");
                     return;
+                }
 
                 var engineTargets = CuePlayer.GetPreparedMediaCueTargets();
                 var ndiTargets = CuePlayer.GetNdiPreConnectTargets();
                 var paTargets = CuePlayer.GetPortAudioPreConnectTargets();
+                Trace.LogDebug(
+                    "RefreshCuePreRollAsync: engineTargets={EngineTargets} ndiTargets={NdiTargets} portAudioTargets={PortAudioTargets} player={Player}",
+                    engineTargets.Count,
+                    ndiTargets.Count,
+                    paTargets.Count,
+                    player?.Name ?? "<none>");
 
                 player?.InvalidateCuePreRoll();
                 await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets, ct).ConfigureAwait(false);
                 if (player is null)
+                {
+                    timing?.SetOutcome("no-selected-player");
                     return;
+                }
                 ct.ThrowIfCancellationRequested();
                 await player.RefreshNdiPreConnectAsync(ndiTargets).ConfigureAwait(false);
                 ct.ThrowIfCancellationRequested();
                 await player.RefreshPortAudioPreConnectAsync(paTargets).ConfigureAwait(false);
+                timing?.SetOutcome($"engine={engineTargets.Count} ndi={ndiTargets.Count} portAudio={paTargets.Count}");
             }
             catch (OperationCanceledException)
             {
+                timing?.SetOutcome("superseded");
                 /* superseded by a newer refresh */
             }
-            catch
+            catch (Exception ex)
             {
+                Trace.LogWarning(ex, "RefreshCuePreRollAsync: pre-roll refresh failed");
+                timing?.SetOutcome("failed");
                 /* best effort — pre-roll must not break transport */
             }
             finally
@@ -1283,7 +1388,7 @@ public partial class MainViewModel : ViewModelBase
             CuePlayer.ApplyCueLists(project.CueLists);
         if (Has(ProjectSections.Soundboards))
         {
-            _ = _soundboardEngine.StopAllAsync();
+            FireAndLog(_soundboardEngine.StopAllAsync(), "SoundboardEngine.StopAllAsync project-load");
             Soundboard.ApplySnapshot(project.Soundboards);
         }
         if (Has(ProjectSections.Control))
@@ -1292,7 +1397,7 @@ public partial class MainViewModel : ViewModelBase
 
         if (!Has(ProjectSections.Players))
         {
-            _ = RefreshCuePreRollAsync();
+            FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync project-load-no-players");
             return;
         }
 
@@ -1305,13 +1410,13 @@ public partial class MainViewModel : ViewModelBase
             removed.NaturalPlaybackEnded -= OnPlayerNaturalPlaybackEnded;
             removed.DetachRequested -= OnPlayerDetachRequested;
             Players.RemoveAt(Players.Count - 1);
-            _ = removed.DisposeAsync();
+            FireAndLog(removed.DisposeAsync(), "MediaPlayerViewModel.DisposeAsync project-load-removed-player");
         }
 
         for (var i = 0; i < project.Players.Count && i < Players.Count; i++)
             Players[i].ApplyPlayerConfigSnapshot(project.Players[i]);
 
-        _ = RefreshCuePreRollAsync();
+        FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync project-load");
     }
 
     // ----- Phase B (§7): Project save / load command plumbing --------------------------------
