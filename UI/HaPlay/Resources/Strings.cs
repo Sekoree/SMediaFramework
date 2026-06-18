@@ -550,6 +550,9 @@ public static class Strings
     public static string NdiOutputMenuHeader => Get(nameof(NdiOutputMenuHeader));
     public static string AudioMatrixSectionTitle => Get(nameof(AudioMatrixSectionTitle));
     public static string AudioMatrixSectionSubtitle => Get(nameof(AudioMatrixSectionSubtitle));
+    public static string AudioMatrixOutputsTitle => Get(nameof(AudioMatrixOutputsTitle));
+    public static string AudioMatrixNoAudioOutputsHint => Get(nameof(AudioMatrixNoAudioOutputsHint));
+    public static string AudioMatrixSimpleHint => Get(nameof(AudioMatrixSimpleHint));
     public static string MixPresetTooltip => Get(nameof(MixPresetTooltip));
     public static string DeviceOutputMuteTooltip => Get(nameof(DeviceOutputMuteTooltip));
     public static string PerDeviceGainTooltip => Get(nameof(PerDeviceGainTooltip));

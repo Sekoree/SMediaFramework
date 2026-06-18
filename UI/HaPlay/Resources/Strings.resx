@@ -1251,6 +1251,15 @@
   <data name="AudioMatrixSectionSubtitle" xml:space="preserve">
     <value>per-cell gain (dB)</value>
   </data>
+  <data name="AudioMatrixOutputsTitle" xml:space="preserve">
+    <value>Routed audio outputs</value>
+  </data>
+  <data name="AudioMatrixNoAudioOutputsHint" xml:space="preserve">
+    <value>Select a PortAudio output or an NDI output with audio channels in Routing to edit the audio matrix.</value>
+  </data>
+  <data name="AudioMatrixSimpleHint" xml:space="preserve">
+    <value>Columns are source input channels. Rows are routed output device channels.</value>
+  </data>
   <data name="MixPresetTooltip" xml:space="preserve">
     <value>Preset that overwrites the matrix below for this device — Stereo identity, Swap L↔R, Mono-from-L, Mono-from-R, or Silence.</value>
   </data>
@@ -1264,7 +1273,7 @@
     <value>Input trims</value>
   </data>
   <data name="AudioMatrixEmptyHint" xml:space="preserve">
-    <value>Tick an output above and load media — the per-cell matrix appears here, sized to the source's channel count.</value>
+    <value>No audio-capable outputs are selected. Pick PortAudio or audio-enabled NDI outputs in Routing.</value>
   </data>
   <data name="ActiveRoutesTitle" xml:space="preserve">
     <value>Active routes</value>

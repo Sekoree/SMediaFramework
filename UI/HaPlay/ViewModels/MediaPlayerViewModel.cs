@@ -1001,6 +1001,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
     /// code-behind, which also installs dynamic input-channel columns.</summary>
     public ObservableCollection<AudioMatrixRow> AudioMatrixRows { get; } = new();
 
+    public ObservableCollection<AudioMatrixOutputSummary> AudioMatrixOutputSummaries { get; } = new();
+
+    public bool HasAudioMatrixOutputs => AudioMatrixOutputSummaries.Count > 0;
+
     /// <summary>
     /// One row per active matrix connection (audible cell). Backing source for the route list TreeDataGrid.
     /// Uses the same cell objects as <see cref="AudioMatrixRows"/>, so edits are fully synchronized.
@@ -2288,9 +2292,20 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void RebuildAudioMatrixRows()
     {
         AudioMatrixRows.Clear();
+        AudioMatrixOutputSummaries.Clear();
         var inputChannels = 0;
+        var summarized = new HashSet<PlayerOutputBinding>();
         foreach (var slot in BuildVirtualOutputMap())
         {
+            if (summarized.Add(slot.Binding))
+            {
+                var channels = slot.Binding.Matrix.OutputChannelCount;
+                AudioMatrixOutputSummaries.Add(new AudioMatrixOutputSummary(
+                    slot.Binding.Line.KindLabel,
+                    slot.Binding.Line.Definition.EffectiveName,
+                    channels == 1 ? "1 channel" : $"{channels} channels"));
+            }
+
             inputChannels = Math.Max(inputChannels, slot.Binding.Matrix.InputChannelCount);
             var label = $"{slot.Binding.Line.Definition.EffectiveName} · {OutputChannelSuffix(slot.Binding.Matrix.OutputChannelCount, slot.OutputChannel)}";
             AudioMatrixRows.Add(new AudioMatrixRow(slot.Binding, slot.OutputChannel, slot.VirtualOutputChannel, label));
@@ -2300,6 +2315,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         RebuildInputTrimRows(inputChannels);
         RebuildAudioMatrixRouteRows();
         OnPropertyChanged(nameof(HasAudioMatrix));
+        OnPropertyChanged(nameof(HasAudioMatrixOutputs));
         AudioMatrixLayoutChanged?.Invoke(this, EventArgs.Empty);
     }
 

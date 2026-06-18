@@ -301,6 +301,8 @@ public sealed partial class AudioMatrixViewModel : ObservableObject
         Cells.FirstOrDefault(c => c.InputChannel == input && c.OutputChannel == output);
 }
 
+public sealed record AudioMatrixOutputSummary(string KindLabel, string Name, string ChannelSummary);
+
 /// <summary>
 /// Phase C (§4.3.4) — one row in the TreeDataGrid: the cells that feed one (device, output-channel) pair.
 /// <see cref="Cells"/> is ordered by input channel index so the view can bind a column per input.
