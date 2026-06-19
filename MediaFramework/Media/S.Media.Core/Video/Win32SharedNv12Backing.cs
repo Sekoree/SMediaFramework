@@ -22,6 +22,7 @@ public sealed class Win32SharedNv12Backing : VideoFrameHardwareBacking
 {
     private nint _lumaNtHandle;
     private nint _chromaNtHandle;
+    private Action? _additionalRelease;
     private int _refCount = 1;
 
     /// <param name="d3d11TextureArraySliceIndex">Array slice for D3D11VA pool textures; 0 for non-array.</param>
@@ -38,7 +39,8 @@ public sealed class Win32SharedNv12Backing : VideoFrameHardwareBacking
         int uvPlanePitchBytes,
         int d3d11TextureArraySliceIndex,
         nint libavD3D11DeviceComPtr = 0,
-        nint libavD3D11Texture2DComPtr = 0)
+        nint libavD3D11Texture2DComPtr = 0,
+        Action? additionalRelease = null)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Win32 NV12 shared-handle backing is Windows-only.");
@@ -59,6 +61,7 @@ public sealed class Win32SharedNv12Backing : VideoFrameHardwareBacking
         D3D11TextureArraySliceIndex = d3d11TextureArraySliceIndex;
         LibavD3D11DeviceComPtr = libavD3D11DeviceComPtr;
         LibavD3D11Texture2DComPtr = libavD3D11Texture2DComPtr;
+        _additionalRelease = additionalRelease;
     }
 
     public int YPlanePitchBytes { get; }
@@ -113,6 +116,14 @@ public sealed class Win32SharedNv12Backing : VideoFrameHardwareBacking
             _ = CloseHandle(l);
         if (c != 0 && c != l)
             _ = CloseHandle(c);
+        try
+        {
+            _additionalRelease?.Invoke();
+        }
+        finally
+        {
+            _additionalRelease = null;
+        }
     }
 
     public VideoFrame CreateFrame(

@@ -137,6 +137,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     private bool _drmGpuNv12Path;
     private bool _d3d11GpuNv12Path;
     private bool _win32Nv12SharedHandleOnly;
+    private int _d3d11GpuNv12ExportFallbackLogged;
 
     private readonly PassThroughDescriptorArena _passThroughArena = new();
 
@@ -2157,7 +2158,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
             return BuildNv12DrmDmabufGpuFrame(work, pts, meta);
 
         if (_d3d11GpuNv12Path)
-            return BuildNv12D3D11SharedGpuFrame(work, pts, meta);
+            return BuildNv12D3D11SharedOrCpuFrame(work, pts, meta);
 
         return _vPassThrough
             ? BuildPassThroughVideoFrame(work, pts, meta)
@@ -2176,14 +2177,40 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
     private VideoFrame BuildNv12DrmDmabufGpuFrame(AVFrame* drmFrame, TimeSpan pts, VideoFrameMetadata meta) =>
         VideoFileDecoder.CreateVideoFrameFromLinuxDrmPrimeFrame(drmFrame, pts, Video.Format, meta);
 
-    private VideoFrame BuildNv12D3D11SharedGpuFrame(AVFrame* d3dFrame, TimeSpan pts, VideoFrameMetadata meta)
+    private VideoFrame BuildNv12D3D11SharedOrCpuFrame(AVFrame* d3dFrame, TimeSpan pts, VideoFrameMetadata meta)
     {
-        var backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame, _win32Nv12SharedHandleOnly);
-        if (backing == null)
-            throw new InvalidOperationException(
-                "D3D11 frame could not be exported to NT shared handles. Disable decoder option RetainD3D11SharedHandleForGl or try a CPU upload path.");
+        Win32SharedNv12Backing? backing = null;
+        Exception? exportException = null;
+        try
+        {
+            backing = D3D11VaNv12BackingFactory.TryCreateBacking(d3dFrame, _win32Nv12SharedHandleOnly);
+        }
+        catch (Exception ex)
+        {
+            exportException = ex;
+        }
 
-        return VideoFrame.CreateNv12Win32Shared(pts, Video.Format, backing, meta);
+        if (backing is not null)
+            return VideoFrame.CreateNv12Win32Shared(pts, Video.Format, backing, meta);
+
+        if (Interlocked.Exchange(ref _d3d11GpuNv12ExportFallbackLogged, 1) == 0)
+        {
+            if (exportException is not null)
+            {
+                Trace.LogWarning(exportException,
+                    "D3D11 NV12 shared export failed; falling back to CPU transfer for this decoder.");
+            }
+            else
+            {
+                Trace.LogWarning("D3D11 NV12 shared export unavailable; falling back to CPU transfer for this decoder.");
+            }
+        }
+
+        if (_hwAccel is null)
+            throw new InvalidOperationException("D3D11 frame export failed and no hardware transfer context is available.");
+
+        var sw = _hwAccel.TransferToScratch(d3dFrame);
+        return BuildPassThroughVideoFrame(sw, pts, meta);
     }
 
     private VideoFrame BuildPassThroughVideoFrame(AVFrame* work, TimeSpan pts, VideoFrameMetadata meta)

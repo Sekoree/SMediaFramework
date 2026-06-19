@@ -41,11 +41,6 @@ internal static unsafe class D3D11VaNv12BackingFactory
         try
         {
             var deviceComPtr = texture.Device?.NativePointer ?? 0;
-            using var dxgi = texture.QueryInterface<VorticeDxgiResource1>();
-            var sharedHandle = dxgi.CreateSharedHandle(null, VorticeDxgiSharedFlags.None, null);
-            if (sharedHandle == 0)
-                return null;
-
             var desc = texture.Description;
             if (desc.Format != VorticeDxgiFormat.NV12)
                 return null;
@@ -53,20 +48,72 @@ internal static unsafe class D3D11VaNv12BackingFactory
             var yPitch = frame->linesize[0] > 0 ? frame->linesize[0] : Align256((int)desc.Width);
             var uvPitch = frame->linesize[1] > 0 ? frame->linesize[1] : yPitch;
             if (yPitch <= 0 || uvPitch <= 0)
+                return null;
+
+            // Prefer the same-device COM texture path when libav's D3D11 device is available. Some
+            // drivers expose decoder pool textures that cannot be exported via CreateSharedHandle, but
+            // the GL uploader can still import the texture directly on the borrowed libav device.
+            if (!sharedHandleOnly && deviceComPtr != 0)
+                return new Win32SharedNv12Backing(0, 0, yPitch, uvPitch, arraySlice, deviceComPtr, (nint)pTex,
+                    RetainFrameReference(frame));
+
+            nint sharedHandle;
+            try
             {
-                _ = Kernel32.CloseHandle(sharedHandle);
+                using var dxgi = texture.QueryInterface<VorticeDxgiResource1>();
+                sharedHandle = dxgi.CreateSharedHandle(null, VorticeDxgiSharedFlags.None, null);
+            }
+            catch
+            {
                 return null;
             }
+
+            if (sharedHandle == 0)
+                return null;
 
             if (sharedHandleOnly)
                 return new Win32SharedNv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, 0, 0);
 
-            return new Win32SharedNv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, deviceComPtr, (nint)pTex);
+            if (deviceComPtr == 0)
+                return new Win32SharedNv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, 0, 0);
+
+            try
+            {
+                return new Win32SharedNv12Backing(sharedHandle, 0, yPitch, uvPitch, arraySlice, deviceComPtr, (nint)pTex,
+                    RetainFrameReference(frame));
+            }
+            catch
+            {
+                _ = Kernel32.CloseHandle(sharedHandle);
+                throw;
+            }
         }
         finally
         {
             texture.Dispose();
         }
+    }
+
+    private static Action RetainFrameReference(AVFrame* frame)
+    {
+        var clone = av_frame_alloc();
+        if (clone == null)
+            throw new OutOfMemoryException("av_frame_alloc (D3D11 frame retain) returned NULL");
+
+        var ret = av_frame_ref(clone, frame);
+        if (ret < 0)
+        {
+            var c = clone;
+            av_frame_free(&c);
+            FFmpegException.ThrowIfError(ret, nameof(av_frame_ref));
+        }
+
+        var clonePtr = (nint)clone;
+        return () =>
+        {
+            var f = (AVFrame*)clonePtr;
+            av_frame_free(&f);
+        };
     }
 
     private static int Align256(int width)
