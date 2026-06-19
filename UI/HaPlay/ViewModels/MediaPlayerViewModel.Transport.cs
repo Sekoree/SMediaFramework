@@ -402,6 +402,34 @@ public partial class MediaPlayerViewModel
         }
     }
 
+    private void HookVideoFaultRecovery(HaPlayPlaybackSession session) =>
+        session.VideoDecodeFaulted += OnSessionVideoDecodeFaulted;
+
+    private void UnhookVideoFaultRecovery(HaPlayPlaybackSession session) =>
+        session.VideoDecodeFaulted -= OnSessionVideoDecodeFaulted;
+
+    /// <summary>
+    /// Fires on the decode thread when a file session's video decode loop faults. <paramref name="switchedToSoftware"/>
+    /// is true only on the fault that flipped the process from hardware to software decode; on that one fault we
+    /// reload the current item once so it comes back via the (now software) decode path. Cue-driven playback is
+    /// skipped — the cue engine owns that lifecycle. The single-trip flag prevents a reload loop if software also fails.
+    /// </summary>
+    private void OnSessionVideoDecodeFaulted(HaPlayPlaybackSession faulted, bool switchedToSoftware)
+    {
+        if (!switchedToSoftware)
+            return;
+
+        _ = Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            if (!ReferenceEquals(_session, faulted) || _cuePlaybackActive)
+                return;
+            TransportTrace.LogWarning(
+                "Video decode faulted; reloading '{Item}' with software decode.",
+                SelectedPlaylistItem?.DisplayName ?? MediaFilePath ?? "current item");
+            await OpenOrReloadAsync();
+        });
+    }
+
     /// <summary>
     /// File seek + optional resume. Uses <see cref="CancellationToken.None"/> for the demux prime so a short
     /// UI cancel cannot abort H.264 GOP catch-up while audio is already at the target.

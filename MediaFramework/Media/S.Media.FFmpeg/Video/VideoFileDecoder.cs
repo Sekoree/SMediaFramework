@@ -405,6 +405,12 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
         if (tryHw)
             hw = VideoHardwareDecodeContext.TryCreate(codec, _codecCtx, preferredDevices, retainDmabuf, retainD3D11);
 
+        // Retained zero-copy GPU frames pin one decoder-pool surface each for the whole consumer pipeline, so the
+        // pool needs head-room beyond the DPB or it drains mid-playback and send_packet returns
+        // AVERROR_INVALIDDATA (see VideoHardwareDecodeContext.RetainedFramePoolHeadroom). Set before avcodec_open2.
+        if (hw != null && (retainD3D11 || retainDmabuf))
+            _codecCtx->extra_hw_frames = VideoHardwareDecodeContext.RetainedFramePoolHeadroom;
+
         // Frame/slice threading helps heavy software codecs; skip while a HW device is attached — libav
         // hardware decode paths are not reliably compatible with frame threading.
         if (hw == null)

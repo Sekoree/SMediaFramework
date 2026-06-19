@@ -46,6 +46,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.Playback.HaPlayPlaybackSession");
 
+    private VideoPlayer? _faultWatchedVideo;
+
     private HaPlayPlaybackSession(MediaPlayer player, PlaybackRouter router, OutputManagementViewModel outputs)
     {
         Player = player;
@@ -59,10 +61,37 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         // device on (re)acquire, so the natural-EOF flush is both redundant and harmful here.
         if (player.AudioRouter is { } audioRouter)
             audioRouter.FlushOutputsOnNaturalEof = false;
+
+        // Watch the file decode loop: an unrecoverable decode fault (e.g. a hardware decoder that the driver
+        // can't sustain) latches the process to software decode so the next open recovers, and surfaces the
+        // fault to the owner (VM) for a one-shot reload. Only file sessions have a container video player.
+        if (player.HasContainerDecoder && player.Decoder.HasVideo)
+        {
+            _faultWatchedVideo = player.Video;
+            _faultWatchedVideo.Faulted += OnVideoPlayerFaulted;
+        }
     }
 
     public MediaPlayer Player { get; }
     public PlaybackRouter Router { get; }
+
+    /// <summary>
+    /// Raised when the file video decode loop faults unrecoverably. Fires on the decode thread; handlers must
+    /// marshal to their own thread. The process has already been latched to software decode (see
+    /// <see cref="HardwareVideoDecodeGate"/>) before this fires, so a reopen will avoid the hardware path. The
+    /// <see cref="bool"/> argument is <see langword="true"/> only when this fault was the one that switched the
+    /// process from hardware to software decode — the owner should reload exactly once on a <see langword="true"/>
+    /// and never on a <see langword="false"/> (which means software decode was already active, so a reload would loop).
+    /// </summary>
+    public event Action<HaPlayPlaybackSession, bool>? VideoDecodeFaulted;
+
+    private void OnVideoPlayerFaulted(object? sender, VideoPlayerFaultedEventArgs e)
+    {
+        Trace.LogWarning(e.Exception, "HaPlayPlaybackSession: video decode faulted — latching to software decode.");
+        var switchedToSoftware = HardwareVideoDecodeGate.DisableAfterFault();
+        try { VideoDecodeFaulted?.Invoke(this, switchedToSoftware); }
+        catch (Exception hx) { Trace.LogError(hx, "HaPlayPlaybackSession.VideoDecodeFaulted handler threw"); }
+    }
 
     /// <summary>Phase C.5 — true when this session was opened via <see cref="MediaPlayer.TryOpenLive"/>
     /// (PortAudio capture / NDI receiver) rather than a container decoder. Live sessions have no
@@ -391,7 +420,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     /// </remarks>
     internal static MediaPlayerOpenOptions BuildFileOpenOptions(bool anyNDI) =>
         new(
-            TryHardwareAcceleration: !anyNDI,
+            // Software decode once the hardware path has faulted this process (see HardwareVideoDecodeGate).
+            TryHardwareAcceleration: !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
             IncludeAudioRouter: true,
             AudioPacketQueueDepth: 720,   // ~15 s @ ~21 ms/packet
             VideoPacketQueueDepth: 512,   // ~21 s @ 24 fps
@@ -1771,6 +1801,11 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         if (_disposed)
             return;
         _disposed = true;
+        if (_faultWatchedVideo is not null)
+        {
+            _faultWatchedVideo.Faulted -= OnVideoPlayerFaulted;
+            _faultWatchedVideo = null;
+        }
         using var timing = MediaDiagnostics.BeginTimedOperation(
             Trace,
             "HaPlayPlaybackSession.Dispose",

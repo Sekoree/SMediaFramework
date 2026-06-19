@@ -455,6 +455,14 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         if (tryHw)
             hw = VideoHardwareDecodeContext.TryCreate(vCodec, _vCtx, preferredDevices, retainDmabuf, retainD3D11);
 
+        // We hand decoded GPU surfaces straight to the GL path and hold them through the consumer queue, so the
+        // decoder must allocate enough extra pool surfaces for the whole pipeline to keep references at once;
+        // otherwise it runs out mid-playback and send_packet returns AVERROR_INVALIDDATA. Only matters when we
+        // actually retain frames (zero-copy paths); the CPU-transfer fallback copies out immediately. Set before
+        // avcodec_open2 so the auto-allocated AVHWFramesContext is sized correctly.
+        if (hw != null && (retainD3D11 || retainDmabuf))
+            _vCtx->extra_hw_frames = VideoHardwareDecodeContext.RetainedFramePoolHeadroom;
+
         if (hw == null)
             VideoFileDecoder.ApplyDecoderThreading(vCodec, _vCtx, videoOptions);
 

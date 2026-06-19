@@ -82,6 +82,11 @@ void main()
     private readonly GL _gl;
     private readonly ID3D11Device _device;
     private readonly ID3D11DeviceContext _context;
+    // ID3D11Multithread on the immediate context (when the device exposes it — libav's d3d11va device does and
+    // runs with SetMultithreadProtected(TRUE)). Used to serialize our staging CopySubresourceRegion/Map/Unmap
+    // against the decode thread that shares this immediate context. Null when the device has no such interface
+    // (then there is no concurrent decoder on it either, e.g. an output-owned interop device).
+    private readonly ID3D11Multithread? _multithread;
     private ID3D11Texture2D? _staging;
     private int _stagingCapW;
     private int _stagingCapH;
@@ -122,11 +127,13 @@ void main()
             nameof(Nv12Win32SharedHandleGpuUploader));
     }
 
-    private Nv12Win32SharedHandleGpuUploader(GL gl, ID3D11Device device, ID3D11DeviceContext context)
+    private Nv12Win32SharedHandleGpuUploader(GL gl, ID3D11Device device, ID3D11DeviceContext context,
+        ID3D11Multithread? multithread)
     {
         _gl = gl;
         _device = device;
         _context = context;
+        _multithread = multithread;
     }
 
     /// <summary>Creates an uploader when <paramref name="d3d11DeviceComPtr"/> is a non-null <c>ID3D11Device</c> pointer.</summary>
@@ -148,7 +155,12 @@ void main()
         {
             var dev = new ID3D11Device(d3d11DeviceComPtr);
             var ctx = dev.ImmediateContext;
-            return new Nv12Win32SharedHandleGpuUploader(gl, dev, ctx);
+            // The decode thread and this uploader share one immediate context. Acquire ID3D11Multithread and make
+            // sure protection is on so Enter()/Leave() around our staging copy actually serializes against the
+            // decoder's context calls (libav already enables it; harmless to re-assert for an owned device).
+            var mt = ctx.QueryInterfaceOrNull<ID3D11Multithread>();
+            mt?.SetMultithreadProtected(true);
+            return new Nv12Win32SharedHandleGpuUploader(gl, dev, ctx, mt);
         }
         catch (Exception ex)
         {
@@ -301,6 +313,9 @@ void main()
         if (!WglNvDxInterop.TryLoad(_gl, out _wgl) || !_wgl.IsComplete)
         {
             _wglInteropDisabled = true;
+            LogInteropUnavailableOnce(
+                "WGL_NV_DX_interop entry points did not resolve on this GL context (driver does not export the extension). " +
+                _wgl.DescribeResolvedProcs());
             return false;
         }
 
@@ -317,10 +332,47 @@ void main()
         if (_wglDeviceHandle == 0)
         {
             _wglInteropDisabled = true;
+            LogInteropUnavailableOnce(
+                "wglDXOpenDeviceNV returned NULL for the upload ID3D11Device (entry points resolved but the driver " +
+                "rejected the device — e.g. it is on a different adapter than the GL context, or a software/WARP device).");
             return false;
         }
 
         return true;
+    }
+
+    private int _interopUnavailableLogged;
+
+    /// <summary>
+    /// Logs once, with the GL vendor/renderer/version and the supplied reason, why the zero-copy WGL_NV_DX_interop
+    /// path is unavailable and uploads fall back to the slower D3D11 staging + glTexSubImage2D copy. Lets a black/slow
+    /// Windows playback report be told apart: "driver lacks the extension" vs "extension present but device rejected".
+    /// </summary>
+    private void LogInteropUnavailableOnce(string reason)
+    {
+        if (Interlocked.Exchange(ref _interopUnavailableLogged, 1) != 0)
+            return;
+
+        string vendor = "?", renderer = "?", version = "?";
+        try
+        {
+            vendor = _gl.GetStringS(StringName.Vendor) ?? "?";
+            renderer = _gl.GetStringS(StringName.Renderer) ?? "?";
+            version = _gl.GetStringS(StringName.Version) ?? "?";
+        }
+        catch
+        {
+            /* GL string query best-effort */
+        }
+
+        MediaDiagnostics.LogWarning(
+            "{0}: zero-copy WGL_NV_DX_interop unavailable — using the slower D3D11 staging CPU upload path. " +
+            "Reason: {1} | GL_VENDOR='{2}' GL_RENDERER='{3}' GL_VERSION='{4}'.",
+            nameof(Nv12Win32SharedHandleGpuUploader),
+            reason,
+            vendor,
+            renderer,
+            version);
     }
 
     private bool EnsureInteropPrograms()
@@ -621,27 +673,39 @@ void main()
                     if (_staging == null)
                         return false;
 
-                    _context.CopySubresourceRegion(_staging, 0, 0, 0, 0, gpuTex, srcSub, null);
-
-                    var mapped = _context.Map(_staging, 0, MapMode.Read, MapFlags.None);
+                    // Hold the D3D11 multithread lock across the whole copy-out so no decode-thread context call
+                    // interleaves between CopySubresourceRegion, Map and Unmap on the shared immediate context.
+                    // The GL upload in between only reads the mapped CPU pointer (no _context calls), so keeping it
+                    // inside the lock is safe and just briefly defers the decoder.
+                    _multithread?.Enter();
                     try
                     {
-                        var yPitch = (int)mapped.RowPitch;
-                        if (yPitch <= 0)
-                            return false;
+                        _context.CopySubresourceRegion(_staging, 0, 0, 0, 0, gpuTex, srcSub, null);
 
-                        var yPtr = (byte*)mapped.DataPointer;
-                        if (yPtr == null)
-                            return false;
+                        var mapped = _context.Map(_staging, 0, MapMode.Read, MapFlags.None);
+                        try
+                        {
+                            var yPitch = (int)mapped.RowPitch;
+                            if (yPitch <= 0)
+                                return false;
 
-                        var uvPtr = yPtr + yPitch * (nint)h;
-                        UploadR8Plane(texYId, yPtr, yPitch, w, h);
-                        UploadRgPlane(texUvId, uvPtr, yPitch, cw, ch);
-                        return true;
+                            var yPtr = (byte*)mapped.DataPointer;
+                            if (yPtr == null)
+                                return false;
+
+                            var uvPtr = yPtr + yPitch * (nint)h;
+                            UploadR8Plane(texYId, yPtr, yPitch, w, h);
+                            UploadRgPlane(texUvId, uvPtr, yPitch, cw, ch);
+                            return true;
+                        }
+                        finally
+                        {
+                            _context.Unmap(_staging, 0);
+                        }
                     }
                     finally
                     {
-                        _context.Unmap(_staging, 0);
+                        _multithread?.Leave();
                     }
                 }
                 finally
@@ -768,6 +832,8 @@ void main()
 
         _staging?.Dispose();
         _staging = null;
+
+        MediaDiagnostics.SwallowDisposeErrors(() => _multithread?.Dispose(), "Nv12Win32SharedHandleGpuUploader.Dispose: multithread");
 
         // Balance the COM reference taken by `new ID3D11Device(comPtr)` in TryCreate (borrowed or shared host pointer).
         MediaDiagnostics.SwallowDisposeErrors(_device.Dispose, "Nv12Win32SharedHandleGpuUploader.Dispose: device");

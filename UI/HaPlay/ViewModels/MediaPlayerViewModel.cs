@@ -2849,6 +2849,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             {
                 try { snap.Player.PlayClock.PositionChanged -= OnClockPositionChanged; }
                 catch { /* best effort */ }
+                UnhookVideoFaultRecovery(snap);
                 _session = null;
                 _throughputDiagnostics.Reset();
             }
@@ -3058,6 +3059,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
                         : TimeSpan.Zero);
 
                 created.Player.PlayClock.PositionChanged += OnClockPositionChanged;
+                // Normal (non-cue) file playback: recover automatically if the decode loop faults (e.g. a flaky
+                // hardware decoder) by latching to software decode and reloading. Cue-opened sessions are watched
+                // by the session itself (gate latch) but not auto-reloaded here — the cue engine owns their lifecycle.
+                HookVideoFaultRecovery(created);
                 if (!string.IsNullOrWhiteSpace(FallbackImagePath))
                     created.ApplyFallbackImage(FallbackImagePath);
                 created.SetHoldFallback(HoldFallbackVideo);

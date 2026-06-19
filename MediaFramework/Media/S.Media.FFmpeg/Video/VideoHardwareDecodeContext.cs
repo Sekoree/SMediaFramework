@@ -132,6 +132,17 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
     // AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX
     private const int HwConfigMethodHwDeviceCtx = 0x01;
 
+    /// <summary>
+    /// Value for <c>AVCodecContext.extra_hw_frames</c> when decoded GPU surfaces are retained for zero-copy GL
+    /// upload (RetainD3D11SharedHandleForGl / RetainDmabufForGl). Every retained frame pins one surface from the
+    /// decoder's FIXED hardware pool, so the pool must hold the DPB <em>plus</em> the whole downstream pipeline at
+    /// once — VideoPlayer's jitter buffer (up to 16) + VideoOutputPump (3) + a couple in flight in the compositor.
+    /// Without this head-room the pool drains after ~one queue's worth of frames and the next
+    /// <c>avcodec_send_packet</c> fails with <c>AVERROR_INVALIDDATA</c>, faulting the decode loop. Must exceed the
+    /// maximum number of frames held downstream simultaneously; raise it if the consumer queue grows.
+    /// </summary>
+    internal const int RetainedFramePoolHeadroom = 24;
+
     private GCHandle _self;
     private AVBufferRef* _deviceRef;
     private AVPixelFormat _hwPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;

@@ -34,6 +34,15 @@ internal sealed unsafe class WglNvDxInterop
         OpenDevice != null && CloseDevice != null && RegisterObject != null && UnregisterObject != null &&
         LockObjects != null && UnlockObjects != null;
 
+    /// <summary>Per-entry-point resolution map for diagnostics, e.g. <c>wglDXOpenDeviceNV=ok wglDXRegisterObjectNV=MISSING ...</c>.</summary>
+    internal string DescribeResolvedProcs() =>
+        $"wglDXOpenDeviceNV={(OpenDevice != null ? "ok" : "MISSING")} " +
+        $"wglDXCloseDeviceNV={(CloseDevice != null ? "ok" : "MISSING")} " +
+        $"wglDXRegisterObjectNV={(RegisterObject != null ? "ok" : "MISSING")} " +
+        $"wglDXUnregisterObjectNV={(UnregisterObject != null ? "ok" : "MISSING")} " +
+        $"wglDXLockObjectsNV={(LockObjects != null ? "ok" : "MISSING")} " +
+        $"wglDXUnlockObjectsNV={(UnlockObjects != null ? "ok" : "MISSING")}";
+
     internal static bool TryLoad(GL gl, out WglNvDxInterop w)
     {
         w = new WglNvDxInterop();
