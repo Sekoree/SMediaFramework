@@ -403,6 +403,22 @@ public class VideoPlayerTests
     }
 
     [Fact]
+    public void Play_SkipsSeekableSourceRealignWhenAlreadyAtClock()
+    {
+        var inner = new FakeVideoSource(VideoFmt(16, 16), Frame(500, 16, 16), Frame(542, 16, 16));
+        var src = new SeekableFakeVideoSource(inner) { Position = TimeSpan.FromMilliseconds(500) };
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        var clock = new FakeMediaClock();
+        clock.AdvanceTo(TimeSpan.FromMilliseconds(500));
+
+        using var player = new VideoPlayer(src, output, clock, queueCapacity: 2);
+        player.Play();
+        output.WaitForConfigured();
+
+        Assert.Equal(0, src.SeekCalls);
+    }
+
+    [Fact]
     public void HasPresentableFrameAt_RequiresFrameAtOrBeforePlayheadPlusEarlyTolerance()
     {
         var src = new FakeVideoSource(VideoFmt(16, 16), Frame(100, 16, 16), Frame(200, 16, 16));

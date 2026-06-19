@@ -85,6 +85,7 @@ public sealed class VideoPlayer : IDisposable
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Video.VideoPlayer");
     private static readonly TimeSpan SyncOutputPreDrainTimeout = TimeSpan.FromMilliseconds(120);
+    private static readonly TimeSpan StartupSeekTolerance = TimeSpan.FromMilliseconds(1);
     private const double SlowDecodeReadWarningMs = 250;
     private const double SlowQueueSlotWaitWarningMs = 250;
     private const double SlowOutputSubmitWarningMs = 50;
@@ -271,17 +272,26 @@ public sealed class VideoPlayer : IDisposable
             if (_source is ICooperativeVideoReadInterrupt iv)
                 iv.ClearYieldRequest();
             // After pause the shared demux can leave decode state out of step with the frozen clock
-            // even when Position still reports emitted samples (≈ clock). Always re-seek on resume —
-            // same policy as AvPlaybackCoordinator.RealignAudioSourceBeforeStart for audio.
+            // even when Position still reports emitted samples (≈ clock). Re-seek on real drift, but
+            // avoid a redundant initial seek when the demux already starts exactly on the playhead.
             if (!_clock.IsRunning && _source is ISeekableSource seekable)
             {
                 var pos = _clock.CurrentPosition;
                 var src = seekable.Position;
                 var drift = (src - pos).Duration();
-                Trace.LogDebug(
-                    "Play: realigning source from {Src} to clock {Clock} (driftMs={DriftMs})",
-                    src, pos, drift.TotalMilliseconds);
-                seekable.Seek(pos);
+                if (drift > StartupSeekTolerance)
+                {
+                    Trace.LogDebug(
+                        "Play: realigning source from {Src} to clock {Clock} (driftMs={DriftMs})",
+                        src, pos, drift.TotalMilliseconds);
+                    seekable.Seek(pos);
+                }
+                else
+                {
+                    Trace.LogDebug(
+                        "Play: source already aligned at {Src} (clock={Clock}, driftMs={DriftMs})",
+                        src, pos, drift.TotalMilliseconds);
+                }
             }
             _cts = new CancellationTokenSource();
             var token = _cts.Token;

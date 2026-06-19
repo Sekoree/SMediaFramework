@@ -2880,7 +2880,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     SDebug.ChangeTrace.Step("CloseSession: Dispose done");
                 }
                 catch { /* best effort */ }
-            }, TimeSpan.FromSeconds(8));
+            }, TimeSpan.FromSeconds(8), "CloseSession transport dispose");
         }
 
         await Dispatcher.UIThread.InvokeAsync(() =>
@@ -3099,9 +3099,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
                     SDebug.ChangeTrace.Step("OpenOrReload: PrepareOutputsBeforePlay");
                     s.PrepareLiveTransportBeforePlay();
                     SDebug.ChangeTrace.Step("OpenOrReload: PrepareLiveTransportBeforePlay");
+                    s.ResetAllUnderrunBaselines();
+                    SDebug.ChangeTrace.Step("OpenOrReload: ResetAllUnderrunBaselines");
                     s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
                     SDebug.ChangeTrace.Step("OpenOrReload: Router.Play (resume)");
-                }, TimeSpan.FromSeconds(8));
+                }, PlayWallTimeout, "OpenOrReload resume Play");
 
                 if (!ok)
                 {
@@ -3339,8 +3341,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 // Playlist advance — receivers may have drained between tracks.
                 s.PrepareOutputsBeforePlay(holdForPrime);
                 s.PrepareLiveTransportBeforePlay();
+                s.ResetAllUnderrunBaselines();
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
-            }, PlayWallTimeout);
+            }, PlayWallTimeout, "Playlist advance Play");
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {

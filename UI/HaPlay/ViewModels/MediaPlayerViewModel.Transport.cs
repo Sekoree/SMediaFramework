@@ -13,8 +13,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 using S.Media.NDI;
 using S.Media.PortAudio;
 
@@ -22,6 +24,9 @@ namespace HaPlay.ViewModels;
 
 public partial class MediaPlayerViewModel
 {
+    private static readonly ILogger TransportTrace =
+        MediaDiagnostics.CreateLogger("HaPlay.ViewModels.MediaPlayerViewModel.Transport");
+
     [RelayCommand(CanExecute = nameof(CanPlay))]
     private async Task PlayAsync()
     {
@@ -217,13 +222,14 @@ public partial class MediaPlayerViewModel
                 SDebug.ChangeTrace.Step("StartPlayback: ResetAllUnderrunBaselines");
                 s.Router.Play(prefillBeforeHardware: null, startHardware: s.StartAllPortAudio);
                 SDebug.ChangeTrace.Step("StartPlayback: Router.Play");
-            }, PlayWallTimeout);
+            }, PlayWallTimeout, "StartPlayback Play");
 
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (!ok)
                 {
                     SDebug.ChangeTrace.Step("StartPlayback: Play TIMED OUT");
+                    StatusMessage = "Playback failed to start. See debug log for details.";
                     return;
                 }
 
@@ -268,7 +274,8 @@ public partial class MediaPlayerViewModel
             // terminal while the UI still shows a loaded session. Bound only the outer wall.
             await RunBoundedAsync(
                 () => s.Router.PauseSkippingSharedMuxFlush(CancellationToken.None),
-                TimeSpan.FromSeconds(5));
+                TimeSpan.FromSeconds(5),
+                "Pause transport");
             SDebug.ChangeTrace.Step("Pause: Router.Pause done");
 
             SDebug.ChangeTrace.End("Pause");
@@ -358,18 +365,39 @@ public partial class MediaPlayerViewModel
 
     /// <summary>
     /// Runs <paramref name="action"/> on the thread pool with a hard <paramref name="outerTimeout"/> wall. Returns
-    /// true when the action completed within the budget. Swallows transport teardown noise — the caller decides
+    /// true when the action completed within the budget. Logs transport teardown noise and lets the caller decide
     /// what to do based on the result, never on exceptions.
     /// </summary>
-    private static async Task<bool> RunBoundedAsync(Action action, TimeSpan outerTimeout)
+    private static async Task<bool> RunBoundedAsync(
+        Action action,
+        TimeSpan outerTimeout,
+        string operationName = "transport operation")
     {
+        var task = Task.Run(action);
         try
         {
-            await Task.Run(action).WaitAsync(outerTimeout).ConfigureAwait(false);
+            await task.WaitAsync(outerTimeout).ConfigureAwait(false);
             return true;
         }
-        catch
+        catch (TimeoutException ex)
         {
+            TransportTrace.LogWarning(ex,
+                "{Operation}: did not complete within {TimeoutMs:0}ms; leaving background work to finish",
+                operationName, outerTimeout.TotalMilliseconds);
+            _ = task.ContinueWith(t =>
+                TransportTrace.LogWarning(t.Exception,
+                    "{Operation}: background work faulted after UI timeout",
+                    operationName),
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            TransportTrace.LogWarning(ex,
+                "{Operation}: failed before {TimeoutMs:0}ms timeout",
+                operationName, outerTimeout.TotalMilliseconds);
             return false;
         }
     }

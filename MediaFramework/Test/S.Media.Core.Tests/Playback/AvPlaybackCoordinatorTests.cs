@@ -335,6 +335,80 @@ public class AvPlaybackCoordinatorTests
     }
 
     [Fact]
+    public void Play_WithAudio_SkipsAudioRealignWhenAlreadyAtClock()
+    {
+        var vFmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(24, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(vFmt, (TimeSpan.Zero, frameBytes, stride));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        using var clock = new MediaClock();
+        using var video = new VideoPlayer(src, output, clock);
+
+        var audioFmt = new AudioFormat(44100, 2);
+        var audioSrc = new SeekableResumeAudioSource(audioFmt);
+        using var router = new AudioRouter(44100, chunkSamples: 64);
+        var srcId = router.AddSource(audioSrc, "src");
+        var outId = router.AddOutput(new SilentAudioOutput(audioFmt));
+        router.Connect(srcId, outId);
+
+        try
+        {
+            AvPlaybackCoordinator.Play(video, router, clock, audioSourceId: srcId,
+                verifyPrebufferAfterPrefill: () => true);
+
+            Assert.Equal(0, audioSrc.SeekCalls);
+            Assert.True(video.IsRunning);
+            Assert.True(router.IsRunning);
+        }
+        finally
+        {
+            router.Stop();
+            video.Pause();
+            clock.Pause();
+        }
+    }
+
+    [Fact]
+    public void Play_WithAudio_ContinuesWhenAudioRealignSeekFails()
+    {
+        var vFmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(24, 1));
+        var stride = 16 * 4;
+        var frameBytes = new byte[stride * 16];
+        var src = new FakeVideoSource(vFmt, (TimeSpan.Zero, frameBytes, stride));
+        var output = new FakeVideoOutput([PixelFormat.Bgra32]);
+        using var clock = new MediaClock();
+        using var video = new VideoPlayer(src, output, clock);
+
+        var audioFmt = new AudioFormat(44100, 2);
+        var audioSrc = new SeekableResumeAudioSource(audioFmt)
+        {
+            Position = TimeSpan.FromSeconds(1),
+            ThrowOnSeek = true,
+        };
+        using var router = new AudioRouter(44100, chunkSamples: 64);
+        var srcId = router.AddSource(audioSrc, "src");
+        var outId = router.AddOutput(new SilentAudioOutput(audioFmt));
+        router.Connect(srcId, outId);
+
+        try
+        {
+            AvPlaybackCoordinator.Play(video, router, clock, audioSourceId: srcId,
+                verifyPrebufferAfterPrefill: () => true);
+
+            Assert.Equal(1, audioSrc.SeekCalls);
+            Assert.True(video.IsRunning);
+            Assert.True(router.IsRunning);
+        }
+        finally
+        {
+            router.Stop();
+            video.Pause();
+            clock.Pause();
+        }
+    }
+
+    [Fact]
     public void Play_WithAudio_PresentsVideoFrameBeforeStartingAudioClock()
     {
         var vFmt = new VideoFormat(16, 16, PixelFormat.Bgra32, new Rational(24, 1));
@@ -380,7 +454,9 @@ public class AvPlaybackCoordinatorTests
         public bool IsExhausted => false;
         public TimeSpan Duration => TimeSpan.FromMinutes(10);
         public TimeSpan Position { get; set; }
+        public int SeekCalls { get; private set; }
         public TimeSpan? LastSeekTo { get; private set; }
+        public bool ThrowOnSeek { get; init; }
 
         public int ReadInto(Span<float> dst)
         {
@@ -390,6 +466,9 @@ public class AvPlaybackCoordinatorTests
 
         public void Seek(TimeSpan position)
         {
+            SeekCalls++;
+            if (ThrowOnSeek)
+                throw new InvalidOperationException("synthetic seek failure");
             LastSeekTo = position;
             Position = position;
         }

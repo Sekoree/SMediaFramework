@@ -14,6 +14,7 @@ internal static class AvPlaybackCoordinator
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Core.Playback.AvPlaybackCoordinator");
     private static readonly TimeSpan SyncStartVideoOutputTimeout = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan AudioRealignTolerance = TimeSpan.FromMilliseconds(1);
 
     public static void Play(
         VideoPlayer video,
@@ -156,7 +157,8 @@ internal static class AvPlaybackCoordinator
     /// <summary>
     /// After pause/resume the shared demux can leave audio decode/resampler state out of step with
     /// the frozen clock even when <see cref="ISeekableSource.Position"/> still reports emitted
-    /// samples (≈ clock). Always re-seek to the clock before the router resumes.
+    /// samples (≈ clock). Realign when there is measurable drift, but never let that recovery step
+    /// abort transport startup.
     /// </summary>
     private static void RealignAudioSourceBeforeStart(
         AudioRouter audioRouter,
@@ -166,13 +168,42 @@ internal static class AvPlaybackCoordinator
         var target = audioClock.CurrentPosition;
         if (!string.IsNullOrEmpty(audioSourceId))
         {
-            if (!audioRouter.TryGetSeekableSourcePosition(audioSourceId, out var pos))
+            TimeSpan pos;
+            try
+            {
+                if (!audioRouter.TryGetSeekableSourcePosition(audioSourceId, out pos))
+                    return;
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex,
+                    "RealignAudio: could not read source {Id} position before start; continuing without realign",
+                    audioSourceId);
                 return;
+            }
+
             var drift = (pos - target).Duration();
+            if (drift <= AudioRealignTolerance)
+            {
+                Trace.LogDebug(
+                    "RealignAudio: source={Id} already aligned at {Src} (clock={Clock}, driftMs={DriftMs})",
+                    audioSourceId, pos, target, drift.TotalMilliseconds);
+                return;
+            }
+
             Trace.LogDebug(
                 "RealignAudio: source={Id} from {Src} to clock {Clock} (driftMs={DriftMs})",
                 audioSourceId, pos, target, drift.TotalMilliseconds);
-            audioRouter.SeekSource(audioSourceId, target);
+            try
+            {
+                audioRouter.SeekSource(audioSourceId, target);
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex,
+                    "RealignAudio: source {Id} seek to clock {Clock} failed before start; continuing",
+                    audioSourceId, target);
+            }
             return;
         }
 
@@ -180,9 +211,16 @@ internal static class AvPlaybackCoordinator
         {
             audioRouter.Seek(target);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
             // Multiple sources — host must pass audioSourceId.
+            Trace.LogDebug(ex, "RealignAudio: skipped unqualified seek before start");
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex,
+                "RealignAudio: unqualified seek to clock {Clock} failed before start; continuing",
+                target);
         }
     }
 
