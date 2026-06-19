@@ -27,6 +27,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
 
     private uint _program;
     private uint _vao;
+    private uint _vbo;
     private readonly uint[] _textures;
     private readonly int[] _samplerUniforms;
     private int _uBitScale = -1;
@@ -710,7 +711,156 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         if (_samplerLinear != 0) { _gl.DeleteSampler(_samplerLinear); _samplerLinear = 0; }
         if (_samplerYMipmap != 0) { _gl.DeleteSampler(_samplerYMipmap); _samplerYMipmap = 0; }
 
-        if (_shaderProgramCacheKey is not null)
+        DeleteProgramAndVertexObjects();
+    }
+
+    private void BuildPipeline(bool allocatePlaneTextures)
+    {
+        try
+        {
+            _vao = _gl.GenVertexArray();
+            _gl.BindVertexArray(_vao);
+
+            _vbo = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+            float[] verts = [-1f, -1f, 3f, -1f, -1f, 3f];
+            fixed (float* p = verts)
+                _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(verts.Length * sizeof(float)), p, BufferUsageARB.StaticDraw);
+            _gl.EnableVertexAttribArray(0);
+            _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, (uint)(2 * sizeof(float)), (void*)0);
+
+            var vertSrc = LoadShaderCached(_recipe.VertexFile);
+            var fragRaw = LoadShaderCached(_recipe.FragmentFile);
+            var fragSrc = _recipe.NearestSampling ? fragRaw : InjectAfterFirstLine(fragRaw, GetBicubicLibrary());
+            if (_shaderProgramCacheKey is not null)
+                _program = SharedGlProgramCache.Acquire(_shaderProgramCacheKey, _gl, _ => LinkProgramWithProfileFallback(vertSrc, fragSrc));
+            else
+                _program = LinkProgramWithProfileFallback(vertSrc, fragSrc);
+            _gl.UseProgram(_program);
+
+            var samplerNames = _recipe.Samplers;
+            for (var i = 0; i < samplerNames.Length; i++)
+            {
+                _samplerUniforms[i] = _gl.GetUniformLocation(_program, samplerNames[i]);
+                if (_samplerUniforms[i] < 0)
+                    throw new InvalidOperationException($"shader missing sampler '{samplerNames[i]}'");
+                _gl.Uniform1(_samplerUniforms[i], i);
+            }
+
+            _uYuvFlip = _gl.GetUniformLocation(_program, "yUvFlip");
+            if (_uYuvFlip < 0)
+                throw new InvalidOperationException("shader missing uniform 'yUvFlip'");
+            ApplyYuvFlipUniform();
+
+            _uBitScale = _gl.GetUniformLocation(_program, "bitScale");
+            if (_uBitScale >= 0)
+                _gl.Uniform1(_uBitScale, _recipe.DefaultBitScale);
+
+            if (_recipe.NeedsYuvMatrix)
+            {
+                _uYuvOffset = _gl.GetUniformLocation(_program, "yuvOffset");
+                _uYuvMatrix = _gl.GetUniformLocation(_program, "yuvMatrix");
+                _uGamutMatrix = _gl.GetUniformLocation(_program, "gamutMatrix");
+                ApplyYuvColorUniforms();
+                ApplyGamutMatrixUniform();
+            }
+
+            _uFrameWidth = _gl.GetUniformLocation(_program, "frameWidth");
+            _uHalfTexWidth = _gl.GetUniformLocation(_program, "halfTexWidth");
+            if (_uFrameWidth >= 0 && _uHalfTexWidth >= 0)
+            {
+                _gl.Uniform1(_uFrameWidth, _format.Width);
+                _gl.Uniform1(_uHalfTexWidth, PixelFormatInfo.ChromaWidth422(_format.Width));
+            }
+
+            _uHdrTransfer = _gl.GetUniformLocation(_program, "uHdrTransfer");
+            _uHdrExposure = _gl.GetUniformLocation(_program, "uHdrExposure");
+            ApplyHdrUniforms();
+
+            for (var pi = 0; pi < _uTexBicubicDimLocs.Length; pi++)
+                _uTexBicubicDimLocs[pi] = -1;
+            if (!_recipe.NearestSampling)
+            {
+                for (var pi = 0; pi < _uTexBicubicDimLocs.Length; pi++)
+                    _uTexBicubicDimLocs[pi] = _gl.GetUniformLocation(_program, $"uTexBicubicDim{pi}");
+                ApplyBicubicPlaneDimensions();
+            }
+
+            var filter = _recipe.NearestSampling ? TextureMinFilter.Nearest : TextureMinFilter.Linear;
+            var magFilter = _recipe.NearestSampling ? TextureMagFilter.Nearest : TextureMagFilter.Linear;
+
+            if (allocatePlaneTextures)
+            {
+                for (var i = 0; i < _textures.Length; i++)
+                {
+                    _textures[i] = _gl.GenTexture();
+                    _gl.ActiveTexture(TextureUnit.Texture0 + i);
+                    _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
+                    var (w, h) = _recipe.PlaneSize(_format, i);
+                    var (intFmt, fmt, type) = _recipe.PlaneGl(i);
+                    _gl.TexImage2D(TextureTarget.Texture2D, 0, intFmt, (uint)w, (uint)h, 0, fmt, type, null);
+                    _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)filter);
+                    _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)magFilter);
+                    _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+                    _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+                }
+            }
+            else
+            {
+                for (var i = 0; i < _textures.Length; i++)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture0 + i);
+                    _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
+                }
+            }
+
+            _samplerLinear = _gl.GenSampler();
+            _gl.SamplerParameter(_samplerLinear, GLEnum.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+            _gl.SamplerParameter(_samplerLinear, GLEnum.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+            _gl.SamplerParameter(_samplerLinear, GLEnum.TextureMinFilter, (int)filter);
+            _gl.SamplerParameter(_samplerLinear, GLEnum.TextureMagFilter, (int)magFilter);
+
+            if (_yPlaneMipmapsEnabled)
+            {
+                _samplerYMipmap = _gl.GenSampler();
+                var miniM = _recipe.NearestSampling
+                    ? TextureMinFilter.NearestMipmapNearest
+                    : TextureMinFilter.LinearMipmapLinear;
+                _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+                _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+                _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureMinFilter, (int)miniM);
+                _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureMagFilter, (int)magFilter);
+            }
+        }
+        catch
+        {
+            if (allocatePlaneTextures)
+                DeletePlaneTextures();
+            DeleteSamplers();
+            DeleteProgramAndVertexObjects();
+            throw;
+        }
+    }
+
+    private void DeletePlaneTextures()
+    {
+        for (var i = 0; i < _textures.Length; i++)
+        {
+            if (!_ownsGpuPlaneTextures || _textures[i] == 0) continue;
+            _gl.DeleteTexture(_textures[i]);
+            _textures[i] = 0;
+        }
+    }
+
+    private void DeleteSamplers()
+    {
+        if (_samplerLinear != 0) { _gl.DeleteSampler(_samplerLinear); _samplerLinear = 0; }
+        if (_samplerYMipmap != 0) { _gl.DeleteSampler(_samplerYMipmap); _samplerYMipmap = 0; }
+    }
+
+    private void DeleteProgramAndVertexObjects()
+    {
+        if (_program != 0 && _shaderProgramCacheKey is not null)
         {
             SharedGlProgramCache.Release(_gl, _shaderProgramCacheKey);
             _program = 0;
@@ -721,116 +871,8 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             _program = 0;
         }
 
+        if (_vbo != 0) { _gl.DeleteBuffer(_vbo); _vbo = 0; }
         if (_vao != 0) { _gl.DeleteVertexArray(_vao); _vao = 0; }
-    }
-
-    private void BuildPipeline(bool allocatePlaneTextures)
-    {
-        _vao = _gl.GenVertexArray();
-        _gl.BindVertexArray(_vao);
-
-        var vertSrc = LoadShaderCached(_recipe.VertexFile);
-        var fragRaw = LoadShaderCached(_recipe.FragmentFile);
-        var fragSrc = _recipe.NearestSampling ? fragRaw : InjectAfterFirstLine(fragRaw, GetBicubicLibrary());
-        if (_shaderProgramCacheKey is not null)
-            _program = SharedGlProgramCache.Acquire(_shaderProgramCacheKey, _gl, _ => LinkProgram(vertSrc, fragSrc));
-        else
-            _program = LinkProgram(vertSrc, fragSrc);
-        _gl.UseProgram(_program);
-
-        var samplerNames = _recipe.Samplers;
-        for (var i = 0; i < samplerNames.Length; i++)
-        {
-            _samplerUniforms[i] = _gl.GetUniformLocation(_program, samplerNames[i]);
-            if (_samplerUniforms[i] < 0)
-                throw new InvalidOperationException($"shader missing sampler '{samplerNames[i]}'");
-            _gl.Uniform1(_samplerUniforms[i], i);
-        }
-
-        _uYuvFlip = _gl.GetUniformLocation(_program, "yUvFlip");
-        if (_uYuvFlip < 0)
-            throw new InvalidOperationException("shader missing uniform 'yUvFlip'");
-        ApplyYuvFlipUniform();
-
-        _uBitScale = _gl.GetUniformLocation(_program, "bitScale");
-        if (_uBitScale >= 0)
-            _gl.Uniform1(_uBitScale, _recipe.DefaultBitScale);
-
-        if (_recipe.NeedsYuvMatrix)
-        {
-            _uYuvOffset = _gl.GetUniformLocation(_program, "yuvOffset");
-            _uYuvMatrix = _gl.GetUniformLocation(_program, "yuvMatrix");
-            _uGamutMatrix = _gl.GetUniformLocation(_program, "gamutMatrix");
-            ApplyYuvColorUniforms();
-            ApplyGamutMatrixUniform();
-        }
-
-        _uFrameWidth = _gl.GetUniformLocation(_program, "frameWidth");
-        _uHalfTexWidth = _gl.GetUniformLocation(_program, "halfTexWidth");
-        if (_uFrameWidth >= 0 && _uHalfTexWidth >= 0)
-        {
-            _gl.Uniform1(_uFrameWidth, _format.Width);
-            _gl.Uniform1(_uHalfTexWidth, PixelFormatInfo.ChromaWidth422(_format.Width));
-        }
-
-        _uHdrTransfer = _gl.GetUniformLocation(_program, "uHdrTransfer");
-        _uHdrExposure = _gl.GetUniformLocation(_program, "uHdrExposure");
-        ApplyHdrUniforms();
-
-        for (var pi = 0; pi < _uTexBicubicDimLocs.Length; pi++)
-            _uTexBicubicDimLocs[pi] = -1;
-        if (!_recipe.NearestSampling)
-        {
-            for (var pi = 0; pi < _uTexBicubicDimLocs.Length; pi++)
-                _uTexBicubicDimLocs[pi] = _gl.GetUniformLocation(_program, $"uTexBicubicDim{pi}");
-            ApplyBicubicPlaneDimensions();
-        }
-
-        var filter = _recipe.NearestSampling ? TextureMinFilter.Nearest : TextureMinFilter.Linear;
-        var magFilter = _recipe.NearestSampling ? TextureMagFilter.Nearest : TextureMagFilter.Linear;
-
-        if (allocatePlaneTextures)
-        {
-            for (var i = 0; i < _textures.Length; i++)
-            {
-                _textures[i] = _gl.GenTexture();
-                _gl.ActiveTexture(TextureUnit.Texture0 + i);
-                _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
-                var (w, h) = _recipe.PlaneSize(_format, i);
-                var (intFmt, fmt, type) = _recipe.PlaneGl(i);
-                _gl.TexImage2D(TextureTarget.Texture2D, 0, intFmt, (uint)w, (uint)h, 0, fmt, type, null);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)filter);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)magFilter);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-            }
-        }
-        else
-        {
-            for (var i = 0; i < _textures.Length; i++)
-            {
-                _gl.ActiveTexture(TextureUnit.Texture0 + i);
-                _gl.BindTexture(TextureTarget.Texture2D, _textures[i]);
-            }
-        }
-
-        _samplerLinear = _gl.GenSampler();
-        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureMinFilter, (int)filter);
-        _gl.SamplerParameter(_samplerLinear, GLEnum.TextureMagFilter, (int)magFilter);
-
-        if (_yPlaneMipmapsEnabled)
-        {
-            _samplerYMipmap = _gl.GenSampler();
-            var miniM = _recipe.NearestSampling
-                ? TextureMinFilter.NearestMipmapNearest
-                : TextureMinFilter.LinearMipmapLinear;
-            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureMinFilter, (int)miniM);
-            _gl.SamplerParameter(_samplerYMipmap, GLEnum.TextureMagFilter, (int)magFilter);
-        }
     }
 
     private void RegenerateYPlaneMipmapsIfNeeded()
@@ -904,10 +946,12 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
 
     private uint LinkProgram(string vertSrc, string fragSrc)
     {
-        var vs = CompileShader(ShaderType.VertexShader, vertSrc);
-        var fs = CompileShader(ShaderType.FragmentShader, fragSrc);
+        uint vs = 0;
+        uint fs = 0;
         try
         {
+            vs = CompileShader(ShaderType.VertexShader, vertSrc);
+            fs = CompileShader(ShaderType.FragmentShader, fragSrc);
             var program = _gl.CreateProgram();
             _gl.AttachShader(program, vs);
             _gl.AttachShader(program, fs);
@@ -925,8 +969,31 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
         }
         finally
         {
-            _gl.DeleteShader(vs);
-            _gl.DeleteShader(fs);
+            if (vs != 0) _gl.DeleteShader(vs);
+            if (fs != 0) _gl.DeleteShader(fs);
+        }
+    }
+
+    private uint LinkProgramWithProfileFallback(string vertSrc, string fragSrc)
+    {
+        try
+        {
+            return LinkProgram(vertSrc, fragSrc);
+        }
+        catch (ShaderCompileException ex) when (GlslShaderSource.LooksLikeDesktopSourceOnEsCompiler(ex.DriverLog))
+        {
+            var esVert = GlslShaderSource.ConvertDesktop330ToEs300(vertSrc);
+            var esFrag = GlslShaderSource.ConvertDesktop330ToEs300(fragSrc);
+            try
+            {
+                return LinkProgram(esVert, esFrag);
+            }
+            catch (Exception esEx)
+            {
+                throw new InvalidOperationException(
+                    "shader compile failed with desktop GLSL and GLSL ES 3.00 fallback; active OpenGL context may not support the renderer shader profile.",
+                    esEx);
+            }
         }
     }
 
@@ -945,7 +1012,7 @@ public sealed unsafe class YuvVideoRenderer : IDisposable
             // Dump the exact source the driver saw so `glslangValidator` can give a second opinion.
             var dumpPath = $"/tmp/mfplayer-failed-{type}.glsl";
             try { System.IO.File.WriteAllText(dumpPath, source); } catch { /* best effort */ }
-            throw new InvalidOperationException($"{type} compile failed: {log}\n(source dumped to {dumpPath})");
+            throw new ShaderCompileException(type, log, source, dumpPath);
         }
         return s;
     }
