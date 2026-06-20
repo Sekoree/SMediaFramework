@@ -499,7 +499,16 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         // each frame to CPU (av_hwframe_transfer_data) and releases the surface at once, so the small pool is
         // ample. (The DRM path above is implicitly gated: AV_PIX_FMT_DRM_PRIME is only selected when
         // RetainDmabufForGl is set; D3D11VA needs the explicit flag because it has no non-retained pix fmt.)
-        _d3d11GpuNv12Path = retainD3D11 && hw?.OutputsD3D11GpuFrame == true;
+        //
+        // Also require 8-bit content. The Win32 D3D11 retain path is NV12-only (D3D11VaNv12BackingFactory rejects
+        // any non-NV12 surface, and the output format is forced to NV12). But d3d11va decodes 10/12-bit 4:2:0 into
+        // P010/P016 surfaces — those would be rejected by the backing and then mislabeled as 8-bit NV12 by the
+        // forced-format fallback, corrupting HDR/10-bit playback. Route higher bit depths through the generic
+        // hwaccel path instead (ResolveWorkVideoFrame downloads to CPU; SyncVideoPixelFormatIfNeeded detects the
+        // real P010/P016 and keeps full precision) — mirrors InferDrmPrimeOutputPixelFormat's bit-depth split on
+        // Linux. (4:2:2 / RGB never reach here: d3d11va doesn't hardware-decode them.)
+        var hwHigherBitDepth = vSt->codecpar->bits_per_raw_sample >= 10;
+        _d3d11GpuNv12Path = retainD3D11 && hw?.OutputsD3D11GpuFrame == true && !hwHigherBitDepth;
 
         if (hw != null)
         {
