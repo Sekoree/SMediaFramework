@@ -72,6 +72,34 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
                 ctorErr);
         }
 
+        if (_createFallbackD3D11InteropDeviceForWin32Nv12)
+        {
+            if (_nv12D3d11Host is not null)
+            {
+                win32D3d11DevicePtr = _nv12D3d11Host.NativeComPointer;
+                if (win32D3d11DevicePtr != 0)
+                    return;
+
+                DisposeOwnedInteropHost();
+            }
+
+            _nv12D3d11Host = D3D11GlInteropDeviceHost.TryCreateOwned(out var d3dErr);
+            if (_nv12D3d11Host != null)
+            {
+                win32D3d11DevicePtr = _nv12D3d11Host.NativeComPointer;
+                TryLogNv12OwnedInteropAdapterOnce(win32D3d11DevicePtr);
+                return;
+            }
+
+            if (d3dErr is not null)
+            {
+                MediaDiagnostics.LogWarning(
+                    "{0}: could not create D3D11 device for Win32 NV12 GL upload — trying libav D3D11 device instead: {1}",
+                    _logPrefix,
+                    d3dErr);
+            }
+        }
+
         if (_borrowVideoSourceForWin32Nv12Gl is IHardwareD3D11GlInteropSource hw
             && hw.TryGetHardwareD3D11DeviceForWin32Gl(out var libavPtr)
             && libavPtr != 0)
@@ -88,29 +116,8 @@ public sealed class Win32Nv12GlUploadDeviceResolver : IDisposable
                 _logPrefix,
                 libavErr,
                 _createFallbackD3D11InteropDeviceForWin32Nv12
-                    ? " — trying owned interop device instead."
+                    ? " — owned interop device was unavailable."
                     : " — true zero-host mode will not create a output-owned D3D11 device.");
-        }
-
-        if (_createFallbackD3D11InteropDeviceForWin32Nv12)
-        {
-            _nv12D3d11Host = D3D11GlInteropDeviceHost.TryCreateOwned(out var d3dErr);
-            if (_nv12D3d11Host != null)
-            {
-                win32D3d11DevicePtr = _nv12D3d11Host.NativeComPointer;
-                TryLogNv12OwnedInteropAdapterOnce(win32D3d11DevicePtr);
-                return;
-            }
-
-            if (d3dErr is not null)
-            {
-                MediaDiagnostics.LogWarning(
-                    "{0}: could not create D3D11 device for Win32 NV12 GL upload — Win32Nv12 frames will fail until a device is supplied: {1}",
-                    _logPrefix,
-                    d3dErr);
-            }
-
-            return;
         }
 
         if (win32D3d11DevicePtr == 0 && Interlocked.Exchange(ref _nv12ZeroHostModeLogged, 1) == 0)

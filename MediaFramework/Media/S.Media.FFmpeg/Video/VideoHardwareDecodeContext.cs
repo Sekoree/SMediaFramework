@@ -237,7 +237,7 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
 
         try
         {
-            using var dev = new global::Vortice.Direct3D11.ID3D11Device(p);
+            using var dev = AddRefAndWrapDevice(p);
             using var dxgiDevice = dev.QueryInterfaceOrNull<IDXGIDevice>();
             if (dxgiDevice is null)
                 return false;
@@ -259,6 +259,20 @@ internal sealed unsafe class VideoHardwareDecodeContext : IDisposable
 
     private static long PackLuid(Luid luid) =>
         unchecked((long)(((ulong)(uint)luid.HighPart << 32) | luid.LowPart));
+
+    private static global::Vortice.Direct3D11.ID3D11Device AddRefAndWrapDevice(nint borrowedDeviceComPtr)
+    {
+        Marshal.AddRef(borrowedDeviceComPtr);
+        try
+        {
+            return new global::Vortice.Direct3D11.ID3D11Device(borrowedDeviceComPtr);
+        }
+        catch
+        {
+            Marshal.Release(borrowedDeviceComPtr);
+            throw;
+        }
+    }
 
     private static IReadOnlyList<HardwareVideoDeviceType> DefaultDeviceOrder()
     {

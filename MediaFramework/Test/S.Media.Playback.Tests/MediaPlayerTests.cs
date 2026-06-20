@@ -82,6 +82,21 @@ public sealed class MediaPlayerTests
     }
 
     [Fact]
+    public void MediaPlayerOpenOptions_ToVideoDecoderOpenOptions_maps_win32_nv12_handle_only()
+    {
+        var options = MediaPlayerOpenOptions.Default with
+        {
+            RetainD3D11SharedHandleForGl = true,
+            Win32Nv12SharedHandleOnlyExport = true,
+        };
+
+        var video = options.ToVideoDecoderOpenOptions();
+
+        Assert.True(video.RetainD3D11SharedHandleForGl);
+        Assert.True(video.Win32Nv12SharedHandleOnlyExport);
+    }
+
+    [Fact]
     public void OpenFileBuilder_missing_file_returns_false()
     {
         var path = "/nonexistent/path/that/does/not/exist-" + Guid.NewGuid();

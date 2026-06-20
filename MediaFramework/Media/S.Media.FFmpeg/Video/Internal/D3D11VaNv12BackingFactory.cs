@@ -1,4 +1,5 @@
 using S.Media.Core.Video;
+using System.Runtime.InteropServices;
 using static FFmpeg.AutoGen.ffmpeg;
 using VorticeD3D11Texture2D = Vortice.Direct3D11.ID3D11Texture2D;
 using VorticeDxgiResource1 = Vortice.DXGI.IDXGIResource1;
@@ -37,10 +38,11 @@ internal static unsafe class D3D11VaNv12BackingFactory
         if (arraySlice < 0)
             return null;
 
-        var texture = new VorticeD3D11Texture2D((nint)pTex);
+        var texture = AddRefAndWrapTexture2D((nint)pTex);
         try
         {
-            var deviceComPtr = texture.Device?.NativePointer ?? 0;
+            using var textureDevice = texture.Device;
+            var deviceComPtr = textureDevice?.NativePointer ?? 0;
             var desc = texture.Description;
             if (desc.Format != VorticeDxgiFormat.NV12)
                 return null;
@@ -120,6 +122,20 @@ internal static unsafe class D3D11VaNv12BackingFactory
     {
         const int a = 256;
         return (width + a - 1) / a * a;
+    }
+
+    private static VorticeD3D11Texture2D AddRefAndWrapTexture2D(nint borrowedTextureComPtr)
+    {
+        Marshal.AddRef(borrowedTextureComPtr);
+        try
+        {
+            return new VorticeD3D11Texture2D(borrowedTextureComPtr);
+        }
+        catch
+        {
+            Marshal.Release(borrowedTextureComPtr);
+            throw;
+        }
     }
 
     private static class Kernel32

@@ -402,6 +402,45 @@ public partial class MediaPlayerViewModel
         }
     }
 
+    /// <summary>
+    /// Runs required teardown work off the UI thread. It warns at <paramref name="slowWarningTimeout"/>,
+    /// but does not let the caller continue until the action has completed.
+    /// </summary>
+    private static async Task RunRequiredTransportAsync(
+        Action action,
+        TimeSpan slowWarningTimeout,
+        string operationName)
+    {
+        var task = Task.Run(action);
+        try
+        {
+            await task.WaitAsync(slowWarningTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException ex)
+        {
+            TransportTrace.LogWarning(ex,
+                "{Operation}: still running after {TimeoutMs:0}ms; waiting for teardown before continuing",
+                operationName, slowWarningTimeout.TotalMilliseconds);
+
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (Exception inner)
+            {
+                TransportTrace.LogWarning(inner,
+                    "{Operation}: failed after slow teardown wait",
+                    operationName);
+            }
+        }
+        catch (Exception ex)
+        {
+            TransportTrace.LogWarning(ex,
+                "{Operation}: failed before {TimeoutMs:0}ms timeout",
+                operationName, slowWarningTimeout.TotalMilliseconds);
+        }
+    }
+
     private void HookVideoFaultRecovery(HaPlayPlaybackSession session) =>
         session.VideoDecodeFaulted += OnSessionVideoDecodeFaulted;
 

@@ -431,6 +431,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             // The decoder sizes its surface pool for the retained pipeline via extra_hw_frames (no pool exhaustion).
             RetainD3D11SharedHandleForGl:
                 OperatingSystem.IsWindows() && !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
+            // Keep rendering on shared NT handles only. Borrowing libav-owned D3D11 COM objects couples GL upload
+            // lifetime to decoder teardown, which is fragile during playlist switches on Windows.
+            Win32Nv12SharedHandleOnlyExport:
+                OperatingSystem.IsWindows() && !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
             IncludeAudioRouter: true,
             AudioPacketQueueDepth: 720,   // ~15 s @ ~21 ms/packet
             VideoPacketQueueDepth: 512,   // ~21 s @ 24 fps

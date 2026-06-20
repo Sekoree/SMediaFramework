@@ -13,6 +13,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using HaPlay.Playback;
 using HaPlay.Resources;
+using Microsoft.Extensions.Logging;
 using S.Media.Core;
 using S.Media.Core.Audio;
 using S.Media.NDI;
@@ -824,10 +825,53 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void CancelWaveformExtraction()
     {
-        try { _waveformCts?.Cancel(); } catch { /* best effort */ }
-        try { _waveformCts?.Dispose(); } catch { /* best effort */ }
+        var pending = CancelWaveformExtractionCore();
+        DisposeWaveformCancellationWhenComplete(pending.Task, pending.Cts);
+    }
+
+    private (Task? Task, CancellationTokenSource? Cts) CancelWaveformExtractionCore()
+    {
+        var task = _waveformTask;
+        var cts = _waveformCts;
+        _waveformTask = null;
         _waveformCts = null;
+        try { cts?.Cancel(); } catch { /* best effort */ }
         IsExtractingWaveform = false;
+        return (task, cts);
+    }
+
+    private async Task CancelWaveformExtractionAndWaitAsync()
+    {
+        var pending = await Dispatcher.UIThread.InvokeAsync(CancelWaveformExtractionCore);
+        if (pending.Task is not null)
+        {
+            try { await pending.Task.ConfigureAwait(false); }
+            catch (OperationCanceledException) { /* expected */ }
+            catch (Exception ex) { TransportTrace.LogWarning(ex, "Waveform extraction failed while cancelling"); }
+        }
+
+        try { pending.Cts?.Dispose(); } catch { /* best effort */ }
+    }
+
+    private static void DisposeWaveformCancellationWhenComplete(Task? task, CancellationTokenSource? cts)
+    {
+        if (cts is null)
+            return;
+
+        if (task is { IsCompleted: false })
+        {
+            _ = task.ContinueWith(
+                _ =>
+                {
+                    try { cts.Dispose(); } catch { /* best effort */ }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            return;
+        }
+
+        try { cts.Dispose(); } catch { /* best effort */ }
     }
 
     private void UnsubscribeOutputEvents()
@@ -1510,6 +1554,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private float[]? _waveformPeaks;
     private int _waveformRevision;
     private CancellationTokenSource? _waveformCts;
+    private Task? _waveformTask;
 
     /// <summary>True while the background waveform peaks are being computed for the loaded file — drives
     /// the slim indeterminate bar's "Analysing waveform…" state once the media itself has opened.</summary>
@@ -1532,36 +1577,69 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void StartWaveformExtraction(string? path)
     {
-        _waveformCts?.Cancel();
-        _waveformCts?.Dispose();
-        _waveformCts = null;
+        CancelWaveformExtraction();
 
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
-            WaveformPeaks = null;
-            WaveformRevision++;
-            IsExtractingWaveform = false;
+            ResetWaveformDisplay();
             return;
         }
 
         IsExtractingWaveform = true;
-        _waveformCts = new CancellationTokenSource();
-        var ct = _waveformCts.Token;
-        _ = Task.Run(async () =>
+        var cts = new CancellationTokenSource();
+        _waveformCts = cts;
+        _waveformTask = RunWaveformExtractionAsync(path, cts);
+    }
+
+    private async Task RunWaveformExtractionAsync(string path, CancellationTokenSource cts)
+    {
+        try
         {
-            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct);
+            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, cts.Token).ConfigureAwait(false);
             // A superseding extraction (or a path clear) owns the flag once this token is cancelled, so
             // only the run that finishes naturally clears the "analysing" state.
-            if (!ct.IsCancellationRequested)
+            if (!cts.IsCancellationRequested)
             {
                 Dispatcher.UIThread.Post(() =>
                 {
+                    if (!ReferenceEquals(_waveformCts, cts))
+                        return;
+                    _waveformCts = null;
+                    _waveformTask = null;
                     WaveformPeaks = peaks;
                     WaveformRevision++;
                     IsExtractingWaveform = false;
+                    try { cts.Dispose(); } catch { /* best effort */ }
                 });
             }
-        }, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal when switching files or closing the player.
+        }
+        catch (Exception ex)
+        {
+            TransportTrace.LogWarning(ex, "Waveform extraction failed for {Path}", path);
+            if (!cts.IsCancellationRequested)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!ReferenceEquals(_waveformCts, cts))
+                        return;
+                    _waveformCts = null;
+                    _waveformTask = null;
+                    ResetWaveformDisplay();
+                    try { cts.Dispose(); } catch { /* best effort */ }
+                });
+            }
+        }
+    }
+
+    private void ResetWaveformDisplay()
+    {
+        WaveformPeaks = null;
+        WaveformRevision++;
+        IsExtractingWaveform = false;
     }
 
     private double _peakLevelDb = double.NegativeInfinity;
@@ -1646,7 +1724,17 @@ public partial class MediaPlayerViewModel : ViewModelBase
         catch { /* best effort */ }
     }
 
-    partial void OnMediaFilePathChanged(string? value) => StartWaveformExtraction(value);
+    partial void OnMediaFilePathChanged(string? value)
+    {
+        if (_session is not null || _isTransportBusy)
+        {
+            CancelWaveformExtraction();
+            ResetWaveformDisplay();
+            return;
+        }
+
+        StartWaveformExtraction(value);
+    }
 
     partial void OnHoldFallbackVideoChanging(bool value) => _ = value;
 
@@ -2882,9 +2970,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         if (snapshot is not null)
         {
-            // Two-tier wall: 2s inner ct keeps Pause from hanging; 8s outer wall lets Dispose finish even on slow
-            // outputs. A previous 50s outer cap would freeze the UI for nearly a minute if a output blocked.
-            await RunBoundedAsync(() =>
+            await CancelSpeculativeMediaWorkBeforeSessionDisposeAsync().ConfigureAwait(false);
+
+            // Pause is bounded, but session disposal is a required boundary before opening another file.
+            // Leaving a half-disposed FFmpeg/D3D11 graph in the background can race the next open.
+            await RunRequiredTransportAsync(() =>
             {
                 try
                 {
@@ -2926,6 +3016,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (!deferIdleSync) SyncIdleSlate();
         });
         SDebug.ChangeTrace.Step("CloseSession: UI cleanup done");
+    }
+
+    private async Task CancelSpeculativeMediaWorkBeforeSessionDisposeAsync()
+    {
+        await Dispatcher.UIThread.InvokeAsync(CancelPreOpen);
+        await CancelWaveformExtractionAndWaitAsync().ConfigureAwait(false);
+        await Task.Run(_decoderCache.InvalidateAll).ConfigureAwait(false);
     }
 
     private bool CanLoadMedia()
@@ -3149,6 +3246,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
                 await Dispatcher.UIThread.InvokeAsync(StartHoldPumpTimer);
                 SDebug.ChangeTrace.Step("OpenOrReload: StartHoldPumpTimer");
             }
+
+            await Dispatcher.UIThread.InvokeAsync(() => StartWaveformExtraction(MediaFilePath));
+            SDebug.ChangeTrace.Step("OpenOrReload: waveform extraction started");
         }).ConfigureAwait(false);
     }
 

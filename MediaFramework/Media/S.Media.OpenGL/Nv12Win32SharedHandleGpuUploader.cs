@@ -159,7 +159,7 @@ void main()
 
         try
         {
-            var dev = new ID3D11Device(d3d11DeviceComPtr);
+            var dev = D3D11InteropUtility.AddRefAndWrapDevice(d3d11DeviceComPtr);
             var ctx = dev.ImmediateContext;
             // The decode thread and this uploader share one immediate context. Acquire ID3D11Multithread and make
             // sure protection is on so Enter()/Leave() around our staging copy actually serializes against the
@@ -269,8 +269,9 @@ void main()
         {
             try
             {
-                var t = new ID3D11Texture2D(backing.LibavD3D11Texture2DComPtr);
-                if (t.Device?.NativePointer != _device.NativePointer)
+                var t = D3D11InteropUtility.AddRefAndWrapTexture2D(backing.LibavD3D11Texture2DComPtr);
+                using var textureDevice = t.Device;
+                if (textureDevice?.NativePointer != _device.NativePointer)
                 {
                     t.Dispose();
                     return false;
@@ -946,7 +947,7 @@ void main()
 
         MediaDiagnostics.SwallowDisposeErrors(() => _multithread?.Dispose(), "Nv12Win32SharedHandleGpuUploader.Dispose: multithread");
 
-        // Balance the COM reference taken by `new ID3D11Device(comPtr)` in TryCreate (borrowed or shared host pointer).
+        // Balance the COM reference taken by AddRefAndWrapDevice in TryCreate (borrowed or shared host pointer).
         MediaDiagnostics.SwallowDisposeErrors(_device.Dispose, "Nv12Win32SharedHandleGpuUploader.Dispose: device");
     }
 }
