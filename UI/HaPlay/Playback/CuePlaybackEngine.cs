@@ -34,6 +34,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
     private readonly OutputManagementViewModel _outputs;
     private readonly CuePlayerViewModel _cuePlayer;
     private readonly object _gate = new();
+    private readonly object _sleepInhibitGate = new();
     private readonly ClipStandbyEngine _standby = new();
 
     private readonly Dictionary<Guid, ActiveCue> _active = new();
@@ -41,6 +42,8 @@ public sealed partial class CuePlaybackEngine : IDisposable
     private readonly Dictionary<Guid, ClipAudioOutputRuntime> _audioOutputs = new();
     private readonly object _previewGate = new();
     private CuePreviewSession? _preview;
+    private IDisposable? _sleepInhibitLease;
+    private bool _playbackPaused;
 
     public CuePlaybackEngine(OutputManagementViewModel outputs, CuePlayerViewModel cuePlayer)
     {
@@ -166,6 +169,57 @@ public sealed partial class CuePlaybackEngine : IDisposable
         get { lock (_previewGate) return _preview?.CueId; }
     }
 
+    private void MarkCuePlaybackRunning()
+    {
+        lock (_gate)
+            _playbackPaused = false;
+        SyncPlaybackSleepInhibitor();
+    }
+
+    private void SetCuePlaybackPaused(bool paused)
+    {
+        lock (_gate)
+            _playbackPaused = paused;
+        SyncPlaybackSleepInhibitor();
+    }
+
+    private void SyncPlaybackSleepInhibitor()
+    {
+        bool activeCuePlaying;
+        lock (_gate)
+            activeCuePlaying = _active.Count > 0 && !_playbackPaused;
+
+        bool previewPlaying;
+        lock (_previewGate)
+            previewPlaying = _preview is not null;
+
+        var shouldInhibit = activeCuePlaying || previewPlaying;
+        lock (_sleepInhibitGate)
+        {
+            if (shouldInhibit)
+            {
+                _sleepInhibitLease ??= PlaybackSleepInhibitor.Default.Acquire("Cue player media is playing");
+                return;
+            }
+
+            ReleasePlaybackSleepInhibitorLocked();
+        }
+    }
+
+    private void ReleasePlaybackSleepInhibitor()
+    {
+        lock (_sleepInhibitGate)
+            ReleasePlaybackSleepInhibitorLocked();
+    }
+
+    private void ReleasePlaybackSleepInhibitorLocked()
+    {
+        var lease = _sleepInhibitLease;
+        _sleepInhibitLease = null;
+        try { lease?.Dispose(); }
+        catch { /* best effort */ }
+    }
+
     public int? PreviewAudioDeviceIndex { get; set; }
 
     public Func<IReadOnlyCollection<Guid>, Task>? ReleaseConflictingPlayerOutputsAsync { get; set; }
@@ -187,6 +241,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         {
             // Off the UI thread for the same reason as cue fires: Play() can block on prefill.
             await Task.Run(() => session.Play()).ConfigureAwait(false);
+            SyncPlaybackSleepInhibitor();
             _ = WatchPreviewEndAsync(session);
             return null;
         }
@@ -209,6 +264,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
         }
 
         if (session is null) return;
+        SyncPlaybackSleepInhibitor();
 
         var cueId = session.CueId;
         try
@@ -364,6 +420,8 @@ public sealed partial class CuePlaybackEngine : IDisposable
         foreach (var entry in group)
             BeginFadeIn(entry);
 
+        MarkCuePlaybackRunning();
+
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
             foreach (var entry in group)
@@ -481,6 +539,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                     entry.EnsureAudioRuntimesStarted();
                 }).ConfigureAwait(false);
                 BeginFadeIn(entry);
+                MarkCuePlaybackRunning();
                 await Dispatcher.UIThread.InvokeAsync(() => CueStarted?.Invoke(this, cue.Id));
             }
             catch (Exception ex)
@@ -813,6 +872,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             toDispose = _active.Values.ToList();
             _active.Clear();
         }
+        SyncPlaybackSleepInhibitor();
         await Task.WhenAll(toDispose.Select(entry => DisposeEntryAsync(entry, releaseFade: ReleaseFadeFor(entry))))
             .ConfigureAwait(false);
         timing?.Checkpoint("active cues disposed");
@@ -844,6 +904,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 return;
             }
         }
+        SyncPlaybackSleepInhibitor();
         // Soft stops honor the cue's own FadeOutMs; hard stops (releaseFade = 0) stay immediate.
         if (releaseFade > TimeSpan.Zero)
             releaseFade = ReleaseFadeFor(entry);
@@ -864,6 +925,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
 
         if (paused)
         {
+            SetCuePlaybackPaused(true);
             // Silence first — SetAudioPaused is a volatile flip with no UI affinity, so do it inline
             // (the old dispatcher hop only added latency before the audio went quiet).
             foreach (var entry in entries)
@@ -910,6 +972,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             entry.SetAudioPaused(false);
             entry.EnsureAudioRuntimesStarted();
         }
+        SetCuePlaybackPaused(false);
         timing?.SetOutcome($"resumed entries={entries.Count}");
     }
 
@@ -2043,6 +2106,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                     }
 
                     lock (_gate) _active.Remove(entry.Cue.Id);
+                    SyncPlaybackSleepInhibitor();
                     await RaiseNaturalEndAsync().ConfigureAwait(false);
                     await DisposeEntryAsync(entry).ConfigureAwait(false);
                     return;
@@ -2087,6 +2151,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             slowWarningMs: 1000);
         try { StopPreviewAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
         try { StopAsync().GetAwaiter().GetResult(); } catch { /* best effort */ }
+        ReleasePlaybackSleepInhibitor();
         try { _standby.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { /* best effort */ }
 
         List<CueCompositionRuntime> compsLeft;

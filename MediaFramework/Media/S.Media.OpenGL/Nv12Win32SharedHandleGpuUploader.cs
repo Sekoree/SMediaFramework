@@ -62,7 +62,7 @@ void main()
     private const string FragUv = """
 #version 330 core
 uniform sampler2D uNV12;
-uniform int uLumaH;
+uniform int uLumaPlaneRows;
 uniform int uChromaW;
 uniform int uChromaH;
 layout(location = 0) out vec2 oUV;
@@ -72,7 +72,7 @@ void main()
     if (p.x >= uChromaW || p.y >= uChromaH)
         discard;
     int bx = int(p.x) * 2;
-    int sy = uLumaH + int(p.y);
+    int sy = uLumaPlaneRows + int(p.y);
     float u = texelFetch(uNV12, ivec2(bx, sy), 0).r;
     float v = texelFetch(uNV12, ivec2(bx + 1, sy), 0).r;
     oUV = vec2(u, v);
@@ -427,6 +427,35 @@ void main()
         _gl.BindTexture(GlTextureTarget.Texture2D, 0);
     }
 
+    internal static int Nv12InteropR8TextureHeight(int lumaAllocationHeight)
+    {
+        if (lumaAllocationHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(lumaAllocationHeight));
+        return checked(lumaAllocationHeight + PixelFormatInfo.ChromaHeight420(lumaAllocationHeight));
+    }
+
+    internal static int Nv12LumaAllocationRowsForChromaOffset(int d3dTextureHeight, int visibleLumaHeight)
+    {
+        // D3D11 decoder textures may be taller than the visible frame; NV12 chroma starts after the allocated luma rows.
+        if (d3dTextureHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(d3dTextureHeight));
+        if (visibleLumaHeight <= 0)
+            throw new ArgumentOutOfRangeException(nameof(visibleLumaHeight));
+        if (d3dTextureHeight < visibleLumaHeight)
+            throw new ArgumentOutOfRangeException(nameof(d3dTextureHeight),
+                "D3D11 NV12 texture height cannot be smaller than the visible luma height.");
+
+        return d3dTextureHeight;
+    }
+
+    internal static nint Nv12ChromaPlaneByteOffset(int rowPitchBytes, int d3dTextureHeight, int visibleLumaHeight)
+    {
+        if (rowPitchBytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(rowPitchBytes));
+        var lumaRows = Nv12LumaAllocationRowsForChromaOffset(d3dTextureHeight, visibleLumaHeight);
+        return checked((nint)rowPitchBytes * lumaRows);
+    }
+
     private bool TryUploadInterop(uint texYId, uint texUvId, in VideoFormat format, Win32SharedNv12Backing backing)
     {
         if (_wglInteropDisabled || !EnsureWglDevice() || !EnsureInteropPrograms() || !EnsureInteropFboAndTexture())
@@ -451,6 +480,9 @@ void main()
                 // libav decodes into a Texture2D ARRAY (this frame = array slice `srcSub`). wglDXRegisterObjectNV
                 // cannot register an array texture or select a slice, so register a persistent owned SINGLE NV12
                 // texture and copy the slice into it on the GPU each frame. Sets _interopCopyTex + _wglRegisteredObject.
+                if (desc.Height < lumaH)
+                    return false;
+
                 if (!EnsureInteropCopyTextureAndRegistration(desc.Width, desc.Height))
                     return false;
 
@@ -495,7 +527,8 @@ void main()
                         _gl.BindVertexArray(_interopVao);
 
                         DrawYPlane(texYId, lumaW, lumaH);
-                        DrawUvPlane(texUvId, lumaH, chromaW, chromaH);
+                        var lumaPlaneRows = Nv12LumaAllocationRowsForChromaOffset((int)desc.Height, lumaH);
+                        DrawUvPlane(texUvId, lumaPlaneRows, chromaW, chromaH);
 
                         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)st.DrawFramebufferBinding);
                     }
@@ -558,7 +591,7 @@ void main()
             MiscFlags = ResourceOptionFlags.None,
         });
 
-        ResizeInteropTexture(wi, hi);
+        ResizeInteropTexture(wi, Nv12InteropR8TextureHeight(hi));
 
         var reg = _wgl.RegisterObject!.Invoke(_wglDeviceHandle, _interopCopyTex.NativePointer, _interopGlTex,
             WglNvDxInterop.Texture2DArb, WglNvDxInterop.AccessReadOnlyNv);
@@ -597,7 +630,7 @@ void main()
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
     }
 
-    private void DrawUvPlane(uint texUvId, int lumaH, int chromaW, int chromaH)
+    private void DrawUvPlane(uint texUvId, int lumaPlaneRows, int chromaW, int chromaH)
     {
         _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
             GlTextureTarget.Texture2D, texUvId, 0);
@@ -607,7 +640,7 @@ void main()
         var loc = _gl.GetUniformLocation(_interopProgUv, "uNV12");
         if (loc >= 0)
             _gl.Uniform1(loc, 2);
-        _gl.Uniform1(_gl.GetUniformLocation(_interopProgUv, "uLumaH"), lumaH);
+        _gl.Uniform1(_gl.GetUniformLocation(_interopProgUv, "uLumaPlaneRows"), lumaPlaneRows);
         _gl.Uniform1(_gl.GetUniformLocation(_interopProgUv, "uChromaW"), chromaW);
         _gl.Uniform1(_gl.GetUniformLocation(_interopProgUv, "uChromaH"), chromaH);
         _gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
@@ -762,7 +795,10 @@ void main()
                             if (yPtr == null)
                                 return false;
 
-                            var uvPtr = yPtr + yPitch * (nint)h;
+                            if (gpuDesc.Height < h)
+                                return false;
+
+                            var uvPtr = yPtr + Nv12ChromaPlaneByteOffset(yPitch, (int)gpuDesc.Height, h);
                             UploadR8Plane(texYId, yPtr, yPitch, w, h);
                             UploadRgPlane(texUvId, uvPtr, yPitch, cw, ch);
                             return true;

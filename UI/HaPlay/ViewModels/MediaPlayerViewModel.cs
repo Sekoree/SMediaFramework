@@ -30,6 +30,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private readonly OutputManagementViewModel _outputs;
     private readonly Func<MediaPlayerViewModel, Task>? _requestRemove;
     private HaPlayPlaybackSession? _session;
+    private IDisposable? _sleepInhibitLease;
     private readonly PlaybackThroughputDiagnostics _throughputDiagnostics = new();
     private int _disposeStarted;
 
@@ -795,6 +796,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            ReleasePlaybackSleepInhibitor();
             _idleSlateSyncTimer.Stop();
             StopHoldPumpTimer();
             CancelCueEnvelope();
@@ -1608,6 +1610,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(IsTransportSeekable));
         OnPropertyChanged(nameof(PlaybackStateLabel));
         OnPropertyChanged(nameof(PlaybackStateColor));
+        SyncPlaybackSleepInhibitor();
         if (value)
             StopIdleSlate();
     }
@@ -1619,8 +1622,28 @@ public partial class MediaPlayerViewModel : ViewModelBase
         OnPropertyChanged(nameof(PlaybackStateColor));
         OnPropertyChanged(nameof(IsNearEndOfTrack));
         NotifyTransportCanExecuteChanged();
+        SyncPlaybackSleepInhibitor();
         if (value)
             PreOpenAdjacentPlaylistItems();
+    }
+
+    private void SyncPlaybackSleepInhibitor()
+    {
+        var shouldInhibit = IsPlaying && IsMediaLoaded && _session is not null;
+        if (shouldInhibit)
+        {
+            _sleepInhibitLease ??= PlaybackSleepInhibitor.Default.Acquire($"Media player '{Name}' is playing");
+            return;
+        }
+
+        ReleasePlaybackSleepInhibitor();
+    }
+
+    private void ReleasePlaybackSleepInhibitor()
+    {
+        var lease = Interlocked.Exchange(ref _sleepInhibitLease, null);
+        try { lease?.Dispose(); }
+        catch { /* best effort */ }
     }
 
     partial void OnMediaFilePathChanged(string? value) => StartWaveformExtraction(value);
