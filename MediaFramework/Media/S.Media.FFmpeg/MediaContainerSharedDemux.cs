@@ -488,7 +488,18 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
         _hwAccel = hw;
         _drmGpuNv12Path = hw?.OutputsDrmPrimeGpuFrame == true;
-        _d3d11GpuNv12Path = hw?.OutputsD3D11GpuFrame == true;
+        // Only take the D3D11 zero-copy path — which RETAINS each decoded surface through the whole
+        // consumer pipeline — when the caller actually opted into it (RetainD3D11SharedHandleForGl).
+        // d3d11va's only decoder output format is AV_PIX_FMT_D3D11, so without this gate every default
+        // hardware-decode open would pin surfaces from the fixed (default 20) pool and exhaust it after
+        // ~one jitter-buffer's worth of frames — avcodec_send_packet then fails with AVERROR_INVALIDDATA
+        // ("Static surface pool size exceeded"). The extra_hw_frames head-room above is only applied on the
+        // retain path, so the un-gated default had a 20-surface pool and faulted almost immediately. When
+        // retain is off we instead fall through to the generic hwaccel path: ResolveWorkVideoFrame downloads
+        // each frame to CPU (av_hwframe_transfer_data) and releases the surface at once, so the small pool is
+        // ample. (The DRM path above is implicitly gated: AV_PIX_FMT_DRM_PRIME is only selected when
+        // RetainDmabufForGl is set; D3D11VA needs the explicit flag because it has no non-retained pix fmt.)
+        _d3d11GpuNv12Path = retainD3D11 && hw?.OutputsD3D11GpuFrame == true;
 
         if (hw != null)
         {

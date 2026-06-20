@@ -1,0 +1,24 @@
+<Project>
+
+  <!--
+    Stage repo-managed Windows native DLLs (PortAudio, PortMidi — see WinNatives/) next to every build
+    output for RID-less Windows builds, i.e. the IDE Debug/run case. These libs are loaded through the OS
+    loader (exe dir + PATH) by PALib/PMLib's DllImport resolvers, so they must sit beside the running exe.
+
+    A `-r win-x64` publish (the AOT artifact) gets its natives a different way and does not need this, so the
+    copy is gated to the RID-less-on-Windows case only. Items are None+CopyToOutputDirectory so they also flow
+    transitively into a referencing executable's output. FFmpeg natives are handled in S.Media.FFmpeg.csproj
+    (they come from the FFmpeg.GPL NuGet package, not this folder).
+  -->
+  <PropertyGroup>
+    <StageWinNativesToOutput Condition="'$(StageWinNativesToOutput)' == '' And '$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">true</StageWinNativesToOutput>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(StageWinNativesToOutput)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)WinNatives\*.dll" Visible="false">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

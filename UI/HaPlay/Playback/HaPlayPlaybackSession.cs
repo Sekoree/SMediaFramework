@@ -422,6 +422,15 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         new(
             // Software decode once the hardware path has faulted this process (see HardwareVideoDecodeGate).
             TryHardwareAcceleration: !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
+            // Windows D3D11VA only: keep decoded frames on their D3D11 NV12 surfaces and let the GL output do the
+            // GPU->CPU staging upload on its OWN render thread, instead of av_hwframe_transfer_data on the decode
+            // thread. That parallelizes decode and upload and is what holds file video at a stable 60 fps — the
+            // decode-thread transfer otherwise jitters frame production so the player presents ~1/6 of frames late
+            // (measured: retain ≈ 60 fps / 0 late vs transfer ≈ 50 fps / climbing late). Gated exactly like hardware
+            // decode: NDI needs CPU-readable pixels (a D3D11 surface has none), and a faulted hw path forces software.
+            // The decoder sizes its surface pool for the retained pipeline via extra_hw_frames (no pool exhaustion).
+            RetainD3D11SharedHandleForGl:
+                OperatingSystem.IsWindows() && !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
             IncludeAudioRouter: true,
             AudioPacketQueueDepth: 720,   // ~15 s @ ~21 ms/packet
             VideoPacketQueueDepth: 512,   // ~21 s @ 24 fps

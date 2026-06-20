@@ -23,13 +23,34 @@
         <PackageReference Include="Vortice.DXGI" />
     </ItemGroup>
 
-    <!-- Windows publishes ship FFmpeg shared libraries via NuGet (FFmpeg.GPL) so the win-x64
-         artifact no longer needs the libav* DLLs hand-added. Win RIDs only — Linux/macOS keep
-         using the system FFmpeg. NOTE: the FFmpeg.GPL version pinned in Directory.Packages.props
-         must provide FFmpeg 8.x to match FFmpeg.AutoGen 8.1.0; bump it in lock-step if AutoGen's
-         major changes. (Verified: this build ships avcodec-62 / avutil-60 = FFmpeg 8.x.) -->
-    <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win'))">
-        <PackageReference Include="FFmpeg.GPL" />
+    <!-- Windows ships FFmpeg shared libraries via NuGet (FFmpeg.GPL) so the win-x64 artifact no
+         longer needs the libav* DLLs hand-added. Win only — Linux/macOS keep using the system FFmpeg.
+         NOTE: the FFmpeg.GPL version pinned in Directory.Packages.props must provide FFmpeg 8.x to
+         match FFmpeg.AutoGen 8.1.0; bump it in lock-step if AutoGen's major changes. (Verified: this
+         build ships avcodec-62 / avutil-60 = FFmpeg 8.x.)
+
+         The condition covers BOTH a win RID publish AND a RID-less build *on* Windows (the IDE
+         Debug/run case). FFmpeg.GPL's net10 target only copies the native DLLs via runtimes/<rid>/native
+         RID resolution (publish -r win-x64); its build/netstandard copy rule is .NET-Framework-only. So a
+         RID-less Debug build would otherwise reference nothing, the libav DLLs never land next to the exe,
+         and FFmpeg.AutoGen's LoadLibrary fails -> "Specified method is not supported" (NotSupportedException)
+         from the un-bound function pointers. _FFmpegWinNoRid marks that RID-less-on-Windows case. -->
+    <PropertyGroup>
+        <_FFmpegWinNoRid Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">true</_FFmpegWinNoRid>
+    </PropertyGroup>
+
+    <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win')) Or '$(_FFmpegWinNoRid)' == 'true'">
+        <PackageReference Include="FFmpeg.GPL" GeneratePathProperty="true" />
+    </ItemGroup>
+
+    <!-- RID-less Windows build only: copy the package's win-x64 native libav DLLs to the output dir so
+         IDE runs (and referencing exes, via transitive CopyToOutputDirectory) can load them. RID publishes
+         already place them via runtimes/ resolution, so this is gated off there to avoid a double copy. -->
+    <ItemGroup Condition="'$(_FFmpegWinNoRid)' == 'true'">
+        <None Include="$(PkgFFmpeg_GPL)\runtimes\win-x64\native\*.dll" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>%(Filename)%(Extension)</Link>
+        </None>
     </ItemGroup>
 
     <ItemGroup>

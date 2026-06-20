@@ -103,6 +103,12 @@ void main()
     private uint _interopVao;
     private int _interopAllocW;
     private int _interopAllocH;
+    // Owned single-slice NV12 texture: the decoder hands us a slice of a Texture2D *array*, which
+    // wglDXRegisterObjectNV cannot register; we CopySubresourceRegion (GPU->GPU) the slice into this single
+    // texture and register THAT once with WGL_NV_DX_interop. Persistent across frames (re-created only on resize).
+    private ID3D11Texture2D? _interopCopyTex;
+    private int _interopCopyCapW;
+    private int _interopCopyCapH;
     private bool _uploadMechanismLogged;
     private bool _disposed;
 
@@ -433,76 +439,77 @@ void main()
 
         try
         {
-            if (!TryOpenD3D11GpuTexture(backing, out var gpuTex, out _))
+            if (!TryOpenD3D11GpuTexture(backing, out var gpuTex, out var srcSub))
                 return false;
 
             using (gpuTex)
             {
+                var desc = gpuTex!.Description;
+                if (desc.Width == 0 || desc.Height == 0)
+                    return false;
+
+                // libav decodes into a Texture2D ARRAY (this frame = array slice `srcSub`). wglDXRegisterObjectNV
+                // cannot register an array texture or select a slice, so register a persistent owned SINGLE NV12
+                // texture and copy the slice into it on the GPU each frame. Sets _interopCopyTex + _wglRegisteredObject.
+                if (!EnsureInteropCopyTextureAndRegistration(desc.Width, desc.Height))
+                    return false;
+
                 if (!D3d11TextureKeyedMutexScope.TryAcquireForGpuRead(gpuTex!, out var keyedScope, KeyedMutexTimeoutMilliseconds()))
                 {
                     LogKeyedMutexAcquireFailedOnce();
                     return false;
                 }
 
+                // Copy the decoded slice into the owned interop texture (must be D3D-owned == not GL-locked here).
+                // Hold the D3D11 multithread lock so the decode thread sharing this immediate context can't interleave.
                 try
                 {
-                    var desc = gpuTex!.Description;
-                    var tw = (int)desc.Width;
-                    var th = (int)desc.Height;
-                    if (tw <= 0 || th <= 0)
-                        return false;
-
-                    ResizeInteropTexture(tw, th);
-
-                    _wglRegisteredObject = _wgl.RegisterObject!.Invoke(_wglDeviceHandle, gpuTex.NativePointer, _interopGlTex,
-                        WglNvDxInterop.Texture2DArb, WglNvDxInterop.AccessReadOnlyNv);
-                    if (_wglRegisteredObject == 0)
-                        return false;
-
-                    var hObj = _wglRegisteredObject;
-                    if (_wgl.LockObjects!.Invoke(_wglDeviceHandle, 1, &hObj) == 0)
-                    {
-                        _ = _wgl.UnregisterObject!.Invoke(_wglDeviceHandle, _wglRegisteredObject);
-                        _wglRegisteredObject = 0;
-                        return false;
-                    }
-
+                    _multithread?.Enter();
                     try
                     {
-                        SaveGlState(out var st);
-                        try
-                        {
-                            _gl.ActiveTexture(GlTextureUnit.Texture0 + 2);
-                            _gl.BindTexture(GlTextureTarget.Texture2D, _interopGlTex);
-                            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _interopFbo);
-                            _gl.BindVertexArray(_interopVao);
-
-                            DrawYPlane(texYId, lumaW, lumaH);
-                            DrawUvPlane(texUvId, lumaH, chromaW, chromaH);
-
-                            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)st.DrawFramebufferBinding);
-                        }
-                        finally
-                        {
-                            RestoreGlState(in st);
-                        }
-
-                        return true;
+                        _context.CopySubresourceRegion(_interopCopyTex!, 0, 0, 0, 0, gpuTex, srcSub, null);
                     }
                     finally
                     {
-                        var h = _wglRegisteredObject;
-                        if (h != 0)
-                        {
-                            _ = _wgl.UnlockObjects!.Invoke(_wglDeviceHandle, 1, &h);
-                            _ = _wgl.UnregisterObject!.Invoke(_wglDeviceHandle, h);
-                            _wglRegisteredObject = 0;
-                        }
+                        _multithread?.Leave();
                     }
                 }
                 finally
                 {
                     keyedScope?.Dispose();
+                }
+
+                // Hand the interop texture to GL for the duration of the sample, then return it to D3D.
+                var hObj = _wglRegisteredObject;
+                if (_wgl.LockObjects!.Invoke(_wglDeviceHandle, 1, &hObj) == 0)
+                    return false;
+
+                try
+                {
+                    SaveGlState(out var st);
+                    try
+                    {
+                        _gl.ActiveTexture(GlTextureUnit.Texture0 + 2);
+                        _gl.BindTexture(GlTextureTarget.Texture2D, _interopGlTex);
+                        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _interopFbo);
+                        _gl.BindVertexArray(_interopVao);
+
+                        DrawYPlane(texYId, lumaW, lumaH);
+                        DrawUvPlane(texUvId, lumaH, chromaW, chromaH);
+
+                        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)st.DrawFramebufferBinding);
+                    }
+                    finally
+                    {
+                        RestoreGlState(in st);
+                    }
+
+                    return true;
+                }
+                finally
+                {
+                    var h = _wglRegisteredObject;
+                    _ = _wgl.UnlockObjects!.Invoke(_wglDeviceHandle, 1, &h);
                 }
             }
         }
@@ -511,6 +518,68 @@ void main()
             MediaDiagnostics.LogWarning("Nv12Win32SharedHandleGpuUploader: WGL interop upload failed ({0}); falling back to staging.", ex.Message);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Ensures the owned single-slice NV12 copy texture exists at <paramref name="gpuW"/>×<paramref name="gpuH"/> and
+    /// is registered with WGL_NV_DX_interop against <see cref="_interopGlTex"/>. Re-creates on size change. Returns
+    /// <see langword="false"/> (and permanently disables the interop path) if the driver refuses to register an NV12
+    /// single texture — planar interop is not universally supported; the BGRA convert-then-register path is the
+    /// alternative. The registered object stays D3D-owned (unlocked) between frames so the per-frame copy is valid.
+    /// </summary>
+    private bool EnsureInteropCopyTextureAndRegistration(uint gpuW, uint gpuH)
+    {
+        var wi = (int)gpuW;
+        var hi = (int)gpuH;
+        if (_interopCopyTex is not null && _wglRegisteredObject != 0 && _interopCopyCapW == wi && _interopCopyCapH == hi)
+            return true;
+
+        // Rebuild: unregister the stale object, then recreate the D3D copy texture and re-allocate the GL texture
+        // storage (the GL texture must NOT be registered while ResizeInteropTexture runs glTexImage2D on it).
+        if (_wglRegisteredObject != 0)
+        {
+            var h = _wglRegisteredObject;
+            _ = _wgl.UnregisterObject!.Invoke(_wglDeviceHandle, h);
+            _wglRegisteredObject = 0;
+        }
+
+        _interopCopyTex?.Dispose();
+        _interopCopyTex = _device.CreateTexture2D(new Texture2DDescription
+        {
+            Width = gpuW,
+            Height = gpuH,
+            MipLevels = 1,
+            ArraySize = 1,
+            Format = DxgiFormat.NV12,
+            SampleDescription = new DxgiSampleDescription(1, 0),
+            Usage = ResourceUsage.Default,
+            BindFlags = BindFlags.ShaderResource,
+            CPUAccessFlags = CpuAccessFlags.None,
+            MiscFlags = ResourceOptionFlags.None,
+        });
+
+        ResizeInteropTexture(wi, hi);
+
+        var reg = _wgl.RegisterObject!.Invoke(_wglDeviceHandle, _interopCopyTex.NativePointer, _interopGlTex,
+            WglNvDxInterop.Texture2DArb, WglNvDxInterop.AccessReadOnlyNv);
+        if (reg == 0)
+        {
+            _interopCopyTex.Dispose();
+            _interopCopyTex = null;
+            _interopCopyCapW = 0;
+            _interopCopyCapH = 0;
+            _wglInteropDisabled = true;
+            LogInteropUnavailableOnce(
+                "wglDXRegisterObjectNV refused an NV12 single texture (planar WGL_NV_DX_interop unsupported on this " +
+                "driver). Zero-copy disabled; using CPU staging upload. A GPU NV12->BGRA convert-then-register path " +
+                "would be the alternative.");
+            return false;
+        }
+
+        _wglRegisteredObject = reg;
+        _interopCopyCapW = wi;
+        _interopCopyCapH = hi;
+        return true;
     }
 
     private void DrawYPlane(uint texYId, int lumaW, int lumaH)
@@ -829,6 +898,12 @@ void main()
 
         _interopAllocW = 0;
         _interopAllocH = 0;
+
+        // Unregistered above (the WGL object is registered against this texture); now release the D3D resource.
+        MediaDiagnostics.SwallowDisposeErrors(() => _interopCopyTex?.Dispose(), "Nv12Win32SharedHandleGpuUploader.Dispose: interop copy texture");
+        _interopCopyTex = null;
+        _interopCopyCapW = 0;
+        _interopCopyCapH = 0;
 
         _staging?.Dispose();
         _staging = null;

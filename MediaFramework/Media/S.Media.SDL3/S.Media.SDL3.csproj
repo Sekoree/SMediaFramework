@@ -14,7 +14,19 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="SDL3-CS" />
-        <PackageReference Include="SDL3-CS.Native" />
+        <PackageReference Include="SDL3-CS.Native" GeneratePathProperty="true" />
+    </ItemGroup>
+
+    <!-- RID-less Windows build (IDE Debug/run): SDL3-CS.Native only places the native SDL3.dll via
+         runtimes/<rid>/native RID resolution (a -r win-x64 publish), with no copy rule for a RID-less
+         build. Without SDL3.dll next to the exe, SDL_Init fails at runtime. Copy it from the package for
+         the RID-less-on-Windows case; the None+CopyToOutputDirectory item also flows into a referencing
+         exe's output. RID publishes already resolve it from runtimes/, so this is gated off there. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(PkgSDL3-CS_Native)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>SDL3.dll</Link>
+        </None>
     </ItemGroup>
 
     <ItemGroup>

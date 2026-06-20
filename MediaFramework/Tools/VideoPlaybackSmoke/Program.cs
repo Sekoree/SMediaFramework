@@ -1,5 +1,7 @@
 using System.Text;
+using Microsoft.Extensions.Logging;
 using S.Media.Core.Clock;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Playback;
 using S.Media.Core.Video;
 using S.Media.FFmpeg;
@@ -11,6 +13,17 @@ using S.Media.SDL3;
 using VideoPlaybackSmoke;
 
 Console.OutputEncoding = Encoding.UTF8;
+
+// Opt-in framework diagnostics to stderr (e.g. WGL_NV_DX_interop status, decode faults): set MF_SMOKE_LOG=debug|info.
+if (Environment.GetEnvironmentVariable("MF_SMOKE_LOG") is { Length: > 0 } smokeLog)
+{
+    var lvl = Enum.TryParse<LogLevel>(smokeLog, ignoreCase: true, out var l) ? l : LogLevel.Debug;
+    MediaDiagnostics.LoggerFactory = LoggerFactory.Create(b =>
+    {
+        b.SetMinimumLevel(lvl);
+        b.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss.fff "; });
+    });
+}
 
 if (args.Contains("--list-audio"))
 {
