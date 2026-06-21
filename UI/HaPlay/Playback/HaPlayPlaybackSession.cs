@@ -763,7 +763,15 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             ? sourceFormat.FrameRate
             : fallbackRate;
         var (width, height) = MediaPlayerCompositionCanvasSize(lines, sourceFormat);
-        var canvas = new VideoFormat(width, height, PixelFormat.Bgra32, rate);
+        // The composition pump free-runs on a wall clock at the canvas rate. Running it AT the source rate
+        // beats 1:1 against the audio-paced decoder feeding layer 0: at the latest-wins slot, phase drift
+        // intermittently drops some source frames and repeats others, so the deck visibly judders to a
+        // fraction of its frame rate — and a seek re-anchors the audio clock phase, which is why it comes
+        // and goes with seeking. Oversample the pump (>= 2x source, >= 60fps) so every source frame is
+        // sampled at least twice and reaches the screen. The extra composites are cheap (no over-budget),
+        // the SDL output still presents on vsync, and direct (non-composition) playback — which has no
+        // second clock and is always smooth — is the behaviour we're matching.
+        var canvas = new VideoFormat(width, height, PixelFormat.Bgra32, OversampleCompositionPumpRate(rate));
         if (!decoder.HasVideo)
             sourceFormat = canvas;
 
@@ -775,8 +783,24 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             throw new InvalidOperationException(routeErr ?? "media player composition route failed");
         }
         composition.EnsurePumpStarted();
-        Trace.LogInformation("TryBuildMediaPlayerComposition: {Count} output(s), canvas {W}x{H}", leases.Count, width, height);
+        Trace.LogInformation("TryBuildMediaPlayerComposition: {Count} output(s), canvas {W}x{H} @ {Rate}",
+            leases.Count, width, height, canvas.FrameRate);
         return composition;
+    }
+
+    /// <summary>
+    /// Pump cadence for the free-running media-player composition: at least 2x the source frame rate and at
+    /// least 60fps. A wall-clock pump running AT the source rate beats 1:1 against the audio-paced decoder
+    /// feeding layer 0, intermittently dropping/repeating frames at the latest-wins layer slot; oversampling
+    /// guarantees every source frame is sampled at least twice so it always reaches the output.
+    /// </summary>
+    internal static Rational OversampleCompositionPumpRate(Rational sourceRate)
+    {
+        if (sourceRate.Numerator <= 0 || sourceRate.Denominator <= 0)
+            return new Rational(60, 1);
+        var doubled = new Rational(sourceRate.Numerator * 2, sourceRate.Denominator);
+        // doubled >= 60fps  <=>  numerator >= 60 * denominator
+        return doubled.Numerator >= 60 * doubled.Denominator ? doubled : new Rational(60, 1);
     }
 
     /// <summary>Default media-player composition canvas size: locked NDI raster when present, otherwise the

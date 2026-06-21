@@ -107,6 +107,21 @@ public sealed partial class AudioRouter
             || output is not IClockedOutput || output is IAdaptiveRateWrappedOutput)
             return;
 
+        // Promotion re-slaves the router pacing clock (SlaveTo) AND re-masters the attached MediaClock
+        // to this output's playback clock. Both are only safe before the router starts: doing them
+        // mid-stream throws ("cannot slave clock while router is running") and would snap the visible
+        // playhead back to the freshly-started device clock, desyncing A/V. A clocked output hot-wired
+        // into a running router therefore stays a non-primary slave (wall-clock paced, and adaptive-rate
+        // wrapped when drift correction is enabled — see MaybeWrapAdaptiveRateOutputLocked) rather than
+        // becoming the master. This is what makes live "hot-wiring" of an audio device work.
+        if (_isRunning)
+        {
+            MediaDiagnostics.LogDebug(
+                "AddOutput: clocked output {0} joined a running router — left as a non-primary slave (no mid-stream re-clock).",
+                outputId);
+            return;
+        }
+
         SlaveTo(outputId);
         if (output is IPlaybackClock pc)
             _attachedMasterClock?.SetMaster(pc);
@@ -123,7 +138,12 @@ public sealed partial class AudioRouter
             return output;
         if (_slaveClockOutputId == outputId || _primaryOutputId == outputId)
             return output;
-        if (AutoWirePrimary && _primaryOutputId is null && _slaveClockOutputId is null && output is IClockedOutput)
+        // While stopped, the first clocked output is reserved to become the pacing primary at Start, so it
+        // must not be adaptive-wrapped (the wrapper hides the inner IClockedOutput's authoritative clock).
+        // Once the router is running, AutoWirePrimaryOutputIfNeeded no longer promotes (a mid-stream
+        // re-clock would desync), so a hot-wired clocked output IS a non-master output and should be
+        // wrapped for drift correction like any other.
+        if (!_isRunning && AutoWirePrimary && _primaryOutputId is null && _slaveClockOutputId is null && output is IClockedOutput)
             return output;
         var wrap = MediaFrameworkPlugins.WrapAdaptiveRateOutput;
         return wrap is null ? output : wrap(this, output, outputId, _adaptiveRateMaxDeltaHz);

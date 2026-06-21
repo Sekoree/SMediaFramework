@@ -100,5 +100,28 @@ public sealed class CompositionSizingTests
         Assert.Equal((1920, 1080), size);
     }
 
+    [Theory]
+    // The free-running composition pump must oversample the source (>= 2x, >= 60fps) so it never beats
+    // 1:1 against the audio-paced decoder and drops/repeats frames at the latest-wins layer slot.
+    [InlineData(24, 1, 60, 1)]      // 24fps  -> 60 (2x = 48 < 60, floor to 60)
+    [InlineData(25, 1, 60, 1)]      // 25fps  -> 60
+    [InlineData(30, 1, 60, 1)]      // 30fps  -> 60 (2x = 60)
+    [InlineData(50, 1, 100, 1)]     // 50fps  -> 100 (2x already >= 60)
+    [InlineData(60, 1, 120, 1)]     // 60fps  -> 120 (2x; a 60 pump would itself beat a 60 source)
+    [InlineData(24000, 1001, 60, 1)] // 23.976 -> 60
+    [InlineData(0, 1, 60, 1)]       // unknown -> 60
+    public void Composition_pump_rate_oversamples_the_source(int srcNum, int srcDen, int expNum, int expDen)
+    {
+        var rate = HaPlayPlaybackSession.OversampleCompositionPumpRate(new Rational(srcNum, srcDen));
+
+        var rateFps = rate.Numerator / (double)rate.Denominator;
+        var expectedFps = expNum / (double)expDen;
+        Assert.Equal(expectedFps, rateFps, 3);
+        // Always at least 60fps and at least double the (known) source rate.
+        Assert.True(rateFps >= 60.0 - 1e-6);
+        if (srcNum > 0)
+            Assert.True(rateFps >= 2.0 * (srcNum / (double)srcDen) - 1e-6);
+    }
+
     private static OutputLineViewModel Line(OutputDefinition definition) => new(definition, _ => { });
 }

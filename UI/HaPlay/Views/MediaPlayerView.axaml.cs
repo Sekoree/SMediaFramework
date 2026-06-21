@@ -17,7 +17,11 @@ public partial class MediaPlayerView : UserControl
     public MediaPlayerView()
     {
         InitializeComponent();
+        SeekSlider.AddHandler(PointerPressedEvent, OnSeekSliderPointerPressed,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
         SeekSlider.AddHandler(PointerReleasedEvent, OnSeekSliderPointerReleased,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        SeekSlider.AddHandler(KeyDownEvent, OnSeekSliderKeyDown,
             RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
         SeekSlider.AddHandler(KeyUpEvent, OnSeekSliderKeyUp,
             RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
@@ -167,20 +171,41 @@ public partial class MediaPlayerView : UserControl
         _ = vm.PlayPlaylistItemAsync(item);
     }
 
+    private static bool IsSeekNavKey(Key key) =>
+        key is Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown;
+
+    private void OnSeekSliderPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // Take ownership of the thumb the instant the drag begins so the playback clock stops writing
+        // SeekSliderValue out from under the user (see MediaPlayerViewModel.IsScrubbing).
+        if (DataContext is MediaPlayerViewModel vm)
+            vm.IsScrubbing = true;
+    }
+
     private void OnSeekSliderPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (DataContext is not MediaPlayerViewModel vm) return;
+        // Execute synchronously captures the dragged target into the seek arc before we hand the slider
+        // back to the clock, so clearing IsScrubbing here can't race the committed value.
         if (vm.SeekToSliderCommand.CanExecute(null))
             vm.SeekToSliderCommand.Execute(null);
+        vm.IsScrubbing = false;
+    }
+
+    private void OnSeekSliderKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is MediaPlayerViewModel vm && IsSeekNavKey(e.Key))
+            vm.IsScrubbing = true;
     }
 
     private void OnSeekSliderKeyUp(object? sender, KeyEventArgs e)
     {
         if (DataContext is not MediaPlayerViewModel vm) return;
-        if (e.Key is Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown)
+        if (IsSeekNavKey(e.Key))
         {
             if (vm.SeekToSliderCommand.CanExecute(null))
                 vm.SeekToSliderCommand.Execute(null);
+            vm.IsScrubbing = false;
         }
     }
 

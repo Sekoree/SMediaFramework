@@ -534,10 +534,22 @@ public partial class OutputManagementViewModel : ViewModelBase
         return null;
     }
 
-    internal void NotifyLocalPreviewEnded(OutputLineViewModel line)
+    /// <summary>
+    /// A local video preview window stopped. <paramref name="userInitiated"/> is <see langword="true"/>
+    /// only when the operator closed the OS window (clicked the title-bar X / quit), as opposed to our
+    /// own programmatic teardown (Remove, reconfigure, shutdown). A user-closed window means the operator
+    /// is done with that output, so we drop the whole line from the I/O page — which also raises
+    /// <see cref="OutputLineRemoving"/> so any active playback session unwires its route first.
+    /// </summary>
+    internal void NotifyLocalPreviewEnded(OutputLineViewModel line, bool userInitiated = false)
     {
         _localPreviews.Remove(line, out _);
         line.IsPreviewRunning = false;
+
+        // Removing the line re-enters StopLocalPreview, but _localPreviews no longer holds this line
+        // (removed just above) so that path is a no-op for the already-closed window — no double dispose.
+        if (userInitiated && Outputs.Contains(line))
+            Remove(line);
     }
 
     internal void NotifyLocalPreviewResized(OutputLineViewModel line, int width, int height)

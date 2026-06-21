@@ -1,4 +1,5 @@
 using S.Media.Core.Audio;
+using S.Media.Core.Clock;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
@@ -43,6 +44,38 @@ public sealed class AudioRouterPumpLifecycleTests
 
         Assert.True(SpinUntil(() => output.SubmitCount > 0, 2000),
             "output added while running should start draining immediately");
+        r.Stop();
+    }
+
+    [Fact]
+    public void ClockedOutputAddedWhileRunning_DoesNotThrow_AndReceivesAudio()
+    {
+        // Regression: hot-wiring an audio device (PortAudio is IClockedOutput + IPlaybackClock) into a
+        // running router used to throw "cannot slave clock while router is running" — AutoWirePrimary
+        // tried to promote the first clocked output to pacing primary mid-stream. A running router must
+        // instead keep the new clocked output as a non-primary slave (no mid-stream re-clock).
+        using var r = new AudioRouter(SampleRate, chunkSamples: 480);
+        r.AddSource(new SilenceSource(Stereo), "src");
+        // Start with only a non-clocked sink routed (the "video playing, no audio output" case: the
+        // framework wires a discard sink so the source is consumed and the router runs at wall clock).
+        r.AddOutput(new RecordingOutput(Stereo), "discard");
+        r.AddRoute("src", "discard", ChannelMap.Identity(2));
+        r.Start();
+        Thread.Sleep(30);
+        Assert.True(r.IsRunning);
+
+        var clocked = new ClockedRecordingOutput(Stereo);
+        var ex = Record.Exception(() =>
+        {
+            var id = r.AddOutput(clocked, "device");
+            r.AddRoute("src", id, ChannelMap.Identity(2));
+        });
+
+        Assert.Null(ex);
+        Assert.True(SpinUntil(() => clocked.SubmitCount > 0, 2000),
+            "a clocked output hot-wired into a running router should still receive audio");
+        // The hot-wired clocked output must NOT have hijacked the router as the pacing primary.
+        Assert.Null(r.PrimaryOutputId);
         r.Stop();
     }
 
@@ -133,6 +166,19 @@ public sealed class AudioRouterPumpLifecycleTests
         public int SubmitCount => Volatile.Read(ref _submits);
         public AudioFormat Format { get; } = fmt;
         public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Increment(ref _submits);
+    }
+
+    /// <summary>Models a hardware device: clocked (paces the router when promoted) and exposes a playback
+    /// clock, exactly like <c>PortAudioOutput</c>. Always ready to accept a chunk.</summary>
+    private sealed class ClockedRecordingOutput(AudioFormat fmt) : IAudioOutput, IClockedOutput, IPlaybackClock
+    {
+        private int _submits;
+        public int SubmitCount => Volatile.Read(ref _submits);
+        public AudioFormat Format { get; } = fmt;
+        public void Submit(ReadOnlySpan<float> packedSamples) => Interlocked.Increment(ref _submits);
+        public bool WaitForCapacity(int chunkSamples, CancellationToken token) => !token.IsCancellationRequested;
+        public TimeSpan ElapsedSinceStart => TimeSpan.Zero;
+        public bool IsAdvancing => true;
     }
 
     private sealed class BlockingOutput(AudioFormat fmt) : IAudioOutput

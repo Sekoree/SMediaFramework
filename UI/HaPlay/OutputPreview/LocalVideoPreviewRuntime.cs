@@ -337,7 +337,9 @@ internal sealed class SdlLocalVideoPreviewRuntime : ILocalVideoPreviewRuntime
             }
             finally
             {
-                Dispatcher.UIThread.Post(() => _owner.NotifyLocalPreviewEnded(_line));
+                // Reached only via SDL's WindowCloseRequested/Quit — our own Dispose() unsubscribes this
+                // handler before tearing the sink down, so this is always an operator-initiated close.
+                Dispatcher.UIThread.Post(() => _owner.NotifyLocalPreviewEnded(_line, userInitiated: true));
             }
         });
     }
@@ -371,6 +373,7 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
     private readonly Window? _screenReference;
     private LocalVideoPreviewWindow? _window;
     private int _ended;
+    private int _disposing;
     private int _playbackHolders;
 
     public AvaloniaLocalVideoPreviewRuntime(
@@ -434,6 +437,9 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
 
     public void Dispose()
     {
+        // Mark this as a programmatic teardown so the resulting Closed event isn't mistaken for the
+        // operator closing the window (which would remove the whole output line from the I/O page).
+        Interlocked.Exchange(ref _disposing, 1);
         Dispatcher.UIThread.Post(() =>
         {
             if (_window is not null)
@@ -517,7 +523,9 @@ internal sealed class AvaloniaLocalVideoPreviewRuntime : ILocalVideoPreviewRunti
         if (sender is LocalVideoPreviewWindow win)
             win.SizeChanged -= OnWindowSizeChanged;
         _window = null;
-        _owner.NotifyLocalPreviewEnded(_line);
+        // _disposing is set only by our own Dispose(); a window the operator closes leaves it clear.
+        var userInitiated = Volatile.Read(ref _disposing) == 0;
+        _owner.NotifyLocalPreviewEnded(_line, userInitiated);
     }
 
     private void OnWindowSizeChanged(object? sender, SizeChangedEventArgs e)

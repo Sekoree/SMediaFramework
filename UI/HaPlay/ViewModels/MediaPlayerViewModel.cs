@@ -1396,6 +1396,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
     [ObservableProperty]
     private double _seekSliderValue;
 
+    /// <summary>True while the user is actively dragging the seek slider (or navigating it with the
+    /// keyboard). The view sets it on pointer/key down and clears it once the seek is committed on
+    /// release. While set — and until the resulting seek arc finishes (<see cref="_seekArcRunning"/>) —
+    /// the playback clock must not write <see cref="SeekSliderValue"/>, otherwise the thumb snaps back
+    /// from under the user and the committed target can be a stale clock value (the "jumps back / seeks
+    /// somewhere random" symptom).</summary>
+    [ObservableProperty]
+    private bool _isScrubbing;
+
     [ObservableProperty]
     private string? _statusMessage;
 
@@ -3302,7 +3311,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Dispatcher.UIThread.Post(() =>
         {
             CurrentPosition = e;
-            if (Duration > TimeSpan.Zero)
+            // Don't fight the user: while they're scrubbing the slider (or the committed seek arc is
+            // still running) the thumb position is owned by the drag, not the playhead. Resuming clock
+            // write-back once the arc finishes snaps the slider to the (correct, post-seek) position.
+            if (Duration > TimeSpan.Zero && !IsScrubbing && !_seekArcRunning)
                 SeekSliderValue = e.Ticks * 1000.0 / Duration.Ticks;
             PollAudioMeters();
         }, DispatcherPriority.Normal);

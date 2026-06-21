@@ -19,8 +19,21 @@ internal static class HardwareVideoDecodeGate
 {
     private static int _disabled;
 
-    /// <summary>True until a hardware-decode fault has tripped the gate; <see langword="false"/> thereafter.</summary>
-    public static bool HardwareDecodeEnabled => Volatile.Read(ref _disabled) == 0;
+    /// <summary>
+    /// Forces software decode for the whole process when <c>HAPLAY_DISABLE_HW_DECODE</c> is set to
+    /// <c>1</c>/<c>true</c>/<c>on</c>. An escape hatch for machines whose driver hardware-decode path is
+    /// flaky (and a quick A/B to tell a hardware-surface issue apart from a software one) without waiting
+    /// for a fault to trip the latch.
+    /// </summary>
+    private static readonly bool EnvDisabled = IsTruthy(Environment.GetEnvironmentVariable("HAPLAY_DISABLE_HW_DECODE"));
+
+    /// <summary>True until a hardware-decode fault has tripped the gate (or <c>HAPLAY_DISABLE_HW_DECODE</c> is set); <see langword="false"/> thereafter.</summary>
+    public static bool HardwareDecodeEnabled => !EnvDisabled && Volatile.Read(ref _disabled) == 0;
+
+    private static bool IsTruthy(string? value) =>
+        value is "1"
+        || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Trips the gate (idempotent). Returns <see langword="true"/> only on the first trip so the caller can do a
