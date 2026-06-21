@@ -2,7 +2,7 @@
 
 ## Testing
 There is currently a basic test build on the Releases page for WIndows and Linux to find bugs:<br>
-https://github.com/Sekoree/MFPlayer/releases/tag/latest<br>
+https://github.com/Sekoree/MFPlayer/releases/latest<br>
 
 ## The Framework
 
