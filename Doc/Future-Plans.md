@@ -96,23 +96,39 @@ Ordered roughly from simplest to most complex. Status notes added as items are p
       several UI surfaces and needs the app run with/without each native runtime to verify nothing useful is
       hidden (a false-negative probe would wrongly disable a working feature).
 
-- **Adopt the miniaudio library** as an audio backend (source + headers in `Reference/miniaudio-0.11.25`),
-  alongside PortAudio. **Adoption plan** (deferred from this pass — see "why" below):
-  - *Shape it like `S.Media.PortAudio`.* A new `S.Media.MiniAudio` project with:
-    - A tiny C shim (`miniaudio.c` compiled with `MA_ENABLE_*` for the wanted backends) built as a native
-      lib, or P/Invoke straight against a prebuilt `miniaudio` shared lib, mirroring `PALib`'s native layer.
-    - `MiniAudioOutput : IAudioOutput, IClockedOutput, IFlushableOutput, IPlaybackClock,
-      IAudioOutputChannelCapabilities, IAudioOutputPlaybackStats` — the exact contract `PortAudioOutput`
-      already implements, so it drops into `AudioRouter` unchanged (SPSC ring + callback, `ElapsedSinceStart`
-      from played-samples/device clock, `WaitForCapacity` for pacing). `MiniAudioInput : IAudioSource` for
-      capture. A `MiniAudioDeviceCatalog` mirroring `PortAudioDeviceCatalog`.
-    - A `MediaFrameworkRuntime` hook (`.UseMiniAudio()`) and a `MediaPlayerOpenBuilder` extension
-      (`.WithMiniAudio(...)`), mirroring the PortAudio extensions.
-  - *Then the HaPlay naming/selection change:* drop "Add PortAudio" → "Add Audio Output", and add a
-    backend picker (PortAudio / miniaudio) in the add dialog (and persist the choice on the output
-    definition). The C-ABI would gain `mfp_miniaudio_output_create` alongside the PortAudio factory.
-  - *Why deferred:* this is a from-scratch real-time audio backend. Getting the callback timing, ring sizing,
-    underrun/flush, and device-clock (`ElapsedSinceStart`) right is exactly the class of work that must be
-    verified on real audio hardware (glitches/drift only show up live) — not something to land unverified in
-    a headless pass. The plan above makes it a well-scoped follow-up: implement `MiniAudioOutput` against the
-    existing `IAudioOutput`/`IClockedOutput` contract and validate with `PlaybackSmoke` + the HaPlay deck.
+- **Adopt the miniaudio library** as an audio backend (source + headers in `Reference/miniaudio-0.11.25`).
+  **The right shape is a backend-agnostic interface, NOT a miniaudio-emulates-PortAudio shim.** miniaudio
+  should be a peer of PortAudio behind one common abstraction, never a translation of PortAudio's API.
+  - **[DONE]** *Introduced the common audio-backend interface in `S.Media.Core`* — `IAudioBackend`
+    (`EnumerateOutputDevices`/`EnumerateInputDevices`/`CreateOutput`/`CreateInput`) + `AudioDeviceInfo` +
+    `AudioBackendOptions` + an `AudioBackends` registry. `PortAudioBackend` (in `S.Media.PortAudio`) wraps the
+    existing catalog + ctors with no behaviour change and registers itself from `UsePortAudio()`. Tested
+    (Core registry + PortAudio backend). The shape that was planned:
+    ```
+    interface IAudioBackend {
+        string Name { get; }                                   // "PortAudio" / "miniaudio"
+        IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices();
+        IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices();
+        IAudioOutput CreateOutput(AudioDeviceSelector device, AudioFormat format, AudioBackendOptions opts);
+        IAudioSource CreateInput (AudioDeviceSelector device, AudioFormat format, AudioBackendOptions opts);
+    }
+    record AudioDeviceInfo(string Id, string Name, int MaxChannels, double DefaultSampleRate, bool IsDefault);
+    ```
+    Note the *frame-level* contract is already backend-neutral: `AudioRouter` only ever sees
+    `IAudioOutput` / `IClockedOutput` / `IAudioSource`, never PortAudio types. So this new interface only
+    abstracts the **device/enumeration/open** layer that sits above those. `PortAudioBackend : IAudioBackend`
+    wraps today's catalog + ctors (no behaviour change); `MiniAudioBackend : IAudioBackend` is the new one.
+  - *New `S.Media.MiniAudio` project.* P/Invoke against miniaudio (its single-file `miniaudio.c` built as a
+    native lib, or a prebuilt shared lib — mirroring how `PALib` *binds* PortAudio, not how `PortAudioOutput`
+    is shaped). `MiniAudioOutput` implements the framework's existing `IAudioOutput`/`IClockedOutput`/
+    `IFlushableOutput`/`IPlaybackClock`/… directly from miniaudio's own callback + ring model — it does not
+    reuse or imitate PortAudio's internals.
+  - *Selection.* `MediaFrameworkRuntime` registers available backends; a host (or the C-ABI / HaPlay) picks
+    one by name. HaPlay then drops "Add PortAudio" → "Add Audio Output" with a backend picker (persisted on
+    the output definition); the C-ABI gains a `backend` parameter / a `mfp_audio_backend_*` enumeration
+    rather than a PortAudio-only factory.
+  - *Why deferred:* a from-scratch real-time backend (callback timing, ring sizing, underrun/flush,
+    device-clock `ElapsedSinceStart`) only reveals glitches/drift on real audio hardware, so it must be
+    validated live (`PlaybackSmoke` + the HaPlay deck), not landed unverified in a headless pass. The
+    interface step (now done) was the safe part; what remains is `MiniAudioBackend`/`MiniAudioOutput` itself
+    plus routing HaPlay's add-output picker and the C-ABI through `AudioBackends` instead of PortAudio-only.
