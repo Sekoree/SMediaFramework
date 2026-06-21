@@ -1,0 +1,2 @@
+﻿- NDI Input reliability (dynamically changing inputs/ are resolution and FPS changes handled?).
+- Current output seems to be 2x the media FPS, why?
