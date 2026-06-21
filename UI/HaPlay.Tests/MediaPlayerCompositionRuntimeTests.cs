@@ -1,3 +1,4 @@
+using System.Threading;
 using HaPlay.Playback;
 using S.Media.Core.Video;
 using S.Media.Effects;
@@ -98,6 +99,39 @@ public sealed class MediaPlayerCompositionRuntimeTests
 
         Assert.False(noLogo.HasHoldLayer);
         noLogo.SetHold(true);   // no logo layer → no-op, must not throw
+    }
+
+    [Fact]
+    public void RemoveOutput_RetiresOnlyRequestedDeckOutput()
+    {
+        var releasedA = 0;
+        var releasedB = 0;
+        using var runtime = new MediaPlayerCompositionRuntime(
+            Canvas,
+            new[]
+            {
+                new ClipCompositionOutputLease(
+                    "out-a",
+                    "A",
+                    new RecordingVideoOutput(),
+                    Release: () => Interlocked.Increment(ref releasedA)),
+                new ClipCompositionOutputLease(
+                    "out-b",
+                    "B",
+                    new RecordingVideoOutput(),
+                    Release: () => Interlocked.Increment(ref releasedB)),
+            },
+            videoSourceFormat: Canvas,
+            compositorFactory: CpuCompositor);
+
+        Assert.Equal(2, runtime.OutputCount);
+
+        Assert.True(runtime.RemoveOutput("out-a"));
+
+        Assert.Equal(1, runtime.OutputCount);
+        Assert.Equal(1, Volatile.Read(ref releasedA));
+        Assert.Equal(0, Volatile.Read(ref releasedB));
+        Assert.False(runtime.RemoveOutput("out-a"));
     }
 
     private static VideoFrame SolidBgra(TimeSpan pts)

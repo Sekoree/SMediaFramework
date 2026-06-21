@@ -10,6 +10,12 @@ validation passed: `dotnet test MediaFramework/Test/S.Media.Core.Tests/S.Media.C
 MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj --no-restore -v:m`, and `dotnet build
 MFPlayer.sln -m:1 --no-restore -v:m`.
 
+Validation update 2026-06-21: fixed the follow-up crash when removing a clone/output after accepting the
+"Stop playback & remove" warning. Focused validation passed:
+`dotnet test MediaFramework/Test/S.Media.Playback.Tests/S.Media.Playback.Tests.csproj --no-restore -v:m`,
+`dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m`, and
+`dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
+
 ## Quick wins (UI text / cleanup)
 
 - **[DONE]** In HaPlay the quick buttons to fullscreen/window a window had the "preview" suffix — removed
@@ -57,6 +63,12 @@ MFPlayer.sln -m:1 --no-restore -v:m`.
     window/GL handles). Consider whether clones should instead use the real `SDL3GLVideoOutput` texture-mirror
     mechanism (anchor `ownsThread:false`, `CreateTextureMirror`+`RegisterTextureMirror`) which already
     handles shared-context rendering, rather than the route-duplication approach.
+  - **[DONE] (4) Crash when removing while playback is loaded:** accepting the remove-in-use dialog's stop
+    action stops transport but keeps the loaded media-player composition alive. Composition-opened outputs now
+    record their fan-out lease id in `HaPlayPlaybackSession`, and `OutputLineRemoving` removes that lease from
+    `ClipCompositionRuntime` before `OutputManagementViewModel` disposes the SDL/NDI runtime. The composition
+    runtime retires a single output behind a submit gate, so an in-flight pump snapshot cannot submit to the
+    disposed `SDL3GLVideoOutput`.
 - **Sync the "Explain" docs** (`Doc/Explained/`) with the current code/behavior.
   - **[DONE]** Added the missing component: new chapter `17-NativeAOT-C-ABI.md` (the `S.Media.Interop` C ABI,
     which didn't exist when the series was written), wired into the `01-Overview` component table and the

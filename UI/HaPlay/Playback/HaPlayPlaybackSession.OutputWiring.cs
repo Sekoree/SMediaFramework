@@ -343,6 +343,24 @@ internal sealed partial class HaPlayPlaybackSession
             catch (Exception ex) { Trace.LogWarning(ex, "UnwireLineFromRouters: VideoRouter.RemoveOutput({Id})", videoOutputId); }
         }
 
+        if (wiring.CompositionOutputId is { } compositionOutputId && _mediaPlayerComposition is { } composition)
+        {
+            try
+            {
+                if (!composition.RemoveOutput(compositionOutputId))
+                {
+                    Trace.LogDebug(
+                        "UnwireLineFromRouters: composition output {Id} was already absent (remaining={Remaining})",
+                        compositionOutputId,
+                        composition.OutputCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "UnwireLineFromRouters: composition.RemoveOutput({Id})", compositionOutputId);
+            }
+        }
+
         if (wiring.Resampler is not null)
         {
             // Resampler is in _portAudioResamplers or _ndiAudioResamplers; drop the reference so Dispose
@@ -405,6 +423,7 @@ internal sealed partial class HaPlayPlaybackSession
     {
         public string? AudioOutputId { get; set; }
         public string? VideoOutputId { get; set; }
+        public string? CompositionOutputId { get; set; }
         public LogoFallbackVideoOutput? LogoOutput { get; set; }
         public ResamplingAudioOutput? Resampler { get; set; }
         public AcquireKind AcquiredKind { get; set; }

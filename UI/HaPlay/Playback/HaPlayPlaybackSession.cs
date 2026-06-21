@@ -632,14 +632,22 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             // Composition path: build a video-L0 / logo-L1 composition over the deck's outputs and feed it
             // from the same decoder input. videoChains is empty here, so the loops above were no-ops.
             MediaPlayerCompositionRuntime? composition = null;
+            var compositionLineOutputs = new List<(OutputLineViewModel Line, string OutputId)>();
             if (useComposition)
             {
                 composition = TryBuildMediaPlayerComposition(
-                    decoder, videoOverride?.Format, lines, ndiByDefinitionId, outputs, acquiredLocalLines, router, inputId);
+                    decoder, videoOverride?.Format, lines, ndiByDefinitionId, outputs, acquiredLocalLines,
+                    compositionLineOutputs, router, inputId);
                 if (composition is not null)
                 {
                     pendingPlayback._mediaPlayerComposition = composition;
                     pendingPlayback._playbackOwnedDisposables.Add(composition);
+                    foreach (var (line, outputId) in compositionLineOutputs)
+                    {
+                        var wiring = pendingPlayback.GetOrCreateLineWiring(line);
+                        wiring.CompositionOutputId = outputId;
+                        wiring.AcquiredKind = line.Definition is NDIOutputDefinition ? AcquireKind.NDI : AcquireKind.LocalVideo;
+                    }
                 }
             }
 
@@ -715,6 +723,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         Dictionary<Guid, NDIOutput> ndiByDefinitionId,
         OutputManagementViewModel outputs,
         List<OutputLineViewModel> acquiredLocalLines,
+        List<(OutputLineViewModel Line, string OutputId)> leasedOutputs,
         VideoRouter router,
         string inputId)
     {
@@ -732,9 +741,11 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                         continue;
                     }
                     acquiredLocalLines.Add(line);
+                    var outputId = $"sdl_{lv.Id:N}";
                     // Preview runtime owns the output (released via the line) — the composition must not dispose it.
                     leases.Add(new ClipCompositionOutputLease(
-                        $"sdl_{lv.Id:N}", lv.DisplayName, output, Release: null, DisposeOutputOnRuntimeDispose: false));
+                        outputId, lv.DisplayName, output, Release: null, DisposeOutputOnRuntimeDispose: false));
+                    leasedOutputs.Add((line, outputId));
                     break;
                 }
                 case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.AudioOnly:
@@ -745,8 +756,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                     var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-comp-{nd.Id:N}",
                         log: null, disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
                     // Carrier released via the session's acquired-carriers list; the composition owns the pump.
+                    var outputId = $"ndi_{nd.Id:N}";
                     leases.Add(new ClipCompositionOutputLease(
-                        $"ndi_{nd.Id:N}", nd.DisplayName, pump, Release: null, DisposeOutputOnRuntimeDispose: true));
+                        outputId, nd.DisplayName, pump, Release: null, DisposeOutputOnRuntimeDispose: true));
+                    leasedOutputs.Add((line, outputId));
                     break;
                 }
             }

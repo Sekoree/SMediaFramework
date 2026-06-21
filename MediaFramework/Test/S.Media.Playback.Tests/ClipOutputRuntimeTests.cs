@@ -177,6 +177,31 @@ public sealed class ClipOutputRuntimeTests
     }
 
     [Fact]
+    public void ClipCompositionRuntime_RemoveOutput_RetiresOneFanoutLease()
+    {
+        var released = 0;
+        using var runtime = new ClipCompositionRuntime(
+            new ClipCompositionDefinition("comp-a", "Comp A", 320, 180, 30, 1),
+            [
+                new ClipCompositionOutputLease(
+                    "out-a",
+                    "A",
+                    new RecordingVideoOutput(),
+                    Release: () => Interlocked.Increment(ref released)),
+                new ClipCompositionOutputLease("out-b", "B", new RecordingVideoOutput()),
+            ]);
+
+        Assert.Equal(2, runtime.OutputCount);
+
+        Assert.True(runtime.RemoveOutput("out-a"));
+
+        Assert.Equal(1, runtime.OutputCount);
+        Assert.Equal(1, Volatile.Read(ref released));
+        Assert.False(runtime.RemoveOutput("out-a"));
+        Assert.Equal(1, Volatile.Read(ref released));
+    }
+
+    [Fact]
     public async Task ClipCompositionRuntime_MasterAlignedLayerUsesTimelinePlayheadAfterSeek()
     {
         var output = new TimelineRecordingVideoOutput();
