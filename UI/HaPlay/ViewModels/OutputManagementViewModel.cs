@@ -301,6 +301,23 @@ public partial class OutputManagementViewModel : ViewModelBase
         OutputNamingChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private IReadOnlyList<string> ExistingOutputNames(Guid? excludingId = null)
+    {
+        var names = new List<string>(Outputs.Count * 2);
+        foreach (var line in Outputs)
+        {
+            if (line.Definition.Id == excludingId)
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(line.Definition.DisplayName))
+                names.Add(line.Definition.DisplayName);
+            if (!string.IsNullOrWhiteSpace(line.Definition.EffectiveName))
+                names.Add(line.Definition.EffectiveName);
+        }
+
+        return names;
+    }
+
     /// <summary>
     /// Phase B follow-up — raised *before* a line's runtime is torn down so any active
     /// <c>HaPlayPlaybackSession</c> can call <c>TryRemoveOutput</c> first and avoid Submit'ing to a
@@ -896,10 +913,11 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
     }
 
-    private static async Task<PortAudioOutputDefinition?> ShowEditPortAudioAsync(Window owner, PortAudioOutputDefinition pa)
+    private async Task<PortAudioOutputDefinition?> ShowEditPortAudioAsync(Window owner, PortAudioOutputDefinition pa)
     {
         var vm = new AddPortAudioOutputDialogViewModel();
         vm.LoadFromExisting(pa);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(pa.Id));
         var dlg = new AddPortAudioOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<PortAudioOutputDefinition?>(owner);
     }
@@ -912,14 +930,16 @@ public partial class OutputManagementViewModel : ViewModelBase
         var editingLine = Outputs.FirstOrDefault(o => o.Definition.Id == lv.Id);
         vm.InitializeCloneParents(GetPotentialCloneParents(editingLine));
         vm.LoadFromExisting(lv);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(lv.Id));
         var dlg = new AddLocalVideoOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<LocalVideoOutputDefinition?>(owner);
     }
 
-    private static async Task<NDIOutputDefinition?> ShowEditNDIAsync(Window owner, NDIOutputDefinition nd)
+    private async Task<NDIOutputDefinition?> ShowEditNDIAsync(Window owner, NDIOutputDefinition nd)
     {
         var vm = new AddNDIOutputDialogViewModel();
         vm.LoadFromExisting(nd);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(nd.Id));
         var dlg = new AddNDIOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<NDIOutputDefinition?>(owner);
     }
@@ -978,6 +998,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
 
         var vm = new AddPortAudioOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
         vm.ReloadHostApis();
         var dlg = new AddPortAudioOutputDialog { DataContext = vm };
         var result = await dlg.ShowDialog<PortAudioOutputDefinition?>(owner);
@@ -1021,6 +1042,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
 
         var vm = new AddLocalVideoOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
         vm.InitializeScreens(owner.Screens.All);
         vm.InitializeCloneParents(GetPotentialCloneParents());
         var dlg = new AddLocalVideoOutputDialog { DataContext = vm };
@@ -1051,6 +1073,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
 
         var vm = new AddNDIOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
         var dlg = new AddNDIOutputDialog { DataContext = vm };
         var result = await dlg.ShowDialog<NDIOutputDefinition?>(owner);
         if (result is null)

@@ -951,6 +951,9 @@
   <data name="ValidationDisplayNameRequired" xml:space="preserve">
     <value>Display name is required.</value>
   </data>
+  <data name="ValidationOutputNameAlreadyExistsFormat" xml:space="preserve">
+    <value>An output named '{0}' already exists. Choose a unique display name.</value>
+  </data>
   <data name="ValidationSelectHostApiAndOutputDevice" xml:space="preserve">
     <value>Select a host API and output device.</value>
   </data>

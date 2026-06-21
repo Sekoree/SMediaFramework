@@ -31,6 +31,7 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
     /// </summary>
     private Guid? _existingId;
     private bool _suppressBackendReload;
+    private IReadOnlyCollection<string> _existingOutputNames = Array.Empty<string>();
 
     [ObservableProperty] private string _displayName = Strings.MainSpeakersDefaultName;
     [ObservableProperty] private string? _validationMessage;
@@ -54,6 +55,14 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
     public string DialogTitle => IsEditing ? Strings.EditPortAudioOutputDialogTitle : Strings.AddPortAudioOutputDialogTitle;
 
     public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
+
+    public void InitializeExistingOutputNames(IEnumerable<string> names)
+    {
+        var set = OutputNameUniqueness.CreateNameSet(names);
+        _existingOutputNames = set;
+        if (!IsEditing)
+            DisplayName = OutputNameUniqueness.MakeUniqueDefaultName(DisplayName, set);
+    }
 
     public void ReloadBackends()
     {
@@ -277,6 +286,12 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
             ValidationMessage = Strings.ValidationDisplayNameRequired;
             return null;
         }
+        var displayName = DisplayName.Trim();
+        if (OutputNameUniqueness.TryFindDuplicate(displayName, _existingOutputNames, out var duplicateName))
+        {
+            ValidationMessage = Strings.Format(nameof(Strings.ValidationOutputNameAlreadyExistsFormat), duplicateName);
+            return null;
+        }
 
         if (SelectedBackend is null || SelectedDevice is null)
         {
@@ -309,7 +324,7 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
 
             return new PortAudioOutputDefinition(
                 _existingId ?? Guid.NewGuid(),
-                DisplayName.Trim(),
+                displayName,
                 SelectedHostApi.Value.Index,
                 SelectedHostApi.Value.Name,
                 portDevice.GlobalDeviceIndex,
@@ -322,7 +337,7 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
 
         return new PortAudioOutputDefinition(
             _existingId ?? Guid.NewGuid(),
-            DisplayName.Trim(),
+            displayName,
             HostApiIndex: -1,
             HostApiName: SelectedBackend.Name,
             GlobalDeviceIndex: -1,
