@@ -1,2 +1,3 @@
 ﻿- NDI Input reliability (dynamically changing inputs/ are resolution and FPS changes handled?).
 - Current output seems to be 2x the media FPS, why?
+- Loading screen to wait for framework init/discover what modules are available?
