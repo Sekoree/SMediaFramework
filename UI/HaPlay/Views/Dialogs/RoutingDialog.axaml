@@ -24,7 +24,7 @@
         <Button Grid.Column="1" Content="{x:Static res:Strings.AddOutputButton}" Padding="10,4">
           <Button.Flyout>
             <MenuFlyout>
-              <MenuItem Header="{x:Static res:Strings.PortAudioOutputMenuHeader}"
+              <MenuItem Header="{x:Static res:Strings.LocalAudioOutputMenuHeader}"
                         Command="{Binding AddPortAudioOutputCommand}" />
               <MenuItem Header="{x:Static res:Strings.LocalVideoOutputMenuHeader}"
                         Command="{Binding AddLocalVideoOutputCommand}" />

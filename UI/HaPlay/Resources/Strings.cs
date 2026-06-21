@@ -544,7 +544,7 @@ public static class Strings
     public static string RoutingSectionTitle => Get(nameof(RoutingSectionTitle));
     public static string RoutingHint => Get(nameof(RoutingHint));
     public static string AddOutputButton => Get(nameof(AddOutputButton));
-    public static string PortAudioOutputMenuHeader => Get(nameof(PortAudioOutputMenuHeader));
+    public static string LocalAudioOutputMenuHeader => Get(nameof(LocalAudioOutputMenuHeader));
     public static string LocalVideoOutputMenuHeader => Get(nameof(LocalVideoOutputMenuHeader));
     public static string NdiOutputMenuHeader => Get(nameof(NdiOutputMenuHeader));
     public static string AudioMatrixSectionTitle => Get(nameof(AudioMatrixSectionTitle));

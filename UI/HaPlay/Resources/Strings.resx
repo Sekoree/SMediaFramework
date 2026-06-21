@@ -1233,8 +1233,8 @@
   <data name="AddOutputButton" xml:space="preserve">
     <value>+ Add output…</value>
   </data>
-  <data name="PortAudioOutputMenuHeader" xml:space="preserve">
-    <value>PortAudio output…</value>
+  <data name="LocalAudioOutputMenuHeader" xml:space="preserve">
+    <value>Local audio output…</value>
   </data>
   <data name="LocalVideoOutputMenuHeader" xml:space="preserve">
     <value>Local video output…</value>
