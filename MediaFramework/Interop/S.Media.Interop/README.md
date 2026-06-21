@@ -3,8 +3,7 @@
 A NativeAOT shared library that exposes the media framework over a flat C ABI
 (`[UnmanagedCallersOnly]`), so it can be driven from C, C++, Rust, Python (ctypes/cffi),
 Go (cgo), etc. Because it ships as a native library, the framework's .NET garbage collector
-runs entirely behind the boundary and never interferes with the host program's memory
-management — the original motivation for this surface.
+runs entirely behind the boundary and never interferes with the host program's memory.
 
 ## Build
 
@@ -22,57 +21,101 @@ dotnet publish MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj \
 | Windows  | `s_media_player.dll` |
 | macOS    | `s_media_player.dylib` |
 
-The native FFmpeg / PortAudio / SDL3 dependencies are copied alongside it.
+Native FFmpeg / PortAudio / SDL3 dependencies are copied alongside it. Confirm the exports with
+`nm -D --defined-only s_media_player.so | grep mfp_`.
 
-The exported symbols can be confirmed with `nm -D --defined-only s_media_player.so | grep mfp_`.
+## Two ways to use it
 
-## ABI
+The full surface is declared in [`include/s_media_player.h`](include/s_media_player.h).
 
-The full surface is declared in [`include/s_media_player.h`](include/s_media_player.h). In short:
+### 1. Batteries-included (quick player)
 
-- `mfp_initialize()` / `mfp_shutdown()` — call once at start / end.
-- `mfp_open_file(path, with_video_window, audio_device_index, &handle)` — open a file; audio
-  device `-1` = default, `-2` = no audio; video window opens an SDL window when the file has video.
-- `mfp_play` / `mfp_pause` / `mfp_seek(handle, ticks)` — transport.
-- `mfp_get_position_ticks` / `mfp_get_duration_ticks` / `mfp_get_state` / `mfp_is_ended` — queries.
-- `mfp_close(handle)` — release the player.
-- `mfp_last_error(buf, len)` — thread-local UTF-8 message for the last failed call.
+`mfp_open_file(path, with_video_window, audio_device_index, &player)` opens a file *and* wires a
+default audio device + optional SDL window in one call. Then `mfp_play` / `mfp_pause` / `mfp_seek` /
+`mfp_close`.
 
-Functions never throw across the boundary: they return `MFP_OK` (0) or a negative `MFP_ERR_*`
-code. Time is in 100-ns ticks (10,000,000 = 1 second).
+### 2. Graph — build your own (like HaPlay)
 
-## Minimal C example
+Open with **no** outputs, then assemble your own pipeline from the framework's building blocks:
+players, routers, output factories, routing, device discovery, events. This is what lets a host
+build a HaPlay-style app in any language.
 
 ```c
 #include "s_media_player.h"
-#include <stdio.h>
-#include <unistd.h>
 
-int main(int argc, char** argv) {
-    if (mfp_initialize() != MFP_OK) { char e[256]; mfp_last_error(e, sizeof e); fprintf(stderr, "%s\n", e); return 1; }
+mfp_initialize();
 
-    mfp_player p = NULL;
-    if (mfp_open_file(argv[1], /*video*/1, MFP_AUDIO_DEFAULT, &p) != MFP_OK) {
-        char e[256]; mfp_last_error(e, sizeof e); fprintf(stderr, "open: %s\n", e); return 1;
-    }
+mfp_player p;
+mfp_player_open_file("clip.mp4", &p);          /* no outputs wired */
 
-    mfp_play(p);
-    while (!mfp_is_ended(p)) {
-        int64_t pos = mfp_get_position_ticks(p), dur = mfp_get_duration_ticks(p);
-        printf("\r%.1f / %.1f s", pos / 1e7, dur / 1e7); fflush(stdout);
-        usleep(200000);
-    }
+/* --- video: route to an SDL window --- */
+mfp_video_router vr = mfp_player_video_router(p);
+char vin[64];  mfp_player_video_input_id(p, vin, sizeof vin);
+mfp_output win; mfp_sdl_window_output_create("Program", 1280, 720, &win);
+char vout[64]; mfp_video_router_add_output(vr, win, vout, sizeof vout);
+mfp_video_router_add_route(vr, vin, vout);
 
-    mfp_close(p);
-    mfp_shutdown();
-    return 0;
+/* --- audio: route to the default PortAudio device --- */
+mfp_audio_router ar = mfp_player_audio_router(p);   /* NULL if the file has no audio */
+char src[64];  mfp_player_audio_source_id(p, src, sizeof src);
+int rate = mfp_audio_router_sample_rate(ar);
+mfp_output dev; mfp_portaudio_output_create(MFP_AUDIO_DEFAULT, rate, 2, &dev);
+char aout[64]; mfp_audio_router_add_output(ar, dev, aout, sizeof aout);
+mfp_audio_router_connect(ar, src, aout, 1.0f);
+
+mfp_play(p);
+/* … run your loop / event callback … */
+
+mfp_close(p);            /* tears down the player + routers (stops feeding the outputs) */
+mfp_output_destroy(win); /* you created these, so you free them — after mfp_close */
+mfp_output_destroy(dev);
+mfp_shutdown();
+```
+
+### Events
+
+Push-based via a C callback:
+
+```c
+void on_event(mfp_player p, int type, int64_t arg, void* user) {
+    if (type == MFP_EVENT_ENDED) { /* play next */ }
+    /* MFP_EVENT_POSITION: arg = ticks; MFP_EVENT_FAULTED: decode fault */
+}
+mfp_player_set_event_callback(p, on_event, /*user_data*/ NULL);
+```
+
+The callback fires on framework threads (clock / decode) — marshal to your own thread and don't call
+transport from inside it.
+
+### Device discovery
+
+```c
+int n = mfp_portaudio_output_device_count();      /* snapshots the list on this thread */
+for (int i = 0; i < n; i++) {
+    int idx, ch; double rate; char name[256];
+    mfp_portaudio_output_device_get(i, &idx, &ch, &rate, name, sizeof name);
+    /* idx is the device_index to pass to mfp_portaudio_output_create */
 }
 ```
 
-Link against the produced library (e.g. `cc demo.c -L. -ls_media_player` or `dlopen` at runtime).
+## Conventions
+
+- `mfp_initialize()` once at start, `mfp_shutdown()` once at end.
+- int-returning functions: `MFP_OK` (0) or negative `MFP_ERR_*`; `mfp_last_error(buf, len)` has the
+  message (thread-local). Nothing throws across the boundary.
+- Time is in 100-ns ticks (10,000,000 = 1 s).
+- **Ownership:** a player owns its decoder + routers (freed by `mfp_close`). Outputs you create with a
+  factory you own — free them with `mfp_output_destroy` *after* closing the player / removing them.
+  Router handles are borrowed (freed with the player).
 
 ## Scope
 
-This first surface covers single-file playback (audio to a PortAudio device, optional SDL video
-window) plus transport and state. It is intentionally small and additive: new entry points can be
-appended without breaking existing callers (state/error enum values are append-only).
+Building blocks only: players, routers, I/O, device discovery, events, metrics. Higher-level
+constructs (cues, soundboards, control mapping) are intentionally left to the host to build on top —
+good candidates for separate addon libraries. Entry points and enum values are append-only.
+
+### Roadmap
+
+- **Foundation** (this layer): graph open, routers + routing, PortAudio/SDL outputs, device discovery, events.
+- **Next:** live inputs (PortAudio capture, NDI receiver), NDI sender + file/encoder (recording) outputs, NDI source discovery.
+- **Then:** compositions (layers, per-output mapping/warp).

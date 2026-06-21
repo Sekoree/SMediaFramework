@@ -188,6 +188,7 @@ the control tier sends triggers into it; the UI visualizes and operates it.
 | `MediaFramework/Media/S.Media.{PortAudio,OpenGL,SDL3,NDI,SkiaSharp,Avalonia}` | Output/source backends (82 production types) | 09 |
 | `MediaFramework/Media/S.Media.Playback` | Product facades (115 production types) | 11 |
 | `MediaFramework/Control/S.Control` | Show-control + Mond scripting (180 production types) | 12 |
+| `MediaFramework/Interop/S.Media.Interop` | NativeAOT C ABI (`mfp_*`) for consuming the framework from other languages | 17 |
 | `MediaFramework/Audio/PALib`, `NDI/NDILib`, `Extras/{MIDI/PMLib,OSC/OSCLib,JackLib}` | Native bindings (199 production types) | 02 |
 | `MediaFramework/Tools/*` | Smoke tools & probes (17 declared helper types plus top-level tools) | 14 |
 | `UI/HaPlay`, `UI/HaPlay.Desktop` | Avalonia app and desktop entry point (344 production types) | 13 |

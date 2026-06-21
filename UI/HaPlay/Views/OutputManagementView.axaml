@@ -71,14 +71,6 @@
                            VerticalAlignment="Center"
                            Fill="{Binding HealthColor}"
                            ToolTip.Tip="{Binding HealthToolTip}" />
-                  <Border IsVisible="{Binding IsNdiRecording}"
-                          Background="#CCB00020"
-                          BorderBrush="#FFDF4A4A"
-                          BorderThickness="1"
-                          CornerRadius="3"
-                          Padding="4,1">
-                    <TextBlock Text="{x:Static res:Strings.RecBadgeLabel}" FontSize="10" FontWeight="SemiBold" Foreground="#FFF5D4D4" />
-                  </Border>
                   <TextBlock Text="{x:Static res:Strings.CloneOutputGlyph}" Opacity="0.6" IsVisible="{Binding IsClone}" />
                   <TextBlock Text="{Binding KindLabel}" Opacity="0.7" FontSize="12" VerticalAlignment="Center"
                              ToolTip.Tip="{Binding KindTechnicalLabel}" />
@@ -119,9 +111,6 @@
 
                   <!-- Actions -->
                   <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Button Content="{Binding NdiRecordingButtonText}"
-                            Command="{Binding ToggleNdiRecordingCommand}"
-                            IsVisible="{Binding IsNdi}" />
                     <Button Content="{x:Static res:Strings.FullscreenPreviewMenuHeader}"
                             Command="{Binding FullscreenPreviewCommand}"
                             IsVisible="{Binding IsLocalVideo}" />

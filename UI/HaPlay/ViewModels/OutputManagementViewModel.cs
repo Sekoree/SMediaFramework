@@ -329,6 +329,80 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// UI remove path: when a player is actively playing through <paramref name="line"/>, warn the operator
+    /// and offer to stop that playback (so removal can't race a live submit and crash) or cancel. Programmatic
+    /// removals (project load, reconfigure) keep calling <see cref="Remove"/> directly and never prompt.
+    /// </summary>
+    public async Task RemoveLineAsync(OutputLineViewModel line, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var owner = TryGetOwnerWindow();
+        if (owner is not null && PlaybackUsageProbe?.Invoke(line) == true)
+        {
+            if (!await ConfirmRemoveInUseAsync(owner, line))
+                return;
+            await StopPlayersUsingLineAsync(line);
+        }
+
+        Remove(line);
+    }
+
+    private async Task StopPlayersUsingLineAsync(OutputLineViewModel line)
+    {
+        foreach (var player in ActivePlayersProbe?.Invoke() ?? [])
+        {
+            if (player.IsActivelyPlayingThroughLine(line) && player.StopCommand.CanExecute(null))
+                await player.StopCommand.ExecuteAsync(null);
+        }
+    }
+
+    private static async Task<bool> ConfirmRemoveInUseAsync(Window owner, OutputLineViewModel line)
+    {
+        var dlg = new Window
+        {
+            Title = Strings.OutputRemoveInUseDialogTitle,
+            Width = 480,
+            Height = 200,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false,
+        };
+
+        var ok = new Button { Content = Strings.OutputRemoveInUseStopButton, IsDefault = true };
+        var cancel = new Button { Content = Strings.CancelButton, IsCancel = true };
+
+        var tcs = new TaskCompletionSource<bool>();
+        ok.Click += (_, _) => { tcs.TrySetResult(true); dlg.Close(); };
+        cancel.Click += (_, _) => { tcs.TrySetResult(false); dlg.Close(); };
+        dlg.Closed += (_, _) => tcs.TrySetResult(false);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Spacing = 8,
+            Margin = new Avalonia.Thickness(0, 16, 0, 0),
+        };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(ok);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+
+        var message = new TextBlock
+        {
+            Text = Strings.Format(nameof(Strings.OutputRemoveInUseDialogMessageFormat), line.Definition.DisplayName),
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+
+        var root = new DockPanel { Margin = new Avalonia.Thickness(16) };
+        root.Children.Add(buttons);
+        root.Children.Add(message);
+        dlg.Content = root;
+
+        await dlg.ShowDialog(owner);
+        return await tcs.Task;
+    }
+
+    /// <summary>
     /// Phase A — replaces every output line with new <see cref="OutputLineViewModel"/>s for the supplied
     /// definitions. Existing runtimes are stopped (matches the manual Remove path); the new lines do
     /// <strong>not</strong> have their runtimes started — Phase B's project-load orchestration is
@@ -721,17 +795,6 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             /* best effort */
         }
-    }
-
-    /// <summary>
-    /// §8.8 UI-side recording control: toggles per-line record intent for NDI outputs.
-    /// Backend recording-output wiring remains a separate framework follow-up.
-    /// </summary>
-    internal void ToggleNdiRecording(OutputLineViewModel line)
-    {
-        if (line.Definition is not NDIOutputDefinition)
-            return;
-        line.IsNdiRecording = !line.IsNdiRecording;
     }
 
     /// <summary>

@@ -479,12 +479,9 @@ public static class Strings
     public static string StopPreviewWindowMenuHeader => Get(nameof(StopPreviewWindowMenuHeader));
     public static string FullscreenPreviewMenuHeader => Get(nameof(FullscreenPreviewMenuHeader));
     public static string WindowedPreviewMenuHeader => Get(nameof(WindowedPreviewMenuHeader));
-    public static string RecBadgeLabel => Get(nameof(RecBadgeLabel));
     public static string EmDash => Get(nameof(EmDash));
     public static string OutputThroughputTooltip => Get(nameof(OutputThroughputTooltip));
     public static string EditButton => Get(nameof(EditButton));
-    public static string RecordButton => Get(nameof(RecordButton));
-    public static string StopRecButton => Get(nameof(StopRecButton));
     public static string OutputHealthyTooltip => Get(nameof(OutputHealthyTooltip));
     public static string OutputWarningTooltip => Get(nameof(OutputWarningTooltip));
     public static string OutputErrorTooltip => Get(nameof(OutputErrorTooltip));
@@ -589,6 +586,9 @@ public static class Strings
     public static string OutputEditInUseDialogTitle => Get(nameof(OutputEditInUseDialogTitle));
     public static string OutputEditInUseApplyButton => Get(nameof(OutputEditInUseApplyButton));
     public static string OutputEditInUseDialogMessageFormat => Get(nameof(OutputEditInUseDialogMessageFormat));
+    public static string OutputRemoveInUseDialogTitle => Get(nameof(OutputRemoveInUseDialogTitle));
+    public static string OutputRemoveInUseStopButton => Get(nameof(OutputRemoveInUseStopButton));
+    public static string OutputRemoveInUseDialogMessageFormat => Get(nameof(OutputRemoveInUseDialogMessageFormat));
     public static string VideoOutputRouteConflictTitle => Get(nameof(VideoOutputRouteConflictTitle));
     public static string VideoOutputRouteConflictRewireButton => Get(nameof(VideoOutputRouteConflictRewireButton));
     public static string VideoOutputRouteConflictMessageFormat => Get(nameof(VideoOutputRouteConflictMessageFormat));

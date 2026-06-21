@@ -40,6 +40,7 @@ and video engines, and the product-facing API. Everything else is reference dept
 | 14 | [Tools & Probes](14-Tools-and-Probes.md) | The smoke tools and diagnostic probes (`VideoPlaybackSmoke`, `TransportSyncProbe`, `CompositorSmoke`, …) and what each verifies. |
 | 15 | [Issues & Improvements](15-Issues-and-Improvements.md) | Honest findings: bugs, smells, refactor/optimization opportunities (including API-breaking ideas), ranked by impact. |
 | 16 | [Type Coverage Appendix](16-Type-Coverage-Appendix.md) | A source-derived inventory of all production classes, records, structs, enums, and interfaces, with chapter ownership links. |
+| 17 | [NativeAOT C-ABI](17-NativeAOT-C-ABI.md) | `S.Media.Interop`: the flat `mfp_*` C API (NativeAOT shared library) for driving the framework from other languages, with the GC isolated behind the boundary. |
 
 ## The 30-second mental model
 
