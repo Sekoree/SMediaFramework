@@ -99,7 +99,8 @@
                           Command="{Binding AddOscListenerCommand}" />
                   <Button Grid.Column="4" Content="Resolve MIDI…"
                           ToolTip.Tip="Pick current ports for ambiguous or missing MIDI devices"
-                          Command="{Binding ResolveMidiDevicesCommand}" />
+                          Command="{Binding ResolveMidiDevicesCommand}"
+                          IsVisible="{Binding IsMidiAvailable}" />
                 </Grid>
                 <ItemsControl DockPanel.Dock="Bottom" ItemsSource="{Binding ProfileWarnings}" Margin="0,8,0,0">
                   <ItemsControl.ItemTemplate>
@@ -200,7 +201,8 @@
                   <Button Content="Export built-ins" Classes="Dense" Command="{Binding ExportBuiltInProfilesCommand}" />
                   <Button Content="Remove project" Classes="Dense" Command="{Binding RemoveSelectedProjectProfileCommand}" />
                 </StackPanel>
-                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="4" Padding="8">
+                <Border BorderBrush="#22808080" BorderThickness="1" CornerRadius="4" Padding="8"
+                        IsVisible="{Binding IsMidiAvailable}">
                   <StackPanel Spacing="6">
                     <TextBlock Text="MIDI profile builder" FontWeight="SemiBold" />
                     <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="6" RowSpacing="6">

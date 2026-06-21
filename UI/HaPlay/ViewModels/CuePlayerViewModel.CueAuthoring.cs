@@ -106,7 +106,7 @@ public partial class CuePlayerViewModel
             : null;
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanAddNdiInputCue))]
     private async Task AddNdiInputCueAsync()
     {
         var owner = TryGetMainWindow();
@@ -126,6 +126,8 @@ public partial class CuePlayerViewModel
             dialogVm.StopDiscovery();
         }
     }
+
+    private bool CanAddNdiInputCue() => IsNdiAvailable;
 
     [RelayCommand]
     private async Task AddPortAudioInputCueAsync()

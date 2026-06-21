@@ -237,19 +237,19 @@ public partial class OutputLineViewModel : ViewModelBase
         _ => Definition.Kind.ToString(),
     };
 
-    public string KindTechnicalLabel => Definition.Kind switch
+    public string KindTechnicalLabel => Definition switch
     {
-        ManagedOutputKind.PortAudio => Strings.OutputKindTechnicalPortAudio,
-        ManagedOutputKind.NDI => Strings.OutputKindTechnicalNdi,
-        ManagedOutputKind.SdlOpenGlVideo => Strings.OutputKindTechnicalSdlOpenGl,
-        ManagedOutputKind.AvaloniaOpenGlVideo => Strings.OutputKindTechnicalAvaloniaOpenGl,
+        PortAudioOutputDefinition p => p.EffectiveAudioBackendName,
+        NDIOutputDefinition => Strings.OutputKindTechnicalNdi,
+        LocalVideoOutputDefinition { Engine: VideoOutputEngine.SdlOpenGl } => Strings.OutputKindTechnicalSdlOpenGl,
+        LocalVideoOutputDefinition => Strings.OutputKindTechnicalAvaloniaOpenGl,
         _ => Definition.Kind.ToString(),
     };
 
     public string Summary => Definition switch
         {
         PortAudioOutputDefinition p =>
-            Strings.Format(nameof(Strings.OutputSummaryPortAudioFormat), p.DeviceName, p.ChannelCount, p.SampleRate, p.HostApiName),
+            Strings.Format(nameof(Strings.OutputSummaryPortAudioFormat), p.DeviceName, p.ChannelCount, p.SampleRate, p.EffectiveAudioBackendName),
         LocalVideoOutputDefinition v =>
             Strings.Format(
                 nameof(Strings.OutputSummaryLocalVideoBaseFormat),

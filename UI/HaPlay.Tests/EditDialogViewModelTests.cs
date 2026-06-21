@@ -229,7 +229,7 @@ public sealed class EditDialogViewModelTests
         vm.LoadFromExisting(existing);
 
         Assert.True(vm.IsEditing);
-        Assert.Equal("Edit PortAudio output", vm.DialogTitle);
+        Assert.Equal("Edit audio output", vm.DialogTitle);
         Assert.Equal("Save", vm.PrimaryButtonLabel);
         Assert.Equal("Stage", vm.DisplayName);
         Assert.Equal(4, vm.ChannelCount);

@@ -125,13 +125,15 @@ internal sealed partial class HaPlayPlaybackSession
 
         _acquiredPortAudioLines.Add(line);
         wiring.AcquiredKind = AcquireKind.PortAudio;
-        wiring.PortAudioOutput = outDev;
-        wiring.PortAudioUnderrunBaseline = outDev.UnderrunSamples;
+        wiring.PortAudioOutput = outDev as PortAudioOutput;
+        wiring.AudioPlaybackStats = outDev as IAudioOutputPlaybackStats;
+        wiring.PortAudioUnderrunBaseline = wiring.AudioPlaybackStats?.UnderrunSamples ?? 0;
 
         if (!TryGetSourceAudioFormat(out var dec))
         {
             _acquiredPortAudioLines.Remove(line);
             wiring.PortAudioOutput = null;
+            wiring.AudioPlaybackStats = null;
             try { _outputs.ReleasePortAudioForPlayback(line); } catch { /* best effort */ }
             errorMessage = "Source audio format is unavailable.";
             return false;
@@ -448,6 +450,7 @@ internal sealed partial class HaPlayPlaybackSession
         public int SinkChannelCount { get; set; }
 
         public PortAudioOutput? PortAudioOutput { get; set; }
+        public IAudioOutputPlaybackStats? AudioPlaybackStats { get; set; }
         public long PortAudioUnderrunBaseline { get; set; }
         public long VideoSubmittedBaseline { get; set; }
         public long VideoDroppedBaseline { get; set; }

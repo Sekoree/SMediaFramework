@@ -17,6 +17,8 @@ namespace HaPlay.ViewModels;
 
 public partial class CuePlayerViewModel : ViewModelBase
 {
+    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+
     private CancellationTokenSource? _transportRunCts;
 
     /// <summary>

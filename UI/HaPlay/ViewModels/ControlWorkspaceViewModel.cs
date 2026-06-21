@@ -91,6 +91,9 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<string> ProfileWarnings { get; } = new();
 
+    public bool IsMidiAvailable => RuntimeModules.IsMidiAvailable;
+    public string MidiUnavailableStatus => RuntimeModules.MidiUnavailableReason ?? "MIDI runtime unavailable.";
+
     [ObservableProperty]
     private string _profileBuilderDisplayName = "Custom MIDI Surface";
 
@@ -2172,12 +2175,14 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     // When a configured MIDI device cannot be confidently matched to a current port (ambiguous or
     // missing), let the user pick the live port and persist that choice into the device binding.
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanResolveMidiDevices))]
     private async Task ResolveMidiDevicesAsync()
     {
         if (await ResolveMidiDevicesCoreAsync(announceWhenResolvedOrEmpty: true).ConfigureAwait(true))
             StatusMessage = "MIDI device bindings resolved." + (IsArmed ? " Re-arm to apply." : string.Empty);
     }
+
+    private bool CanResolveMidiDevices() => IsMidiAvailable;
 
     /// <summary>
     /// Enumerates current MIDI ports, prompts the user to resolve any ambiguous/missing bindings, and writes
@@ -2185,6 +2190,13 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     /// </summary>
     private async Task<bool> ResolveMidiDevicesCoreAsync(bool announceWhenResolvedOrEmpty)
     {
+        if (!IsMidiAvailable)
+        {
+            if (announceWhenResolvedOrEmpty)
+                StatusMessage = MidiUnavailableStatus;
+            return false;
+        }
+
         var catalog = MidiCatalogProvider();
         if (catalog is null)
         {
@@ -2535,6 +2547,12 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
     /// <summary>Sends a single recognizable test CC to the selected MIDI device's output.</summary>
     private async Task TestMidiDeviceAsync(ControlStructureRowViewModel row)
     {
+        if (!IsMidiAvailable)
+        {
+            StatusMessage = MidiUnavailableStatus;
+            return;
+        }
+
         if (row.DeviceInstanceId is not { } deviceId)
             return;
 

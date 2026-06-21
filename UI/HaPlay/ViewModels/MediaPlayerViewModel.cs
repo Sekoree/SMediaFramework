@@ -28,6 +28,8 @@ internal sealed record VideoOutputRouteConflict(
 
 public partial class MediaPlayerViewModel : ViewModelBase
 {
+    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
+
     private readonly OutputManagementViewModel _outputs;
     private readonly Func<MediaPlayerViewModel, Task>? _requestRemove;
     private HaPlayPlaybackSession? _session;

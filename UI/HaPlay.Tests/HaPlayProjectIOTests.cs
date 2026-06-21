@@ -95,6 +95,26 @@ public sealed class HaPlayProjectIOTests
         Assert.Equal("USB Codec", pa.DeviceName);
         Assert.Equal(4, pa.ChannelCount);
         Assert.Equal(96000, pa.SampleRate);
+        Assert.Equal(PortAudioOutputDefinition.PortAudioBackendName, pa.EffectiveAudioBackendName);
+        Assert.Equal("7", pa.EffectiveAudioBackendDeviceId);
+    }
+
+    [Fact]
+    public void RoundTrip_AudioOutput_PreservesBackendSelection()
+    {
+        var id = Guid.NewGuid();
+        var def = new PortAudioOutputDefinition(
+            id, "Main Speakers", HostApiIndex: -1, "miniaudio", GlobalDeviceIndex: -1, "USB Codec",
+            ChannelCount: 4, SampleRate: 96000,
+            AudioBackendName: "miniaudio",
+            AudioBackendDeviceId: "ma-device");
+
+        var project = new HaPlayProject { Outputs = { def } };
+        var roundTripped = ProjectIO.Deserialize(ProjectIO.Serialize(project));
+
+        var pa = Assert.IsType<PortAudioOutputDefinition>(Assert.Single(roundTripped.Outputs));
+        Assert.Equal("miniaudio", pa.EffectiveAudioBackendName);
+        Assert.Equal("ma-device", pa.EffectiveAudioBackendDeviceId);
     }
 
     [Fact]

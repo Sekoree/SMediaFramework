@@ -13,6 +13,7 @@ using HaPlay.Resources;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
@@ -25,6 +26,8 @@ public partial class OutputManagementViewModel : ViewModelBase
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.ViewModels.OutputManagementViewModel");
 
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
+
+    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
 
     private volatile IReadOnlyList<OutputDefinition> _definitionsSnapshot = Array.Empty<OutputDefinition>();
 
@@ -748,12 +751,12 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Returns the persistent <see cref="PortAudioOutput"/> for the line so a playback session can route
-    /// audio into the already-open stream. Returns <c>null</c> if the line isn't PortAudio, the runtime
+    /// Returns the persistent audio output for the line so a playback session can route audio into the
+    /// already-open stream. Returns <c>null</c> if the line isn't an audio output, the runtime
     /// isn't started yet, or another session already holds it. Callers MUST pair every successful acquire
     /// with <see cref="ReleasePortAudioForPlayback"/>.
     /// </summary>
-    internal PortAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line, bool liveMonitoring = false)
+    internal IAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line, bool liveMonitoring = false)
     {
         PortAudioOutputRuntime? rt;
         lock (_portAudioOutputsGate)
@@ -1039,7 +1042,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanAddNDI))]
     private async Task AddNDIAsync(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
@@ -1077,6 +1080,8 @@ public partial class OutputManagementViewModel : ViewModelBase
                 result.DisplayName, result.SourceName, result.StreamMode);
         }
     }
+
+    private bool CanAddNDI() => IsNdiAvailable;
 
     [RelayCommand]
     private void ClearHealth()

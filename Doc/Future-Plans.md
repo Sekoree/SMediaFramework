@@ -34,6 +34,21 @@ output factories. Focused validation passed:
 `dotnet publish MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj -c Release -r linux-x64 -p:PublishAot=true -v:m`.
 `nm` shows the new `mfp_ndi_*` and `mfp_player_open_live_ndi` exports.
 
+Validation update 2026-06-21: HaPlay audio outputs are now backend-selectable instead of PortAudio-only.
+The Add/Edit output dialog is labelled as an audio-output dialog with a backend picker; existing PortAudio
+project entries still deserialize through the old `portAudio` discriminator, while new entries persist
+`AudioBackendName` / `AudioBackendDeviceId` and the persistent runtime opens non-PortAudio outputs through
+`IAudioBackend`. Focused validation passed:
+`dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m` and
+`dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
+
+Validation update 2026-06-21: implemented HaPlay runtime-module gating for optional NDI and MIDI native
+runtimes. `RuntimeModules` caches guarded probes, Add-NDI output/input commands and menu entries are hidden
+when NDI is unavailable, and MIDI endpoint/catalog tabs and commands are hidden/disabled when PortMidi cannot
+initialize, including the Control workspace live MIDI resolver/profile-builder surfaces. Focused validation passed:
+`dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m` and
+`dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
+
 ## Quick wins (UI text / cleanup)
 
 - **[DONE]** In HaPlay the quick buttons to fullscreen/window a window had the "preview" suffix — removed
@@ -114,13 +129,12 @@ output factories. Focused validation passed:
     runtime probes. NDI remains lazy: `mfp_initialize` does not require the NDI runtime to be installed, and
     NDI-specific calls report errors through `mfp_last_error` when the native runtime cannot be loaded.
   - **Remaining (building blocks only — high-level cue/soundboard/control engines are intentionally left to
-    host apps / possible future addon libraries):** file/encoder (recording) output factories, a generic
-    non-NDI live video input handle path, and compositions
+    host apps / possible future addon libraries):** a generic non-NDI live video input handle path and compositions
     (`ClipCompositionRuntime` layers + per-output mapping/warp).
+    File/encoder recording output factories were dropped from the remaining scope: HaPlay no longer needs the
+    old NDI recording path, and recording factories are not part of the current interop goal.
 
-- **Properly modularize the framework** — make parts non-strictly-required. **Assessment + plan** (the
-  framework half is largely already done; the HaPlay half needs the running app to verify, so it is planned
-  here rather than shipped blind):
+- **Properly modularize the framework** — make parts non-strictly-required. **Assessment + implementation:**
   - *Framework level — already modular.* The framework is split into independent projects
     (`S.Media.Core`, `S.Media.FFmpeg`, `S.Media.PortAudio`, `S.Media.NDI`, `S.Media.SDL3`, `S.Media.Effects`,
     `S.Control` + `PMLib`/`OSCLib`, plus the new `S.Media.Interop`). A consumer references only what it needs:
@@ -128,18 +142,13 @@ output factories. Focused validation passed:
     enables NDI output; etc. Native runtimes are loaded lazily (`NDILibraryResolver`, `PMLib.Native`,
     `FFmpegRuntime`), so a managed reference that's never exercised won't fault on a machine missing that
     native lib. So "parts aren't strictly required" already holds for downstream consumers.
-  - *HaPlay level — reflect missing native runtimes (the remaining work).* HaPlay references everything, so
-    it must detect at runtime whether each native runtime is actually present and hide the corresponding UI:
-    - NDI: probe with a guarded `NDILib.NDIRuntime.IsSupportedCpu()` / `Version` (throws/false when the NDI
-      runtime isn't installed). Gate the Add-NDI-output / Add-NDI-input commands + the NDI output/input
-      dialogs + any NDI device discovery.
-    - MIDI: probe with a guarded `PMLib.PMUtil.Initialize()` / `CountDevices()` (throws when portmidi is
-      missing). Gate the Add-MIDI-endpoint command and the MIDI device pickers in the Control workspace.
-    - Suggested implementation: a small `RuntimeModules` helper in HaPlay caching `IsNdiAvailable` /
-      `IsMidiAvailable` (each = `try { <native probe>; true } catch { false }`), bound to `CanExecute` /
-      `IsVisible` on the relevant commands/menus. Deferred from this pass because correct gating spans
-      several UI surfaces and needs the app run with/without each native runtime to verify nothing useful is
-      hidden (a false-negative probe would wrongly disable a working feature).
+  - **[DONE]** *HaPlay level — reflect missing native runtimes.* `RuntimeModules` caches guarded
+    `IsNdiAvailable` / `IsMidiAvailable` probes. Add-NDI output/input commands and menu entries are
+    hidden/disabled when the NDI runtime cannot initialize; MIDI endpoint/catalog tabs, commands, and the
+    Control workspace live MIDI resolver/profile-builder controls are hidden/disabled when PortMidi cannot
+    initialize. Existing project content still loads; the gate only removes creation/discovery surfaces that
+    would otherwise fail immediately. Hardware validation with NDI/PortMidi intentionally remains a
+    machine-local check.
 
 - **Adopt the miniaudio library** as an audio backend (source + headers in `Reference/miniaudio-0.11.25`).
   **The right shape is a backend-agnostic interface, NOT a miniaudio-emulates-PortAudio shim.** miniaudio
@@ -176,7 +185,9 @@ output factories. Focused validation passed:
     `mfp_audio_input_create(backend, deviceId, ...)`, and `mfp_player_open_live_audio(...)` entry points,
     declared in the public header while keeping the legacy PortAudio factory for compatibility. NativeAOT
     publish copies the miniaudio sidecar next to `s_media_player.so`.
+  - **[DONE]** HaPlay output selection is backend-aware: the Add/Edit dialog now says "audio output", shows a
+    backend picker, persists `AudioBackendName` / `AudioBackendDeviceId`, and the persistent audio runtime
+    opens non-PortAudio outputs through `IAudioBackend`. Existing PortAudio project files remain compatible.
   - **Remaining:** real hardware validation for callback timing, ring sizing, underrun/flush, and device-clock
-    `ElapsedSinceStart` (`PlaybackSmoke` + HaPlay deck); HaPlay still remains PortAudio-shaped and must drop
-    "Add PortAudio" → "Add Audio Output" with a backend picker (persisted on the output definition) after the
-    persistent output runtime has a backend-neutral queue/latency/stats capability surface.
+    `ElapsedSinceStart` (`PlaybackSmoke` + HaPlay deck). PortAudio-only queue tuning remains guarded to
+    PortAudio until a backend-neutral queue/latency control surface is introduced.

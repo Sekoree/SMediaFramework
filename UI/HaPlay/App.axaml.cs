@@ -10,8 +10,11 @@ using Avalonia.Markup.Xaml;
 using HaPlay.ViewModels;
 using HaPlay.Views;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg;
+using S.Media.MiniAudio;
+using S.Media.PortAudio;
 
 namespace HaPlay;
 
@@ -62,7 +65,7 @@ public partial class App : Application
     }
 
     /// <summary>
-    /// Registers the FFmpeg framework plugins once at startup so file/stream source factories and the
+    /// Registers framework plugins once at startup so file/stream source factories, audio backends, and the
     /// adaptive-rate output wrapper are wired on <see cref="MediaFrameworkPlugins"/>. The wrapper backs
     /// <see cref="S.Media.Core.Audio.AudioRouter.EnableAdaptiveRateOnNonMasterOutputs"/> (multi-output
     /// drift correction); without this call that method throws. Idempotent and best-effort — a failure
@@ -71,15 +74,34 @@ public partial class App : Application
     private static void InitializeMediaFramework()
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "App.InitializeMediaFramework", slowWarningMs: 1000);
+        var builder = MediaFrameworkRuntime.Init();
         try
         {
-            MediaFrameworkRuntime.Init().UseFFmpeg();
-            timing?.SetOutcome("ffmpeg-registered");
+            builder.UseFFmpeg();
         }
         catch (System.Exception ex)
         {
             Trace.LogWarning(ex, "HaPlay media framework init failed during UseFFmpeg; continuing with degraded plugin availability");
-            timing?.SetOutcome("ffmpeg-registration-failed");
         }
+
+        try
+        {
+            builder.UsePortAudio();
+        }
+        catch (System.Exception ex)
+        {
+            Trace.LogWarning(ex, "HaPlay media framework init failed during UsePortAudio; PortAudio devices will be unavailable");
+        }
+
+        try
+        {
+            builder.UseMiniAudio();
+        }
+        catch (System.Exception ex)
+        {
+            Trace.LogWarning(ex, "HaPlay media framework init failed during UseMiniAudio; miniaudio devices will be unavailable");
+        }
+
+        timing?.SetOutcome($"audio-backends={string.Join(",", AudioBackends.All.Select(b => b.Name))}");
     }
 }

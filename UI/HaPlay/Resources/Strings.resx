@@ -711,6 +711,9 @@
   <data name="DisplayNameLabel" xml:space="preserve">
     <value>Display name</value>
   </data>
+  <data name="AudioBackendLabel" xml:space="preserve">
+    <value>Audio backend</value>
+  </data>
   <data name="HostApiLabel" xml:space="preserve">
     <value>Host API</value>
   </data>
@@ -835,10 +838,10 @@
     <value>args</value>
   </data>
   <data name="AddPortAudioOutputDialogTitle" xml:space="preserve">
-    <value>Add PortAudio output</value>
+    <value>Add audio output</value>
   </data>
   <data name="EditPortAudioOutputDialogTitle" xml:space="preserve">
-    <value>Edit PortAudio output</value>
+    <value>Edit audio output</value>
   </data>
   <data name="AddPortAudioInputDialogTitle" xml:space="preserve">
     <value>Add PortAudio input</value>
@@ -1009,13 +1012,13 @@
     <value>Configured audio / video destinations. Right-click a local-video row for preview controls.</value>
   </data>
   <data name="NoOutputsEmptyHint" xml:space="preserve">
-    <value>No outputs yet. Add a local video, PortAudio, or NDI output to make routing targets available.</value>
+    <value>No outputs yet. Add a local video, audio, or NDI output to make routing targets available.</value>
   </data>
   <data name="AdvancedRoutingHeader" xml:space="preserve">
     <value>Advanced routing</value>
   </data>
   <data name="AddPortAudioButton" xml:space="preserve">
-    <value>Add PortAudio…</value>
+    <value>Add audio…</value>
   </data>
   <data name="AddLocalVideoButton" xml:space="preserve">
     <value>Add local video…</value>
@@ -1759,7 +1762,7 @@
     <value>Avalonia OpenGL</value>
   </data>
   <data name="OutputSummaryPortAudioFormat" xml:space="preserve">
-    <value>{0} · {1} ch @ {2} Hz · API {3}</value>
+    <value>{0} · {1} ch @ {2} Hz · {3}</value>
   </data>
   <data name="OutputSummaryLocalVideoBaseFormat" xml:space="preserve">
     <value>{0} · {1} · screen {2}</value>

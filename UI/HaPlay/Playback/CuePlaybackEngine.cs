@@ -1866,7 +1866,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 var pa = outputs.TryAcquirePortAudioForPlayback(line)
                     ?? throw new InvalidOperationException(
                         $"PortAudio output '{line.Definition.DisplayName}' couldn't be acquired (preview not running or held).");
-                return (pa, pa, () => outputs.ReleasePortAudioForPlayback(line));
+                return (pa, pa as IPlaybackClock, () => outputs.ReleasePortAudioForPlayback(line));
             }
             case NDIOutputDefinition { StreamMode: not NDIOutputStreamMode.VideoOnly } nd:
             {

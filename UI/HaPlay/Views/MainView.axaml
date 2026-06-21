@@ -186,7 +186,8 @@
         <TabItem Header="{x:Static res:Strings.OutputsHeader}">
           <views:OutputManagementView DataContext="{Binding OutputManagement}" />
         </TabItem>
-        <TabItem Header="{x:Static res:Strings.MidiHeader}">
+        <TabItem Header="{x:Static res:Strings.MidiHeader}"
+                 IsVisible="{Binding IsMidiAvailable}">
           <views:MidiDevicesView />
         </TabItem>
         <TabItem Header="{x:Static res:Strings.IoTabOsc}">

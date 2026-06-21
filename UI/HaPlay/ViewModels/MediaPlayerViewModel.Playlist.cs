@@ -232,7 +232,7 @@ public partial class MediaPlayerViewModel
     /// <see cref="NDIInputPlaylistItem"/>. The discovery list + manual-name path land alongside the
     /// dialog VM in task #3; until then the menu entry surfaces a banner so users know the data
     /// model is ready but the dialog isn't wired yet.</summary>
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanAddNDIInput))]
     private async Task AddNDIInputAsync()
     {
         var top = TryGetMainWindow();
@@ -254,6 +254,8 @@ public partial class MediaPlayerViewModel
             dialogVm.StopDiscovery();
         }
     }
+
+    private bool CanAddNDIInput() => IsNdiAvailable;
 
     /// <summary>§8.5 quick-play — load and play the first dropped file without mutating the playlist.</summary>
     public async Task QuickPlayDroppedFilesAsync(IEnumerable<string> paths)

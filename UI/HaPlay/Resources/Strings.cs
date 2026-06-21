@@ -359,6 +359,7 @@ public static class Strings
     public static string RebindMissingActionEndpointsDescription => Get(nameof(RebindMissingActionEndpointsDescription));
 
     public static string DisplayNameLabel => Get(nameof(DisplayNameLabel));
+    public static string AudioBackendLabel => Get(nameof(AudioBackendLabel));
     public static string HostApiLabel => Get(nameof(HostApiLabel));
     public static string OutputDeviceLabel => Get(nameof(OutputDeviceLabel));
     public static string InputDeviceLabel => Get(nameof(InputDeviceLabel));

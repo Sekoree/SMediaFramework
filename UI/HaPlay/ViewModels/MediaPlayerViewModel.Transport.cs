@@ -108,8 +108,10 @@ public partial class MediaPlayerViewModel
     [RelayCommand]
     private Task AddLocalVideoOutputAsync() => AddOutputAndSelectAsync(() => _outputs.AddLocalVideoCommand.ExecuteAsync(null));
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanAddNDIOutput))]
     private Task AddNDIOutputAsync() => AddOutputAndSelectAsync(() => _outputs.AddNDICommand.ExecuteAsync(null));
+
+    private bool CanAddNDIOutput() => IsNdiAvailable;
 
     private async Task AddOutputAndSelectAsync(Func<Task> addOutputAsync)
     {

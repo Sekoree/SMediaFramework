@@ -29,7 +29,8 @@
               <MenuItem Header="{x:Static res:Strings.LocalVideoOutputMenuHeader}"
                         Command="{Binding AddLocalVideoOutputCommand}" />
               <MenuItem Header="{x:Static res:Strings.NdiOutputMenuHeader}"
-                        Command="{Binding AddNDIOutputCommand}" />
+                        Command="{Binding AddNDIOutputCommand}"
+                        IsVisible="{Binding IsNdiAvailable}" />
             </MenuFlyout>
           </Button.Flyout>
         </Button>

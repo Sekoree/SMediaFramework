@@ -361,7 +361,8 @@
                                 <MenuItem Header="{x:Static res:Strings.PortAudioInputMenuHeader}"
                                           Command="{Binding AddPortAudioInputCommand}" />
                                 <MenuItem Header="{x:Static res:Strings.NdiInputMenuHeader}"
-                                          Command="{Binding AddNDIInputCommand}" />
+                                          Command="{Binding AddNDIInputCommand}"
+                                          IsVisible="{Binding IsNdiAvailable}" />
                             </MenuFlyout>
                         </Button.Flyout>
                     </Button>

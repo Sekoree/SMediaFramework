@@ -236,10 +236,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
 
     internal long GetPortAudioUnderrunDelta(OutputLineViewModel line)
     {
-        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.PortAudioOutput is not { } pa)
+        if (!_lineWiring.TryGetValue(line, out var wiring) || wiring.AudioPlaybackStats is not { } stats)
             return 0;
 
-        return Math.Max(0, pa.UnderrunSamples - wiring.PortAudioUnderrunBaseline);
+        return Math.Max(0, stats.UnderrunSamples - wiring.PortAudioUnderrunBaseline);
     }
 
     internal bool TryGetVideoHealthMetrics(OutputLineViewModel line, out VideoOutputPumpMetrics metrics)
@@ -1307,9 +1307,10 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                     }
                     playback._acquiredPortAudioLines.Add(line);
 
+                    PortAudioOutput? portAudioOutput = outDev as PortAudioOutput;
                     int? previousTargetQueue = null;
                     PortAudioOutput? targetQueueOwner = null;
-                    if (playback.IsLive)
+                    if (playback.IsLive && portAudioOutput is not null)
                     {
                         // Live sources (NDI / PortAudio capture) hand the router exactly as many samples as
                         // arrive in real time. The default `TargetQueueSamples` (half the PortAudio ring,
@@ -1319,12 +1320,12 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                         // Cap live sessions to a small ring so the router paces against the hardware drain
                         // from chunk #1. Restored on unwire so file sessions still see the full target.
                         const int liveTargetFrames = 480 * 4; // ~40 ms @ 48 kHz, scales linearly at other rates
-                        var capped = Math.Min(outDev.TargetQueueSamples, liveTargetFrames);
-                        if (capped < outDev.TargetQueueSamples)
+                        var capped = Math.Min(portAudioOutput.TargetQueueSamples, liveTargetFrames);
+                        if (capped < portAudioOutput.TargetQueueSamples)
                         {
-                            previousTargetQueue = outDev.TargetQueueSamples;
-                            targetQueueOwner = outDev;
-                            outDev.TargetQueueSamples = capped;
+                            previousTargetQueue = portAudioOutput.TargetQueueSamples;
+                            targetQueueOwner = portAudioOutput;
+                            portAudioOutput.TargetQueueSamples = capped;
                             Trace.LogDebug("WireAudio (live): PortAudio '{Name}' TargetQueueSamples {Prev} → {New}",
                                 pa.DisplayName, previousTargetQueue, capped);
                         }
@@ -1355,18 +1356,19 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                     wiring.SinkChannelCount = sinkChannels;
                     wiring.Resampler = routerSink is ResamplingAudioOutput ? (ResamplingAudioOutput)routerSink : wiring.Resampler;
                     wiring.AcquiredKind = AcquireKind.PortAudio;
-                    wiring.PortAudioOutput = outDev;
-                    wiring.PortAudioUnderrunBaseline = outDev.UnderrunSamples;
+                    wiring.PortAudioOutput = portAudioOutput;
+                    wiring.AudioPlaybackStats = outDev as IAudioOutputPlaybackStats;
+                    wiring.PortAudioUnderrunBaseline = wiring.AudioPlaybackStats?.UnderrunSamples ?? 0;
                     wiring.PortAudioForTargetRestore = targetQueueOwner;
                     wiring.PreviousPortAudioTargetQueue = previousTargetQueue;
                     // A/V sync fallback: if this output could not become the media-clock master (for example
                     // a non-clocked wrapper), the clock is wall-time and video can lead the queued audio.
                     // When PortAudio is the actual master, do not also subtract the ring target here.
-                    if (player.HasContainerDecoder && outDev.Format.SampleRate > 0)
+                    if (player.HasContainerDecoder && portAudioOutput is not null && outDev.Format.SampleRate > 0)
                     {
                         player.Video.PlayheadOffset =
                             player.AudioClock?.Master is null
-                                ? TimeSpan.FromSeconds(outDev.TargetQueueSamples / (double)outDev.Format.SampleRate)
+                                ? TimeSpan.FromSeconds(portAudioOutput.TargetQueueSamples / (double)outDev.Format.SampleRate)
                                 : TimeSpan.Zero;
                     }
                     break;
@@ -1780,8 +1782,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     {
         foreach (var wiring in _lineWiring.Values)
         {
-            if (wiring.PortAudioOutput is { } pa)
-                wiring.PortAudioUnderrunBaseline = pa.UnderrunSamples;
+            if (wiring.AudioPlaybackStats is { } stats)
+                wiring.PortAudioUnderrunBaseline = stats.UnderrunSamples;
         }
     }
 
@@ -1802,8 +1804,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             wiring.AudioDroppedBaseline = st.Dropped;
         }
 
-        if (wiring.PortAudioOutput is { } pa)
-            wiring.PortAudioUnderrunBaseline = pa.UnderrunSamples;
+        if (wiring.AudioPlaybackStats is { } stats)
+            wiring.PortAudioUnderrunBaseline = stats.UnderrunSamples;
     }
 
     /// <summary>

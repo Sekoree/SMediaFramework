@@ -165,7 +165,7 @@ internal sealed class PlaybackThroughputDiagnostics
             var dUnder = paUnder - prevUnder;
             _prevPortAudioUnderruns[line.Definition.Id] = paUnder;
             if (dUnder > 0)
-                sb.Append(" | portAudio '").Append(name).Append("' underrun +").Append(dUnder);
+                sb.Append(" | audioDevice '").Append(name).Append("' underrun +").Append(dUnder);
 
             if (session.TryGetPortAudioOutput(line, out var portAudio))
             {

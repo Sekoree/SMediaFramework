@@ -7,10 +7,10 @@ using S.Media.PortAudio;
 namespace HaPlay.OutputPreview;
 
 /// <summary>
-/// Owns one <see cref="PortAudioOutput"/> for the lifetime of a PortAudio <see cref="OutputDefinition"/>
-/// line. The stream is opened once (at the line's declared sample rate / channel count) and stays open
+/// Owns one persistent audio output for the lifetime of an audio <see cref="OutputDefinition"/> line.
+/// The device is opened once (at the line's declared sample rate / channel count) and stays open
 /// across playback sessions — receivers don't see Pa_OpenStream cost on every track change, and the
-/// PA callback keeps draining silence between sessions so ALSA/PulseAudio doesn't release the device.
+/// device callback keeps draining silence between sessions so the OS doesn't release the device.
 /// Sessions acquire the output via <see cref="AcquireForPlayback"/> and release it on Dispose; the
 /// stream is only closed when the line is removed.
 /// </summary>
@@ -18,7 +18,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
 {
     private PortAudioOutputDefinition _definition;
     private readonly Lock _gate = new();
-    private PortAudioOutput? _output;
+    private IAudioOutput? _output;
     private int _holders;
     private bool _disposed;
 
@@ -37,14 +37,14 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     public AudioFormat Format => new(Definition.SampleRate, Definition.ChannelCount);
 
     /// <summary>
-    /// Raised after <see cref="ReconfigureAsync"/> swaps the underlying <see cref="PortAudioOutput"/>.
+    /// Raised after <see cref="ReconfigureAsync"/> swaps the underlying audio output.
     /// Any prior reference handed out by <see cref="AcquireForPlayback"/> is now stale; subscribers
     /// (i.e. an in-flight <c>HaPlayPlaybackSession</c>) should release + re-acquire to pick up the new
     /// stream. Phase A wires the event but does not orchestrate the re-acquire — that's Phase B's job.
     /// </summary>
     public event EventHandler? Reconfigured;
 
-    /// <summary>Opens and starts the underlying <see cref="PortAudioOutput"/>. Call once per runtime.</summary>
+    /// <summary>Opens and starts the underlying audio output. Call once per runtime.</summary>
     public void Start()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -53,32 +53,24 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             if (_output is not null)
                 return;
             var output = CreateOutput(_definition, out var resolvedDefinition);
-            try
-            {
-                output.Start();
-            }
-            catch
-            {
-                output.Dispose();
-                throw;
-            }
 
             _definition = resolvedDefinition;
             _output = output;
         }
-        Trace.LogInformation("Start: '{Name}' device={Device} rate={Rate}Hz channels={Ch}",
-            _definition.DisplayName, _definition.GlobalDeviceIndex, _definition.SampleRate, _definition.ChannelCount);
+        Trace.LogInformation("Start: '{Name}' backend={Backend} device={Device} rate={Rate}Hz channels={Ch}",
+            _definition.DisplayName, _definition.EffectiveAudioBackendName, _definition.DeviceName,
+            _definition.SampleRate, _definition.ChannelCount);
     }
 
     /// <summary>
-    /// Returns the persistent <see cref="PortAudioOutput"/> for use as an audio output. Returns <c>null</c>
+    /// Returns the persistent audio output for use as an audio output. Returns <c>null</c>
     /// when the runtime is disposed / never started, or when another acquirer already holds it. The ring
     /// buffer is flushed so the next Submit plays cleanly. Pair every acquire with <see cref="ReleaseFromPlayback"/>.
     /// </summary>
-    public PortAudioOutput? AcquireForPlayback(bool liveMonitoring = false) =>
+    public IAudioOutput? AcquireForPlayback(bool liveMonitoring = false) =>
         AcquireForPlaybackCore(liveMonitoring);
 
-    private PortAudioOutput? AcquireForPlaybackCore(bool liveMonitoring)
+    private IAudioOutput? AcquireForPlaybackCore(bool liveMonitoring)
     {
         lock (_gate)
         {
@@ -97,11 +89,14 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             if (liveMonitoring)
             {
                 EnsureLiveSizedOutputLocked();
-                PortAudioLiveMonitoring.ApplyTo(_output, _definition.SampleRate);
+                if (_output is PortAudioOutput portAudio)
+                    PortAudioLiveMonitoring.ApplyTo(portAudio, _definition.SampleRate);
+                else
+                    FlushIfSupported(_output);
             }
             else
             {
-                try { _output.Flush(); }
+                try { FlushIfSupported(_output); }
                 catch (Exception ex) { Trace.LogError(ex, $"PortAudioOutputRuntime '{_definition.DisplayName}' Acquire.Flush"); }
             }
 
@@ -115,30 +110,39 @@ internal sealed class PortAudioOutputRuntime : IDisposable
     /// </summary>
     private void EnsureLiveSizedOutputLocked()
     {
-        if (_output is null)
+        if (_output is not PortAudioOutput portAudio)
             return;
 
         var liveCap = PortAudioLiveMonitoring.RingCapacityFrames(_definition.SampleRate);
-        if (_output.CapacitySamples <= liveCap * 2)
+        if (portAudio.CapacitySamples <= liveCap * 2)
             return;
 
         Trace.LogInformation(
             "EnsureLiveSizedOutput: '{Name}' reopening stream (capacity={Cap} liveCap={LiveCap})",
-            _definition.DisplayName, _output.CapacitySamples, liveCap);
+            _definition.DisplayName, portAudio.CapacitySamples, liveCap);
 
-        try { _output.Stop(); }
+        try { portAudio.Stop(); }
         catch (Exception ex) { Trace.LogWarning(ex, "EnsureLiveSizedOutput Stop"); }
 
-        try { _output.Dispose(); }
+        try { portAudio.Dispose(); }
         catch (Exception ex) { Trace.LogWarning(ex, "EnsureLiveSizedOutput Dispose"); }
 
         var output = CreateOutput(_definition, out var resolvedDefinition);
-        output.Start();
         _definition = resolvedDefinition;
         _output = output;
     }
 
-    private PortAudioOutput CreateOutput(
+    private IAudioOutput CreateOutput(
+        PortAudioOutputDefinition definition,
+        out PortAudioOutputDefinition resolvedDefinition)
+    {
+        if (definition.UsesPortAudioBackend)
+            return CreatePortAudioOutput(definition, out resolvedDefinition);
+
+        return CreateBackendOutput(definition, out resolvedDefinition);
+    }
+
+    private PortAudioOutput CreatePortAudioOutput(
         PortAudioOutputDefinition definition,
         out PortAudioOutputDefinition resolvedDefinition)
     {
@@ -165,7 +169,93 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             framesPerBuffer: 480,
             ringCapacityFrames: PortAudioLiveMonitoring.RingCapacityFrames(resolvedDefinition.SampleRate));
         output.TargetQueueSamples = PortAudioLiveMonitoring.TargetQueueSamples(resolvedDefinition.SampleRate);
-        return output;
+        try
+        {
+            output.Start();
+            return output;
+        }
+        catch
+        {
+            output.Dispose();
+            throw;
+        }
+    }
+
+    private IAudioOutput CreateBackendOutput(
+        PortAudioOutputDefinition definition,
+        out PortAudioOutputDefinition resolvedDefinition)
+    {
+        var backendName = definition.EffectiveAudioBackendName;
+        if (!AudioBackends.TryGet(backendName, out var backend))
+            throw new InvalidOperationException(
+                $"audio backend '{backendName}' is not registered; available: {FormatBackendNames()}");
+
+        var deviceId = definition.EffectiveAudioBackendDeviceId;
+        var useDefaultDevice = string.IsNullOrWhiteSpace(deviceId);
+        var deviceName = string.IsNullOrWhiteSpace(definition.DeviceName) ? "System default" : definition.DeviceName;
+        try
+        {
+            var devices = backend.EnumerateOutputDevices();
+            var matched = MatchBackendDevice(devices, deviceId, definition.DeviceName);
+            if (matched is not null)
+            {
+                if (!useDefaultDevice)
+                    deviceId = matched.Id;
+                deviceName = matched.Name;
+            }
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "CreateBackendOutput: '{Name}' failed to enumerate {Backend} devices; using saved device id",
+                definition.DisplayName, backend.Name);
+        }
+
+        resolvedDefinition = definition with
+        {
+            HostApiIndex = -1,
+            HostApiName = backend.Name,
+            GlobalDeviceIndex = -1,
+            DeviceName = deviceName,
+            AudioBackendName = backend.Name,
+            AudioBackendDeviceId = useDefaultDevice ? null : deviceId,
+        };
+
+        var options = new AudioBackendOptions(
+            SuggestedLatencySeconds: null,
+            FramesPerBuffer: 480,
+            RingCapacityFrames: PortAudioLiveMonitoring.RingCapacityFrames(resolvedDefinition.SampleRate));
+
+        return backend.CreateOutput(deviceId, new AudioFormat(resolvedDefinition.SampleRate, resolvedDefinition.ChannelCount), options);
+    }
+
+    private static AudioDeviceInfo? MatchBackendDevice(
+        IReadOnlyList<AudioDeviceInfo> devices,
+        string? deviceId,
+        string? savedDeviceName)
+    {
+        if (!string.IsNullOrWhiteSpace(deviceId))
+        {
+            var byId = devices.FirstOrDefault(d =>
+                string.Equals(d.Id, deviceId, StringComparison.OrdinalIgnoreCase));
+            if (byId is not null)
+                return byId;
+        }
+
+        if (!string.IsNullOrWhiteSpace(savedDeviceName))
+        {
+            var byName = devices.FirstOrDefault(d =>
+                string.Equals(d.Name, savedDeviceName.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (byName is not null)
+                return byName;
+        }
+
+        return devices.FirstOrDefault(d => d.IsDefault);
+    }
+
+    private static string FormatBackendNames()
+    {
+        var names = AudioBackends.All.Select(b => b.Name).ToArray();
+        return names.Length == 0 ? "(none)" : string.Join(", ", names);
     }
 
     internal static PortAudioOutputDefinition ResolveCurrentOutputDevice(
@@ -254,20 +344,20 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             Interlocked.Exchange(ref _holders, 0);
             if (_disposed || _output is null)
                 return;
-            try { _output.Flush(); }
+            try { FlushIfSupported(_output); }
             catch { /* best effort */ }
         }
     }
 
     /// <summary>
-    /// Phase A foundations (§9.6) — swaps the underlying <see cref="PortAudioOutput"/> for one opened at
+    /// Phase A foundations (§9.6) — swaps the underlying audio output for one opened at
     /// <paramref name="newDefinition"/>'s sample rate / channel count / device. Hot semantics per §3.6:
     /// no policy enforcement here, callers see a brief silence/glitch window and react to <see cref="Reconfigured"/>.
     /// </summary>
     /// <remarks>
     /// <para>The Id field MUST match the existing definition — re-binding to a different line is the wrong
     /// operation (use a fresh runtime). Other fields are free to change.</para>
-    /// <para>Existing <see cref="AcquireForPlayback"/> holders see their <see cref="PortAudioOutput"/>
+    /// <para>Existing <see cref="AcquireForPlayback"/> holders see their audio output
     /// reference go stale; once they release, the next acquire returns the new output.</para>
     /// </remarks>
     public async Task ReconfigureAsync(PortAudioOutputDefinition newDefinition, CancellationToken cancellationToken = default)
@@ -281,8 +371,8 @@ internal sealed class PortAudioOutputRuntime : IDisposable
         await Task.Run(() =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            PortAudioOutput? toDispose;
-            PortAudioOutput? newOutput = null;
+            IAudioOutput? toDispose;
+            IAudioOutput? newOutput = null;
             lock (_gate)
             {
                 if (_disposed)
@@ -296,7 +386,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
 
             try
             {
-                toDispose?.Dispose();
+                DisposeOutput(toDispose);
             }
             catch (Exception ex)
             {
@@ -308,12 +398,11 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             try
             {
                 newOutput = CreateOutput(newDefinition, out var resolvedDefinition);
-                newOutput.Start();
                 newDefinition = resolvedDefinition;
             }
             catch
             {
-                newOutput?.Dispose();
+                DisposeOutput(newOutput);
                 throw;
             }
 
@@ -322,7 +411,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 if (_disposed)
                 {
                     // Concurrent Dispose during reconfigure — drop the just-built output rather than leaking.
-                    try { newOutput.Dispose(); }
+                    try { DisposeOutput(newOutput); }
                     catch { /* best effort */ }
                     throw new ObjectDisposedException(nameof(PortAudioOutputRuntime));
                 }
@@ -330,8 +419,9 @@ internal sealed class PortAudioOutputRuntime : IDisposable
                 _output = newOutput;
             }
 
-            Trace.LogInformation("ReconfigureAsync: '{Name}' device={Device} rate={Rate}Hz channels={Ch}",
-                newDefinition.DisplayName, newDefinition.GlobalDeviceIndex, newDefinition.SampleRate, newDefinition.ChannelCount);
+            Trace.LogInformation("ReconfigureAsync: '{Name}' backend={Backend} device={Device} rate={Rate}Hz channels={Ch}",
+                newDefinition.DisplayName, newDefinition.EffectiveAudioBackendName, newDefinition.DeviceName,
+                newDefinition.SampleRate, newDefinition.ChannelCount);
         }, cancellationToken).ConfigureAwait(false);
 
         Reconfigured?.Invoke(this, EventArgs.Empty);
@@ -339,7 +429,7 @@ internal sealed class PortAudioOutputRuntime : IDisposable
 
     public void Dispose()
     {
-        PortAudioOutput? toDispose;
+        IAudioOutput? toDispose;
         lock (_gate)
         {
             if (_disposed)
@@ -349,7 +439,19 @@ internal sealed class PortAudioOutputRuntime : IDisposable
             _output = null;
         }
 
-        try { toDispose?.Dispose(); }
+        try { DisposeOutput(toDispose); }
         catch { /* best effort */ }
+    }
+
+    private static void FlushIfSupported(IAudioOutput? output)
+    {
+        if (output is IFlushableOutput flushable)
+            flushable.Flush();
+    }
+
+    private static void DisposeOutput(IAudioOutput? output)
+    {
+        if (output is IDisposable disposable)
+            disposable.Dispose();
     }
 }
