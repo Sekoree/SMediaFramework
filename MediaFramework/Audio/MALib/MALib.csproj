@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <IsAotCompatible>true</IsAotCompatible>
+    </PropertyGroup>
+
+    <!--
+      MALib is the dedicated P/Invoke binding for miniaudio — the analogue of PALib for PortAudio. It binds
+      miniaudio's *own* C ABI (ma_*) directly; there is NO custom C wrapper/shim. miniaudio is header-only,
+      so the one unavoidable native step is compiling the upstream amalgamation (Reference/.../miniaudio.c,
+      a single MA_IMPLEMENTATION translation unit) into a plain shared library that exports ma_*. That is the
+      library itself (like libportaudio.so), not a shim.
+    -->
+    <PropertyGroup>
+        <MiniAudioReferenceDir>$(MSBuildProjectDirectory)/../../../Reference/miniaudio-0.11.25/</MiniAudioReferenceDir>
+        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('Linux'))">libminiaudio.so</MiniAudioNativeFileName>
+        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('OSX'))">libminiaudio.dylib</MiniAudioNativeFileName>
+        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('Windows'))">miniaudio.dll</MiniAudioNativeFileName>
+        <MiniAudioNativePath>$(MSBuildProjectDirectory)/native/$(MiniAudioNativeFileName)</MiniAudioNativePath>
+        <BuildMiniAudioNative Condition="'$(BuildMiniAudioNative)' == '' And !$([MSBuild]::IsOSPlatform('Windows'))">true</BuildMiniAudioNative>
+        <BuildMiniAudioNative Condition="'$(BuildMiniAudioNative)' == ''">false</BuildMiniAudioNative>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.MiniAudio" />
+        <InternalsVisibleTo Include="S.Media.MiniAudio.Tests" />
+        <InternalsVisibleTo Include="MALib.Tests" />
+    </ItemGroup>
+
+    <!-- Compile the upstream miniaudio amalgamation into a plain ma_*-exporting shared library, once, into a
+         stable per-project native/ folder. -->
+    <Target Name="BuildMiniAudioNative" BeforeTargets="BeforeBuild"
+            Condition="'$(BuildMiniAudioNative)' == 'true' And !Exists('$(MiniAudioNativePath)')">
+        <MakeDir Directories="$(MSBuildProjectDirectory)/native" />
+        <Exec Condition="$([MSBuild]::IsOSPlatform('Linux'))"
+              Command="cc -shared -fPIC -O2 -D_GNU_SOURCE -DMA_NO_ENCODING -DMA_NO_DECODING -DMA_NO_GENERATION &quot;$(MiniAudioReferenceDir)miniaudio.c&quot; -o &quot;$(MiniAudioNativePath)&quot; -lpthread -lm -ldl" />
+        <Exec Condition="$([MSBuild]::IsOSPlatform('OSX'))"
+              Command="cc -dynamiclib -fPIC -O2 -DMA_NO_ENCODING -DMA_NO_DECODING -DMA_NO_GENERATION &quot;$(MiniAudioReferenceDir)miniaudio.c&quot; -o &quot;$(MiniAudioNativePath)&quot; -lpthread -lm" />
+    </Target>
+
+    <!-- Ship the native lib next to this project's output AND, because it's a CopyToOutputDirectory item on a
+         ProjectReference, into any referencing app's output (so HaPlay loads it without a publish step). The
+         item is declared unconditionally on platforms we build for (NOT gated on Exists, which evaluates
+         before BuildMiniAudioNative produces the file on a clean build); the BeforeBuild target above creates
+         it before the copy-to-output step runs. -->
+    <ItemGroup Condition="'$(BuildMiniAudioNative)' == 'true'">
+        <None Include="$(MiniAudioNativePath)" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>$(MiniAudioNativeFileName)</Link>
+        </None>
+    </ItemGroup>
+
+</Project>

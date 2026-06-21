@@ -16,6 +16,16 @@ Validation update 2026-06-21: fixed the follow-up crash when removing a clone/ou
 `dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m`, and
 `dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
 
+Validation update 2026-06-21: reworked the miniaudio backend to a **dedicated `MALib` binding with no C shim**
+(see the miniaudio bullet below for the full rationale). `MALib` binds vanilla miniaudio's `ma_*` ABI directly;
+the removed `smedia_miniaudio.c` wrapper and its `smedia_miniaudio` library are gone, replaced by a plain
+`libminiaudio.so` (upstream amalgamation) that propagates into HaPlay's output. Validated headlessly on real
+audio hardware: enumeration reads correct device names/caps, and opening the default playback device drives
+init → start → data-callback → stop with zero faults. Focused validation passed:
+`dotnet test MediaFramework/Test/S.Media.MiniAudio.Tests/S.Media.MiniAudio.Tests.csproj --no-restore -v:m`,
+`dotnet build UI/HaPlay.Desktop/HaPlay.Desktop.csproj --no-restore -v:m` (with `libminiaudio.so` landing in
+its `bin`), and `dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
+
 Validation update 2026-06-21: implemented the miniaudio backend foundation and expanded the NativeAOT C ABI
 for backend-neutral live audio capture. Focused validation passed:
 `dotnet test MediaFramework/Test/S.Media.MiniAudio.Tests/S.Media.MiniAudio.Tests.csproj --no-restore -v:m`,
@@ -172,19 +182,29 @@ initialize, including the Control workspace live MIDI resolver/profile-builder s
     `IAudioOutput` / `IClockedOutput` / `IAudioSource`, never PortAudio types. So this new interface only
     abstracts the **device/enumeration/open** layer that sits above those. `PortAudioBackend : IAudioBackend`
     wraps today's catalog + ctors (no behaviour change); `MiniAudioBackend : IAudioBackend` is the new one.
-  - **[DONE]** *New `S.Media.MiniAudio` project.* The project builds a small native shim over vendored
-    `miniaudio.c` on Linux/macOS and binds it through AOT-friendly `LibraryImport` calls. `MiniAudioBackend`
-    implements `IAudioBackend`; `MiniAudioOutput` implements the framework's existing `IAudioOutput` /
-    `IClockedOutput` / `IFlushableOutput` / `IPlaybackClock` / playback-stats contracts from miniaudio's
-    callback + managed ring model; `MiniAudioInput` implements `IAudioSource` for capture. `UseMiniAudio()`
-    registers the backend without opening hardware. Current caveat: Windows expects a matching
-    `smedia_miniaudio.dll` sidecar unless/until a Windows native build step is added.
+  - **[DONE]** *Dedicated `MALib` binding (no C shim) + `S.Media.MiniAudio` wrapper.* Reworked 2026-06-21:
+    the earlier `smedia_miniaudio.c` custom shim was removed. `MALib` (under `MediaFramework/Audio`, the
+    analogue of `PALib`) now binds miniaudio's **own** `ma_*` C ABI directly via AOT-friendly `LibraryImport`;
+    the only native step is compiling the upstream amalgamation `Reference/.../miniaudio.c` into a plain
+    `libminiaudio.so` that exports `ma_*` (the library itself, like `libportaudio.so` — not a shim). Because
+    miniaudio is header-only with no FFI size/offset accessors (only `ma_context_sizeof`), `MALib` hand-mirrors
+    `ma_device_config`/`ma_device_info`/`ma_device_id`/`ma_resampler_config` (sequential layout) and
+    over-allocates the opaque `ma_device`; the data callback is bridged in managed code, keyed by the device
+    pointer. `S.Media.MiniAudio` consumes `MALib`: `MiniAudioBackend : IAudioBackend`, `MiniAudioOutput`
+    (`IAudioOutput`/`IClockedOutput`/`IFlushableOutput`/`IPlaybackClock`/playback-stats over a managed ring),
+    `MiniAudioInput : IAudioSource`. `UseMiniAudio()` registers the backend without opening hardware. The build
+    emits `libminiaudio.so` and propagates it transitively into referencing apps (HaPlay). **Validated
+    headlessly on real audio hardware**: device enumeration reads correct device names/caps (confirms the
+    `ma_device_info`/`ma_device_id` layout), and opening the default playback device drives `ma_device_init` →
+    start → the data callback firing cleanly against the ring → stop (confirms the `ma_device_config` layout,
+    the `ma_device` allocation, and the callback bridge). Windows needs a native `miniaudio.dll` build step
+    (the Linux/macOS `cc` step has no Windows equivalent wired up yet).
   - *Selection.* `MediaFrameworkRuntime` registers available backends; a host (or the C-ABI / HaPlay) picks
     one by name. **[C-ABI DONE]** The C ABI now has backend-neutral `mfp_audio_backend_*`,
     `mfp_audio_device_*`, `mfp_audio_input_device_*`, `mfp_audio_output_create(backend, deviceId, ...)`,
     `mfp_audio_input_create(backend, deviceId, ...)`, and `mfp_player_open_live_audio(...)` entry points,
     declared in the public header while keeping the legacy PortAudio factory for compatibility. NativeAOT
-    publish copies the miniaudio sidecar next to `s_media_player.so`.
+    publish copies `libminiaudio.so` next to `s_media_player.so` (transitively, via the `MALib` reference).
   - **[DONE]** HaPlay output selection is backend-aware: the Add/Edit dialog now says "audio output", shows a
     backend picker, persists `AudioBackendName` / `AudioBackendDeviceId`, and the persistent audio runtime
     opens non-PortAudio outputs through `IAudioBackend`. Existing PortAudio project files remain compatible.

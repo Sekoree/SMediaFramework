@@ -1,3 +1,4 @@
+using MALib;
 using S.Media.Core.Audio;
 
 namespace S.Media.MiniAudio;

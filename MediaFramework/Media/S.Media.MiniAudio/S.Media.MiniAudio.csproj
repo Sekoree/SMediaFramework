@@ -8,15 +8,6 @@
         <IsAotCompatible>true</IsAotCompatible>
     </PropertyGroup>
 
-    <PropertyGroup>
-        <MiniAudioReferenceDir>$(MSBuildProjectDirectory)/../../../Reference/miniaudio-0.11.25/</MiniAudioReferenceDir>
-        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('Linux'))">libsmedia_miniaudio.so</MiniAudioNativeFileName>
-        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('OSX'))">libsmedia_miniaudio.dylib</MiniAudioNativeFileName>
-        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('Windows'))">smedia_miniaudio.dll</MiniAudioNativeFileName>
-        <BuildMiniAudioNative Condition="'$(BuildMiniAudioNative)' == '' And !$([MSBuild]::IsOSPlatform('Windows'))">true</BuildMiniAudioNative>
-        <BuildMiniAudioNative Condition="'$(BuildMiniAudioNative)' == ''">false</BuildMiniAudioNative>
-    </PropertyGroup>
-
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.MiniAudio.Tests" />
     </ItemGroup>
@@ -27,18 +18,8 @@
 
     <ItemGroup>
         <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
+        <!-- Dedicated miniaudio P/Invoke binding (ma_* direct; builds + ships libminiaudio). -->
+        <ProjectReference Include="..\..\Audio\MALib\MALib.csproj" />
     </ItemGroup>
-
-    <Target Name="BuildMiniAudioNative" BeforeTargets="Build" Condition="'$(BuildMiniAudioNative)' == 'true'">
-        <MakeDir Directories="$(TargetDir)" />
-        <Exec Condition="$([MSBuild]::IsOSPlatform('Linux'))"
-              Command="cc -shared -fPIC -O2 -D_GNU_SOURCE -I&quot;$(MiniAudioReferenceDir)&quot; &quot;$(MSBuildProjectDirectory)/Native/smedia_miniaudio.c&quot; &quot;$(MiniAudioReferenceDir)miniaudio.c&quot; -o &quot;$(TargetDir)$(MiniAudioNativeFileName)&quot; -lpthread -lm -ldl" />
-        <Exec Condition="$([MSBuild]::IsOSPlatform('OSX'))"
-              Command="cc -dynamiclib -fPIC -O2 -I&quot;$(MiniAudioReferenceDir)&quot; &quot;$(MSBuildProjectDirectory)/Native/smedia_miniaudio.c&quot; &quot;$(MiniAudioReferenceDir)miniaudio.c&quot; -o &quot;$(TargetDir)$(MiniAudioNativeFileName)&quot; -lpthread -lm" />
-    </Target>
-
-    <Target Name="CopyMiniAudioNativeToPublish" AfterTargets="Publish" Condition="'$(MiniAudioNativeFileName)' != '' And Exists('$(TargetDir)$(MiniAudioNativeFileName)')">
-        <Copy SourceFiles="$(TargetDir)$(MiniAudioNativeFileName)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
-    </Target>
 
 </Project>

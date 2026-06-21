@@ -1,5 +1,5 @@
+using MALib;
 using S.Media.Core.Audio;
-using S.Media.MiniAudio.Runtime;
 
 namespace S.Media.MiniAudio;
 
@@ -11,8 +11,7 @@ internal sealed unsafe class MiniAudioContext : IDisposable
 
     public static MiniAudioContext Create()
     {
-        MiniAudioLibraryResolver.Install();
-        MiniAudioException.ThrowIfError(MiniAudioNative.ContextCreate(out var handle), "sma_context_create");
+        MiniAudioException.ThrowIfError(MiniAudioNative.ContextCreate(out var handle), "ma_context_init");
         return new MiniAudioContext(handle);
     }
 
@@ -22,7 +21,7 @@ internal sealed unsafe class MiniAudioContext : IDisposable
 
         MiniAudioException.ThrowIfError(
             MiniAudioNative.ContextDeviceCount(_handle, (int)deviceType, out var count),
-            "sma_context_device_count");
+            "ma_context_get_devices(count)");
 
         var devices = new AudioDeviceInfo[count];
         var idCapacity = Math.Max(1, MiniAudioNative.DeviceIdHexCapacity());
@@ -49,7 +48,7 @@ internal sealed unsafe class MiniAudioContext : IDisposable
                         out isDefault,
                         out maxChannels,
                         out defaultSampleRate),
-                    "sma_context_device_get");
+                    "ma_context_get_devices(get)");
             }
 
             devices[i] = new AudioDeviceInfo(

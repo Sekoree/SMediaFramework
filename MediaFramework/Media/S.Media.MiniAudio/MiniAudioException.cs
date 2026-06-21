@@ -1,3 +1,5 @@
+using MALib;
+
 namespace S.Media.MiniAudio;
 
 public sealed class MiniAudioException : Exception

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using MALib;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
@@ -99,7 +100,7 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
                 if (createResult != MiniAudioNative.Success)
                 {
                     _selfHandle.Free();
-                    MiniAudioException.ThrowIfError(createResult, "sma_device_create(capture)");
+                    MiniAudioException.ThrowIfError(createResult, "ma_device_init(capture)");
                 }
             }
 
@@ -109,7 +110,7 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
                 MiniAudioNative.DeviceDestroy(_device);
                 _device = nint.Zero;
                 _selfHandle.Free();
-                MiniAudioException.ThrowIfError(startResult, "sma_device_start(capture)");
+                MiniAudioException.ThrowIfError(startResult, "ma_device_start(capture)");
             }
 
             Volatile.Write(ref _isRunning, true);
@@ -152,7 +153,7 @@ public sealed unsafe class MiniAudioInput : IAudioSource, IDisposable
                 Volatile.Write(ref _isRunning, false);
             }
 
-            MiniAudioException.ThrowIfError(stopResult, "sma_device_stop(capture)");
+            MiniAudioException.ThrowIfError(stopResult, "ma_device_stop(capture)");
             timing?.SetOutcome($"emitted={Volatile.Read(ref _samplesEmitted)} overflow={Volatile.Read(ref _overflowSamples)}");
         }
     }

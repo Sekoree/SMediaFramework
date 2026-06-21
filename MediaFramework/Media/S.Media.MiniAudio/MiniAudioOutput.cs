@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using MALib;
 using Microsoft.Extensions.Logging;
 using S.Media.Core.Audio;
 using S.Media.Core.Clock;
@@ -138,7 +139,7 @@ public sealed unsafe class MiniAudioOutput :
                 if (createResult != MiniAudioNative.Success)
                 {
                     _selfHandle.Free();
-                    MiniAudioException.ThrowIfError(createResult, "sma_device_create(playback)");
+                    MiniAudioException.ThrowIfError(createResult, "ma_device_init(playback)");
                 }
             }
 
@@ -148,7 +149,7 @@ public sealed unsafe class MiniAudioOutput :
                 MiniAudioNative.DeviceDestroy(_device);
                 _device = nint.Zero;
                 _selfHandle.Free();
-                MiniAudioException.ThrowIfError(startResult, "sma_device_start(playback)");
+                MiniAudioException.ThrowIfError(startResult, "ma_device_start(playback)");
             }
 
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
@@ -197,7 +198,7 @@ public sealed unsafe class MiniAudioOutput :
                 Volatile.Write(ref _readIndex, 0);
             }
 
-            MiniAudioException.ThrowIfError(stopResult, "sma_device_stop(playback)");
+            MiniAudioException.ThrowIfError(stopResult, "ma_device_stop(playback)");
             timing?.SetOutcome(
                 $"played={Volatile.Read(ref _playedSamples)} underrun={Volatile.Read(ref _underrunSamples)} dropped={Volatile.Read(ref _droppedSamples)}");
         }
@@ -282,7 +283,7 @@ public sealed unsafe class MiniAudioOutput :
         lock (_deviceLifecycleGate)
         {
             if (_disposed || !Volatile.Read(ref _isRunning) || _device == nint.Zero) return;
-            MiniAudioException.ThrowIfError(MiniAudioNative.DeviceStop(_device), "sma_device_stop(playback flush)");
+            MiniAudioException.ThrowIfError(MiniAudioNative.DeviceStop(_device), "ma_device_stop(playback flush)");
             Volatile.Write(ref _writeIndex, 0);
             Volatile.Write(ref _readIndex, 0);
             Interlocked.Exchange(ref _underrunSamples, 0);
@@ -319,7 +320,7 @@ public sealed unsafe class MiniAudioOutput :
             if (Volatile.Read(ref _deviceStoppedAfterFlush) == 0 || _device == nint.Zero)
                 return;
 
-            MiniAudioException.ThrowIfError(MiniAudioNative.DeviceStart(_device), "sma_device_start(playback after flush)");
+            MiniAudioException.ThrowIfError(MiniAudioNative.DeviceStart(_device), "ma_device_start(playback after flush)");
             Volatile.Write(ref _deviceStoppedAfterFlush, 0);
         }
     }

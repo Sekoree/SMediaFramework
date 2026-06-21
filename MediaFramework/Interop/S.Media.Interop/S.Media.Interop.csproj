@@ -40,19 +40,7 @@
         <None Update="include\s_media_player.h" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
-    <PropertyGroup>
-        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('Linux'))">libsmedia_miniaudio.so</MiniAudioNativeFileName>
-        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('OSX'))">libsmedia_miniaudio.dylib</MiniAudioNativeFileName>
-        <MiniAudioNativeFileName Condition="$([MSBuild]::IsOSPlatform('Windows'))">smedia_miniaudio.dll</MiniAudioNativeFileName>
-        <MiniAudioNativeSource>..\..\Media\S.Media.MiniAudio\bin\$(Configuration)\net10.0\$(MiniAudioNativeFileName)</MiniAudioNativeSource>
-    </PropertyGroup>
-
-    <Target Name="CopyMiniAudioNativeShim" AfterTargets="Build" Condition="'$(MiniAudioNativeFileName)' != '' And Exists('$(MiniAudioNativeSource)')">
-        <Copy SourceFiles="$(MiniAudioNativeSource)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
-    </Target>
-
-    <Target Name="CopyMiniAudioNativeShimToPublish" AfterTargets="Publish" Condition="'$(MiniAudioNativeFileName)' != '' And Exists('$(MiniAudioNativeSource)')">
-        <Copy SourceFiles="$(MiniAudioNativeSource)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
-    </Target>
+    <!-- libminiaudio (and libportaudio/SDL3) flow into this project's output transitively from MALib /
+         S.Media.MiniAudio via their CopyToOutputDirectory runtime assets — no manual copy target needed. -->
 
 </Project>
