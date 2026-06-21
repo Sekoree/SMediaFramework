@@ -711,6 +711,9 @@
   <data name="DisplayNameLabel" xml:space="preserve">
     <value>Display name</value>
   </data>
+  <data name="AudioBackendLabel" xml:space="preserve">
+    <value>Audio backend</value>
+  </data>
   <data name="HostApiLabel" xml:space="preserve">
     <value>Host API</value>
   </data>
@@ -835,10 +838,10 @@
     <value>args</value>
   </data>
   <data name="AddPortAudioOutputDialogTitle" xml:space="preserve">
-    <value>Add PortAudio output</value>
+    <value>Add audio output</value>
   </data>
   <data name="EditPortAudioOutputDialogTitle" xml:space="preserve">
-    <value>Edit PortAudio output</value>
+    <value>Edit audio output</value>
   </data>
   <data name="AddPortAudioInputDialogTitle" xml:space="preserve">
     <value>Add PortAudio input</value>
@@ -892,13 +895,13 @@
     <value>NDI sample rate differs from this output — resampling adds delay and may cause drops. Set the PortAudio device to 48 kHz if the NDI source is 48 kHz.</value>
   </data>
   <data name="EngineInAppPreviewLabel" xml:space="preserve">
-    <value>In-app preview</value>
+    <value>UI Framework (Avalonia) Window</value>
   </data>
   <data name="EngineInAppPreviewSubtitle" xml:space="preserve">
     <value>Avalonia — paints on the UI thread, lives inside the app shell</value>
   </data>
   <data name="EngineStandaloneWindowLabel" xml:space="preserve">
-    <value>Standalone window</value>
+    <value>Standalone (SDL3) Window</value>
   </data>
   <data name="EngineStandaloneWindowSubtitle" xml:space="preserve">
     <value>SDL3 — own thread, dedicated fullscreen-capable window</value>
@@ -947,6 +950,9 @@
   </data>
   <data name="ValidationDisplayNameRequired" xml:space="preserve">
     <value>Display name is required.</value>
+  </data>
+  <data name="ValidationOutputNameAlreadyExistsFormat" xml:space="preserve">
+    <value>An output named '{0}' already exists. Choose a unique display name.</value>
   </data>
   <data name="ValidationSelectHostApiAndOutputDevice" xml:space="preserve">
     <value>Select a host API and output device.</value>
@@ -1009,13 +1015,13 @@
     <value>Configured audio / video destinations. Right-click a local-video row for preview controls.</value>
   </data>
   <data name="NoOutputsEmptyHint" xml:space="preserve">
-    <value>No outputs yet. Add a local video, PortAudio, or NDI output to make routing targets available.</value>
+    <value>No outputs yet. Add a local video, audio, or NDI output to make routing targets available.</value>
   </data>
   <data name="AdvancedRoutingHeader" xml:space="preserve">
     <value>Advanced routing</value>
   </data>
   <data name="AddPortAudioButton" xml:space="preserve">
-    <value>Add PortAudio…</value>
+    <value>Add audio…</value>
   </data>
   <data name="AddLocalVideoButton" xml:space="preserve">
     <value>Add local video…</value>
@@ -1036,13 +1042,10 @@
     <value>Stop preview window</value>
   </data>
   <data name="FullscreenPreviewMenuHeader" xml:space="preserve">
-    <value>Fullscreen preview</value>
+    <value>Fullscreen</value>
   </data>
   <data name="WindowedPreviewMenuHeader" xml:space="preserve">
-    <value>Windowed preview</value>
-  </data>
-  <data name="RecBadgeLabel" xml:space="preserve">
-    <value>REC</value>
+    <value>Windowed</value>
   </data>
   <data name="EmDash" xml:space="preserve">
     <value>—</value>
@@ -1052,12 +1055,6 @@
   </data>
   <data name="EditButton" xml:space="preserve">
     <value>Edit…</value>
-  </data>
-  <data name="RecordButton" xml:space="preserve">
-    <value>Record</value>
-  </data>
-  <data name="StopRecButton" xml:space="preserve">
-    <value>Stop Rec</value>
   </data>
   <data name="OutputHealthyTooltip" xml:space="preserve">
     <value>Output healthy</value>
@@ -1358,6 +1355,15 @@
   </data>
   <data name="OutputEditInUseDialogMessageFormat" xml:space="preserve">
     <value>'{0}' is currently delivering audio/video to a running player. Applying the edit will cause a brief silence / black-frame on that output (typically 1–2 frames). Continue?</value>
+  </data>
+  <data name="OutputRemoveInUseDialogTitle" xml:space="preserve">
+    <value>Remove output while in use?</value>
+  </data>
+  <data name="OutputRemoveInUseStopButton" xml:space="preserve">
+    <value>Stop playback &amp; remove</value>
+  </data>
+  <data name="OutputRemoveInUseDialogMessageFormat" xml:space="preserve">
+    <value>'{0}' is currently delivering audio/video to a running player. Removing it now would interrupt that playback. Stop the playback using it and remove the output?</value>
   </data>
   <data name="VideoOutputRouteConflictTitle" xml:space="preserve">
     <value>Rewire video output?</value>
@@ -1759,7 +1765,7 @@
     <value>Avalonia OpenGL</value>
   </data>
   <data name="OutputSummaryPortAudioFormat" xml:space="preserve">
-    <value>{0} · {1} ch @ {2} Hz · API {3}</value>
+    <value>{0} · {1} ch @ {2} Hz · {3}</value>
   </data>
   <data name="OutputSummaryLocalVideoBaseFormat" xml:space="preserve">
     <value>{0} · {1} · screen {2}</value>

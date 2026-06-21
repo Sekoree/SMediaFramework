@@ -41,8 +41,6 @@ public partial class OutputLineViewModel : ViewModelBase
         OnPropertyChanged(nameof(SupportsMediaPlayerRouting));
         OnPropertyChanged(nameof(IndentMargin));
         OnPropertyChanged(nameof(CloneParentLabel));
-        OnPropertyChanged(nameof(NdiRecordingButtonText));
-        ToggleNdiRecordingCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>The name shown everywhere for this output: the operator alias when set, else the
@@ -104,9 +102,6 @@ public partial class OutputLineViewModel : ViewModelBase
 
     [ObservableProperty]
     private bool _isPreviewRunning;
-
-    [ObservableProperty]
-    private bool _isNdiRecording;
 
     [ObservableProperty]
     private OutputLineHealthState _health = OutputLineHealthState.Unknown;
@@ -224,14 +219,6 @@ public partial class OutputLineViewModel : ViewModelBase
     [ObservableProperty]
     private string? _statsSummary;
 
-    public string NdiRecordingButtonText => IsNdiRecording ? Strings.StopRecButton : Strings.RecordButton;
-
-    partial void OnIsNdiRecordingChanged(bool value)
-    {
-        _ = value;
-        OnPropertyChanged(nameof(NdiRecordingButtonText));
-    }
-
     partial void OnIsPreviewRunningChanged(bool value)
     {
         _ = value;
@@ -250,19 +237,19 @@ public partial class OutputLineViewModel : ViewModelBase
         _ => Definition.Kind.ToString(),
     };
 
-    public string KindTechnicalLabel => Definition.Kind switch
+    public string KindTechnicalLabel => Definition switch
     {
-        ManagedOutputKind.PortAudio => Strings.OutputKindTechnicalPortAudio,
-        ManagedOutputKind.NDI => Strings.OutputKindTechnicalNdi,
-        ManagedOutputKind.SdlOpenGlVideo => Strings.OutputKindTechnicalSdlOpenGl,
-        ManagedOutputKind.AvaloniaOpenGlVideo => Strings.OutputKindTechnicalAvaloniaOpenGl,
+        PortAudioOutputDefinition p => p.EffectiveAudioBackendName,
+        NDIOutputDefinition => Strings.OutputKindTechnicalNdi,
+        LocalVideoOutputDefinition { Engine: VideoOutputEngine.SdlOpenGl } => Strings.OutputKindTechnicalSdlOpenGl,
+        LocalVideoOutputDefinition => Strings.OutputKindTechnicalAvaloniaOpenGl,
         _ => Definition.Kind.ToString(),
     };
 
     public string Summary => Definition switch
         {
         PortAudioOutputDefinition p =>
-            Strings.Format(nameof(Strings.OutputSummaryPortAudioFormat), p.DeviceName, p.ChannelCount, p.SampleRate, p.HostApiName),
+            Strings.Format(nameof(Strings.OutputSummaryPortAudioFormat), p.DeviceName, p.ChannelCount, p.SampleRate, p.EffectiveAudioBackendName),
         LocalVideoOutputDefinition v =>
             Strings.Format(
                 nameof(Strings.OutputSummaryLocalVideoBaseFormat),
@@ -293,13 +280,17 @@ public partial class OutputLineViewModel : ViewModelBase
 
     private bool CanWindowedPreview() => IsPreviewRunning && IsLocalVideo && _host is not null;
 
-    [RelayCommand(CanExecute = nameof(CanToggleNdiRecording))]
-    private void ToggleNdiRecording() => _host?.ToggleNdiRecording(this);
-
-    private bool CanToggleNdiRecording() => IsNdi;
-
     [RelayCommand]
-    private void Remove() => _requestRemove(this);
+    private async Task RemoveAsync()
+    {
+        // Route through the management VM so it can warn + offer to stop when a player is actively playing
+        // through this line (removing mid-playback otherwise races a live submit and crashes). The host-less
+        // path (cue editor / tests) removes directly.
+        if (_host is not null)
+            await _host.RemoveLineAsync(this);
+        else
+            _requestRemove(this);
+    }
 
     /// <summary>Phase B (§3.2) — open the Edit dialog. Delegates to the management VM so the dialog
     /// can be opened with the correct owner window and the right per-kind form.</summary>

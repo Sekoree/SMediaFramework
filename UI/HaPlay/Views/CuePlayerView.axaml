@@ -78,7 +78,9 @@
             <MenuItem Header="{x:Static res:Strings.AddImageButton}" Command="{Binding AddImageCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddTextButton}" Command="{Binding AddTextCueCommand}" />
             <Separator />
-            <MenuItem Header="{x:Static res:Strings.AddNdiInputCueButton}" Command="{Binding AddNdiInputCueCommand}" />
+            <MenuItem Header="{x:Static res:Strings.AddNdiInputCueButton}"
+                      Command="{Binding AddNdiInputCueCommand}"
+                      IsVisible="{Binding IsNdiAvailable}" />
             <MenuItem Header="{x:Static res:Strings.AddPortAudioInputCueButton}" Command="{Binding AddPortAudioInputCueCommand}" />
             <Separator />
             <MenuItem Header="{x:Static res:Strings.AddActionButton}" Command="{Binding AddActionCueCommand}" />

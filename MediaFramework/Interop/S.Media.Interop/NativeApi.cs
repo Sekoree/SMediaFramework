@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg;
+using S.Media.MiniAudio;
 using S.Media.PortAudio;
 
 namespace S.Media.Interop;
@@ -23,7 +24,7 @@ namespace S.Media.Interop;
 /// <item>Time is in 100-ns ticks (<see cref="TimeSpan.Ticks"/>): 10,000,000 ticks = 1 second.</item>
 /// </list>
 /// </remarks>
-internal static unsafe class NativeApi
+internal static unsafe partial class NativeApi
 {
     // --- status codes (part of the ABI; append only) ---------------------------------------------
     private const int Ok = 0;
@@ -49,7 +50,7 @@ internal static unsafe class NativeApi
         try
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
-                MediaFrameworkRuntime.Init().UseFFmpeg().UsePortAudio();
+                MediaFrameworkRuntime.Init().UseFFmpeg().UsePortAudio().UseMiniAudio();
             return Ok;
         }
         catch (Exception ex)
@@ -105,7 +106,7 @@ internal static unsafe class NativeApi
                 return Fail(error ?? "open failed", ErrOpenFailed);
             }
 
-            *outHandle = GCHandle.ToIntPtr(GCHandle.Alloc(instance));
+            *outHandle = Handles.Alloc(instance);
             return Ok;
         }
         catch (Exception ex)
@@ -116,23 +117,7 @@ internal static unsafe class NativeApi
 
     /// <summary>Closes a player handle and frees its resources. Safe to call with a null handle.</summary>
     [UnmanagedCallersOnly(EntryPoint = "mfp_close")]
-    public static void Close(IntPtr handle)
-    {
-        if (handle == IntPtr.Zero)
-            return;
-        try
-        {
-            var gch = GCHandle.FromIntPtr(handle);
-            if (!gch.IsAllocated)
-                return;
-            (gch.Target as PlayerInstance)?.Dispose();
-            gch.Free();
-        }
-        catch (Exception ex)
-        {
-            MediaDiagnostics.LogError(ex, "S.Media.Interop.Close");
-        }
-    }
+    public static void Close(IntPtr handle) => Handles.Free(handle, dispose: true);
 
     // --- transport -------------------------------------------------------------------------------
 
@@ -220,20 +205,7 @@ internal static unsafe class NativeApi
         }
     }
 
-    private static PlayerInstance? Resolve(IntPtr handle)
-    {
-        if (handle == IntPtr.Zero)
-            return null;
-        try
-        {
-            var gch = GCHandle.FromIntPtr(handle);
-            return gch.IsAllocated ? gch.Target as PlayerInstance : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    private static PlayerInstance? Resolve(IntPtr handle) => Handles.Resolve<PlayerInstance>(handle);
 
     private static int Fail(string message, int code)
     {

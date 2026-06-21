@@ -13,6 +13,7 @@ using HaPlay.Resources;
 using HaPlay.ViewModels.Dialogs;
 using HaPlay.Views.Dialogs;
 using Microsoft.Extensions.Logging;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.NDI;
@@ -25,6 +26,8 @@ public partial class OutputManagementViewModel : ViewModelBase
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.ViewModels.OutputManagementViewModel");
 
     public ObservableCollection<OutputLineViewModel> Outputs { get; } = new();
+
+    public bool IsNdiAvailable => RuntimeModules.IsNdiAvailable;
 
     private volatile IReadOnlyList<OutputDefinition> _definitionsSnapshot = Array.Empty<OutputDefinition>();
 
@@ -298,6 +301,23 @@ public partial class OutputManagementViewModel : ViewModelBase
         OutputNamingChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    private IReadOnlyList<string> ExistingOutputNames(Guid? excludingId = null)
+    {
+        var names = new List<string>(Outputs.Count * 2);
+        foreach (var line in Outputs)
+        {
+            if (line.Definition.Id == excludingId)
+                continue;
+
+            if (!string.IsNullOrWhiteSpace(line.Definition.DisplayName))
+                names.Add(line.Definition.DisplayName);
+            if (!string.IsNullOrWhiteSpace(line.Definition.EffectiveName))
+                names.Add(line.Definition.EffectiveName);
+        }
+
+        return names;
+    }
+
     /// <summary>
     /// Phase B follow-up — raised *before* a line's runtime is torn down so any active
     /// <c>HaPlayPlaybackSession</c> can call <c>TryRemoveOutput</c> first and avoid Submit'ing to a
@@ -326,6 +346,80 @@ public partial class OutputManagementViewModel : ViewModelBase
         StopNDIOutput(line);
         StopPortAudioOutput(line);
         Outputs.Remove(line);
+    }
+
+    /// <summary>
+    /// UI remove path: when a player is actively playing through <paramref name="line"/>, warn the operator
+    /// and offer to stop that playback (so removal can't race a live submit and crash) or cancel. Programmatic
+    /// removals (project load, reconfigure) keep calling <see cref="Remove"/> directly and never prompt.
+    /// </summary>
+    public async Task RemoveLineAsync(OutputLineViewModel line, CancellationToken cancellationToken = default)
+    {
+        _ = cancellationToken;
+        var owner = TryGetOwnerWindow();
+        if (owner is not null && PlaybackUsageProbe?.Invoke(line) == true)
+        {
+            if (!await ConfirmRemoveInUseAsync(owner, line))
+                return;
+            await StopPlayersUsingLineAsync(line);
+        }
+
+        Remove(line);
+    }
+
+    private async Task StopPlayersUsingLineAsync(OutputLineViewModel line)
+    {
+        foreach (var player in ActivePlayersProbe?.Invoke() ?? [])
+        {
+            if (player.IsActivelyPlayingThroughLine(line) && player.StopCommand.CanExecute(null))
+                await player.StopCommand.ExecuteAsync(null);
+        }
+    }
+
+    private static async Task<bool> ConfirmRemoveInUseAsync(Window owner, OutputLineViewModel line)
+    {
+        var dlg = new Window
+        {
+            Title = Strings.OutputRemoveInUseDialogTitle,
+            Width = 480,
+            Height = 200,
+            CanResize = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false,
+        };
+
+        var ok = new Button { Content = Strings.OutputRemoveInUseStopButton, IsDefault = true };
+        var cancel = new Button { Content = Strings.CancelButton, IsCancel = true };
+
+        var tcs = new TaskCompletionSource<bool>();
+        ok.Click += (_, _) => { tcs.TrySetResult(true); dlg.Close(); };
+        cancel.Click += (_, _) => { tcs.TrySetResult(false); dlg.Close(); };
+        dlg.Closed += (_, _) => tcs.TrySetResult(false);
+
+        var buttons = new StackPanel
+        {
+            Orientation = Avalonia.Layout.Orientation.Horizontal,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+            Spacing = 8,
+            Margin = new Avalonia.Thickness(0, 16, 0, 0),
+        };
+        buttons.Children.Add(cancel);
+        buttons.Children.Add(ok);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+
+        var message = new TextBlock
+        {
+            Text = Strings.Format(nameof(Strings.OutputRemoveInUseDialogMessageFormat), line.Definition.DisplayName),
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+        };
+
+        var root = new DockPanel { Margin = new Avalonia.Thickness(16) };
+        root.Children.Add(buttons);
+        root.Children.Add(message);
+        dlg.Content = root;
+
+        await dlg.ShowDialog(owner);
+        return await tcs.Task;
     }
 
     /// <summary>
@@ -674,12 +768,12 @@ public partial class OutputManagementViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Returns the persistent <see cref="PortAudioOutput"/> for the line so a playback session can route
-    /// audio into the already-open stream. Returns <c>null</c> if the line isn't PortAudio, the runtime
+    /// Returns the persistent audio output for the line so a playback session can route audio into the
+    /// already-open stream. Returns <c>null</c> if the line isn't an audio output, the runtime
     /// isn't started yet, or another session already holds it. Callers MUST pair every successful acquire
     /// with <see cref="ReleasePortAudioForPlayback"/>.
     /// </summary>
-    internal PortAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line, bool liveMonitoring = false)
+    internal IAudioOutput? TryAcquirePortAudioForPlayback(OutputLineViewModel line, bool liveMonitoring = false)
     {
         PortAudioOutputRuntime? rt;
         lock (_portAudioOutputsGate)
@@ -721,17 +815,6 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             /* best effort */
         }
-    }
-
-    /// <summary>
-    /// §8.8 UI-side recording control: toggles per-line record intent for NDI outputs.
-    /// Backend recording-output wiring remains a separate framework follow-up.
-    /// </summary>
-    internal void ToggleNdiRecording(OutputLineViewModel line)
-    {
-        if (line.Definition is not NDIOutputDefinition)
-            return;
-        line.IsNdiRecording = !line.IsNdiRecording;
     }
 
     /// <summary>
@@ -830,10 +913,11 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
     }
 
-    private static async Task<PortAudioOutputDefinition?> ShowEditPortAudioAsync(Window owner, PortAudioOutputDefinition pa)
+    private async Task<PortAudioOutputDefinition?> ShowEditPortAudioAsync(Window owner, PortAudioOutputDefinition pa)
     {
         var vm = new AddPortAudioOutputDialogViewModel();
         vm.LoadFromExisting(pa);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(pa.Id));
         var dlg = new AddPortAudioOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<PortAudioOutputDefinition?>(owner);
     }
@@ -846,14 +930,16 @@ public partial class OutputManagementViewModel : ViewModelBase
         var editingLine = Outputs.FirstOrDefault(o => o.Definition.Id == lv.Id);
         vm.InitializeCloneParents(GetPotentialCloneParents(editingLine));
         vm.LoadFromExisting(lv);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(lv.Id));
         var dlg = new AddLocalVideoOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<LocalVideoOutputDefinition?>(owner);
     }
 
-    private static async Task<NDIOutputDefinition?> ShowEditNDIAsync(Window owner, NDIOutputDefinition nd)
+    private async Task<NDIOutputDefinition?> ShowEditNDIAsync(Window owner, NDIOutputDefinition nd)
     {
         var vm = new AddNDIOutputDialogViewModel();
         vm.LoadFromExisting(nd);
+        vm.InitializeExistingOutputNames(ExistingOutputNames(nd.Id));
         var dlg = new AddNDIOutputDialog { DataContext = vm };
         return await dlg.ShowDialog<NDIOutputDefinition?>(owner);
     }
@@ -912,6 +998,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
 
         var vm = new AddPortAudioOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
         vm.ReloadHostApis();
         var dlg = new AddPortAudioOutputDialog { DataContext = vm };
         var result = await dlg.ShowDialog<PortAudioOutputDefinition?>(owner);
@@ -955,6 +1042,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
 
         var vm = new AddLocalVideoOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
         vm.InitializeScreens(owner.Screens.All);
         vm.InitializeCloneParents(GetPotentialCloneParents());
         var dlg = new AddLocalVideoOutputDialog { DataContext = vm };
@@ -976,7 +1064,7 @@ public partial class OutputManagementViewModel : ViewModelBase
         }
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanAddNDI))]
     private async Task AddNDIAsync(CancellationToken cancellationToken)
     {
         _ = cancellationToken;
@@ -985,6 +1073,7 @@ public partial class OutputManagementViewModel : ViewModelBase
             return;
 
         var vm = new AddNDIOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(ExistingOutputNames());
         var dlg = new AddNDIOutputDialog { DataContext = vm };
         var result = await dlg.ShowDialog<NDIOutputDefinition?>(owner);
         if (result is null)
@@ -1014,6 +1103,8 @@ public partial class OutputManagementViewModel : ViewModelBase
                 result.DisplayName, result.SourceName, result.StreamMode);
         }
     }
+
+    private bool CanAddNDI() => IsNdiAvailable;
 
     [RelayCommand]
     private void ClearHealth()

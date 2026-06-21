@@ -8,6 +8,7 @@ namespace HaPlay.ViewModels.Dialogs;
 public partial class AddNDIOutputDialogViewModel : ViewModelBase
 {
     private Guid? _existingId;
+    private IReadOnlyCollection<string> _existingOutputNames = Array.Empty<string>();
 
     public NDIOutputStreamMode[] StreamModes { get; } = Enum.GetValues<NDIOutputStreamMode>();
 
@@ -53,6 +54,14 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
     public string DialogTitle => IsEditing ? Strings.EditNdiOutputDialogTitle : Strings.AddNdiOutputDialogTitle;
     public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
+    public void InitializeExistingOutputNames(IEnumerable<string> names)
+    {
+        var set = OutputNameUniqueness.CreateNameSet(names);
+        _existingOutputNames = set;
+        if (!IsEditing)
+            DisplayName = OutputNameUniqueness.MakeUniqueDefaultName(DisplayName, set);
+    }
+
     public void LoadFromExisting(NDIOutputDefinition existing)
     {
         _existingId = existing.Id;
@@ -85,6 +94,12 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(DisplayName))
         {
             ValidationMessage = Strings.ValidationDisplayNameRequired;
+            return null;
+        }
+        var displayName = DisplayName.Trim();
+        if (OutputNameUniqueness.TryFindDuplicate(displayName, _existingOutputNames, out var duplicateName))
+        {
+            ValidationMessage = Strings.Format(nameof(Strings.ValidationOutputNameAlreadyExistsFormat), duplicateName);
             return null;
         }
 
@@ -132,7 +147,7 @@ public partial class AddNDIOutputDialogViewModel : ViewModelBase
 
         return new NDIOutputDefinition(
             _existingId ?? Guid.NewGuid(),
-            DisplayName.Trim(),
+            displayName,
             SourceName.Trim(),
             string.IsNullOrWhiteSpace(Groups) ? null : Groups.Trim(),
             StreamMode,

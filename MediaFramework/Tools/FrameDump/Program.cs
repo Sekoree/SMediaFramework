@@ -96,7 +96,9 @@ gl.Clear((uint)ClearBufferMask.ColorBufferBit);
 var renderer = new YuvVideoRenderer(gl, fmt);
 // Match the real outputs: apply the HDR transfer hint per frame (default FollowFrameHints).
 GlVideoOutputHdr.ApplyTransferHint(renderer, frame!, GlVideoOutputHdrPreference.FollowFrameHints);
-Console.Error.WriteLine($"colorTransferHint={frame!.ColorTransferHint} -> HdrTransfer={renderer.HdrTransfer} colorSpace={frame.ColorSpaceHint}");
+Console.Error.WriteLine(
+    $"colorTransferHint={frame!.ColorTransferHint} -> HdrTransfer={renderer.HdrTransfer} " +
+    $"colorSpace={frame.ColorSpace} colorRange={frame.ColorRange}");
 renderer.Upload(frame);
 renderer.Render(w, h);
 gl.Finish();

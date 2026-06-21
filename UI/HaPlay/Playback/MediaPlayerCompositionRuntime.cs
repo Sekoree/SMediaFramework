@@ -67,6 +67,8 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
     /// <summary>The layer-0 sink the deck's video router fans its decoded frames into.</summary>
     public IVideoOutput VideoSink => _videoLayer.Output;
 
+    public int OutputCount => _composition.OutputCount;
+
     /// <summary>True when a hold/logo layer is present (hold has an effect).</summary>
     public bool HasHoldLayer => _logoLayer is not null;
 
@@ -133,6 +135,8 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
         _composition.SetClockMaster(master, timeline);
 
     public void EnsurePumpStarted() => _composition.EnsurePumpStarted();
+
+    public bool RemoveOutput(string outputId) => _composition.RemoveOutput(outputId);
 
     public void Dispose()
     {

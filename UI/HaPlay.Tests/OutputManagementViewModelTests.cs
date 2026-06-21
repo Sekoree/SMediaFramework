@@ -400,28 +400,4 @@ public sealed class OutputManagementViewModelTests
         Assert.Equal("Monitors", back.EffectiveName);
     }
 
-    [Fact]
-    public void NdiRecordingToggle_AppliesOnlyToNdiLines()
-    {
-        var vm = new OutputManagementViewModel();
-        vm.ReplaceDefinitionsForLoad(new OutputDefinition[]
-        {
-            new NDIOutputDefinition(Guid.NewGuid(), "NDI 1", "src", null, NDIOutputStreamMode.VideoAndAudio, 2, 48000),
-            new PortAudioOutputDefinition(Guid.NewGuid(), "PA", 0, "Alsa", 1, "dev", 2, 48000),
-        });
-
-        var ndiLine = vm.Outputs[0];
-        var paLine = vm.Outputs[1];
-
-        Assert.True(ndiLine.ToggleNdiRecordingCommand.CanExecute(null));
-        Assert.False(paLine.ToggleNdiRecordingCommand.CanExecute(null));
-
-        Assert.False(ndiLine.IsNdiRecording);
-        ndiLine.ToggleNdiRecordingCommand.Execute(null);
-        Assert.True(ndiLine.IsNdiRecording);
-        Assert.Equal("Stop Rec", ndiLine.NdiRecordingButtonText);
-        ndiLine.ToggleNdiRecordingCommand.Execute(null);
-        Assert.False(ndiLine.IsNdiRecording);
-        Assert.Equal("Record", ndiLine.NdiRecordingButtonText);
-    }
 }

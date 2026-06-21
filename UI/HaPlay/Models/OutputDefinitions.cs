@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 using S.Media.Core.Video;
 
@@ -61,10 +62,30 @@ public sealed record PortAudioOutputDefinition(
     int GlobalDeviceIndex,
     string DeviceName,
     int ChannelCount,
-    int SampleRate) : OutputDefinition(Id, DisplayName)
+    int SampleRate,
+    string AudioBackendName = "PortAudio",
+    string? AudioBackendDeviceId = null) : OutputDefinition(Id, DisplayName)
 {
+    public const string PortAudioBackendName = "PortAudio";
+
     [JsonIgnore]
     public override ManagedOutputKind Kind => ManagedOutputKind.PortAudio;
+
+    [JsonIgnore]
+    public string EffectiveAudioBackendName =>
+        string.IsNullOrWhiteSpace(AudioBackendName) ? PortAudioBackendName : AudioBackendName;
+
+    [JsonIgnore]
+    public bool UsesPortAudioBackend =>
+        string.Equals(EffectiveAudioBackendName, PortAudioBackendName, StringComparison.OrdinalIgnoreCase);
+
+    [JsonIgnore]
+    public string? EffectiveAudioBackendDeviceId =>
+        !string.IsNullOrWhiteSpace(AudioBackendDeviceId)
+            ? AudioBackendDeviceId
+            : UsesPortAudioBackend
+                ? GlobalDeviceIndex.ToString(CultureInfo.InvariantCulture)
+                : null;
 }
 
 public sealed record LocalVideoOutputDefinition(

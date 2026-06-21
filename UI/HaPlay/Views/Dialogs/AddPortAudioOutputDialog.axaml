@@ -23,9 +23,22 @@
         <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
         <TextBox Text="{Binding DisplayName}" />
 
-        <TextBlock Text="{x:Static res:Strings.HostApiLabel}" FontWeight="SemiBold" />
+        <TextBlock Text="{x:Static res:Strings.AudioBackendLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Backends}"
+                  SelectedItem="{Binding SelectedBackend}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:AudioBackendChoice">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.HostApiLabel}"
+                   FontWeight="SemiBold"
+                   IsVisible="{Binding IsPortAudioBackend}" />
         <ComboBox ItemsSource="{Binding HostApis}"
-                  SelectedItem="{Binding SelectedHostApi}">
+                  SelectedItem="{Binding SelectedHostApi}"
+                  IsVisible="{Binding IsPortAudioBackend}">
           <ComboBox.ItemTemplate>
             <DataTemplate x:DataType="port:PortAudioHostApiEntry">
               <TextBlock Text="{Binding Name}" />
@@ -37,8 +50,8 @@
         <ComboBox ItemsSource="{Binding Devices}"
                   SelectedItem="{Binding SelectedDevice}">
           <ComboBox.ItemTemplate>
-            <DataTemplate x:DataType="port:PortAudioOutputDeviceEntry">
-              <TextBlock Text="{Binding Name}" />
+            <DataTemplate x:DataType="vm:AudioOutputDeviceChoice">
+              <TextBlock Text="{Binding DisplayName}" />
             </DataTemplate>
           </ComboBox.ItemTemplate>
         </ComboBox>

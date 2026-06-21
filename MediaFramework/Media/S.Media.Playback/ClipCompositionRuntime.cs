@@ -169,6 +169,11 @@ public sealed class ClipCompositionRuntime : IDisposable
         get { lock (_gate) return _slots.Count; }
     }
 
+    public int OutputCount
+    {
+        get { lock (_gate) return _acquired.Count; }
+    }
+
     public long PumpStartCount => Volatile.Read(ref _pumpStartCount);
 
     public event EventHandler<ClipCompositionDriftWarning>? DriftWarning;
@@ -224,8 +229,43 @@ public sealed class ClipCompositionRuntime : IDisposable
         if (target is null)
             return false;
 
-        target.SetMapping(mapping, _canvasFormat, out var retired);
+        if (!target.SetMapping(mapping, _canvasFormat, out var retired))
+            return false;
         if (retired is not null)
+            _retiredMappingStages.Enqueue(retired);
+        ReevaluateIntegratedWarp();
+        return true;
+    }
+
+    /// <summary>
+    /// Removes one fan-out output from a running composition. Any in-flight submit for the output is allowed
+    /// to finish before the lease is released; future pump snapshots that still hold the retired output drop
+    /// their frame instead of touching a runtime the host may be about to dispose.
+    /// </summary>
+    public bool RemoveOutput(string outputId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
+
+        AcquiredOutput? removed = null;
+        lock (_gate)
+        {
+            if (_disposed) return false;
+
+            for (var i = 0; i < _acquired.Count; i++)
+            {
+                if (!string.Equals(_acquired[i].OutputId, outputId, StringComparison.Ordinal))
+                    continue;
+
+                removed = _acquired[i];
+                _acquired.RemoveAt(i);
+                break;
+            }
+        }
+
+        if (removed is null)
+            return false;
+
+        if (removed.Retire("ClipCompositionRuntime.RemoveOutput") is { } retired)
             _retiredMappingStages.Enqueue(retired);
         ReevaluateIntegratedWarp();
         return true;
@@ -630,9 +670,10 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         try
         {
-            output.EnsureConfigured(toSubmit.Format);
-            output.Output.Submit(toSubmit);
-            Interlocked.Increment(ref _framesSubmitted);
+            if (output.TrySubmit(toSubmit))
+                Interlocked.Increment(ref _framesSubmitted);
+            else
+                toSubmit.Dispose();
         }
         catch (Exception ex)
         {
@@ -715,24 +756,27 @@ public sealed class ClipCompositionRuntime : IDisposable
     public void Dispose()
     {
         MediaClock? slaveClock;
+        List<AcquiredOutput> acquiredToRetire;
         lock (_gate)
         {
             if (_disposed) return;
             _disposed = true;
             slaveClock = _slaveClock;
+            acquiredToRetire = _acquired.ToList();
 
             // Retire mapping stages up front so the driver-thread dispose window below (and the
             // direct drain fallback at the end) can tear their compositors down.
-            foreach (var acquired in _acquired)
-            {
-                if (acquired.DetachMappingStage() is { } stage)
-                    _retiredMappingStages.Enqueue(stage);
-            }
             if (_compositionMappingStage is { } compositionStage)
             {
                 _compositionMappingStage = null;
                 _retiredMappingStages.Enqueue(compositionStage);
             }
+        }
+
+        foreach (var acquired in acquiredToRetire)
+        {
+            if (acquired.Retire("ClipCompositionRuntime.Dispose") is { } stage)
+                _retiredMappingStages.Enqueue(stage);
         }
 
         if (slaveClock is not null && _disposeCompositorOnDriverThread is not null)
@@ -755,14 +799,6 @@ public sealed class ClipCompositionRuntime : IDisposable
         lock (_gate)
         {
             _slots.Clear();
-            foreach (var acquired in _acquired)
-            {
-                acquired.UnsubscribePumpPressure();
-                if (acquired.DisposeOutputOnRuntimeDispose && acquired.Output is IDisposable disposable)
-                    MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, "ClipCompositionRuntime.Dispose: output dispose");
-                if (acquired.Release is not null)
-                    MediaDiagnostics.SwallowDisposeErrors(acquired.Release, "ClipCompositionRuntime.Dispose: output release");
-            }
             _acquired.Clear();
         }
 
@@ -917,11 +953,13 @@ public sealed class ClipCompositionRuntime : IDisposable
     private sealed class AcquiredOutput
     {
         private readonly ClipCompositionOutputLease _lease;
+        private readonly object _lifecycleGate = new();
         private EventHandler<VideoOutputPumpPressureEventArgs>? _pressureHandler;
         private long _lastReportedDrops;
         private long _nextReportTicks;
         private volatile OutputMappingStage? _mappingStage;
         private VideoFormat? _configuredFormat;
+        private bool _retired;
 
         public AcquiredOutput(ClipCompositionOutputLease lease)
         {
@@ -945,46 +983,58 @@ public sealed class ClipCompositionRuntime : IDisposable
         /// <summary>Swaps the mapping. When the output canvas size is unchanged the existing
         /// compositor carries over (no GL churn while dragging in the editor); otherwise the old
         /// stage is handed back via <paramref name="retired"/> for driver-thread disposal.</summary>
-        public void SetMapping(ClipOutputMappingSpec? mapping, VideoFormat canvasFormat, out OutputMappingStage? retired)
+        public bool SetMapping(ClipOutputMappingSpec? mapping, VideoFormat canvasFormat, out OutputMappingStage? retired)
         {
-            retired = null;
-            var current = _mappingStage;
-
-            if (mapping is null)
+            lock (_lifecycleGate)
             {
-                _mappingStage = null;
+                retired = null;
+                if (_retired)
+                    return false;
+
+                var current = _mappingStage;
+
+                if (mapping is null)
+                {
+                    _mappingStage = null;
+                    retired = current;
+                    return true;
+                }
+
+                var outputFormat = OutputMappingResolver.ResolveOutputFormat(mapping, canvasFormat);
+                var sections = OutputMappingResolver.Resolve(mapping, canvasFormat.Width, canvasFormat.Height);
+                if (current is not null && current.OutputFormat == outputFormat)
+                {
+                    _mappingStage = current.WithSections(sections);
+                    return true;
+                }
+
+                _mappingStage = new OutputMappingStage(outputFormat, sections);
                 retired = current;
-                return;
+                return true;
             }
-
-            var outputFormat = OutputMappingResolver.ResolveOutputFormat(mapping, canvasFormat);
-            var sections = OutputMappingResolver.Resolve(mapping, canvasFormat.Width, canvasFormat.Height);
-            if (current is not null && current.OutputFormat == outputFormat)
-            {
-                _mappingStage = current.WithSections(sections);
-                return;
-            }
-
-            _mappingStage = new OutputMappingStage(outputFormat, sections);
-            retired = current;
-        }
-
-        /// <summary>Takes the mapping stage for disposal (runtime teardown).</summary>
-        public OutputMappingStage? DetachMappingStage()
-        {
-            var stage = _mappingStage;
-            _mappingStage = null;
-            return stage;
         }
 
         /// <summary>Configure-on-change: mapped and unmapped outputs see different formats, and a
         /// live mapping resize changes the format mid-run. Configure is idempotent downstream.</summary>
-        public void EnsureConfigured(VideoFormat format)
+        private void EnsureConfigured(VideoFormat format)
         {
             if (_configuredFormat == format)
                 return;
             Output.Configure(format);
             _configuredFormat = format;
+        }
+
+        public bool TrySubmit(VideoFrame frame)
+        {
+            lock (_lifecycleGate)
+            {
+                if (_retired)
+                    return false;
+
+                EnsureConfigured(frame.Format);
+                Output.Submit(frame);
+                return true;
+            }
         }
 
         public void SubscribePumpPressure(ClipCompositionRuntime owner)
@@ -1005,7 +1055,28 @@ public sealed class ClipCompositionRuntime : IDisposable
             pump.PumpPressure += _pressureHandler;
         }
 
-        public void UnsubscribePumpPressure()
+        public OutputMappingStage? Retire(string operation)
+        {
+            lock (_lifecycleGate)
+            {
+                if (_retired)
+                    return null;
+
+                _retired = true;
+                var retired = _mappingStage;
+                _mappingStage = null;
+                UnsubscribePumpPressureCore();
+
+                if (DisposeOutputOnRuntimeDispose && Output is IDisposable disposable)
+                    MediaDiagnostics.SwallowDisposeErrors(disposable.Dispose, $"{operation}: output dispose");
+                if (Release is not null)
+                    MediaDiagnostics.SwallowDisposeErrors(Release, $"{operation}: output release");
+
+                return retired;
+            }
+        }
+
+        private void UnsubscribePumpPressureCore()
         {
             if (_pressureHandler is null || Output is not VideoOutputPump pump)
                 return;

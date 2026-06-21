@@ -38,7 +38,7 @@ public partial class MainViewModel
         SelectedActionEndpoint = endpoint;
     }
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanAddMidiEndpoint))]
     private void AddMidiEndpoint()
     {
         var n = ActionEndpoints.OfType<MidiActionEndpoint>().Count() + 1;
@@ -51,13 +51,15 @@ public partial class MainViewModel
         SelectedActionEndpoint = endpoint;
     }
 
+    private bool CanAddMidiEndpoint() => IsMidiAvailable;
+
     [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputEndpoint))]
     private void AddSelectedMidiOutputEndpoint()
     {
         AddSelectedMidiOutputToProject();
     }
 
-    private bool CanAddSelectedMidiOutputEndpoint() => SelectedMidiOutputOption is not null;
+    private bool CanAddSelectedMidiOutputEndpoint() => IsMidiAvailable && SelectedMidiOutputOption is not null;
 
     [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputToProject))]
     private void AddSelectedMidiOutputToProject()
@@ -92,7 +94,7 @@ public partial class MainViewModel
             MatchesMidiBinding(r.DeviceId, r.DeviceName, output.Id, output.Name));
     }
 
-    private bool CanAddSelectedMidiOutputToProject() => SelectedMidiOutputOption is not null;
+    private bool CanAddSelectedMidiOutputToProject() => IsMidiAvailable && SelectedMidiOutputOption is not null;
 
     private MidiActionEndpoint? FindMidiEndpoint(int deviceId, string deviceName) =>
         ActionEndpoints
@@ -159,11 +161,21 @@ public partial class MainViewModel
             SelectedMidiOutputOption = MidiOutputOptions.FirstOrDefault(o => o.Id == midi.DeviceId);
     }
 
-    private bool CanRefreshMidiOutputs() => SelectedActionEndpoint is MidiActionEndpoint;
+    private bool CanRefreshMidiOutputs() => IsMidiAvailable && SelectedActionEndpoint is MidiActionEndpoint;
 
-    [RelayCommand]
+    [RelayCommand(CanExecute = nameof(CanRefreshMidiDeviceCatalog))]
     private void RefreshMidiDeviceCatalog()
     {
+        if (!IsMidiAvailable)
+        {
+            MidiInputOptions.Clear();
+            MidiOutputOptions.Clear();
+            SelectedMidiInputOption = null;
+            SelectedMidiOutputOption = null;
+            MidiDeviceStatus = MidiUnavailableStatus;
+            return;
+        }
+
         var previousInputId = SelectedMidiInputOption?.Id;
         var previousOutputId = SelectedMidiOutputOption?.Id;
         var initError = EnsureMidiInitialized();
@@ -192,6 +204,8 @@ public partial class MainViewModel
         MidiDeviceStatus = Strings.Format(nameof(Strings.MidiDeviceCatalogStatusFormat), inputs.Count, outputs.Count);
     }
 
+    private bool CanRefreshMidiDeviceCatalog() => IsMidiAvailable;
+
     [RelayCommand(CanExecute = nameof(CanUseSelectedMidiOutput))]
     private void UseSelectedMidiOutput()
     {
@@ -201,7 +215,7 @@ public partial class MainViewModel
         MidiEditDeviceName = SelectedMidiOutputOption.Name;
     }
 
-    private bool CanUseSelectedMidiOutput() => SelectedMidiOutputOption is not null;
+    private bool CanUseSelectedMidiOutput() => IsMidiAvailable && SelectedMidiOutputOption is not null;
 
     [RelayCommand(CanExecute = nameof(CanAddSelectedMidiInputToControl))]
     private void AddSelectedMidiInputToControl()
@@ -215,7 +229,7 @@ public partial class MainViewModel
         MidiDeviceStatus = $"Added project MIDI input '{input.Name}'.";
     }
 
-    private bool CanAddSelectedMidiInputToControl() => SelectedMidiInputOption is not null;
+    private bool CanAddSelectedMidiInputToControl() => IsMidiAvailable && SelectedMidiInputOption is not null;
 
     [RelayCommand(CanExecute = nameof(CanAddSelectedMidiOutputToControl))]
     private void AddSelectedMidiOutputToControl()
@@ -229,7 +243,7 @@ public partial class MainViewModel
         MidiDeviceStatus = $"Added project MIDI output '{output.Name}' to Control.";
     }
 
-    private bool CanAddSelectedMidiOutputToControl() => SelectedMidiOutputOption is not null;
+    private bool CanAddSelectedMidiOutputToControl() => IsMidiAvailable && SelectedMidiOutputOption is not null;
 
     [RelayCommand(CanExecute = nameof(CanRemoveSelectedProjectMidiInput))]
     private void RemoveSelectedProjectMidiInput()

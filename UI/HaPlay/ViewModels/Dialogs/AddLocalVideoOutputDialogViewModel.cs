@@ -32,6 +32,7 @@ public sealed record VideoEngineChoice(VideoOutputEngine Value, string Label, st
 public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
 {
     private Guid? _existingId;
+    private IReadOnlyCollection<string> _existingOutputNames = Array.Empty<string>();
 
     /// <summary>User-visible engine choices (§12.3). Subtitle exposes the technical name for power users.</summary>
     public VideoEngineChoice[] Engines { get; } =
@@ -89,6 +90,14 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
     public string DialogTitle => IsEditing ? Strings.EditLocalVideoOutputDialogTitle : Strings.AddLocalVideoOutputDialogTitle;
 
     public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
+
+    public void InitializeExistingOutputNames(IEnumerable<string> names)
+    {
+        var set = OutputNameUniqueness.CreateNameSet(names);
+        _existingOutputNames = set;
+        if (!IsEditing)
+            DisplayName = OutputNameUniqueness.MakeUniqueDefaultName(DisplayName, set);
+    }
 
     public void InitializeScreens(IReadOnlyList<Screen> screens)
     {
@@ -156,6 +165,12 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
             ValidationMessage = Strings.ValidationDisplayNameRequired;
             return null;
         }
+        var displayName = DisplayName.Trim();
+        if (OutputNameUniqueness.TryFindDuplicate(displayName, _existingOutputNames, out var duplicateName))
+        {
+            ValidationMessage = Strings.Format(nameof(Strings.ValidationOutputNameAlreadyExistsFormat), duplicateName);
+            return null;
+        }
 
         if (SelectedScreen is null)
         {
@@ -174,7 +189,7 @@ public partial class AddLocalVideoOutputDialogViewModel : ViewModelBase
 
         return new LocalVideoOutputDefinition(
             _existingId ?? Guid.NewGuid(),
-            DisplayName.Trim(),
+            displayName,
             Engine,
             SurfaceMode,
             SelectedScreen.Index,

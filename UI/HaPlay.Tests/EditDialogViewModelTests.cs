@@ -64,6 +64,32 @@ public sealed class EditDialogViewModelTests
     }
 
     [Fact]
+    public void LocalVideo_InitializeExistingOutputNames_AutoIncrementsDefaultDisplayName()
+    {
+        var vm = new AddLocalVideoOutputDialogViewModel();
+
+        vm.InitializeExistingOutputNames(["Program output", "Program output 2"]);
+
+        Assert.Equal("Program output 3", vm.DisplayName);
+    }
+
+    [Fact]
+    public void LocalVideo_TryCommit_RejectsDuplicateDisplayName()
+    {
+        var vm = new AddLocalVideoOutputDialogViewModel();
+        var screen = new ScreenListItem { Index = 0, Label = "Primary" };
+        vm.Screens.Add(screen);
+        vm.SelectedScreen = screen;
+        vm.InitializeExistingOutputNames(["Program output"]);
+        vm.DisplayName = "Program output";
+
+        var committed = vm.TryCommit();
+
+        Assert.Null(committed);
+        Assert.Contains("Program output", vm.ValidationMessage);
+    }
+
+    [Fact]
     public void LocalVideo_LoadFromExisting_MissingParent_FallsBackToNone()
     {
         var vm = new AddLocalVideoOutputDialogViewModel();
@@ -133,6 +159,22 @@ public sealed class EditDialogViewModelTests
         Assert.Equal(PixelFormat.Uyvy, committed!.PixelFormatLock);
         Assert.Equal(1920, committed.ResolutionLockWidth);
         Assert.Equal(1080, committed.ResolutionLockHeight);
+    }
+
+    [Fact]
+    public void NDI_TryCommit_RejectsDuplicateDisplayName()
+    {
+        var vm = new AddNDIOutputDialogViewModel
+        {
+            SourceName = "Studio (Cam1)",
+        };
+        vm.InitializeExistingOutputNames(["NDI program"]);
+        vm.DisplayName = "NDI program";
+
+        var committed = vm.TryCommit();
+
+        Assert.Null(committed);
+        Assert.Contains("NDI program", vm.ValidationMessage);
     }
 
     /// <summary>"Auto" entries map back to nullable lock fields. Without this, every NDI output created
@@ -229,10 +271,23 @@ public sealed class EditDialogViewModelTests
         vm.LoadFromExisting(existing);
 
         Assert.True(vm.IsEditing);
-        Assert.Equal("Edit PortAudio output", vm.DialogTitle);
+        Assert.Equal("Edit audio output", vm.DialogTitle);
         Assert.Equal("Save", vm.PrimaryButtonLabel);
         Assert.Equal("Stage", vm.DisplayName);
         Assert.Equal(4, vm.ChannelCount);
         Assert.Equal(96000, vm.SampleRate);
+    }
+
+    [Fact]
+    public void PortAudio_TryCommit_RejectsDuplicateDisplayNameBeforeDeviceValidation()
+    {
+        var vm = new AddPortAudioOutputDialogViewModel();
+        vm.InitializeExistingOutputNames(["Main speakers"]);
+        vm.DisplayName = "Main speakers";
+
+        var committed = vm.TryCommit();
+
+        Assert.Null(committed);
+        Assert.Contains("Main speakers", vm.ValidationMessage);
     }
 }

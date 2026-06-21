@@ -125,13 +125,15 @@ internal sealed partial class HaPlayPlaybackSession
 
         _acquiredPortAudioLines.Add(line);
         wiring.AcquiredKind = AcquireKind.PortAudio;
-        wiring.PortAudioOutput = outDev;
-        wiring.PortAudioUnderrunBaseline = outDev.UnderrunSamples;
+        wiring.PortAudioOutput = outDev as PortAudioOutput;
+        wiring.AudioPlaybackStats = outDev as IAudioOutputPlaybackStats;
+        wiring.PortAudioUnderrunBaseline = wiring.AudioPlaybackStats?.UnderrunSamples ?? 0;
 
         if (!TryGetSourceAudioFormat(out var dec))
         {
             _acquiredPortAudioLines.Remove(line);
             wiring.PortAudioOutput = null;
+            wiring.AudioPlaybackStats = null;
             try { _outputs.ReleasePortAudioForPlayback(line); } catch { /* best effort */ }
             errorMessage = "Source audio format is unavailable.";
             return false;
@@ -343,6 +345,24 @@ internal sealed partial class HaPlayPlaybackSession
             catch (Exception ex) { Trace.LogWarning(ex, "UnwireLineFromRouters: VideoRouter.RemoveOutput({Id})", videoOutputId); }
         }
 
+        if (wiring.CompositionOutputId is { } compositionOutputId && _mediaPlayerComposition is { } composition)
+        {
+            try
+            {
+                if (!composition.RemoveOutput(compositionOutputId))
+                {
+                    Trace.LogDebug(
+                        "UnwireLineFromRouters: composition output {Id} was already absent (remaining={Remaining})",
+                        compositionOutputId,
+                        composition.OutputCount);
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "UnwireLineFromRouters: composition.RemoveOutput({Id})", compositionOutputId);
+            }
+        }
+
         if (wiring.Resampler is not null)
         {
             // Resampler is in _portAudioResamplers or _ndiAudioResamplers; drop the reference so Dispose
@@ -405,6 +425,7 @@ internal sealed partial class HaPlayPlaybackSession
     {
         public string? AudioOutputId { get; set; }
         public string? VideoOutputId { get; set; }
+        public string? CompositionOutputId { get; set; }
         public LogoFallbackVideoOutput? LogoOutput { get; set; }
         public ResamplingAudioOutput? Resampler { get; set; }
         public AcquireKind AcquiredKind { get; set; }
@@ -429,6 +450,7 @@ internal sealed partial class HaPlayPlaybackSession
         public int SinkChannelCount { get; set; }
 
         public PortAudioOutput? PortAudioOutput { get; set; }
+        public IAudioOutputPlaybackStats? AudioPlaybackStats { get; set; }
         public long PortAudioUnderrunBaseline { get; set; }
         public long VideoSubmittedBaseline { get; set; }
         public long VideoDroppedBaseline { get; set; }

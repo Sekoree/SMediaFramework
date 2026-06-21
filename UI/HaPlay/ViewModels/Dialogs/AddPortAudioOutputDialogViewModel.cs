@@ -1,10 +1,27 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using HaPlay.Models;
 using HaPlay.Resources;
+using S.Media.Core.Audio;
 using S.Media.PortAudio;
 
 namespace HaPlay.ViewModels.Dialogs;
+
+public sealed record AudioBackendChoice(string Name, string DisplayName, IAudioBackend Backend);
+
+public sealed record AudioOutputDeviceChoice(
+    string? DeviceId,
+    string Name,
+    int MaxOutputChannels,
+    double DefaultSampleRate,
+    bool IsDefault,
+    PortAudioOutputDeviceEntry? PortAudioDevice = null)
+{
+    public string DisplayName => IsDefault ? $"{Name} (default)" : Name;
+
+    public int EffectiveMaxOutputChannels => Math.Max(1, MaxOutputChannels);
+}
 
 public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
 {
@@ -13,31 +30,64 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
     /// On <see cref="TryCommit"/> we keep this Id so playback references survive the edit.
     /// </summary>
     private Guid? _existingId;
+    private bool _suppressBackendReload;
+    private IReadOnlyCollection<string> _existingOutputNames = Array.Empty<string>();
 
     [ObservableProperty] private string _displayName = Strings.MainSpeakersDefaultName;
     [ObservableProperty] private string? _validationMessage;
 
+    public ObservableCollection<AudioBackendChoice> Backends { get; } = new();
     public ObservableCollection<PortAudioHostApiEntry> HostApis { get; } = new();
-    public ObservableCollection<PortAudioOutputDeviceEntry> Devices { get; } = new();
+    public ObservableCollection<AudioOutputDeviceChoice> Devices { get; } = new();
 
+    [ObservableProperty] private AudioBackendChoice? _selectedBackend;
     [ObservableProperty] private PortAudioHostApiEntry? _selectedHostApi;
-    [ObservableProperty] private PortAudioOutputDeviceEntry? _selectedDevice;
+    [ObservableProperty] private AudioOutputDeviceChoice? _selectedDevice;
     [ObservableProperty] private int _channelCount = 2;
     [ObservableProperty] private int _sampleRate = 48000;
 
     /// <summary>True when the dialog is editing an existing line. Title bar uses this to show "Edit X" vs "Add X".</summary>
     public bool IsEditing => _existingId is not null;
 
+    public bool IsPortAudioBackend =>
+        SelectedBackend is null || IsPortAudioBackendName(SelectedBackend.Name);
+
     public string DialogTitle => IsEditing ? Strings.EditPortAudioOutputDialogTitle : Strings.AddPortAudioOutputDialogTitle;
 
     public string PrimaryButtonLabel => IsEditing ? Strings.SaveButton : Strings.AddButton;
 
+    public void InitializeExistingOutputNames(IEnumerable<string> names)
+    {
+        var set = OutputNameUniqueness.CreateNameSet(names);
+        _existingOutputNames = set;
+        if (!IsEditing)
+            DisplayName = OutputNameUniqueness.MakeUniqueDefaultName(DisplayName, set);
+    }
+
+    public void ReloadBackends()
+    {
+        var selectedName = SelectedBackend?.Name;
+        Backends.Clear();
+        foreach (var backend in DiscoverBackends())
+            Backends.Add(new AudioBackendChoice(backend.Name, BackendDisplayName(backend), backend));
+
+        var selected =
+            Backends.FirstOrDefault(b => string.Equals(b.Name, selectedName, StringComparison.OrdinalIgnoreCase))
+            ?? Backends.FirstOrDefault(b => IsPortAudioBackendName(b.Name))
+            ?? Backends.FirstOrDefault();
+
+        _suppressBackendReload = true;
+        SelectedBackend = selected;
+        _suppressBackendReload = false;
+        OnPropertyChanged(nameof(IsPortAudioBackend));
+    }
+
     public void ReloadHostApis()
     {
-        HostApis.Clear();
-        foreach (var h in PortAudioDeviceCatalog.EnumerateHostApis())
-            HostApis.Add(h);
-        SelectedHostApi = HostApis.Cast<PortAudioHostApiEntry?>().FirstOrDefault();
+        if (Backends.Count == 0)
+            ReloadBackends();
+
+        ReloadDevicesForSelectedBackend();
     }
 
     /// <summary>Pre-populate the dialog from <paramref name="existing"/> so the user sees current values.</summary>
@@ -46,29 +96,59 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
         _existingId = existing.Id;
         DisplayName = existing.DisplayName;
 
-        ReloadHostApis();
-        // PortAudio indices can move between launches, so match saved host/device names first and
-        // use indices only as a fallback. Cast to nullable avoids treating a zero-init struct as a hit.
-        var hostMatch = HostApis
-            .Where(h => string.Equals(h.Name, existing.HostApiName, StringComparison.OrdinalIgnoreCase))
-            .Cast<PortAudioHostApiEntry?>()
-            .FirstOrDefault()
-            ?? HostApis.Where(h => h.Index == existing.HostApiIndex)
-                .Cast<PortAudioHostApiEntry?>()
-                .FirstOrDefault();
-        if (hostMatch is not null)
-            SelectedHostApi = hostMatch;
+        ReloadBackends();
+        var backend = Backends.FirstOrDefault(b =>
+            string.Equals(b.Name, existing.EffectiveAudioBackendName, StringComparison.OrdinalIgnoreCase))
+            ?? Backends.FirstOrDefault(b => IsPortAudioBackendName(b.Name))
+            ?? Backends.FirstOrDefault();
 
-        // ReloadDevices is invoked by OnSelectedHostApiChanged; pick the matching device after that runs.
-        var deviceMatch = Devices
-            .Where(d => string.Equals(d.Name, existing.DeviceName, StringComparison.OrdinalIgnoreCase))
-            .Cast<PortAudioOutputDeviceEntry?>()
-            .FirstOrDefault()
-            ?? Devices.Where(d => d.GlobalDeviceIndex == existing.GlobalDeviceIndex)
-                .Cast<PortAudioOutputDeviceEntry?>()
-                .FirstOrDefault();
-        if (deviceMatch is not null)
-            SelectedDevice = deviceMatch;
+        _suppressBackendReload = true;
+        SelectedBackend = backend;
+        _suppressBackendReload = false;
+        OnPropertyChanged(nameof(IsPortAudioBackend));
+        ReloadDevicesForSelectedBackend();
+
+        if (existing.UsesPortAudioBackend)
+        {
+            var hostMatch = HostApis
+                .Where(h => string.Equals(h.Name, existing.HostApiName, StringComparison.OrdinalIgnoreCase))
+                .Cast<PortAudioHostApiEntry?>()
+                .FirstOrDefault()
+                ?? HostApis.Where(h => h.Index == existing.HostApiIndex)
+                    .Cast<PortAudioHostApiEntry?>()
+                    .FirstOrDefault();
+            if (hostMatch is not null)
+                SelectedHostApi = hostMatch;
+
+            var deviceMatch = Devices
+                .Where(d => string.Equals(d.Name, existing.DeviceName, StringComparison.OrdinalIgnoreCase))
+                .FirstOrDefault()
+                ?? Devices.FirstOrDefault(d => d.PortAudioDevice?.GlobalDeviceIndex == existing.GlobalDeviceIndex);
+            if (deviceMatch is not null)
+                SelectedDevice = deviceMatch;
+        }
+        else
+        {
+            var deviceMatch = Devices.FirstOrDefault(d =>
+                    string.Equals(d.DeviceId, existing.AudioBackendDeviceId, StringComparison.OrdinalIgnoreCase))
+                ?? Devices.FirstOrDefault(d =>
+                    string.Equals(d.Name, existing.DeviceName, StringComparison.OrdinalIgnoreCase));
+            if (deviceMatch is not null)
+            {
+                SelectedDevice = deviceMatch;
+            }
+            else if (!string.IsNullOrWhiteSpace(existing.DeviceName) || !string.IsNullOrWhiteSpace(existing.AudioBackendDeviceId))
+            {
+                var saved = new AudioOutputDeviceChoice(
+                    existing.AudioBackendDeviceId,
+                    string.IsNullOrWhiteSpace(existing.DeviceName) ? "Saved device" : existing.DeviceName,
+                    Math.Max(1, existing.ChannelCount),
+                    existing.SampleRate,
+                    IsDefault: false);
+                Devices.Add(saved);
+                SelectedDevice = saved;
+            }
+        }
 
         ChannelCount = existing.ChannelCount;
         SampleRate = existing.SampleRate;
@@ -78,31 +158,124 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
         OnPropertyChanged(nameof(PrimaryButtonLabel));
     }
 
-    partial void OnSelectedHostApiChanged(PortAudioHostApiEntry? value) => ReloadDevices();
-
-    partial void OnSelectedDeviceChanged(PortAudioOutputDeviceEntry? value)
+    partial void OnSelectedBackendChanged(AudioBackendChoice? value)
     {
-        if (!value.HasValue)
+        OnPropertyChanged(nameof(IsPortAudioBackend));
+        if (!_suppressBackendReload)
+            ReloadDevicesForSelectedBackend();
+    }
+
+    partial void OnSelectedHostApiChanged(PortAudioHostApiEntry? value)
+    {
+        if (IsPortAudioBackend)
+            ReloadDevices();
+    }
+
+    partial void OnSelectedDeviceChanged(AudioOutputDeviceChoice? value)
+    {
+        if (value is null)
             return;
-        var d = value.GetValueOrDefault();
-        ChannelCount = Math.Clamp(ChannelCount, 1, Math.Max(1, d.MaxOutputChannels));
+        ChannelCount = Math.Clamp(ChannelCount, 1, value.EffectiveMaxOutputChannels);
         // Only auto-snap the sample rate during the Add flow — when editing, preserve the saved value
         // so a device swap doesn't silently reset the user's chosen rate.
         if (!IsEditing)
         {
-            var sr = (int)Math.Round(d.DefaultSampleRate, MidpointRounding.AwayFromZero);
+            var sr = (int)Math.Round(value.DefaultSampleRate, MidpointRounding.AwayFromZero);
             if (sr > 0)
                 SampleRate = sr;
         }
     }
 
+    private void ReloadDevicesForSelectedBackend()
+    {
+        if (SelectedBackend is null)
+        {
+            HostApis.Clear();
+            Devices.Clear();
+            SelectedHostApi = null;
+            SelectedDevice = null;
+            return;
+        }
+
+        if (IsPortAudioBackend)
+            ReloadPortAudioHostApis();
+        else
+        {
+            HostApis.Clear();
+            SelectedHostApi = null;
+            ReloadDevices();
+        }
+    }
+
+    private void ReloadPortAudioHostApis()
+    {
+        var previousHost = SelectedHostApi?.Index;
+        HostApis.Clear();
+        foreach (var h in PortAudioDeviceCatalog.EnumerateHostApis())
+            HostApis.Add(h);
+        SelectedHostApi =
+            HostApis.Cast<PortAudioHostApiEntry?>().FirstOrDefault(h => h?.Index == previousHost)
+            ?? HostApis.Cast<PortAudioHostApiEntry?>().FirstOrDefault();
+        ReloadDevices();
+    }
+
     private void ReloadDevices()
     {
+        ValidationMessage = null;
+        var previousDeviceId = SelectedDevice?.DeviceId;
         Devices.Clear();
-        var host = SelectedHostApi?.Index;
-        foreach (var d in PortAudioDeviceCatalog.EnumerateOutputDevices(host))
-            Devices.Add(d);
-        SelectedDevice = Devices.Cast<PortAudioOutputDeviceEntry?>().FirstOrDefault();
+
+        if (SelectedBackend is null)
+        {
+            SelectedDevice = null;
+            return;
+        }
+
+        if (IsPortAudioBackend)
+        {
+            var host = SelectedHostApi?.Index;
+            foreach (var d in PortAudioDeviceCatalog.EnumerateOutputDevices(host))
+            {
+                Devices.Add(new AudioOutputDeviceChoice(
+                    d.GlobalDeviceIndex.ToString(CultureInfo.InvariantCulture),
+                    d.Name,
+                    d.MaxOutputChannels,
+                    d.DefaultSampleRate,
+                    IsDefault: false,
+                    PortAudioDevice: d));
+            }
+        }
+        else
+        {
+            Devices.Add(new AudioOutputDeviceChoice(
+                null,
+                "System default",
+                MaxOutputChannels: 64,
+                DefaultSampleRate: 48000,
+                IsDefault: true));
+
+            try
+            {
+                foreach (var d in SelectedBackend.Backend.EnumerateOutputDevices())
+                {
+                    Devices.Add(new AudioOutputDeviceChoice(
+                        d.Id,
+                        d.Name,
+                        d.MaxChannels,
+                        d.DefaultSampleRate,
+                        d.IsDefault));
+                }
+            }
+            catch (Exception ex)
+            {
+                ValidationMessage = ex.Message;
+            }
+        }
+
+        SelectedDevice =
+            Devices.FirstOrDefault(d => string.Equals(d.DeviceId, previousDeviceId, StringComparison.OrdinalIgnoreCase))
+            ?? Devices.FirstOrDefault(d => d.IsDefault)
+            ?? Devices.FirstOrDefault();
     }
 
     public PortAudioOutputDefinition? TryCommit()
@@ -113,19 +286,25 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
             ValidationMessage = Strings.ValidationDisplayNameRequired;
             return null;
         }
+        var displayName = DisplayName.Trim();
+        if (OutputNameUniqueness.TryFindDuplicate(displayName, _existingOutputNames, out var duplicateName))
+        {
+            ValidationMessage = Strings.Format(nameof(Strings.ValidationOutputNameAlreadyExistsFormat), duplicateName);
+            return null;
+        }
 
-        if (SelectedHostApi is null || SelectedDevice is null)
+        if (SelectedBackend is null || SelectedDevice is null)
         {
             ValidationMessage = Strings.ValidationSelectHostApiAndOutputDevice;
             return null;
         }
 
-        if (ChannelCount < 1 || ChannelCount > SelectedDevice.Value.MaxOutputChannels)
+        if (ChannelCount < 1 || ChannelCount > SelectedDevice.EffectiveMaxOutputChannels)
         {
             ValidationMessage = string.Format(
-                System.Globalization.CultureInfo.CurrentUICulture,
+                CultureInfo.CurrentUICulture,
                 Strings.ValidationChannelCountRangeForDevice,
-                SelectedDevice.Value.MaxOutputChannels);
+                SelectedDevice.EffectiveMaxOutputChannels);
             return null;
         }
 
@@ -135,14 +314,54 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
             return null;
         }
 
+        if (IsPortAudioBackend)
+        {
+            if (SelectedHostApi is null || SelectedDevice.PortAudioDevice is not { } portDevice)
+            {
+                ValidationMessage = Strings.ValidationSelectHostApiAndOutputDevice;
+                return null;
+            }
+
+            return new PortAudioOutputDefinition(
+                _existingId ?? Guid.NewGuid(),
+                displayName,
+                SelectedHostApi.Value.Index,
+                SelectedHostApi.Value.Name,
+                portDevice.GlobalDeviceIndex,
+                portDevice.Name,
+                ChannelCount,
+                SampleRate,
+                PortAudioOutputDefinition.PortAudioBackendName,
+                portDevice.GlobalDeviceIndex.ToString(CultureInfo.InvariantCulture));
+        }
+
         return new PortAudioOutputDefinition(
             _existingId ?? Guid.NewGuid(),
-            DisplayName.Trim(),
-            SelectedHostApi.Value.Index,
-            SelectedHostApi.Value.Name,
-            SelectedDevice.Value.GlobalDeviceIndex,
-            SelectedDevice.Value.Name,
+            displayName,
+            HostApiIndex: -1,
+            HostApiName: SelectedBackend.Name,
+            GlobalDeviceIndex: -1,
+            DeviceName: SelectedDevice.Name,
             ChannelCount,
-            SampleRate);
+            SampleRate,
+            AudioBackendName: SelectedBackend.Name,
+            AudioBackendDeviceId: SelectedDevice.DeviceId);
     }
+
+    private static IReadOnlyList<IAudioBackend> DiscoverBackends()
+    {
+        var registered = AudioBackends.All;
+        if (registered.Count > 0)
+            return registered;
+
+        // Unit tests instantiate the dialog without running App.InitializeMediaFramework. Keep the legacy
+        // PortAudio path visible in that case; real app startup registers every available backend.
+        return [new PortAudioBackend()];
+    }
+
+    private static bool IsPortAudioBackendName(string name) =>
+        string.Equals(name, PortAudioOutputDefinition.PortAudioBackendName, StringComparison.OrdinalIgnoreCase);
+
+    private static string BackendDisplayName(IAudioBackend backend) =>
+        IsPortAudioBackendName(backend.Name) ? PortAudioOutputDefinition.PortAudioBackendName : backend.Name;
 }

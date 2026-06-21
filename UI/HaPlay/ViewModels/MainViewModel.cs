@@ -563,6 +563,8 @@ public partial class MainViewModel : ViewModelBase
     public ObservableCollection<ProjectMidiOutputRowViewModel> ProjectMidiOutputRows { get; } = new();
     public bool HasNoProjectMidiInputs => ProjectMidiInputRows.Count == 0;
     public bool HasNoProjectMidiOutputs => ProjectMidiOutputRows.Count == 0;
+    public bool IsMidiAvailable => RuntimeModules.IsMidiAvailable;
+    public string MidiUnavailableStatus => RuntimeModules.MidiUnavailableReason ?? "MIDI runtime unavailable.";
 
     [ObservableProperty]
     private string? _midiDeviceStatus;
@@ -1468,7 +1470,7 @@ public partial class MainViewModel : ViewModelBase
         };
     }
 
-    private bool CanTestSelectedMidiEndpoint() => SelectedActionEndpoint is MidiActionEndpoint;
+    private bool CanTestSelectedMidiEndpoint() => IsMidiAvailable && SelectedActionEndpoint is MidiActionEndpoint;
 
     private sealed class ProjectMidiOutputRowBuilder
     {
