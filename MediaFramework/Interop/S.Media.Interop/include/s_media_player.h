@@ -19,8 +19,8 @@
  *
  * Conventions:
  *   - Call mfp_initialize() once before anything else; mfp_shutdown() once at the end.
- *   - Handles (mfp_player, mfp_video_router, mfp_audio_router, mfp_output, mfp_audio_source) are
- *     opaque pointers.
+ *   - Handles (mfp_player, mfp_video_router, mfp_audio_router, mfp_output, mfp_audio_source,
+ *     mfp_ndi_source, mfp_ndi_output) are opaque pointers.
  *   - Functions returning int return MFP_OK (0) or a negative MFP_ERR_*; a human-readable message for
  *     the last failure on the calling thread is available via mfp_last_error(). Nothing throws/aborts
  *     across the boundary.
@@ -29,7 +29,9 @@
  *     factory you OWN: attach them (the router does not take ownership), and after closing the player /
  *     removing them, free them with mfp_output_destroy. Audio sources you create are also owned by you
  *     until transferred into mfp_player_open_live_audio; after a successful transfer the player owns the
- *     source. Router handles are borrowed (freed with the player).
+ *     source. NDI receiver sources similarly transfer into mfp_player_open_live_ndi. NDI sender child
+ *     outputs require the parent mfp_ndi_output to stay alive until after routes are removed and child
+ *     output handles are destroyed. Router handles are borrowed (freed with the player).
  */
 #ifndef S_MEDIA_PLAYER_H
 #define S_MEDIA_PLAYER_H
@@ -64,12 +66,34 @@ extern "C" {
 #define MFP_AUDIO_DEFAULT  -1   /* system default output device */
 #define MFP_AUDIO_NONE     -2   /* do not wire audio */
 
+/* NDI receive bandwidth values, matching the NDI SDK. */
+#define MFP_NDI_BANDWIDTH_METADATA_ONLY -10
+#define MFP_NDI_BANDWIDTH_LOWEST          0
+#define MFP_NDI_BANDWIDTH_AUDIO_ONLY     10
+#define MFP_NDI_BANDWIDTH_HIGHEST       100
+
+/* NDI receiver color-format values, matching the NDI SDK. */
+#define MFP_NDI_COLOR_BGRX_BGRA   0
+#define MFP_NDI_COLOR_UYVY_BGRA   1
+#define MFP_NDI_COLOR_RGBX_RGBA   2
+#define MFP_NDI_COLOR_UYVY_RGBA   3
+#define MFP_NDI_COLOR_FASTEST   100
+#define MFP_NDI_COLOR_BEST      101
+
+/* NDI sender video timecode modes. */
+#define MFP_NDI_TIMECODE_SYNTHESIZE                  0
+#define MFP_NDI_TIMECODE_PRESENTATION_RELATIVE_TICKS 1
+#define MFP_NDI_TIMECODE_MUXER_PRESENTATION_TICKS    2
+#define MFP_NDI_TIMECODE_SMPTE_FROM_FRAME            3
+
 /* Opaque handles. */
 typedef void* mfp_player;
 typedef void* mfp_video_router;
 typedef void* mfp_audio_router;
 typedef void* mfp_output;
 typedef void* mfp_audio_source;
+typedef void* mfp_ndi_source;
+typedef void* mfp_ndi_output;
 
 /*
  * Event callback. Fires on a framework thread (clock / decode) — marshal to your own thread; do not
@@ -90,6 +114,8 @@ int  mfp_player_open_uri(const char* utf8_uri, mfp_player* out_player);
 int  mfp_player_open_stream(const uint8_t* data, int length, mfp_player* out_player);
 /* Transfers ownership of source to the returned player on success. Do not destroy source after success. */
 int  mfp_player_open_live_audio(mfp_audio_source source, mfp_player* out_player);
+/* Transfers ownership of source to the returned player on success. Do not destroy source after success. */
+int  mfp_player_open_live_ndi(mfp_ndi_source source, mfp_player* out_player);
 
 void mfp_close(mfp_player player);
 
@@ -135,6 +161,31 @@ void mfp_audio_source_destroy(mfp_audio_source source);
 int  mfp_portaudio_output_create(int device_index, int sample_rate, int channels, mfp_output* out_output);
 int  mfp_sdl_window_output_create(const char* utf8_title, int width, int height, mfp_output* out_output);
 void mfp_output_destroy(mfp_output output);
+
+/* ---- NDI discovery, live input, and sender output factories ------------------------------------ */
+/* NDI is optional. These calls fail with MFP_ERR_* / mfp_last_error when the native NDI runtime is absent. */
+int  mfp_ndi_runtime_is_available(void); /* 1 = available CPU/runtime probe succeeded, 0 = unavailable */
+int  mfp_ndi_runtime_version(char* buffer, int buffer_len);
+
+/* Source discovery snapshots on the calling thread; call count first, then get(index, ...). */
+int  mfp_ndi_source_count(int timeout_ms, int show_local_sources, const char* groups, const char* extra_ips);
+int  mfp_ndi_source_get(int index, char* name_buffer, int name_len, char* url_buffer, int url_len);
+int  mfp_ndi_source_open(const char* ndi_name, const char* url_address,
+                         int receive_audio, int receive_video, const char* receiver_name,
+                         int bandwidth, int color_format, int max_queued_video_frames,
+                         mfp_ndi_source* out_source);
+void mfp_ndi_source_destroy(mfp_ndi_source source);
+
+/* Create an NDI sender owner, then obtain video/audio child mfp_output handles from it. Keep the
+ * mfp_ndi_output alive while any child output handle is routed. Destroy child output handles with
+ * mfp_output_destroy after removing routes; destroy the parent with mfp_ndi_output_destroy last. */
+int  mfp_ndi_output_create(const char* source_name, const char* groups,
+                           int clock_video, int clock_audio, int video_timecode_mode,
+                           mfp_ndi_output* out_output);
+int  mfp_ndi_output_video(mfp_ndi_output output, mfp_output* out_video);
+int  mfp_ndi_output_audio(mfp_ndi_output output, int sample_rate, int channels, mfp_output* out_audio);
+int  mfp_ndi_output_connection_count(mfp_ndi_output output, int timeout_ms);
+void mfp_ndi_output_destroy(mfp_ndi_output output);
 
 /* ---- Video router wiring ------------------------------------------------------------------------ */
 /* add_output writes the new output id into out_id_buffer (same copy semantics as the id getters). */

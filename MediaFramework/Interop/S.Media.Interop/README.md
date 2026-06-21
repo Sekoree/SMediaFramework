@@ -126,6 +126,55 @@ char src[64]; mfp_player_audio_source_id(p, src, sizeof src);
 /* attach an output and connect src as in the file example */
 ```
 
+### NDI
+
+NDI is optional and loaded lazily. `mfp_initialize()` does not fail when the NDI runtime is absent; NDI
+calls return `MFP_ERR_*` and set `mfp_last_error` if the native NDI library cannot be loaded.
+
+Discover and open an NDI receiver source:
+
+```c
+int n = mfp_ndi_source_count(500, 1, NULL, NULL);
+for (int i = 0; i < n; i++) {
+    char name[256], url[256];
+    mfp_ndi_source_get(i, name, sizeof name, url, sizeof url);
+}
+
+mfp_ndi_source src;
+mfp_ndi_source_open("CAMERA-1 (Studio)", NULL,
+                    1, 1, "native-host",
+                    MFP_NDI_BANDWIDTH_HIGHEST,
+                    MFP_NDI_COLOR_BGRX_BGRA,
+                    8,
+                    &src);
+
+mfp_player p;
+mfp_player_open_live_ndi(src, &p);          /* ownership of src transfers to p on success */
+```
+
+Create an NDI sender and route the child outputs into a graph:
+
+```c
+mfp_ndi_output ndi;
+mfp_ndi_output_create("Program", NULL,
+                      0, 0,
+                      MFP_NDI_TIMECODE_PRESENTATION_RELATIVE_TICKS,
+                      &ndi);
+
+mfp_output ndi_video;
+mfp_ndi_output_video(ndi, &ndi_video);
+/* add ndi_video to a video router and route to it */
+
+mfp_output ndi_audio;
+mfp_ndi_output_audio(ndi, 48000, 2, &ndi_audio);
+/* add ndi_audio to an audio router and connect to it */
+
+/* Teardown order after routes are removed / player closed: */
+mfp_output_destroy(ndi_video);
+mfp_output_destroy(ndi_audio);
+mfp_ndi_output_destroy(ndi);
+```
+
 The legacy PortAudio-only device surface is still available for hosts that already store
 PortAudio global device indices:
 
@@ -147,7 +196,9 @@ for (int i = 0; i < n; i++) {
 - **Ownership:** a player owns its decoder + routers (freed by `mfp_close`). Outputs you create with a
   factory you own — free them with `mfp_output_destroy` *after* closing the player / removing them.
   Audio sources you create are owned by you until `mfp_player_open_live_audio` succeeds, after which the
-  player owns them. Router handles are borrowed (freed with the player).
+  player owns them. NDI receiver sources follow the same transfer rule through `mfp_player_open_live_ndi`.
+  NDI sender child outputs require the parent `mfp_ndi_output` to stay alive until after routes are removed
+  and child output handles are destroyed. Router handles are borrowed (freed with the player).
 
 ## Scope
 
@@ -157,6 +208,6 @@ good candidates for separate addon libraries. Entry points and enum values are a
 
 ### Roadmap
 
-- **Foundation** (this layer): graph open, routers + routing, backend-neutral audio output/input creation, live audio open, PortAudio/SDL compatibility outputs, device discovery, events.
-- **Next:** NDI receiver/source discovery, NDI sender + file/encoder (recording) outputs.
+- **Foundation** (this layer): graph open, routers + routing, backend-neutral audio output/input creation, live audio open, NDI source discovery/live receiver/sender outputs, PortAudio/SDL compatibility outputs, device discovery, events.
+- **Next:** file/encoder (recording) outputs.
 - **Then:** compositions (layers, per-output mapping/warp).

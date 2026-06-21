@@ -26,6 +26,14 @@ for backend-neutral live audio capture. Focused validation passed:
 The publish output includes `libsmedia_miniaudio.so`, and `nm` shows the new
 `mfp_audio_input_*`, `mfp_audio_source_destroy`, and `mfp_player_open_live_audio` exports.
 
+Validation update 2026-06-21: expanded the NativeAOT C ABI with NDI discovery, live receiver open, and sender
+output factories. Focused validation passed:
+`dotnet build MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj --no-restore -m:1 -v:m`,
+`dotnet test MediaFramework/Test/S.Media.NDI.Tests/S.Media.NDI.Tests.csproj --no-restore -v:m`,
+`dotnet build MFPlayer.sln -m:1 --no-restore -v:m`, and
+`dotnet publish MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj -c Release -r linux-x64 -p:PublishAot=true -v:m`.
+`nm` shows the new `mfp_ndi_*` and `mfp_player_open_live_ndi` exports.
+
 ## Quick wins (UI text / cleanup)
 
 - **[DONE]** In HaPlay the quick buttons to fullscreen/window a window had the "preview" suffix — removed
@@ -101,9 +109,13 @@ The publish output includes `libsmedia_miniaudio.so`, and `nm` shows the new
     `mfp_audio_input_create`, `mfp_audio_source_destroy`, and `mfp_player_open_live_audio`. Source ownership
     transfers into the player on a successful live open; otherwise the host remains responsible for destroying
     the source handle.
+  - **[DONE]** NDI building blocks are exposed to native hosts: `mfp_ndi_source_count/get/open/destroy`,
+    `mfp_player_open_live_ndi`, `mfp_ndi_output_create/video/audio/connection_count/destroy`, and optional
+    runtime probes. NDI remains lazy: `mfp_initialize` does not require the NDI runtime to be installed, and
+    NDI-specific calls report errors through `mfp_last_error` when the native runtime cannot be loaded.
   - **Remaining (building blocks only — high-level cue/soundboard/control engines are intentionally left to
-    host apps / possible future addon libraries):** NDI receiver/source discovery for `open_live`, NDI sender
-    + file/encoder (recording) output factories, richer live video input handles, and compositions
+    host apps / possible future addon libraries):** file/encoder (recording) output factories, a generic
+    non-NDI live video input handle path, and compositions
     (`ClipCompositionRuntime` layers + per-output mapping/warp).
 
 - **Properly modularize the framework** — make parts non-strictly-required. **Assessment + plan** (the

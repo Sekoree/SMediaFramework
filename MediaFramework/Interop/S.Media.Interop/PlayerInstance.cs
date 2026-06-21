@@ -155,23 +155,35 @@ internal sealed class PlayerInstance : IDisposable
     }
 
     /// <summary>Graph open from a live audio source; the player takes ownership of the source.</summary>
-    public static bool TryOpenLiveAudio(IAudioSource audioSource, out PlayerInstance? instance, out string? error)
+    public static bool TryOpenLiveAudio(IAudioSource audioSource, out PlayerInstance? instance, out string? error) =>
+        TryOpenLive(audioSource, videoSource: null, out instance, out error);
+
+    /// <summary>Graph open from live sources; the player takes ownership of the supplied source objects.</summary>
+    public static bool TryOpenLive(
+        IAudioSource? audioSource,
+        IVideoSource? videoSource,
+        out PlayerInstance? instance,
+        out string? error)
     {
-        if (audioSource is null)
+        if (audioSource is null && videoSource is null)
         {
             instance = null;
-            error = "audio source is null";
+            error = "at least one live audio or video source is required.";
             return false;
         }
 
         var opened = TryOpenGraph(
-            MediaPlayer.OpenLive(audioSource, videoSource: null)
+            MediaPlayer.OpenLive(audioSource, videoSource)
                 .WithOptions(MediaPlayerOpenOptions.Default)
                 .WithDisposeSourcesOnPlayerDispose(),
             out instance,
             out error);
+        // When the player opens successfully it owns/disposes the live source adapters. If graph creation
+        // fails before ownership transfers, release them here so native handles do not leak capture devices.
         if (!opened && audioSource is IDisposable d)
-            MediaDiagnostics.SwallowDisposeErrors(d.Dispose, "S.Media.Interop.PlayerInstance.TryOpenLiveAudio");
+            MediaDiagnostics.SwallowDisposeErrors(d.Dispose, "S.Media.Interop.PlayerInstance.TryOpenLive: audio source");
+        if (!opened && videoSource is IDisposable vd && !ReferenceEquals(vd, audioSource))
+            MediaDiagnostics.SwallowDisposeErrors(vd.Dispose, "S.Media.Interop.PlayerInstance.TryOpenLive: video source");
         return opened;
     }
 
