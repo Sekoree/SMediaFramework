@@ -913,11 +913,60 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void OnSharedOutputsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        var addedLines = e.NewItems?.OfType<OutputLineViewModel>().ToArray() ?? [];
         Dispatcher.UIThread.Post(() =>
         {
             SyncOutputsCollection();
             SyncIdleSlate();
+            foreach (var addedLine in addedLines)
+                _ = TryHotAddAddedCloneAsync(addedLine);
         });
+    }
+
+    private bool ShouldHotAddAddedClone(OutputLineViewModel line)
+    {
+        if (_session is null)
+            return false;
+        if (line.Definition is not LocalVideoOutputDefinition { CloneOfId: { } parentId })
+            return false;
+        return Outputs.FirstOrDefault(b => b.Line.Definition.Id == parentId)?.IsSelected == true;
+    }
+
+    private async Task TryHotAddAddedCloneAsync(OutputLineViewModel line)
+    {
+        if (!await Dispatcher.UIThread.InvokeAsync(() => ShouldHotAddAddedClone(line)))
+            return;
+
+        for (var i = 0; i < 20; i++)
+        {
+            var ready = await Dispatcher.UIThread.InvokeAsync(() =>
+                line.IsPreviewRunning || !ShouldHotAddAddedClone(line));
+            if (ready)
+                break;
+            await Task.Delay(50).ConfigureAwait(false);
+        }
+
+        if (!await Dispatcher.UIThread.InvokeAsync(() => line.IsPreviewRunning && ShouldHotAddAddedClone(line)))
+            return;
+
+        await WithPlaybackArcAsync(() =>
+        {
+            var session = _session;
+            if (session is null || !ShouldRouteLine(line) || session.HasWiredLine(line))
+                return Task.CompletedTask;
+
+            if (!session.TryAddOutput(line, out var err))
+            {
+                if (!string.IsNullOrWhiteSpace(err))
+                    Dispatcher.UIThread.Post(() => StatusMessage = err);
+            }
+            else
+            {
+                TransportTrace.LogInformation("Hot-added clone output '{Name}' to running session", line.Definition.DisplayName);
+            }
+
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
     }
 
     private void OnSharedHeadphonesBusesChanged(object? sender, EventArgs e)

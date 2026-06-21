@@ -48,14 +48,15 @@ public interface IAudioBackend
     /// <summary>
     /// Opens an output on the device with <paramref name="deviceId"/> (an <see cref="AudioDeviceInfo.Id"/>),
     /// or the system default when <paramref name="deviceId"/> is <c>null</c>/empty. The returned output is
-    /// ready to register on an <see cref="AudioRouter"/>; it may also implement <see cref="IClockedOutput"/> /
-    /// <see cref="IPlaybackClock"/> etc. The caller owns it and disposes it.
+    /// <strong>started</strong> and ready to register on an <see cref="AudioRouter"/>; it may also implement
+    /// <see cref="IClockedOutput"/> / <see cref="IPlaybackClock"/> etc. The caller owns it and disposes it.
     /// </summary>
     IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null);
 
     /// <summary>
     /// Opens a capture input on the device with <paramref name="deviceId"/>, or the system default when
-    /// <paramref name="deviceId"/> is <c>null</c>/empty. The caller owns it and disposes it.
+    /// <paramref name="deviceId"/> is <c>null</c>/empty. The returned source is <strong>started</strong>
+    /// (already capturing). The caller owns it and disposes it.
     /// </summary>
     IAudioSource CreateInput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null);
 }

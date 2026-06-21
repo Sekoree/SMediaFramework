@@ -2,6 +2,14 @@
 
 Ordered roughly from simplest to most complex. Status notes added as items are picked up.
 
+Validation 2026-06-21: rechecked the completed UI cleanup, remove-in-use output flow, `Doc/Explained`
+chapter 17 wiring, NativeAOT C-ABI project, and audio-backend abstraction against current code. Focused
+validation passed: `dotnet test MediaFramework/Test/S.Media.Core.Tests/S.Media.Core.Tests.csproj --no-restore -v:m`,
+`dotnet test MediaFramework/Test/S.Media.PortAudio.Tests/S.Media.PortAudio.Tests.csproj --no-restore -v:m`,
+`dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m`, `dotnet build
+MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj --no-restore -v:m`, and `dotnet build
+MFPlayer.sln -m:1 --no-restore -v:m`.
+
 ## Quick wins (UI text / cleanup)
 
 - **[DONE]** In HaPlay the quick buttons to fullscreen/window a window had the "preview" suffix — removed
@@ -31,12 +39,10 @@ Ordered roughly from simplest to most complex. Status notes added as items are p
     "PlayerRoutingMirror" (`MediaPlayerViewModel.SelectedOutputLines` / `HotApplyRoutingToggleAsync` expand a
     ticked parent into parent + `GetClonesOf(parent)`). Clones have no own checkbox; their routing derives
     from the parent's tick.
-  - **(1) Black when added mid-playback:** `OnSharedOutputsCollectionChanged` only rebuilds the checkbox list
-    (`SyncOutputsCollection`); it does NOT hot-wire a newly-added clone into the *running* session. Since the
-    clone has no checkbox, nothing calls `session.TryAddOutput(clone)`, so it never receives frames.
-    **Fix:** on collection-add of a clone whose parent is currently routed in the live session, ensure the
-    clone's preview runtime is started, then `TryAddOutput(clone)` through the playback arc (mirror
-    `HotApplyRoutingToggleAsync`'s add branch).
+  - **[DONE] (1) Black when added mid-playback:** `OnSharedOutputsCollectionChanged` now detects newly added
+    clones whose parent is selected in a running session, waits briefly for the clone's preview runtime to
+    come up, then calls `TryAddOutput(clone)` through the playback arc. This covers the missing hot-wire
+    path; the GL resize/teardown crash items below still need hardware logs before changing blindly.
   - **(2) Clone not sized independently (crops):** with `HAPLAY_MEDIAPLAYER_COMPOSITIONS` on (default) the deck
     renders one fixed-size canvas and fans it to every output; each window should letterbox via the SDL
     output's `ViewportFit=Contain`. A smaller clone cropping suggests the clone branch isn't getting the
@@ -124,11 +130,14 @@ Ordered roughly from simplest to most complex. Status notes added as items are p
     `IFlushableOutput`/`IPlaybackClock`/… directly from miniaudio's own callback + ring model — it does not
     reuse or imitate PortAudio's internals.
   - *Selection.* `MediaFrameworkRuntime` registers available backends; a host (or the C-ABI / HaPlay) picks
-    one by name. HaPlay then drops "Add PortAudio" → "Add Audio Output" with a backend picker (persisted on
-    the output definition); the C-ABI gains a `backend` parameter / a `mfp_audio_backend_*` enumeration
-    rather than a PortAudio-only factory.
+    one by name. **[C-ABI DONE]** The C ABI now has backend-neutral `mfp_audio_backend_*`,
+    `mfp_audio_device_*`, and `mfp_audio_output_create(backend, deviceId, ...)` entry points, declared in the
+    public header while keeping the legacy PortAudio factory for compatibility. **HaPlay still remains
+    PortAudio-shaped**: the UI/runtime must still drop "Add PortAudio" → "Add Audio Output" with a backend
+    picker (persisted on the output definition) after the persistent output runtime has a backend-neutral
+    queue/latency/stats capability surface.
   - *Why deferred:* a from-scratch real-time backend (callback timing, ring sizing, underrun/flush,
     device-clock `ElapsedSinceStart`) only reveals glitches/drift on real audio hardware, so it must be
     validated live (`PlaybackSmoke` + the HaPlay deck), not landed unverified in a headless pass. The
-    interface step (now done) was the safe part; what remains is `MiniAudioBackend`/`MiniAudioOutput` itself
-    plus routing HaPlay's add-output picker and the C-ABI through `AudioBackends` instead of PortAudio-only.
+    interface and C-ABI selection steps are done; what remains is `MiniAudioBackend`/`MiniAudioOutput` itself
+    plus routing HaPlay's add-output picker through a backend-neutral persistent output runtime.

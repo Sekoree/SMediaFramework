@@ -13,7 +13,9 @@
  *      SDL window in one call. Good for a quick player.
  *   2. Graph (build-your-own, like HaPlay): mfp_player_open_*() opens with NO outputs; reach the
  *      player's routers (mfp_player_video_router / _audio_router), create outputs with the factory
- *      functions, attach them, and add routes. Compose any audio/video topology you like.
+ *      functions, attach them, and add routes. Compose any audio/video topology you like. For audio,
+ *      prefer the backend-neutral mfp_audio_* functions; the mfp_portaudio_* functions are the legacy
+ *      PortAudio-specific surface kept for compatibility.
  *
  * Conventions:
  *   - Call mfp_initialize() once before anything else; mfp_shutdown() once at the end.
@@ -109,6 +111,13 @@ int  mfp_player_audio_source_id(mfp_player player, char* buffer, int buffer_len)
 
 /* ---- Output factories (you own the returned handle; free with mfp_output_destroy) --------------- */
 /* sample_rate must equal mfp_audio_router_sample_rate of the router it will be attached to. */
+int  mfp_audio_backend_count(void);
+int  mfp_audio_backend_name(int index, char* buffer, int buffer_len);
+int  mfp_audio_device_count(const char* backend_name);
+int  mfp_audio_device_get(int index, int* out_max_channels, double* out_default_sample_rate,
+                          int* out_is_default, char* id_buffer, int id_len, char* name_buffer, int name_len);
+int  mfp_audio_output_create(const char* backend_name, const char* device_id,
+                             int sample_rate, int channels, mfp_output* out_output);
 int  mfp_portaudio_output_create(int device_index, int sample_rate, int channels, mfp_output* out_output);
 int  mfp_sdl_window_output_create(const char* utf8_title, int width, int height, mfp_output* out_output);
 void mfp_output_destroy(mfp_output output);

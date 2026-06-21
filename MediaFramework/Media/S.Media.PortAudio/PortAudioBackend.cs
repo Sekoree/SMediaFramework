@@ -29,15 +29,42 @@ public sealed class PortAudioBackend : IAudioBackend
     public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)
     {
         var opt = options ?? new AudioBackendOptions();
-        return new PortAudioOutput(format, ParseDeviceId(deviceId), opt.SuggestedLatencySeconds, opt.FramesPerBuffer,
-            RingCapacityFrames(opt));
+        var output = new PortAudioOutput(format, ParseDeviceId(deviceId), opt.SuggestedLatencySeconds,
+            opt.FramesPerBuffer, RingCapacityFrames(opt));
+        return Started(output);
     }
 
     public IAudioSource CreateInput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)
     {
         var opt = options ?? new AudioBackendOptions();
-        return new PortAudioInput(format, ParseDeviceId(deviceId), opt.SuggestedLatencySeconds, opt.FramesPerBuffer,
-            RingCapacityFrames(opt));
+        var input = new PortAudioInput(format, ParseDeviceId(deviceId), opt.SuggestedLatencySeconds,
+            opt.FramesPerBuffer, RingCapacityFrames(opt));
+        try
+        {
+            input.Start();
+            return input;
+        }
+        catch
+        {
+            input.Dispose();
+            throw;
+        }
+    }
+
+    // IAudioBackend.CreateOutput/Input return a ready (started) device; on a start failure the half-open
+    // device is disposed rather than leaked.
+    private static PortAudioOutput Started(PortAudioOutput output)
+    {
+        try
+        {
+            output.Start();
+            return output;
+        }
+        catch
+        {
+            output.Dispose();
+            throw;
+        }
     }
 
     private static string DeviceId(int globalDeviceIndex) =>

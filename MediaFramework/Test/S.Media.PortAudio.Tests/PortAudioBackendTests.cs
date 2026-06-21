@@ -47,13 +47,14 @@ public sealed class PortAudioBackendTests
         try
         {
             var backend = new PortAudioBackend();
-            // null deviceId = system default; backend returns the framework's IAudioOutput contract.
+            // null deviceId = system default; backend returns a started IAudioOutput.
             var output = backend.CreateOutput(deviceId: null, new AudioFormat(48000, 2));
             using (output as IDisposable)
             {
                 Assert.Equal(48000, output.Format.SampleRate);
                 Assert.Equal(2, output.Format.Channels);
-                Assert.IsType<PortAudioOutput>(output);
+                var pa = Assert.IsType<PortAudioOutput>(output);
+                Assert.True(pa.IsRunning); // CreateOutput returns a ready/started device
             }
         }
         finally

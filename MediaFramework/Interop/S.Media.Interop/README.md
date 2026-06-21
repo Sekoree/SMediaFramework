@@ -3,7 +3,9 @@
 A NativeAOT shared library that exposes the media framework over a flat C ABI
 (`[UnmanagedCallersOnly]`), so it can be driven from C, C++, Rust, Python (ctypes/cffi),
 Go (cgo), etc. Because it ships as a native library, the framework's .NET garbage collector
-runs entirely behind the boundary and never interferes with the host program's memory.
+runs entirely behind the boundary and never interferes with the host program's memory. Audio
+output creation is backend-neutral through `mfp_audio_*`; the older `mfp_portaudio_*`
+functions are kept as a PortAudio compatibility surface.
 
 ## Build
 
@@ -55,11 +57,11 @@ mfp_output win; mfp_sdl_window_output_create("Program", 1280, 720, &win);
 char vout[64]; mfp_video_router_add_output(vr, win, vout, sizeof vout);
 mfp_video_router_add_route(vr, vin, vout);
 
-/* --- audio: route to the default PortAudio device --- */
+/* --- audio: route to the default backend's default device --- */
 mfp_audio_router ar = mfp_player_audio_router(p);   /* NULL if the file has no audio */
 char src[64];  mfp_player_audio_source_id(p, src, sizeof src);
 int rate = mfp_audio_router_sample_rate(ar);
-mfp_output dev; mfp_portaudio_output_create(MFP_AUDIO_DEFAULT, rate, 2, &dev);
+mfp_output dev; mfp_audio_output_create(NULL, NULL, rate, 2, &dev);
 char aout[64]; mfp_audio_router_add_output(ar, dev, aout, sizeof aout);
 mfp_audio_router_connect(ar, src, aout, 1.0f);
 
@@ -87,7 +89,29 @@ mfp_player_set_event_callback(p, on_event, /*user_data*/ NULL);
 The callback fires on framework threads (clock / decode) — marshal to your own thread and don't call
 transport from inside it.
 
-### Device discovery
+### Audio backends and device discovery
+
+Backend-neutral discovery uses backend names and opaque device ids. Pass `backend_name = NULL`
+or `""` to use the default registered backend.
+
+```c
+int backends = mfp_audio_backend_count();
+char backend[64];
+for (int i = 0; i < backends; i++) {
+    mfp_audio_backend_name(i, backend, sizeof backend);
+}
+
+int n = mfp_audio_device_count(NULL);      /* snapshots default-backend output devices */
+for (int i = 0; i < n; i++) {
+    int ch, is_default; double rate;
+    char id[64], name[256];
+    mfp_audio_device_get(i, &ch, &rate, &is_default, id, sizeof id, name, sizeof name);
+    /* pass id to mfp_audio_output_create; id is backend-specific */
+}
+```
+
+The legacy PortAudio-only device surface is still available for hosts that already store
+PortAudio global device indices:
 
 ```c
 int n = mfp_portaudio_output_device_count();      /* snapshots the list on this thread */
@@ -116,6 +140,6 @@ good candidates for separate addon libraries. Entry points and enum values are a
 
 ### Roadmap
 
-- **Foundation** (this layer): graph open, routers + routing, PortAudio/SDL outputs, device discovery, events.
+- **Foundation** (this layer): graph open, routers + routing, backend-neutral audio output creation, PortAudio/SDL compatibility outputs, device discovery, events.
 - **Next:** live inputs (PortAudio capture, NDI receiver), NDI sender + file/encoder (recording) outputs, NDI source discovery.
 - **Then:** compositions (layers, per-output mapping/warp).
