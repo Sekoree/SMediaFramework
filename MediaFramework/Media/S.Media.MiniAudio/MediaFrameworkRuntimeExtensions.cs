@@ -7,7 +7,8 @@ public static class MediaFrameworkRuntimeMiniAudioExtensions
 {
     /// <summary>
     /// Registers the miniaudio backend. This does not open or initialize a native device; the native
-    /// libminiaudio loads lazily when device enumeration or CreateOutput/CreateInput is first called.
+    /// libminiaudio, supplied by the host/package, loads lazily when device enumeration or
+    /// CreateOutput/CreateInput is first called.
     /// </summary>
     public static MediaFrameworkRuntimeBuilder UseMiniAudio(this MediaFrameworkRuntimeBuilder builder)
     {

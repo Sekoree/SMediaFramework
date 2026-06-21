@@ -40,7 +40,8 @@
         <None Update="include\s_media_player.h" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
-    <!-- libminiaudio (and libportaudio/SDL3) flow into this project's output transitively from MALib /
-         S.Media.MiniAudio via their CopyToOutputDirectory runtime assets — no manual copy target needed. -->
+    <!-- Native dependency deployment is handled outside this project. MALib resolves libminiaudio lazily at
+         runtime; packaging/publish scripts should place the external native library next to the app or in the
+         platform native-library search path. -->
 
 </Project>

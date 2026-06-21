@@ -18,7 +18,7 @@
 
     <ItemGroup>
         <ProjectReference Include="..\S.Media.Core\S.Media.Core.csproj" />
-        <!-- Dedicated miniaudio P/Invoke binding (ma_* direct; builds + ships libminiaudio). -->
+        <!-- Dedicated miniaudio P/Invoke binding (ma_* direct; native lib is supplied externally). -->
         <ProjectReference Include="..\..\Audio\MALib\MALib.csproj" />
     </ItemGroup>
 

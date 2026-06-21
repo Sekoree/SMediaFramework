@@ -18,13 +18,14 @@ Validation update 2026-06-21: fixed the follow-up crash when removing a clone/ou
 
 Validation update 2026-06-21: reworked the miniaudio backend to a **dedicated `MALib` binding with no C shim**
 (see the miniaudio bullet below for the full rationale). `MALib` binds vanilla miniaudio's `ma_*` ABI directly;
-the removed `smedia_miniaudio.c` wrapper and its `smedia_miniaudio` library are gone, replaced by a plain
-`libminiaudio.so` (upstream amalgamation) that propagates into HaPlay's output. Validated headlessly on real
-audio hardware: enumeration reads correct device names/caps, and opening the default playback device drives
-init → start → data-callback → stop with zero faults. Focused validation passed:
+the removed `smedia_miniaudio.c` wrapper and its `smedia_miniaudio` library are gone. `libminiaudio.so` /
+`miniaudio.dll` / `libminiaudio.dylib` is now treated like any other external native dependency: built and
+deployed outside `MALib`, then resolved lazily at runtime. Validated headlessly on real audio hardware:
+enumeration reads correct device names/caps, and opening the default playback device drives init → start →
+data-callback → stop with zero faults. Focused validation passed:
 `dotnet test MediaFramework/Test/S.Media.MiniAudio.Tests/S.Media.MiniAudio.Tests.csproj --no-restore -v:m`,
-`dotnet build UI/HaPlay.Desktop/HaPlay.Desktop.csproj --no-restore -v:m` (with `libminiaudio.so` landing in
-its `bin`), and `dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
+`dotnet build UI/HaPlay.Desktop/HaPlay.Desktop.csproj --no-restore -v:m`, and
+`dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
 
 Validation update 2026-06-21: implemented the miniaudio backend foundation and expanded the NativeAOT C ABI
 for backend-neutral live audio capture. Focused validation passed:
@@ -33,7 +34,8 @@ for backend-neutral live audio capture. Focused validation passed:
 `dotnet build MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj --no-restore -m:1 -v:m`,
 `dotnet build MFPlayer.sln -m:1 --no-restore -v:m`, and
 `dotnet publish MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj -c Release -r linux-x64 -p:PublishAot=true -v:m`.
-The publish output includes `libsmedia_miniaudio.so`, and `nm` shows the new
+Superseded by the MALib external-native handoff above: `MALib` no longer builds or copies `libminiaudio.so`;
+package/publish steps must include the externally built native library. `nm` shows the new
 `mfp_audio_input_*`, `mfp_audio_source_destroy`, and `mfp_player_open_live_audio` exports.
 
 Validation update 2026-06-21: expanded the NativeAOT C ABI with NDI discovery, live receiver open, and sender
@@ -92,12 +94,13 @@ initialize, including the Control workspace live MIDI resolver/profile-builder s
     clones whose parent is selected in a running session, waits briefly for the clone's preview runtime to
     come up, then calls `TryAddOutput(clone)` through the playback arc. This covers the missing hot-wire
     path; the GL resize/teardown crash items below still need hardware logs before changing blindly.
-  - **(2) Clone not sized independently (crops):** with `HAPLAY_MEDIAPLAYER_COMPOSITIONS` on (default) the deck
-    renders one fixed-size canvas and fans it to every output; each window should letterbox via the SDL
-    output's `ViewportFit=Contain`. A smaller clone cropping suggests the clone branch isn't getting the
-    Contain fit (or, in the legacy direct-router path, frames are sized for the parent). **Fix:** ensure the
-    clone's `SDL3GLVideoOutput.ViewportFit` is `Contain` and that the composition lease for a clone is an
-    independent output (its own viewport), not a shared parent surface.
+  - **[DONE] (2) Clone not sized independently (crops):** verified 2026-06-21. Local SDL previews and embedded
+    local preview windows set `ViewportFit=Contain`, and the media-player composition path creates one
+    `ClipCompositionOutputLease` per local/NDI output line, so a clone is an independent fan-out output with
+    its own viewport instead of a shared parent surface. Focused validation passed:
+    `dotnet test MediaFramework/Test/S.Media.Playback.Tests/S.Media.Playback.Tests.csproj --no-restore -v:m`,
+    `dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m`, and
+    `dotnet build UI/HaPlay.Desktop/HaPlay.Desktop.csproj --no-restore -v:m`.
   - **(3) Crash on resize / using playback controls:** GL-thread sensitive; needs a stack trace from a real
     GPU. Most likely a use-after-dispose / cross-context GL call when the clone window resizes or is torn down
     while the parent's render thread is mid-frame (clones share the deck's video route but have separate GL
@@ -185,26 +188,28 @@ initialize, including the Control workspace live MIDI resolver/profile-builder s
   - **[DONE]** *Dedicated `MALib` binding (no C shim) + `S.Media.MiniAudio` wrapper.* Reworked 2026-06-21:
     the earlier `smedia_miniaudio.c` custom shim was removed. `MALib` (under `MediaFramework/Audio`, the
     analogue of `PALib`) now binds miniaudio's **own** `ma_*` C ABI directly via AOT-friendly `LibraryImport`;
-    the only native step is compiling the upstream amalgamation `Reference/.../miniaudio.c` into a plain
-    `libminiaudio.so` that exports `ma_*` (the library itself, like `libportaudio.so` — not a shim). Because
+    the native dependency is the upstream amalgamation compiled externally into a plain `libminiaudio.so` /
+    `miniaudio.dll` / `libminiaudio.dylib` that exports `ma_*` (the library itself, like `libportaudio.so` —
+    not a shim). Because
     miniaudio is header-only with no FFI size/offset accessors (only `ma_context_sizeof`), `MALib` hand-mirrors
     `ma_device_config`/`ma_device_info`/`ma_device_id`/`ma_resampler_config` (sequential layout) and
     over-allocates the opaque `ma_device`; the data callback is bridged in managed code, keyed by the device
     pointer. `S.Media.MiniAudio` consumes `MALib`: `MiniAudioBackend : IAudioBackend`, `MiniAudioOutput`
     (`IAudioOutput`/`IClockedOutput`/`IFlushableOutput`/`IPlaybackClock`/playback-stats over a managed ring),
-    `MiniAudioInput : IAudioSource`. `UseMiniAudio()` registers the backend without opening hardware. The build
-    emits `libminiaudio.so` and propagates it transitively into referencing apps (HaPlay). **Validated
+    `MiniAudioInput : IAudioSource`. `UseMiniAudio()` registers the backend without opening hardware. `MALib`
+    does not build, copy, or package the native library; hosts/package scripts must deploy it next to the app
+    or in the platform native-library search path. **Validated
     headlessly on real audio hardware**: device enumeration reads correct device names/caps (confirms the
     `ma_device_info`/`ma_device_id` layout), and opening the default playback device drives `ma_device_init` →
     start → the data callback firing cleanly against the ring → stop (confirms the `ma_device_config` layout,
-    the `ma_device` allocation, and the callback bridge). Windows needs a native `miniaudio.dll` build step
-    (the Linux/macOS `cc` step has no Windows equivalent wired up yet).
+    the `ma_device` allocation, and the callback bridge).
   - *Selection.* `MediaFrameworkRuntime` registers available backends; a host (or the C-ABI / HaPlay) picks
     one by name. **[C-ABI DONE]** The C ABI now has backend-neutral `mfp_audio_backend_*`,
     `mfp_audio_device_*`, `mfp_audio_input_device_*`, `mfp_audio_output_create(backend, deviceId, ...)`,
     `mfp_audio_input_create(backend, deviceId, ...)`, and `mfp_player_open_live_audio(...)` entry points,
     declared in the public header while keeping the legacy PortAudio factory for compatibility. NativeAOT
-    publish copies `libminiaudio.so` next to `s_media_player.so` (transitively, via the `MALib` reference).
+    publish no longer copies `libminiaudio.so`; external packaging must include the native library next to
+    `s_media_player.so` or in the platform native-library search path.
   - **[DONE]** HaPlay output selection is backend-aware: the Add/Edit dialog now says "audio output", shows a
     backend picker, persists `AudioBackendName` / `AudioBackendDeviceId`, and the persistent audio runtime
     opens non-PortAudio outputs through `IAudioBackend`. Existing PortAudio project files remain compatible.

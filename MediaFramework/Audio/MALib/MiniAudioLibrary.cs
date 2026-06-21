@@ -6,8 +6,8 @@ namespace MALib;
 
 /// <summary>
 /// Resolves the <c>"miniaudio"</c> import name to the compiled vanilla miniaudio shared library
-/// (<c>libminiaudio.so</c> / <c>miniaudio.dll</c> / <c>libminiaudio.dylib</c>), which MALib's build emits and
-/// copies next to the consuming app. Installed once on module load.
+/// (<c>libminiaudio.so</c> / <c>miniaudio.dll</c> / <c>libminiaudio.dylib</c>). The native library is built
+/// and deployed externally; MALib only resolves it. Installed once on module load.
 /// </summary>
 internal static class MiniAudioLibrary
 {
