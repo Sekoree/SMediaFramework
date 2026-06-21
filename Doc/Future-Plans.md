@@ -16,6 +16,16 @@ Validation update 2026-06-21: fixed the follow-up crash when removing a clone/ou
 `dotnet test UI/HaPlay.Tests/HaPlay.Tests.csproj --no-restore -v:m`, and
 `dotnet build MFPlayer.sln -m:1 --no-restore -v:m`.
 
+Validation update 2026-06-21: implemented the miniaudio backend foundation and expanded the NativeAOT C ABI
+for backend-neutral live audio capture. Focused validation passed:
+`dotnet test MediaFramework/Test/S.Media.MiniAudio.Tests/S.Media.MiniAudio.Tests.csproj --no-restore -v:m`,
+`dotnet test MediaFramework/Test/S.Media.Core.Tests/S.Media.Core.Tests.csproj --no-restore -v:m`,
+`dotnet build MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj --no-restore -m:1 -v:m`,
+`dotnet build MFPlayer.sln -m:1 --no-restore -v:m`, and
+`dotnet publish MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj -c Release -r linux-x64 -p:PublishAot=true -v:m`.
+The publish output includes `libsmedia_miniaudio.so`, and `nm` shows the new
+`mfp_audio_input_*`, `mfp_audio_source_destroy`, and `mfp_player_open_live_audio` exports.
+
 ## Quick wins (UI text / cleanup)
 
 - **[DONE]** In HaPlay the quick buttons to fullscreen/window a window had the "preview" suffix — removed
@@ -84,11 +94,16 @@ Validation update 2026-06-21: fixed the follow-up crash when removing a clone/ou
 - **NativeAOT C-ABI** to consume the framework from other languages.
   - **[FOUNDATION DONE]** `MediaFramework/Interop/S.Media.Interop` — NativeAOT shared library
     (`s_media_player.so`/`.dll`/`.dylib`) with `mfp_*` `UnmanagedCallersOnly` exports. Covers: lifecycle,
-    graph/convenience open (file/uri/stream), video+audio routers + routing, PortAudio/SDL output factories,
-    PortAudio device discovery, C function-pointer events, transport/state. Builds + AOT-publishes clean.
+    graph/convenience open (file/uri/stream), audio-only live open, video+audio routers + routing,
+    backend-neutral audio output/input factories + device discovery, PortAudio/SDL compatibility factories,
+    C function-pointer events, transport/state. Builds + AOT-publishes clean.
+  - **[DONE]** Backend-neutral live audio capture is exposed to native hosts: `mfp_audio_input_device_*`,
+    `mfp_audio_input_create`, `mfp_audio_source_destroy`, and `mfp_player_open_live_audio`. Source ownership
+    transfers into the player on a successful live open; otherwise the host remains responsible for destroying
+    the source handle.
   - **Remaining (building blocks only — high-level cue/soundboard/control engines are intentionally left to
-    host apps / possible future addon libraries):** live inputs (PortAudio capture, NDI receiver) for
-    `open_live`; NDI sender + file/encoder (recording) output factories; NDI source discovery; compositions
+    host apps / possible future addon libraries):** NDI receiver/source discovery for `open_live`, NDI sender
+    + file/encoder (recording) output factories, richer live video input handles, and compositions
     (`ClipCompositionRuntime` layers + per-output mapping/warp).
 
 - **Properly modularize the framework** — make parts non-strictly-required. **Assessment + plan** (the
@@ -136,20 +151,20 @@ Validation update 2026-06-21: fixed the follow-up crash when removing a clone/ou
     `IAudioOutput` / `IClockedOutput` / `IAudioSource`, never PortAudio types. So this new interface only
     abstracts the **device/enumeration/open** layer that sits above those. `PortAudioBackend : IAudioBackend`
     wraps today's catalog + ctors (no behaviour change); `MiniAudioBackend : IAudioBackend` is the new one.
-  - *New `S.Media.MiniAudio` project.* P/Invoke against miniaudio (its single-file `miniaudio.c` built as a
-    native lib, or a prebuilt shared lib — mirroring how `PALib` *binds* PortAudio, not how `PortAudioOutput`
-    is shaped). `MiniAudioOutput` implements the framework's existing `IAudioOutput`/`IClockedOutput`/
-    `IFlushableOutput`/`IPlaybackClock`/… directly from miniaudio's own callback + ring model — it does not
-    reuse or imitate PortAudio's internals.
+  - **[DONE]** *New `S.Media.MiniAudio` project.* The project builds a small native shim over vendored
+    `miniaudio.c` on Linux/macOS and binds it through AOT-friendly `LibraryImport` calls. `MiniAudioBackend`
+    implements `IAudioBackend`; `MiniAudioOutput` implements the framework's existing `IAudioOutput` /
+    `IClockedOutput` / `IFlushableOutput` / `IPlaybackClock` / playback-stats contracts from miniaudio's
+    callback + managed ring model; `MiniAudioInput` implements `IAudioSource` for capture. `UseMiniAudio()`
+    registers the backend without opening hardware. Current caveat: Windows expects a matching
+    `smedia_miniaudio.dll` sidecar unless/until a Windows native build step is added.
   - *Selection.* `MediaFrameworkRuntime` registers available backends; a host (or the C-ABI / HaPlay) picks
     one by name. **[C-ABI DONE]** The C ABI now has backend-neutral `mfp_audio_backend_*`,
-    `mfp_audio_device_*`, and `mfp_audio_output_create(backend, deviceId, ...)` entry points, declared in the
-    public header while keeping the legacy PortAudio factory for compatibility. **HaPlay still remains
-    PortAudio-shaped**: the UI/runtime must still drop "Add PortAudio" → "Add Audio Output" with a backend
-    picker (persisted on the output definition) after the persistent output runtime has a backend-neutral
-    queue/latency/stats capability surface.
-  - *Why deferred:* a from-scratch real-time backend (callback timing, ring sizing, underrun/flush,
-    device-clock `ElapsedSinceStart`) only reveals glitches/drift on real audio hardware, so it must be
-    validated live (`PlaybackSmoke` + the HaPlay deck), not landed unverified in a headless pass. The
-    interface and C-ABI selection steps are done; what remains is `MiniAudioBackend`/`MiniAudioOutput` itself
-    plus routing HaPlay's add-output picker through a backend-neutral persistent output runtime.
+    `mfp_audio_device_*`, `mfp_audio_input_device_*`, `mfp_audio_output_create(backend, deviceId, ...)`,
+    `mfp_audio_input_create(backend, deviceId, ...)`, and `mfp_player_open_live_audio(...)` entry points,
+    declared in the public header while keeping the legacy PortAudio factory for compatibility. NativeAOT
+    publish copies the miniaudio sidecar next to `s_media_player.so`.
+  - **Remaining:** real hardware validation for callback timing, ring sizing, underrun/flush, and device-clock
+    `ElapsedSinceStart` (`PlaybackSmoke` + HaPlay deck); HaPlay still remains PortAudio-shaped and must drop
+    "Add PortAudio" → "Add Audio Output" with a backend picker (persisted on the output definition) after the
+    persistent output runtime has a backend-neutral queue/latency/stats capability surface.

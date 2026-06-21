@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using S.Media.Core.Diagnostics;
 using S.Media.FFmpeg;
+using S.Media.MiniAudio;
 using S.Media.PortAudio;
 
 namespace S.Media.Interop;
@@ -49,7 +50,7 @@ internal static unsafe partial class NativeApi
         try
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
-                MediaFrameworkRuntime.Init().UseFFmpeg().UsePortAudio();
+                MediaFrameworkRuntime.Init().UseFFmpeg().UsePortAudio().UseMiniAudio();
             return Ok;
         }
         catch (Exception ex)

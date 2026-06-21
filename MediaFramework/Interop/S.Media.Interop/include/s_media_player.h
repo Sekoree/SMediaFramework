@@ -19,14 +19,17 @@
  *
  * Conventions:
  *   - Call mfp_initialize() once before anything else; mfp_shutdown() once at the end.
- *   - Handles (mfp_player, mfp_video_router, mfp_audio_router, mfp_output) are opaque pointers.
+ *   - Handles (mfp_player, mfp_video_router, mfp_audio_router, mfp_output, mfp_audio_source) are
+ *     opaque pointers.
  *   - Functions returning int return MFP_OK (0) or a negative MFP_ERR_*; a human-readable message for
  *     the last failure on the calling thread is available via mfp_last_error(). Nothing throws/aborts
  *     across the boundary.
  *   - Time is in 100-nanosecond "ticks": 10,000,000 ticks == 1 second.
  *   - Ownership: a player owns its decoder + routers (freed by mfp_close). Outputs you create with a
  *     factory you OWN: attach them (the router does not take ownership), and after closing the player /
- *     removing them, free them with mfp_output_destroy. Router handles are borrowed (freed with the player).
+ *     removing them, free them with mfp_output_destroy. Audio sources you create are also owned by you
+ *     until transferred into mfp_player_open_live_audio; after a successful transfer the player owns the
+ *     source. Router handles are borrowed (freed with the player).
  */
 #ifndef S_MEDIA_PLAYER_H
 #define S_MEDIA_PLAYER_H
@@ -66,6 +69,7 @@ typedef void* mfp_player;
 typedef void* mfp_video_router;
 typedef void* mfp_audio_router;
 typedef void* mfp_output;
+typedef void* mfp_audio_source;
 
 /*
  * Event callback. Fires on a framework thread (clock / decode) — marshal to your own thread; do not
@@ -84,6 +88,8 @@ int  mfp_open_file(const char* utf8_path, int with_video_window, int audio_devic
 int  mfp_player_open_file(const char* utf8_path, mfp_player* out_player);
 int  mfp_player_open_uri(const char* utf8_uri, mfp_player* out_player);
 int  mfp_player_open_stream(const uint8_t* data, int length, mfp_player* out_player);
+/* Transfers ownership of source to the returned player on success. Do not destroy source after success. */
+int  mfp_player_open_live_audio(mfp_audio_source source, mfp_player* out_player);
 
 void mfp_close(mfp_player player);
 
@@ -109,15 +115,23 @@ mfp_audio_router mfp_player_audio_router(mfp_player player);   /* NULL if no aud
 int  mfp_player_video_input_id(mfp_player player, char* buffer, int buffer_len);
 int  mfp_player_audio_source_id(mfp_player player, char* buffer, int buffer_len);
 
-/* ---- Output factories (you own the returned handle; free with mfp_output_destroy) --------------- */
+/* ---- Audio/device factories -------------------------------------------------------------------- */
+/* You own returned output/source handles unless ownership is explicitly transferred. */
 /* sample_rate must equal mfp_audio_router_sample_rate of the router it will be attached to. */
 int  mfp_audio_backend_count(void);
 int  mfp_audio_backend_name(int index, char* buffer, int buffer_len);
 int  mfp_audio_device_count(const char* backend_name);
 int  mfp_audio_device_get(int index, int* out_max_channels, double* out_default_sample_rate,
                           int* out_is_default, char* id_buffer, int id_len, char* name_buffer, int name_len);
+int  mfp_audio_input_device_count(const char* backend_name);
+int  mfp_audio_input_device_get(int index, int* out_max_channels, double* out_default_sample_rate,
+                                int* out_is_default, char* id_buffer, int id_len,
+                                char* name_buffer, int name_len);
 int  mfp_audio_output_create(const char* backend_name, const char* device_id,
                              int sample_rate, int channels, mfp_output* out_output);
+int  mfp_audio_input_create(const char* backend_name, const char* device_id,
+                            int sample_rate, int channels, mfp_audio_source* out_source);
+void mfp_audio_source_destroy(mfp_audio_source source);
 int  mfp_portaudio_output_create(int device_index, int sample_rate, int channels, mfp_output* out_output);
 int  mfp_sdl_window_output_create(const char* utf8_title, int width, int height, mfp_output* out_output);
 void mfp_output_destroy(mfp_output output);

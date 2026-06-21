@@ -154,6 +154,27 @@ internal sealed class PlayerInstance : IDisposable
         return false;
     }
 
+    /// <summary>Graph open from a live audio source; the player takes ownership of the source.</summary>
+    public static bool TryOpenLiveAudio(IAudioSource audioSource, out PlayerInstance? instance, out string? error)
+    {
+        if (audioSource is null)
+        {
+            instance = null;
+            error = "audio source is null";
+            return false;
+        }
+
+        var opened = TryOpenGraph(
+            MediaPlayer.OpenLive(audioSource, videoSource: null)
+                .WithOptions(MediaPlayerOpenOptions.Default)
+                .WithDisposeSourcesOnPlayerDispose(),
+            out instance,
+            out error);
+        if (!opened && audioSource is IDisposable d)
+            MediaDiagnostics.SwallowDisposeErrors(d.Dispose, "S.Media.Interop.PlayerInstance.TryOpenLiveAudio");
+        return opened;
+    }
+
     private static bool TryOpenGraph(MediaPlayerOpenBuilder builder, out PlayerInstance? instance, out string? error)
     {
         instance = null;

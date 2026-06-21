@@ -23,7 +23,7 @@ dotnet publish MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj \
 | Windows  | `s_media_player.dll` |
 | macOS    | `s_media_player.dylib` |
 
-Native FFmpeg / PortAudio / SDL3 dependencies are copied alongside it. Confirm the exports with
+Native FFmpeg / PortAudio / SDL3 / miniaudio dependencies are copied alongside it. Confirm the exports with
 `nm -D --defined-only s_media_player.so | grep mfp_`.
 
 ## Two ways to use it
@@ -92,7 +92,8 @@ transport from inside it.
 ### Audio backends and device discovery
 
 Backend-neutral discovery uses backend names and opaque device ids. Pass `backend_name = NULL`
-or `""` to use the default registered backend.
+or `""` to use the default registered backend. `mfp_audio_device_*` enumerates playback devices;
+`mfp_audio_input_device_*` enumerates capture devices.
 
 ```c
 int backends = mfp_audio_backend_count();
@@ -108,6 +109,21 @@ for (int i = 0; i < n; i++) {
     mfp_audio_device_get(i, &ch, &rate, &is_default, id, sizeof id, name, sizeof name);
     /* pass id to mfp_audio_output_create; id is backend-specific */
 }
+```
+
+Live audio inputs use the same backend/device model. The source handle is owned by the host until it is
+destroyed or transferred into a live player:
+
+```c
+mfp_audio_source mic;
+mfp_audio_input_create("miniaudio", NULL, 48000, 2, &mic);
+
+mfp_player p;
+mfp_player_open_live_audio(mic, &p);       /* ownership of mic transfers to p on success */
+
+mfp_audio_router ar = mfp_player_audio_router(p);
+char src[64]; mfp_player_audio_source_id(p, src, sizeof src);
+/* attach an output and connect src as in the file example */
 ```
 
 The legacy PortAudio-only device surface is still available for hosts that already store
@@ -130,7 +146,8 @@ for (int i = 0; i < n; i++) {
 - Time is in 100-ns ticks (10,000,000 = 1 s).
 - **Ownership:** a player owns its decoder + routers (freed by `mfp_close`). Outputs you create with a
   factory you own — free them with `mfp_output_destroy` *after* closing the player / removing them.
-  Router handles are borrowed (freed with the player).
+  Audio sources you create are owned by you until `mfp_player_open_live_audio` succeeds, after which the
+  player owns them. Router handles are borrowed (freed with the player).
 
 ## Scope
 
@@ -140,6 +157,6 @@ good candidates for separate addon libraries. Entry points and enum values are a
 
 ### Roadmap
 
-- **Foundation** (this layer): graph open, routers + routing, backend-neutral audio output creation, PortAudio/SDL compatibility outputs, device discovery, events.
-- **Next:** live inputs (PortAudio capture, NDI receiver), NDI sender + file/encoder (recording) outputs, NDI source discovery.
+- **Foundation** (this layer): graph open, routers + routing, backend-neutral audio output/input creation, live audio open, PortAudio/SDL compatibility outputs, device discovery, events.
+- **Next:** NDI receiver/source discovery, NDI sender + file/encoder (recording) outputs.
 - **Then:** compositions (layers, per-output mapping/warp).

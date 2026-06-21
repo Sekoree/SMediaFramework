@@ -30,6 +30,30 @@ internal static class Handles
     }
 
     /// <summary>
+    /// Removes a handle from the table and returns its target without disposing it. Used when ownership is
+    /// transferred into another managed object, e.g. a live source handed to a player.
+    /// </summary>
+    public static T? Take<T>(IntPtr handle) where T : class
+    {
+        if (handle == IntPtr.Zero)
+            return null;
+        try
+        {
+            var gch = GCHandle.FromIntPtr(handle);
+            if (!gch.IsAllocated)
+                return null;
+            if (gch.Target is not T target)
+                return null;
+            gch.Free();
+            return target;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Frees the handle and, when <paramref name="dispose"/> is set, disposes its target first. No-op on a
     /// zero handle; tolerant of double-free / garbage pointers (best-effort).
     /// </summary>

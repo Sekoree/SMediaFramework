@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
+using S.Media.Core.Audio;
+using S.Media.Core.Diagnostics;
 
 namespace S.Media.Interop;
 
@@ -49,6 +51,34 @@ internal static unsafe partial class NativeApi
         }
         catch (Exception ex)
         {
+            return Fail(ex, ErrOpenFailed);
+        }
+    }
+
+    [UnmanagedCallersOnly(EntryPoint = "mfp_player_open_live_audio")]
+    public static int PlayerOpenLiveAudio(IntPtr sourceHandle, IntPtr* outHandle)
+    {
+        if (outHandle is null)
+            return Fail("outHandle is null", ErrInvalidArg);
+        *outHandle = IntPtr.Zero;
+        if (Volatile.Read(ref _initialized) == 0)
+            return Fail("mfp_initialize has not been called", ErrNotInitialized);
+
+        var source = Handles.Take<IAudioSource>(sourceHandle);
+        if (source is null)
+            return Fail("invalid audio source handle", ErrInvalidHandle);
+
+        try
+        {
+            if (!PlayerInstance.TryOpenLiveAudio(source, out var instance, out var error) || instance is null)
+                return Fail(error ?? "open failed", ErrOpenFailed);
+            *outHandle = Handles.Alloc(instance);
+            return Ok;
+        }
+        catch (Exception ex)
+        {
+            if (source is IDisposable d)
+                MediaDiagnostics.SwallowDisposeErrors(d.Dispose, "S.Media.Interop.PlayerOpenLiveAudio");
             return Fail(ex, ErrOpenFailed);
         }
     }
