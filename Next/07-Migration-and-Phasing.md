@@ -72,6 +72,10 @@ Phases 1–3 are the spine (a file plays with HW decode, GPU compositing, perfec
 4–5 restore the show/live feature set. 6–7 deliver the new capabilities (subtitles, real plugins) and
 the C ABI. 8 is the UI, deliberately last and decoupled.
 
+> **Working checklists:** [09 — Phase Checklists](09-Phase-Checklists.md) has a per-phase `- [ ]` list
+> wired to the D#/OQ# decisions, with each phase's gate and exit criteria. Use this table for the *why*
+> and 09 for the *do*.
+
 ## 3. Parity harness (build this in Phase 0–1, not at the end)
 
 The existing `Tools/*` smoke apps are your spec. Port them onto the new APIs **first** in each phase

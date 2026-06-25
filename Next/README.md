@@ -41,6 +41,7 @@ boundary zero-copy via exported external images) with a GL-explicit plugin ABI. 
 6. **[06 — Control Surface](06-Control-Surface.md)** — MIDI/OSC/Mond scripting, data-driven device profiles.
 7. **[07 — Migration & Phasing](07-Migration-and-Phasing.md)** — fresh solution, phase plan, salvage map, parity gates.
 8. **[08 — Decisions Ledger](08-Open-Decisions.md)** — locked cross-cutting decisions plus follow-up open questions.
+9. **[09 — Phase Checklists](09-Phase-Checklists.md)** — actionable `- [ ]` checklist per phase, wired to the D#/OQ# decisions, with each phase's gate + exit.
 
 ---
 
