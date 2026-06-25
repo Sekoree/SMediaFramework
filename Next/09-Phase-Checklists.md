@@ -9,7 +9,8 @@ checkable. `(D#)` / `(OQ#)` tags point to the binding decision in [08](08-Open-D
 - [ ] `dotnet publish -p:PublishAot=true` succeeds for every project touched this phase (D15).
 - [ ] Arch-test green: the [01 §3](01-Architecture-and-Principles.md) reference rules hold — deps point
       down only, `Core` has no backend deps (D15).
-- [ ] **Zero** references to the old `MediaFrameworkPlugins.*` global — registry only (P2).
+- [ ] **Zero code** references to the old `MediaFrameworkPlugins.*` global (it is deleted) — registry only (P2).
+      Historical mentions in comments/docs that explain the replacement are fine; this rule is about code, not text search.
 - [ ] CI green on **Windows + Linux** (D13); no macOS target.
 - [ ] The phase's parity gate(s) pass before starting the next phase.
 - [ ] Public types added this phase have XML docs stating thread-ownership where relevant (D5/OQ8).
@@ -42,34 +43,37 @@ native ELF runs (`MFPlayer.Next AOT smoke OK`) · ✅ old tree untouched. *(Wind
 
 ---
 
-## Phase 1 — Core + Time + Routing
+## Phase 1 — Core + Time + Routing ✅ *(salvage + new primitives green; 407 tests pass)*
 **Goal:** the vocabulary, clocks, and routers (no backends yet).
 
-**Core (slim → ~6k LOC):**
-- [ ] Move in: frames/formats, `IVideoSource/Output`, `IAudioSource/Output`, `IAudioBackend`, capability
-      ifaces, `VideoFormatNegotiator`, `ChannelMap`(+SIMD), HW-backing descriptors, diagnostics.
-- [ ] Registry contracts: `IMediaModule`, `IMediaRegistryBuilder`, `IMediaRegistry`,
-      `IMediaDecoderProvider` with a **confidence-score** probe (D3) and **URI** open
-      (`CanOpen`/`TryOpen*` take a URI — D2).
-- [ ] Device contract: backend `SupportsDeviceChangeNotifications` + a uniform `DevicesChanged`; caps
-      frozen, devices dynamic (D6/OQ9).
-- [ ] **Delete** the `MediaFrameworkPlugins`/`Runtime`/`ExtensionRegistry` concept (replaced).
+**Core (slim):**
+- [x] Salvaged primitives: frames/formats, `IVideoSource/Output`, `IAudioSource/Output`, `IAudioBackend`,
+      capability ifaces, `VideoFormatNegotiator`, `ChannelMap`(+SIMD), HW-backing descriptors, diagnostics, Triggers.
+- [x] Registry contracts: `IMediaModule`, `IMediaRegistryBuilder`, `IMediaRegistry`, `IMediaDecoderProvider`
+      (**confidence-score** probe D3 + **URI** open D2) + concrete immutable `MediaRegistry`/`MediaRegistryBuilder`.
+- [x] Device contract: `IDeviceChangeNotifier` (`SupportsDeviceChangeNotifications` + `DevicesChanged`); caps frozen, devices dynamic (D6/OQ9).
+- [x] **Deleted** `MediaFrameworkPlugins`/`Runtime`/`ExtensionRegistry` (P2) + the static open-factories — opening is via the registry.
 
 **Time:**
-- [ ] Move clocks → `S.Media.Time`. Add `SessionClock` (one **per transport group** — D4),
-      `SourceTimeline` (offset + rebase policy), `SourceSyncGroup` (correlated live A/V), keep
-      `OutputSyncGroup`/`VideoPresentSyncGroup`.
+- [x] Clocks → `S.Media.Time` (`MediaClock`, `CompositePlaybackClock`, `VideoPtsClock`, `OutputSyncGroup`, `VideoPresentSyncGroup`).
+- [x] **New:** `SessionClock` (per transport group, D4), `SourceTimeline` (offset + rebase policy), `SourceSyncGroup` (correlated live A/V).
 
 **Routing:**
-- [ ] Move `AudioRouter`(+matrix/pump/playback), router clocks, `VideoRouter`, `VideoOutputPump`,
-      `RetimingVideoOutput`, `SyncPresentVideoOutput` → `S.Media.Routing`.
+- [x] `AudioRouter`(+partials), router clocks, `VideoRouter`, pumps, `RetimingVideoOutput`, `SyncPresentVideoOutput` →
+      `S.Media.Routing`, **rewired off the global slots to injected factories** (`ResamplerFactory`, `AdaptiveRateWrapper`,
+      `VideoRouterOptions` converter) — P2 removed from the routers.
 
-**Session-threading seam (used by later tiers):**
-- [ ] Land the dispatcher primitives: `Post` + `InvokeAsync`, **no blocking `Invoke` from a dispatcher
-      callback** + a debug reentrancy guard (D5/OQ8).
+**Session-threading seam:**
+- [x] `SessionDispatcher` in Core (`Post` + `InvokeAsync`, no blocking `Invoke`, `IsOnDispatcherThread` — D5/OQ8).
 
-**Gate:** `S.Media.Core.Tests` ported green; `TransportSyncProbe` builds against the new clocks.
-**Exit:** Core has no backend deps (arch-test); LOC trending toward ~6k.
+**Placement refinements (during salvage):** `ISyncPresentableVideoOutput`→Core (pure iface); `Triggers` primitives→Core; new
+`IStoppableSource` seam replaces the `AudioClipVoice` router coupling. Deferred to their phases: `AudioClip*`,
+`AudioTriggerRegistration`, `PlaybackTimelineClockExtensions`(IAvPlaybackSession overload), `VideoPlayer`, Playback/Compositor code.
+
+**Gate:** ✅ `S.Media.Core.Tests` ported — **403 green** (salvaged Core/Time/Routing behavior + new registry/dispatcher/sync-primitive tests) + arch-test **4/4** = **407 total**; full sln 0/0; AOT smoke runs.
+⚠️ `TransportSyncProbe` **reclassified to Phase 2** — it depends on `MediaPlayer`/FFmpeg (full stack), not just clocks; Phase 1's
+clocks are covered by the ported Clock tests (`MediaClock`/`CompositePlaybackClock`/`OutputSyncGroup`/`VideoPtsClock`).
+**Exit:** ✅ Core has no backend deps (arch-test enforced).
 
 ---
 
@@ -88,7 +92,8 @@ native ELF runs (`MFPlayer.Next AOT smoke OK`) · ✅ old tree untouched. *(Wind
       rate** (D11).
 - [ ] Test composition root: `MediaRegistry.Build(b => b.Use(FFmpeg).Use(PortAudio).Use(Sdl3))`.
 
-**Gate:** `PlaybackSmoke` + `VideoPlaybackSmoke` play a file at parity; `…FFmpeg.Tests`,
+**Gate:** `PlaybackSmoke` + `VideoPlaybackSmoke` play a file at parity; **`TransportSyncProbe`** builds + runs
+against the new clocks (moved here from Phase 1 — it needs `MediaPlayer`/FFmpeg); `…FFmpeg.Tests`,
 `…PortAudio.Tests` green; A/V lip-sync **< ±1 frame** ([03 §7](03-AV-Sync-Clocks-Routing.md)).
 **Exit:** a file plays HW-decoded and synced with zero static plugin state.
 

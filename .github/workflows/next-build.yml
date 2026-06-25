@@ -46,10 +46,8 @@ jobs:
       - name: Build (Release)
         run: dotnet build next/MFPlayer.Next.sln -c Release
 
-      - name: Architecture test (dependency rules)
-        run: >
-          dotnet test next/MediaFramework/Test/S.Media.Arch.Tests/S.Media.Arch.Tests.csproj
-          -c Release --no-build
+      - name: Tests (arch rules + Core/Time/Routing)
+        run: dotnet test next/MFPlayer.Next.sln -c Release --no-build
 
       - name: AOT-publish smoke
         run: >
