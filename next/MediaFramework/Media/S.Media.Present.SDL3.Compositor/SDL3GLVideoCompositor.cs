@@ -167,6 +167,18 @@ public sealed class SDL3GLVideoCompositor : IWarpPassVideoCompositor
         return _inner!.CompositeMulti(layersBackToFront, outputs, presentationTime);
     }
 
+    public void CompositeMultiToTargets(
+        IReadOnlyList<CompositorLayer> layersBackToFront,
+        IReadOnlyList<TargetedWarpOutput> targets,
+        TimeSpan presentationTime)
+    {
+        if (_disposeRequested)
+            throw new ObjectDisposedException(nameof(SDL3GLVideoCompositor));
+        EnsureInitialized();
+        EnsureContextCurrent();
+        _inner!.CompositeMultiToTargets(layersBackToFront, targets, presentationTime);
+    }
+
     /// <summary>
     /// Re-asserts the shared GL context as current on the calling thread before any GL work. Compositors
     /// on one thread now share a single <see cref="SharedSdlGlContext"/>, so sibling compositors can no

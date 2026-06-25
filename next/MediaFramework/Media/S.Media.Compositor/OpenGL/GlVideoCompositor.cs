@@ -343,6 +343,196 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         }
     }
 
+    public unsafe void CompositeMultiToTargets(
+        IReadOnlyList<CompositorLayer> layersBackToFront,
+        IReadOnlyList<TargetedWarpOutput> targets,
+        TimeSpan presentationTime)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(layersBackToFront);
+        ArgumentNullException.ThrowIfNull(targets);
+        if (!_configured)
+            throw new InvalidOperationException("GlVideoCompositor must be Configure()d before CompositeMultiToTargets.");
+        if (targets.Count == 0)
+            return;
+
+        // --- Save host GL state we'll touch (same set as CompositeMulti). ---
+        _gl.GetInteger(GetPName.DrawFramebufferBinding, out var savedFbo);
+        _gl.GetInteger(GetPName.CurrentProgram, out var savedProgram);
+        _gl.GetInteger(GetPName.VertexArrayBinding, out var savedVao);
+        _gl.GetInteger(GetPName.ActiveTexture, out var savedActiveTexture);
+        Span<int> savedViewport = stackalloc int[4];
+        _gl.GetInteger(GetPName.Viewport, savedViewport);
+        var savedBlendEnabled = _gl.IsEnabled(EnableCap.Blend);
+        _gl.GetInteger(GetPName.BlendSrcRgb, out var savedBlendSrcRgb);
+        _gl.GetInteger(GetPName.BlendDstRgb, out var savedBlendDstRgb);
+        _gl.GetInteger(GetPName.BlendSrcAlpha, out var savedBlendSrcAlpha);
+        _gl.GetInteger(GetPName.BlendDstAlpha, out var savedBlendDstAlpha);
+        var savedScissor = _gl.IsEnabled(EnableCap.ScissorTest);
+        _gl.GetInteger(GetPName.UnpackAlignment, out var savedUnpackAlignment);
+        _gl.GetInteger(GetPName.UnpackRowLength, out var savedUnpackRowLength);
+        _gl.GetInteger(GetPName.PackAlignment, out var savedPackAlignment);
+        _gl.GetInteger(GetPName.PackRowLength, out var savedPackRowLength);
+        _gl.GetInteger(GetPName.PixelPackBufferBinding, out var savedPixelPackBuffer);
+
+        try
+        {
+            RenderLayersToCanvas(layersBackToFront, savedScissor);
+
+            for (var i = 0; i < targets.Count; i++)
+            {
+                var targeted = targets[i];
+                ArgumentNullException.ThrowIfNull(targeted.Target);
+
+                // Warp this output; the result is left in the bound draw framebuffer (_fbo for a
+                // full-canvas passthrough, else _warpFbo) at OutputFormat size.
+                RenderOutputRequest(targeted.Request, nameof(targets));
+                _gl.GetInteger(GetPName.DrawFramebufferBinding, out var srcFbo);
+                var w = targeted.Request.OutputFormat.Width;
+                var h = targeted.Request.OutputFormat.Height;
+
+                switch (targeted.Target)
+                {
+                    case GlCompositeTarget glTarget:
+                        BlitToGlTarget((uint)srcFbo, w, h, glTarget);
+                        break;
+
+                    case CpuFrameCompositeTarget cpuTarget:
+                        var stride = OutputStrideForWidth(w);
+                        var frame = ReadCurrentFramebuffer(
+                            targeted.Request.OutputFormat, w, h, stride, stride * h, presentationTime);
+                        cpuTarget.OnFrameReady(frame);
+                        break;
+
+                    case ExternalImageCompositeTarget externalTarget:
+                        ExportExternalImage((uint)srcFbo, targeted.Request.OutputFormat, externalTarget);
+                        break;
+
+                    default:
+                        throw new NotSupportedException(
+                            $"Unknown composite target '{targeted.Target.GetType().Name}'.");
+                }
+            }
+        }
+        finally
+        {
+            // --- Restore host state. ---
+            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, savedUnpackAlignment);
+            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, savedUnpackRowLength);
+            _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
+            _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
+            _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, (uint)savedPixelPackBuffer);
+            if (savedBlendEnabled) _gl.Enable(EnableCap.Blend);
+            else _gl.Disable(EnableCap.Blend);
+            _gl.BlendFuncSeparate((BlendingFactor)savedBlendSrcRgb, (BlendingFactor)savedBlendDstRgb,
+                (BlendingFactor)savedBlendSrcAlpha, (BlendingFactor)savedBlendDstAlpha);
+            if (savedScissor) _gl.Enable(EnableCap.ScissorTest);
+            _gl.BindVertexArray((uint)savedVao);
+            _gl.UseProgram((uint)savedProgram);
+            _gl.ActiveTexture((TextureUnit)savedActiveTexture);
+            _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+        }
+    }
+
+    /// <summary>Zero-copy GL→GL: blit the warped result in <paramref name="srcFbo"/> into the caller's
+    /// framebuffer. The canvas is stored top-down, so the destination Y is flipped to land upright in the
+    /// GL (bottom-up) target.</summary>
+    private void BlitToGlTarget(uint srcFbo, int w, int h, GlCompositeTarget target)
+    {
+        var vp = target.Viewport;
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, srcFbo);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, target.Framebuffer);
+        _gl.BlitFramebuffer(
+            0, 0, w, h,
+            vp.X, vp.Y + vp.Height, vp.X + vp.Width, vp.Y,
+            ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Linear);
+    }
+
+    private void ExportExternalImage(uint srcFbo, VideoFormat format, ExternalImageCompositeTarget target)
+    {
+        if (GlExternalImageExport.TryExportDmabuf(_gl, srcFbo, format, target.AcceptedHandleTypes, out var handle))
+        {
+            target.OnImageReady(handle);
+            return;
+        }
+
+        throw new NotSupportedException(
+            "ExternalImageCompositeTarget: no requested handle type can be exported on this platform/context " +
+            $"(requested: {string.Join(", ", target.AcceptedHandleTypes)}). dmabuf needs EGL_MESA_image_dma_buf_export " +
+            "(Linux/Mesa); D3D11 NT-handle export is the Windows path. Use a CpuFrameCompositeTarget as the fallback.");
+    }
+
+    public unsafe VideoFrame CompositeWithSurfaces(
+        IReadOnlyList<CompositorLayer> frameLayers,
+        IReadOnlyList<CompositorSurfaceLayer> surfaceLayers,
+        TimeSpan presentationTime)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(frameLayers);
+        ArgumentNullException.ThrowIfNull(surfaceLayers);
+        if (!_configured)
+            throw new InvalidOperationException("GlVideoCompositor must be Configure()d before CompositeWithSurfaces.");
+
+        // --- Save host GL state (same set as CompositeMulti). ---
+        _gl.GetInteger(GetPName.DrawFramebufferBinding, out var savedFbo);
+        _gl.GetInteger(GetPName.CurrentProgram, out var savedProgram);
+        _gl.GetInteger(GetPName.VertexArrayBinding, out var savedVao);
+        _gl.GetInteger(GetPName.ActiveTexture, out var savedActiveTexture);
+        Span<int> savedViewport = stackalloc int[4];
+        _gl.GetInteger(GetPName.Viewport, savedViewport);
+        var savedBlendEnabled = _gl.IsEnabled(EnableCap.Blend);
+        _gl.GetInteger(GetPName.BlendSrcRgb, out var savedBlendSrcRgb);
+        _gl.GetInteger(GetPName.BlendDstRgb, out var savedBlendDstRgb);
+        _gl.GetInteger(GetPName.BlendSrcAlpha, out var savedBlendSrcAlpha);
+        _gl.GetInteger(GetPName.BlendDstAlpha, out var savedBlendDstAlpha);
+        var savedScissor = _gl.IsEnabled(EnableCap.ScissorTest);
+        _gl.GetInteger(GetPName.PackAlignment, out var savedPackAlignment);
+        _gl.GetInteger(GetPName.PackRowLength, out var savedPackRowLength);
+        _gl.GetInteger(GetPName.PixelPackBufferBinding, out var savedPixelPackBuffer);
+
+        try
+        {
+            RenderLayersToCanvas(frameLayers, savedScissor);
+
+            // Surface layers render on top of the frame layers, directly into the canvas FBO, each in the
+            // compositor's GL context/thread (the "3D object layer" seam, Doc 04 §5).
+            for (var i = 0; i < surfaceLayers.Count; i++)
+            {
+                var surfaceLayer = surfaceLayers[i];
+                ArgumentNullException.ThrowIfNull(surfaceLayer.Surface);
+                var opacity = Math.Clamp(surfaceLayer.Opacity, 0f, 1f);
+                if (opacity <= 0f)
+                    continue;
+
+                _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+                _gl.Viewport(0, 0, (uint)_output.Width, (uint)_output.Height);
+                surfaceLayer.Surface.Render(_gl, _fbo, presentationTime, surfaceLayer.Transform, opacity);
+            }
+
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+            return ReadCurrentFramebuffer(_output, _output.Width, _output.Height, _outputStride, _outputByteCount, presentationTime);
+        }
+        finally
+        {
+            // --- Restore host state. ---
+            _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
+            _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
+            _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, (uint)savedPixelPackBuffer);
+            if (savedBlendEnabled) _gl.Enable(EnableCap.Blend);
+            else _gl.Disable(EnableCap.Blend);
+            _gl.BlendFuncSeparate((BlendingFactor)savedBlendSrcRgb, (BlendingFactor)savedBlendDstRgb,
+                (BlendingFactor)savedBlendSrcAlpha, (BlendingFactor)savedBlendDstAlpha);
+            if (savedScissor) _gl.Enable(EnableCap.ScissorTest);
+            else _gl.Disable(EnableCap.ScissorTest);
+            _gl.BindVertexArray((uint)savedVao);
+            _gl.UseProgram((uint)savedProgram);
+            _gl.ActiveTexture((TextureUnit)savedActiveTexture);
+            _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+        }
+    }
+
     private VideoFrame[] CompositeMultiSynchronousAfterCanvas(
         IReadOnlyList<WarpOutputRequest> outputs,
         TimeSpan presentationTime)

@@ -75,4 +75,16 @@ public interface IWarpPassVideoCompositor : IVideoCompositor
         IReadOnlyList<CompositorLayer> layersBackToFront,
         IReadOnlyList<WarpOutputRequest> outputs,
         TimeSpan presentationTime);
+
+    /// <summary>
+    /// Like <see cref="CompositeMulti"/> but routes each output to a typed <see cref="ICompositeOutputTarget"/>
+    /// (Doc 04 §4): composite the layers once, warp each output, then deliver it zero-copy into a GL
+    /// framebuffer (<see cref="GlCompositeTarget"/>), as a CPU readback frame (<see cref="CpuFrameCompositeTarget"/>),
+    /// or as an exported external image (<see cref="ExternalImageCompositeTarget"/>). Results go to the
+    /// per-target callbacks/FBOs in request order; nothing is returned. Runs on the compositor's GL thread.
+    /// </summary>
+    void CompositeMultiToTargets(
+        IReadOnlyList<CompositorLayer> layersBackToFront,
+        IReadOnlyList<TargetedWarpOutput> targets,
+        TimeSpan presentationTime);
 }

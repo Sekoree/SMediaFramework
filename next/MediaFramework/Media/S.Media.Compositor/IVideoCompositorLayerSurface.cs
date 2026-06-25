@@ -21,3 +21,13 @@ public interface IVideoCompositorLayerSurface : IDisposable
     /// </summary>
     void Render(GL gl, uint targetFbo, TimeSpan masterTime, LayerTransform2D transform, float opacity);
 }
+
+/// <summary>
+/// A layer-surface placed in a composite: the GL-rendering <see cref="IVideoCompositorLayerSurface"/> plus
+/// its destination <see cref="Transform"/> and <see cref="Opacity"/>. Surface layers render on top of the
+/// frame layers, in list order, directly into the compositor's canvas (no intermediate frame).
+/// </summary>
+public readonly record struct CompositorSurfaceLayer(
+    IVideoCompositorLayerSurface Surface,
+    LayerTransform2D Transform,
+    float Opacity);
