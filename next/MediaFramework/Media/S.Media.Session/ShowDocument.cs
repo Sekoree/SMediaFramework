@@ -1,0 +1,56 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace S.Media.Session;
+
+/// <summary>
+/// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
+/// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI — D2) and played on the cue's group.
+/// </summary>
+public sealed record ShowClipBinding(
+    string CueId,
+    string MediaPath,
+    string? CompositionId = null,
+    int LayerIndex = 0);
+
+/// <summary>A composition canvas a clip's video can be placed onto (maps to a <c>ClipCompositionRuntime</c>).
+/// <paramref name="OutputMapping"/> cuts the composited canvas into placed sections for the output (projector
+/// keystone / multi-panel tiling) — affine sections composite headless on the CPU backend; mesh warp is GL.</summary>
+public sealed record ShowComposition(
+    string Id,
+    string Name,
+    int Width,
+    int Height,
+    int FrameRateNum = 30,
+    int FrameRateDen = 1,
+    ClipOutputMappingSpec? OutputMapping = null);
+
+/// <summary>
+/// The headless, serializable definition of a show — cues, the media each cue plays, and the output patch.
+/// Source-generated (<see cref="ShowDocumentJsonContext"/>) so it loads with no reflection (D10, AOT-safe),
+/// and carries no Avalonia/UI state (the UI persists view-state separately on top of this).
+/// </summary>
+public sealed record ShowDocument(
+    int Version,
+    IReadOnlyList<CueDefinition> Cues,
+    IReadOnlyList<ShowClipBinding> Clips,
+    IReadOnlyList<ShowComposition> Compositions,
+    IReadOnlyList<OutputPatchRoute> Outputs,
+    IReadOnlyList<OutputPatchRoute> Routes,
+    IReadOnlyList<string> Devices)
+{
+    /// <summary>An empty version-1 show.</summary>
+    public static ShowDocument Empty { get; } = new(1, [], [], [], [], [], []);
+
+    /// <summary>Serializes to indented JSON via the source-generated context (no reflection — D10).</summary>
+    public string ToJson() => JsonSerializer.Serialize(this, ShowDocumentJsonContext.Default.ShowDocument);
+
+    /// <summary>Loads a show from JSON via the source-generated context (headless, AOT-safe — D10).</summary>
+    public static ShowDocument FromJson(string json) =>
+        JsonSerializer.Deserialize(json, ShowDocumentJsonContext.Default.ShowDocument)
+        ?? throw new InvalidOperationException("show document JSON was empty or invalid.");
+}
+
+[JsonSourceGenerationOptions(WriteIndented = true)]
+[JsonSerializable(typeof(ShowDocument))]
+internal partial class ShowDocumentJsonContext : JsonSerializerContext;

@@ -347,6 +347,10 @@ public sealed class VideoPlayer : IDisposable
         timing?.SetOutcome($"target={position} resumed={wasRunning}");
     }
 
+    /// <summary>True when the underlying source supports <see cref="Seek"/> (file decoders) — false for live
+    /// sources and non-seekable stubs (e.g. an audio clip's embedded cover-art or empty video).</summary>
+    public bool CanSeek => _source is ISeekableSource;
+
     public void Dispose()
     {
         if (_disposed) return;

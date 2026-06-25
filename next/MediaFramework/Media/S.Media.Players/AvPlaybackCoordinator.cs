@@ -294,7 +294,10 @@ internal static class AvPlaybackCoordinator
             video.Clock.Seek(position);
         }
 
-        video.Seek(position);
+        // Seek the video only when its source is seekable — an audio clip's cover-art/stub video (and live
+        // video) can't seek, but the audio seek above is what matters for those.
+        if (video.CanSeek)
+            video.Seek(position);
     }
 
     public static void SeekCoordinated(

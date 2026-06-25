@@ -155,18 +155,45 @@ into a foreign API, and a sync-fd fence upgrade for `ExternalImageCompositeTarge
 
 ## Phase 4 — Session (the show, headless)
 **Goal:** cues / soundboard / output-mapping in one headless home — collapse the P1 duplication.
+**Status (2026-06-25):** framework spine **done + gated** (cue engine merged, `ShowSession` + `ShowDocument`,
+cue→video-composition + output-mapping, 566 tests). **No Phase-4-only work remains.** The two items below
+that aren't framework work have been **re-filed to their proper phases** — routing/multi-track → **Phase 5**,
+the UI god-object collapse → **Phase 8** — because each depends on a later phase (decode-layer/multi-output,
+and the UI port) rather than being a finishing touch here.
 
-- [ ] Merge `S.Media.Playback` (`ClipCompositionRuntime`, `ClipStandbyEngine`, `Soundboard`, `CueGraph`,
-      `RoutingScene`, `MediaSession`, …) into `S.Media.Session`.
-- [ ] **Move out of the UI** (P1): `CuePlaybackEngine`, `HaPlayPlaybackSession`(+`OutputWiring`),
-      `SoundboardEngine`, group-seek barrier, output-mapping/warp wiring → Session, **de-Avalonia'd**.
-- [ ] Public `ShowSession` on the dispatcher (Post/InvokeAsync, immutable snapshots, reentrancy guard —
-      D5/OQ8); one `SessionClock` **per transport group** (D4); per-group master output (D11).
-- [ ] `ShowDocument` persistence — **STJ source-gen**, AOT-safe, loads headless (D10).
-- [ ] Output map = binding → warp sections; routing scene = N→M channel remap + multi-track select.
+- [x] Merge `S.Media.Playback` (`ClipCompositionRuntime`, `ClipStandbyEngine`, `Soundboard`, `CueGraph`,
+      `RoutingScene`, `MediaSession`, …) into `S.Media.Session`. **Done** — 13 files decoupled
+      (FFmpeg→registry, Effects→Compositor); `MediaPlayer` itself decoupled to `S.Media.Players` (the
+      container-open/`MediaContainerPlaybackBundle` half removed; new registry `MediaPlayer.OpenFile(registry,…)`
+      builder). Genlock `AdaptiveRateAudioOutput` deferred to Phase 5 per its own note.
+- [→] **Move out of the UI** (P1) — **re-filed to Phase 8 (UI port).** The playback *engine* embedded in the
+      UI god-objects (`CuePlaybackEngine` 2425 LOC, `HaPlayPlaybackSession`(+`OutputWiring`), `SoundboardEngine`)
+      is now the headless `ShowSession` + `CueGraph` + `Soundboard` + `ClipCompositionRuntime` — **built fresh,
+      not ported**, so the framework duplication is already collapsed. What's left isn't a framework pass: the
+      old god-objects live in `./UI/HaPlay/` (next/ has no UI yet), and auditing them for any engine logic
+      `ShowSession` still lacks + retiring them happens *as the UI is rebuilt on `ShowSession`* (Phase 8).
+- [x] Public `ShowSession` on the dispatcher (Post/InvokeAsync, immutable snapshots, reentrancy guard —
+      D5/OQ8); one `SessionClock` **per transport group** (D4); per-group master output (D11). **Done**
+      — serial async dispatcher, `AsyncLocal` reentrancy guard, `TransportSnapshot` immutable queries.
+- [x] `ShowDocument` persistence — **STJ source-gen**, AOT-safe, loads headless (D10). **Done** —
+      `ShowDocumentJsonContext`; `SessionSmoke` round-trips the show through JSON before driving it.
+- [x] Output map = binding → warp sections. **Done (affine, headless)** — cue→video-composition wired
+      (composition-bound clip mints a `ClipCompositionRuntime` layer, opened with the layer output as the
+      video negotiation lead; CPU compositor composites it). `ShowComposition.OutputMapping` carries a
+      `ClipOutputMappingSpec` applied at build + `ShowSession.ApplyCompositionMappingAsync` updates it live;
+      `SessionSmoke` composites through an affine section headless. *Mesh **warp** stays GL-only (verify
+      under xvfb).* 
+- [→] Routing scene = N→M channel remap + **multi-track select** — **re-filed to Phase 5.** Blocked *below*
+      `ShowSession`, not a wiring gap: the registry **audio** open is single-track (`AudioSourceOpenOptions`
+      has no stream index — the multi-track container path was the FFmpeg bundle decoder, intentionally
+      removed), and N→M needs the multi-output matrix. Both are Phase-5 work (decode-layer track-select +
+      multi-output), then driven from `ShowSession`.
 
-**Gate:** `SoundboardSmoke` + new `SessionSmoke` (headless cue fire / seek / GO) green; `…Playback.Tests`.
-**Exit:** a full show runs headless with no Avalonia dependency.
+**Gate:** `SoundboardSmoke` + new `SessionSmoke` (headless cue fire / seek / GO + video composite) green;
+`S.Media.Session.Tests`. ✅ Both smokes green on real hardware (2026-06-25); **566 unit tests** (incl. new
+23-test `S.Media.Session.Tests`: CueGraph / ShowDocument / ShowSession dispatcher) + arch-test green.
+**Exit:** a full show runs headless with no Avalonia dependency. ✅ **Proven** — `SessionSmoke` loads a
+JSON show and drives GO → fire → seek → GO → switch-clip with zero Avalonia on the path.
 
 ---
 
@@ -183,6 +210,10 @@ into a foreign API, and a sync-fd fence upgrade for `ExternalImageCompositeTarge
 - [ ] Live convergence: NDI/mic on `SourceTimeline` + `SourceSyncGroup` over the session master (03);
       first-class per-source offset.
 - [ ] Multi-output: `CompositeMulti` + `VideoPresentSyncGroup` for stitched/combined outputs.
+- [ ] **(Re-filed from Phase 4)** Routing scene = N→M channel remap + multi-track select: add an audio
+      track-select option to the registry **audio** open (`AudioSourceOpenOptions` stream index, honoured by
+      the FFmpeg audio provider — today it opens single-track standalone audio), wire the N→M matrix over the
+      multi-output above, and drive both from `ShowSession`.
 
 **Gate:** `NDIPlayer`/`NDIReceiver`; multi-output drift soak (1 hr, no unbounded drift); live A/V-sync
 targets ([03 §7](03-AV-Sync-Clocks-Routing.md)).
@@ -237,6 +268,10 @@ source **and** a control decoder.
 
 - [ ] `HaPlay.Core` / `HaPlay.Controls` / `HaPlay.App` / `HaPlay.Desktop` — thin MVVM over `ShowSession`.
 - [ ] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).
+- [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
+      `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
+      built in Phase 4 — audit each for any logic `ShowSession` still lacks, then delete it as its workspace
+      is strangled onto `ShowSession`.
 - [ ] UI persists only **view-state** on top of Session's `ShowDocument` (D10).
 - [ ] Strangle the old app **workspace by workspace**; old + new never share a process (OQ6).
 
