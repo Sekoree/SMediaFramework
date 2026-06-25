@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 0 skeleton: S.Media.NDI — NDI sender + receiver (+NDILib, Phase 5).
+         NuGet/native refs are added in the phase noted above. Common build settings come
+         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Time/S.Media.Time.csproj" />
+        <ProjectReference Include="../S.Media.Routing/S.Media.Routing.csproj" />
+    </ItemGroup>
+
+</Project>

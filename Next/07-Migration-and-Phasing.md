@@ -9,10 +9,10 @@ stub dirs, which are superseded.
 
 ## 0. Ground rules
 
-- **`Next/` holds planning; code lives in a new `next/` source tree (D1).** Create `next/` mirroring
-  `MediaFramework/` + `UI/` with `MFPlayer.Next.sln`; assembly names match today's (separate build
-  outputs, no collisions) so the old `MFPlayer.sln` keeps building and shipping releases untouched. No
-  long-lived broken `master`.
+- **`Next/` holds planning; code lives in a new `next/` source tree (D1).** Create `next/` with
+  `MFPlayer.Next.sln`; carried-forward modules keep their names where they remain the same module,
+  while split/renamed modules use the planned new names. Separate build outputs avoid collisions, so
+  the old `MFPlayer.sln` keeps building and shipping releases untouched. No long-lived broken `master`.
 - **Parity is defined by the existing tools + tests**, ported first (see §3). A phase is "done" when
   its parity gate is green.
 - **Salvage, don't rewrite blank.** Most engine code moves with namespace/dependency edits only. The
@@ -95,9 +95,10 @@ either. Options, simplest first:
   façade over `S.Media.Session` so the existing view-models call the new engine with minimal edits.
   More work; only worth it if you need new-engine features in the current UI before the rebuild.
 
-**Never load old + next managed assemblies in one process** (D1 keeps identical names, so they'd clash —
-OQ6). If a transitional process must bridge old↔next, cross via the `s_media_player` C ABI (native — no
-managed-identity collision), not by referencing both managed sets.
+**Never load old + next managed assemblies in one process** (D1 keeps an overlapping managed
+generation, so carried-forward assemblies would clash — OQ6). If a transitional process must bridge
+old↔next, cross via the `s_media_player` C ABI (native — no managed-identity collision), not by
+referencing both managed sets.
 
 ## 5. Risks & mitigations
 

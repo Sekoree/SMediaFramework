@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Enforces the dependency rules from ../../../../Next/01-Architecture-and-Principles.md §3 (D15).
+       It parses the next/ *.csproj graph at test time and has NO ProjectReferences of its own, so it
+       builds fast and validates even partially-stubbed phases. -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+</Project>

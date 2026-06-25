@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 0 skeleton: S.Media.Encode.FFmpeg — mux/encode for record/stream-out (Phase 2).
+         NuGet/native refs are added in the phase noted above. Common build settings come
+         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.FFmpeg.Common/S.Media.FFmpeg.Common.csproj" />
+    </ItemGroup>
+
+</Project>

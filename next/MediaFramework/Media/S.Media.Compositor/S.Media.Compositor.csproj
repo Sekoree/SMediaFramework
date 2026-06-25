@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 0 skeleton: S.Media.Compositor — layers, transforms, mesh warp, multi-output (NO decoder dep).
+         NuGet/native refs are added in the phase noted above. Common build settings come
+         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Gpu/S.Media.Gpu.csproj" />
+    </ItemGroup>
+
+</Project>

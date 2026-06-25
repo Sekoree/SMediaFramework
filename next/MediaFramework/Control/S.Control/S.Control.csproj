@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 0 skeleton: S.Control — MIDI/OSC/Mond + control profile registry (+PMLib/OSCLib/Mond, Phase 6).
+         NuGet/native refs are added in the phase noted above. Common build settings come
+         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+    </ItemGroup>
+
+</Project>

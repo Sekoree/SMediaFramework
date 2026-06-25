@@ -16,26 +16,29 @@ checkable. `(D#)` / `(OQ#)` tags point to the binding decision in [08](08-Open-D
 
 ---
 
-## Phase 0 — Scaffold
+## Phase 0 — Scaffold ✅ *(local gates green; CI pending first run)*
 **Goal:** an empty `next/` solution that builds, AOT-publishes, and enforces the dependency graph.
 
-- [ ] Create `next/` mirroring `MediaFramework/` + `UI/`; add `MFPlayer.Next.sln` (D1).
-- [ ] Create empty projects: `Core`, `Time`, `Routing`, `Gpu`, `Compositor`, `Players`, `Session`;
-      module skeletons `FFmpeg.Common`, `Decode.FFmpeg`, `Encode.FFmpeg`, `Audio.PortAudio`,
+- [x] Create `next/`; add `MFPlayer.Next.sln` (D1). *(UI/ mirror deferred to Phase 8.)*
+- [x] Create the project graph (20 skeletons): `Core`, `Time`, `Routing`, `Gpu`, `Compositor`, `Players`,
+      `Session`; modules `FFmpeg.Common`, `Decode.FFmpeg`, `Encode.FFmpeg`, `Audio.PortAudio`,
       `Audio.MiniAudio`, `Present.SDL3`, `Present.Avalonia`, `NDI`, `Images.Skia`, `Subtitles`;
-      `S.Control`, `S.Abi`, `S.Media.Interop`.
-- [ ] Wire `ProjectReference`s to match the allowed-reference table ([01 §3](01-Architecture-and-Principles.md)) — nothing upward.
-- [ ] `next/Directory.Packages.props`: Avalonia 12.x, SDL3-CS, Silk.NET.OpenGL/Core, FFmpeg.AutoGen 8.x,
-      SkiaSharp, Mond, CommunityToolkit.Mvvm, STJ, **Vortice 3.8.x** (OQ5). Single TFM `net10.0` (D15).
-- [ ] Identical assembly names to old; confirm old `MFPlayer.sln` still builds untouched; write the
-      **"one generation per process"** rule into the repo README (D1/OQ6).
-- [ ] Add the **arch-test** project asserting the [01 §3](01-Architecture-and-Principles.md) rules (D15).
-- [ ] CI: `publish-aot` smoke + arch-test on Windows + Linux (D13).
-- [ ] Create empty/stubbed parity-harness apps to fill in later (`PlaybackSmoke`, `VideoPlaybackSmoke`,
-      `CompositorSmoke`, `SessionSmoke`, `TransportSyncProbe`, `FormatSwitchProbe`, `GlProbe`, …).
+      `S.Control`, `S.Abi`, `S.Media.Interop`. *(NuGet/native refs deferred to each project's phase.)*
+- [x] Wire `ProjectReference`s to match the allowed-reference table ([01 §3](01-Architecture-and-Principles.md)) — nothing upward.
+- [x] `next/Directory.Build.props` (net10.0, Nullable, `IsAotCompatible`) + `Directory.Build.targets`
+      (isolates next/ from the old root targets) + `next/Directory.Packages.props` (pins incl. **Vortice 3.8.x**, OQ5). Single TFM (D15).
+- [x] Carried-forward assembly names preserved where applicable; split/renamed module names are
+      intentional; old `MFPlayer.sln` untouched (git-verified); **"one generation per process"** rule
+      written into `next/README.md` (D1/OQ6).
+- [x] `S.Media.Arch.Tests` asserts the [01 §3](01-Architecture-and-Principles.md) rules (D15) — **verified
+      it fails on an injected upward ref**, not vacuously green.
+- [x] CI `.github/workflows/next-build.yml`: build + arch-test + AOT-publish on Windows + Linux (D13).
+      *(Triggers on push to `next`; first green run pending.)*
+- [x] Parity harness: `Tools/AotSmoke` (the AOT gate). Phase-specific smokes (PlaybackSmoke, …) added in their phases.
 
-**Gate:** solution builds + AOT-publishes empty; arch-test green; old `MFPlayer.sln` still builds.
-**Exit:** green CI on both platforms.
+**Gate:** ✅ `dotnet build` — 22 projects, 0 warnings/0 errors · ✅ arch-test 4/4 · ✅ AOT-publish →
+native ELF runs (`MFPlayer.Next AOT smoke OK`) · ✅ old tree untouched. *(Windows AOT leg runs in CI.)*
+**Exit:** green CI on both platforms *(pending the first CI run on push)*.
 
 ---
 

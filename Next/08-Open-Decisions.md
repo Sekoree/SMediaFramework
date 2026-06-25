@@ -27,9 +27,13 @@ extra consequences worth keeping visible.
 ---
 
 ## D1 — New source lives in a parallel `next/` subtree
-`next/` mirrors `MediaFramework/` + `UI/` and carries `MFPlayer.Next.sln`. Assembly/namespace names
-stay identical to today's — separate build outputs mean no collision. Old `MFPlayer.sln` is untouched
-and keeps shipping. The in-place stub dirs (`MediaFramework/Media/S.Media.Time` etc.) are superseded.
+`next/` mirrors the framework layout and carries `MFPlayer.Next.sln`. Carried-forward projects keep
+their existing assembly/namespace names where they survive as the same module (`S.Media.Core`,
+`S.Media.NDI`, `S.Control`, `S.Media.Interop`); split or renamed rewrite modules use the planned new
+names (`S.Media.Decode.FFmpeg`, `S.Media.Present.SDL3`, `S.Media.Images.Skia`, etc.). Separate build
+outputs mean no collision as long as old and next managed assemblies are never loaded into one process.
+Old `MFPlayer.sln` is untouched and keeps shipping. The in-place stub dirs
+(`MediaFramework/Media/S.Media.Time` etc.) are superseded.
 *Reflected in:* [07](07-Migration-and-Phasing.md) §0 + Phase 0.
 
 ## D2 — URI scheme + typed options for opening sources
@@ -192,10 +196,11 @@ the affected phase freezes its public API or ABI.
 | OQ3 | Is NDI output CPU-frame only in v1? | The referenced NDI SDK send path is CPU-buffer based, and today's sender requires CPU-backed pixel planes. If a future GPU NDI encoder exists it should be a separate target/backend; otherwise `NDI` should not be listed as an `ExternalImageCompositeTarget` consumer. | Phase 5 NDI / Phase 3 compositor |
 | OQ4 | What native bundle does `LibAssLib` require on each platform? | libass itself is only the wrapper target; deployment also needs the native libass runtime dependencies such as FreeType, FriBidi, HarfBuzz, and the platform font provider path. The Phase 6 packaging plan should name these explicitly. | Phase 6 subtitles / packaging |
 | OQ5 | Which Vortice version/source is authoritative for next? | `Reference/` contains `Vortice.Windows-1.9.143`, while the current package props use `Vortice.Direct3D11`/`Vortice.DXGI` 3.8.3. Pick one source of truth before freezing D3D11 interop code. | Phase 0 deps / Phase 3 GPU |
-| OQ6 | Can old and next assemblies ever be loaded together? | D1 keeps identical assembly/namespace names in a parallel `next/` tree. That is fine for separate solutions/build outputs, but unsafe if a host/test process loads old and next at the same time. Define the boundary or introduce a temporary shim/distinct package names. | Phase 0 solution / migration |
+| OQ6 | Can old and next assemblies ever be loaded together? | D1 keeps a parallel managed generation with overlapping carried-forward assembly/namespace names. That is fine for separate solutions/build outputs, but unsafe if a host/test process loads old and next at the same time. Define the boundary or introduce a temporary shim/distinct package names. | Phase 0 solution / migration |
 | OQ7 | How does the compositor transition between 8-bit SDR and RGBA16F HDR? | D12's auto mode is feasible, but a mid-session working-space switch can cause a visible reset unless the trigger, frame boundary, resource rebuild, and test expectations are specified. | Phase 3 compositor |
 | OQ8 | What are the session-dispatcher reentrancy rules? | D5 avoids UI-thread assumptions, but callbacks from UI/plugins must not synchronously call back into `ShowSession` and deadlock the dispatcher. Define snapshot/event delivery and blocking-call rules. | Phase 1 session API |
 | OQ9 | Which backends provide real device-change events and which poll? | D6 says dynamic devices are surfaced via backend change events, but native libraries differ. Define whether PortAudio/PortMidi/miniaudio/capture devices use native notifications, polling, or a hybrid. | Phase 1-2 registry/devices |
+| OQ10 | Where do the control capability contracts live so `S.Abi` stays Session-free? | Finding 1 made `S.Abi` Session-free (`[Core, Compositor]`). But `IControlRegistryBuilder`/`IControlFeedbackDecoder`/`ControlDeviceProfile` currently imply living in `S.Control`, which references `S.Media.Session`; a Phase-6 `S.Abi → S.Control` ref would *transitively* re-introduce Session into the plugin host — reopening finding 1. | Phase 6 control adapter (decide contract home by Phase 1) |
 
 ### Resolutions (recommended approaches)
 
@@ -220,8 +225,9 @@ the affected phase freezes its public API or ABI.
   (1.x API differs); pin 3.8.x in next's package props and don't mirror 1.x patterns. *Reflected in:*
   dep-check above.
 - **OQ6 — one generation per process.** Old HaPlay stays on the old sln; next builds/tests reference
-  only next; identical names never collide because they never share a process. If a process must ever
-  bridge old↔next, cross via the `s_media_player` C ABI (native — no managed-identity clash).
+  only next; overlapping carried-forward names never collide because they never share a process. If a
+  process must ever bridge old↔next, cross via the `s_media_player` C ABI (native — no managed-identity
+  clash).
   *Reflected in:* [07](07-Migration-and-Phasing.md) §4.
 - **OQ7 — choose working space at `Configure`/graph-rebuild, not per-frame.** Promote eagerly to RGBA16F,
   demote only at cue/idle boundaries (hysteresis) so a show never resets mid-playback; rebuild FBOs at a
@@ -236,10 +242,13 @@ the affected phase freezes its public API or ABI.
   (`ma_device_notification_type`, incl. `rerouted`) + NDI (`find_wait_for_sources`); **poll** =
   PortAudio (list fixed until `Pa_Terminate`/`Pa_Initialize`) + PortMidi (header: reinit to rescan);
   **capture** = OS notify (udev / `WM_DEVICECHANGE`) or poll. *Reflected in:* D6.
-
----
-
-## How to use this file
+- **OQ10 — control capability contracts go in a Session-free home.** Put `IControlRegistryBuilder`,
+  `IControlFeedbackDecoder`, and `ControlDeviceProfile` in `S.Media.Core` (next to the media registry
+  contracts) or a small `S.Control.Abstractions` referenced by both `S.Control` and `S.Abi` — mirroring
+  how `IVideoCompositorLayerSurface` lives in `Compositor` (Session-free). That keeps `S.Abi`'s allowed
+  set `[Core, Compositor, <control-abstractions>]` with **no Session, direct or transitive**. Decide the
+  exact home when Phase 6 writes the control registry, then add it to the arch-test allow-list.
+  *Reflected in:* [02](02-Project-Structure.md) Tier 6/7; `S.Media.Arch.Tests` (Phase 6).
 
 When a decision is revisited, edit its entry here first (it's the source of truth for "what did we
 decide?"), then update the doc(s) on its *Reflected in* line. Add new cross-cutting questions here

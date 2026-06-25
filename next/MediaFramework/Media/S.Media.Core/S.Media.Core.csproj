@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 0 skeleton: S.Media.Core — primitives + contracts + media registry (NO backend deps).
+         NuGet/native refs are added in the phase noted above. Common build settings come
+         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+
+</Project>

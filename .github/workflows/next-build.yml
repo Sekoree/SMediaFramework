@@ -1,0 +1,66 @@
+name: Next Build
+
+# Phase 0 gate for the parallel rewrite tree (next/). Independent of build.yml (which ships the old app
+# from master). Builds the next solution, runs the architecture test, and AOT-publishes the smoke exe
+# on Windows + Linux (D13).
+
+on:
+  push:
+    branches: [next]
+    paths: ['next/**', '.github/workflows/next-build.yml']
+  pull_request:
+    paths: ['next/**', '.github/workflows/next-build.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: next-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: linux-x64, os: ubuntu-latest,  rid: linux-x64 }
+          - { label: win-x64,   os: windows-latest, rid: win-x64 }
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      # NativeAOT links with the platform toolchain. Windows runners ship MSVC; Linux needs clang + zlib.
+      - name: Install Linux AOT prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang zlib1g-dev
+
+      - name: Build (Release)
+        run: dotnet build next/MFPlayer.Next.sln -c Release
+
+      - name: Architecture test (dependency rules)
+        run: >
+          dotnet test next/MediaFramework/Test/S.Media.Arch.Tests/S.Media.Arch.Tests.csproj
+          -c Release --no-build
+
+      - name: AOT-publish smoke
+        run: >
+          dotnet publish next/MediaFramework/Tools/AotSmoke/AotSmoke.csproj
+          -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o aot-publish
+
+      - name: Run native AOT smoke
+        shell: bash
+        run: |
+          if [ -f aot-publish/AotSmoke.exe ]; then
+            ./aot-publish/AotSmoke.exe
+          else
+            ./aot-publish/AotSmoke
+          fi
