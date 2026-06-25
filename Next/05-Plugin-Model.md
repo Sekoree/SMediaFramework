@@ -171,12 +171,18 @@ typedef struct MfpAudioBackendVTable {
 
 Other vtables, each shadowing the framework interface it adapts to:
 - **`MfpVideoSourceVTable`** ↔ `IVideoSource`: `native_pixel_formats`, `select_output_format`,
-  `try_read_frame(out MfpVideoFrame)`, `is_exhausted`, `seek`. Frames cross as a **tagged** descriptor
-  carrying CPU planes **or** a hardware handle (D8): `{ MfpFrameKind kind; void* planes[4];
-  int strides[4]; uint64 gpu_handle; /* dmabuf fd | D3D11 shared handle | GL texture id */
-  w; h; MfpPixelFormat; int64 pts_ticks; void* opaque }`. GPU handles are zero-copy via the same
-  interop paths as `S.Media.Gpu` (D7); the kind tag carries the handle's platform meaning so the host
-  imports it correctly and CPU-only plugins ignore the GPU fields.
+  `try_read_frame(out MfpVideoFrame)`, `is_exhausted`, `seek`. Frames cross as a **tagged union, one
+  struct per kind** (OQ1 — one `uint64 gpu_handle` is not enough), mirroring the existing `S.Media.Core`
+  HW-backings so the managed adapter is a near-direct map:
+  - `MfpCpuFrame { void* planes[4]; int strides[4]; }`
+  - `MfpDmaBufFrame { int n; int fds[4]; int offsets[4]; int strides[4]; uint64 drm_modifier; uint32 fourcc; }` (← `DmabufNv12/P010/P016Backing`)
+  - `MfpD3D11Frame { uint64 nt_shared_handle; uint32 dxgi_format; uint32 array_slice; }` (← `Win32SharedNv12Backing`)
+  - `MfpGlTextureFrame { uint32 id; uint32 target; uint64 context_id; }` — **same-context only**, so for
+    layer-surface plugins, never cross-process source/output frames.
+
+  Common header `{ MfpFrameKind kind; uint32 w, h; MfpPixelFormat; int64 pts_ticks; MfpSync sync; void* opaque }`.
+  GPU kinds are zero-copy via the same interop paths as `S.Media.Gpu` (D7); CPU-only plugins ignore the
+  GPU kinds. **This struct set is the forever-surface — review hard before tagging ABI v1.**
 - **`MfpVideoOutputVTable`** ↔ `IVideoOutput`: `accepted_pixel_formats`, `configure(format)`,
   `submit(frame)`.
 - **`MfpLayerSurfaceVTable`** ↔ `IVideoCompositorLayerSurface`: `configure_gl(MfpGlContext, canvas)`,
@@ -216,8 +222,9 @@ foreach (var lib in Directory.EnumerateFiles(dir, NativeLibPattern))
   across the boundary; a thread-local last-error string is fetchable.
 - **Ownership:** CPU frames are host-pooled (`alloc_frame`/`release_frame`); the side that last holds a
   frame releases it, mirroring the managed `VideoFrame` release-callback contract. GPU-handle frames
-  (D8) add explicit `acquire`/`release` plus a sync fence so producer and consumer don't race on the
-  texture; the host owns import and lifetime of foreign handles.
+  (D8) add explicit `acquire`/`release` plus a **negotiated sync primitive** (`MfpSync` — keyed-mutex /
+  binary or timeline semaphore / fence, chosen by capability query, OQ2) so producer and consumer don't
+  race on the texture; the host owns import and lifetime of foreign handles.
 - **Threading:** the contract states which thread each call runs on (e.g. `submit`/`render` on the
   clock/compositor thread, must return promptly; slow work goes to the plugin's own thread) — same
   rule as `IVideoOutput.Submit` today.

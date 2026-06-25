@@ -183,7 +183,8 @@ C ABI drive). This is where P1's duplication collapses into one home.
 unified.
 
 **Threading + persistence (D5/D10):** the public `ShowSession` API marshals commands onto an internal
-session dispatcher (queries return immutable snapshots; it never assumes the UI thread). `Session` owns
+session dispatcher (queries return immutable snapshots; it never assumes the UI thread; `Post`/`InvokeAsync`
+only — **no blocking `Invoke` from within a dispatcher callback**, OQ8). `Session` owns
 a serializable `ShowDocument` (System.Text.Json source-generated, AOT-safe) so shows load headless and
 via the C ABI; the UI persists only view-state on top.
 

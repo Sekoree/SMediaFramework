@@ -40,7 +40,7 @@ boundary zero-copy via exported external images) with a GL-explicit plugin ABI. 
 5. **[05 — Plugin Model](05-Plugin-Model.md)** — scoped typed registries + the native C-ABI plugin contract.
 6. **[06 — Control Surface](06-Control-Surface.md)** — MIDI/OSC/Mond scripting, data-driven device profiles.
 7. **[07 — Migration & Phasing](07-Migration-and-Phasing.md)** — fresh solution, phase plan, salvage map, parity gates.
-8. **[08 — Open Decisions](08-Open-Decisions.md)** — cross-cutting decisions ledger (D1/D4/D7 locked; the rest carry recommended defaults).
+8. **[08 — Decisions Ledger](08-Open-Decisions.md)** — locked cross-cutting decisions plus follow-up open questions.
 
 ---
 

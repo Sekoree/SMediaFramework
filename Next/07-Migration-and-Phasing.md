@@ -91,6 +91,10 @@ either. Options, simplest first:
   façade over `S.Media.Session` so the existing view-models call the new engine with minimal edits.
   More work; only worth it if you need new-engine features in the current UI before the rebuild.
 
+**Never load old + next managed assemblies in one process** (D1 keeps identical names, so they'd clash —
+OQ6). If a transitional process must bridge old↔next, cross via the `s_media_player` C ABI (native — no
+managed-identity collision), not by referencing both managed sets.
+
 ## 5. Risks & mitigations
 
 | Risk | Mitigation |

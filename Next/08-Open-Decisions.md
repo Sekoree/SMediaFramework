@@ -66,9 +66,11 @@ change events on the backend — not by mutating the registry.
 `S.Media.Gpu` shares **one GL context per render thread** (the existing `SharedSdlGlContext` pattern):
 the compositor, its composition-FX, and per-output warp stages on that thread share it and pass
 textures zero-copy. **SDL3** runs the compositor on its own thread, so it gets that zero-copy directly.
-**Crossing a thread/context/API boundary** (to Avalonia, NDI/D3D11, a native plugin) is **not** a shared
-GL context — it's an **exported external image** (dmabuf fd on Linux / D3D11-DXGI shared handle on
-Windows) **+ a sync semaphore**, imported by the consumer. That is one currency: it's Avalonia's
+**Crossing a thread/context/API boundary** (to Avalonia, a D3D11/Vulkan consumer, a native plugin) is
+**not** a shared GL context — it's an **exported external image** (dmabuf fd on Linux / D3D11-DXGI
+shared handle on Windows) **+ a negotiated sync primitive** (keyed-mutex / semaphore, per OQ2), imported
+by the consumer. (NDI is **not** here — its SDK send path is CPU `p_data`, so NDI is a CPU readback
+target; see OQ3.) That is one currency: it's Avalonia's
 `IGlContextExternalObjectsFeature.ImportImage` / `ICompositionGpuInterop`, the **D8** plugin frame
 handle, and the existing `S.Media.Core` `DmabufNv12Backing`/`Win32SharedNv12Backing`. Plugin
 `GpuContext`/`MfpGlContext` still exposes raw GL; `IGpuDevice` stays internal.
@@ -163,7 +165,8 @@ Validated the plan against the vendored dependency source/SDKs in `Reference/`:
   scripting/AOT assumption ([06](06-Control-Surface.md), D5). ✓
 - **libass 0.17.5** — source vendored, so the D14 `LibAssLib` wrapper is feasible. ✓
 - **Native SDKs all present** — portaudio 19.7.0, portmidi 2.0.8, miniaudio 0.11.25, jack2 1.9.22, NDI
-  SDK (Linux + Windows), Vortice.Windows 1.9.143 (D3D11 interop). The Tier-0 keep-list is real. ✓
+  SDK (Linux + Windows), Vortice (D3D11 interop — use the **3.8.x NuGet**, not the stale `Reference/`
+  1.9.143 copy whose 1.x API differs; OQ5). The Tier-0 keep-list is real. ✓
 - **FFmpeg.AutoGen (main / 8.1)** — full binding (hwcontext, swscale, subtitle decoders); aligns with
   the FFmpeg 8.x `FFmpeg.GPL` native. ✓
 - **GL interop** — drove the D7 refinement: Avalonia can't join a foreign GL share group, so
@@ -174,6 +177,65 @@ Validated the plan against the vendored dependency source/SDKs in `Reference/`:
   Do **not** carry it into `next/`. (`Tmds.DBus.Protocol` has no direct refs either — it's only a
   transitive Avalonia/Linux dep, which is fine.)
 - **macOS interop** (Metal/IOSurface) exists in Avalonia but is moot under D13 (Win/Linux only).
+
+---
+
+## Follow-up open questions
+
+These do not reopen D1-D15. They are implementation-contract details that should be answered before
+the affected phase freezes its public API or ABI.
+
+| ID | Question | Why it matters | Blocks |
+|----|----------|----------------|--------|
+| OQ1 | What is the exact tagged C-ABI frame descriptor for GPU frames? | D8 is feasible, but one `uint64 gpu_handle` is not enough for dmabuf, D3D11 shared textures, and GL textures. Define separate structs for CPU planes, dmabuf planes/fds/modifiers, D3D11 shared handles + keyed-mutex/sync metadata, and GL textures scoped to a declared context/share group. | Phase 6 ABI |
+| OQ2 | What is the external-image synchronization contract per backend? | Avalonia 12 exposes capability queries and may use keyed mutex, semaphore, timeline semaphore, or automatic sync. The docs should say "sync primitive/capability", not assume every external image has a semaphore. | Phase 3 GPU / Phase 6 ABI |
+| OQ3 | Is NDI output CPU-frame only in v1? | The referenced NDI SDK send path is CPU-buffer based, and today's sender requires CPU-backed pixel planes. If a future GPU NDI encoder exists it should be a separate target/backend; otherwise `NDI` should not be listed as an `ExternalImageCompositeTarget` consumer. | Phase 5 NDI / Phase 3 compositor |
+| OQ4 | What native bundle does `LibAssLib` require on each platform? | libass itself is only the wrapper target; deployment also needs the native libass runtime dependencies such as FreeType, FriBidi, HarfBuzz, and the platform font provider path. The Phase 6 packaging plan should name these explicitly. | Phase 6 subtitles / packaging |
+| OQ5 | Which Vortice version/source is authoritative for next? | `Reference/` contains `Vortice.Windows-1.9.143`, while the current package props use `Vortice.Direct3D11`/`Vortice.DXGI` 3.8.3. Pick one source of truth before freezing D3D11 interop code. | Phase 0 deps / Phase 3 GPU |
+| OQ6 | Can old and next assemblies ever be loaded together? | D1 keeps identical assembly/namespace names in a parallel `next/` tree. That is fine for separate solutions/build outputs, but unsafe if a host/test process loads old and next at the same time. Define the boundary or introduce a temporary shim/distinct package names. | Phase 0 solution / migration |
+| OQ7 | How does the compositor transition between 8-bit SDR and RGBA16F HDR? | D12's auto mode is feasible, but a mid-session working-space switch can cause a visible reset unless the trigger, frame boundary, resource rebuild, and test expectations are specified. | Phase 3 compositor |
+| OQ8 | What are the session-dispatcher reentrancy rules? | D5 avoids UI-thread assumptions, but callbacks from UI/plugins must not synchronously call back into `ShowSession` and deadlock the dispatcher. Define snapshot/event delivery and blocking-call rules. | Phase 1 session API |
+| OQ9 | Which backends provide real device-change events and which poll? | D6 says dynamic devices are surfaced via backend change events, but native libraries differ. Define whether PortAudio/PortMidi/miniaudio/capture devices use native notifications, polling, or a hybrid. | Phase 1-2 registry/devices |
+
+### Resolutions (recommended approaches)
+
+- **OQ1 — tagged union, one struct per kind, mirroring the Core HW-backings.** `MfpCpuFrame` ·
+  `MfpDmaBufFrame` (fds/offsets/strides/`drm_modifier`/fourcc) · `MfpD3D11Frame` (NT shared handle +
+  dxgi format + array slice) · `MfpGlTextureFrame` (id/target/**context id — same-context only**, so
+  layer-surface plugins, never cross-process). Common header = kind + w/h + pixfmt + pts + `MfpSync`.
+  *Reflected in:* [05](05-Plugin-Model.md) `MfpVideoSourceVTable`. **Review hard at Phase 6 — forever-surface.**
+- **OQ2 — a negotiated sync primitive, not "a semaphore".** Frame carries `MfpSync { None | KeyedMutex |
+  BinarySemaphore | TimelineSemaphore }` + handle; the producer picks the best type the consumer
+  advertises (Avalonia's `Supported*ExternalSemaphoreTypes`). D3D11 = keyed-mutex; Vulkan/GL =
+  semaphore fd. *Reflected in:* [04](04-Compositor-Warp-GPU.md) §4, [05](05-Plugin-Model.md), D7.
+- **OQ3 — NDI is a CPU target.** Validated: `NDIlib_video_frame_v2_t` sends from `uint8_t* p_data`. NDI
+  output = `CpuFrameCompositeTarget` (one readback) in v1, **not** an external-image consumer; a future
+  GPU NDI encoder would be a separate backend. *Reflected in:* [04](04-Compositor-Warp-GPU.md) §4, D7.
+- **OQ4 — `LibAssLib` bundle = libass + FreeType + FriBidi + HarfBuzz + a font provider** (fontconfig on
+  Linux; DirectWrite/GDI on Windows — validated from libass `meson.build`). Prefer a self-contained
+  build with deps statically linked (one `.so`/`.dll`); document font discovery per platform. Fallback
+  if bundling bites (no D14 reopen): route ASS through `Decode.FFmpeg`'s libass-backed decoder.
+  *Reflected in:* D14, [07](07-Migration-and-Phasing.md) Phase 6.
+- **OQ5 — Vortice 3.8.x (NuGet) is authoritative.** `Reference/Vortice.Windows-1.9.143` is a stale copy
+  (1.x API differs); pin 3.8.x in next's package props and don't mirror 1.x patterns. *Reflected in:*
+  dep-check above.
+- **OQ6 — one generation per process.** Old HaPlay stays on the old sln; next builds/tests reference
+  only next; identical names never collide because they never share a process. If a process must ever
+  bridge old↔next, cross via the `s_media_player` C ABI (native — no managed-identity clash).
+  *Reflected in:* [07](07-Migration-and-Phasing.md) §4.
+- **OQ7 — choose working space at `Configure`/graph-rebuild, not per-frame.** Promote eagerly to RGBA16F,
+  demote only at cue/idle boundaries (hysteresis) so a show never resets mid-playback; rebuild FBOs at a
+  frame boundary (same path as a resolution change). Tests: SDR→8-bit, HDR-layer→16F, add/remove-HDR
+  rebuild w/o leak. *Reflected in:* [04](04-Compositor-Warp-GPU.md) §1 (D12 note).
+- **OQ8 — dispatcher reentrancy.** Public API = `Post` (fire-and-forget) + `InvokeAsync` (awaitable)
+  only; **no blocking `Invoke` from within a dispatcher callback** (debug guard throws); events deliver
+  immutable snapshots off the dispatcher thread; plugin/UI callbacks run outside the dispatcher lock.
+  *Reflected in:* [02](02-Project-Structure.md) Tier 5 (D5 note).
+- **OQ9 — hybrid, declared per backend** via a `SupportsDeviceChangeNotifications` capability + a shared
+  coalescing poller + one uniform `DevicesChanged`. Validated: **native** = miniaudio
+  (`ma_device_notification_type`, incl. `rerouted`) + NDI (`find_wait_for_sources`); **poll** =
+  PortAudio (list fixed until `Pa_Terminate`/`Pa_Initialize`) + PortMidi (header: reinit to rescan);
+  **capture** = OS notify (udev / `WM_DEVICECHANGE`) or poll. *Reflected in:* D6.
 
 ---
 

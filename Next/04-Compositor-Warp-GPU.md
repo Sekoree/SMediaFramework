@@ -28,7 +28,8 @@ anywhere). The CPU one is a correctness reference and fallback only — it is **
 
 **Working color space (D12):** the GL compositor blends in **8-bit BT.709 when every input and output
 is SDR**, and switches to **linear-light RGBA16F when any HDR/wide-gamut** layer or output is present
-(reconfiguring when the color-space set changes). The `S.Media.Gpu` color pieces
+— decided at `Configure`/graph-rebuild (not per-frame), promoting eagerly to 16F and demoting only at
+cue/idle boundaries to avoid a mid-show reset (OQ7). The `S.Media.Gpu` color pieces
 (`YuvColorSpace`/`RgbGamutMatrix`/HDR-transfer) feed both paths.
 
 ## 2. Layers
@@ -90,13 +91,14 @@ on compositions in the cue player).
 - **`GlCompositeTarget`** — the output shares the compositor's thread/context (an SDL3 window, a local
   GL surface). Render/blit straight into its FBO/texture. **Zero-copy, no readback.**
 - **`ExternalImageCompositeTarget`** — the output lives in another context/API (Avalonia's render
-  context, an NDI GPU encoder, a cross-API plugin). Export the warped result as an external image
-  (dmabuf fd / D3D11-DXGI shared handle) + a sync semaphore; the consumer imports it — Avalonia via
-  `IGlContextExternalObjectsFeature` / `ICompositionGpuInterop`. **Zero-copy across the boundary**; the
-  handle type is backend-dependent (D7). Same handle currency as the D8 plugin frame ABI.
-- **`CpuFrameCompositeTarget`** — the output needs CPU pixels (file dump, a CPU-only encoder/plugin, or
-  the fallback when no compatible external-image type exists). Render into a readback PBO; **one async
-  readback per such output**.
+  context, a D3D11/Vulkan consumer, a cross-API plugin). Export the warped result as an external image
+  (dmabuf fd / D3D11-DXGI shared handle) + a **negotiated sync primitive** (keyed-mutex / semaphore,
+  OQ2); the consumer imports it — Avalonia via `IGlContextExternalObjectsFeature` /
+  `ICompositionGpuInterop`. **Zero-copy across the boundary**; the handle type is backend-dependent (D7).
+  Same handle currency as the D8 plugin frame ABI.
+- **`CpuFrameCompositeTarget`** — the output needs CPU pixels: **NDI** (its SDK send is CPU `p_data`,
+  OQ3), a file dump, a CPU-only encoder/plugin, or the fallback when no compatible external-image type
+  exists. Render into a readback PBO; **one async readback per such output**.
 - `Sections == null` = full-canvas passthrough scaled to `OutputFormat`; empty list = transparent.
 
 This is the **integrated fast path** (memory: output-mapping plan — ~0.4 ms vs ~5 ms chaining at
@@ -125,7 +127,7 @@ public sealed class GlCompositeTarget : ICompositeOutputTarget
 public sealed class ExternalImageCompositeTarget : ICompositeOutputTarget  // zero-copy cross-context/API (D7)
 {
     public required string HandleType { get; init; }                       // dmabuf fd | D3D11 DXGI shared handle
-    public required Action<ExternalImageHandle> OnImageReady { get; init; } // image handle + sync semaphore
+    public required Action<ExternalImageHandle> OnImageReady { get; init; } // image handle + negotiated sync (OQ2)
 }
 
 public sealed class CpuFrameCompositeTarget : ICompositeOutputTarget
