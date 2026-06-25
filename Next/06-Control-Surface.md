@@ -15,7 +15,7 @@ device-specific `BuiltInControlDeviceProfile*`). "Compatibility with multiple de
    device feedback ─────┘    (normalized events)  runtime└─► Session actions (cues, transport, routing)
                                    ▲                          (S.Media.Session API)
                                    │
-                        Device Profile Registry  ◄── profiles are DATA (+ optional native plugin)
+                        Control Registry         ◄── profiles are DATA (+ optional native plugin)
 ```
 
 `S.Control` keeps the **engine**: `ControlEventQueue`/`ControlEvents`, `ControlScriptRuntime`(+session)
@@ -40,15 +40,16 @@ A **device profile** is a declarative description, not code:
 }
 ```
 
-- **Matching** (`ControlDeviceMatcher`) stays, but reads profiles from the registry instead of a
-  hardcoded factory.
+- **Matching** (`ControlDeviceMatcher`) stays, but reads profiles from the control registry instead of
+  a hardcoded factory.
 - **Mappings** (XTouch→X32 fader maps, 14-bit combine) become profile entries, not C# classes.
 - **Periodic/maintenance** OSC (the `/xremote` keep-alive, `ControlPeriodicOscSendManager`) is declared
   in the profile, not coded per console.
 - **Protocol oddities that truly need code** — e.g. X32 meter blob decoding (`X32MeterCacheDecoder`) —
-  become a named **decoder capability** resolved from the registry. Ship the X32 decoder as a built-in
-  module today; a third party can ship one as a native C-ABI plugin (a `MfpControlDecoderVTable`,
-  same mechanism as [05](05-Plugin-Model.md)). The profile just references `"decoder": "x32.meters"`.
+  become a named **decoder capability** resolved from the control registry. Ship the X32 decoder as a
+  built-in module today; a third party can ship one as a native C-ABI plugin (`MfpControlDecoderVTable`)
+  through the general `S.Abi` host described in [05](05-Plugin-Model.md). The profile just references
+  `"decoder": "x32.meters"`.
 
 Result: adding a new console = drop a profile (+ rarely a decoder plugin). `S.Control` stops growing
 per device. The existing X32/XTouch support ships as the **first profiles**, proving the model.
@@ -70,8 +71,8 @@ per device. The existing X32/XTouch support ships as the **first profiles**, pro
 |---|---|
 | event queue, script runtime+API, MIDI/OSC managers, value cache, 14-bit combiner, config/IO | stays in `S.Control` |
 | `X32Session`, `X32MeterCacheDecoder`, `ControlX32ProtocolMaintenanceManager` | `x32` profile + `x32.meters` decoder module (built-in now; plugin-capable) |
-| `XTouchMiniX32FaderMapping`, device-specific `BuiltInControlDeviceProfile*` | declarative profiles (`xtouch-mini`, `x32`) loaded by the registry |
+| `XTouchMiniX32FaderMapping`, device-specific `BuiltInControlDeviceProfile*` | declarative profiles (`xtouch-mini`, `x32`) loaded by the control registry |
 | MIDI/OSC P/Invoke + lib | `PMLib`, `OSCLib` (kept) |
 
 This keeps every current capability (X32 meters, XTouch mapping, keep-alives, scripting) while making
-the surface extensible by data and by the same plugin ABI as the rest of the framework.
+the surface extensible by data and by the same general plugin ABI as the rest of the framework.

@@ -5,14 +5,17 @@ via `S.Media.Interop`). That rules out managed reflection / `Assembly.LoadFrom` 
 plugin discovery — none of it survives AOT. So the model is:
 
 - **Tier A — Build-time modules (typed registration).** AOT-pure. First-party + trusted .NET
-  extensions, referenced at build time, registered through a typed builder. Replaces today's static
-  `MediaFrameworkPlugins` global.
+  extensions, referenced at build time, registered through typed scoped registries. Replaces today's
+  static `MediaFrameworkPlugins` global.
 - **Tier B — Native C-ABI plugins (dynamic).** Third-party, language-agnostic. A plugin is any shared
-  library (NativeAOT C#, C, C++, Rust, Zig…) that exports a C plugin ABI. The host `dlopen`s it and
-  adapts its vtables to the same managed interfaces a Tier-A module would register. The host stays AOT.
+  library (NativeAOT C#, C, C++, Rust, Zig…) that exports a C plugin ABI. The general `S.Abi` host
+  `dlopen`s it and adapts its vtables to the same managed media/compositor/control capability
+  interfaces a Tier-A module would register. The host stays AOT.
 
-Both tiers end at the **same `IMediaRegistry`** — once registered, a native plugin's audio backend is
-indistinguishable from PortAudio to the rest of the engine.
+Both tiers end at scoped registries. Media capabilities end at **`IMediaRegistry`**; compositor
+layer-surface capabilities end at a compositor registry extension; control profiles/decoders end at a
+control registry. Once registered, a native plugin's audio backend is indistinguishable from PortAudio
+to the rest of the engine.
 
 ---
 
@@ -35,7 +38,6 @@ public interface IMediaRegistryBuilder
     IMediaRegistryBuilder AddPresenter(IVideoPresenterFactory p);     // SDL3, Avalonia, NDI-out…
     IMediaRegistryBuilder AddImageSource(string ext, Func<string, IVideoSource> f);
     IMediaRegistryBuilder AddSubtitleProvider(ISubtitleProvider p);
-    IMediaRegistryBuilder AddLayerSurface(string kind, Func<IVideoCompositorLayerSurface> f);
     IMediaRegistryBuilder SetCpuConverterFactory(Func<IVideoCpuFrameConverter> f);   // swscale, etc.
     IMediaRegistryBuilder SetResamplerFactory(Func<IAudioSource,int,IAudioSource> f);
     IMediaRegistryBuilder SetDeinterlacerFactory(Func<VideoFormat,IDeinterlacer> f);
@@ -45,17 +47,38 @@ public interface IMediaRegistryBuilder
 public interface IMediaRegistry   // immutable, queryable, injected
 {
     IReadOnlyList<IAudioBackend> AudioBackends { get; }
-    bool CanDecode(string pathOrExt);
-    bool TryOpenVideo(string path, VideoSourceOpenOptions? o, out IVideoSource s);
-    bool TryOpenAudio(string path, AudioSourceOpenOptions? o, out IAudioSource s);
+    bool CanOpen(string uri);                                       // scheme-based dispatch (D2)
+    bool TryOpenVideo(string uri, VideoSourceOpenOptions? o, out IVideoSource s);
+    bool TryOpenAudio(string uri, AudioSourceOpenOptions? o, out IAudioSource s);
     IVideoCpuFrameConverter? CreateCpuConverter();
     // … typed queries; null/false when no module provides the capability
+}
+```
+
+Higher layers extend registration without making Core depend upward:
+
+```csharp
+// S.Media.Compositor
+public interface ICompositorRegistryBuilder
+{
+    ICompositorRegistryBuilder AddLayerSurface(
+        string kind,
+        Func<IVideoCompositorLayerSurface> factory);
+}
+
+// S.Control
+public interface IControlRegistryBuilder
+{
+    IControlRegistryBuilder AddDeviceProfile(ControlDeviceProfile profile);
+    IControlRegistryBuilder AddDecoder(string id, IControlFeedbackDecoder decoder);
 }
 ```
 
 ### Composition root (host wires it once; nothing global)
 
 ```csharp
+var plugins = AbiPluginCatalog.Load("./plugins");   // one dlopen pass; exposes typed registrations
+
 var registry = MediaRegistry.Build(b => b
     .Use(new FFmpegModule())        // Decode.FFmpeg + Encode.FFmpeg
     .Use(new PortAudioModule())
@@ -65,9 +88,20 @@ var registry = MediaRegistry.Build(b => b
     .Use(new NdiModule())
     .Use(new SkiaImagesModule())
     .Use(new SubtitlesModule())
-    .LoadNativePlugins("./plugins"));   // Tier B (below)
+    .Use(plugins.Media));
 
-await using var session = MediaSession.Create(registry, sessionOptions);
+var compositorRegistry = CompositorRegistry.Build(b => b
+    .UseMedia(registry)
+    .Use(plugins.Compositor));
+
+var controlRegistry = ControlRegistry.Build(b => b
+    .UseBuiltInProfiles()
+    .Use(plugins.Control));
+
+await using var session = MediaSession.Create(
+    registry,
+    compositorRegistry,
+    sessionOptions);
 ```
 
 Wins over the current static model (P2):
@@ -85,12 +119,13 @@ A .NET author writing a Tier-A backend implements one interface (e.g. `IAudioBac
 
 ---
 
-## Tier B — native C-ABI plugins (`S.Media.Abi`)
+## Tier B — native C-ABI plugins (`S.Abi`)
 
 Symmetric to the outbound `s_media_player.h`: where `S.Media.Interop` lets other languages *drive*
-the framework, `S.Media.Abi` lets other languages *extend* it. One mechanism covers every dynamic
-plugin — including a .NET plugin that wants runtime loading: it compiles to a NativeAOT shared lib
-exposing this same C ABI, so there's no separate managed-plugin path to maintain.
+the framework, `S.Abi` lets other languages *extend* media, compositor, and control capabilities. One
+mechanism covers every dynamic plugin — including a .NET plugin that wants runtime loading: it
+compiles to a NativeAOT shared lib exposing this same C ABI, so there's no separate managed-plugin
+path to maintain.
 
 ### The contract (`include/mfp_plugin.h`)
 
@@ -101,7 +136,7 @@ typedef struct MfpPluginInfo {
     uint32_t abi_version;     // plugin sets = MFP_PLUGIN_ABI_VERSION; host rejects mismatched major
     const char* id;           // "com.acme.webcam"
     const char* display_name;
-    uint32_t capabilities;    // bitset: AUDIO_BACKEND | VIDEO_SOURCE | VIDEO_OUTPUT | LAYER_SURFACE | SUBTITLE …
+    uint32_t capabilities;    // bitset: AUDIO_BACKEND | VIDEO_SOURCE | VIDEO_OUTPUT | LAYER_SURFACE | CONTROL_DECODER | SUBTITLE …
 } MfpPluginInfo;
 
 // Host services handed to the plugin (logging, frame-buffer pool, GL helpers, time base).
@@ -136,9 +171,12 @@ typedef struct MfpAudioBackendVTable {
 
 Other vtables, each shadowing the framework interface it adapts to:
 - **`MfpVideoSourceVTable`** ↔ `IVideoSource`: `native_pixel_formats`, `select_output_format`,
-  `try_read_frame(out MfpVideoFrame)`, `is_exhausted`, `seek`. Frames cross as descriptors
-  (`{ void* planes[4]; int strides[4]; w; h; MfpPixelFormat; int64 pts_ticks; void* opaque }`),
-  zero-copy where the buffer is host-pooled.
+  `try_read_frame(out MfpVideoFrame)`, `is_exhausted`, `seek`. Frames cross as a **tagged** descriptor
+  carrying CPU planes **or** a hardware handle (D8): `{ MfpFrameKind kind; void* planes[4];
+  int strides[4]; uint64 gpu_handle; /* dmabuf fd | D3D11 shared handle | GL texture id */
+  w; h; MfpPixelFormat; int64 pts_ticks; void* opaque }`. GPU handles are zero-copy via the same
+  interop paths as `S.Media.Gpu` (D7); the kind tag carries the handle's platform meaning so the host
+  imports it correctly and CPU-only plugins ignore the GPU fields.
 - **`MfpVideoOutputVTable`** ↔ `IVideoOutput`: `accepted_pixel_formats`, `configure(format)`,
   `submit(frame)`.
 - **`MfpLayerSurfaceVTable`** ↔ `IVideoCompositorLayerSurface`: `configure_gl(MfpGlContext, canvas)`,
@@ -147,16 +185,18 @@ Other vtables, each shadowing the framework interface it adapts to:
   "3D object layer") renders straight into the canvas. `MfpGlContext` exposes the proc-address getter
   + current-thread guarantee, matching `S.Media.Gpu`'s device.
 - **`MfpSubtitleVTable`** ↔ `ISubtitleSource`.
+- **`MfpControlDecoderVTable`** ↔ `IControlFeedbackDecoder`: named binary/OSC/MIDI feedback decoders
+  for device-profile entries such as `"decoder": "x32.meters"`.
 
-### Managed adapters (`S.Media.Abi`)
+### Managed adapters (`S.Abi`)
 
-For each loaded vtable, `S.Media.Abi` instantiates a small managed shim implementing the matching
-framework interface and forwarding calls through the function pointers. It then registers the shim
-through the **same `IMediaRegistryBuilder`** as a Tier-A module. After that, the engine cannot tell a
-native plugin from a built-in one.
+For each loaded vtable, `S.Abi` instantiates a small managed shim implementing the matching framework
+interface and forwarding calls through the function pointers. It then registers the shim through the
+appropriate scoped builder (`IMediaRegistryBuilder`, `ICompositorRegistryBuilder`,
+`IControlRegistryBuilder`). After that, the engine cannot tell a native plugin from a built-in one.
 
 ```csharp
-// inside LoadNativePlugins("./plugins"):
+// inside AbiPluginCatalog.Load("./plugins"):
 foreach (var lib in Directory.EnumerateFiles(dir, NativeLibPattern))
 {
     var h = NativeLibrary.Load(lib);
@@ -174,8 +214,10 @@ foreach (var lib in Directory.EnumerateFiles(dir, NativeLibPattern))
   (append-only evolution). Reject + log on mismatch; never crash.
 - **Errors:** functions return `int` status (0 ok, negative error) like `s_media_player`; never throw
   across the boundary; a thread-local last-error string is fetchable.
-- **Ownership:** frames are host-pooled (`alloc_frame`/`release_frame`); the side that last holds a
-  frame releases it, mirroring the managed `VideoFrame` release-callback contract.
+- **Ownership:** CPU frames are host-pooled (`alloc_frame`/`release_frame`); the side that last holds a
+  frame releases it, mirroring the managed `VideoFrame` release-callback contract. GPU-handle frames
+  (D8) add explicit `acquire`/`release` plus a sync fence so producer and consumer don't race on the
+  texture; the host owns import and lifetime of foreign handles.
 - **Threading:** the contract states which thread each call runs on (e.g. `submit`/`render` on the
   clock/compositor thread, must return promptly; slow work goes to the plugin's own thread) — same
   rule as `IVideoOutput.Submit` today.
@@ -196,10 +238,12 @@ foreach (var lib in Directory.EnumerateFiles(dir, NativeLibPattern))
 
 - Writing a plugin in C# means compiling it as a NativeAOT shared lib and marshalling by hand at the
   edge — more friction than "implement an interface in a referenced project." **Mitigation:** ship a
-  `S.Media.Plugin.Sdk` NuGet with the `[UnmanagedCallersOnly]` entry-point boilerplate and managed→ABI
+  `S.Abi.Plugin.Sdk` NuGet with the `[UnmanagedCallersOnly]` entry-point boilerplate and managed→ABI
   helper wrappers, so a C# plugin author mostly writes normal C# behind a generated shim.
-- The ABI is a compatibility surface you must keep stable. **Mitigation:** append-only structs +
-  version gate + a conformance test plugin in the tools harness.
+- The ABI is a compatibility surface you must keep stable — and D8/D9 make v1 **large and
+  platform-specific** (GPU handles + the full vtable set up front). **Mitigation:** append-only structs
+  + a strict version gate + a per-platform conformance plugin (exercising every vtable) in CI from day
+  one; isolate the GPU-handle fields behind the `MfpFrameKind` tag so CPU-only plugins are unaffected.
 
 ---
 
@@ -211,4 +255,4 @@ foreach (var lib in Directory.EnumerateFiles(dir, NativeLibPattern))
 | Loaded | at build time (project/NuGet ref) | at runtime (`dlopen` from a trusted dir) |
 | AOT | pure | host stays pure; plugin is its own native lib |
 | Effort | implement an interface + tiny module | implement a C vtable (SDK eases C#) |
-| Examples | FFmpeg, PortAudio, SDL3, NDI, Skia, Subtitles | webcam/capture-card source, exotic output, 3D layer surface, bespoke console protocol |
+| Examples | FFmpeg, PortAudio, SDL3, NDI, Skia, Subtitles, X32 profile/decoder | webcam/capture-card source, exotic output, 3D layer surface, bespoke console protocol |

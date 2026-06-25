@@ -22,23 +22,28 @@ to fix. Each is grounded in the current tree.
    `Core` has **zero** backend dependencies (no FFmpeg/GL/SDL/PortAudio/NDI).
 
 2. **Core = contracts + primitives, nothing else.** Frames, formats, channel math, the I/O
-   interfaces, negotiation, and the *registry contracts*. Routers, clocks, players, and the session
-   move out into their own projects (you already sketched these).
+   interfaces, negotiation, and the *media registry contracts*. Routers, clocks, players, and the
+   session move out into their own projects (you already sketched these).
 
 3. **Every backend is a peer behind an interface.** The current `IAudioBackend` doc already states
    the ethos — *"the only layer a new backend must implement … a new backend is a peer of PortAudio,
    not a translation of it."* Generalize that to **all** I/O: decode, encode, present, ingest,
-   compositor layer-surfaces. The engine sees interfaces, never concrete backend types.
+   compositor layer-surfaces. The engine sees interfaces, never concrete backend types. Shared
+   backend implementation details live in explicit common libraries (for example
+   `S.Media.FFmpeg.Common`), not by making backend modules reference each other.
 
-4. **No process-wide mutable plugin state.** Replace the static `MediaFrameworkPlugins` slots with an
-   **instance-scoped registry** built once and injected. Two sessions with different capabilities can
-   coexist; tests need no global teardown. (See [05](05-Plugin-Model.md).)
+4. **No process-wide mutable plugin state.** Replace the static `MediaFrameworkPlugins` slots with
+   **instance-scoped registries** built once and injected. `S.Media.Core` owns media capability
+   contracts; compositor and control add their own capability registries/extensions so Core never
+   names GL/compositor/control-specific types. Two sessions with different capabilities can coexist;
+   tests need no global teardown. (See [05](05-Plugin-Model.md).)
 
 5. **One dynamic-extension mechanism: the native C-ABI plugin.** The framework must stay
    NativeAOT-compatible (it already ships `s_media_player.so` via `S.Media.Interop`), so there is **no**
    managed reflection / `AssemblyLoadContext` plugin loading. Third-party plugins are compiled native
-   libraries exposing a C plugin ABI; the host `dlopen`s them and adapts their vtables to managed
-   interfaces. Build-time .NET extensions use typed registration instead.
+   libraries exposing a C plugin ABI; the general `S.Abi` host `dlopen`s them and adapts their vtables
+   to managed media/compositor/control capability interfaces. Build-time .NET extensions use typed
+   registration instead.
 
 6. **Product logic belongs in the framework.** The cue engine, soundboard, output mapping, and show
    session live in `S.Media.Session`, usable headless (and from the C ABI). The UI only *drives* them.
@@ -47,8 +52,9 @@ to fix. Each is grounded in the current tree.
    MVVM (CommunityToolkit) and source-generated marshalling; no reflection on hot or registration
    paths; pooled frame buffers stay pooled.
 
-8. **One sync model.** File and live both schedule against a single session master clock with
-   per-source timelines (offset + rebase policy). No second "master-less" path. (See [03](03-AV-Sync-Clocks-Routing.md).)
+8. **One sync model.** File and live both schedule against a master clock (one per transport group) with
+   per-source timelines (offset + rebase policy) and source sync groups for correlated streams from
+   one sender/device. No second "master-less" path. (See [03](03-AV-Sync-Clocks-Routing.md).)
 
 9. **Simplicity is a feature, measured.** Targets: no framework source file > ~800 LOC without a
    reason; `Core` < ~6k LOC; product logic implemented **once**; project count stays close to today's
@@ -60,7 +66,7 @@ Read top-to-bottom = high-to-low. An arrow `A → B` means "A references B".
 
 ```
                           ┌─────────────────────────────────────────────┐
-  Tier 7  hosts/abi       │  S.Media.Abi  (in)        S.Media.Interop (out)│
+  Tier 7  hosts/abi       │  S.Abi  (in/plugins)      S.Media.Interop (out)│
                           └─────────────────────────────────────────────┘
                                      │                    │
   Tier 6  control          S.Control │                    │
@@ -72,9 +78,9 @@ Read top-to-bottom = high-to-low. An arrow `A → B` means "A references B".
   Tier 4  players                    ▼   S.Media.Players
                                      │
   Tier 3b backend modules ┌──────────────────────────────────────────────┐
-   (plug-in capabilities) │ Decode.FFmpeg  Encode.FFmpeg  Audio.PortAudio │
-                          │ Audio.MiniAudio  Present.SDL3  Present.Avalonia│
-                          │ NDI  Images.Skia  Subtitles                   │
+   (plug-in capabilities) │ FFmpeg.Common  Decode.FFmpeg  Encode.FFmpeg    │
+                          │ Audio.PortAudio  Audio.MiniAudio  Present.SDL3 │
+                          │ Present.Avalonia  NDI  Images.Skia  Subtitles │
                           └──────────────────────────────────────────────┘
                                      │
   Tier 3  compositor                 ▼   S.Media.Compositor
@@ -83,7 +89,7 @@ Read top-to-bottom = high-to-low. An arrow `A → B` means "A references B".
                                      │              │                │
   Tier 1  core                       └──────► S.Media.Core ◄─────────┘
                                                    │
-  Tier 0  native                      PALib · MALib · PMLib · NDILib · OSCLib
+  Tier 0  native                      PALib · MALib · PMLib · NDILib · OSCLib · LibAssLib
 ```
 
 Allowed reference rules (enforced by `.csproj` review and ideally an arch test):
@@ -95,37 +101,38 @@ Allowed reference rules (enforced by `.csproj` review and ideally an arch test):
 | `S.Media.Routing` | Core, Time |
 | `S.Media.Gpu` | Core, Silk.NET.OpenGL |
 | `S.Media.Compositor` | Core, Gpu (**never** a decoder) |
-| `Decode.FFmpeg` / `Encode.FFmpeg` | Core (+ FFmpeg.AutoGen) |
+| `S.Media.FFmpeg.Common` | Core (+ FFmpeg.AutoGen); shared FFmpeg runtime/mapping utilities only |
+| `Decode.FFmpeg` / `Encode.FFmpeg` | Core, `S.Media.FFmpeg.Common` |
 | `Audio.PortAudio` / `Audio.MiniAudio` | Core, Time, Routing (+ PALib / MALib) |
 | `Present.SDL3` / `Present.Avalonia` | Core, Gpu (+ SDL3-CS / Avalonia) |
 | `NDI` | Core, Time, Routing (+ NDILib) |
 | `Images.Skia` | Core (+ SkiaSharp) |
-| `Subtitles` | Core (+ libass/FFmpeg sub decode) |
-| `S.Media.Players` | Core, Time, Routing |
-| `S.Media.Session` | Core, Time, Routing, Players, Compositor, **registry contracts** (not concrete backends) |
+| `Subtitles` | Core (+ libass; embedded/bitmap subtitle support through registry capabilities, not concrete decoder references) |
+| `S.Media.Players` | Core, Time, Routing, **media registry contracts** |
+| `S.Media.Session` | Core, Time, Routing, Players, Compositor, **media/compositor registry contracts** (not concrete backends) |
 | `S.Control` | Core, Session (for actions), PMLib, OSCLib, Mond |
-| `S.Media.Abi` | Core, Session (it adapts native plugins into framework interfaces) |
+| `S.Abi` | Core plus media/compositor/control capability packages as needed; adapts native plugins into framework interfaces |
 | `S.Media.Interop` | Core, Session, the backend modules it bundles (it's the host) |
 
-The crucial inversion: **`S.Media.Session` depends on the registry *contracts*, not on
-`Decode.FFmpeg`/`Present.SDL3`/etc.** The concrete backends are wired in at the composition root
-(the host app, `S.Media.Interop`, or a test) by registering modules. That is what makes "if no audio
-module is present, don't offer audio output" fall out naturally instead of needing special-casing.
+The crucial inversion: **`S.Media.Session` depends on media/compositor registry *contracts*, not on
+`Decode.FFmpeg`/`Present.SDL3`/etc.** The concrete backends are wired in at the composition root (the
+host app, `S.Media.Interop`, or a test) by registering modules. That is what makes "if no audio module
+is present, don't offer audio output" fall out naturally instead of needing special-casing.
 
 ## 4. How the must-have features map onto the layers
 
 | Feature | Where it lives |
 |---|---|
-| A/V sync (file + live, multi-in/out) | `S.Media.Time` (clocks, sync groups) + `S.Media.Routing` + `S.Media.Players`/`Session` scheduling |
+| A/V sync (file + live, multi-in/out) | `S.Media.Time` (`SessionClock`, `SourceTimeline`, `SourceSyncGroup`, output sync groups) + `S.Media.Routing` + `S.Media.Players`/`Session` scheduling |
 | GPU decode, shader pixel formats | `Decode.FFmpeg` (hw decode) + `S.Media.Gpu` (upload + YUV shaders) + `Core` (format negotiation) |
 | Compositions, layers, transforms, transitions | `S.Media.Compositor` |
 | Mesh warp + splitting (composition & output) | `S.Media.Compositor` (`WarpMesh`/`WarpSection`/warp pass) — see [04](04-Compositor-Warp-GPU.md) |
-| Multiple outputs in one composition | `S.Media.Compositor` `CompositeMulti` + `S.Media.Time` sync group |
+| Multiple outputs in one composition | `S.Media.Compositor` `CompositeMulti` output targets + `S.Media.Time` sync group |
 | Audio channel remap + multi-track | `Core` (`ChannelMap`) + `S.Media.Routing` (matrix) + `Session` (track selection) |
 | Text / image / video layers | `Images.Skia` (image+text sources) → `Compositor` layers |
 | MIDI/OSC/Mond scripting + automations | `S.Control` |
 | Subtitles | `Subtitles` module → `Compositor` layer |
-| Plugins (audio/video I/O, layer surfaces) | typed modules + `S.Media.Abi` native C-ABI — see [05](05-Plugin-Model.md) |
+| Plugins (audio/video I/O, layer surfaces, control decoders) | typed modules + `S.Abi` native C-ABI — see [05](05-Plugin-Model.md) |
 | SDL3 + Avalonia outputs | `Present.SDL3` + `Present.Avalonia` |
 | PortAudio + miniaudio | `Audio.PortAudio` + `Audio.MiniAudio` |
 | NDI in/out | `NDI` |

@@ -4,13 +4,15 @@ Strategy (your call): **a fresh parallel solution** built alongside the current 
 file-by-file, cutting over at parity. You already started this — the stubbed `S.Media.Time`,
 `S.Media.Routing`, `S.Media.Session`, `S.Media.Players`, `S.Media.Compositor`, `S.Media.Gpu`,
 `S.Media.Decode.FFmpeg`, `S.Media.Audio.*`, `S.Media.Present.*` projects still have build artifacts on
-disk. This plan resumes from there.
+disk — proof of the intended graph. New code lands in a clean `next/` tree (D1), not those in-place
+stub dirs, which are superseded.
 
 ## 0. Ground rules
 
-- **`Next/` holds planning; code lives in a new solution.** Create `MFPlayer.Next.sln` at repo root
-  (or a `next/` source tree) so the old `MFPlayer.sln` keeps building and shipping releases the whole
-  time. No long-lived broken `master`.
+- **`Next/` holds planning; code lives in a new `next/` source tree (D1).** Create `next/` mirroring
+  `MediaFramework/` + `UI/` with `MFPlayer.Next.sln`; assembly names match today's (separate build
+  outputs, no collisions) so the old `MFPlayer.sln` keeps building and shipping releases untouched. No
+  long-lived broken `master`.
 - **Parity is defined by the existing tools + tests**, ported first (see §3). A phase is "done" when
   its parity gate is green.
 - **Salvage, don't rewrite blank.** Most engine code moves with namespace/dependency edits only. The
@@ -30,8 +32,9 @@ disk. This plan resumes from there.
 | `S.Media.Core/Video/VideoPlayer`, `Playback/AvPlaybackCoordinator`, `MediaPlaybackSession` | `S.Media.Players` | move |
 | `S.Media.Core/Video/*Frame*`, `PixelFormat*`, `*Backing*`, negotiators, contracts | `S.Media.Core` | keep (slim) |
 | `S.Media.Core/Diagnostics/MediaFrameworkPlugins/Runtime/ExtensionRegistry` | — | **delete** → registry |
-| `S.Media.FFmpeg` (decode, hw, swscale, yadif, capture) | `S.Media.Decode.FFmpeg` | move + wrap as module |
-| `S.Media.FFmpeg.Encode` | `S.Media.Encode.FFmpeg` | move + module |
+| `S.Media.FFmpeg` / `S.Media.FFmpeg.Encode` shared FFmpeg glue | `S.Media.FFmpeg.Common` | split first: runtime init, native loading, error helpers, stream/format mapping |
+| `S.Media.FFmpeg` (decode, hw, swscale, yadif, capture) | `S.Media.Decode.FFmpeg` | move + wrap as module; use `FFmpeg.Common` |
+| `S.Media.FFmpeg.Encode` | `S.Media.Encode.FFmpeg` | move + module; use `FFmpeg.Common`, not `Decode.FFmpeg` |
 | `S.Media.OpenGL/*` (YuvVideoRenderer, uploaders, interop) | `S.Media.Gpu` | move |
 | `S.Media.Effects/*` (compositor, layers, warp) | `S.Media.Compositor` | move + **drop FFmpeg dep (P3)** |
 | `S.Media.PortAudio` / `S.Media.MiniAudio` | `S.Media.Audio.PortAudio` / `…MiniAudio` | move + module |
@@ -43,6 +46,7 @@ disk. This plan resumes from there.
 | `UI/HaPlay/Models/*` (AudioMatrix, OutputDefinitions, ControlGraphConfig, ProjectIO…) | `S.Media.Session` (runtime) + HaPlay (view models) | split: data/runtime down, VM up |
 | `S.Control/*` engine | `S.Control` | move |
 | `S.Control/X32*`, `XTouch*`, device factories | profiles + `x32.meters` decoder module | convert to data (P6) |
+| dynamic plugin host | `S.Abi` | general native C-ABI host for media, compositor, and control capabilities |
 | `S.Media.Interop/*` | `S.Media.Interop` | move + retarget to registry |
 | `PALib/MALib/PMLib/NDILib/OSCLib/JackLib` | same names | move as-is |
 | `Tools/*`, `Test/*` | same | port early as parity gates |
@@ -54,13 +58,13 @@ Each phase ends on a **green parity gate** (the named tool/test, ported).
 
 | Phase | Deliverable | Parity gate |
 |---|---|---|
-| **0. Scaffold** | `MFPlayer.Next.sln`; empty `Core/Time/Routing/Gpu/Compositor/Players/Session` + module project skeletons with the dependency rules from [01](01-Architecture-and-Principles.md); CI `publish-aot` smoke. | solution builds + AOT-publishes empty |
-| **1. Core + Time + Routing** | Slim `Core` (primitives + contracts + **registry**); move clocks→`Time`, routers→`Routing`. Add `SessionClock`/`SourceTimeline`. | `S.Media.Core.Tests` port green; `TransportSyncProbe` builds against new clocks |
-| **2. First end-to-end playback** | `Decode.FFmpeg` + `Audio.PortAudio` + `Present.SDL3` as modules; `Players.MediaPlayer` plays a file with A/V sync via the registry (no globals). | `PlaybackSmoke` + `VideoPlaybackSmoke` play a file at parity; `…FFmpeg.Tests`, `…PortAudio.Tests` |
-| **3. GPU + Compositor + Players** | Move `Gpu`; move `Compositor` **without FFmpeg dep** (P3 fixed, uses registry converter); `Players` complete (transport, seek, rate, multi-output fan-out). | `CompositorSmoke`, `GlProbe`, `FormatSwitchProbe`, `…OpenGL.Tests` green; compositor builds with FFmpeg **absent** |
+| **0. Scaffold** | `MFPlayer.Next.sln` under `next/` (D1); empty `Core/Time/Routing/Gpu/Compositor/Players/Session` + module project skeletons with the dependency rules from [01](01-Architecture-and-Principles.md); CI `publish-aot` smoke. | solution builds + AOT-publishes empty |
+| **1. Core + Time + Routing** | Slim `Core` (primitives + contracts + **media registry**); move clocks→`Time`, routers→`Routing`. Add `SessionClock`/`SourceTimeline`/`SourceSyncGroup`. | `S.Media.Core.Tests` port green; `TransportSyncProbe` builds against new clocks |
+| **2. First end-to-end playback** | `FFmpeg.Common` + `Decode.FFmpeg` + `Audio.PortAudio` + `Present.SDL3` as modules; `Players.MediaPlayer` receives registry/source-resolver contracts and plays a file with A/V sync via the registry (no globals, no concrete backend refs). | `PlaybackSmoke` + `VideoPlaybackSmoke` play a file at parity; `…FFmpeg.Tests`, `…PortAudio.Tests` |
+| **3. GPU + Compositor + Players** | Move `Gpu`; move `Compositor` **without FFmpeg dep** (P3 fixed, uses registry converter); add compositor registry extension; `Players` complete (transport, seek, rate, multi-output fan-out). | `CompositorSmoke`, `GlProbe`, `FormatSwitchProbe`, `…OpenGL.Tests` green; compositor builds with FFmpeg **absent** |
 | **4. Session (the show)** | Merge `S.Media.Playback` + the UI's `CuePlaybackEngine`/`HaPlayPlaybackSession`/`SoundboardEngine` into headless `S.Media.Session`: cues, soundboard, output mapping (warp sections), routing scene, group-seek barrier. | `SoundboardSmoke` + new `SessionSmoke` (cue fire/seek/go headless); `…Playback.Tests` |
-| **5. Live + multi-out + more backends** | `NDI` (send+recv) + `Audio.MiniAudio` + `Present.Avalonia`; converge live onto `SourceTimeline`; `CompositeMulti` + sync groups for stitched/combined outputs. | `NDIPlayer`/`NDIReceiver`; multi-output drift soak; live A/V-sync targets from [03](03-AV-Sync-Clocks-Routing.md) §7 |
-| **6. Subtitles + Control + plugin host** | `S.Media.Subtitles` (SRT/VTT/ASS/PGS); `S.Control` engine + X32/XTouch as **profiles**; `S.Media.Abi` native plugin host + a conformance sample plugin. | subtitle render test; `OSCLib.Tests`/`PMLib.Tests`; sample C-ABI plugin loads + provides a source |
+| **5. Live + multi-out + more backends** | `NDI` (send+recv) + `Audio.MiniAudio` + `Present.Avalonia`; converge live onto `SourceTimeline` + `SourceSyncGroup`; `CompositeMulti` target-domain outputs + sync groups for stitched/combined outputs. | `NDIPlayer`/`NDIReceiver`; multi-output drift soak; live A/V-sync targets from [03](03-AV-Sync-Clocks-Routing.md) §7 |
+| **6. Subtitles + Control + plugin host** | `S.Media.Subtitles` (SRT/VTT/ASS/PGS); `S.Control` engine + X32/XTouch as **profiles**; `S.Abi` general native plugin host + a conformance sample plugin covering media and control capabilities. | subtitle render test; `OSCLib.Tests`/`PMLib.Tests`; sample C-ABI plugin loads + provides a source/control decoder |
 | **7. Outbound C ABI** | Retarget `S.Media.Interop` (`s_media_player`) to build a registry + drive the new session; keep the ABI stable. | C ABI smoke (open/play/close via `s_media_player.h`) |
 | **8. UI port** *(separate effort)* | Rebuild HaPlay as `HaPlay.Core/Controls/App/Desktop` over `S.Media.Session`; decompose god-VMs; strangle the old app workspace-by-workspace. | HaPlay.Tests port; manual workspace parity |
 
@@ -91,7 +95,7 @@ either. Options, simplest first:
 
 | Risk | Mitigation |
 |---|---|
-| Live-sync regressions during convergence (Phase 5) | the `SourceTimeline` model is testable headless; gate on the §03 soak targets before declaring parity |
+| Live-sync regressions during convergence (Phase 5) | the `SourceTimeline`/`SourceSyncGroup` model is testable headless; gate on the §03 soak targets before declaring parity |
 | GPU/interop platform quirks (D3D11↔GL, dmabuf) move with `Gpu` | `GlProbe`/`FrameDump` per platform each phase; keep the existing Windows/Linux HW-decode fixes (memory notes) intact during the move |
 | C-ABI plugin surface churn | append-only structs + version gate + conformance sample plugin in CI |
 | Session merge (Phase 4) is the biggest single lift (P1) | do it after 1–3 are rock-solid; move file-by-file with `SessionSmoke` green at each step |
@@ -102,9 +106,9 @@ either. Options, simplest first:
 - A file plays with HW decode, GPU compositing, and < ±1-frame A/V sync — with **no** static plugin
   state anywhere.
 - Live (NDI/mic) composited with a file stays in sync to the §03 targets.
-- Mesh-warp/keystone splitting and one-canvas→many-outputs work on GPU with one readback.
+- Mesh-warp/keystone splitting and one-canvas→many-outputs work as one composite pass + N warp passes, with zero readbacks for GPU outputs and one async readback per CPU-bound output.
 - Audio remap + multi-track + subtitle selection all work headless.
-- A third-party native plugin adds a video source and a GL layer surface without touching the host.
+- A third-party native plugin adds a video source, a GL layer surface, and a control decoder without touching the host.
 - `s_media_player` drives the new session; `CompositorSmoke`/`PlaybackSmoke`/`SessionSmoke`/NDI soak
   all green on Windows + Linux.
 - `Core` ≈ 6k LOC; product logic exists once; no framework file is a god-object.

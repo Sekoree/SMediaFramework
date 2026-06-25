@@ -7,20 +7,23 @@ converges everything onto **one** model.
 
 ## 1. The model in one paragraph
 
-There is exactly one **master clock** per session (`SessionClock`). Every source — file or live —
-is presented through a **`SourceTimeline`** that maps source PTS onto master time via a fixed
-**offset** and a **rebase policy**. Audio for the master bus drives the clock (lowest-latency
-reference); video and all other outputs **present scheduled against master time**. Multiple inputs are
-just multiple `SourceTimeline`s feeding the routers/compositor; multiple outputs are kept phase-locked
-by a **sync group**. There is no second path for live — live is "a source whose rebase policy is
+Each **transport group** (a cue, or a set fired/seeked together) has exactly one **master clock**
+(`SessionClock`); a session runs one or more groups concurrently. Within a group, every source — file
+or live — is presented through a **`SourceTimeline`** that maps source PTS onto master time via a fixed
+**offset** and a **rebase policy**. Correlated streams from one sender/device (for example NDI video +
+NDI audio, or camera + embedded audio) live in a **`SourceSyncGroup`** so their shared sender timeline
+and per-stream correction offsets are adjusted together. Audio for the master bus drives the clock
+(lowest-latency reference); video and all other outputs **present scheduled against master time**.
+Multiple inputs are `SourceTimeline`s grouped where needed; multiple outputs are kept phase-locked by
+an **output sync group**. There is no second path for live — live is "a source whose rebase policy is
 *holdback + rebase-to-latest* instead of *scheduled*."
 
 ```
-   sources                 timelines (offset + rebase)      mix/composite        outputs (scheduled)
+   sources                 timelines / source groups        mix/composite        outputs (scheduled)
   ┌─────────┐   PTS      ┌──────────────────────────┐                          ┌──────────────────┐
   │ file A  │──────────► │ Scheduled  off=0          │──►┐                  ┌──►│ SDL3 window      │
   ├─────────┤            ├──────────────────────────┤   │  AudioRouter     │   ├──────────────────┤
-  │ NDI in  │──────────► │ Holdback+RebaseLatest     │──►┼─►(N→M matrix)──► ├──►│ PortAudio device │
+  │ NDI in  │──────────► │ SourceSyncGroup           │──►┼─►(N→M matrix)──► ├──►│ PortAudio device │
   ├─────────┤            ├──────────────────────────┤   │  VideoRouter +   │   ├──────────────────┤
   │ mic in  │──────────► │ Holdback (audio only)     │──►┘  Compositor      └──►│ NDI sender       │
   └─────────┘            └──────────────────────────┘                          └──────────────────┘
@@ -40,12 +43,15 @@ model uniform.
 - **`IPlaybackClock` / `IMediaClock` / `IPlayhead`** — unchanged contracts (`MediaClock`,
   `CompositePlaybackClock`, `VideoPtsClock`). `IMediaClock.VideoTick` remains the heartbeat that
   `IVideoOutput.Submit` runs on.
-- **`SessionClock` (new, master).** Wraps whichever reference advances time:
-  - *File-led session:* the master audio output (a clocked PortAudio/miniaudio device) advances it —
+- **`SessionClock` (new, per-group master).** One per transport group (see [08](08-Open-Decisions.md) D4).
+  Wraps whichever reference advances time:
+  - *File-led group:* the master audio output (a clocked PortAudio/miniaudio device) advances it —
     same as today's "audio is master."
-  - *Live-led session (no file):* a free-running monotonic wall clock advances it, disciplined by the
+  - *Live-led group (no file):* a free-running monotonic wall clock advances it, disciplined by the
     chosen live master's arrival cadence (PI controller on long-term drift, not per-frame).
-  - The session picks the reference once at start; switching reference is an explicit, debounced op.
+  - Each group picks its reference when it starts; when its master output stops, the group idles
+    (mastership never floats between unrelated sources). Switching a group's reference is an explicit,
+    debounced op.
 - **`SourceTimeline` (new).** Per source: `Offset` (TimeSpan, signed) + `RebasePolicy`:
   - **`Scheduled`** — source PTS is authoritative; frame is shown when `master ≥ pts + offset`. Used
     for files and exact-rate live senders. Gives perfect lip-sync.
@@ -56,13 +62,17 @@ model uniform.
     timeline policy against the master*, not a discarded clock).
   - `Offset` absorbs known phase error as a **first-class per-source control** (replacing the
     `HAPLAY_LIVE_AV_SYNC_OFFSET_MS` env hack and the `DelayedVideoSource` shim).
+- **`SourceSyncGroup` (new).** Groups related `SourceTimeline`s that originate from the same live
+  sender/device or demux session. The group owns the sender-to-session rebase and drift estimate;
+  each member timeline has only a small correction offset (for known A/V phase error, capture device
+  latency, or manual trim). This avoids treating NDI video and NDI audio as unrelated clocks.
 
 > **Why this fixes the NDI saga.** The recurring live-desync work (memory: `ndi_input_av_sync`,
-> `avsync_playback_review`) all stems from live video/audio not sharing a master. Here they do: NDI
-> video and NDI audio are two `SourceTimeline`s over the *same* `SessionClock`, so their relative
-> phase is observable and correctable instead of invisible. The "reduce audio keep + keep video
-> LatestOnTick + optional trim" tuning becomes: `Holdback` keep-size + per-source `Offset` — set in
-> one place, testable headless.
+> `avsync_playback_review`) all stems from live video/audio not sharing a master and not preserving
+> their sender-side relationship. Here they do: NDI video and NDI audio are timelines in one
+> `SourceSyncGroup` over the same `SessionClock`, so their relative phase is observable and correctable
+> instead of invisible. The "reduce audio keep + keep video LatestOnTick + optional trim" tuning
+> becomes: group `Holdback` keep-size + per-stream `Offset` — set in one place, testable headless.
 
 ## 3. Routing (`S.Media.Routing`)
 
@@ -81,7 +91,8 @@ Unchanged in spirit — these are battle-tested — just moved out of `Core`.
 
 ## 4. Multiple inputs
 
-A session holds an ordered set of `(IVideoSource | IAudioSource, SourceTimeline)`.
+A session holds an ordered set of `(IVideoSource | IAudioSource, SourceTimeline)` plus optional
+`SourceSyncGroup`s for correlated streams.
 
 - **Audio inputs** (file tracks, mic/line via `IAudioBackend.CreateInput`, NDI audio) are sources on
   the `AudioRouter`. Multi-track files expose multiple audio sources; selection (none/one/many) picks
@@ -89,6 +100,9 @@ A session holds an ordered set of `(IVideoSource | IAudioSource, SourceTimeline)
 - **Video inputs** (file, NDI receiver, capture) become **compositor layers** when a composition is
   active, or route directly to outputs in single-source playback. Each carries its own
   `SourceTimeline`, so a live camera and a file clip stay in sync on the same canvas.
+- **Grouped live inputs** (NDI A/V, capture device A/V, future multi-sensor devices) share a
+  `SourceSyncGroup`. Group-level rebase tracks the sender/device; per-stream offsets handle known
+  capture or processing delays.
 - **Mixed file + live** is the normal case, not a special one: a `Scheduled` file timeline and a
   `Holdback` NDI timeline coexist under one master.
 
@@ -105,15 +119,19 @@ A session holds an ordered set of `(IVideoSource | IAudioSource, SourceTimeline)
 - **Per-output rate:** keep the deliberate oversample-for-local, dedup-for-NDI behavior
   (memory: `haplay_output_2x_fps_by_design`) — but make it a per-binding policy on the output map,
   not an env var.
+- **Master output + mix rate (D11):** each transport group designates one **master output** (default:
+  the first clocked device) — the group's clock source (D4). It mixes internally at that device's native
+  rate and resamples sources on ingress, so the `portaudio_default_device_rate_desync` class can't occur.
 
 ## 6. Audio channel remap & multi-track selection
 
 - **Remap** is the `AudioRouter` matrix + `ChannelMap` (already SIMD-accelerated). The UI's
   `AudioMatrix`/`AudioDownmixPresets`/`VirtualAudioChannelAssignment` models become a `RoutingScene`
   in `S.Media.Session`, serialized with the show.
-- **Multi-track**: `Decode.FFmpeg` enumerates audio tracks (`AudioTrackInfo[]`). Open options take a
-  selection: `None` (video-only), one track, or several tracks (each a source on the router — e.g.
-  separate language stems to separate buses). Subtitles use the same select-none/one/many pattern.
+- **Multi-track**: decoder providers enumerate audio tracks (`AudioTrackInfo[]`; `Decode.FFmpeg` is
+  the built-in provider). Open options take a selection: `None` (video-only), one track, or several
+  tracks (each a source on the router — e.g. separate language stems to separate buses). Subtitles use
+  the same select-none/one/many pattern.
 
 ## 7. What "near-perfect" means here (acceptance targets)
 
@@ -129,4 +147,5 @@ State these as test gates in `TransportSyncProbe`/`PlaybackSmoke`:
   master (memory: `video_source_format_change_reconfig`).
 
 These targets are the reason the model is uniform: you can only hit "< 1 frame on a live camera
-composited with a file" if both are scheduled against the same clock.
+composited with a file" if both are scheduled against the same clock, and if correlated live A/V
+streams preserve their sender-side relationship through `SourceSyncGroup`.
