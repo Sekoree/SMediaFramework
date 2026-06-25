@@ -95,6 +95,15 @@ public sealed class CueGraph
                 .ToArray();
     }
 
+    public void Clear()
+    {
+        lock (_gate)
+        {
+            _cues.Clear();
+            _log.Clear();
+        }
+    }
+
     public void AddCue(
         CueDefinition definition,
         Func<CancellationToken, ValueTask> action,

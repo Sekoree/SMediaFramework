@@ -362,8 +362,8 @@ public sealed class MediaPlayer : IDisposable
     /// <summary>The master playhead position.</summary>
     public TimeSpan Position => PlayClock.CurrentPosition;
 
-    /// <summary>True while the audio router is advancing.</summary>
-    public bool IsRunning => _liveAudioRouter?.IsRunning ?? false;
+    /// <summary>True while the active playback clock is advancing.</summary>
+    public bool IsRunning => _liveClock?.IsRunning ?? false;
 
     /// <summary>
     /// Opens <paramref name="uri"/> through <paramref name="registry"/>: the highest-confidence decoder
@@ -383,10 +383,12 @@ public sealed class MediaPlayer : IDisposable
         player = null;
         error = null;
 
-        registry.TryOpenVideo(uri, options.ToVideoSourceOpenOptions(), out var video);
+        IVideoSource? video = null;
+        if (options.VideoStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
+            registry.TryOpenVideo(uri, options.ToVideoSourceOpenOptions(), out video);
         IAudioSource? audio = null;
-        if (options.IncludeAudioRouter)
-            registry.TryOpenAudio(uri, null, out audio);
+        if (options.IncludeAudioRouter && options.AudioStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
+            registry.TryOpenAudio(uri, options.ToAudioSourceOpenOptions(), out audio);
 
         if (video is null && audio is null)
         {
@@ -563,14 +565,16 @@ public sealed class MediaPlayer : IDisposable
             }
 
             var vin = router.AddInput(primaryOutputId);
-            var liveQueueCap = options.LiveVideoDecodeQueueCapacity > 0
-                ? options.LiveVideoDecodeQueueCapacity
-                : 4;
+            var decodeQueueCap = options.FileVideoDecodeQueueCapacity > 0
+                ? options.FileVideoDecodeQueueCapacity
+                : options.LiveVideoDecodeQueueCapacity > 0
+                    ? options.LiveVideoDecodeQueueCapacity
+                    : 4;
             videoPlayer = new VideoPlayer(
                 effectiveVideoSource,
                 vin.Output,
                 playClock,
-                queueCapacity: liveQueueCap,
+                queueCapacity: decodeQueueCap,
                 presentationMode: options.LiveVideoPresentation);
 
             player = new MediaPlayer(

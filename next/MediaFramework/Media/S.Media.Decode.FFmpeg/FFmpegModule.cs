@@ -86,12 +86,25 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
             ? null
             : new VideoDecoderOpenOptions
             {
+                TryHardwareAcceleration = o.TryHardwareAcceleration,
                 RetainDmabufForGl = o.RetainDmabufForGl,
                 RetainD3D11SharedHandleForGl = o.RetainD3D11SharedHandleForGl,
+                Win32Nv12SharedHandleOnlyExport = o.Win32Nv12SharedHandleOnlyExport,
+                AudioPacketQueueDepth = o.AudioPacketQueueDepth,
+                VideoPacketQueueDepth = o.VideoPacketQueueDepth,
+                FileReadBufferBytes = o.FileReadBufferBytes,
+                AudioStreamIndex = o.AudioStreamIndex,
+                VideoStreamIndex = o.VideoStreamIndex,
             };
 
     private static AudioFileDecoderOpenOptions MapAudio(AudioSourceOpenOptions? o) =>
-        o is null ? default : new AudioFileDecoderOpenOptions { CodecThreadCount = o.CodecThreadCount };
+        o is null
+            ? default
+            : new AudioFileDecoderOpenOptions
+            {
+                CodecThreadCount = o.CodecThreadCount,
+                AudioStreamIndex = o.AudioStreamIndex,
+            };
 }
 
 /// <summary>Owns a <see cref="MediaContainerDecoder"/> and exposes its video track as an <see cref="IVideoSource"/>.</summary>

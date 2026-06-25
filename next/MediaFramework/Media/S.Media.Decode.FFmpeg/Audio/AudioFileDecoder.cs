@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using Microsoft.Extensions.Logging;
+using S.Media.Decode.FFmpeg;
 
 namespace S.Media.Decode.FFmpeg.Audio;
 
@@ -267,7 +268,7 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         FFmpegException.ThrowIfError(ret, nameof(avformat_find_stream_info));
 
         AVCodec* codec = null;
-        _audioStreamIndex = av_find_best_stream(_formatCtx, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+        _audioStreamIndex = ElectAudioStream(options.AudioStreamIndex, &codec);
         if (_audioStreamIndex < 0 || codec == null)
             throw new FFmpegException(_audioStreamIndex, "no decodable audio stream found");
 
@@ -341,6 +342,41 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
         _frame = av_frame_alloc();
         if (_frame == null) throw new OutOfMemoryException("av_frame_alloc returned NULL");
         timing?.SetOutcome($"path={Path.GetFileName(path)} stream={_audioStreamIndex} codec={CodecName} format={Format} duration={Duration} threads={CodecThreadCountOption}");
+    }
+
+    private int ElectAudioStream(int? requested, AVCodec** decoderRet)
+    {
+        *decoderRet = null;
+        if (requested == MediaStreamSelection.Disabled)
+            return -1;
+
+        if (requested is { } idx && idx >= 0)
+        {
+            if (TryUseExplicitAudioStream(idx, decoderRet))
+                return idx;
+
+            MediaDiagnostics.LogWarning(
+                $"AudioFileDecoder: requested audio stream #{idx} is not a decodable audio stream; falling back to automatic selection.");
+        }
+
+        return av_find_best_stream(_formatCtx, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, decoderRet, 0);
+    }
+
+    private bool TryUseExplicitAudioStream(int index, AVCodec** decoderRet)
+    {
+        if (index < 0 || index >= _formatCtx->nb_streams)
+            return false;
+
+        var stream = _formatCtx->streams[index];
+        if (stream->codecpar->codec_type != AVMediaType.AVMEDIA_TYPE_AUDIO)
+            return false;
+
+        var codec = avcodec_find_decoder(stream->codecpar->codec_id);
+        if (codec == null)
+            return false;
+
+        *decoderRet = codec;
+        return true;
     }
 
     private void MaybeLogSlowRead(long started, int writtenFloats)

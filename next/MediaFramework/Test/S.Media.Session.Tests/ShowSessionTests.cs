@@ -34,6 +34,40 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task InvokeAsync_FromAnotherSessionDispatcher_DoesNotRunInline()
+    {
+        await using var sessionA = new ShowSession(MediaRegistry.Build(_ => { }));
+        await using var sessionB = new ShowSession(MediaRegistry.Build(_ => { }));
+
+        var releaseB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blockerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blocker = sessionB.InvokeAsync(async () =>
+        {
+            blockerStarted.SetResult();
+            await releaseB.Task;
+        });
+        await blockerStarted.Task;
+
+        var ranInline = await sessionA.InvokeAsync(async () =>
+        {
+            var bWorkRan = false;
+            var bWork = sessionB.InvokeAsync(() =>
+            {
+                bWorkRan = true;
+                return Task.FromResult(7);
+            });
+
+            var observedInline = bWorkRan;
+            releaseB.SetResult();
+            Assert.Equal(7, await bWork);
+            await blocker;
+            return observedInline;
+        });
+
+        Assert.False(ranInline);
+    }
+
+    [Fact]
     public async Task Post_RunsActionOnSessionThread()
     {
         await using var session = new ShowSession(MediaRegistry.Build(_ => { }));
@@ -59,6 +93,29 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task LoadDocumentAsync_ReplacesExistingDocumentOnDispatcher()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+
+        var replacement = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue3", 3, "Three")],
+            Clips: [new ShowClipBinding("cue3", "fake://3")],
+            Compositions: [],
+            Outputs: [],
+            Routes: [],
+            Devices: []);
+
+        await session.LoadDocumentAsync(replacement);
+
+        Assert.Equal(["cue3"], session.Cues.Cues.Select(c => c.Id));
+        Assert.Empty(session.Cues.ExecutionLog);
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        Assert.Equal("cue3", Assert.Single(session.Cues.ExecutionLog).CueId);
+    }
+
+    [Fact]
     public async Task FireCueAsync_FiresSpecificCue()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
@@ -79,6 +136,23 @@ public sealed class ShowSessionTests
 
         var group = Assert.Single(snapshot);
         Assert.Equal(ShowSession.DefaultGroup, group.GroupId);
+    }
+
+    [Fact]
+    public async Task StopAsync_FreezesSessionClock()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync();
+        await Task.Delay(50);
+
+        await session.StopAsync();
+        var stopped = Assert.Single(await session.SnapshotAsync());
+        await Task.Delay(50);
+        var later = Assert.Single(await session.SnapshotAsync());
+
+        Assert.False(later.IsRunning);
+        Assert.Equal(stopped.SessionTime, later.SessionTime);
     }
 
     [Fact]

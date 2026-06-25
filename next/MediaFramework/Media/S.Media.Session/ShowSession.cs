@@ -33,7 +33,7 @@ public sealed class ShowSession : IAsyncDisposable
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
     private readonly BlockingCollection<Func<Task>> _queue = new();
     private readonly Task _pump;
-    private static readonly AsyncLocal<bool> OnDispatcher = new();
+    private static readonly AsyncLocal<ShowSession?> CurrentDispatcher = new();
     private volatile bool _disposed;
 
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
@@ -63,7 +63,8 @@ public sealed class ShowSession : IAsyncDisposable
     {
         foreach (var work in _queue.GetConsumingEnumerable())
         {
-            OnDispatcher.Value = true;
+            var previous = CurrentDispatcher.Value;
+            CurrentDispatcher.Value = this;
             try
             {
                 await work().ConfigureAwait(false);
@@ -74,7 +75,7 @@ public sealed class ShowSession : IAsyncDisposable
             }
             finally
             {
-                OnDispatcher.Value = false;
+                CurrentDispatcher.Value = previous;
             }
         }
     }
@@ -84,7 +85,7 @@ public sealed class ShowSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(action);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (OnDispatcher.Value)
+        if (ReferenceEquals(CurrentDispatcher.Value, this))
         {
             action();
             return;
@@ -103,7 +104,7 @@ public sealed class ShowSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(func);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (OnDispatcher.Value)
+        if (ReferenceEquals(CurrentDispatcher.Value, this))
             return func();
 
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -135,9 +136,32 @@ public sealed class ShowSession : IAsyncDisposable
     /// Builds the cue graph from <paramref name="document"/>: each clip-bound cue, when fired, opens its
     /// media through the registry and plays it on the cue's transport group. Call before firing cues.
     /// </summary>
-    public void LoadDocument(ShowDocument document)
+    public void LoadDocument(ShowDocument document) =>
+        LoadDocumentAsync(document).GetAwaiter().GetResult();
+
+    /// <summary>Asynchronously loads a show document on the session dispatcher.</summary>
+    public Task LoadDocumentAsync(ShowDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
+        return InvokeAsync(() =>
+        {
+            LoadDocumentCore(document);
+            return Task.CompletedTask;
+        });
+    }
+
+    private void LoadDocumentCore(ShowDocument document)
+    {
+        foreach (var group in _groups.Values)
+            group.Dispose();
+        _groups.Clear();
+
+        foreach (var composition in _compositions.Values)
+            composition.Dispose();
+        _compositions.Clear();
+
+        _cueGraph.Clear();
+
         foreach (var comp in document.Compositions)
         {
             var definition = new ClipCompositionDefinition(
@@ -324,7 +348,7 @@ public sealed class ShowSession : IAsyncDisposable
     /// composition layer the active clip's video feeds (removed when the clip is replaced).</summary>
     private sealed class TransportGroup : IDisposable
     {
-        public SessionClock Clock { get; } = SessionClock.LiveWallClock();
+        public SessionClock Clock { get; } = new(new MonotonicWallClock(start: false));
         public MediaSession? Active { get; private set; }
         private IAudioOutput? _output;
         private ClipCompositionRuntime.LayerSlot? _layer;
@@ -332,6 +356,9 @@ public sealed class ShowSession : IAsyncDisposable
 
         public void Replace(MediaSession? session, IAudioOutput? output, ClipCompositionRuntime.LayerSlot? layer = null)
         {
+            Clock.SetReference(session is null
+                ? new MonotonicWallClock(start: false)
+                : new PlayheadPlaybackClock(session.Player.PlayClock));
             _layer?.Dispose();
             Active?.Dispose();
             (_output as IDisposable)?.Dispose();
@@ -341,5 +368,11 @@ public sealed class ShowSession : IAsyncDisposable
         }
 
         public void Dispose() => Replace(null, null);
+    }
+
+    private sealed class PlayheadPlaybackClock(IPlayhead playhead) : IPlaybackClock
+    {
+        public TimeSpan ElapsedSinceStart => playhead.CurrentPosition;
+        public bool IsAdvancing => playhead.IsRunning;
     }
 }

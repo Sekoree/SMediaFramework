@@ -1,3 +1,4 @@
+using S.Media.Core.Audio;
 using S.Media.Core.Video;
 
 namespace S.Media.Players;
@@ -33,21 +34,19 @@ public readonly record struct MediaPlayerOpenOptions(
     bool SpoolStreamToDisk = false,
     /// <summary>When true (and not spooling), allows libav seek on the input stream.</summary>
     bool StreamIsSeekable = false,
-    /// <summary>
-    /// Per-session deinterlacer override. When null, consumers fall back to
-    /// <see cref="S.Media.Core.Diagnostics.MediaFrameworkPlugins.VideoDeinterlacerFactory"/>,
-    /// then the built-in Core fallback.
-    /// </summary>
+    /// <summary>Reserved for host-level deinterlacer overrides; current registry opens resolve deinterlacers through <c>IMediaRegistry</c>.</summary>
     Func<VideoFormat, IDeinterlacer>? VideoDeinterlacerFactory = null,
     /// <summary>Explicit audio stream index (<see cref="MediaStreamInfo.Index"/>). <c>null</c> = automatic;
-    /// <see cref="MediaStreamSelection.Disabled"/> disables audio decode entirely. Invalid indices warn and
+    /// <see cref="DisabledStreamIndex"/> disables audio decode entirely. Invalid indices warn and
     /// fall back to automatic.</summary>
     int? AudioStreamIndex = null,
     /// <summary>Explicit video stream index, same semantics as <see cref="AudioStreamIndex"/>. Pass
-    /// <see cref="MediaStreamSelection.Disabled"/> for audio-only playback of video files at zero
+    /// <see cref="DisabledStreamIndex"/> for audio-only playback of video files at zero
     /// video-decode cost (the player runs its stub video source).</summary>
     int? VideoStreamIndex = null)
 {
+    public const int DisabledStreamIndex = -1;
+
     public MediaPlayerOpenOptions()
         : this(
             TryHardwareAcceleration: true,
@@ -93,9 +92,25 @@ public readonly record struct MediaPlayerOpenOptions(
     public VideoSourceOpenOptions ToVideoSourceOpenOptions() =>
         new()
         {
+            TryHardwareAcceleration = TryHardwareAcceleration,
             RetainDmabufForGl = RetainDmabufForGl,
             RetainD3D11SharedHandleForGl = RetainD3D11SharedHandleForGl,
+            Win32Nv12SharedHandleOnlyExport = Win32Nv12SharedHandleOnlyExport,
+            AudioPacketQueueDepth = AudioPacketQueueDepth,
+            VideoPacketQueueDepth = VideoPacketQueueDepth,
+            FileReadBufferBytes = FileReadBufferBytes,
             StreamIsSeekable = StreamIsSeekable,
             SpoolToDisk = SpoolStreamToDisk,
+            AudioStreamIndex = AudioStreamIndex,
+            VideoStreamIndex = VideoStreamIndex,
+        };
+
+    /// <summary>Maps audio open flags onto the registry's audio open options.</summary>
+    public AudioSourceOpenOptions ToAudioSourceOpenOptions() =>
+        new()
+        {
+            StreamIsSeekable = StreamIsSeekable,
+            SpoolToDisk = SpoolStreamToDisk,
+            AudioStreamIndex = AudioStreamIndex,
         };
 }

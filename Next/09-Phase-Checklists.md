@@ -182,12 +182,13 @@ and the UI port) rather than being a finishing touch here.
       video negotiation lead; CPU compositor composites it). `ShowComposition.OutputMapping` carries a
       `ClipOutputMappingSpec` applied at build + `ShowSession.ApplyCompositionMappingAsync` updates it live;
       `SessionSmoke` composites through an affine section headless. *Mesh **warp** stays GL-only (verify
-      under xvfb).* 
-- [→] Routing scene = N→M channel remap + **multi-track select** — **re-filed to Phase 5.** Blocked *below*
-      `ShowSession`, not a wiring gap: the registry **audio** open is single-track (`AudioSourceOpenOptions`
-      has no stream index — the multi-track container path was the FFmpeg bundle decoder, intentionally
-      removed), and N→M needs the multi-output matrix. Both are Phase-5 work (decode-layer track-select +
-      multi-output), then driven from `ShowSession`.
+	      under xvfb).*
+- [→] Routing scene = N→M channel remap + **multi-track select** — **re-filed to Phase 5.** *Update
+      (2026-06-25, review fix): the decode-layer + `MediaPlayer` track-select plumbing is now **wired** —
+      `Audio`/`VideoSourceOpenOptions` carry a stream index, `MediaPlayer.TryOpen` forwards it (and honours
+      `DisabledStreamIndex` to disable a stream), and `FFmpegModule` elects the chosen streams. What stays
+      Phase 5: exposing it per-clip in `ShowDocument`/`ShowClipBinding` + the N→M multi-output matrix, driven
+      from `ShowSession`.*
 
 **Gate:** `SoundboardSmoke` + new `SessionSmoke` (headless cue fire / seek / GO + video composite) green;
 `S.Media.Session.Tests`. ✅ Both smokes green on real hardware (2026-06-25); **566 unit tests** (incl. new
@@ -210,10 +211,10 @@ JSON show and drives GO → fire → seek → GO → switch-clip with zero Avalo
 - [ ] Live convergence: NDI/mic on `SourceTimeline` + `SourceSyncGroup` over the session master (03);
       first-class per-source offset.
 - [ ] Multi-output: `CompositeMulti` + `VideoPresentSyncGroup` for stitched/combined outputs.
-- [ ] **(Re-filed from Phase 4)** Routing scene = N→M channel remap + multi-track select: add an audio
-      track-select option to the registry **audio** open (`AudioSourceOpenOptions` stream index, honoured by
-      the FFmpeg audio provider — today it opens single-track standalone audio), wire the N→M matrix over the
-      multi-output above, and drive both from `ShowSession`.
+- [ ] **(Re-filed from Phase 4)** Routing scene = N→M channel remap + multi-track select. *Decode/`MediaPlayer`
+      track-select is already wired (stream index on `Audio`/`VideoSourceOpenOptions` → `MediaPlayer.TryOpen` →
+      `FFmpegModule`).* This phase exposes it per-clip in `ShowDocument`/`ShowClipBinding`, adds the N→M matrix
+      over the multi-output above, and drives both from `ShowSession`.
 
 **Gate:** `NDIPlayer`/`NDIReceiver`; multi-output drift soak (1 hr, no unbounded drift); live A/V-sync
 targets ([03 §7](03-AV-Sync-Clocks-Routing.md)).
