@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Phase 1 parity gate. Covers the salvaged Core + Time + Routing primitives (the old single-assembly
+       S.Media.Core.Tests, ported to the new split). Compositor/Players/clip tests and deleted-global
+       tests are dropped/deferred to their phases. -->
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+    <ProjectReference Include="../../Media/S.Media.Time/S.Media.Time.csproj" />
+    <ProjectReference Include="../../Media/S.Media.Routing/S.Media.Routing.csproj" />
+  </ItemGroup>
+
+  <!-- Global usings so the ported test files need no per-file S.Media.* usings (matches how the salvaged
+       code was once one assembly). -->
+  <ItemGroup>
+    <Using Include="S.Media.Core" />
+    <Using Include="S.Media.Core.Audio" />
+    <Using Include="S.Media.Core.Video" />
+    <Using Include="S.Media.Core.Diagnostics" />
+    <Using Include="S.Media.Core.Triggers" />
+    <Using Include="S.Media.Core.Registry" />
+    <Using Include="S.Media.Core.Threading" />
+    <Using Include="S.Media.Time" />
+    <Using Include="S.Media.Routing" />
+  </ItemGroup>
+
+</Project>
