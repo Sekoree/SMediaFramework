@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 2 audio playback smoke / composition root: builds a registry (FFmpeg + PortAudio), opens a
+         MediaPlayer, and plays a file's audio. Pass the media path as the first argument (optionally a
+         seconds limit). Needs native FFmpeg + PortAudio present at runtime. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+    </ItemGroup>
+
+</Project>

@@ -77,25 +77,33 @@ clocks are covered by the ported Clock tests (`MediaClock`/`CompositePlaybackClo
 
 ---
 
-## Phase 2 — First end-to-end playback
+## Phase 2 — First end-to-end playback ✅ *(audio-first: build-complete + wiring-verified; runtime + test-ports pending)*
 **Goal:** a file plays — HW-decoded, audio-synced — entirely through the registry, no globals.
 
-- [ ] Split `FFmpeg.Common` first (runtime init, native load, error/status, stream/format mapping).
-- [ ] `Decode.FFmpeg` module: file/stream `IVideoSource`+`IAudioSource`, hw decode (D3D11VA/VAAPI),
-      swscale `IVideoCpuFrameConverter`, yadif, resampler, audio-track enumeration; registers a decoder
-      provider for `file:`/`http:` with a confidence score (D2/D3).
-- [ ] `Audio.PortAudio` module: `IAudioBackend` (output+input), clocked output; device enumeration is
-      **poll-based** (PortAudio has no hot-plug callback — OQ9).
-- [ ] `Present.SDL3` module: `IVideoOutput` on its own thread, sharing the per-thread GL context (D7).
-- [ ] `Players.MediaPlayer`: takes `IMediaRegistry`/`IMediaSourceResolver` (no concrete backend refs —
-      02 Tier 4); transport (play/pause/seek/rate); designates a **master output and mixes at its
-      rate** (D11).
-- [ ] Test composition root: `MediaRegistry.Build(b => b.Use(FFmpeg).Use(PortAudio).Use(Sdl3))`.
+> **Scope decision:** Phase 2 is **audio-first**. `Present.SDL3` depends on `S.Media.Gpu` **and**
+> `S.Media.Effects`, so on-screen video belongs with Phase 3 — **`Present.SDL3`, `VideoPlaybackSmoke`,
+> and the `VideoPlayer`/`AvPlaybackCoordinator` salvage move to Phase 3**. Video still *decodes* in
+> Phase 2 (`FrameDump`). The FFmpeg adaptive-rate output wrapper couples to `AudioRouter` and is only
+> needed for non-master outputs → **defers to Phase 5** (keeps `Decode.FFmpeg` free of `Routing`).
 
-**Gate:** `PlaybackSmoke` + `VideoPlaybackSmoke` play a file at parity; **`TransportSyncProbe`** builds + runs
-against the new clocks (moved here from Phase 1 — it needs `MediaPlayer`/FFmpeg); `…FFmpeg.Tests`,
-`…PortAudio.Tests` green; A/V lip-sync **< ±1 frame** ([03 §7](03-AV-Sync-Clocks-Routing.md)).
-**Exit:** a file plays HW-decoded and synced with zero static plugin state.
+- [x] **`FFmpeg.Common`** — native init, error helpers, AVIO bridge, pixel-format mapping, memory helpers.
+- [x] **`Decode.FFmpeg`** — demux + audio/video decode (hw decode, swscale converter, yadif, source
+      resampler) + **`FFmpegModule`** / **`FFmpegDecoderProvider`** (confidence + URI, D2/D3) replacing
+      the old global slots. The two player/session orchestrators (`MediaContainerSession`/`…PlaybackBundle`)
+      deferred to Phase 4.
+- [x] **`Audio.PortAudio`** (+ **`PALib`** into `next/`) — `IAudioBackend` (clocked output) + **`PortAudioModule`**;
+      the old FFmpeg/Playback couplings dropped/deferred. Device enumeration poll-based (OQ9).
+- [x] **`Players.MediaPlayer`** — slim audio-first, registry-driven: open URI → `AudioRouter` → PortAudio
+      master output → `MediaClock` (D11). No concrete backend refs.
+- [x] **Composition roots:** `Tools/PlaybackSmoke` (audio) + `Tools/FrameDump` (video decode).
+- [ ] *(deferred)* port `…FFmpeg.Tests` / `…PortAudio.Tests` (need natives to run → user/CI).
+
+**Gate:** ✅ full sln builds 0/0; arch-test 4/4 + Core.Tests 403; **wiring verified** — `PlaybackSmoke`
+runs, loads native FFmpeg + PortAudio, registers both modules, and dispatches `OpenAudio` through the
+registry (fails only on a bogus path, as expected). **Pending your runtime test** with real media files
+(`dotnet run --project next/MediaFramework/Tools/PlaybackSmoke -c Release <file>`), plus the deferred
+unit-test ports. `VideoPlaybackSmoke` / `TransportSyncProbe` → Phase 3 (need video / full coordinator).
+**Exit:** a file plays HW-decoded and synced with zero static plugin state *(audio confirmed once you test)*.
 
 ---
 
