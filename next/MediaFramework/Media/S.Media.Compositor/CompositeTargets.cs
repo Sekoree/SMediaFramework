@@ -94,8 +94,11 @@ public sealed class ExternalImageHandle
     /// <summary>The sync object handle (sync-fd, semaphore fd, or keyed-mutex key), per <see cref="SyncKind"/>.</summary>
     public nint SyncHandle { get; init; }
 
-    /// <summary>Consumer calls this once it has finished importing/reading so the producer can recycle the
-    /// backing and close any fds it still owns.</summary>
+    /// <summary>
+    /// Consumer calls this once it has finished importing/reading so the producer can recycle the backing and
+    /// close any fds it still owns. Implementations must tolerate calls from a consumer/render thread while the
+    /// producer compositor is still alive; producer-owned GL cleanup may be deferred to the compositor thread.
+    /// </summary>
     public required Action Release { get; init; }
 }
 

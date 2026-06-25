@@ -52,9 +52,15 @@ internal static unsafe partial class GlExternalImageexport_Egl
             && _exportQuery is not null && _exportImage is not null;
     }
 
-    public static bool TryExport(GL gl, uint srcFbo, VideoFormat format, out ExternalImageHandle handle)
+    public static bool TryExport(
+        GL gl,
+        uint srcFbo,
+        VideoFormat format,
+        Action<Action> releaseOnOwnerThread,
+        out ExternalImageHandle handle)
     {
         handle = null!;
+        ArgumentNullException.ThrowIfNull(releaseOnOwnerThread);
         if (!OperatingSystem.IsLinux())
             return false;
 
@@ -125,7 +131,7 @@ internal static unsafe partial class GlExternalImageexport_Egl
         var fboLocal = exportFbo;
         var texLocal = exportTex;
         var fdClose = fd;
-        var released = false;
+        var released = 0;
         handle = new ExternalImageHandle
         {
             HandleType = "dmabuf",
@@ -139,11 +145,13 @@ internal static unsafe partial class GlExternalImageexport_Egl
             SyncKind = ExternalImageSyncKind.None,
             Release = () =>
             {
-                if (released) return;
-                released = true;
+                if (Interlocked.Exchange(ref released, 1) != 0) return;
                 if (fdClose >= 0) CloseFd(fdClose);
-                _destroyImage!(dpy, img);
-                DeleteGl(gl, fboLocal, texLocal);
+                releaseOnOwnerThread(() =>
+                {
+                    _destroyImage!(dpy, img);
+                    DeleteGl(gl, fboLocal, texLocal);
+                });
             },
         };
         return true;
@@ -171,9 +179,11 @@ internal static class GlExternalImageExport
         uint srcFbo,
         VideoFormat format,
         IReadOnlyList<string> acceptedHandleTypes,
+        Action<Action> releaseOnOwnerThread,
         out ExternalImageHandle handle)
     {
         handle = null!;
+        ArgumentNullException.ThrowIfNull(releaseOnOwnerThread);
         var wantsDmabuf = false;
         for (var i = 0; i < acceptedHandleTypes.Count; i++)
             if (string.Equals(acceptedHandleTypes[i], "dmabuf", StringComparison.OrdinalIgnoreCase))
@@ -181,6 +191,6 @@ internal static class GlExternalImageExport
         if (!wantsDmabuf)
             return false;
 
-        return GlExternalImageexport_Egl.TryExport(gl, srcFbo, format, out handle);
+        return GlExternalImageexport_Egl.TryExport(gl, srcFbo, format, releaseOnOwnerThread, out handle);
     }
 }

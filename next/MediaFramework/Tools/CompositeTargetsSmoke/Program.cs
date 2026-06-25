@@ -90,6 +90,8 @@ else
 var red2 = SolidBgra(W, H, b: 0, g: 0, r: 255);
 var surface = new GreenCentreSurface();
 surface.ConfigureGl(gl, output);
+gl.PixelStore(SilkGL.PixelStoreParameter.UnpackAlignment, 8);
+gl.PixelStore(SilkGL.PixelStoreParameter.UnpackRowLength, 7);
 var surfFrame = compositor.CompositeWithSurfaces(
     [CompositorLayer.Default(red2)],
     [new CompositorSurfaceLayer(surface, LayerTransform2D.Identity, 1f)],
@@ -103,6 +105,13 @@ var surfFrame = compositor.CompositeWithSurfaces(
     Console.WriteLine($"surface centre BGRA-as-RGB = ({ss[cc + 2]},{ss[cc + 1]},{ss[cc]}); corner = ({ss[ce + 2]},{ss[ce + 1]},{ss[ce]})");
     ok &= surfCentreGreen && surfCornerRed;
 }
+gl.GetInteger(SilkGL.GetPName.UnpackAlignment, out var unpackAlignmentAfterSurface);
+gl.GetInteger(SilkGL.GetPName.UnpackRowLength, out var unpackRowLengthAfterSurface);
+var surfaceRestoredUnpackState = unpackAlignmentAfterSurface == 8 && unpackRowLengthAfterSurface == 7;
+Console.WriteLine($"surface restored GL_UNPACK state = {surfaceRestoredUnpackState} (alignment={unpackAlignmentAfterSurface}, rowLength={unpackRowLengthAfterSurface})");
+ok &= surfaceRestoredUnpackState;
+gl.PixelStore(SilkGL.PixelStoreParameter.UnpackAlignment, 4);
+gl.PixelStore(SilkGL.PixelStoreParameter.UnpackRowLength, 0);
 surfFrame.Dispose();
 red2.Dispose();
 surface.Dispose();
@@ -140,7 +149,10 @@ if (exported is { } eh)
         ? "dmabuf round-trip (export→reimport→readback) = red ✓"
         : "dmabuf round-trip = not re-importable on this driver (tiled/INVALID-modifier; needs modifier negotiation — Phase-5 consumer)");
     ok &= wellFormed;
-    eh.Release();
+    var releaseThread = new Thread(() => eh.Release()) { IsBackground = true, Name = "dmabuf-release-smoke" };
+    releaseThread.Start();
+    releaseThread.Join();
+    compositor.CompositeMultiToTargets([], [], TimeSpan.Zero); // drains deferred GL cleanup on the compositor thread
 }
 else
 {
@@ -195,6 +207,8 @@ sealed class GreenCentreSurface : IVideoCompositorLayerSurface
 
     public void Render(SilkGL.GL gl, uint targetFbo, TimeSpan masterTime, LayerTransform2D transform, float opacity)
     {
+        gl.PixelStore(SilkGL.PixelStoreParameter.UnpackAlignment, 1);
+        gl.PixelStore(SilkGL.PixelStoreParameter.UnpackRowLength, 11);
         gl.Enable(SilkGL.EnableCap.ScissorTest);
         gl.Scissor(_w / 4, _h / 4, (uint)(_w / 2), (uint)(_h / 2));
         gl.ClearColor(0f, 1f, 0f, 1f);

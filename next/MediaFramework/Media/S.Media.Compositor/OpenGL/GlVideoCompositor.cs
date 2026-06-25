@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Linq;
 using System.Reflection;
 using S.Media.Compositor;
+using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Gpu;
 using Silk.NET.OpenGL;
@@ -144,6 +145,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
     private readonly Dictionary<(int W, int H), (uint Tex, uint Fbo)> _yuvIntermediates = new();
     /// <summary>Cached accepted-formats array — mirrors <see cref="YuvVideoRenderer.SupportedPixelFormats"/>.</summary>
     private static readonly CorePixelFormat[] AcceptedFormatsArr = YuvVideoRenderer.SupportedPixelFormats.ToArray();
+    private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
+    private readonly ConcurrentQueue<Action> _deferredExternalImageReleases = new();
     private PboReadbackState? _multiPboReadback;
     private bool _multiPboReadbackUnavailable;
     private bool _configured;
@@ -167,6 +170,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
     public void Configure(VideoFormat output)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        DrainDeferredExternalImageReleases();
         var expectedPf = OutputPixelFormatForPrecision(_outputPrecision);
         if (output.PixelFormat != expectedPf)
             throw new ArgumentException(
@@ -192,6 +196,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
     public unsafe VideoFrame Composite(IReadOnlyList<CompositorLayer> layersBackToFront, TimeSpan presentationTime)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        DrainDeferredExternalImageReleases();
         ArgumentNullException.ThrowIfNull(layersBackToFront);
         if (!_configured)
             throw new InvalidOperationException("GlVideoCompositor must be Configure()d before Composite.");
@@ -266,6 +271,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             _gl.ActiveTexture((TextureUnit)savedActiveTexture);
             _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+            DrainDeferredExternalImageReleases();
         }
     }
 
@@ -276,6 +282,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         TimeSpan presentationTime)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        DrainDeferredExternalImageReleases();
         ArgumentNullException.ThrowIfNull(layersBackToFront);
         ArgumentNullException.ThrowIfNull(outputs);
         if (!_configured)
@@ -340,6 +347,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             _gl.ActiveTexture((TextureUnit)savedActiveTexture);
             _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+            DrainDeferredExternalImageReleases();
         }
     }
 
@@ -349,6 +357,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         TimeSpan presentationTime)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        DrainDeferredExternalImageReleases();
         ArgumentNullException.ThrowIfNull(layersBackToFront);
         ArgumentNullException.ThrowIfNull(targets);
         if (!_configured)
@@ -401,7 +410,15 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
                         var stride = OutputStrideForWidth(w);
                         var frame = ReadCurrentFramebuffer(
                             targeted.Request.OutputFormat, w, h, stride, stride * h, presentationTime);
-                        cpuTarget.OnFrameReady(frame);
+                        try
+                        {
+                            cpuTarget.OnFrameReady(frame);
+                            frame = null!;
+                        }
+                        finally
+                        {
+                            frame?.Dispose();
+                        }
                         break;
 
                     case ExternalImageCompositeTarget externalTarget:
@@ -432,6 +449,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             _gl.ActiveTexture((TextureUnit)savedActiveTexture);
             _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+            DrainDeferredExternalImageReleases();
         }
     }
 
@@ -451,9 +469,23 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
 
     private void ExportExternalImage(uint srcFbo, VideoFormat format, ExternalImageCompositeTarget target)
     {
-        if (GlExternalImageExport.TryExportDmabuf(_gl, srcFbo, format, target.AcceptedHandleTypes, out var handle))
+        if (GlExternalImageExport.TryExportDmabuf(
+                _gl,
+                srcFbo,
+                format,
+                target.AcceptedHandleTypes,
+                ReleaseExternalImageOnOwnerThread,
+                out var handle))
         {
-            target.OnImageReady(handle);
+            try
+            {
+                target.OnImageReady(handle);
+            }
+            catch
+            {
+                handle.Release();
+                throw;
+            }
             return;
         }
 
@@ -469,6 +501,7 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         TimeSpan presentationTime)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        DrainDeferredExternalImageReleases();
         ArgumentNullException.ThrowIfNull(frameLayers);
         ArgumentNullException.ThrowIfNull(surfaceLayers);
         if (!_configured)
@@ -487,6 +520,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         _gl.GetInteger(GetPName.BlendSrcAlpha, out var savedBlendSrcAlpha);
         _gl.GetInteger(GetPName.BlendDstAlpha, out var savedBlendDstAlpha);
         var savedScissor = _gl.IsEnabled(EnableCap.ScissorTest);
+        _gl.GetInteger(GetPName.UnpackAlignment, out var savedUnpackAlignment);
+        _gl.GetInteger(GetPName.UnpackRowLength, out var savedUnpackRowLength);
         _gl.GetInteger(GetPName.PackAlignment, out var savedPackAlignment);
         _gl.GetInteger(GetPName.PackRowLength, out var savedPackRowLength);
         _gl.GetInteger(GetPName.PixelPackBufferBinding, out var savedPixelPackBuffer);
@@ -516,6 +551,8 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         finally
         {
             // --- Restore host state. ---
+            _gl.PixelStore(PixelStoreParameter.UnpackAlignment, savedUnpackAlignment);
+            _gl.PixelStore(PixelStoreParameter.UnpackRowLength, savedUnpackRowLength);
             _gl.PixelStore(PixelStoreParameter.PackAlignment, savedPackAlignment);
             _gl.PixelStore(PixelStoreParameter.PackRowLength, savedPackRowLength);
             _gl.BindBuffer(BufferTargetARB.PixelPackBuffer, (uint)savedPixelPackBuffer);
@@ -530,6 +567,40 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
             _gl.ActiveTexture((TextureUnit)savedActiveTexture);
             _gl.Viewport(savedViewport[0], savedViewport[1], (uint)savedViewport[2], (uint)savedViewport[3]);
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, (uint)savedFbo);
+            DrainDeferredExternalImageReleases();
+        }
+    }
+
+    private void ReleaseExternalImageOnOwnerThread(Action release)
+    {
+        ArgumentNullException.ThrowIfNull(release);
+        if (Environment.CurrentManagedThreadId == _ownerThreadId)
+        {
+            RunExternalImageRelease(release);
+            return;
+        }
+
+        _deferredExternalImageReleases.Enqueue(release);
+    }
+
+    private void DrainDeferredExternalImageReleases()
+    {
+        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+            return;
+
+        while (_deferredExternalImageReleases.TryDequeue(out var release))
+            RunExternalImageRelease(release);
+    }
+
+    private static void RunExternalImageRelease(Action release)
+    {
+        try
+        {
+            release();
+        }
+        catch (Exception ex)
+        {
+            MediaDiagnostics.LogWarning("GlVideoCompositor external image release failed: {0}", ex.Message);
         }
     }
 
@@ -1564,7 +1635,12 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            DrainDeferredExternalImageReleases();
+            return;
+        }
+        DrainDeferredExternalImageReleases();
         _disposed = true;
         foreach (var (_, tex) in _layerTextures)
             _gl.DeleteTexture(tex);
@@ -1588,5 +1664,6 @@ public sealed class GlVideoCompositor : IWarpPassVideoCompositor
         if (_vbo != 0) { _gl.DeleteBuffer(_vbo); _vbo = 0; }
         if (_vao != 0) { _gl.DeleteVertexArray(_vao); _vao = 0; }
         if (_program != 0) { SharedGlProgramCache.Release(_gl, ProgramCacheKey); _program = 0; }
+        DrainDeferredExternalImageReleases();
     }
 }
