@@ -9,7 +9,8 @@ public readonly record struct PortAudioOutputDeviceEntry(
     int HostApiIndex,
     string Name,
     int MaxOutputChannels,
-    double DefaultSampleRate);
+    double DefaultSampleRate,
+    bool IsDefault);
 
 /// <summary>One physical input (capture) device with a global PortAudio device index.</summary>
 public readonly record struct PortAudioInputDeviceEntry(
@@ -18,7 +19,8 @@ public readonly record struct PortAudioInputDeviceEntry(
     string Name,
     int MaxInputChannels,
     double DefaultSampleRate,
-    double DefaultLowInputLatency);
+    double DefaultLowInputLatency,
+    bool IsDefault);
 
 /// <summary>
 /// Enumerates host APIs and output devices using the same <see cref="PortAudioRuntime"/> ref-count
@@ -67,6 +69,7 @@ public static class PortAudioDeviceCatalog
             if (count <= 0)
                 return [];
 
+            var defaultOutput = Native.Pa_GetDefaultOutputDevice();
             var list = new List<PortAudioOutputDeviceEntry>(count);
             for (var i = 0; i < count; i++)
             {
@@ -84,7 +87,8 @@ public static class PortAudioDeviceCatalog
                     dev.hostApi,
                     dev.Name ?? $"Device {i}",
                     dev.maxOutputChannels,
-                    dev.defaultSampleRate));
+                    dev.defaultSampleRate,
+                    i == defaultOutput));
             }
 
             return list;
@@ -110,6 +114,7 @@ public static class PortAudioDeviceCatalog
             if (count <= 0)
                 return [];
 
+            var defaultInput = Native.Pa_GetDefaultInputDevice();
             var list = new List<PortAudioInputDeviceEntry>(count);
             for (var i = 0; i < count; i++)
             {
@@ -128,7 +133,8 @@ public static class PortAudioDeviceCatalog
                     dev.Name ?? $"Device {i}",
                     dev.maxInputChannels,
                     dev.defaultSampleRate,
-                    dev.defaultLowInputLatency));
+                    dev.defaultLowInputLatency,
+                    i == defaultInput));
             }
 
             return list;

@@ -75,9 +75,10 @@ public sealed class MediaPlayer : IDisposable
             };
             var clock = new MediaClock();
             router.AttachMasterClock(clock);                 // slaves to the primary output's IPlaybackClock
-            router.AddSource(audio, autoResample: true);
+            var sourceId = router.AddSource(audio, autoResample: true);
             output = audioBackend.CreateOutput(device?.Id, new AudioFormat(sampleRate, channels));
-            router.AddOutput(output);                        // clocked output → primary/master (D11)
+            var outputId = router.AddOutput(output);          // clocked output → primary/master (D11)
+            router.ApplyMatrix(sourceId, outputId, DefaultPlaybackMatrix(audio.Format.Channels, channels));
             return new MediaPlayer(router, clock, output, audio);
         }
         catch
@@ -87,6 +88,17 @@ public sealed class MediaPlayer : IDisposable
             (audio as IDisposable)?.Dispose();
             throw;
         }
+    }
+
+    private static float[,] DefaultPlaybackMatrix(int sourceChannels, int outputChannels)
+    {
+        if (AudioChannelLayoutPresets.TryGetDownmix(sourceChannels, outputChannels, out var matrix))
+            return matrix;
+
+        matrix = new float[sourceChannels, outputChannels];
+        for (var ch = 0; ch < Math.Min(sourceChannels, outputChannels); ch++)
+            matrix[ch, ch] = 1f;
+        return matrix;
     }
 
     /// <summary>Start (or resume) playback.</summary>

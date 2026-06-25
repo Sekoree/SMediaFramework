@@ -16,13 +16,13 @@ public sealed class PortAudioBackend : IAudioBackend
     public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices() =>
         PortAudioDeviceCatalog.EnumerateOutputDevices()
             .Select(d => new AudioDeviceInfo(
-                DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxOutputChannels, d.DefaultSampleRate, IsDefault: false))
+                DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxOutputChannels, d.DefaultSampleRate, d.IsDefault))
             .ToArray();
 
     public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices() =>
         PortAudioDeviceCatalog.EnumerateInputDevices()
             .Select(d => new AudioDeviceInfo(
-                DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxInputChannels, d.DefaultSampleRate, IsDefault: false))
+                DeviceId(d.GlobalDeviceIndex), d.Name, d.MaxInputChannels, d.DefaultSampleRate, d.IsDefault))
             .ToArray();
 
     public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)

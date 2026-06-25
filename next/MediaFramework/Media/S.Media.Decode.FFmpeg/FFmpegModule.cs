@@ -43,29 +43,43 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
     public double Probe(string uri, MediaKind kind)
     {
         ArgumentException.ThrowIfNullOrEmpty(uri);
-        // Live/image schemes belong to other providers; FFmpeg takes files, URLs, and bare paths.
-        return SchemeOf(uri) is "ndi" or "capture" or "mic" or "image" ? 0.0 : 0.5;
+        // Live/image schemes belong to other providers; FFmpeg takes files, common network media
+        // protocols, and bare paths. Unknown schemes are left for explicit providers.
+        return SchemeOf(uri) switch
+        {
+            "" or "file" or "http" or "https" or "rtsp" or "rtmp" => 0.5,
+            _ => 0.0,
+        };
     }
 
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options)
     {
-        var container = MediaContainerDecoder.Open(ToPath(uri), MapVideo(options));
+        var container = TryCreateAbsoluteMediaUri(uri, out var parsed)
+            ? MediaContainerDecoder.OpenUri(parsed, MapVideo(options))
+            : MediaContainerDecoder.Open(uri, MapVideo(options));
         return new ContainerOwnedVideoSource(container);
     }
 
     public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
-        AudioFileDecoder.Open(ToPath(uri), MapAudio(options));
+        TryCreateAbsoluteMediaUri(uri, out var parsed)
+            ? AudioFileDecoder.OpenUri(parsed, MapAudio(options))
+            : AudioFileDecoder.Open(uri, MapAudio(options));
 
-    /// <summary>Scheme before <c>://</c>, lowercased; empty for a bare path (no <c>://</c>).</summary>
+    /// <summary>Known URI scheme, lowercased; empty for a bare path.</summary>
     private static string SchemeOf(string uri)
     {
-        var i = uri.IndexOf("://", StringComparison.Ordinal);
-        return i > 0 ? uri[..i].ToLowerInvariant() : string.Empty;
+        return TryCreateAbsoluteMediaUri(uri, out var parsed) ? parsed.Scheme.ToLowerInvariant() : string.Empty;
     }
 
-    /// <summary><c>file://</c> → local path; <c>http(s):</c> URLs and bare paths pass straight to FFmpeg.</summary>
-    private static string ToPath(string uri) =>
-        uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) ? new Uri(uri).LocalPath : uri;
+    private static bool TryCreateAbsoluteMediaUri(string uri, out Uri parsed)
+    {
+        if (Uri.TryCreate(uri, UriKind.Absolute, out parsed!)
+            && parsed.Scheme.Length > 1) // Avoid treating Windows drive paths like C:\media.mp4 as a URI.
+            return true;
+
+        parsed = null!;
+        return false;
+    }
 
     private static VideoDecoderOpenOptions? MapVideo(VideoSourceOpenOptions? o) =>
         o is null

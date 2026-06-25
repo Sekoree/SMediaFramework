@@ -149,14 +149,35 @@ public sealed unsafe class AudioFileDecoder : IAudioSource, ISeekableSource, IDi
     public static AudioFileDecoder Open(string path, AudioFileDecoderOpenOptions options = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
-        if (!File.Exists(path)) throw new FileNotFoundException("audio file not found", path);
+        return OpenInput(path, options, validateLocalFile: true);
+    }
+
+    /// <summary>
+    /// Opens an audio URI. <c>file:</c> URIs are validated as local files; other absolute URI schemes
+    /// are passed to FFmpeg as protocol inputs.
+    /// </summary>
+    public static AudioFileDecoder OpenUri(Uri uri, AudioFileDecoderOpenOptions options = default)
+    {
+        ArgumentNullException.ThrowIfNull(uri);
+        if (!uri.IsAbsoluteUri)
+            throw new ArgumentException("audio URI must be absolute.", nameof(uri));
+
+        return uri.IsFile
+            ? OpenInput(uri.LocalPath, options, validateLocalFile: true)
+            : OpenInput(uri.AbsoluteUri, options, validateLocalFile: false);
+    }
+
+    private static AudioFileDecoder OpenInput(string input, AudioFileDecoderOpenOptions options, bool validateLocalFile)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(input);
+        if (validateLocalFile && !File.Exists(input)) throw new FileNotFoundException("audio file not found", input);
 
         FFmpegRuntime.EnsureInitialized();
 
         var decoder = new AudioFileDecoder();
         try
         {
-            decoder.OpenInternal(path, options);
+            decoder.OpenInternal(input, options);
             return decoder;
         }
         catch
