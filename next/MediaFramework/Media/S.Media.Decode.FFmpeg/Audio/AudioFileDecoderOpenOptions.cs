@@ -23,4 +23,10 @@ public readonly record struct AudioFileDecoderOpenOptions
     /// Default <see cref="AudioDecoderLibavThreadTypePreference.FrameFirst"/> matches the historical precedence.
     /// </summary>
     public AudioDecoderLibavThreadTypePreference LibavThreadTypePreference { get; init; }
+
+    /// <summary>
+    /// Explicit audio stream to decode, as a container stream index. <c>null</c> = automatic election;
+    /// <see cref="MediaStreamSelection.Disabled"/> disables audio. Invalid explicit indices fall back to automatic.
+    /// </summary>
+    public int? AudioStreamIndex { get; init; }
 }
