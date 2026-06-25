@@ -1,11 +1,29 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Media.Gpu — GL device + shaders + HW uploads (+Silk.NET.OpenGL, Phase 3).
-         NuGet/native refs are added in the phase noted above. Common build settings come
-         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+    <!-- S.Media.Gpu — the GL device and everything pixels-on-GPU (D7). Salvaged from S.Media.OpenGL:
+         YuvVideoRenderer, the NV12/dmabuf/D3D11 uploaders + interop, GL format support, shader cache,
+         color/HDR pieces. The ONLY project that knows GL; presenters/compositor consume it. -->
 
     <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="Silk.NET.OpenGL" />
+        <PackageReference Include="Vortice.Direct3D11" />
+        <PackageReference Include="Vortice.DXGI" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="Shaders/*.glsl" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Gpu.Tests" />
+        <InternalsVisibleTo Include="S.Media.Compositor" />
+        <InternalsVisibleTo Include="S.Media.Present.SDL3" />
+        <InternalsVisibleTo Include="S.Media.Present.Avalonia" />
     </ItemGroup>
 
 </Project>

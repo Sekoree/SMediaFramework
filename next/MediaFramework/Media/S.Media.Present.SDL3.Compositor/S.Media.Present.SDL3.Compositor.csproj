@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- S.Media.Present.SDL3.Compositor — the SDL3<->Compositor bridge: runs the GL compositor
+         (S.Media.Compositor) on SDL3's shared GL context/thread (D7). Kept OUT of S.Media.Present.SDL3 so
+         that presenter stays [Core, Gpu]; this bridge is the one place that adds Compositor. Acyclic:
+         it references Present.SDL3 (for the public SDL3Runtime) but Present.SDL3 never references back. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Gpu/S.Media.Gpu.csproj" />
+        <ProjectReference Include="../S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="SDL3-CS" />
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Present.SDL3.Compositor.Tests" />
+    </ItemGroup>
+
+</Project>

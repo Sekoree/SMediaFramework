@@ -1,12 +1,26 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Media.Compositor — layers, transforms, mesh warp, multi-output (NO decoder dep).
-         NuGet/native refs are added in the phase noted above. Common build settings come
-         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+    <!-- S.Media.Compositor — layers, transforms, mesh warp, multi-output. Salvaged from S.Media.Effects.
+         NO decoder dependency (P3): the CPU BGRA converter is injected via VideoCompositorOptions
+         .CpuFrameConverterFactory (registry-wired IVideoCpuFrameConverter), never S.Media.FFmpeg. -->
 
     <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../S.Media.Gpu/S.Media.Gpu.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="OpenGL/Shaders/*.glsl" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Compositor.Tests" />
+        <InternalsVisibleTo Include="S.Media.Session" />
     </ItemGroup>
 
 </Project>

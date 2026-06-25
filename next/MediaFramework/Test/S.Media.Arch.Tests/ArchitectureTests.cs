@@ -28,6 +28,9 @@ public sealed class ArchitectureTests
         ["S.Media.Audio.PortAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "PALib"],
         ["S.Media.Audio.MiniAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "MALib"],
         ["S.Media.Present.SDL3"] = ["S.Media.Core", "S.Media.Gpu"],
+        // The SDL3<->Compositor bridge (D7): the one place SDL3 + Compositor meet, kept out of the
+        // Present.SDL3 presenter so that stays [Core, Gpu]. References Present.SDL3 for SDL3Runtime only.
+        ["S.Media.Present.SDL3.Compositor"] = ["S.Media.Core", "S.Media.Gpu", "S.Media.Compositor", "S.Media.Present.SDL3"],
         ["S.Media.Present.Avalonia"] = ["S.Media.Core", "S.Media.Gpu"],
         ["S.Media.NDI"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "NDILib"],
         ["S.Media.Images.Skia"] = ["S.Media.Core"],

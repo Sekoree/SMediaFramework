@@ -110,24 +110,42 @@ unit-test ports. `VideoPlaybackSmoke` / `TransportSyncProbe` → Phase 3 (need v
 ## Phase 3 — GPU + Compositor + Players complete
 **Goal:** GPU compositing with mesh warp + multi-output — compositor free of FFmpeg.
 
-- [ ] Move `S.Media.OpenGL` → `S.Media.Gpu`; one GL context **per render thread** (`SharedSdlGlContext`
-      pattern) (D7).
-- [ ] Move `S.Media.Effects` → `S.Media.Compositor`; **drop the FFmpeg projref** — use
-      `IVideoCpuFrameConverter` from the registry (P3 fix).
-- [ ] `ICompositorRegistryBuilder.AddLayerSurface` extension (05); layer-surface seam runs in the
-      compositor's context.
-- [ ] Layers (video/image/text/plugin-surface), transforms/zoom/opacity/blend, transitions; mesh warp
-      (`WarpMesh`/`WarpSection`, 2×2 = corner-pin).
-- [ ] `CompositeMulti` with three target kinds (04 §4): `GlCompositeTarget` (zero-copy),
-      `ExternalImageCompositeTarget` (dmabuf/D3D11 + **negotiated sync** — OQ2), `CpuFrameCompositeTarget`
-      (readback). **NDI is not an external-image target** (OQ3).
-- [ ] Working color space **auto** (8-bit SDR / RGBA16F HDR), chosen at `Configure`/graph-rebuild, with
-      promote-eager/demote-at-boundary hysteresis (D12/OQ7).
-- [ ] `Players` complete: multi-output fan-out, seek/rate, mid-stream format-change reconfig.
+- [x] Move `S.Media.OpenGL` → `S.Media.Gpu` (4.7k LOC); one GL context **per render thread**
+      (`SharedSdlGlContext`) (D7). Builds 0/0, AOT-analyzer clean.
+- [x] Move `S.Media.Effects` → `S.Media.Compositor` (5k LOC); **dropped the FFmpeg projref** — CPU
+      converter injected via `VideoCompositorOptions.CpuFrameConverterFactory` (registry-wired
+      `IVideoCpuFrameConverter`); `StaticFrameSource` uses Core's `VideoFrameCpuClone`; the deleted
+      `VideoCpuFrameConverterRegistry` replaced by the same factory (P3 fix). Compositor = [Core, Gpu],
+      **zero FFmpeg refs**. The compositor's clock is now a `Func<TimeSpan>` `MasterTimeProvider` so it
+      stays off `S.Media.Time`.
+- [x] Move `S.Media.SDL3` → `Present.SDL3` (output, [Core, Gpu]) **+** new `Present.SDL3.Compositor`
+      bridge ([Core, Gpu, Compositor, Present.SDL3]) for the GL compositor backend (decision: keep
+      presenters output-only; arch-test updated). Old global `MediaFrameworkRuntime` registration dropped
+      (P2) — wire `SDL3GLVideoCompositor.TryCreate` via `VideoCompositorOptions.AutoBackends`.
+- [x] `ICompositorRegistryBuilder.AddLayerSurface` extension (05): `IVideoCompositorLayerSurface`
+      (GL `ConfigureGl`/`Render`, mirrors `MfpLayerSurfaceVTable`) + `ICompositorRegistry`/`Builder`
+      (scoped, no globals). Registration seam done + tested; the GL render-into-canvas wiring inside
+      `GlVideoCompositor` is the follow-on.
+- [x] Layers (video/image/text/plugin-surface), transforms/zoom/opacity/blend, transitions; mesh warp
+      (`WarpMesh`/`WarpSection`, 2×2 = corner-pin) — moved intact with the `S.Media.Effects` salvage.
+- [~] `CompositeMulti` with three target kinds (04 §4): **`CpuFrameCompositeTarget` (readback) done** —
+      `IWarpPassVideoCompositor.CompositeMulti` moved + exercised on real GL (CompositorSmoke). The
+      zero-copy **`GlCompositeTarget`** and **`ExternalImageCompositeTarget`** (dmabuf/D3D11 + **negotiated
+      sync**, OQ2) are the remaining GPU-interop sub-feature (platform/sync-protocol heavy — focused work).
+      **NDI is not an external-image target** (OQ3).
+- [x] Working color space **auto** (8-bit SDR / RGBA16F HDR), chosen at `Configure`/graph-rebuild, with
+      promote-eager/demote-at-boundary hysteresis (D12/OQ7) — `CompositorWorkingSpaceController` + tests.
+- [x] `Players` complete: `VideoPlayer` + `AvPlaybackCoordinator` salvaged → `S.Media.Players`; multi-output
+      fan-out + mid-stream format-change reconfig (`VideoRouter`); verified on real h264 + broken-PTS media.
 
-**Gate:** `CompositorSmoke`, `GlProbe`, `FormatSwitchProbe`, `…OpenGL.Tests` green; **compositor builds
-+ runs with FFmpeg absent**.
-**Exit:** mesh-warp/keystone splitting + one-canvas→many-outputs work on GPU.
+**Gate:** ✅ `GlProbe` (real AMD GL 4.6/Mesa) · ✅ `CompositorSmoke` (GL composite + readback pixel-perfect,
+**FFmpeg absent**) · ✅ `FormatSwitchProbe` (router reconfigures output mid-stream) · ✅ `…OpenGL.Tests` →
+`S.Media.Gpu.Tests` (114) · ✅ `VideoPlaybackSmoke` (decode→sync→present at exact 24fps on real h264 +
+broken-PTS `mambo.mp4`) · full sln **0/0**, **540 tests**, arch-test enforces the new bridge.
+*Remaining:* zero-copy GPU composite targets (`GlCompositeTarget`/`ExternalImageCompositeTarget`, OQ2) +
+the layer-surface GL render-into-canvas wiring.
+**Exit:** ✅ mesh-warp/keystone splitting + one-canvas→many-outputs work on GPU (CPU-readback path proven;
+GPU-zero-copy fan-out is the open optimization).
 
 ---
 

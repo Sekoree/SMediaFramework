@@ -100,11 +100,12 @@ Allowed reference rules (enforced by `.csproj` review and ideally an arch test):
 | `S.Media.Time` | Core |
 | `S.Media.Routing` | Core, Time |
 | `S.Media.Gpu` | Core, Silk.NET.OpenGL |
-| `S.Media.Compositor` | Core, Gpu (**never** a decoder) |
+| `S.Media.Compositor` | Core, Gpu (**never** a decoder; **never** `Time` — the master clock arrives as a `Func<TimeSpan>` `MasterTimeProvider`, set by the player) |
 | `S.Media.FFmpeg.Common` | Core (+ FFmpeg.AutoGen); shared FFmpeg runtime/mapping utilities only |
 | `Decode.FFmpeg` / `Encode.FFmpeg` | Core, `S.Media.FFmpeg.Common` |
 | `Audio.PortAudio` / `Audio.MiniAudio` | Core, Time, Routing (+ PALib / MALib) |
 | `Present.SDL3` / `Present.Avalonia` | Core, Gpu (+ SDL3-CS / Avalonia) |
+| `Present.SDL3.Compositor` | Core, Gpu, Compositor, Present.SDL3 — the SDL3↔compositor GL bridge (D7), split out so `Present.SDL3` itself stays Core, Gpu (presenters are output-only) |
 | `NDI` | Core, Time, Routing (+ NDILib) |
 | `Images.Skia` | Core (+ SkiaSharp) |
 | `Subtitles` | Core (+ libass; embedded/bitmap subtitle support through registry capabilities, not concrete decoder references) |

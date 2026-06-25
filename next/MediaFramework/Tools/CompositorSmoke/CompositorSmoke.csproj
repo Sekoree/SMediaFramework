@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 3 gate: GL compositing with FFmpeg ABSENT. Composites synthetic StaticFrameSource layers
+         through the SDL3 GL backend (the Present.SDL3.Compositor bridge) and verifies the readback.
+         Proves the moved Gpu+Compositor+bridge stack runs on real GL — no decoder anywhere. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3.Compositor/S.Media.Present.SDL3.Compositor.csproj" />
+    </ItemGroup>
+
+</Project>

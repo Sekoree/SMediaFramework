@@ -1,12 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Media.Present.SDL3 — IVideoOutput on its own GL thread (+SDL3-CS, Phase 2).
-         NuGet/native refs are added in the phase noted above. Common build settings come
-         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+    <!-- S.Media.Present.SDL3 — IVideoOutput on its own GL render thread (salvaged from S.Media.SDL3).
+         Output + GL context only: [Core, Gpu]. The SDL3 GL *compositor backend* lives in the separate
+         S.Media.Present.SDL3.Compositor bridge so this presenter never references S.Media.Compositor. -->
 
     <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../S.Media.Gpu/S.Media.Gpu.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+        <PackageReference Include="SDL3-CS" />
+        <PackageReference Include="SDL3-CS.Native" GeneratePathProperty="true" />
+    </ItemGroup>
+
+    <!-- RID-less Windows build (IDE Debug/run): SDL3-CS.Native only places SDL3.dll via runtimes/<rid>/
+         native RID resolution; copy it next to the exe for the RID-less-on-Windows case (flows into a
+         referencing exe's output). RID publishes resolve it from runtimes/, so this is gated off there. -->
+    <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
+        <None Include="$(PkgSDL3-CS_Native)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+            <Link>SDL3.dll</Link>
+        </None>
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Media.Present.SDL3.Tests" />
     </ItemGroup>
 
 </Project>
