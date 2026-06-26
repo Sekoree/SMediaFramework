@@ -326,8 +326,11 @@ public sealed unsafe class SDL3VideoOutput : IVideoOutput, IDisposable
 
     private void InitGraphics()
     {
+        // NotFocusable: a video-output window needs no keyboard focus, and Wayland delivers the clipboard /
+        // primary-selection data offer only to the focused surface — so a focus-less window dodges SDL3 3.4.x's
+        // null-deref in Wayland_data_offer_add_mime (uncatchable crash on a middle-click primary paste).
         if (!SDL.CreateWindowAndRenderer(_title, _initialWindowWidth, _initialWindowHeight,
-                SDL.WindowFlags.Resizable, out _window, out _renderer))
+                SDL.WindowFlags.Resizable | SDL.WindowFlags.NotFocusable, out _window, out _renderer))
             throw new InvalidOperationException($"SDL_CreateWindowAndRenderer failed: {SDL.GetError()}");
 
         if (!SDL.ShowWindow(_window))

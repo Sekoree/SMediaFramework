@@ -67,8 +67,10 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
             nameof(VideoOpenGlControl));
     }
 
-    /// <summary>Letterboxing / stretch for <see cref="YuvVideoRenderer.Render(int,int,VideoViewportFit)"/>.</summary>
-    public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Stretch;
+    /// <summary>Letterboxing / stretch for <see cref="YuvVideoRenderer.Render(int,int,VideoViewportFit)"/>.
+    /// Defaults to aspect-preserving <see cref="VideoViewportFit.Contain"/> (matches the SDL3 presenter; equal to
+    /// <see cref="VideoViewportFit.Stretch"/> when the control matches the frame aspect).</summary>
+    public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Contain;
 
     public GlVideoOutputHdrPreference HdrPreference
     {
@@ -97,6 +99,21 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
             return _format;
         }
     }
+
+    private long _renderedFrames;
+    private long _hardwareFrames;
+    private volatile bool _dmabufImportAvailable;
+
+    /// <summary>Diagnostic: frames uploaded + rendered on the GL thread — i.e. actually presented on screen.</summary>
+    public long RenderedFrameCount => Volatile.Read(ref _renderedFrames);
+
+    /// <summary>Diagnostic: of <see cref="RenderedFrameCount"/>, how many carried a hardware (dma-buf / Win32
+    /// D3D11) backing — uploaded zero-copy through the interop rather than CPU-reuploaded.</summary>
+    public long HardwareFrameCount => Volatile.Read(ref _hardwareFrames);
+
+    /// <summary>Diagnostic: true once the Linux dma-buf EGL import is wired (EGL display present); dma-buf-backed
+    /// frames are then imported zero-copy. (Windows uses the separate D3D11 shared-handle path.)</summary>
+    public bool DmabufImportAvailable => _dmabufImportAvailable;
 
     public void SetBorrowVideoSourceForWin32Nv12Gl(IVideoSource? videoSource) =>
         _win32Nv12Device.SetBorrowVideoSourceForWin32Nv12Gl(videoSource);
@@ -252,6 +269,9 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
                 renderer.Render(w, h, ViewportFit);
                 _gl.Flush();
                 _hasUploadedOnce = true;
+                Interlocked.Increment(ref _renderedFrames);
+                if (frame.HardwareBacking is not null)
+                    Interlocked.Increment(ref _hardwareFrames);
             }
             catch (Exception ex)
             {
@@ -334,6 +354,7 @@ public sealed class VideoOpenGlControl : OpenGlControlBase, IVideoOutput, IVideo
                 _renderer = new YuvVideoRenderer(_gl, _format, eglDmabufInterop: eglDmabuf,
                     win32D3D11DeviceComPtrForNv12: win32D3d11DevicePtr,
                     allowLazyWin32Nv12UploaderFromDecodedFrame: allowLazyNv12);
+                _dmabufImportAvailable = eglDmabuf is not null;
             }
             catch (Exception ex)
             {

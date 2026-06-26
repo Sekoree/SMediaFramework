@@ -7,16 +7,16 @@
   <ItemGroup>
     <!-- Avalonia packages -->
     <!-- Important: keep version in sync! -->
-    <PackageVersion Include="Avalonia" Version="12.0.4" />
+    <PackageVersion Include="Avalonia" Version="12.0.5" />
     <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
-    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.4" />
+    <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.0.5" />
+    <PackageVersion Include="Avalonia.Fonts.Inter" Version="12.0.5" />
     <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.2" />
-    <PackageVersion Include="Avalonia.Desktop" Version="12.0.4" />
+    <PackageVersion Include="Avalonia.Desktop" Version="12.0.5" />
     <PackageVersion Include="Avalonia.iOS" Version="12.0.4" />
     <PackageVersion Include="Avalonia.Browser" Version="12.0.4" />
     <PackageVersion Include="Avalonia.Android" Version="12.0.4" />
-    <PackageVersion Include="Avalonia.Headless" Version="12.0.4" />
+    <PackageVersion Include="Avalonia.Headless" Version="12.0.5" />
     <PackageVersion Include="Mond" Version="0.11.2" />
     <PackageVersion Include="StbImageSharp" Version="2.30.15" />
     <PackageVersion Include="Tmds.DBus.Protocol" Version="0.92.0" />
@@ -25,7 +25,7 @@
     <!-- Native FFmpeg for Windows publishes (see S.Media.FFmpeg.csproj). Keep the FFmpeg major in
          sync with FFmpeg.AutoGen above (currently 8.x). -->
     <PackageVersion Include="FFmpeg.GPL" Version="20260615.1.0" />
-    <PackageVersion Include="SDL3-CS" Version="3.4.2" />
+    <PackageVersion Include="SDL3-CS" Version="3.4.10.4" />
     <PackageVersion Include="SDL3-CS.Native" Version="3.4.2" />
     <PackageVersion Include="Silk.NET.OpenGL" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
@@ -37,12 +37,12 @@
     <PackageVersion Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
     <PackageVersion Include="SkiaSharp.NativeAssets.macOS" Version="3.119.4" />
     <PackageVersion Include="SkiaSharp.NativeAssets.Win32" Version="3.119.4" />
-    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.8" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.9" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.9" />
     <PackageVersion Include="Xaml.Behaviors.Avalonia" Version="12.0.0.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.7.0" />
   </ItemGroup>
 </Project>

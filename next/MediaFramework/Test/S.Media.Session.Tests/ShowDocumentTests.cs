@@ -120,4 +120,19 @@ public sealed class ShowDocumentTests
         Assert.Equal(0.5, section.SrcWidth);
         Assert.Equal(15, section.RotationDegrees);
     }
+
+    [Fact]
+    public void ToJson_FromJson_RoundTripsAudioOutputs()
+    {
+        var doc = ShowDocument.Empty with
+        {
+            AudioOutputs = [new ShowAudioOutput("main"), new ShowAudioOutput("monitor", DeviceId: "hw:1", GroupId: "fx")],
+        };
+
+        var reloaded = ShowDocument.FromJson(doc.ToJson());
+
+        Assert.Equal(doc.AudioOutputs, reloaded.AudioOutputs); // element-wise — proves the init property round-trips
+        Assert.Equal("hw:1", reloaded.AudioOutputs[1].DeviceId);
+        Assert.Equal("fx", reloaded.AudioOutputs[1].GroupId);
+    }
 }

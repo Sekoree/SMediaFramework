@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5 Avalonia present-path runtime smoke. Hosts the real VideoOpenGlControl in an Avalonia window and
+         plays a video into it through MediaPlayer, verifying on-screen presentation and (with HW decode) the
+         dma-buf EGL zero-copy import — the same shared YuvVideoRenderer the SDL3 presenter uses. Needs a
+         GL-capable display + libav. Auto-closes after a few seconds. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.Avalonia/S.Media.Present.Avalonia.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia" />
+        <PackageReference Include="Avalonia.Desktop" />
+    </ItemGroup>
+
+</Project>

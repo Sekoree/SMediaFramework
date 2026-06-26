@@ -164,6 +164,28 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task RoutingScene_AppliesMasterOutputChannelMatrix()
+    {
+        // A 2→4 channel matrix patched to the master output: the clip's 2 source channels fan out, so the
+        // master output is created with 4 channels and routed through the map (the N→M application hook).
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One")],
+            Clips: [new ShowClipBinding("cue1", "fake://1")],
+            Compositions: [],
+            Outputs: [],
+            Routes: [new OutputPatchRoute("clip", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1])],
+            Devices: []);
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+
+        Assert.Equal(4, backend.LastOutputChannels);
+    }
+
+    [Fact]
     public async Task ApplyCompositionMappingAsync_AppliesToKnown_RejectsUnknown()
     {
         var doc = new ShowDocument(
@@ -179,5 +201,31 @@ public sealed class ShowSessionTests
         Assert.True(await session.ApplyCompositionMappingAsync("screen", mapping));
         Assert.True(await session.ApplyCompositionMappingAsync("screen", null)); // clearing is valid
         Assert.False(await session.ApplyCompositionMappingAsync("missing", mapping));
+    }
+
+    [Fact]
+    public async Task MultiOutput_AttachesEachDeclaredGroupOutput()
+    {
+        // Two outputs on the "main" group: a stereo "main" (no route) + a 4-channel "monitor" (2→4 route).
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One")],
+            Clips: [new ShowClipBinding("cue1", "fake://1")],
+            Compositions: [],
+            Outputs: [],
+            Routes: [new OutputPatchRoute("clip", "monitor", ChannelMatrix: [0, 1, 0, 1])],
+            Devices: [])
+        {
+            AudioOutputs = [new ShowAudioOutput("main"), new ShowAudioOutput("monitor")],
+        };
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+
+        Assert.Equal(2, backend.OutputCount); // both declared outputs created
+        Assert.Contains(2, backend.Created.Select(c => c.Channels)); // "main" stereo
+        Assert.Contains(4, backend.Created.Select(c => c.Channels)); // "monitor" remapped 2→4
     }
 }

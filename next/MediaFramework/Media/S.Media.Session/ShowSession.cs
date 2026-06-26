@@ -25,12 +25,18 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>The implicit group cues fall into when <see cref="CueDefinition.GroupId"/> is null.</summary>
     public const string DefaultGroup = "main";
 
+    /// <summary>The output id of a transport group's master audio output — target it from an
+    /// <see cref="OutputPatchRoute"/> (<c>OutputId</c>) to apply an N→M channel remap when clips play (03 §6).</summary>
+    public const string MasterOutputId = "_master";
+
     private readonly IMediaRegistry _registry;
     private readonly IAudioBackend? _audioBackend;
     private readonly string? _outputDeviceId;
     private readonly CueGraph _cueGraph = new();
     private readonly Dictionary<string, TransportGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
+    private IReadOnlyList<OutputPatchRoute> _routes = [];
+    private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
     private readonly SessionDispatcher _dispatcher = new("show-session");
     private volatile bool _disposed;
 
@@ -127,6 +133,8 @@ public sealed class ShowSession : IAsyncDisposable
         _compositions.Clear();
 
         _cueGraph.Clear();
+        _routes = document.Routes;
+        _audioOutputs = document.AudioOutputs;
 
         foreach (var comp in document.Compositions)
         {
@@ -187,15 +195,25 @@ public sealed class ShowSession : IAsyncDisposable
 
         try
         {
-            IAudioOutput? output = null;
+            var outputs = new List<IAudioOutput>();
             if (_audioBackend is not null && graph.Player.AudioRouter is not null)
             {
                 var rate = graph.Player.SampleRate > 0 ? graph.Player.SampleRate : 48_000;
-                output = _audioBackend.CreateOutput(_outputDeviceId, new AudioFormat(rate, 2));
-                graph.Player.AttachAudioOutput(output, "_master");
+                // D11 per-group outputs: attach the clip's audio to each output the group declares (the first
+                // is the master/clock; the rest auto-slave with adaptive-rate). Each output's N→M channel
+                // matrix (03 §6) comes from its matching route — it remaps the source channels + sets the
+                // channel count; an output with no route is plain stereo.
+                foreach (var outDef in ResolveGroupOutputs(groupId))
+                {
+                    var channelMap = ResolveOutputChannelMap(outDef.Id);
+                    var channels = channelMap?.OutputChannels ?? 2;
+                    var o = _audioBackend.CreateOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+                    graph.Player.AttachAudioOutput(o, outDef.Id, map: channelMap);
+                    outputs.Add(o);
+                }
             }
 
-            group.Replace(graph.Session, output, layer);
+            group.Replace(graph.Session, outputs, layer);
             graph.Player.Play();
         }
         catch
@@ -206,6 +224,24 @@ public sealed class ShowSession : IAsyncDisposable
         }
 
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>Resolves the N→M channel map for <paramref name="outputId"/> from the show's routing scene
+    /// (the first enabled <see cref="OutputPatchRoute"/> patched to it), or null for the source-derived default.</summary>
+    private ChannelMap? ResolveOutputChannelMap(string outputId)
+    {
+        foreach (var route in _routes)
+            if (route.Enabled && string.Equals(route.OutputId, outputId, StringComparison.Ordinal))
+                return route.ToChannelMap();
+        return null;
+    }
+
+    /// <summary>The audio outputs a group plays on: its declared <see cref="ShowAudioOutput"/>s, or a single
+    /// implicit master (<see cref="MasterOutputId"/>) on the default device when the show declares none.</summary>
+    private IReadOnlyList<ShowAudioOutput> ResolveGroupOutputs(string groupId)
+    {
+        var declared = _audioOutputs.Where(o => string.Equals(o.GroupId, groupId, StringComparison.Ordinal)).ToArray();
+        return declared.Length > 0 ? declared : [new ShowAudioOutput(MasterOutputId, GroupId: groupId)];
     }
 
     // --- transport commands (marshaled — D5) -------------------------------------------------------
@@ -242,7 +278,7 @@ public sealed class ShowSession : IAsyncDisposable
     public Task StopAsync(string groupId = DefaultGroup) =>
         InvokeAsync(() =>
         {
-            GetOrAddGroup(groupId).Replace(null, null);
+            GetOrAddGroup(groupId).Replace(null, [], null);
             return Task.CompletedTask;
         });
 
@@ -329,30 +365,32 @@ public sealed class ShowSession : IAsyncDisposable
         _compositions.Clear();
     }
 
-    /// <summary>One transport group: its session clock (D4), active clip, master output (D11), and the
-    /// composition layer the active clip's video feeds (removed when the clip is replaced).</summary>
+    /// <summary>One transport group: its session clock (D4), active clip, its audio outputs (D11 — first is
+    /// master, rest auto-slave), and the composition layer the active clip's video feeds (all released on
+    /// clip replace).</summary>
     private sealed class TransportGroup : IDisposable
     {
         public SessionClock Clock { get; } = new(new MonotonicWallClock(start: false));
         public MediaSession? Active { get; private set; }
-        private IAudioOutput? _output;
+        private IReadOnlyList<IAudioOutput> _outputs = [];
         private ClipCompositionRuntime.LayerSlot? _layer;
         public int LastFiredNumber { get; set; } = int.MinValue;
 
-        public void Replace(MediaSession? session, IAudioOutput? output, ClipCompositionRuntime.LayerSlot? layer = null)
+        public void Replace(MediaSession? session, IReadOnlyList<IAudioOutput> outputs, ClipCompositionRuntime.LayerSlot? layer)
         {
             Clock.SetReference(session is null
                 ? new MonotonicWallClock(start: false)
                 : new PlayheadPlaybackClock(session.Player.PlayClock));
             _layer?.Dispose();
             Active?.Dispose();
-            (_output as IDisposable)?.Dispose();
+            foreach (var output in _outputs)
+                (output as IDisposable)?.Dispose();
             Active = session;
-            _output = output;
+            _outputs = outputs;
             _layer = layer;
         }
 
-        public void Dispose() => Replace(null, null);
+        public void Dispose() => Replace(null, [], null);
     }
 
     private sealed class PlayheadPlaybackClock(IPlayhead playhead) : IPlaybackClock

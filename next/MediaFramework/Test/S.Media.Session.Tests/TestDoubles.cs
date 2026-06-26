@@ -33,3 +33,35 @@ internal sealed class SyntheticSilentSource : IAudioSource
         return destination.Length - (destination.Length % Format.Channels);
     }
 }
+
+/// <summary>A fake audio backend that records every output it creates (channel count + device id) — lets a
+/// headless test assert the routing scene's N→M channel counts and the per-group multi-output fan-out.</summary>
+internal sealed class RecordingAudioBackend : IAudioBackend
+{
+    public string Name => "recording";
+    private readonly List<(int Channels, string? DeviceId)> _created = [];
+
+    public IReadOnlyList<(int Channels, string? DeviceId)> Created => _created;
+    public int OutputCount => _created.Count;
+    public int LastOutputChannels => _created.Count > 0 ? _created[^1].Channels : 0;
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateOutputDevices() =>
+        [new AudioDeviceInfo("dev0", "Recording Output", MaxChannels: 8, DefaultSampleRate: 48_000, IsDefault: true)];
+
+    public IReadOnlyList<AudioDeviceInfo> EnumerateInputDevices() => [];
+
+    public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)
+    {
+        _created.Add((format.Channels, deviceId));
+        return new SinkAudioOutput(format);
+    }
+
+    public IAudioSource CreateInput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null) =>
+        throw new NotSupportedException();
+}
+
+internal sealed class SinkAudioOutput(AudioFormat format) : IAudioOutput
+{
+    public AudioFormat Format => format;
+    public void Submit(ReadOnlySpan<float> packedSamples) { }
+}

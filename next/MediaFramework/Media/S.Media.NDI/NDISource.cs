@@ -174,6 +174,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             Name = "NDISource",
         };
         _captureThread.Start();
+        Interlocked.Increment(ref _liveConnectionCount);
         timing?.SetOutcome($"source={source.Name} audio={_receiveAudio} video={_receiveVideo} bandwidth={ResolveBandwidth(options)} queue={_maxQueuedVideoFrames}");
     }
 
@@ -182,6 +183,13 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
     public IVideoSource Video { get; }
 
     public IPlaybackClock IngestClock => _ingestClock;
+
+    private static int _liveConnectionCount;
+
+    /// <summary>Live NDI receiver connections process-wide (diagnostic). The shared <see cref="NDIDecoderProvider"/>
+    /// keeps this at one per distinct source even when both audio and video are opened — i.e. A and V share one
+    /// receiver rather than anchoring on two.</summary>
+    public static int LiveConnectionCount => Volatile.Read(ref _liveConnectionCount);
 
     public bool ReceiveAudio
     {
@@ -726,6 +734,7 @@ public sealed unsafe class NDISource : IDisposable, INdiOverflowReporter
             return;
         }
         _disposed = true;
+        Interlocked.Decrement(ref _liveConnectionCount);
         _state = NDIConnectionState.Disposed;
 
         NDICaptureThreadLifecycle.StopAndDispose(

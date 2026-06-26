@@ -12,14 +12,19 @@
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
         <PackageReference Include="SDL3-CS" />
-        <PackageReference Include="SDL3-CS.Native" GeneratePathProperty="true" />
+        <!-- SDL3-CS.Native is deprecated; the split SDL3-CS.<Platform> packages carry the runtimes/<rid>/native
+             libs (the binding no longer pulls a native transitively). Reference each CI target (Windows + Linux,
+             D13) so the matching RID's native flows to any referencing exe — the Linux .so resolves from the
+             deps.json, the Windows .dll is copied below for the RID-less IDE case. -->
+        <PackageReference Include="SDL3-CS.Linux" />
+        <PackageReference Include="SDL3-CS.Windows" GeneratePathProperty="true" />
     </ItemGroup>
 
-    <!-- RID-less Windows build (IDE Debug/run): SDL3-CS.Native only places SDL3.dll via runtimes/<rid>/
-         native RID resolution; copy it next to the exe for the RID-less-on-Windows case (flows into a
-         referencing exe's output). RID publishes resolve it from runtimes/, so this is gated off there. -->
+    <!-- RID-less Windows build (IDE Debug/run): the platform native package only places SDL3.dll via
+         runtimes/<rid>/native RID resolution; copy it next to the exe for the RID-less-on-Windows case (flows
+         into a referencing exe's output). RID publishes resolve it from runtimes/, so this is gated off there. -->
     <ItemGroup Condition="'$(RuntimeIdentifier)' == '' And $([MSBuild]::IsOSPlatform('Windows'))">
-        <None Include="$(PkgSDL3-CS_Native)\runtimes\win-x64\native\SDL3.dll" Visible="false">
+        <None Include="$(PkgSDL3-CS_Windows)\runtimes\win-x64\native\SDL3.dll" Visible="false">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
             <Link>SDL3.dll</Link>
         </None>

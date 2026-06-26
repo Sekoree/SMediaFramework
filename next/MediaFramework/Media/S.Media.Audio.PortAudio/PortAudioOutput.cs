@@ -105,11 +105,18 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
     /// <summary>PortAudio's stream clock — wall-clock seconds since the stream started.</summary>
     public double StreamTime => _stream != nint.Zero ? Native.Pa_GetStreamTime(_stream) : 0.0;
 
+    // The negotiated output (DAC) latency in ticks, captured at Start; the master clock subtracts it so it
+    // reports the audible position rather than the consumed one (see ElapsedSinceStart).
+    private long _outputLatencyTicks;
+
     /// <summary>
-    /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic playback time aligned with
-    /// <see cref="PlayedSamples"/> but advanced with PortAudio's <c>Pa_GetStreamTime</c> between
-    /// callbacks so the master clock is not stuck for an entire output buffer (~10–25 ms at 48 kHz).
-    /// Falls back to sample counts when the stream is inactive or before the first callback.
+    /// <see cref="IPlaybackClock.ElapsedSinceStart"/>: monotonic <strong>audible</strong> playback time — the
+    /// consumed-sample position (aligned with <see cref="PlayedSamples"/>, advanced with <c>Pa_GetStreamTime</c>
+    /// between callbacks so it isn't stuck for a whole buffer) <em>minus the output buffer latency</em>. The
+    /// subtraction is what keeps A/V in sync: the device holds ~outputLatency of audio after we hand it over, so
+    /// the consumed count leads the speaker by that much — without it, video scheduled against the master clock
+    /// leads the audio (lip-sync drift, pronounced on high-latency hosts like JACK/ALSA). Falls back to sample
+    /// counts before the first callback.
     /// </summary>
     public TimeSpan ElapsedSinceStart
     {
@@ -119,6 +126,7 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
             var playedNow = Volatile.Read(ref _playedSamples) - epoch;
             if (playedNow < 0) playedNow = 0;
             var sampleElapsedSec = playedNow / (double)_format.SampleRate;
+            var elapsedSec = sampleElapsedSec;
 
             if (_stream != nint.Zero
                 && (int)Native.Pa_IsStreamActive(_stream) == 1
@@ -136,12 +144,14 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                         streamElapsedSec = 0;
                     // After Pa_AbortStream + Pa_StartStream, Pa_GetStreamTime can stall while callbacks
                     // still drain the ring — never let the master clock lag behind sample progress.
-                    var elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
-                    return TimeSpan.FromSeconds(elapsedSec);
+                    elapsedSec = Math.Max(sampleElapsedSec, streamElapsedSec);
                 }
             }
 
-            return TimeSpan.FromSeconds(sampleElapsedSec);
+            // Report the audible (speaker) position. Clamped at zero so the clock doesn't go negative while
+            // the device buffer is still filling at startup.
+            var audibleSec = elapsedSec - Volatile.Read(ref _outputLatencyTicks) / (double)TimeSpan.TicksPerSecond;
+            return TimeSpan.FromSeconds(audibleSec > 0 ? audibleSec : 0);
         }
     }
 
@@ -289,6 +299,10 @@ public sealed unsafe class PortAudioOutput : IAudioOutput, IAudioOutputChannelCa
                 _selfHandle.Free();
                 PortAudioException.ThrowIfError(err, nameof(Native.Pa_StartStream));
             }
+
+            // Capture the negotiated DAC latency so the master clock can report the audible position (A/V sync).
+            var latencySec = Native.Pa_GetStreamInfo(_stream)?.outputLatency ?? _suggestedLatency;
+            Volatile.Write(ref _outputLatencyTicks, latencySec > 0 ? (long)(latencySec * TimeSpan.TicksPerSecond) : 0);
 
             Volatile.Write(ref _playbackEpochSamples, Volatile.Read(ref _playedSamples));
             Volatile.Write(ref _streamSmoothCalibrated, 0);

@@ -29,6 +29,15 @@ public sealed record ShowComposition(
     int FrameRateDen = 1,
     ClipOutputMappingSpec? OutputMapping = null);
 
+/// <summary>An audio output endpoint a transport group plays on (D11 per-group outputs; declare more than one
+/// for a multi-output / multi-device group). <paramref name="DeviceId"/> null = the backend's default device;
+/// the per-output N→M channel remap comes from the matching <see cref="OutputPatchRoute"/> (<c>OutputId</c> ==
+/// <see cref="Id"/>). The first output of a group is its master (drives the clock); the rest auto-slave.</summary>
+public sealed record ShowAudioOutput(
+    string Id,
+    string? DeviceId = null,
+    string GroupId = "main"); // = ShowSession.DefaultGroup
+
 /// <summary>
 /// The headless, serializable definition of a show — cues, the media each cue plays, and the output patch.
 /// Source-generated (<see cref="ShowDocumentJsonContext"/>) so it loads with no reflection (D10, AOT-safe),
@@ -43,6 +52,11 @@ public sealed record ShowDocument(
     IReadOnlyList<OutputPatchRoute> Routes,
     IReadOnlyList<string> Devices)
 {
+    /// <summary>Per-group audio output endpoints (D11). Empty ⇒ each group plays on one implicit master
+    /// output (<see cref="ShowSession.MasterOutputId"/>) on the backend default device; declare entries to
+    /// drive several outputs/devices per group (each with its own N→M route).</summary>
+    public IReadOnlyList<ShowAudioOutput> AudioOutputs { get; init; } = [];
+
     /// <summary>An empty version-1 show.</summary>
     public static ShowDocument Empty { get; } = new(1, [], [], [], [], [], []);
 

@@ -123,10 +123,11 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
     /// <summary>True when this output was created with <see cref="CreateTextureMirror"/> (frames go to the anchor only).</summary>
     public bool IsTextureMirror => _textureMirrorAnchor is not null;
 
-    /// <summary>How the frame is mapped into the window's viewport. Default <see cref="VideoViewportFit.Stretch"/>
-    /// preserves the original behaviour; set to <see cref="VideoViewportFit.Contain"/> to letterbox the frame so
-    /// its aspect ratio is preserved (the letterbox bars are painted black before each render).</summary>
-    public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Stretch;
+    /// <summary>How the frame is mapped into the window's viewport. Default <see cref="VideoViewportFit.Contain"/>
+    /// preserves the source aspect ratio, letterboxing/pillarboxing on resize (the bars are painted black before
+    /// each render) — and is identical to <see cref="VideoViewportFit.Stretch"/> when the window already matches
+    /// the frame aspect. Set to <see cref="VideoViewportFit.Stretch"/> to fill the window and ignore aspect.</summary>
+    public VideoViewportFit ViewportFit { get; set; } = VideoViewportFit.Contain;
 
     public event EventHandler? CloseRequested;
     public event EventHandler<(int Width, int Height)>? Resized;
@@ -638,8 +639,12 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
                 if (!SDL.GLSetAttribute(SDL.GLAttr.ShareWithCurrentContext, 1))
                     MediaDiagnostics.LogWarning("SDL3GLVideoOutput: SDL_GL_SetAttribute(ShareWithCurrentContext) failed: {0}", SDL.GetError());
 
+                // NotFocusable: a video-output window needs no keyboard focus, and on Wayland the clipboard /
+                // primary-selection data offer is delivered to the keyboard-focused surface — so a non-focusable
+                // window never receives it, sidestepping SDL3 3.4.x's null-deref in Wayland_data_offer_add_mime
+                // (uncatchable SIGSEGV on a middle-click primary paste). Mouse events + WM resize/close still work.
                 _window = SDL.CreateWindow(_title, _initialWindowWidth, _initialWindowHeight,
-                    SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable);
+                    SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable | SDL.WindowFlags.NotFocusable);
                 if (_window == nint.Zero)
                     throw new InvalidOperationException($"SDL_CreateWindow (mirror) failed: {SDL.GetError()}");
 
@@ -690,8 +695,10 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
             }
         }
 
+        // NotFocusable — see the mirror-window note above: a focus-less window never receives the Wayland
+        // clipboard/primary-selection data offer, avoiding SDL3's Wayland_data_offer_add_mime crash on middle-click.
         _window = SDL.CreateWindow(_title, _initialWindowWidth, _initialWindowHeight,
-            SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable);
+            SDL.WindowFlags.OpenGL | SDL.WindowFlags.Resizable | SDL.WindowFlags.NotFocusable);
         if (_window == nint.Zero)
             throw new InvalidOperationException($"SDL_CreateWindow failed: {SDL.GetError()}");
 

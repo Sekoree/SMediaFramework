@@ -12,7 +12,11 @@ namespace S.Media.NDI;
 /// CpuFrameCompositeTarget, OQ3) and live A/V correlation onto a SourceSyncGroup land with the live-sync
 /// convergence work; this module is the receive + runtime half.
 /// </summary>
-public sealed class NDIModule : IMediaModule
+/// <param name="audioMinBuffer">Overrides the receiver's audio jitter reserve (<see cref="NDISource"/> default
+/// 50 ms). Smaller brings the audio forward — lower latency, closer to the live video — at more underrun risk;
+/// <c>null</c> keeps the default. This is the lever for live A/V sync: shrink it so audio meets the low-latency
+/// video instead of holding video back.</param>
+public sealed class NDIModule(TimeSpan? audioMinBuffer = null) : IMediaModule
 {
     public string Name => "NDI";
 
@@ -28,7 +32,7 @@ public sealed class NDIModule : IMediaModule
         if (rc != 0 || runtime is null)
             throw new InvalidOperationException($"NDI runtime init failed (error {rc}).");
 
-        builder.AddDecoder(new NDIDecoderProvider());
+        builder.AddDecoder(new NDIDecoderProvider(audioMinBuffer));
     }
 }
 
@@ -43,6 +47,28 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
     // Discovery is inherently latent; bound the blocking wait during open.
     private static readonly TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(5);
 
+    // One ref-counted receiver per source name: OpenVideo + OpenAudio for the same ndi:// share it, so audio
+    // and video arrive on a single connection anchored together (one audio-driven ingest clock) rather than
+    // two independently-anchored receivers. The connection is torn down when the last leased adapter closes.
+    private readonly SharedNdiSourceCache _cache;
+
+    public NDIDecoderProvider(TimeSpan? audioMinBuffer = null) =>
+        _cache = new SharedNdiSourceCache(name =>
+        {
+            var source = NDISource.Open(ResolveSource(name), new NDISourceOptions
+            {
+                ReceiveVideo = true,
+                ReceiveAudio = true,
+                // The audio jitter reserve — the dominant tunable latency between the audio and the live video.
+                AudioMinBufferedDuration = audioMinBuffer,
+            });
+            // Warm up so the A/V formats are available before the open path reads them — the audio router needs
+            // the format up front (live NDI delivers no format until the first frame arrives). Best-effort: an
+            // A/V sender is ready in ~ms; a video-only sender just won't satisfy the audio wait.
+            source.WaitForStreams(TimeSpan.FromSeconds(3));
+            return source;
+        });
+
     public string Name => "NDI";
 
     public double Probe(string uri, MediaKind kind)
@@ -51,24 +77,11 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         return SchemeOf(uri) == "ndi" ? 1.0 : 0.0;
     }
 
-    // Receive only the stream we were asked for. Disposing either adapter disposes the NDISource, so a
-    // video-only / audio-only open owns its connection outright. (Correlating one NDISource's video and
-    // audio through a SourceSyncGroup is the live-convergence step.)
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) =>
-        OpenSource(uri, receiveVideo: true, receiveAudio: false).Video;
+        _cache.LeaseVideo(SourceNameFromUri(uri));
 
     public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
-        OpenSource(uri, receiveVideo: false, receiveAudio: true).Audio;
-
-    private static NDISource OpenSource(string uri, bool receiveVideo, bool receiveAudio)
-    {
-        var discovered = ResolveSource(SourceNameFromUri(uri));
-        return NDISource.Open(discovered, new NDISourceOptions
-        {
-            ReceiveVideo = receiveVideo,
-            ReceiveAudio = receiveAudio,
-        });
-    }
+        _cache.LeaseAudio(SourceNameFromUri(uri));
 
     private static NDIDiscoveredSource ResolveSource(string name)
     {

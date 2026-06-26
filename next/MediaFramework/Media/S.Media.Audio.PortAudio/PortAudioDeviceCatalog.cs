@@ -1,7 +1,9 @@
 namespace S.Media.Audio.PortAudio;
 
-/// <summary>One installed PortAudio host API (ALSA, WASAPI, …).</summary>
-public readonly record struct PortAudioHostApiEntry(int Index, string Name, int TypeId, int DeviceCount);
+/// <summary>One installed PortAudio host API (ALSA, JACK, WASAPI, …). <paramref name="DefaultOutputDeviceIndex"/>
+/// is this host API's default output as a global device index (use it as a <c>CreateOutput</c> device id), or
+/// <c>-1</c> when the host API has no output.</summary>
+public readonly record struct PortAudioHostApiEntry(int Index, string Name, int TypeId, int DeviceCount, int DefaultOutputDeviceIndex);
 
 /// <summary>One physical output device with a global PortAudio device index.</summary>
 public readonly record struct PortAudioOutputDeviceEntry(
@@ -45,7 +47,7 @@ public static class PortAudioDeviceCatalog
                 if (!maybe.HasValue)
                     continue;
                 var api = maybe.Value;
-                list.Add(new PortAudioHostApiEntry(i, api.Name ?? $"Host API {i}", (int)api.type, api.deviceCount));
+                list.Add(new PortAudioHostApiEntry(i, api.Name ?? $"Host API {i}", (int)api.type, api.deviceCount, api.defaultOutputDevice));
             }
 
             return list;
