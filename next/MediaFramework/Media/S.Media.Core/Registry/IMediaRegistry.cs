@@ -47,6 +47,14 @@ public interface IMediaRegistry
     /// <summary>Wraps <paramref name="source"/> to resample to <paramref name="targetSampleRate"/>, or <c>null</c> if unavailable.</summary>
     IAudioSource? CreateResampler(IAudioSource source, int targetSampleRate);
 
+    /// <summary>True when a module registered an adaptive-rate output factory (FFmpeg) — i.e. the router can
+    /// drift-correct non-master audio outputs.</summary>
+    bool SupportsAdaptiveRateOutput { get; }
+
+    /// <summary>Wraps a non-master <paramref name="inner"/> output for adaptive-rate drift correction, or
+    /// <c>null</c> when no module registered a factory. See <see cref="AdaptiveRateOutputFactory"/>.</summary>
+    IAudioOutput? CreateAdaptiveRateOutput(IAudioOutput inner, Func<double> playbackPpmBias, int maxRateDeltaHz, IDisposable? biasSource);
+
     /// <summary>Creates a deinterlacer; falls back to the built-in <see cref="BobDeinterlacer"/> when no module set one.</summary>
     IDeinterlacer CreateDeinterlacer(VideoFormat input);
 }

@@ -26,6 +26,10 @@ public interface IMediaRegistryBuilder
     /// <summary>Sets the audio resample-source factory <c>(inner, targetSampleRate) =&gt; wrapped</c>.</summary>
     IMediaRegistryBuilder SetResamplerFactory(Func<IAudioSource, int, IAudioSource> factory);
 
+    /// <summary>Sets the adaptive-rate output-wrapper factory (FFmpeg-backed) the router uses to
+    /// drift-correct non-master audio outputs.</summary>
+    IMediaRegistryBuilder SetAdaptiveRateOutputFactory(AdaptiveRateOutputFactory factory);
+
     /// <summary>Sets the deinterlacer factory (yadif when FFmpeg is registered; else the built-in Bob).</summary>
     IMediaRegistryBuilder SetDeinterlacerFactory(Func<VideoFormat, IDeinterlacer> factory);
 

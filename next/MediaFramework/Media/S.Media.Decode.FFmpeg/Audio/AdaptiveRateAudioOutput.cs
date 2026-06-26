@@ -25,6 +25,7 @@ public sealed class AdaptiveRateAudioOutput
     private readonly IAudioOutput _inner;
     private readonly AudioFormat _format;
     private readonly Func<double> _getPpmBias;
+    private readonly IDisposable? _biasSource;
     private readonly int _nominalRate;
     private readonly int _maxRateDeltaHz;
     private readonly object _resampleGate = new();
@@ -37,10 +38,15 @@ public sealed class AdaptiveRateAudioOutput
     /// Wraps <paramref name="inner"/>, biasing its effective output rate by <paramref name="getPlaybackPpmBias"/>
     /// (parts-per-million, signed), clamped to ±<paramref name="maxRateDeltaHz"/> around the device rate.
     /// </summary>
-    public AdaptiveRateAudioOutput(IAudioOutput inner, Func<double> getPlaybackPpmBias, int maxRateDeltaHz = 3)
+    /// <param name="biasSource">Optional object disposed with this output — e.g. the (Routing-side) pump-pressure
+    /// monitor backing <paramref name="getPlaybackPpmBias"/>, so its router subscription is released when the
+    /// wrapped output is removed.</param>
+    public AdaptiveRateAudioOutput(IAudioOutput inner, Func<double> getPlaybackPpmBias, int maxRateDeltaHz = 3,
+        IDisposable? biasSource = null)
     {
         ArgumentNullException.ThrowIfNull(inner);
         _getPpmBias = getPlaybackPpmBias ?? throw new ArgumentNullException(nameof(getPlaybackPpmBias));
+        _biasSource = biasSource;
         _inner = inner;
         _format = inner.Format;
         if (_format.SampleRate <= 0 || _format.Channels <= 0)
@@ -113,6 +119,7 @@ public sealed class AdaptiveRateAudioOutput
         if (_disposed)
             return;
         _disposed = true;
+        MediaDiagnostics.SwallowDisposeErrors(() => _biasSource?.Dispose(), "AdaptiveRateAudioOutput.Dispose: bias source");
         lock (_resampleGate)
         {
             MediaDiagnostics.SwallowDisposeErrors(() => _swr?.Dispose(), "AdaptiveRateAudioOutput.Dispose: AudioResampler");

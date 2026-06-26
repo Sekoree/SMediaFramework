@@ -23,7 +23,10 @@ public sealed class ArchitectureTests
         ["S.Media.Players"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing"],
         ["S.Media.Session"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "S.Media.Players", "S.Media.Compositor"],
         ["S.Media.FFmpeg.Common"] = ["S.Media.Core"],
-        ["S.Media.Decode.FFmpeg"] = ["S.Media.Core", "S.Media.FFmpeg.Common"],
+        // Time: the FFmpeg-backed audio output wrappers (ResamplingAudioOutput / AdaptiveRateAudioOutput)
+        // forward IPlaybackClock, which lives in S.Media.Time. Downward ref (Time is tier 2); the module
+        // keeps the cohesive FFmpeg audio-processing set together rather than spinning up a new project.
+        ["S.Media.Decode.FFmpeg"] = ["S.Media.Core", "S.Media.Time", "S.Media.FFmpeg.Common"],
         ["S.Media.Encode.FFmpeg"] = ["S.Media.Core", "S.Media.FFmpeg.Common"],
         ["S.Media.Audio.PortAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "PALib"],
         ["S.Media.Audio.MiniAudio"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "MALib"],

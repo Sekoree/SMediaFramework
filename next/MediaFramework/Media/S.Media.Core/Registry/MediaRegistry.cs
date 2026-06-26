@@ -12,6 +12,7 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
     internal readonly Dictionary<string, Func<string, IVideoSource>> ImageFactories = new(StringComparer.OrdinalIgnoreCase);
     internal Func<IVideoCpuFrameConverter>? CpuConverterFactory;
     internal Func<IAudioSource, int, IAudioSource>? ResamplerFactory;
+    internal AdaptiveRateOutputFactory? AdaptiveRateFactory;
     internal Func<VideoFormat, IDeinterlacer>? DeinterlacerFactory;
 
     public IMediaRegistryBuilder AddDecoder(IMediaDecoderProvider provider)
@@ -48,6 +49,12 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
         return this;
     }
 
+    public IMediaRegistryBuilder SetAdaptiveRateOutputFactory(AdaptiveRateOutputFactory factory)
+    {
+        AdaptiveRateFactory = factory ?? throw new ArgumentNullException(nameof(factory));
+        return this;
+    }
+
     public IMediaRegistryBuilder SetDeinterlacerFactory(Func<VideoFormat, IDeinterlacer> factory)
     {
         DeinterlacerFactory = factory ?? throw new ArgumentNullException(nameof(factory));
@@ -81,6 +88,7 @@ public sealed class MediaRegistry : IMediaRegistry
     private readonly Dictionary<string, Func<string, IVideoSource>> _imageFactories;
     private readonly Func<IVideoCpuFrameConverter>? _cpuConverter;
     private readonly Func<IAudioSource, int, IAudioSource>? _resampler;
+    private readonly AdaptiveRateOutputFactory? _adaptiveRate;
     private readonly Func<VideoFormat, IDeinterlacer>? _deinterlacer;
 
     public IReadOnlyList<IAudioBackend> AudioBackends { get; }
@@ -94,6 +102,7 @@ public sealed class MediaRegistry : IMediaRegistry
         _imageFactories = new Dictionary<string, Func<string, IVideoSource>>(b.ImageFactories, StringComparer.OrdinalIgnoreCase);
         _cpuConverter = b.CpuConverterFactory;
         _resampler = b.ResamplerFactory;
+        _adaptiveRate = b.AdaptiveRateFactory;
         _deinterlacer = b.DeinterlacerFactory;
     }
 
@@ -216,6 +225,15 @@ public sealed class MediaRegistry : IMediaRegistry
     {
         ArgumentNullException.ThrowIfNull(source);
         return _resampler?.Invoke(source, targetSampleRate);
+    }
+
+    public bool SupportsAdaptiveRateOutput => _adaptiveRate is not null;
+
+    public IAudioOutput? CreateAdaptiveRateOutput(IAudioOutput inner, Func<double> playbackPpmBias, int maxRateDeltaHz, IDisposable? biasSource)
+    {
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(playbackPpmBias);
+        return _adaptiveRate?.Invoke(inner, playbackPpmBias, maxRateDeltaHz, biasSource);
     }
 
     public IDeinterlacer CreateDeinterlacer(VideoFormat input) =>

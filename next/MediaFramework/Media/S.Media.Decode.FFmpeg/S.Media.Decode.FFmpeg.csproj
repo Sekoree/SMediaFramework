@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <!-- S.Media.Decode.FFmpeg — demux + audio/video decode (hw decode, swscale converter, yadif),
-         source-side resample, and the FFmpegModule + FFmpegDecoderProvider that register these through
-         the media registry (replacing the old global slots, P2). Routing-coupled adaptive-rate / output
-         resampling is deferred to Phase 5. -->
+         source-side resample, the FFmpeg-backed audio output wrappers (AdaptiveRateAudioOutput /
+         ResamplingAudioOutput), and the FFmpegModule + FFmpegDecoderProvider that register these through
+         the media registry (replacing the old global slots, P2). References S.Media.Time for IPlaybackClock
+         forwarding in the resampling output wrappers (see Next/01 §3). -->
 
     <ItemGroup>
         <PackageReference Include="FFmpeg.AutoGen" />
@@ -14,6 +15,7 @@
 
     <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../S.Media.Time/S.Media.Time.csproj" />
         <ProjectReference Include="../S.Media.FFmpeg.Common/S.Media.FFmpeg.Common.csproj" />
     </ItemGroup>
 
@@ -25,6 +27,7 @@
         <Using Include="S.Media.Core.Video" />
         <Using Include="S.Media.Core.Diagnostics" />
         <Using Include="S.Media.Core.Registry" />
+        <Using Include="S.Media.Time" />
         <Using Include="S.Media.FFmpeg.Common" />
     </ItemGroup>
 

@@ -392,12 +392,18 @@ public sealed class MediaPlayer : IDisposable
         player = null;
         error = null;
 
+        // Open both kinds opportunistically: a confidence-matched decoder still throws when the source lacks
+        // that stream (an audio-only file has no video, and vice-versa). Tolerate that here so the dual-open
+        // falls back to whichever kind exists; a genuinely unopenable source surfaces as the "no decoder"
+        // error below (both null).
         IVideoSource? video = null;
         if (options.VideoStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
-            registry.TryOpenVideo(uri, options.ToVideoSourceOpenOptions(), out video);
+            try { registry.TryOpenVideo(uri, options.ToVideoSourceOpenOptions(), out video); }
+            catch { video = null; }
         IAudioSource? audio = null;
         if (options.IncludeAudioRouter && options.AudioStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
-            registry.TryOpenAudio(uri, options.ToAudioSourceOpenOptions(), out audio);
+            try { registry.TryOpenAudio(uri, options.ToAudioSourceOpenOptions(), out audio); }
+            catch { audio = null; }
 
         if (video is null && audio is null)
         {
@@ -408,11 +414,35 @@ public sealed class MediaPlayer : IDisposable
 
         if (TryOpenLive(audio, video, options, videoNegotiationLead, disposeNegotiationLead: false,
                 disposeSourcesOnDispose: true, out player, out error))
+        {
+            WireAdaptiveRateFromRegistry(registry, player);
             return true;
+        }
 
         (video as IDisposable)?.Dispose();
         (audio as IDisposable)?.Dispose();
         return false;
+    }
+
+    /// <summary>
+    /// Enables adaptive-rate drift correction on the player's non-master audio outputs when the registry
+    /// provides a wrapper factory (FFmpeg). The router's per-output pump-pressure signal drives a small
+    /// resample-rate bias on each non-master output; the master device stays the clock. No-op for
+    /// single-output players (the only output is the master) and when no factory is registered.
+    /// </summary>
+    private static void WireAdaptiveRateFromRegistry(IMediaRegistry registry, MediaPlayer player)
+    {
+        if (!registry.SupportsAdaptiveRateOutput || player.AudioRouter is not { } router)
+            return;
+
+        router.AdaptiveRateWrapper = (r, inner, outputId, maxRateDeltaHz) =>
+        {
+            // The monitor subscribes to the router's PumpPressure for this output; it is disposed with the
+            // wrapped output (passed as biasSource), so the subscription is released on RemoveOutput.
+            var monitor = new PumpPressurePlaybackHintMonitor(r, outputId);
+            return registry.CreateAdaptiveRateOutput(inner, () => monitor.HintPpmBias, maxRateDeltaHz, monitor) ?? inner;
+        };
+        router.EnableAdaptiveRateOnNonMasterOutputs();
     }
 
     /// <summary>Fluent open: <c>OpenFile(registry, path).WithOptions(...).Build()</c>. The provider is

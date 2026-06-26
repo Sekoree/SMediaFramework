@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5 mic-input smoke: opens the default audio input via the PortAudio backend (IAudioBackend.
+         CreateInput) and pulls live capture samples, reporting frame count + RMS level. Proves the live
+         audio-capture path (mic/line in). Needs native PortAudio + an input device. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+    </ItemGroup>
+
+</Project>

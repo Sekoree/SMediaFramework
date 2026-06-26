@@ -6,8 +6,8 @@ namespace S.Media.Decode.FFmpeg;
 /// <summary>
 /// Registers FFmpeg decode capabilities into the media registry — the AOT-pure replacement for the old
 /// static <c>MediaFrameworkPlugins</c> slots (P2). Contributes a URI decoder provider plus the swscale
-/// CPU converter, swresample source-resampler, and yadif/Bob deinterlacer factories. The adaptive-rate
-/// output wrapper couples to <c>AudioRouter</c> (non-master outputs) and is deferred to Phase 5.
+/// CPU converter, swresample source-resampler, yadif/Bob deinterlacer, and the swresample adaptive-rate
+/// output-wrapper factories.
 /// </summary>
 public sealed class FFmpegModule : IMediaModule
 {
@@ -23,6 +23,8 @@ public sealed class FFmpegModule : IMediaModule
             .SetCpuConverterFactory(static () => new VideoCpuFrameConverter())
             .SetResamplerFactory(static (inner, targetRate) =>
                 ResamplingAudioSource.Create(inner, targetRate, disposeInnerWhenDisposed: false))
+            .SetAdaptiveRateOutputFactory(static (inner, bias, maxDeltaHz, biasSource) =>
+                new AdaptiveRateAudioOutput(inner, bias, maxDeltaHz, biasSource))
             .SetDeinterlacerFactory(static input =>
                 input.PixelFormat is PixelFormat.I420 or PixelFormat.Nv12
                     or PixelFormat.Yuv422P or PixelFormat.Yuv444P

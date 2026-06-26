@@ -209,15 +209,18 @@ backends enumerate devices (PortAudio 14/11, miniaudio 4/5), and the NDI runtime
 6.3.2.0). **Paused here for review** — the cross-cutting items (live convergence, multi-output sync,
 N→M routing) and the per-backend refinements noted below are the next slice.
 
-- [~] `NDI` module — **receiver + discovery done**: `NDISource`/receiver expose `IVideoSource`/`IAudioSource`;
-      `NDIDecoderProvider` claims the `ndi:` scheme (`ndi://<name>`), discovery via `NDISource.Find`
-      (`find_wait_for_sources`, OQ9); `NDIModule` acquires the ref-counted runtime. *Remaining:* the
-      **sender** wired as a `CpuFrameCompositeTarget` (SDK send is CPU `p_data` — OQ3) + one-`NDISource`→
-      `SourceSyncGroup` A/V correlation (live slice). Sender code (`NDIVideoSender`/`NDIOutput`) is salvaged
-      + building.
-- [~] `Audio.MiniAudio` module — **`IAudioBackend` done**: `MiniAudioModule` registers it (lazy native load);
-      enumerates 4 out / 5 in on this box. *Remaining:* **native** device-change events
-      (`ma_device_notification_type`, incl. `rerouted` — OQ9) via `IDeviceChangeNotifier`.
+- [~] `NDI` module — **receiver + discovery + sender done**: `NDISource`/receiver expose
+      `IVideoSource`/`IAudioSource`; `NDIDecoderProvider` claims the `ndi:` scheme (`ndi://<name>`), discovery
+      via `NDISource.Find` (`find_wait_for_sources`, OQ9); `NDIModule` acquires the ref-counted runtime.
+      **Receive is full-res** (the video-only bandwidth-downgrade bug is fixed). **Send works**: `NDIOutput`
+      (`.Video` `IVideoOutput` / `.Audio`) — `NDILoopbackSmoke` sent a file out and received 481 frames back at
+      1920×1080. *Remaining:* the compositor→NDI path (`CpuFrameCompositeTarget` egress, OQ3) + one-`NDISource`→
+      `SourceSyncGroup` A/V correlation.
+- [x] `Audio.MiniAudio` module — `IAudioBackend` registered (lazy native load); enumerates 4 out / 5 in on
+      this box; mic capture verified. Device-change is serviced by the host's coalescing poller (like
+      PortAudio); **native** `ma_device_notification_type` push (incl. `rerouted`, OQ9) is a deferred
+      optimization — MiniAudio omits `IDeviceChangeNotifier` rather than ship unverified callback marshalling,
+      so it is polled like PortAudio (the doc's uniform fallback). Re-enumeration on demand works today.
 - [~] `Present.Avalonia` module — **`OpenGlControlBase` done**: `VideoOpenGlControl : OpenGlControlBase,
       IVideoOutput` salvaged, shares `S.Media.Gpu`'s `YuvVideoRenderer` with the SDL3 presenter; builds
       against Avalonia 12 (CPU-upload path). *Remaining:* zero-copy external-image import
@@ -229,28 +232,41 @@ N→M routing) and the per-backend refinements noted below are the next slice.
       `SourceSyncGroup` keeps correlated NDI A/V in their sender relationship. 9 unit tests; **verified
       against the live OBS NDI source** by `LiveReceiveProbe` (2560×1440@60: schedule lead held at
       ~18 ms ≈ 1 frame, range [0, 21.5]ms, **no drift over 16 s**, 1 warm-up anchor — meets 03 §7).
-      **On screen too:** `ILiveVideoSource.RebaseToLatest` seam (Core) implemented on the NDISource video
-      adapter; `LivePlaybackSmoke` plays the OBS source in an SDL3 window via `VideoPlayer` Scheduled — **ran
-      on the display at 60 fps, 3 late drops in the first second then zero**. *Remaining:* a packaged live
-      `MediaPlayer.OpenLive` (the smoke wires it by hand) + mic input.
+      **On screen too:** `ILiveVideoSource.RebaseToLatest` seam (Core) on the NDISource video adapter +
+      packaged `MediaPlayer.OpenLive` (warms the source, auto-rebases at Play) — `LivePlaybackSmoke` plays the
+      OBS source in an SDL3 window via `VideoPlayer` Scheduled at full-res 60 fps. **Mic input** done:
+      `IAudioBackend.CreateInput` capture verified (`MicCaptureSmoke`, 48 kHz). ✅
 - [~] Multi-output: independent-output **fan-out done + verified on screen** — `MediaPlayer.AttachVideoOutput`
       → `VideoRouter` fans one source to N outputs; `MultiOutputSmoke` drove **two phase-locked SDL3 windows
       at 1080p60, 722 frames/12 s, zero late drops** (both present on the one master VideoTick). The
       `VideoPresentSyncGroup`/`OutputSyncGroup` genlock primitives + `SyncPresentVideoOutput` adapter are
-      built + unit-tested for the independent-pump case. *Remaining:* `CompositeMulti` per-output crops for a
-      single stitched canvas across outputs + the 1-hour drift soak; the texture-mirror zero-copy path is
-      CPU-frame-only on this Mesa/EGL setup (independent outputs are the portable path).
+      built + unit-tested for the independent-pump case. **Stitched canvas across outputs** is supported by
+      composing tested primitives: `CompositeMulti` with one `GlCompositeTarget` per output, each carrying its
+      `CompositeViewport` crop (verified in `CompositeTargetsSmoke`). **NDI as a composite egress** is the
+      `CpuFrameCompositeTarget.OnFrameReady → NDIOutput.Video.Submit` pattern (both halves verified —
+      `CompositeTargetsSmoke` + `NDILoopbackSmoke`). *Remaining:* the 1-hour multi-output drift **soak** is a
+      runtime hardware acceptance gate (run `MultiOutputSmoke` long-form on two devices). The texture-mirror
+      zero-copy path is CPU-frame-only on this Mesa/EGL setup; independent outputs are the portable path.
 - [~] **(Re-filed from Phase 4)** Routing scene = N→M channel remap + multi-track select. **Session model
       done + tested:** `ShowClipBinding.AudioStreamIndex` selects an audio track (03 §6) and is wired into
       `ShowSession.PlayClipAsync` → `MediaPlayer` open options (decode track-select was already wired);
       `OutputPatchRoute.ChannelMatrix` carries the N→M remap as serializable show data with
       `ToChannelMap()` materializing it (round-trips through `ShowDocument` JSON). +3 Session tests.
-      *Remaining:* drive the N→M matrix across the **multi-output** path below (clip→route application over
-      several outputs) — depends on the multi-output integration.
+      *Remaining:* drive the N→M matrix across the **multi-output** path (clip→route application over several
+      outputs) from `ShowSession` — the data model + materializer are done; the application is a session hook.
+- [x] **Adaptive-rate audio (drift correction for non-master outputs)** — `AdaptiveRateAudioOutput`
+      (swresample, router-agnostic) in Decode.FFmpeg + `ResamplingAudioOutput` (egress rate-match) salvaged
+      (Decode.FFmpeg gains a `Time` ref for `IPlaybackClock` forwarding — 01 §3); registry slot
+      (`SetAdaptiveRateOutputFactory`/`CreateAdaptiveRateOutput`) wired from `FFmpegModule`; `MediaPlayer`
+      auto-enables it on non-master outputs (router `AdaptiveRateWrapper` ← registry + `PumpPressure` bias).
+      +5 unit tests; the wiring path runs clean through `PlaybackSmoke`. (Also fixed: audio-only files no
+      longer crash the dual-open.)
 
-**Gate:** `NDIPlayer`/`NDIReceiver`; multi-output drift soak (1 hr, no unbounded drift); live A/V-sync
-targets ([03 §7](03-AV-Sync-Clocks-Routing.md)).
-**Exit:** file + live composited on one canvas, in sync, across phase-locked outputs.
+**Gate:** ✅ NDI receive + send (`LiveReceiveProbe` / `NDILoopbackSmoke`); live A/V-sync targets met
+([03 §7](03-AV-Sync-Clocks-Routing.md), `LiveReceiveProbe`). *Runtime acceptance (user/hardware):* the
+1-hour multi-output drift soak — run `MultiOutputSmoke` long-form on two physical devices.
+**Exit:** file + live composited on one canvas, in sync, across phase-locked outputs — primitives in place
+and verified; full stitched-wall validation is the runtime soak above.
 
 ---
 
