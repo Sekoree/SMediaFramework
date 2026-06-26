@@ -51,6 +51,10 @@ public sealed class MediaPlayer : IDisposable
 
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("S.Media.Playback.MediaPlayer");
 
+    // Set when the video source is live (NDI/capture): the player re-anchors it to the master at Play so it
+    // presents Scheduled against the session clock (Doc 03), not master-less.
+    private readonly ILiveVideoSource? _liveVideoSource;
+
     private MediaPlayer(
         VideoRouter videoRouter,
         VideoPlayer video,
@@ -61,10 +65,12 @@ public sealed class MediaPlayer : IDisposable
         string videoRouterInputId,
         IVideoOutput videoInput,
         string? audioSourceId,
-        IEnumerable<IDisposable>? ownedLiveDisposables)
+        IEnumerable<IDisposable>? ownedLiveDisposables,
+        ILiveVideoSource? liveVideoSource = null)
     {
         _liveVideoRouter = videoRouter;
         _liveVideo = video;
+        _liveVideoSource = liveVideoSource;
         _liveClock = clock;
         _liveAudioRouter = audioRouter;
         _liveAudioClock = audioClock;
@@ -281,6 +287,9 @@ public sealed class MediaPlayer : IDisposable
         IPlaybackClock? videoOnlyMaster = null,
         Func<bool>? verifyPrebufferAfterPrefill = null)
     {
+        // Live video: re-anchor the source's synthesized PTS to the master so prebuffered + subsequent frames
+        // present Scheduled against the session clock (Doc 03 §2), not master-less. No-op for file sources.
+        _liveVideoSource?.RebaseToLatest(_liveClock?.CurrentPosition ?? TimeSpan.Zero);
         _liveSession!.Play(prefillBeforeHardware, startHardware, videoOnlyMaster, verifyPrebufferAfterPrefill);
     }
 
@@ -455,6 +464,55 @@ public sealed class MediaPlayer : IDisposable
         }
     }
 
+    /// <summary>
+    /// One-call open for a <em>live</em> source (e.g. <c>ndi://&lt;name&gt;</c>). Opens it through the
+    /// registry with Scheduled presentation; the source is warmed and re-anchored to the master at
+    /// <see cref="Play"/> so live video presents scheduled against the session clock (Doc 03 §2), not
+    /// master-less. With no <paramref name="audioBackend"/> the group is video-led on a free-running clock and
+    /// no audio is opened; with one (and a source that has audio) a master output is created on it (the device
+    /// becomes the clock reference). Attach video outputs with <see cref="AttachVideoOutput"/>, then
+    /// <see cref="Play"/>.
+    /// </summary>
+    public static MediaPlayer OpenLive(
+        IMediaRegistry registry,
+        string uri,
+        IAudioBackend? audioBackend = null,
+        string? deviceId = null,
+        MediaPlayerOpenOptions? options = null)
+    {
+        var opts = options ?? MediaPlayerOpenOptions.Default;
+        opts = opts with
+        {
+            LiveVideoPresentation = VideoPresentationMode.Scheduled,
+            // Without an audio backend, don't open a (separate) live audio connection at all.
+            IncludeAudioRouter = audioBackend is not null && opts.IncludeAudioRouter,
+        };
+
+        var player = Open(registry, uri, opts);
+        if (audioBackend is null || player.AudioRouter is null)
+            return player;
+
+        try
+        {
+            var devices = audioBackend.EnumerateOutputDevices();
+            var device = deviceId is null
+                ? devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault()
+                : devices.FirstOrDefault(d => d.Id == deviceId)
+                  ?? throw new ArgumentException($"audio output device '{deviceId}' not found", nameof(deviceId));
+            var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
+            var output = audioBackend.CreateOutput(device?.Id, new AudioFormat(rate, 2));
+            if (output is IDisposable d)
+                player.RegisterOwnedCompanion(d);
+            player.AttachAudioOutput(output, "_master");
+            return player;
+        }
+        catch
+        {
+            player.Dispose();
+            throw;
+        }
+    }
+
     /// <summary>Opens a local media file path (not a URI string — use <see cref="OpenUri"/> for <c>http:</c> / <c>rtsp:</c>).</summary>
     internal static bool TryOpenLive(
         IAudioSource? audioSource,
@@ -548,6 +606,13 @@ public sealed class MediaPlayer : IDisposable
             if (disposeSourcesOnDispose && videoSource is IDisposable videoDisposable)
                 ownedDisposables.Add(videoDisposable);
 
+            // A live video source (NDI/capture) publishes its NativePixelFormats only after its first frame,
+            // which VideoPlayer's up-front negotiation needs. Block for that first frame and discard it; the
+            // player re-anchors the source to the master at Play (Doc 03 §2).
+            var liveVideo = videoSource as ILiveVideoSource;
+            if (liveVideo is not null && videoSource!.TryReadNextFrame(out var warmFrame))
+                warmFrame.Dispose();
+
             router = new VideoRouter(null);
             string primaryOutputId;
             if (videoNegotiationLead is null)
@@ -587,7 +652,8 @@ public sealed class MediaPlayer : IDisposable
                 vin.Id,
                 vin.Output,
                 audioSourceId,
-                ownedDisposables);
+                ownedDisposables,
+                liveVideo);
 
             Trace.LogInformation("TryOpenLive: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
                 audioSource is not null,

@@ -1,3 +1,5 @@
+using S.Media.Core.Audio;
+
 namespace S.Media.Session;
 
 public enum RoutingTransitionKind
@@ -8,11 +10,22 @@ public enum RoutingTransitionKind
     Crop,
 }
 
+/// <summary>
+/// One source→output patch in the routing scene. <paramref name="ChannelMatrix"/> carries the N→M audio
+/// remap (03 §6) as serializable show data — the <c>map[outCh] = inCh</c> encoding of
+/// <see cref="ChannelMap"/> (<c>-1</c> = silence); <c>null</c> means the router's source-derived default
+/// (<see cref="ChannelMap.DefaultFor"/>). Use <see cref="ToChannelMap"/> to materialize it for the router.
+/// </summary>
 public sealed record OutputPatchRoute(
     string SourceId,
     string OutputId,
     bool Enabled = true,
-    string? FormatVersion = null);
+    string? FormatVersion = null,
+    int[]? ChannelMatrix = null)
+{
+    /// <summary>Materializes the N→M <see cref="ChannelMap"/>, or <c>null</c> to use the router's source-derived default.</summary>
+    public ChannelMap? ToChannelMap() => ChannelMatrix is { Length: > 0 } m ? new ChannelMap(m) : null;
+}
 
 public sealed record SceneLayerDefinition(
     string LayerId,

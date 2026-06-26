@@ -202,20 +202,51 @@ JSON show and drives GO → fire → seek → GO → switch-clip with zero Avalo
 ## Phase 5 — Live + multi-output + more backends
 **Goal:** live sources and stitched outputs hitting the sync targets.
 
-- [ ] `NDI` module: sender (video+audio) + receiver (`IVideoSource`/`IAudioSource`). **NDI video out =
-      `CpuFrameCompositeTarget`** (SDK send is CPU `p_data` — OQ3). Source discovery via
-      `find_wait_for_sources` (**native** change events — OQ9).
-- [ ] `Audio.MiniAudio` module: `IAudioBackend`; **native** device events (`ma_device_notification_type`,
-      incl. `rerouted` — OQ9).
-- [ ] `Present.Avalonia` module: `OpenGlControlBase`; zero-copy via external-image import
-      (`IGlContextExternalObjectsFeature`) where the backend allows, else re-upload fallback (D7/OQ2).
-- [ ] Live convergence: NDI/mic on `SourceTimeline` + `SourceSyncGroup` over the session master (03);
-      first-class per-source offset.
-- [ ] Multi-output: `CompositeMulti` + `VideoPresentSyncGroup` for stitched/combined outputs.
-- [ ] **(Re-filed from Phase 4)** Routing scene = N→M channel remap + multi-track select. *Decode/`MediaPlayer`
-      track-select is already wired (stream index on `Audio`/`VideoSourceOpenOptions` → `MediaPlayer.TryOpen` →
-      `FFmpegModule`).* This phase exposes it per-clip in `ShowDocument`/`ShowClipBinding`, adds the N→M matrix
-      over the multi-output above, and drives both from `ShowSession`.
+**Status (2026-06-26):** the three **backend modules are salvaged, build 0/0, and registry-wired** (no
+globals, P2). Native wrappers `MALib` + `NDILib` brought into `next/`. Verified at runtime by the new
+`BackendsSmoke`: FFmpeg + NDI decoders and PortAudio + miniaudio backends all register, both audio
+backends enumerate devices (PortAudio 14/11, miniaudio 4/5), and the NDI runtime initialises (libndi
+6.3.2.0). **Paused here for review** — the cross-cutting items (live convergence, multi-output sync,
+N→M routing) and the per-backend refinements noted below are the next slice.
+
+- [~] `NDI` module — **receiver + discovery done**: `NDISource`/receiver expose `IVideoSource`/`IAudioSource`;
+      `NDIDecoderProvider` claims the `ndi:` scheme (`ndi://<name>`), discovery via `NDISource.Find`
+      (`find_wait_for_sources`, OQ9); `NDIModule` acquires the ref-counted runtime. *Remaining:* the
+      **sender** wired as a `CpuFrameCompositeTarget` (SDK send is CPU `p_data` — OQ3) + one-`NDISource`→
+      `SourceSyncGroup` A/V correlation (live slice). Sender code (`NDIVideoSender`/`NDIOutput`) is salvaged
+      + building.
+- [~] `Audio.MiniAudio` module — **`IAudioBackend` done**: `MiniAudioModule` registers it (lazy native load);
+      enumerates 4 out / 5 in on this box. *Remaining:* **native** device-change events
+      (`ma_device_notification_type`, incl. `rerouted` — OQ9) via `IDeviceChangeNotifier`.
+- [~] `Present.Avalonia` module — **`OpenGlControlBase` done**: `VideoOpenGlControl : OpenGlControlBase,
+      IVideoOutput` salvaged, shares `S.Media.Gpu`'s `YuvVideoRenderer` with the SDL3 presenter; builds
+      against Avalonia 12 (CPU-upload path). *Remaining:* zero-copy external-image import
+      (`IGlContextExternalObjectsFeature`, D7/OQ2); runtime needs a display.
+- [~] Live convergence: NDI/mic on `SourceTimeline` + `SourceSyncGroup` over the session master (03);
+      first-class per-source offset. **Mechanism done + verified:** `LiveTimelineDriver` (S.Media.Time) is
+      the consumer that anchors sender↔master on the first frame, maps each frame to a master due-time, and
+      collapses drift (RebaseToLatest) — `SourceTimeline.Offset` is the first-class per-source phase trim;
+      `SourceSyncGroup` keeps correlated NDI A/V in their sender relationship. 9 unit tests; **verified
+      against the live OBS NDI source** by `LiveReceiveProbe` (2560×1440@60: schedule lead held at
+      ~18 ms ≈ 1 frame, range [0, 21.5]ms, **no drift over 16 s**, 1 warm-up anchor — meets 03 §7).
+      **On screen too:** `ILiveVideoSource.RebaseToLatest` seam (Core) implemented on the NDISource video
+      adapter; `LivePlaybackSmoke` plays the OBS source in an SDL3 window via `VideoPlayer` Scheduled — **ran
+      on the display at 60 fps, 3 late drops in the first second then zero**. *Remaining:* a packaged live
+      `MediaPlayer.OpenLive` (the smoke wires it by hand) + mic input.
+- [~] Multi-output: independent-output **fan-out done + verified on screen** — `MediaPlayer.AttachVideoOutput`
+      → `VideoRouter` fans one source to N outputs; `MultiOutputSmoke` drove **two phase-locked SDL3 windows
+      at 1080p60, 722 frames/12 s, zero late drops** (both present on the one master VideoTick). The
+      `VideoPresentSyncGroup`/`OutputSyncGroup` genlock primitives + `SyncPresentVideoOutput` adapter are
+      built + unit-tested for the independent-pump case. *Remaining:* `CompositeMulti` per-output crops for a
+      single stitched canvas across outputs + the 1-hour drift soak; the texture-mirror zero-copy path is
+      CPU-frame-only on this Mesa/EGL setup (independent outputs are the portable path).
+- [~] **(Re-filed from Phase 4)** Routing scene = N→M channel remap + multi-track select. **Session model
+      done + tested:** `ShowClipBinding.AudioStreamIndex` selects an audio track (03 §6) and is wired into
+      `ShowSession.PlayClipAsync` → `MediaPlayer` open options (decode track-select was already wired);
+      `OutputPatchRoute.ChannelMatrix` carries the N→M remap as serializable show data with
+      `ToChannelMap()` materializing it (round-trips through `ShowDocument` JSON). +3 Session tests.
+      *Remaining:* drive the N→M matrix across the **multi-output** path below (clip→route application over
+      several outputs) — depends on the multi-output integration.
 
 **Gate:** `NDIPlayer`/`NDIReceiver`; multi-output drift soak (1 hr, no unbounded drift); live A/V-sync
 targets ([03 §7](03-AV-Sync-Clocks-Routing.md)).

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5 multi-output smoke: decode one source via the registry and present it to TWO phase-locked
+         SDL3 GL windows using the zero-copy texture-mirror path (one upload on the anchor, the mirror draws
+         the same plane textures, so the two windows never tear relative to each other). VideoPlayer drives
+         Scheduled present against the master clock. Needs a display. Pass a media path + seconds. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+    </ItemGroup>
+
+</Project>

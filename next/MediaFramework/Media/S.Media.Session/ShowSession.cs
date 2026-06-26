@@ -169,6 +169,8 @@ public sealed class ShowSession : IAsyncDisposable
         }
 
         var graphBuilder = MediaGraphBuilder.File(binding.MediaPath);
+        if (binding.AudioStreamIndex is { } audioTrack)
+            graphBuilder.WithOptions(o => o with { AudioStreamIndex = audioTrack }); // multi-track select (03 §6)
         if (layer is not null)
             graphBuilder.WithVideoOutput(layer.Output);
 

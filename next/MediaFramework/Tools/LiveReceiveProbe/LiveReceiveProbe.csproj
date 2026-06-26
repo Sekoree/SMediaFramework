@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5 live-convergence probe: receives a real NDI source and drives its video through a
+         SourceTimeline (RebaseToLatest) over a live-led SessionClock master via LiveTimelineDriver,
+         reporting frame rate + schedule lead + re-anchors. Proves the P7 "live is a source scheduled
+         against the master" model against a live sender. Pass an optional NDI source-name substring. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.NDI/S.Media.NDI.csproj" />
+    </ItemGroup>
+
+</Project>

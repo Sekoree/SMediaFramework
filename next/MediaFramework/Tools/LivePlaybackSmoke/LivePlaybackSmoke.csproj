@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5 on-screen live smoke: receive a real NDI source and present it in an SDL3 GL window through
+         VideoPlayer in SCHEDULED mode against a master clock, re-anchored via the ILiveVideoSource seam
+         (RebaseToLatest) — the P7 "live scheduled against the master" path on screen, replacing latest-on-tick.
+         Needs a display + a live NDI sender. Pass an optional source-name substring + seconds. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Players/S.Media.Players.csproj" />
+        <ProjectReference Include="../../Media/S.Media.NDI/S.Media.NDI.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Present.SDL3/S.Media.Present.SDL3.csproj" />
+    </ItemGroup>
+
+</Project>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Phase 5 backend smoke / composition root: builds a registry with FFmpeg + PortAudio + MiniAudio +
+         NDI (no globals, P2) and proves each module registers and its native library loads. Enumerates the
+         audio backends' devices and reports the NDI runtime. Needs the corresponding natives present. -->
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <IsAotCompatible>false</IsAotCompatible>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.MiniAudio/S.Media.Audio.MiniAudio.csproj" />
+        <ProjectReference Include="../../Media/S.Media.NDI/S.Media.NDI.csproj" />
+    </ItemGroup>
+
+</Project>

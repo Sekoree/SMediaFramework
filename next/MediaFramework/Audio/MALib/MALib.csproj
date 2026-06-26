@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      MALib is the dedicated P/Invoke binding for miniaudio — the analogue of PALib for PortAudio. It binds
+      miniaudio's own C ABI (ma_*) directly; there is NO custom C wrapper/shim and no native build step in
+      this project. Hosts/package scripts build and deploy the vanilla miniaudio shared library
+      (libminiaudio.so / miniaudio.dll / libminiaudio.dylib) next to the consuming app or on a normal
+      native-library search path.
+    -->
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Intentional: S.Media.Audio.MiniAudio is the primary managed wrapper for MALib (next/ name). -->
+        <InternalsVisibleTo Include="S.Media.Audio.MiniAudio" />
+        <InternalsVisibleTo Include="S.Media.MiniAudio.Tests" />
+        <!-- Development tools: smoke test and unit tests need low-level access. -->
+        <InternalsVisibleTo Include="MALib.Smoke" />
+        <InternalsVisibleTo Include="MALib.Tests" />
+    </ItemGroup>
+
+</Project>

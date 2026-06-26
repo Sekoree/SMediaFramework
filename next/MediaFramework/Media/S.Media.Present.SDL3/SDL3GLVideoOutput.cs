@@ -109,6 +109,10 @@ public sealed unsafe class SDL3GLVideoOutput : IVideoOutput, IVideoOutputD3D11Gl
 
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats => AcceptedFormats;
     public bool OwnsThread => _ownsThread;
+
+    /// <summary>The GL viewport (drawable pixels) the renderer currently draws into — diagnostic, for
+    /// comparing against the source frame size to reason about scaling quality.</summary>
+    public (int Width, int Height) ViewportPixelSize => (_viewportWidth, _viewportHeight);
     public long DisplayedCount => Volatile.Read(ref _displayed);
     public long DroppedNewer => Volatile.Read(ref _droppedNew);
     public TimeSpan? LastPresentedPresentationTime =>

@@ -55,6 +55,53 @@ public sealed class ShowDocumentTests
     }
 
     [Fact]
+    public void ToJson_FromJson_RoundTripsClipAudioTrackSelection()
+    {
+        // Multi-track select (03 §6): a stem file picks track 2; a video clip disables audio (-1).
+        var doc = ShowDocument.Empty with
+        {
+            Clips =
+            [
+                new ShowClipBinding("cue1", "/stems/song.mka", AudioStreamIndex: 2),
+                new ShowClipBinding("cue2", "/video/b.mp4", AudioStreamIndex: -1),
+            ],
+        };
+
+        var reloaded = ShowDocument.FromJson(doc.ToJson());
+
+        Assert.Equal(2, reloaded.Clips[0].AudioStreamIndex);
+        Assert.Equal(-1, reloaded.Clips[1].AudioStreamIndex);
+        Assert.Null(ShowDocument.Empty.Clips.FirstOrDefault()?.AudioStreamIndex); // default = automatic
+    }
+
+    [Fact]
+    public void ToJson_FromJson_RoundTripsRouteChannelMatrix_AndMaterializes()
+    {
+        // N→M routing (03 §6) as serializable show data: mono → stereo duplicate.
+        var doc = ShowDocument.Empty with
+        {
+            Routes = [new OutputPatchRoute("clip", "_master", ChannelMatrix: [0, 0])],
+        };
+
+        var route = ShowDocument.FromJson(doc.ToJson()).Routes[0];
+
+        Assert.Equal(new[] { 0, 0 }, route.ChannelMatrix);
+        var map = route.ToChannelMap();
+        Assert.True(map.HasValue);
+        Assert.Equal(2, map!.Value.OutputChannels);
+        Assert.Equal(0, map.Value[0]);
+        Assert.Equal(0, map.Value[1]);
+    }
+
+    [Fact]
+    public void OutputPatchRoute_ToChannelMap_NullWhenNoMatrix()
+    {
+        // null/empty matrix → router uses its source-derived default (ChannelMap.DefaultFor).
+        Assert.Null(new OutputPatchRoute("s", "o").ToChannelMap());
+        Assert.Null(new OutputPatchRoute("s", "o", ChannelMatrix: []).ToChannelMap());
+    }
+
+    [Fact]
     public void ToJson_FromJson_RoundTripsCompositionOutputMapping()
     {
         var doc = ShowDocument.Empty with

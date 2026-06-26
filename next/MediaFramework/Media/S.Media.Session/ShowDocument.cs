@@ -7,11 +7,15 @@ namespace S.Media.Session;
 /// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
 /// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI — D2) and played on the cue's group.
 /// </summary>
+/// <param name="AudioStreamIndex">Audio track selection (03 §6 multi-track): <c>null</c> = automatic,
+/// <c>-1</c> (<see cref="S.Media.Players.MediaPlayerOpenOptions.DisabledStreamIndex"/>) = no audio, otherwise
+/// the chosen stream index. Lets a multi-track clip (e.g. language stems) pick which track this cue plays.</param>
 public sealed record ShowClipBinding(
     string CueId,
     string MediaPath,
     string? CompositionId = null,
-    int LayerIndex = 0);
+    int LayerIndex = 0,
+    int? AudioStreamIndex = null);
 
 /// <summary>A composition canvas a clip's video can be placed onto (maps to a <c>ClipCompositionRuntime</c>).
 /// <paramref name="OutputMapping"/> cuts the composited canvas into placed sections for the output (projector

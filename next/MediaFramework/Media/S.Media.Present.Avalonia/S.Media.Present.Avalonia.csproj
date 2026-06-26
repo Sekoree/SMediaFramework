@@ -1,8 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Media.Present.Avalonia — IVideoOutput in OpenGlControlBase (+Avalonia, Phase 5).
-         NuGet/native refs are added in the phase noted above. Common build settings come
-         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+    <!-- S.Media.Present.Avalonia — IVideoOutput as an Avalonia OpenGlControlBase, sharing S.Media.Gpu's
+         YuvVideoRenderer with the SDL3 presenter. Output-only ([Core, Gpu]); zero-copy external-image
+         import (IGlContextExternalObjectsFeature) is the live-slice refinement, CPU re-upload otherwise. -->
+
+    <ItemGroup>
+        <PackageReference Include="Avalonia" />
+        <PackageReference Include="Silk.NET.OpenGL" />
+    </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="../S.Media.Core/S.Media.Core.csproj" />
