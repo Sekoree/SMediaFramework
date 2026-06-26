@@ -174,7 +174,7 @@ public sealed class ShowSessionTests
             Clips: [new ShowClipBinding("cue1", "fake://1")],
             Compositions: [],
             Outputs: [],
-            Routes: [new OutputPatchRoute("clip", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1])],
+            Routes: [new OutputPatchRoute("cue1", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1])],
             Devices: []);
         var backend = new RecordingAudioBackend();
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
@@ -213,7 +213,7 @@ public sealed class ShowSessionTests
             Clips: [new ShowClipBinding("cue1", "fake://1")],
             Compositions: [],
             Outputs: [],
-            Routes: [new OutputPatchRoute("clip", "monitor", ChannelMatrix: [0, 1, 0, 1])],
+            Routes: [new OutputPatchRoute("cue1", "monitor", ChannelMatrix: [0, 1, 0, 1])],
             Devices: [])
         {
             AudioOutputs = [new ShowAudioOutput("main"), new ShowAudioOutput("monitor")],
@@ -227,5 +227,32 @@ public sealed class ShowSessionTests
         Assert.Equal(2, backend.OutputCount); // both declared outputs created
         Assert.Contains(2, backend.Created.Select(c => c.Channels)); // "main" stereo
         Assert.Contains(4, backend.Created.Select(c => c.Channels)); // "monitor" remapped 2→4
+    }
+
+    [Fact]
+    public async Task RoutingScene_MatchesRouteSourceId_ForSameOutput()
+    {
+        // Two cues route to the same master output, each with a different matrix. The route source id is the
+        // clip binding's cue id, so cue2's route must not leak onto cue1 just because it appears first.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One"), new CueDefinition("cue2", 2, "Two")],
+            Clips: [new ShowClipBinding("cue1", "fake://1"), new ShowClipBinding("cue2", "fake://2")],
+            Compositions: [],
+            Outputs: [],
+            Routes:
+            [
+                new OutputPatchRoute("cue2", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1, 0, 1]),
+                new OutputPatchRoute("cue1", ShowSession.MasterOutputId, ChannelMatrix: [0, 1, 0, 1]),
+            ],
+            Devices: []);
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+
+        Assert.Equal(new[] { 4, 6 }, backend.Created.Select(c => c.Channels));
     }
 }

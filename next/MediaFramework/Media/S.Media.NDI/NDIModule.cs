@@ -47,9 +47,9 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
     // Discovery is inherently latent; bound the blocking wait during open.
     private static readonly TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(5);
 
-    // One ref-counted receiver per source name: OpenVideo + OpenAudio for the same ndi:// share it, so audio
-    // and video arrive on a single connection anchored together (one audio-driven ingest clock) rather than
-    // two independently-anchored receivers. The connection is torn down when the last leased adapter closes.
+    // One ref-counted receiver per paired OpenVideo + OpenAudio call for the same ndi://, so audio and video
+    // arrive on a single connection anchored together (one audio-driven ingest clock) rather than two
+    // independently-anchored receivers. Independent consumers get independent receivers.
     private readonly SharedNdiSourceCache _cache;
 
     public NDIDecoderProvider(TimeSpan? audioMinBuffer = null) =>
@@ -77,11 +77,35 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         return SchemeOf(uri) == "ndi" ? 1.0 : 0.0;
     }
 
-    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) =>
-        _cache.LeaseVideo(SourceNameFromUri(uri));
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options)
+    {
+        var source = _cache.LeaseVideo(SourceNameFromUri(uri));
+        try
+        {
+            _ = source.Format;
+            return source;
+        }
+        catch
+        {
+            (source as IDisposable)?.Dispose();
+            throw;
+        }
+    }
 
-    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
-        _cache.LeaseAudio(SourceNameFromUri(uri));
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options)
+    {
+        var source = _cache.LeaseAudio(SourceNameFromUri(uri));
+        try
+        {
+            _ = source.Format;
+            return source;
+        }
+        catch
+        {
+            (source as IDisposable)?.Dispose();
+            throw;
+        }
+    }
 
     private static NDIDiscoveredSource ResolveSource(string name)
     {

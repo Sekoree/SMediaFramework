@@ -201,11 +201,11 @@ public sealed class ShowSession : IAsyncDisposable
                 var rate = graph.Player.SampleRate > 0 ? graph.Player.SampleRate : 48_000;
                 // D11 per-group outputs: attach the clip's audio to each output the group declares (the first
                 // is the master/clock; the rest auto-slave with adaptive-rate). Each output's N→M channel
-                // matrix (03 §6) comes from its matching route — it remaps the source channels + sets the
-                // channel count; an output with no route is plain stereo.
+                // matrix (03 §6) comes from the matching source→output route — it remaps the source channels +
+                // sets the channel count; an output with no route for this clip is plain stereo.
                 foreach (var outDef in ResolveGroupOutputs(groupId))
                 {
-                    var channelMap = ResolveOutputChannelMap(outDef.Id);
+                    var channelMap = ResolveOutputChannelMap(binding, outDef.Id);
                     var channels = channelMap?.OutputChannels ?? 2;
                     var o = _audioBackend.CreateOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
                     graph.Player.AttachAudioOutput(o, outDef.Id, map: channelMap);
@@ -226,12 +226,14 @@ public sealed class ShowSession : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    /// <summary>Resolves the N→M channel map for <paramref name="outputId"/> from the show's routing scene
-    /// (the first enabled <see cref="OutputPatchRoute"/> patched to it), or null for the source-derived default.</summary>
-    private ChannelMap? ResolveOutputChannelMap(string outputId)
+    /// <summary>Resolves the N→M channel map for this clip's source→output route, or null for the source-derived default.</summary>
+    private ChannelMap? ResolveOutputChannelMap(ShowClipBinding binding, string outputId)
     {
+        var sourceId = binding.CueId;
         foreach (var route in _routes)
-            if (route.Enabled && string.Equals(route.OutputId, outputId, StringComparison.Ordinal))
+            if (route.Enabled
+                && string.Equals(route.SourceId, sourceId, StringComparison.Ordinal)
+                && string.Equals(route.OutputId, outputId, StringComparison.Ordinal))
                 return route.ToChannelMap();
         return null;
     }

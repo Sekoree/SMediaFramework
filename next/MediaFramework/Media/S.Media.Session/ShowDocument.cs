@@ -32,7 +32,8 @@ public sealed record ShowComposition(
 /// <summary>An audio output endpoint a transport group plays on (D11 per-group outputs; declare more than one
 /// for a multi-output / multi-device group). <paramref name="DeviceId"/> null = the backend's default device;
 /// the per-output N→M channel remap comes from the matching <see cref="OutputPatchRoute"/> (<c>OutputId</c> ==
-/// <see cref="Id"/>). The first output of a group is its master (drives the clock); the rest auto-slave.</summary>
+/// <see cref="Id"/>, <c>SourceId</c> == the clip binding's cue id). The first output of a group is its master
+/// (drives the clock); the rest auto-slave.</summary>
 public sealed record ShowAudioOutput(
     string Id,
     string? DeviceId = null,
