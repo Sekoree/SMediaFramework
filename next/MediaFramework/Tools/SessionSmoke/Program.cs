@@ -81,7 +81,7 @@ var go2 = await session.GoAsync();
 await Task.Delay(1500);
 var comp = await session.GetCompositionStatsAsync("screen");
 
-var log = session.Cues.ExecutionLog;
+var log = await session.GetCueExecutionLogAsync();
 Console.WriteLine($"GO1={go1} pos={afterFire.ClipPosition.TotalSeconds:F2}s running={afterFire.IsRunning}");
 Console.WriteLine($"SEEK pos={afterSeek.ClipPosition.TotalSeconds:F2}s");
 Console.WriteLine($"GO2={go2} composition: submitted={comp?.FramesSubmitted} composited={comp?.FramesComposited}");

@@ -54,9 +54,24 @@ clock.Start();
 player.Play();
 
 var sw = Stopwatch.StartNew();
+var lastProgress = TimeSpan.Zero;
+var lastObservedFrames = 0L;
+TimeSpan? stalledAt = null;
 while (sw.Elapsed.TotalSeconds < seconds && !player.IsSourceExhausted && fault is null)
 {
-    Console.Write($"\r{clock.CurrentPosition:mm\\:ss\\.ff}  frames={Interlocked.Read(ref frames)}   ");
+    var observed = Interlocked.Read(ref frames);
+    if (observed != lastObservedFrames)
+    {
+        lastObservedFrames = observed;
+        lastProgress = sw.Elapsed;
+    }
+    else if (observed > 0 && sw.Elapsed - lastProgress > TimeSpan.FromSeconds(1.5))
+    {
+        stalledAt = sw.Elapsed;
+        break;
+    }
+
+    Console.Write($"\r{clock.CurrentPosition:mm\\:ss\\.ff}  frames={observed}   ");
     Thread.Sleep(100);
 }
 
@@ -67,6 +82,12 @@ Console.WriteLine($"\npresented {total} frames; pts {firstPts:mm\\:ss\\.fff}..{l
 if (fault is not null)
 {
     Console.Error.WriteLine($"FAIL: player faulted: {fault.Message}");
+    return 1;
+}
+
+if (stalledAt is { } stall)
+{
+    Console.Error.WriteLine($"FAIL: frame presentation stalled after {stall.TotalSeconds:F2}s with source exhausted={player.IsSourceExhausted}.");
     return 1;
 }
 

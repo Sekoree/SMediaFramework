@@ -1,6 +1,6 @@
-using System.Collections.Concurrent;
 using S.Media.Core.Audio;
 using S.Media.Core.Registry;
+using S.Media.Core.Threading;
 using S.Media.Core.Video;
 using S.Media.Time;
 
@@ -31,9 +31,7 @@ public sealed class ShowSession : IAsyncDisposable
     private readonly CueGraph _cueGraph = new();
     private readonly Dictionary<string, TransportGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
-    private readonly BlockingCollection<Func<Task>> _queue = new();
-    private readonly Task _pump;
-    private static readonly AsyncLocal<ShowSession?> CurrentDispatcher = new();
+    private readonly SessionDispatcher _dispatcher = new("show-session");
     private volatile bool _disposed;
 
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
@@ -47,55 +45,26 @@ public sealed class ShowSession : IAsyncDisposable
             var devices = audioBackend.EnumerateOutputDevices();
             _outputDeviceId = (devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault())?.Id;
         }
-
-        _pump = Task.Run(PumpAsync);
     }
 
     /// <summary>The registry clips open through (frozen capabilities — D6).</summary>
     public IMediaRegistry Registry => _registry;
 
-    /// <summary>The cue model — definitions, arm/enable state, and the execution log.</summary>
-    public CueGraph Cues => _cueGraph;
-
     // --- dispatcher (D5) ---------------------------------------------------------------------------
-
-    private async Task PumpAsync()
-    {
-        foreach (var work in _queue.GetConsumingEnumerable())
-        {
-            var previous = CurrentDispatcher.Value;
-            CurrentDispatcher.Value = this;
-            try
-            {
-                await work().ConfigureAwait(false);
-            }
-            catch
-            {
-                // InvokeAsync surfaces faults to its awaiter via the TCS; Post is fire-and-forget by design.
-            }
-            finally
-            {
-                CurrentDispatcher.Value = previous;
-            }
-        }
-    }
 
     /// <summary>Fire-and-forget a command on the session thread (runs inline if already on it).</summary>
     public void Post(Action action)
     {
         ArgumentNullException.ThrowIfNull(action);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (ReferenceEquals(CurrentDispatcher.Value, this))
+        if (_dispatcher.IsOnDispatcherThread)
         {
             action();
             return;
         }
 
-        _queue.Add(() =>
-        {
-            action();
-            return Task.CompletedTask;
-        });
+        if (!_dispatcher.Post(action))
+            throw new ObjectDisposedException(nameof(ShowSession));
     }
 
     /// <summary>Marshals <paramref name="func"/> onto the session thread and awaits its result. A reentrant
@@ -104,22 +73,19 @@ public sealed class ShowSession : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(func);
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (ReferenceEquals(CurrentDispatcher.Value, this))
-            return func();
-
-        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _queue.Add(async () =>
+        if (_dispatcher.IsOnDispatcherThread)
         {
             try
             {
-                tcs.SetResult(await func().ConfigureAwait(false));
+                return func();
             }
             catch (Exception ex)
             {
-                tcs.SetException(ex);
+                return Task.FromException<T>(ex);
             }
-        });
-        return tcs.Task;
+        }
+
+        return _dispatcher.InvokeAsync(func);
     }
 
     /// <summary>Marshals a non-returning command onto the session thread.</summary>
@@ -294,6 +260,14 @@ public sealed class ShowSession : IAsyncDisposable
             return Task.FromResult<IReadOnlyList<TransportSnapshot>>(snaps);
         });
 
+    /// <summary>An immutable snapshot of the loaded cue definitions, ordered by cue number.</summary>
+    public Task<IReadOnlyList<CueDefinition>> GetCueDefinitionsAsync() =>
+        InvokeAsync(() => Task.FromResult(_cueGraph.Cues));
+
+    /// <summary>An immutable snapshot of the cue execution log.</summary>
+    public Task<IReadOnlyList<CueExecutionLogEntry>> GetCueExecutionLogAsync() =>
+        InvokeAsync(() => Task.FromResult(_cueGraph.ExecutionLog));
+
     /// <summary>A composition's pump stats (frames submitted to its layers + composited), or null when no
     /// composition with that id is loaded — proves the cue→clip→layer→composite path ran (headless).</summary>
     public Task<ClipCompositionRuntimeStats?> GetCompositionStatsAsync(string compositionId) =>
@@ -325,23 +299,32 @@ public sealed class ShowSession : IAsyncDisposable
         if (_disposed)
             return;
         _disposed = true;
-        _queue.CompleteAdding();
-        try
+
+        if (_dispatcher.IsOnDispatcherThread)
         {
-            await _pump.ConfigureAwait(false);
-        }
-        catch
-        {
-            // drained
+            DisposeState();
+            _dispatcher.Dispose();
+            return;
         }
 
+        try
+        {
+            await _dispatcher.InvokeAsync(DisposeState).ConfigureAwait(false);
+        }
+        finally
+        {
+            await _dispatcher.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    private void DisposeState()
+    {
         foreach (var group in _groups.Values)
             group.Dispose();
         _groups.Clear();
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
-        _queue.Dispose();
     }
 
     /// <summary>One transport group: its session clock (D4), active clip, master output (D11), and the

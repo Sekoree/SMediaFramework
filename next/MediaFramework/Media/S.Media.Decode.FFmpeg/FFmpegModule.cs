@@ -55,8 +55,8 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options)
     {
         var container = TryCreateAbsoluteMediaUri(uri, out var parsed)
-            ? MediaContainerDecoder.OpenUri(parsed, MapVideo(options))
-            : MediaContainerDecoder.Open(uri, MapVideo(options));
+            ? MediaContainerDecoder.OpenUri(parsed, MapStandaloneVideo(options))
+            : MediaContainerDecoder.Open(uri, MapStandaloneVideo(options));
         return new ContainerOwnedVideoSource(container);
     }
 
@@ -81,21 +81,21 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
         return false;
     }
 
-    private static VideoDecoderOpenOptions? MapVideo(VideoSourceOpenOptions? o) =>
-        o is null
-            ? null
-            : new VideoDecoderOpenOptions
-            {
-                TryHardwareAcceleration = o.TryHardwareAcceleration,
-                RetainDmabufForGl = o.RetainDmabufForGl,
-                RetainD3D11SharedHandleForGl = o.RetainD3D11SharedHandleForGl,
-                Win32Nv12SharedHandleOnlyExport = o.Win32Nv12SharedHandleOnlyExport,
-                AudioPacketQueueDepth = o.AudioPacketQueueDepth,
-                VideoPacketQueueDepth = o.VideoPacketQueueDepth,
-                FileReadBufferBytes = o.FileReadBufferBytes,
-                AudioStreamIndex = o.AudioStreamIndex,
-                VideoStreamIndex = o.VideoStreamIndex,
-            };
+    private static VideoDecoderOpenOptions MapStandaloneVideo(VideoSourceOpenOptions? o) =>
+        new()
+        {
+            TryHardwareAcceleration = o?.TryHardwareAcceleration ?? true,
+            RetainDmabufForGl = o?.RetainDmabufForGl ?? false,
+            RetainD3D11SharedHandleForGl = o?.RetainD3D11SharedHandleForGl ?? false,
+            Win32Nv12SharedHandleOnlyExport = o?.Win32Nv12SharedHandleOnlyExport ?? false,
+            AudioPacketQueueDepth = o?.AudioPacketQueueDepth ?? 0,
+            VideoPacketQueueDepth = o?.VideoPacketQueueDepth ?? 0,
+            FileReadBufferBytes = o?.FileReadBufferBytes ?? 0,
+            // The registry OpenVideo contract returns only an IVideoSource. If the shared demux also opens
+            // audio here, its packet queue has no consumer and can eventually block video decode.
+            AudioStreamIndex = MediaStreamSelection.Disabled,
+            VideoStreamIndex = o?.VideoStreamIndex,
+        };
 
     private static AudioFileDecoderOpenOptions MapAudio(AudioSourceOpenOptions? o) =>
         o is null

@@ -457,17 +457,38 @@ public sealed partial class AudioRouter : IDisposable
         return routeId;
     }
 
-    /// <summary>Routes <paramref name="sourceId"/> to <paramref name="outputId"/> with an identity channel map.</summary>
-    public string Route(string sourceId, string outputId, float gain = 1.0f)
-    {
-        if (!TryGetOutput(outputId, out var output) || output is null)
-            throw new ArgumentException($"output '{outputId}' is not registered", nameof(outputId));
-        return AddRoute(sourceId, outputId, ChannelMap.Identity(output.Format.Channels), gain);
-    }
+    /// <summary>
+    /// Routes <paramref name="sourceId"/> to <paramref name="outputId"/> with a default channel map
+    /// derived from the source channel count onto the output's (see <see cref="DefaultMap"/>), so a mono
+    /// or otherwise mismatched source up/down-mixes instead of failing route validation.
+    /// </summary>
+    public string Route(string sourceId, string outputId, float gain = 1.0f) =>
+        AddRoute(sourceId, outputId, DefaultMap(sourceId, outputId), gain);
 
     /// <summary>Routes with an explicit <paramref name="map"/> (alias for <see cref="AddRoute(string, string, ChannelMap, float)"/>).</summary>
     public string Route(string sourceId, string outputId, ChannelMap map, float gain = 1.0f) =>
         AddRoute(sourceId, outputId, map, gain);
+
+    /// <summary>
+    /// The channel map used when a route is requested without an explicit one: derived from the
+    /// registered <em>source</em> channel count onto the output's (<see cref="ChannelMap.DefaultFor"/>),
+    /// so a mono or otherwise mismatched source up/down-mixes instead of tripping the
+    /// <c>RequiredInputChannels ≤ source</c> check in
+    /// <see cref="AddRoute(string, string, string, ChannelMap, float)"/>. Both counts are read under the
+    /// gate so the map matches the registered formats.
+    /// </summary>
+    private ChannelMap DefaultMap(string sourceId, string outputId)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_state.Sources.TryGetValue(sourceId, out var src))
+                throw new ArgumentException($"unknown source ID '{sourceId}'", nameof(sourceId));
+            if (!_state.Outputs.TryGetValue(outputId, out var output))
+                throw new ArgumentException($"unknown output ID '{outputId}'", nameof(outputId));
+            return ChannelMap.DefaultFor(src.Source.Format.Channels, output.Output.Format.Channels);
+        }
+    }
 
     /// <summary>Id of the most recent <see cref="AddSource"/> on this router.</summary>
     public string? LastSourceId
@@ -494,10 +515,7 @@ public sealed partial class AudioRouter : IDisposable
                 throw new InvalidOperationException("RouteLast: no output registered yet — call AddOutput first.");
         }
 
-        var routeMap = map ?? (TryGetOutput(_lastOutputId!, out var output) && output is not null
-            ? ChannelMap.Identity(output.Format.Channels)
-            : throw new InvalidOperationException($"RouteLast: output '{_lastOutputId}' is not registered."));
-
+        var routeMap = map ?? DefaultMap(_lastSourceId!, _lastOutputId!);
         return Route(_lastSourceId!, _lastOutputId!, routeMap, gain);
     }
 

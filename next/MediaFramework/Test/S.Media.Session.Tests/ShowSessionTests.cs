@@ -89,7 +89,8 @@ public sealed class ShowSessionTests
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
         Assert.Equal(CueExecutionStatus.NotReady, await session.GoAsync()); // past the last cue
 
-        Assert.Equal(["cue1", "cue2"], session.Cues.ExecutionLog.Select(e => e.CueId));
+        var log = await session.GetCueExecutionLogAsync();
+        Assert.Equal(["cue1", "cue2"], log.Select(e => e.CueId));
     }
 
     [Fact]
@@ -109,10 +110,10 @@ public sealed class ShowSessionTests
 
         await session.LoadDocumentAsync(replacement);
 
-        Assert.Equal(["cue3"], session.Cues.Cues.Select(c => c.Id));
-        Assert.Empty(session.Cues.ExecutionLog);
+        Assert.Equal(["cue3"], (await session.GetCueDefinitionsAsync()).Select(c => c.Id));
+        Assert.Empty(await session.GetCueExecutionLogAsync());
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
-        Assert.Equal("cue3", Assert.Single(session.Cues.ExecutionLog).CueId);
+        Assert.Equal("cue3", Assert.Single(await session.GetCueExecutionLogAsync()).CueId);
     }
 
     [Fact]
@@ -122,7 +123,7 @@ public sealed class ShowSessionTests
         session.LoadDocument(TwoAudioCues());
 
         Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue2"));
-        Assert.Equal("cue2", Assert.Single(session.Cues.ExecutionLog).CueId);
+        Assert.Equal("cue2", Assert.Single(await session.GetCueExecutionLogAsync()).CueId);
     }
 
     [Fact]

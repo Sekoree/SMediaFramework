@@ -111,7 +111,6 @@ public sealed class AudioClipPlayer
 
             if (!router.TryGetOutput(outputId, out var output) || output is null)
                 throw new ArgumentException($"output '{outputId}' is not registered", nameof(outputId));
-            var routeMap = map ?? ChannelMap.Identity(output.Format.Channels);
 
             var voiceOptions = options ?? AudioClipVoiceOptions.Default;
             if (Mode == AudioClipPlayerMode.LatchedLoop)
@@ -122,7 +121,10 @@ public sealed class AudioClipPlayer
             var chokeRegistered = false;
             try
             {
-                router.Route(newSourceId, outputId, routeMap, gain);
+                if (map is { } explicitMap)
+                    router.Route(newSourceId, outputId, explicitMap, gain);
+                else
+                    router.Route(newSourceId, outputId, gain);
 
                 if (ChokeGroup is { } group)
                 {

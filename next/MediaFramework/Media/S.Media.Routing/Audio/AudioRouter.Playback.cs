@@ -54,30 +54,12 @@ public sealed partial class AudioRouter
         AddOutput(output, id, pumpCapacityChunks);
 
     /// <summary>
-    /// Convenience route with identity <see cref="ChannelMap"/> sized to the output channel count.
+    /// Convenience route with a default <see cref="ChannelMap"/> derived from the source channel count
+    /// onto the output's (see <see cref="ChannelMap.DefaultFor"/>), so a mono or otherwise mismatched
+    /// source up/down-mixes instead of failing route validation.
     /// </summary>
-    public void Connect(string sourceId, string outputId, ChannelMap? map = null, float gain = 1.0f)
-    {
-        ChannelMap effective;
-        if (map is { } m)
-        {
-            effective = m;
-        }
-        else
-        {
-            int channels;
-            lock (_gate)
-            {
-                if (!_sinkFormats.TryGetValue(outputId, out var fmt))
-                    throw new ArgumentException($"unknown output '{outputId}'", nameof(outputId));
-                channels = fmt.Channels;
-            }
-
-            effective = ChannelMap.Identity(channels);
-        }
-
-        AddRoute(sourceId, outputId, effective, gain);
-    }
+    public void Connect(string sourceId, string outputId, ChannelMap? map = null, float gain = 1.0f) =>
+        AddRoute(sourceId, outputId, map ?? DefaultMap(sourceId, outputId), gain);
 
     /// <summary>Seeks the only registered source. Throws when zero or multiple sources exist.</summary>
     public void Seek(TimeSpan position)

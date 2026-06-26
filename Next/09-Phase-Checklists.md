@@ -155,8 +155,8 @@ into a foreign API, and a sync-fd fence upgrade for `ExternalImageCompositeTarge
 
 ## Phase 4 — Session (the show, headless)
 **Goal:** cues / soundboard / output-mapping in one headless home — collapse the P1 duplication.
-**Status (2026-06-25):** framework spine **done + gated** (cue engine merged, `ShowSession` + `ShowDocument`,
-cue→video-composition + output-mapping, 566 tests). **No Phase-4-only work remains.** The two items below
+**Status (2026-06-26):** framework spine **done + gated** (cue engine merged, `ShowSession` + `ShowDocument`,
+cue→video-composition + output-mapping, 594 tests). **No Phase-4-only work remains.** The two items below
 that aren't framework work have been **re-filed to their proper phases** — routing/multi-track → **Phase 5**,
 the UI god-object collapse → **Phase 8** — because each depends on a later phase (decode-layer/multi-output,
 and the UI port) rather than being a finishing touch here.
@@ -174,7 +174,8 @@ and the UI port) rather than being a finishing touch here.
       `ShowSession` still lacks + retiring them happens *as the UI is rebuilt on `ShowSession`* (Phase 8).
 - [x] Public `ShowSession` on the dispatcher (Post/InvokeAsync, immutable snapshots, reentrancy guard —
       D5/OQ8); one `SessionClock` **per transport group** (D4); per-group master output (D11). **Done**
-      — serial async dispatcher, `AsyncLocal` reentrancy guard, `TransportSnapshot` immutable queries.
+      — shared `SessionDispatcher`, `AsyncLocal` reentrancy guard, `TransportSnapshot` + cue-log immutable
+      queries; no live mutable `CueGraph` escape hatch from `ShowSession`.
 - [x] `ShowDocument` persistence — **STJ source-gen**, AOT-safe, loads headless (D10). **Done** —
       `ShowDocumentJsonContext`; `SessionSmoke` round-trips the show through JSON before driving it.
 - [x] Output map = binding → warp sections. **Done (affine, headless)** — cue→video-composition wired
@@ -191,8 +192,8 @@ and the UI port) rather than being a finishing touch here.
       from `ShowSession`.*
 
 **Gate:** `SoundboardSmoke` + new `SessionSmoke` (headless cue fire / seek / GO + video composite) green;
-`S.Media.Session.Tests`. ✅ Both smokes green on real hardware (2026-06-25); **566 unit tests** (incl. new
-23-test `S.Media.Session.Tests`: CueGraph / ShowDocument / ShowSession dispatcher) + arch-test green.
+`S.Media.Session.Tests`. ✅ Both smokes green on real hardware (2026-06-25); **594 unit tests** (incl.
+26-test `S.Media.Session.Tests`: CueGraph / ShowDocument / ShowSession dispatcher) + arch-test green.
 **Exit:** a full show runs headless with no Avalonia dependency. ✅ **Proven** — `SessionSmoke` loads a
 JSON show and drives GO → fire → seek → GO → switch-clip with zero Avalonia on the path.
 

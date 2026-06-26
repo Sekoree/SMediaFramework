@@ -107,6 +107,21 @@ public class SessionDispatcherTests
     }
 
     [Fact]
+    public async Task Async_reentrancy_survives_await_without_deadlock()
+    {
+        using var d = new SessionDispatcher();
+
+        var result = await d.InvokeAsync(async () =>
+        {
+            await Task.Delay(1);
+            Assert.True(d.IsOnDispatcherThread);
+            return await d.InvokeAsync(() => 7);
+        });
+
+        Assert.Equal(7, result);
+    }
+
+    [Fact]
     public async Task Exceptions_surface_through_the_returned_task()
     {
         using var d = new SessionDispatcher();
@@ -120,5 +135,13 @@ public class SessionDispatcherTests
         var d = new SessionDispatcher();
         d.Dispose();
         await Assert.ThrowsAsync<ObjectDisposedException>(() => d.InvokeAsync(() => 1));
+    }
+
+    [Fact]
+    public void Post_after_dispose_returns_false()
+    {
+        var d = new SessionDispatcher();
+        d.Dispose();
+        Assert.False(d.Post(() => { }));
     }
 }
