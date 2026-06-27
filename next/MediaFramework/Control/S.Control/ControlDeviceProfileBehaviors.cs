@@ -51,7 +51,7 @@ public static class ControlProfileProtocolBehavior
         || profile?.Tasks.Any(task => task.Kind == ControlDeviceTaskKind.ProtocolMaintenance) == true;
 
     public static bool SupportsMeterBlobDecoding(ControlDeviceProfile? profile) =>
-        string.Equals(profile?.Behaviors?.MeterBlobDecoder, "x32", StringComparison.OrdinalIgnoreCase);
+        ControlMeterBlobDecoderRegistry.Default.Contains(profile?.Behaviors?.MeterBlobDecoder);
 
     public static int ResolveProtocolRenewIntervalMs(
         ControlDeviceProfile? profile,

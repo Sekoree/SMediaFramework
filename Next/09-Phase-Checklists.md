@@ -394,7 +394,7 @@ and verified; full stitched-wall validation is the runtime soak above.
       *Only loose end:* the embedded-font `AddFont` path is wired but **untested** (no fonts-attached MKV sample).
 
 **Control:** (foundation-first; the old engine is in old `MediaFramework/Control/S.Control` + `Extras/MIDI|OSC` — copy-salvage)
-- [~] Move `S.Control` engine; X32/XTouch → **data-driven profiles** + control registry (P6); X32 meter
+- [x] Move `S.Control` engine; X32/XTouch → **data-driven profiles** + control registry (P6); X32 meter
       decode as a registered capability.
       **Transport foundation MOVED (2026-06-27):** **OSCLib** → `next/MediaFramework/OSC/OSCLib` (OSC over UDP;
       11 files) + **PMLib** → `next/MediaFramework/MIDI/PMLib` (PortMidi P/Invoke, native user-provided; 40 files
@@ -429,16 +429,39 @@ and verified; full stitched-wall validation is the runtime soak above.
       **deleted** — the runtime has no device-specific script code. *Gotcha fixed:* Mond passes the receiver as the
       first arg for `x32.fn(...)`, so each exported helper takes `(self, …)` (the C# modules skip it via
       `ArgumentOffset`). Built-in profiles load by default so helpers are always available (old always-on parity).
-      New `ProfileHelperScriptTests` proves it; **850 total**, build 0/0, arch green. *Remaining (broader data-driven
-      cleanup, separable):* (e) retire the redundant hardcoded `BuiltInControlDeviceProfileFactory` (JSON = single
-      source; migrate its test users) → then `X32Presets`/`XAirPresets`/`X32Fader` C# can go; (f) X32 meter-blob
-      decode as a **registered C# capability** the profile references (`ControlDeviceProfileBehaviors.MeterBlobDecoder`
-      field exists; binary parsing can't be Mond).
-- [ ] Mond host API targets the `ShowSession` action façade (headless-drivable). **Confirmed the payoff (2026-06-27):**
-      old scripts only expose device handles (`midi`/`osc`/`bus`/`channel`/`matrix` = device→device, e.g. XTouch→X32);
-      NO player control today. `ShowSession` already has the façade (`GoAsync`/`FireCueAsync`/`SeekAsync`/`StopAsync`/
-      `SnapshotAsync`/`GetCueDefinitionsAsync`) → add a `show`/`cue` Mond handle so a MIDI button/OSC msg can GO/fire/
-      seek the show (hardware-driven cues). Key deliverable, not an afterthought.
+      New `ProfileHelperScriptTests` proves it; **850 total**, build 0/0, arch green.
+      **(e)–(f) DONE + VERIFIED (2026-06-27):** (e) `BuiltInControlDeviceProfileFactory` **deleted** — `ExportBuiltInProfiles`
+      + the test users now read the shipped JSON via `BuiltInControlDeviceProfileRepository.Instance` (new `TestProfiles`
+      helper); the now-unused `XAirPresets` class is also deleted (`X32Presets`/`X32Fader` stay — still used by
+      `XTouchMiniX32FaderMapping` + templates). (f) **meter-blob decode is now a registered capability:** new
+      `IControlMeterBlobDecoder` + `ControlMeterBlobDecoderRegistry.Default` (keyed by name; `"x32"`→`X32MeterBlobDecoder`
+      wrapping `X32MeterCacheDecoder`); `SupportsMeterBlobDecoding` and the runtime dispatch resolve the decoder by the
+      profile's `Behaviors.MeterBlobDecoder` name (the hardcoded `=="x32"` and the `/meters` literal are gone — the
+      decoder owns its address). **850 total, build 0/0, arch green, old trees untouched.** ✅ **The "no hardcoded
+      devices, incl. helpers" line item is complete** — devices are profiles (data + Mond helpers) + registered binary
+      capabilities; the runtime has zero device-specific code. (`✓` the `S.Control` move + data-driven-profiles item.)
+- [x] Mond host API targets the `ShowSession` action façade (headless-drivable).
+      **DONE (2026-06-27):** new `IControlShowActions` (Go/FireCue/Seek/Stop) + `ShowSessionControlActions` adapter
+      (posts fire-and-forget to `ShowSession.GoAsync`/`FireCueAsync`/`SeekAsync`/`StopAsync`); the script API exposes
+      it as the **`show` global** (`show.go()`/`show.fireCue(id)`/`show.seek(secs)`/`show.stop()`), wired via
+      `ControlScriptRuntimeServices.ShowActions` (no-op when no show bound). So a MIDI button / OSC message drives
+      cues + playback. `ControlShowBridgeTests` proves dispatch + the no-op path. (`ArgumentOffset` handles the Mond
+      receiver-as-arg0.)
+      **DEVICE-SPECIFIC C# ELIMINATED (2026-06-27, user's follow-up):** deleted `XTouchMiniX32FaderMapping` (+ test —
+      it was only used by its own test; the runtime does XTouch→X32 via the Mond template) and the redundant
+      `X32Presets` address builders + preset builders + `X32Fader` (+ `X32PresetTests`) — all superseded by the
+      profile `HelperScript`.
+      **TRANSPORT WAS DEAD TOO — DELETED (2026-06-27):** investigating the user's "can these be generalized?",
+      `X32Session` (the OSC connect / `/xremote` keep-alive / `/subscribe` / `/meters` renewal loop) + `X32Subscription`/
+      `X32MeterSubscription` + the endpoint config (`X32EndpointPreset`/`X32Presets`/`ControlPresets.cs`) turned out to
+      be **entirely unused** — superseded by the data-driven **profile Tasks** (periodic OSC sends via
+      `ControlPeriodicOscSendManager`; `/xremote` is a profile Task with `intervalMs`). Deleted all of it. **The ONLY
+      X32-specific C# left is the binary meter-blob *parse*** (`X32Meters` + `X32MeterCacheDecoder` + the registered
+      `X32MeterBlobDecoder`, 3 files): deserialize a packed little-endian payload at meter rate → floats; the output
+      address comes from the OSC arg before the blob (no protocol state). That's the deliberate registered-capability
+      escape hatch — it *could* be a profile "binary-format descriptor + generic decoder", but it's a hot path (~50Hz)
+      where C# is right and the gain is marginal. So: the runtime has **zero device-specific *logic*** — a device is
+      its profile (data + Mond helpers) + one tiny opt-in binary capability. **812 total, build 0/0, arch green.**
 
 **Plugin host (`S.Abi`) — the forever-surface:**
 - [ ] Define `include/mfp_plugin.h`: **full vtable surface** — source/output/audio-backend/layer-surface

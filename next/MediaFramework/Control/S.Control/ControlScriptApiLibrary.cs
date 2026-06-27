@@ -14,7 +14,8 @@ public sealed class ControlScriptRuntimeServices
         ControlDeviceHealthRegistry? deviceHealth = null,
         Func<DateTimeOffset>? clock = null,
         IReadOnlyList<ControlLayerConfig>? layers = null,
-        IReadOnlyList<ControlDeviceProfile>? profiles = null)
+        IReadOnlyList<ControlDeviceProfile>? profiles = null,
+        IControlShowActions? showActions = null)
     {
         CommandSink = commandSink ?? NullControlScriptCommandSink.Instance;
         OscCache = oscCache ?? new ControlValueCache();
@@ -28,6 +29,7 @@ public sealed class ControlScriptRuntimeServices
         // available to scripts out of the box — the old always-on C# x32 module behaved this way. The session
         // passes an explicit resolved set (built-ins + config overrides).
         Profiles = profiles ?? BuiltInProfileLoader.Load();
+        ShowActions = showActions;
     }
 
     public IControlScriptCommandSink CommandSink { get; }
@@ -51,6 +53,10 @@ public sealed class ControlScriptRuntimeServices
     /// <summary>Loaded device profiles (built-in JSON + config overrides), surfaced to scripts via
     /// <c>devices.command(id)</c> so profile-embedded helpers can read address data instead of hardcoding it.</summary>
     public IReadOnlyList<ControlDeviceProfile> Profiles { get; }
+
+    /// <summary>Optional bridge to the running show, surfaced to scripts as the <c>show</c> global so MIDI/OSC
+    /// triggers can GO / fire / seek / stop cues. Null when no show is wired (the <c>show</c> calls are no-ops).</summary>
+    public IControlShowActions? ShowActions { get; }
 
     /// <summary>Returns the currently active layer id; set by the runtime so <c>layers.active()</c> can read it.</summary>
     public Func<Guid?>? ActiveLayerProvider { get; set; }
@@ -188,6 +194,53 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
         yield return new KeyValuePair<string, MondValue>("devices", CreateDevicesApi(state));
         yield return new KeyValuePair<string, MondValue>("time", CreateTimeApi(state));
         yield return new KeyValuePair<string, MondValue>("layers", CreateLayersApi(state));
+        yield return new KeyValuePair<string, MondValue>("show", CreateShowApi(state));
+    }
+
+    // The `show` bridge: lets a control trigger (a MIDI button / OSC message) drive the running show through the
+    // host-wired IControlShowActions — GO, fire a cue, seek, stop. No-ops when no show is bound. Fire-and-forget.
+    private MondValue CreateShowApi(MondState state)
+    {
+        var show = MondValue.Object(state);
+        var actions = _services.ShowActions;
+
+        show["go"] = (MondFunction)((_, args) =>
+        {
+            actions?.Go(OptionalStringArg(args, 0));
+            return MondValue.Undefined;
+        });
+        show["fireCue"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length <= offset)
+                throw new MondRuntimeException("show.fireCue requires a cue id.");
+            actions?.FireCue((string)args[offset]);
+            return MondValue.Undefined;
+        });
+        show["seek"] = (MondFunction)((_, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length <= offset)
+                throw new MondRuntimeException("show.seek requires a position in seconds.");
+            actions?.Seek(TimeSpan.FromSeconds((double)args[offset]), OptionalStringArg(args, 1));
+            return MondValue.Undefined;
+        });
+        show["stop"] = (MondFunction)((_, args) =>
+        {
+            actions?.Stop(OptionalStringArg(args, 0));
+            return MondValue.Undefined;
+        });
+
+        return show;
+    }
+
+    // A string argument at logical position `index` (after the receiver), or null when absent / not a string.
+    private static string? OptionalStringArg(Span<MondValue> args, int index)
+    {
+        var offset = ArgumentOffset(args) + index;
+        return offset < args.Length && args[offset].Type == MondValueType.String
+            ? (string)args[offset]
+            : null;
     }
 
     // HaPlay owns mutually-exclusive layers. activate() queues a switch that the host applies after the

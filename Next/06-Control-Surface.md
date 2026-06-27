@@ -76,3 +76,37 @@ per device. The existing X32/XTouch support ships as the **first profiles**, pro
 
 This keeps every current capability (X32 meters, XTouch mapping, keep-alives, scripting) while making
 the surface extensible by data and by the same general plugin ABI as the rest of the framework.
+
+## 5. Where the device-code boundary actually landed (implemented 2026-06-27)
+
+The plan above is realized. To save a future contributor the investigation: **everything device-specific is
+data now, with exactly one deliberate C# exception — the binary meter-blob parse.**
+
+- **Config, OSC address building, value/fader math, mappings (XTouch→X32), and keep-alives/subscriptions are all
+  profile data.** A profile carries its OSC addresses as `commands`, an embedded Mond **`HelperScript`** for ergonomics
+  (e.g. `x32.channelFaderAddress(n)` just returns `devices.command(id).address` — the address lives once, in the
+  data), and **Tasks** for periodic sends (`/xremote` keep-alive via `ControlPeriodicOscSendManager`). The old C#
+  (`X32Session`, `XTouchMiniX32FaderMapping`, `X32Presets`/`X32Fader`, the hardcoded `BuiltInControlDeviceProfileFactory`)
+  was **deleted** — most of it was already dead once the data path existed (`X32Session`'s renewal loop, for instance,
+  duplicated the profile-Task mechanism). Helper scripts are exposed as a `ScriptModule` global; note that Mond passes
+  the receiver as arg 0, so a profile helper `fun(self, …)`.
+- **The one thing that stays C#: decoding the X32 `/meters` *binary blob*** — `X32Meters` + `X32MeterCacheDecoder`,
+  reached only through the registered `IControlMeterBlobDecoder` / `ControlMeterBlobDecoderRegistry`. The profile opts
+  in by name (`Behaviors.MeterBlobDecoder = "x32"`).
+
+**Why not generalize even that into a profile "binary-format descriptor" + a generic decoder?** It's technically
+possible — the X32's two formats are regular (header bytes, then a little-endian element array, with an optional
+scale), and the output address comes from the OSC argument *before* the blob in the same message (so no protocol
+state is needed). We deliberately didn't, and a future contributor probably shouldn't either:
+
+- It is a **hot path** — meters arrive at ~50 Hz × dozens of values; a generic descriptor interpreter (let alone a
+  Mond byte-loop) is far slower than ~30 lines of `BinaryPrimitives`.
+- The **gain is marginal** — you would trade a tiny, isolated, *pluggable* unit for a descriptor schema + interpreter
+  that still would not cover a genuinely exotic device's framing.
+- **The device stays data regardless**: the profile references the decoder by string, and a host — or a third-party
+  C-ABI plugin (see [05](05-Plugin-Model.md)) — can register more decoders without the runtime knowing the device.
+
+So the registered binary-decoder capability **is** the data-driven contract, not a hole in it: it is the intentional
+escape hatch for the irreducible <1% (raw byte-crunching at meter rate). The bar for revisiting this: a real second
+device whose meter framing the X32 decoder can't express, *and* a measured need to avoid shipping a small per-device
+decoder module/plugin.

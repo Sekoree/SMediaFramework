@@ -79,7 +79,7 @@ public sealed class ControlX32ProtocolMaintenanceManagerTests
     {
         var deviceId = Guid.NewGuid();
         var sender = new RecordingOscSender();
-        var profile = BuiltInControlDeviceProfileFactory.CreateX32Profile();
+        var profile = TestProfiles.ById(TestProfiles.X32);
         var repository = new FixedProfileRepository(profile);
         var manager = new ControlX32ProtocolMaintenanceManager(
             new ControlSystemConfig

@@ -260,7 +260,7 @@ public sealed class DirectoryControlDeviceProfileRepository : IControlDeviceProf
     }
 
     public static IReadOnlyList<string> ExportBuiltInProfiles(string directoryPath, bool overwrite = true) =>
-        BuiltInControlDeviceProfileFactory.All()
+        BuiltInControlDeviceProfileRepository.Instance.Profiles
             .Select(profile => SaveProfile(directoryPath, profile, overwrite))
             .ToArray();
 

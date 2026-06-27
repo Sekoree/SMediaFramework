@@ -609,12 +609,16 @@ public sealed class ControlScriptRuntime
         {
             var argument = osc.Arguments[i];
 
-            if (argument.Type == OSCArgumentType.Blob
-                && string.Equals(osc.Address, "/meters", StringComparison.OrdinalIgnoreCase)
-                && ShouldDecodeMeterBlob(evt.OriginId))
+            if (argument.Type == OSCArgumentType.Blob && ShouldDecodeMeterBlob(evt.OriginId))
             {
-                changes.AddRange(ApplyX32MeterBlobCache(deviceKeys, osc, argument, i, evt));
-                continue;
+                // The resolved decoder owns its address convention (e.g. X32's /meters) and returns no readings
+                // for blobs it doesn't recognize, in which case we fall through to normal caching.
+                var meterChanges = ApplyMeterBlobCache(deviceKeys, osc, argument, i, evt);
+                if (meterChanges.Count > 0)
+                {
+                    changes.AddRange(meterChanges);
+                    continue;
+                }
             }
 
             // Each incoming argument is mirrored to every device alias key (id, name,
@@ -645,18 +649,31 @@ public sealed class ControlScriptRuntime
         return ControlProfileProtocolBehavior.SupportsMeterBlobDecoding(profile);
     }
 
-    private IReadOnlyList<ControlValueCacheChange> ApplyX32MeterBlobCache(
+    private IControlMeterBlobDecoder? ResolveMeterDecoder(Guid deviceInstanceId)
+    {
+        if (!_devices.TryGetValue(deviceInstanceId, out var device))
+            return null;
+
+        var profile = _profiles.FindById(device.ProfileId ?? string.Empty);
+        return ControlMeterBlobDecoderRegistry.Default.Resolve(profile?.Behaviors?.MeterBlobDecoder);
+    }
+
+    private IReadOnlyList<ControlValueCacheChange> ApplyMeterBlobCache(
         string[] deviceKeys,
         OscControlEvent osc,
         OSCArgument argument,
         int argumentIndex,
         ControlEvent evt)
     {
+        var decoder = ResolveMeterDecoder(evt.OriginId);
+        if (decoder is null)
+            return [];
+
         const ControlValueCacheSource source = ControlValueCacheSource.Incoming;
         var cache = RuntimeServices.OscCache;
         var changes = new List<ControlValueCacheChange>();
 
-        foreach (var entry in X32MeterCacheDecoder.Decode(osc.Address, osc.Arguments, argumentIndex, argument.AsBlob()))
+        foreach (var entry in decoder.Decode(osc.Address, osc.Arguments, argumentIndex, argument.AsBlob()))
         {
             ControlValueCacheChange? canonicalChange = null;
             for (var k = 0; k < deviceKeys.Length; k++)

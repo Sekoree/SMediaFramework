@@ -32,7 +32,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void ProfileSeeding_CreatesDefaultPeriodicOscSendsFromProfileTasks()
     {
-        var profile = BuiltInControlDeviceProfileFactory.CreateX32Profile();
+        var profile = TestProfiles.ById(TestProfiles.X32);
         var sends = ControlDeviceProfileSeeding.CreateDefaultPeriodicOscSends(profile);
 
         var xremote = Assert.Single(sends);
@@ -43,7 +43,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void XAirProfile_UsesXAirAddressingAndDefaultPort()
     {
-        var profile = BuiltInControlDeviceProfileFactory.CreateXAirProfile();
+        var profile = TestProfiles.ById(TestProfiles.XAir);
 
         Assert.Equal("behringer.xair.osc", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Osc, profile.Protocol);
@@ -76,7 +76,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void XTouchMiniProfile_UsesReferenceMcModeMapping()
     {
-        var profile = BuiltInControlDeviceProfileFactory.CreateXTouchMiniProfile();
+        var profile = TestProfiles.ById(TestProfiles.XTouchMini);
 
         Assert.Equal("behringer.xtouch-mini.mc", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
@@ -121,7 +121,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void Bcf2000Profile_Uses14BitFadersEncodersAndButtonBanks()
     {
-        var profile = BuiltInControlDeviceProfileFactory.CreateBcf2000Profile();
+        var profile = TestProfiles.ById(TestProfiles.Bcf2000);
 
         Assert.Equal("behringer.bcf2000", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Midi, profile.Protocol);
@@ -166,7 +166,7 @@ public sealed class ControlDeviceProfileTests
     [Fact]
     public void X32Profile_ContainsCoreCommandCatalogAndXRemoteTask()
     {
-        var profile = BuiltInControlDeviceProfileFactory.CreateX32Profile();
+        var profile = TestProfiles.ById(TestProfiles.X32);
 
         Assert.Equal("behringer.x32.osc", profile.Id);
         Assert.Equal(ControlDeviceProtocol.Osc, profile.Protocol);
@@ -352,17 +352,15 @@ public sealed class ControlDeviceProfileTests
         var files = Directory.GetFiles(profilesDir, "*.json");
         Assert.Equal(4, files.Length);
 
-        var factoryIds = BuiltInControlDeviceProfileFactory.All()
-            .Select(profile => profile.Id)
-            .OrderBy(id => id, StringComparer.Ordinal)
-            .ToArray();
         var loaded = DirectoryControlDeviceProfileRepository.Load(profilesDir);
         Assert.Empty(loaded.LoadIssues);
         var loadedIds = loaded.Profiles
             .Select(profile => profile.Id)
             .OrderBy(id => id, StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal(factoryIds, loadedIds);
+        Assert.Equal(
+            new[] { "behringer.bcf2000", "behringer.x32.osc", "behringer.xair.osc", "behringer.xtouch-mini.mc" },
+            loadedIds);
     }
 
     [Fact]
