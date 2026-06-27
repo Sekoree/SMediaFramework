@@ -3,7 +3,9 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
 using Avalonia.Threading;
 using HaPlay.Core;
+using S.Media.Audio.PortAudio;
 using S.Media.Core.Registry;
+using S.Media.Decode.FFmpeg;
 using S.Media.Session;
 
 namespace HaPlay.App;
@@ -19,9 +21,10 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            // Headless session — the UI process drives transport/composition without owning an audio device.
-            // Real decoders / audio-out get wired in as media-loading workspaces strangle over from the old app.
-            var registry = MediaRegistry.Build(_ => { });
+            // Headless session — the UI process drives transport/composition without owning an audio device (yet).
+            // FFmpeg gives real decoders so shows with media clips load + advance on the headless clock; PortAudio is
+            // registered but unused until a create-with-audio path attaches it for real audio-out.
+            var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()).Use(new PortAudioModule()));
             var vm = new ShowSessionViewModel(new ShowSession(registry));
             vm.LoadShow(EmptyShow);
 

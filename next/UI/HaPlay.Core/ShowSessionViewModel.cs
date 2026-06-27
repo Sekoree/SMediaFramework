@@ -22,6 +22,7 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
     [ObservableProperty] private long _positionTicks;
     [ObservableProperty] private long _durationTicks;
     [ObservableProperty] private bool _isRunning;
+    [ObservableProperty] private int _cueCount;
 
     /// <summary>Load (replace) the show from a <see cref="ShowDocument"/> JSON string.</summary>
     public void LoadShow(string json)
@@ -55,6 +56,7 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
                 DurationTicks = snap.ClipDuration.Ticks;
                 IsRunning = snap.IsRunning;
             }
+            CueCount = (await _session.GetCueDefinitionsAsync()).Count;
         }
         catch (Exception ex)
         {

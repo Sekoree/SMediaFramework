@@ -650,6 +650,11 @@ load → cue-list → go → transport advances → stop → close, all from pur
       bound to the VM, no exceptions). Gotchas: next/ had never built XAML — the default `*.axaml` glob *is* active (an
       explicit `AvaloniaResource` double-includes → `AVLN2002`), and next/ defaults to **compiled bindings** so every
       bound view needs `x:DataType`. 816 tests (814 + 2), build 0/0, arch 4/4.
+      **FUNCTIONAL SLICE DONE (2026-06-28):** the app loads + drives *real* shows now — (1) **real registry** (`FFmpeg`
+      + `PortAudio` modules, still headless session), (2) **"Load show…" file picker** (`StorageProvider.OpenFilePickerAsync`
+      → `vm.LoadShow(json)` → refresh; async-void handler guards into `StatusMessage`), (3) **cue-count readout**
+      (`ShowSessionViewModel.CueCount` from `GetCueDefinitionsAsync`, pulled in `RefreshAsync`). xvfb smoke still EXIT=0;
+      817 tests (added a CueCount test), build 0/0, arch 4/4.
       *Next:* a video preview (reuse `VideoOpenGlControl`) + `HaPlay.Controls`; then strangle the old workspaces one at
       a time (transport → cue list → control → soundboard …), deleting each god-object as its workspace moves over.
 - [ ] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).

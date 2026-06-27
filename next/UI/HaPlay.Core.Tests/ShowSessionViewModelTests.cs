@@ -37,4 +37,20 @@ public class ShowSessionViewModelTests
 
         Assert.StartsWith("load failed:", vm.StatusMessage);
     }
+
+    [Fact]
+    public async Task Refresh_reportsCueCount_fromLoadedShow()
+    {
+        const string oneCueShow =
+            "{\"Version\":1,\"Cues\":[{\"Id\":\"cue1\",\"Number\":1,\"Label\":\"X\"}]," +
+            "\"Clips\":[],\"Compositions\":[],\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+
+        vm.LoadShow(oneCueShow);
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        Assert.Equal(1, vm.CueCount);
+    }
 }
