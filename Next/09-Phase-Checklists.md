@@ -393,9 +393,19 @@ and verified; full stitched-wall validation is the runtime soak above.
       rendered/composited as a layer + show-wired (`none/one/many` = pass none / one / compose several sources).
       *Only loose end:* the embedded-font `AddFont` path is wired but **untested** (no fonts-attached MKV sample).
 
-**Control:**
-- [ ] Move `S.Control` engine; X32/XTouch → **data-driven profiles** + control registry (P6); X32 meter
+**Control:** (foundation-first; the old engine is in old `MediaFramework/Control/S.Control` + `Extras/MIDI|OSC` — copy-salvage)
+- [~] Move `S.Control` engine; X32/XTouch → **data-driven profiles** + control registry (P6); X32 meter
       decode as a registered capability.
+      **Transport foundation MOVED (2026-06-27):** **OSCLib** → `next/MediaFramework/OSC/OSCLib` (OSC over UDP;
+      11 files) + **PMLib** → `next/MediaFramework/MIDI/PMLib` (PortMidi P/Invoke, native user-provided; 40 files
+      incl. MessageTypes/Devices/Types/Runtime/Accumulators). Both go in **non-FrameworkDir** category dirs (like
+      `Audio/MALib`, `NDI/NDILib`) so the arch-test doesn't require a key — bindings need no `Allowed`-map entry.
+      Gates green: **OSCLib.Tests 23 + PMLib.Tests 13** pass, build 0/0, arch 4/4, **656 total**. *Note found:* the
+      old engine is already partly data-driven — `BuiltInProfileLoader` loads JSON profiles from disk + embedded
+      resources (STJ source-gen); the only hardcoding is `BuiltInControlDeviceProfileFactory` (C# `CreateX32Profile`
+      etc.) → that becomes JSON profile files (user's call: NO hardcoded devices, see [[feedback_control_data_driven_profiles]]).
+      *Next:* move `S.Control` core (profile model + events + device managers/matcher + monitor + value cache),
+      then hardcoded-factory → JSON device profiles (X32/XAir/XTouch/BCF2000 as data).
 - [ ] Mond host API targets the `ShowSession` action façade (headless-drivable).
 
 **Plugin host (`S.Abi`) — the forever-surface:**
