@@ -1,12 +1,29 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Control — MIDI/OSC/Mond + control profile registry (+PMLib/OSCLib/Mond, Phase 6).
-         NuGet/native refs are added in the phase noted above. Common build settings come
-         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+    <!-- S.Control — scriptable MIDI/OSC control runtime: data-driven device profiles (JSON, embedded + copied to
+         output), control config, event queue, monitor/value-cache, live MIDI/OSC routing, and a Mond script host.
+         Devices are DATA (Profiles/*.json), not code. Moved to next/ (Phase 6 Control); common build settings from
+         next/Directory.Build.props, package versions from next/Directory.Packages.props. -->
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="S.Control.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <EmbeddedResource Include="Profiles/*.json">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </EmbeddedResource>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Mond" />
+    </ItemGroup>
 
     <ItemGroup>
         <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../../MIDI/PMLib/PMLib.csproj" />
+        <ProjectReference Include="../../OSC/OSCLib/OSCLib.csproj" />
     </ItemGroup>
 
 </Project>

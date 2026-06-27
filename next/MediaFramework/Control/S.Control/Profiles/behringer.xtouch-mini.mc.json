@@ -1,0 +1,541 @@
+{
+  "id": "behringer.xtouch-mini.mc",
+  "displayName": "Behringer X-Touch Mini (MC Mode)",
+  "protocol": 0,
+  "version": "1.0",
+  "ports": [
+    {
+      "id": "midi-in",
+      "displayName": "MIDI Input",
+      "kind": 0
+    },
+    {
+      "id": "midi-out",
+      "displayName": "MIDI Output",
+      "kind": 1
+    }
+  ],
+  "controls": [
+    {
+      "id": "xtouch.layer.a",
+      "displayName": "Layer A",
+      "kind": 3,
+      "midiNote": 84,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.layer.b",
+      "displayName": "Layer B",
+      "kind": 3,
+      "midiNote": 85,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.1",
+      "displayName": "Encoder 1",
+      "kind": 0,
+      "midiController": 16,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.1.push",
+      "displayName": "Encoder 1 Push",
+      "kind": 1,
+      "midiNote": 32,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.2",
+      "displayName": "Encoder 2",
+      "kind": 0,
+      "midiController": 17,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.2.push",
+      "displayName": "Encoder 2 Push",
+      "kind": 1,
+      "midiNote": 33,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.3",
+      "displayName": "Encoder 3",
+      "kind": 0,
+      "midiController": 18,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.3.push",
+      "displayName": "Encoder 3 Push",
+      "kind": 1,
+      "midiNote": 34,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.4",
+      "displayName": "Encoder 4",
+      "kind": 0,
+      "midiController": 19,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.4.push",
+      "displayName": "Encoder 4 Push",
+      "kind": 1,
+      "midiNote": 35,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.5",
+      "displayName": "Encoder 5",
+      "kind": 0,
+      "midiController": 20,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.5.push",
+      "displayName": "Encoder 5 Push",
+      "kind": 1,
+      "midiNote": 36,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.6",
+      "displayName": "Encoder 6",
+      "kind": 0,
+      "midiController": 21,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.6.push",
+      "displayName": "Encoder 6 Push",
+      "kind": 1,
+      "midiNote": 37,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.7",
+      "displayName": "Encoder 7",
+      "kind": 0,
+      "midiController": 22,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.7.push",
+      "displayName": "Encoder 7 Push",
+      "kind": 1,
+      "midiNote": 38,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.encoder.8",
+      "displayName": "Encoder 8",
+      "kind": 0,
+      "midiController": 23,
+      "valueMode": 2,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "decrementValues": [
+        65,
+        66,
+        67,
+        68,
+        69,
+        70,
+        71,
+        72
+      ]
+    },
+    {
+      "id": "xtouch.encoder.8.push",
+      "displayName": "Encoder 8 Push",
+      "kind": 1,
+      "midiNote": 39,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.1",
+      "displayName": "Button 1",
+      "kind": 2,
+      "midiNote": 89,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.2",
+      "displayName": "Button 2",
+      "kind": 2,
+      "midiNote": 90,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.3",
+      "displayName": "Button 3",
+      "kind": 2,
+      "midiNote": 40,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.4",
+      "displayName": "Button 4",
+      "kind": 2,
+      "midiNote": 41,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.5",
+      "displayName": "Button 5",
+      "kind": 2,
+      "midiNote": 42,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.6",
+      "displayName": "Button 6",
+      "kind": 2,
+      "midiNote": 43,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.7",
+      "displayName": "Button 7",
+      "kind": 2,
+      "midiNote": 44,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.8",
+      "displayName": "Button 8",
+      "kind": 2,
+      "midiNote": 45,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.9",
+      "displayName": "Button 9",
+      "kind": 2,
+      "midiNote": 87,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.10",
+      "displayName": "Button 10",
+      "kind": 2,
+      "midiNote": 88,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.11",
+      "displayName": "Button 11",
+      "kind": 2,
+      "midiNote": 91,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.12",
+      "displayName": "Button 12",
+      "kind": 2,
+      "midiNote": 92,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.13",
+      "displayName": "Button 13",
+      "kind": 2,
+      "midiNote": 86,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.14",
+      "displayName": "Button 14",
+      "kind": 2,
+      "midiNote": 93,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.15",
+      "displayName": "Button 15",
+      "kind": 2,
+      "midiNote": 94,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.button.16",
+      "displayName": "Button 16",
+      "kind": 2,
+      "midiNote": 95,
+      "valueMode": 3,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    },
+    {
+      "id": "xtouch.master-fader",
+      "displayName": "Master Fader",
+      "kind": 4,
+      "valueMode": 4,
+      "midiHighResolution14Bit": false,
+      "incrementValues": [],
+      "decrementValues": []
+    }
+  ],
+  "commands": [],
+  "layers": [
+    {
+      "id": "layer.a",
+      "displayName": "Layer A"
+    },
+    {
+      "id": "layer.b",
+      "displayName": "Layer B"
+    }
+  ],
+  "tasks": []
+}

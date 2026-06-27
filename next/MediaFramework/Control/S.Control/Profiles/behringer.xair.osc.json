@@ -1,0 +1,905 @@
+{
+  "id": "behringer.xair.osc",
+  "displayName": "Behringer X-Air / Midas M-Air OSC",
+  "protocol": 1,
+  "version": "1.0",
+  "defaultOscPort": 10024,
+  "ports": [
+    {
+      "id": "osc-remote",
+      "displayName": "OSC Remote",
+      "kind": 2
+    },
+    {
+      "id": "osc-listener",
+      "displayName": "OSC Listener",
+      "kind": 3
+    }
+  ],
+  "controls": [],
+  "commands": [
+    {
+      "id": "xair.ch.01.fader",
+      "displayName": "Ch 01 Fader",
+      "address": "/ch/01/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/01/mix/fader"
+    },
+    {
+      "id": "xair.ch.01.mute",
+      "displayName": "Ch 01 Mute",
+      "address": "/ch/01/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/01/mix/on"
+    },
+    {
+      "id": "xair.ch.01.pan",
+      "displayName": "Ch 01 Pan",
+      "address": "/ch/01/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/01/mix/pan"
+    },
+    {
+      "id": "xair.ch.01.solo",
+      "displayName": "Ch 01 Solo",
+      "address": "/-stat/solosw/01",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/01"
+    },
+    {
+      "id": "xair.ch.02.fader",
+      "displayName": "Ch 02 Fader",
+      "address": "/ch/02/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/02/mix/fader"
+    },
+    {
+      "id": "xair.ch.02.mute",
+      "displayName": "Ch 02 Mute",
+      "address": "/ch/02/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/02/mix/on"
+    },
+    {
+      "id": "xair.ch.02.pan",
+      "displayName": "Ch 02 Pan",
+      "address": "/ch/02/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/02/mix/pan"
+    },
+    {
+      "id": "xair.ch.02.solo",
+      "displayName": "Ch 02 Solo",
+      "address": "/-stat/solosw/02",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/02"
+    },
+    {
+      "id": "xair.ch.03.fader",
+      "displayName": "Ch 03 Fader",
+      "address": "/ch/03/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/03/mix/fader"
+    },
+    {
+      "id": "xair.ch.03.mute",
+      "displayName": "Ch 03 Mute",
+      "address": "/ch/03/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/03/mix/on"
+    },
+    {
+      "id": "xair.ch.03.pan",
+      "displayName": "Ch 03 Pan",
+      "address": "/ch/03/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/03/mix/pan"
+    },
+    {
+      "id": "xair.ch.03.solo",
+      "displayName": "Ch 03 Solo",
+      "address": "/-stat/solosw/03",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/03"
+    },
+    {
+      "id": "xair.ch.04.fader",
+      "displayName": "Ch 04 Fader",
+      "address": "/ch/04/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/04/mix/fader"
+    },
+    {
+      "id": "xair.ch.04.mute",
+      "displayName": "Ch 04 Mute",
+      "address": "/ch/04/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/04/mix/on"
+    },
+    {
+      "id": "xair.ch.04.pan",
+      "displayName": "Ch 04 Pan",
+      "address": "/ch/04/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/04/mix/pan"
+    },
+    {
+      "id": "xair.ch.04.solo",
+      "displayName": "Ch 04 Solo",
+      "address": "/-stat/solosw/04",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/04"
+    },
+    {
+      "id": "xair.ch.05.fader",
+      "displayName": "Ch 05 Fader",
+      "address": "/ch/05/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/05/mix/fader"
+    },
+    {
+      "id": "xair.ch.05.mute",
+      "displayName": "Ch 05 Mute",
+      "address": "/ch/05/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/05/mix/on"
+    },
+    {
+      "id": "xair.ch.05.pan",
+      "displayName": "Ch 05 Pan",
+      "address": "/ch/05/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/05/mix/pan"
+    },
+    {
+      "id": "xair.ch.05.solo",
+      "displayName": "Ch 05 Solo",
+      "address": "/-stat/solosw/05",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/05"
+    },
+    {
+      "id": "xair.ch.06.fader",
+      "displayName": "Ch 06 Fader",
+      "address": "/ch/06/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/06/mix/fader"
+    },
+    {
+      "id": "xair.ch.06.mute",
+      "displayName": "Ch 06 Mute",
+      "address": "/ch/06/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/06/mix/on"
+    },
+    {
+      "id": "xair.ch.06.pan",
+      "displayName": "Ch 06 Pan",
+      "address": "/ch/06/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/06/mix/pan"
+    },
+    {
+      "id": "xair.ch.06.solo",
+      "displayName": "Ch 06 Solo",
+      "address": "/-stat/solosw/06",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/06"
+    },
+    {
+      "id": "xair.ch.07.fader",
+      "displayName": "Ch 07 Fader",
+      "address": "/ch/07/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/07/mix/fader"
+    },
+    {
+      "id": "xair.ch.07.mute",
+      "displayName": "Ch 07 Mute",
+      "address": "/ch/07/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/07/mix/on"
+    },
+    {
+      "id": "xair.ch.07.pan",
+      "displayName": "Ch 07 Pan",
+      "address": "/ch/07/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/07/mix/pan"
+    },
+    {
+      "id": "xair.ch.07.solo",
+      "displayName": "Ch 07 Solo",
+      "address": "/-stat/solosw/07",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/07"
+    },
+    {
+      "id": "xair.ch.08.fader",
+      "displayName": "Ch 08 Fader",
+      "address": "/ch/08/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/08/mix/fader"
+    },
+    {
+      "id": "xair.ch.08.mute",
+      "displayName": "Ch 08 Mute",
+      "address": "/ch/08/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/08/mix/on"
+    },
+    {
+      "id": "xair.ch.08.pan",
+      "displayName": "Ch 08 Pan",
+      "address": "/ch/08/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/08/mix/pan"
+    },
+    {
+      "id": "xair.ch.08.solo",
+      "displayName": "Ch 08 Solo",
+      "address": "/-stat/solosw/08",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/08"
+    },
+    {
+      "id": "xair.ch.09.fader",
+      "displayName": "Ch 09 Fader",
+      "address": "/ch/09/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/09/mix/fader"
+    },
+    {
+      "id": "xair.ch.09.mute",
+      "displayName": "Ch 09 Mute",
+      "address": "/ch/09/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/09/mix/on"
+    },
+    {
+      "id": "xair.ch.09.pan",
+      "displayName": "Ch 09 Pan",
+      "address": "/ch/09/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/09/mix/pan"
+    },
+    {
+      "id": "xair.ch.09.solo",
+      "displayName": "Ch 09 Solo",
+      "address": "/-stat/solosw/09",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/09"
+    },
+    {
+      "id": "xair.ch.10.fader",
+      "displayName": "Ch 10 Fader",
+      "address": "/ch/10/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/10/mix/fader"
+    },
+    {
+      "id": "xair.ch.10.mute",
+      "displayName": "Ch 10 Mute",
+      "address": "/ch/10/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/10/mix/on"
+    },
+    {
+      "id": "xair.ch.10.pan",
+      "displayName": "Ch 10 Pan",
+      "address": "/ch/10/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/10/mix/pan"
+    },
+    {
+      "id": "xair.ch.10.solo",
+      "displayName": "Ch 10 Solo",
+      "address": "/-stat/solosw/10",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/10"
+    },
+    {
+      "id": "xair.ch.11.fader",
+      "displayName": "Ch 11 Fader",
+      "address": "/ch/11/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/11/mix/fader"
+    },
+    {
+      "id": "xair.ch.11.mute",
+      "displayName": "Ch 11 Mute",
+      "address": "/ch/11/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/11/mix/on"
+    },
+    {
+      "id": "xair.ch.11.pan",
+      "displayName": "Ch 11 Pan",
+      "address": "/ch/11/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/11/mix/pan"
+    },
+    {
+      "id": "xair.ch.11.solo",
+      "displayName": "Ch 11 Solo",
+      "address": "/-stat/solosw/11",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/11"
+    },
+    {
+      "id": "xair.ch.12.fader",
+      "displayName": "Ch 12 Fader",
+      "address": "/ch/12/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/12/mix/fader"
+    },
+    {
+      "id": "xair.ch.12.mute",
+      "displayName": "Ch 12 Mute",
+      "address": "/ch/12/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/12/mix/on"
+    },
+    {
+      "id": "xair.ch.12.pan",
+      "displayName": "Ch 12 Pan",
+      "address": "/ch/12/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/12/mix/pan"
+    },
+    {
+      "id": "xair.ch.12.solo",
+      "displayName": "Ch 12 Solo",
+      "address": "/-stat/solosw/12",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/12"
+    },
+    {
+      "id": "xair.ch.13.fader",
+      "displayName": "Ch 13 Fader",
+      "address": "/ch/13/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/13/mix/fader"
+    },
+    {
+      "id": "xair.ch.13.mute",
+      "displayName": "Ch 13 Mute",
+      "address": "/ch/13/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/13/mix/on"
+    },
+    {
+      "id": "xair.ch.13.pan",
+      "displayName": "Ch 13 Pan",
+      "address": "/ch/13/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/13/mix/pan"
+    },
+    {
+      "id": "xair.ch.13.solo",
+      "displayName": "Ch 13 Solo",
+      "address": "/-stat/solosw/13",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/13"
+    },
+    {
+      "id": "xair.ch.14.fader",
+      "displayName": "Ch 14 Fader",
+      "address": "/ch/14/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/14/mix/fader"
+    },
+    {
+      "id": "xair.ch.14.mute",
+      "displayName": "Ch 14 Mute",
+      "address": "/ch/14/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/14/mix/on"
+    },
+    {
+      "id": "xair.ch.14.pan",
+      "displayName": "Ch 14 Pan",
+      "address": "/ch/14/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/14/mix/pan"
+    },
+    {
+      "id": "xair.ch.14.solo",
+      "displayName": "Ch 14 Solo",
+      "address": "/-stat/solosw/14",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/14"
+    },
+    {
+      "id": "xair.ch.15.fader",
+      "displayName": "Ch 15 Fader",
+      "address": "/ch/15/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/15/mix/fader"
+    },
+    {
+      "id": "xair.ch.15.mute",
+      "displayName": "Ch 15 Mute",
+      "address": "/ch/15/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/15/mix/on"
+    },
+    {
+      "id": "xair.ch.15.pan",
+      "displayName": "Ch 15 Pan",
+      "address": "/ch/15/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/15/mix/pan"
+    },
+    {
+      "id": "xair.ch.15.solo",
+      "displayName": "Ch 15 Solo",
+      "address": "/-stat/solosw/15",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/15"
+    },
+    {
+      "id": "xair.ch.16.fader",
+      "displayName": "Ch 16 Fader",
+      "address": "/ch/16/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/16/mix/fader"
+    },
+    {
+      "id": "xair.ch.16.mute",
+      "displayName": "Ch 16 Mute",
+      "address": "/ch/16/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/16/mix/on"
+    },
+    {
+      "id": "xair.ch.16.pan",
+      "displayName": "Ch 16 Pan",
+      "address": "/ch/16/mix/pan",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/ch/16/mix/pan"
+    },
+    {
+      "id": "xair.ch.16.solo",
+      "displayName": "Ch 16 Solo",
+      "address": "/-stat/solosw/16",
+      "valueKind": 2,
+      "access": 0,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/-stat/solosw/16"
+    },
+    {
+      "id": "xair.bus.1.fader",
+      "displayName": "Bus 1 Fader",
+      "address": "/bus/1/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/1/mix/fader"
+    },
+    {
+      "id": "xair.bus.1.mute",
+      "displayName": "Bus 1 Mute",
+      "address": "/bus/1/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/1/mix/on"
+    },
+    {
+      "id": "xair.bus.2.fader",
+      "displayName": "Bus 2 Fader",
+      "address": "/bus/2/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/2/mix/fader"
+    },
+    {
+      "id": "xair.bus.2.mute",
+      "displayName": "Bus 2 Mute",
+      "address": "/bus/2/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/2/mix/on"
+    },
+    {
+      "id": "xair.bus.3.fader",
+      "displayName": "Bus 3 Fader",
+      "address": "/bus/3/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/3/mix/fader"
+    },
+    {
+      "id": "xair.bus.3.mute",
+      "displayName": "Bus 3 Mute",
+      "address": "/bus/3/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/3/mix/on"
+    },
+    {
+      "id": "xair.bus.4.fader",
+      "displayName": "Bus 4 Fader",
+      "address": "/bus/4/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/4/mix/fader"
+    },
+    {
+      "id": "xair.bus.4.mute",
+      "displayName": "Bus 4 Mute",
+      "address": "/bus/4/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/4/mix/on"
+    },
+    {
+      "id": "xair.bus.5.fader",
+      "displayName": "Bus 5 Fader",
+      "address": "/bus/5/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/5/mix/fader"
+    },
+    {
+      "id": "xair.bus.5.mute",
+      "displayName": "Bus 5 Mute",
+      "address": "/bus/5/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/5/mix/on"
+    },
+    {
+      "id": "xair.bus.6.fader",
+      "displayName": "Bus 6 Fader",
+      "address": "/bus/6/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/6/mix/fader"
+    },
+    {
+      "id": "xair.bus.6.mute",
+      "displayName": "Bus 6 Mute",
+      "address": "/bus/6/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/bus/6/mix/on"
+    },
+    {
+      "id": "xair.dca.1.fader",
+      "displayName": "DCA 1 Fader",
+      "address": "/dca/1/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/1/fader"
+    },
+    {
+      "id": "xair.dca.1.mute",
+      "displayName": "DCA 1 Mute",
+      "address": "/dca/1/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/1/on"
+    },
+    {
+      "id": "xair.dca.2.fader",
+      "displayName": "DCA 2 Fader",
+      "address": "/dca/2/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/2/fader"
+    },
+    {
+      "id": "xair.dca.2.mute",
+      "displayName": "DCA 2 Mute",
+      "address": "/dca/2/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/2/on"
+    },
+    {
+      "id": "xair.dca.3.fader",
+      "displayName": "DCA 3 Fader",
+      "address": "/dca/3/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/3/fader"
+    },
+    {
+      "id": "xair.dca.3.mute",
+      "displayName": "DCA 3 Mute",
+      "address": "/dca/3/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/3/on"
+    },
+    {
+      "id": "xair.dca.4.fader",
+      "displayName": "DCA 4 Fader",
+      "address": "/dca/4/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/4/fader"
+    },
+    {
+      "id": "xair.dca.4.mute",
+      "displayName": "DCA 4 Mute",
+      "address": "/dca/4/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/dca/4/on"
+    },
+    {
+      "id": "xair.lr.fader",
+      "displayName": "Main LR Fader",
+      "address": "/lr/mix/fader",
+      "valueKind": 1,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/lr/mix/fader"
+    },
+    {
+      "id": "xair.lr.mute",
+      "displayName": "Main LR Mute",
+      "address": "/lr/mix/on",
+      "valueKind": 2,
+      "access": 2,
+      "minValue": 0,
+      "maxValue": 1,
+      "cacheKey": "/lr/mix/on"
+    }
+  ],
+  "layers": [],
+  "tasks": [
+    {
+      "id": "xair.xremote",
+      "displayName": "Maintain /xremote",
+      "isDefaultEnabled": true,
+      "kind": 1,
+      "address": "/xremote",
+      "intervalMs": 8000,
+      "arguments": []
+    }
+  ],
+  "behaviors": {
+    "protocolMaintenance": {
+      "renewIntervalMs": 8000,
+      "maintenanceAddresses": [
+        "/xremote",
+        "/subscribe",
+        "/meters"
+      ]
+    },
+    "meterBlobDecoder": "x32"
+  }
+}

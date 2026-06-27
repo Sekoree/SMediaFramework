@@ -404,9 +404,20 @@ and verified; full stitched-wall validation is the runtime soak above.
       old engine is already partly data-driven — `BuiltInProfileLoader` loads JSON profiles from disk + embedded
       resources (STJ source-gen); the only hardcoding is `BuiltInControlDeviceProfileFactory` (C# `CreateX32Profile`
       etc.) → that becomes JSON profile files (user's call: NO hardcoded devices, see [[feedback_control_data_driven_profiles]]).
-      *Next:* move `S.Control` core (profile model + events + device managers/matcher + monitor + value cache),
-      then hardcoded-factory → JSON device profiles (X32/XAir/XTouch/BCF2000 as data).
-- [ ] Mond host API targets the `ShowSession` action façade (headless-drivable).
+      **S.Control CORE MOVED + VERIFIED (2026-06-27):** the whole ~9.7k-line engine (41 .cs + 4 JSON profiles)
+      → `next/MediaFramework/Control/S.Control`, **builds 0 errors unchanged** against next/ Core/Session/PMLib/
+      OSCLib/Mond (clean API compat). 22 clean S.Control test files → `next/Test/S.Control.Tests` (UI-coupled ones
+      skipped); **192 tests pass** (profiles load from embedded JSON, device managers/matcher, 14-bit CC, X32 meter
+      decode, OSC listeners, Mond script runtime) → build 0/0, arch 4/4, **848 total**, old trees untouched. (One
+      test had an old-tree relative path to `Profiles/`; fixed for the next/ layout.)
+      *Remaining for this item:* (a) **data-driven conversion** — retire the redundant hardcoded
+      `BuiltInControlDeviceProfileFactory`, JSON `Profiles/*.json` become the single source (devices = pure data);
+      (b) X32 meter decode as a registered capability.
+- [ ] Mond host API targets the `ShowSession` action façade (headless-drivable). **Confirmed the payoff (2026-06-27):**
+      old scripts only expose device handles (`midi`/`osc`/`bus`/`channel`/`matrix` = device→device, e.g. XTouch→X32);
+      NO player control today. `ShowSession` already has the façade (`GoAsync`/`FireCueAsync`/`SeekAsync`/`StopAsync`/
+      `SnapshotAsync`/`GetCueDefinitionsAsync`) → add a `show`/`cue` Mond handle so a MIDI button/OSC msg can GO/fire/
+      seek the show (hardware-driven cues). Key deliverable, not an afterthought.
 
 **Plugin host (`S.Abi`) — the forever-surface:**
 - [ ] Define `include/mfp_plugin.h`: **full vtable surface** — source/output/audio-backend/layer-surface
