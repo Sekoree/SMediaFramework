@@ -1,0 +1,19 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:HaPlay.Core;assembly=HaPlay.Core"
+        x:Class="HaPlay.App.MainWindow"
+        x:DataType="vm:ShowSessionViewModel"
+        Width="460" Height="260" Title="HaPlay">
+    <StackPanel Margin="16" Spacing="10">
+        <TextBlock Text="HaPlay — ShowSession spine" FontWeight="Bold" FontSize="16" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="GO" Command="{Binding GoCommand}" />
+            <Button Content="Stop" Command="{Binding StopCommand}" />
+            <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+        </StackPanel>
+        <TextBlock Text="{Binding PositionTicks, StringFormat='position: {0} ticks'}" />
+        <TextBlock Text="{Binding DurationTicks, StringFormat='duration: {0} ticks'}" />
+        <TextBlock Text="{Binding IsRunning, StringFormat='running: {0}'}" />
+        <TextBlock Text="{Binding StatusMessage, StringFormat='status: {0}'}" Foreground="#888888" />
+    </StackPanel>
+</Window>

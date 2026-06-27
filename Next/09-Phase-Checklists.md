@@ -643,8 +643,15 @@ load → cue-list → go → transport advances → stop → close, all from pur
       `StatusMessage`** (the async-RelayCommand no-rethrow rule, so a throw never leaves a button stuck disabled);
       transport pulled from `TransportSnapshot` (position / duration / IsRunning). **`HaPlay.Core.Tests`: 2 green**
       (load + GO updates status/transport without throwing; invalid JSON → StatusMessage). Build 0/0, arch 4/4.
-      *Next:* `HaPlay.App` + `HaPlay.Desktop` (an Avalonia 12 window binding the VM — GO button + transport readout,
-      reusing `VideoOpenGlControl` for preview), then strangle the old workspaces one at a time (P1–P6).
+      **APP SLICE DONE (2026-06-28):** `HaPlay.App` (Avalonia 12 — `App.axaml` FluentTheme + `MainWindow` binding the VM:
+      GO/Stop/Refresh buttons + position/duration/running/status readout; compiled bindings via `x:DataType`) +
+      `HaPlay.Desktop` (the exe entry — `AppBuilder.Configure<App>().UsePlatformDetect().WithInterFont()`). A
+      `HAPLAY_SMOKE` env self-exits the app after render → an **xvfb headless smoke runs EXIT=0** (the window comes up
+      bound to the VM, no exceptions). Gotchas: next/ had never built XAML — the default `*.axaml` glob *is* active (an
+      explicit `AvaloniaResource` double-includes → `AVLN2002`), and next/ defaults to **compiled bindings** so every
+      bound view needs `x:DataType`. 816 tests (814 + 2), build 0/0, arch 4/4.
+      *Next:* a video preview (reuse `VideoOpenGlControl`) + `HaPlay.Controls`; then strangle the old workspaces one at
+      a time (transport → cue list → control → soundboard …), deleting each god-object as its workspace moves over.
 - [ ] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
