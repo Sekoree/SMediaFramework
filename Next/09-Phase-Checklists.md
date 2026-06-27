@@ -496,15 +496,34 @@ and verified; full stitched-wall validation is the runtime soak above.
       vtable, self}`). Managed ABI mirrors in `AbiNative.cs` (layout-critical `[StructLayout(Sequential)]` + `delegate*
       unmanaged`). New **`AbiSmoke`** tool gcc-compiles `test_plugin.c` → `.so`, loads it, and verifies a native C
       plugin registers a **media-source-provider + a control-decoder** (`caps=0x42`) — the gate's load+register half.
-      Build 0/0, 812 tests, arch 4/4 (S.Abi→Core). *Next layer:* bind each recorded vtable to its managed interface
-      (`IVideoSource` via the frame-union marshalling; `IControlMeterBlobDecoder` — needs S.Control, so an arch add)
-      and register the adapter into the scoped registry, so the capabilities don't just register but *run*.
+      Build 0/0, 812 tests, arch 4/4 (S.Abi→Core).
+      **CONTROL-DECODER ADAPTER DONE + RUNS (2026-06-27):** `NativeControlDecoder : IControlMeterBlobDecoder` forwards
+      `Decode` through the plugin's `MfpControlDecoderVTable` (address + blob in, readings out via a host-provided
+      buffer; UTF-8 + `NativeMemory` marshalling). `AbiPluginHost.BindControlDecoders(plugin)` → `(id, decoder)` pairs
+      to register into `ControlMeterBlobDecoderRegistry`. Arch dict updated **S.Abi → +S.Control** (acyclic). `AbiSmoke`
+      now also EXERCISES it: the plugin's decoder decodes a 1-byte blob → `/test/decoded = 0.502` (128/255) through the
+      managed interface — a plugin capability is now indistinguishable from a built-in. 812 tests, arch 4/4.
+      **VIDEO-SOURCE ADAPTER DONE + RUNS (2026-06-27):** `NativeVideoSource : IVideoSource` +
+      `NativeMediaSourceProvider` (`AbiPluginHost.BindMediaSourceProviders`). Frame-union structs in `AbiNative.cs`
+      (`MfpVideoFrame`/`MfpCpuFrame`/`MfpDmaBufFrame` + an Explicit `MfpFramePayload` sized to the largest member so
+      sizeof matches C and a plugin can't overrun). CPU-kind frames copy planes → `VideoFrame` (release the native
+      frame after); MfpPixelFormat↔PixelFormat is an explicit name table (the enums' ordinals differ). **ABI:** added
+      `get_format` to `MfpVideoSourceVTable` (the v1-review finding — header still gcc-clean). `AbiSmoke` EXERCISES it
+      end-to-end: opens the plugin's source → `4x4 Bgra32` (via get_format) → reads a frame → `px0=(10,20,30,255)`
+      matching the plugin's bytes — the **frame-union marshalling is proven correct**.
+      **⇒ Phase-6 plugin gate MET: a native C plugin loads and both a video source (feeds a frame) AND a control
+      decoder (decodes) RUN through managed adapters.** Build 0/0, 812 tests, arch 4/4.
+      *Next layer (optional, post-gate):* the remaining capability adapters (audio backend, video output, the MMD
+      layer surface, subtitle) + registering adapters into the live scoped registries + the conformance plugin in CI.
 - [ ] **Per-platform conformance plugin** exercising every vtable, in CI (D8/D9).
 - [ ] ⚠️ **Review `mfp_plugin.h` hard before tagging v1** — it's expensive to change after (OQ1/D9).
 
 **Gate:** subtitle render test; `OSCLib.Tests`/`PMLib.Tests`; sample C-ABI plugin loads + provides a
-source **and** a control decoder.
+source **and** a control decoder. ✅ **MET (2026-06-27)** — `AbiSmoke` gcc-compiles `test_plugin.c` → `.so`, loads
+it through `AbiPluginHost`, and both run through managed adapters: the video source feeds a `4x4 Bgra32` frame
+(`px0=(10,20,30,255)`, frame-union marshalling verified) and the control decoder decodes (`/test/decoded = 0.502`).
 **Exit:** a third-party native plugin adds a video source + a GL layer surface without touching the host.
+*(Video source half of Exit proven; the GL layer surface — the MMD-style layer — is the remaining adapter.)*
 
 **AOT gate VERIFIED for Phase 6 (2026-06-27):** `AotSmoke` extended to reference + exercise the real AOT-risk
 paths — `S.Control` (Mond compile+run of a script that uses a profile `HelperScript` + the `show` bridge) and the

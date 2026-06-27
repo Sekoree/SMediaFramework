@@ -65,3 +65,105 @@ internal unsafe struct MfpPluginInfo
     public byte* DisplayName;
     public uint Capabilities;
 }
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpControlReading
+{
+    public fixed byte Address[160];   // null-terminated UTF-8
+    public double Value;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpControlDecoderVTable
+{
+    // (self, osc_address, blob, blob_len, out[], out_cap, out_count) -> int status
+    public delegate* unmanaged<void*, byte*, byte*, int, MfpControlReading*, int, int*, int> Decode;
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+internal enum MfpFrameKind { Cpu = 0, DmaBuf = 1, D3D11 = 2, GlTexture = 3 }
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MfpSync
+{
+    public int Kind;
+    public ulong Handle;
+    public ulong Value;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpCpuFrame
+{
+    public void* Plane0;
+    public void* Plane1;
+    public void* Plane2;
+    public void* Plane3;
+    public int Stride0;
+    public int Stride1;
+    public int Stride2;
+    public int Stride3;
+    public int PlaneCount;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpDmaBufFrame
+{
+    public int PlaneCount;
+    public fixed int Fds[4];
+    public fixed int Offsets[4];
+    public fixed int Strides[4];
+    public ulong DrmModifier;
+    public uint Fourcc;
+}
+
+// Tagged union — the kind-specific payload of MfpVideoFrame. Explicit overlay; its size = the largest member
+// (MfpDmaBufFrame), so the managed struct's total size equals the C sizeof and a plugin can't write past it.
+[StructLayout(LayoutKind.Explicit)]
+internal unsafe struct MfpFramePayload
+{
+    [FieldOffset(0)] public MfpCpuFrame Cpu;
+    [FieldOffset(0)] public MfpDmaBufFrame DmaBuf;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpVideoFrame
+{
+    public MfpFrameKind Kind;
+    public uint Width;
+    public uint Height;
+    public int PixelFormat;
+    public long PtsTicks;
+    public MfpSync Sync;
+    public void* Opaque;
+    public MfpFramePayload Payload;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpMediaSource
+{
+    public void* Video;
+    public void* Audio;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpVideoSourceVTable
+{
+    public delegate* unmanaged<void*, int*, int, int*, int> NativePixelFormats;  // (src, out[], cap, count)
+    public delegate* unmanaged<void*, int, int> SelectOutputFormat;              // (src, MfpPixelFormat)
+    public delegate* unmanaged<void*, MfpVideoFormat*, int> GetFormat;           // (src, out)
+    public delegate* unmanaged<void*, MfpVideoFrame*, int> TryReadFrame;
+    public delegate* unmanaged<void*, MfpVideoFrame*, void> ReleaseFrame;
+    public delegate* unmanaged<void*, int> IsExhausted;
+    public delegate* unmanaged<void*, long, int> Seek;
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpMediaSourceProviderVTable
+{
+    public delegate* unmanaged<void*, byte*, int> CanOpen;                  // (self, uri)
+    public delegate* unmanaged<void*, byte*, MfpMediaSource*, int> Open;    // (self, uri, out)
+    public MfpVideoSourceVTable* VideoSourceVTable;
+    public void* AudioSourceVTable;   // MfpAudioSourceVTable* — opaque until audio is modeled
+    public delegate* unmanaged<void*, void> Destroy;
+}

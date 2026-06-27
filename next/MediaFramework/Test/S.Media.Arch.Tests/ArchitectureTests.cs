@@ -39,7 +39,7 @@ public sealed class ArchitectureTests
         ["S.Media.Images.Skia"] = ["S.Media.Core"],
         ["S.Media.Subtitles"] = ["S.Media.Core", "LibAssLib"],
         ["S.Control"] = ["S.Media.Core", "S.Media.Session", "PMLib", "OSCLib"],
-        ["S.Abi"] = ["S.Media.Core", "S.Media.Compositor"],
+        ["S.Abi"] = ["S.Media.Core", "S.Media.Compositor", "S.Control"],
         // S.Media.Interop is the host: it bundles the backend modules it ships (Phase 7).
         ["S.Media.Interop"] =
         [

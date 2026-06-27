@@ -1,11 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Abi — inbound native C-ABI plugin host (Phase 6).
-         NuGet/native refs are added in the phase noted above. Common build settings come
-         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+    <!-- S.Abi — inbound native C-ABI plugin host (Phase 6). Loads shared-library plugins (include/mfp_plugin.h)
+         and adapts their vtables to the framework's managed interfaces. References the layers it adapts into:
+         Core (media: sources/outputs/audio), Compositor (layer surfaces), Control (feedback decoders). -->
 
     <ItemGroup>
         <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Control/S.Control/S.Control.csproj" />
     </ItemGroup>
 
 </Project>

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using S.Control;
 
 namespace S.Abi;
 
@@ -106,6 +107,34 @@ public static unsafe class AbiPluginHost
             if (lib != 0)
                 NativeLibrary.Free(lib);
         }
+    }
+
+    /// <summary>Binds a loaded plugin's registered control-decoder capabilities to managed
+    /// <see cref="IControlMeterBlobDecoder"/> adapters (id → decoder). Register each into a
+    /// <see cref="ControlMeterBlobDecoderRegistry"/> so a device profile can reference it by name.</summary>
+    public static IReadOnlyList<(string Id, IControlMeterBlobDecoder Decoder)> BindControlDecoders(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+
+        var result = new List<(string, IControlMeterBlobDecoder)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "control-decoder")
+                result.Add((cap.Id, new NativeControlDecoder(cap.VTable, cap.Self)));
+        return result;
+    }
+
+    /// <summary>Binds a loaded plugin's registered media-source-provider capabilities to
+    /// <see cref="NativeMediaSourceProvider"/> adapters (scheme → provider). Open a URI through one to get a managed
+    /// <see cref="S.Media.Core.Video.IVideoSource"/>.</summary>
+    public static IReadOnlyList<(string Scheme, NativeMediaSourceProvider Provider)> BindMediaSourceProviders(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+
+        var result = new List<(string, NativeMediaSourceProvider)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "media-source-provider")
+                result.Add((cap.Id, new NativeMediaSourceProvider(cap.VTable, cap.Self)));
+        return result;
     }
 
     private static int Record(void* ctx, byte* id, void* vt, void* self, string capability)

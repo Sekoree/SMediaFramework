@@ -249,6 +249,7 @@ typedef struct MfpAudioSourceVTable {
 typedef struct MfpVideoSourceVTable {
     int  (*native_pixel_formats)(void* src, MfpPixelFormat* out, int cap, int* count);
     int  (*select_output_format)(void* src, MfpPixelFormat chosen);
+    int  (*get_format)(void* src, MfpVideoFormat* out);       /* resolved output format (w/h/pixel_format); host queries it before the first read (↔ IVideoSource.Format) */
     int  (*try_read_frame)(void* src, MfpVideoFrame* out);    /* MFP_OK / MFP_ERR_AGAIN / MFP_ERR_END */
     void (*release_frame)(void* src, MfpVideoFrame* frame);   /* return a frame this source produced */
     int  (*is_exhausted)(void* src);
