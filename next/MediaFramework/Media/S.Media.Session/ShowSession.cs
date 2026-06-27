@@ -11,6 +11,7 @@ public sealed record TransportSnapshot(
     string GroupId,
     TimeSpan SessionTime,
     TimeSpan ClipPosition,
+    TimeSpan ClipDuration,
     bool IsRunning);
 
 /// <summary>
@@ -330,6 +331,7 @@ public sealed class ShowSession : IAsyncDisposable
                     kv.Key,
                     kv.Value.Clock.Now,
                     kv.Value.Active?.Player.Position ?? TimeSpan.Zero,
+                    kv.Value.Active?.Player.Duration ?? TimeSpan.Zero,
                     kv.Value.Active?.Player.IsRunning ?? false))
                 .ToArray();
             return Task.FromResult<IReadOnlyList<TransportSnapshot>>(snaps);

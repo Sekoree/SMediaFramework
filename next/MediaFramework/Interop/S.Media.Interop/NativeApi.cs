@@ -168,8 +168,7 @@ internal static unsafe class NativeApi
 
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_duration_ticks")]
     private static long SessionDurationTicks(nint session, byte* groupId) =>
-        // The transport snapshot doesn't carry a clip duration yet; 0 = unknown (a richer query is a later slice).
-        Snapshot(session, groupId, static _ => 0L, MfpErrInvalidHandle);
+        Snapshot(session, groupId, static s => s.ClipDuration.Ticks, MfpErrInvalidHandle);
 
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_state")]
     private static int SessionState(nint session, byte* groupId) =>

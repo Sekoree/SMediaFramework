@@ -621,7 +621,13 @@ and it runs). Windows-CI AOT still deferred (user).
       (no audio backend — CI-safe, no flaky-ALSA dependency; audio-out is a later create-with-audio option). (3) **Richer
       query** — added `mfp_session_cue_count` + `mfp_session_cue_id` (16 exported symbols now). Build 0/0, 814 tests,
       0 IL trim warnings. **Windows deferred** (no Windows builds available right now — needs an AOT cross/MSVC-link run
-      on a Windows runner). *Remaining (append-only):* snapshot / real clip-duration query; the Windows CI leg.
+      on a Windows runner).
+      **DURATION QUERY DONE (2026-06-28):** `MediaPlayer.Duration` was never wired (always 0) — now set at open from
+      the seekable source's duration (`(audioSource/videoSource as ISeekableSource)?.Duration`, max; live sources stay
+      0). Threaded through `TransportSnapshot.ClipDuration` → `mfp_session_duration_ticks` returns it. `SmpSmoke`'s
+      media show (a 1 s ffmpeg tone) now reports `duration = 10000000 ticks` (= 1 s). 814 tests, build 0/0, 0 IL warnings.
+      *Remaining (append-only):* the **Windows CI leg** (deferred — no Windows builds available); a fuller snapshot
+      query (per-group session-time / running-flag struct) if a host wants it.
 **Exit:** a headless host can run a show entirely through the C ABI — ✅ **demonstrated** (`SmpSmoke` media show:
 load → cue-list → go → transport advances → stop → close, all from pure C).
 

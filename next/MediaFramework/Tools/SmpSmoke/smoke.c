@@ -57,10 +57,15 @@ int main(int argc, char** argv) {
 
     CHECK(mfp_session_go(s, NULL) == MFP_OK, "mfp_session_go");
     int64_t pos = mfp_session_position_ticks(s, NULL);
+    int64_t dur = mfp_session_duration_ticks(s, NULL);
     int state = mfp_session_state(s, NULL);
-    printf("after go: position = %lld ticks, state = %d\n", (long long)pos, state);
+    printf("after go: position = %lld ticks, duration = %lld ticks, state = %d\n",
+           (long long)pos, (long long)dur, state);
     CHECK(pos >= 0, "mfp_session_position_ticks");
+    CHECK(dur >= 0, "mfp_session_duration_ticks");
     CHECK(state >= 0, "mfp_session_state");
+    if (media)
+        CHECK(dur > 0, "media clip reports a duration");
 
     CHECK(mfp_session_stop(s, NULL) == MFP_OK, "mfp_session_stop");
     mfp_session_destroy(s);

@@ -685,6 +685,12 @@ public sealed class MediaPlayer : IDisposable
                 ownedDisposables,
                 liveVideo);
 
+            // Surface the media's duration (file clips) so transport queries — and the outbound C ABI
+            // (mfp_session_duration_ticks) — can report it. Live sources carry no duration, so it stays zero.
+            var audioDuration = (audioSource as ISeekableSource)?.Duration ?? TimeSpan.Zero;
+            var videoDuration = (videoSource as ISeekableSource)?.Duration ?? TimeSpan.Zero;
+            player.Duration = audioDuration > videoDuration ? audioDuration : videoDuration;
+
             Trace.LogInformation("TryOpenLive: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
                 audioSource is not null,
                 videoSource is not null,
