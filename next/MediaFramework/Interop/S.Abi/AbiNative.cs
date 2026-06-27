@@ -167,3 +167,112 @@ internal unsafe struct MfpMediaSourceProviderVTable
     public void* AudioSourceVTable;   // MfpAudioSourceVTable* — opaque until audio is modeled
     public delegate* unmanaged<void*, void> Destroy;
 }
+
+// --- audio backend ---
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MfpAudioFormat
+{
+    public uint SampleRate;
+    public uint Channels;
+    public int SampleFormat;   // MfpAudioSampleFormat; 0 = f32 interleaved
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpAudioDeviceInfo
+{
+    public fixed byte Id[128];
+    public fixed byte Name[128];
+    public uint MaxChannels;
+    public uint DefaultSampleRate;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MfpAudioOpts
+{
+    public double SuggestedLatencySeconds;
+    public uint PrebufferFrames;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpAudioBackendVTable
+{
+    public delegate* unmanaged<void*, MfpAudioDeviceInfo*, int, int*, int> EnumerateOutputs;
+    public delegate* unmanaged<void*, MfpAudioDeviceInfo*, int, int*, int> EnumerateInputs;
+    public delegate* unmanaged<void*, byte*, MfpAudioFormat*, MfpAudioOpts*, void*> OpenOutput;
+    public delegate* unmanaged<void*, byte*, MfpAudioFormat*, MfpAudioOpts*, void*> OpenInput;
+    public delegate* unmanaged<void*, float*, int, int> OutputSubmit;   // (handle, interleaved, float_count)
+    public delegate* unmanaged<void*, float*, int, int> InputReadInto;  // (handle, dst, float_count)
+    public delegate* unmanaged<void*, void> CloseHandle;
+    public delegate* unmanaged<void*, void> Destroy;
+    public delegate* unmanaged<void*, long> OutputPlayedFrames;         // optional (NULL = not a clock)
+    public delegate* unmanaged<void*, int> OutputWritableFrames;        // optional (NULL = always writable)
+}
+
+// --- video output ---
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpVideoOutputVTable
+{
+    public delegate* unmanaged<void*, int*, int, int*, int> AcceptedPixelFormats;
+    public delegate* unmanaged<void*, MfpVideoFormat*, int> Configure;
+    public delegate* unmanaged<void*, MfpVideoFrame*, int> Submit;
+    public delegate* unmanaged<void*, void> Destroy;
+    public delegate* unmanaged<void*, void> AbandonQueued;          // optional (NULL = no internal queue)
+    public delegate* unmanaged<void*, int, int> WaitForIdle;        // optional; (self, timeout_ms) -> idle?
+}
+
+// --- subtitle ---
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpSubtitleVTable
+{
+    public delegate* unmanaged<void*, long, MfpVideoFrame*, int> RenderAt;  // (self, position_ticks, out)
+    public delegate* unmanaged<void*, MfpVideoFrame*, void> ReleaseFrame;
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpSubtitleProviderVTable
+{
+    public delegate* unmanaged<void*, byte*, int> CanOpen;
+    public delegate* unmanaged<void*, byte*, uint, uint, void*> Open;   // (self, uri, canvas_w, canvas_h) -> instance
+    public MfpSubtitleVTable* SubtitleVTable;
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+// --- layer surface (GL) ---
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpGlContext
+{
+    public ulong ContextId;
+    public delegate* unmanaged<byte*, void*> GetProcAddress;   // (name) -> GL proc address
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MfpTransform2D
+{
+    public float A;
+    public float B;
+    public float C;
+    public float D;
+    public float Tx;
+    public float Ty;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpLayerSurfaceVTable
+{
+    public delegate* unmanaged<void*, MfpGlContext*, uint, uint, int> ConfigureGl;  // (surface, ctx, canvas_w, canvas_h)
+    public delegate* unmanaged<void*, MfpGlContext*, uint, long, MfpTransform2D*, float, int> Render; // (surface, ctx, fbo, master_ticks, placement, opacity)
+    public delegate* unmanaged<void*, void> Destroy;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal unsafe struct MfpLayerSurfaceFactoryVTable
+{
+    public delegate* unmanaged<void*, byte*, void*> Create;   // (self, config_json) -> surface instance
+    public MfpLayerSurfaceVTable* SurfaceVTable;
+    public delegate* unmanaged<void*, void> Destroy;
+}

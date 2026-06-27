@@ -1,23 +1,44 @@
 using System.Text;
+using S.Media.Core.Audio;
+using S.Media.Core.Registry;
 using S.Media.Core.Video;
 
 namespace S.Abi;
 
 /// <summary>
-/// Adapts a native plugin's <c>MfpMediaSourceProviderVTable</c> — opens a URI into the plugin's video source and
-/// wraps it as a managed <see cref="IVideoSource"/> via <see cref="NativeVideoSource"/>. (Audio sources are not
-/// modelled yet; <see cref="TryOpenVideo"/> returns the video half of the opened media.)
+/// Adapts a native plugin's <c>MfpMediaSourceProviderVTable</c> to the framework's <see cref="IMediaDecoderProvider"/>
+/// — so a plugin that handles a URI scheme is registered into a live <see cref="IMediaRegistry"/> and used exactly
+/// like the built-in FFmpeg/NDI providers. Opens the URI into the plugin's video source and wraps it as a managed
+/// <see cref="IVideoSource"/> via <see cref="NativeVideoSource"/>. (Audio-source adapting is not modelled yet — the
+/// provider only claims video in <see cref="Probe"/>.)
 /// </summary>
-public sealed unsafe class NativeMediaSourceProvider
+public sealed unsafe class NativeMediaSourceProvider : IMediaDecoderProvider
 {
     private readonly MfpMediaSourceProviderVTable* _vt;
     private readonly void* _self;
 
-    internal NativeMediaSourceProvider(nint vtable, nint self)
+    internal NativeMediaSourceProvider(string name, nint vtable, nint self)
     {
+        Name = name;
         _vt = (MfpMediaSourceProviderVTable*)vtable;
         _self = (void*)self;
     }
+
+    public string Name { get; }
+
+    public double Probe(string uri, MediaKind kind)
+    {
+        // Only claim video for now (audio adapting unmodelled), and only when the plugin says it handles the URI.
+        if (kind != MediaKind.Video || _vt->VideoSourceVTable == null)
+            return 0.0;
+        return CanOpen(uri) ? 1.0 : 0.0;
+    }
+
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) =>
+        TryOpenVideo(uri) ?? throw new InvalidOperationException($"plugin '{Name}' could not open video for '{uri}'.");
+
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
+        throw new NotSupportedException($"plugin '{Name}': native audio-source adapting is not implemented yet.");
 
     public bool CanOpen(string uri)
     {

@@ -6,6 +6,7 @@
 
     <ItemGroup>
         <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Compositor/S.Media.Compositor.csproj" />
         <ProjectReference Include="../../Control/S.Control/S.Control.csproj" />
     </ItemGroup>
 

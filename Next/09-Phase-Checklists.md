@@ -488,7 +488,7 @@ and verified; full stitched-wall validation is the runtime soak above.
 - [ ] **Per-kind tagged frame union** incl. GPU handles: `MfpCpuFrame`/`MfpDmaBufFrame`/`MfpD3D11Frame`/
       `MfpGlTextureFrame` (GL = same-context only), mirroring Core's `Dmabuf*`/`Win32Shared*` (D8/OQ1).
 - [ ] **Negotiated `MfpSync`** (keyed-mutex / semaphore / fence via capability query — OQ2).
-- [~] Managed adapters → scoped registries; ABI version gate; append-only structs.
+- [x] Managed adapters → scoped registries; ABI version gate; append-only structs. **ALL SIX capabilities done.**
       **HOST LOADER + GATE (load+register half) DONE (2026-06-27):** `S.Abi.AbiPluginHost.Load(path)` —
       `NativeLibrary.Load` + `GetExport("mfp_plugin_register")` + a host-API + registrar built from
       `[UnmanagedCallersOnly]` callbacks (all NativeAOT-safe, no reflection) → calls the entry point, enforces the
@@ -513,8 +513,36 @@ and verified; full stitched-wall validation is the runtime soak above.
       matching the plugin's bytes — the **frame-union marshalling is proven correct**.
       **⇒ Phase-6 plugin gate MET: a native C plugin loads and both a video source (feeds a frame) AND a control
       decoder (decodes) RUN through managed adapters.** Build 0/0, 812 tests, arch 4/4.
-      *Next layer (optional, post-gate):* the remaining capability adapters (audio backend, video output, the MMD
-      layer surface, subtitle) + registering adapters into the live scoped registries + the conformance plugin in CI.
+      **LIVE-REGISTRY WIRING DONE (2026-06-27):** `NativeMediaSourceProvider` now implements
+      `IMediaDecoderProvider` (Name/Probe/OpenVideo; audio-source adapting unmodelled so Probe only claims video) and
+      `AbiPluginHost.RegisterInto(plugin, IMediaRegistryBuilder?, ControlMeterBlobDecoderRegistry?)` registers a
+      plugin's providers + decoders into the live registries. `AbiSmoke` proves the **end-to-end live path**:
+      `MediaRegistry.Build(b => RegisterInto(plugin, b))` then `registry.TryOpenVideo("testsrc://demo")` routes the URI
+      to the plugin (via Probe) → reads `4x4 Bgra32 px0=(10,20,30,255)` — the SAME path MediaPlayer/ShowSession use;
+      the decoder resolves from `ControlMeterBlobDecoderRegistry` by id. So plugin capabilities are usable from the
+      real framework, not just direct binding. 812 tests, arch 4/4.
+      **ALL REMAINING CPU ADAPTERS DONE + RUNNING (2026-06-27):** `NativeAudioBackend` (IAudioBackend) + its
+      `NativeAudioOutput` (IAudioOutput + IAudioOutputPlaybackStats — the played-frame clock via `output_played_frames`)
+      + `NativeAudioInput` (IAudioSource); `NativeVideoOutput` (IVideoOutput + IVideoOutputQueueControl) with the
+      REVERSE frame marshalling (pins the managed VideoFrame's planes → MfpVideoFrame for the synchronous submit);
+      `NativeSubtitleProvider` + `NativeSubtitleOverlay` (IVideoOverlaySource). Shared `AbiFrameMarshal` (pixel-format
+      name table + CPU-frame to/from VideoFrame) de-dups source/output/subtitle. Host binders `BindAudioBackends`/
+      `BindVideoOutputs`/`BindSubtitleProviders`; `RegisterInto` also does `AddAudioBackend`. `AbiSmoke` exercises ALL
+      SIX through managed adapters: audio (`played frames=4`), video output (`vout:ok` — plugin validated the bytes),
+      subtitle (`px0=(99,99,99,255)`), plus the earlier source/decoder. **Real bug found + fixed:** the host-API was a
+      stack local in `Load` — a plugin captures it and calls back (log/now_ticks) AFTER Load returns → dangling-pointer
+      SIGSEGV; now allocated once in persistent native memory (`s_hostApiPtr`). Build 0/0, 812 tests, arch 4/4.
+      **GL LAYER-SURFACE ADAPTER DONE + RUNNING (2026-06-27, user asked not to defer):** `NativeLayerSurface`
+      (IVideoCompositorLayerSurface) + `NativeLayerSurfaceFactory` forward configure_gl/render to the plugin's
+      `MfpLayerSurfaceVTable`; the plugin loads GL entry points through `MfpGlContext.get_proc_address`, bridged to
+      Silk.NET's `gl.Context.GetProcAddress` via a thread-static GL set around each call. **Compositor registry gained
+      config-aware overloads** — `AddLayerSurface(kind, Func<string?,…>)` + `TryCreateLayerSurface(kind, configJson,…)`
+      (back-compat kept; one existing test's `null!` needed a delegate cast). `RegisterInto` gained an
+      `ICompositorRegistryBuilder`. New **`AbiGlSmoke`** (SDL GL ctx, run under xvfb): registers the plugin's
+      "testlayer" surface, `TryCreateLayerSurface("testlayer", "40")` → ConfigureGl → Render into a real FBO → readback
+      `px0=(40,0,0,255)` — config drove the colour, proving the factory + the proc-address bridge + the GL render. So
+      **ALL SIX ABI capabilities now have working, exercised adapters.** Build 0/0, 814 tests, arch 4/4. (+ the
+      per-platform conformance plugin in CI remains for hardening.)
 - [ ] **Per-platform conformance plugin** exercising every vtable, in CI (D8/D9).
 - [ ] ⚠️ **Review `mfp_plugin.h` hard before tagging v1** — it's expensive to change after (OQ1/D9).
 
@@ -523,7 +551,9 @@ source **and** a control decoder. ✅ **MET (2026-06-27)** — `AbiSmoke` gcc-co
 it through `AbiPluginHost`, and both run through managed adapters: the video source feeds a `4x4 Bgra32` frame
 (`px0=(10,20,30,255)`, frame-union marshalling verified) and the control decoder decodes (`/test/decoded = 0.502`).
 **Exit:** a third-party native plugin adds a video source + a GL layer surface without touching the host.
-*(Video source half of Exit proven; the GL layer surface — the MMD-style layer — is the remaining adapter.)*
+✅ **MET (2026-06-27)** — `AbiSmoke` proves the video source (registry-routed open + frame) and `AbiGlSmoke` proves
+the GL layer surface (config-driven FBO render on a real GL context); neither touches the host. (Both halves of Exit
+done; only the per-platform conformance-plugin-in-CI item remains, for hardening.)
 
 **AOT gate VERIFIED for Phase 6 (2026-06-27):** `AotSmoke` extended to reference + exercise the real AOT-risk
 paths — `S.Control` (Mond compile+run of a script that uses a profile `HelperScript` + the `show` bridge) and the

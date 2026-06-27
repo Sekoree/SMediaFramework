@@ -63,7 +63,30 @@ public sealed class CompositorLayerSurfaceRegistryTests
     {
         var b = new CompositorRegistryBuilder();
         Assert.Throws<ArgumentException>(() => b.AddLayerSurface("", () => new FakeSurface()));
-        Assert.Throws<ArgumentNullException>(() => b.AddLayerSurface("k", null!));
+        Assert.Throws<ArgumentNullException>(() => b.AddLayerSurface("k", (Func<IVideoCompositorLayerSurface>)null!));
+    }
+
+    [Fact]
+    public void AddLayerSurface_config_aware_passes_config_blob_to_factory()
+    {
+        string? captured = null;
+        var registry = CompositorRegistryBuilder.Build(b =>
+            b.AddLayerSurface("mmd", cfg => { captured = cfg; return new FakeSurface(); }));
+
+        Assert.True(registry.TryCreateLayerSurface("mmd", "{\"models\":[\"a.pmx\"]}", out var surface));
+        Assert.NotNull(surface);
+        Assert.Equal("{\"models\":[\"a.pmx\"]}", captured);
+    }
+
+    [Fact]
+    public void TryCreateLayerSurface_without_config_passes_null_to_config_aware_factory()
+    {
+        var sawConfig = "unset";
+        var registry = CompositorRegistryBuilder.Build(b =>
+            b.AddLayerSurface("mmd", cfg => { sawConfig = cfg ?? "<null>"; return new FakeSurface(); }));
+
+        Assert.True(registry.TryCreateLayerSurface("mmd", out _));
+        Assert.Equal("<null>", sawConfig);
     }
 
     private sealed class FakeSurface : IVideoCompositorLayerSurface

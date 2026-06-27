@@ -1,5 +1,7 @@
 using System.Runtime.InteropServices;
 using S.Control;
+using S.Media.Compositor;
+using S.Media.Core.Registry;
 
 namespace S.Abi;
 
@@ -49,6 +51,29 @@ public static unsafe class AbiPluginHost
 {
     public const uint AbiVersion = 1u;
 
+    /// <summary>The most recent message a loaded plugin emitted through the host log callback (diagnostics).</summary>
+    public static string? LastLogMessage { get; private set; }
+
+    // The host-API handed to plugins. Allocated ONCE in native memory (never a stack local) because a plugin captures
+    // this pointer and may call the host callbacks (log, now_ticks, alloc_frame) long after Load returns — a stack
+    // MfpHostApi would dangle and crash on the first post-load callback. The vtable function pointers are stable.
+    private static readonly nint s_hostApiPtr = CreateHostApi();
+
+    private static nint CreateHostApi()
+    {
+        var p = (MfpHostApi*)NativeMemory.Alloc((nuint)sizeof(MfpHostApi));
+        *p = new MfpHostApi
+        {
+            AbiVersion = AbiVersion,
+            Log = &HostLog,
+            SetLastError = &HostSetLastError,
+            NowTicks = &HostNowTicks,
+            AllocFrame = &HostAllocFrame,
+            ReleaseFrame = &HostReleaseFrame,
+        };
+        return (nint)p;
+    }
+
     public static AbiLoadedPlugin Load(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
@@ -63,15 +88,6 @@ public static unsafe class AbiPluginHost
             var ctx = GCHandle.Alloc(recorded);
             try
             {
-                var host = new MfpHostApi
-                {
-                    AbiVersion = AbiVersion,
-                    Log = &HostLog,
-                    SetLastError = &HostSetLastError,
-                    NowTicks = &HostNowTicks,
-                    AllocFrame = &HostAllocFrame,
-                    ReleaseFrame = &HostReleaseFrame,
-                };
                 var reg = new MfpRegistrar
                 {
                     AbiVersion = AbiVersion,
@@ -85,7 +101,7 @@ public static unsafe class AbiPluginHost
                 };
 
                 MfpPluginInfo info = default;
-                var rc = register(&host, &info, &reg);
+                var rc = register((MfpHostApi*)s_hostApiPtr, &info, &reg);
                 if (rc != (int)MfpStatus.Ok)
                     throw new InvalidOperationException($"mfp_plugin_register('{path}') returned {rc}.");
                 if (info.AbiVersion != AbiVersion)
@@ -133,8 +149,91 @@ public static unsafe class AbiPluginHost
         var result = new List<(string, NativeMediaSourceProvider)>();
         foreach (var cap in plugin.Registered)
             if (cap.Capability == "media-source-provider")
-                result.Add((cap.Id, new NativeMediaSourceProvider(cap.VTable, cap.Self)));
+                result.Add((cap.Id, new NativeMediaSourceProvider(cap.Id, cap.VTable, cap.Self)));
         return result;
+    }
+
+    /// <summary>Binds a loaded plugin's registered audio-backend capabilities to <see cref="NativeAudioBackend"/>
+    /// adapters (id → backend). Register each into a media registry via <c>AddAudioBackend</c>.</summary>
+    public static IReadOnlyList<(string Id, NativeAudioBackend Backend)> BindAudioBackends(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+
+        var result = new List<(string, NativeAudioBackend)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "audio-backend")
+                result.Add((cap.Id, new NativeAudioBackend(cap.Id, cap.VTable, cap.Self)));
+        return result;
+    }
+
+    /// <summary>Binds a loaded plugin's registered video-output capabilities to <see cref="NativeVideoOutput"/>
+    /// adapters (id → output). Video outputs are wired by the app/router (there is no media-registry slot).</summary>
+    public static IReadOnlyList<(string Id, NativeVideoOutput Output)> BindVideoOutputs(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+
+        var result = new List<(string, NativeVideoOutput)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "video-output")
+                result.Add((cap.Id, NativeVideoOutput.Create(cap.VTable, cap.Self)));
+        return result;
+    }
+
+    /// <summary>Binds a loaded plugin's registered subtitle-provider capabilities to
+    /// <see cref="NativeSubtitleProvider"/> adapters (id → provider). Subtitles are consumed via an overlay factory
+    /// delegate (e.g. ShowSession's), not a registry.</summary>
+    public static IReadOnlyList<(string Id, NativeSubtitleProvider Provider)> BindSubtitleProviders(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+
+        var result = new List<(string, NativeSubtitleProvider)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "subtitle-provider")
+                result.Add((cap.Id, new NativeSubtitleProvider(cap.VTable, cap.Self)));
+        return result;
+    }
+
+    /// <summary>Binds a loaded plugin's registered layer-surface capabilities to <see cref="NativeLayerSurfaceFactory"/>
+    /// adapters (kind → factory). Register each into an <see cref="ICompositorRegistryBuilder"/>; the opaque
+    /// config_json blob (e.g. the MMD models/motion) is passed through to the plugin's create().</summary>
+    public static IReadOnlyList<(string Kind, NativeLayerSurfaceFactory Factory)> BindLayerSurfaces(AbiLoadedPlugin plugin)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+
+        var result = new List<(string, NativeLayerSurfaceFactory)>();
+        foreach (var cap in plugin.Registered)
+            if (cap.Capability == "layer-surface")
+                result.Add((cap.Id, new NativeLayerSurfaceFactory(cap.VTable, cap.Self)));
+        return result;
+    }
+
+    /// <summary>Registers a loaded plugin's media-source providers, audio backends, control decoders + GL layer
+    /// surfaces into the live framework registries, so plugin capabilities are usable from a real pipeline — not just
+    /// via direct binding. (Video outputs + subtitle providers have no registry slot — bind them directly.)</summary>
+    public static void RegisterInto(
+        AbiLoadedPlugin plugin,
+        IMediaRegistryBuilder? media = null,
+        ControlMeterBlobDecoderRegistry? control = null,
+        ICompositorRegistryBuilder? compositor = null)
+    {
+        ArgumentNullException.ThrowIfNull(plugin);
+
+        if (media is not null)
+        {
+            foreach (var (_, provider) in BindMediaSourceProviders(plugin))
+                media.AddDecoder(provider);
+            foreach (var (_, backend) in BindAudioBackends(plugin))
+                media.AddAudioBackend(backend);
+        }
+
+        if (control is not null)
+            foreach (var (id, decoder) in BindControlDecoders(plugin))
+                control.Register(id, decoder);
+
+        if (compositor is not null)
+            foreach (var (kind, factory) in BindLayerSurfaces(plugin))
+                compositor.AddLayerSurface(kind, cfg =>
+                    factory.Create(cfg) ?? throw new InvalidOperationException($"plugin layer surface '{kind}' returned no instance."));
     }
 
     private static int Record(void* ctx, byte* id, void* vt, void* self, string capability)
@@ -151,7 +250,7 @@ public static unsafe class AbiPluginHost
     [UnmanagedCallersOnly] private static int AddSubtitleProvider(void* ctx, byte* id, void* vt, void* self) => Record(ctx, id, vt, self, "subtitle-provider");
     [UnmanagedCallersOnly] private static int AddControlDecoder(void* ctx, byte* id, void* vt, void* self) => Record(ctx, id, vt, self, "control-decoder");
 
-    [UnmanagedCallersOnly] private static void HostLog(int level, byte* msg) { }
+    [UnmanagedCallersOnly] private static void HostLog(int level, byte* msg) => LastLogMessage = Utf8(msg);
     [UnmanagedCallersOnly] private static void HostSetLastError(byte* msg) { }
     [UnmanagedCallersOnly] private static long HostNowTicks() => DateTime.UtcNow.Ticks;
     [UnmanagedCallersOnly] private static void* HostAllocFrame(MfpVideoFormat* fmt) => null;
