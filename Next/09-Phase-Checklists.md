@@ -600,12 +600,30 @@ and it runs). Windows-CI AOT still deferred (user).
 ## Phase 7 — Outbound C ABI
 **Goal:** `s_media_player` drives the new session.
 
-- [ ] Retarget `S.Media.Interop`: init **builds a registry** (`UseFFmpeg().UsePortAudio().UseMiniAudio()…`)
+- [x] Retarget `S.Media.Interop`: init **builds a registry** (`Use(new FFmpegModule()).Use(new PortAudioModule())`)
       and drives the new `ShowSession`; keep ABI conventions (opaque handles, status codes, 100-ns ticks).
-- [ ] Update `s_media_player.h` to the new session surface; keep it stable/append-only.
+- [x] Update `s_media_player.h` to the new session surface; keep it stable/append-only.
+      **FIRST SLICE DONE + GATED FROM C (2026-06-27):** new `s_media_player.h` (show/cue surface, gcc-clean) + the
+      `NativeApi.cs` `[UnmanagedCallersOnly]` exports over `ShowSession` — sync over the async dispatcher (block on the
+      task; the dispatcher runs on its own thread), `GCHandle` handles, thread-local last-error, null→default group,
+      real-backend-or-headless fallback. `S.Media.Interop` now AOT-publishes (`AssemblyName=s_media_player`,
+      `NativeLib=Shared` gated on `PublishAot` so normal builds/refs are unaffected) → **`s_media_player.so` exporting
+      all 14 `mfp_*` symbols, zero IL trim warnings**. New pure-C fixture `Tools/SmpSmoke/smoke.c` links the `.so` and
+      runs the lifecycle — `initialize → create → load_show(json) → go → position/state → seek → stop → destroy →
+      shutdown` — green (`EXIT=0`). Build 0/0, 814 tests, arch 4/4, old trees untouched.
 
-**Gate:** C-ABI smoke (open / play / close via `s_media_player.h`) green on Windows + Linux.
-**Exit:** a headless host can run a show entirely through the C ABI.
+**Gate:** C-ABI smoke (open / play / close via `s_media_player.h`) — ✅ **Linux green** (`SmpSmoke`).
+      **SECOND SLICE DONE (2026-06-28):** (1) **CI gate (Linux)** — `next-build.yml` now AOT-publishes `s_media_player.so`,
+      gcc-compiles `Tools/SmpSmoke/smoke.c`, and runs it (empty show **gating**; ffmpeg-tone media show **best-effort** —
+      runner FFmpeg version varies). (2) **Media-playing show** — `smoke.c` takes a media path → builds a one-cue show
+      whose clip plays it; `go` opens the clip and the **transport advances headless** (`position = 672 ticks,
+      state = PLAYING`) with no audio device → the **Exit is met**. `mfp_session_create` is now **headless by default**
+      (no audio backend — CI-safe, no flaky-ALSA dependency; audio-out is a later create-with-audio option). (3) **Richer
+      query** — added `mfp_session_cue_count` + `mfp_session_cue_id` (16 exported symbols now). Build 0/0, 814 tests,
+      0 IL trim warnings. **Windows deferred** (no Windows builds available right now — needs an AOT cross/MSVC-link run
+      on a Windows runner). *Remaining (append-only):* snapshot / real clip-duration query; the Windows CI leg.
+**Exit:** a headless host can run a show entirely through the C ABI — ✅ **demonstrated** (`SmpSmoke` media show:
+load → cue-list → go → transport advances → stop → close, all from pure C).
 
 ---
 

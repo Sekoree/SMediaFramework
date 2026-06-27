@@ -4,11 +4,21 @@
          lib, Phase 7). It also carries cross-module host glue that needs more than one backend — e.g. the unified
          subtitle factory (FFmpeg decode + libass render), which Session/Subtitles must not couple to directly. -->
 
+    <PropertyGroup>
+        <!-- The outbound ABI ships as s_media_player.{so,dll} so the AOT native lib + the header (s_media_player.h)
+             line up; the namespace stays S.Media.Interop. -->
+        <AssemblyName>s_media_player</AssemblyName>
+        <!-- Emit a native shared lib only when publishing AOT (dotnet publish -p:PublishAot=true). A normal build —
+             and project references to this assembly (e.g. the subtitle factory) — produce/consume the managed dll. -->
+        <NativeLib Condition="'$(PublishAot)' == 'true'">Shared</NativeLib>
+    </PropertyGroup>
+
     <ItemGroup>
         <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
         <ProjectReference Include="../../Media/S.Media.Subtitles/S.Media.Subtitles.csproj" />
         <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
     </ItemGroup>
 
 </Project>

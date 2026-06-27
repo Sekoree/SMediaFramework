@@ -90,3 +90,19 @@ jobs:
         run: >
           xvfb-run -a dotnet run --project next/MediaFramework/Tools/AbiGlSmoke/AbiGlSmoke.csproj
           -c Release --no-build
+
+      # Outbound C ABI: AOT-publish s_media_player.so, then a pure-C client drives a show through s_media_player.h.
+      # The empty show is self-contained (gating); the media show opens an ffmpeg-generated clip (best-effort —
+      # the runner's FFmpeg version varies). Windows deferred (AOT cross-publish + MSVC link on a Windows runner).
+      - name: Outbound C-ABI smoke (s_media_player)
+        if: runner.os == 'Linux'
+        run: |
+          PUB="$RUNNER_TEMP/smp"
+          dotnet publish next/MediaFramework/Interop/S.Media.Interop/S.Media.Interop.csproj -c Release -r ${{ matrix.rid }} -p:PublishAot=true -o "$PUB"
+          gcc next/MediaFramework/Tools/SmpSmoke/smoke.c -I next/MediaFramework/Interop/S.Media.Interop/include "$PUB/s_media_player.so" -o "$PUB/smoke" -Wl,-rpath,"$PUB"
+          echo "--- empty show (gating) ---"
+          "$PUB/smoke"
+          echo "--- media show (best-effort) ---"
+          if ffmpeg -nostdin -loglevel error -y -f lavfi -i "sine=frequency=440:duration=1" "$PUB/tone.wav"; then
+            "$PUB/smoke" "$PUB/tone.wav" || echo "media smoke non-gating failure (FFmpeg native version?)"
+          fi
