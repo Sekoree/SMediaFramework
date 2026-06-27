@@ -27,6 +27,20 @@ public sealed record ControlDeviceProfile
 
     /// <summary>Optional runtime behavior metadata (protocol maintenance, meter decoding, etc.).</summary>
     public ControlDeviceProfileBehaviors? Behaviors { get; init; }
+
+    /// <summary>
+    /// Optional Mond helper script embedded in the profile: device-specific convenience functions (e.g. OSC
+    /// address builders) exposed to control scripts under <see cref="ScriptModule"/>. Keeps device-specific logic
+    /// out of the runtime — a device is described entirely by its profile (data + helpers). Helpers read the
+    /// profile's own command data (e.g. <c>device.command(id).address</c>) instead of re-deriving address patterns.
+    /// </summary>
+    public string? HelperScript { get; init; }
+
+    /// <summary>
+    /// The global name the compiled <see cref="HelperScript"/> is exposed under to control scripts (e.g. "x32").
+    /// Defaults to a name derived from <see cref="Id"/> when omitted.
+    /// </summary>
+    public string? ScriptModule { get; init; }
 }
 
 public sealed record ControlDevicePortProfile

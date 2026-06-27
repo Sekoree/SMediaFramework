@@ -1,3 +1,4 @@
+using System.Text;
 using Mond;
 using Mond.Debugger;
 using Mond.Libraries;
@@ -73,8 +74,13 @@ public sealed class ControlScriptFileHost
 
     private const string HostEntryPath = "haplay-script-host.mnd";
 
+    // Synthetic require path under which a profile's embedded helper script is served (never a real file).
+    private const string HelperPathPrefix = "__device-helpers/";
+
     private readonly IControlScriptSourceProvider _sourceProvider;
     private readonly int _instructionLimit;
+    private readonly Dictionary<string, string> _helperSources;          // synthetic path -> Mond helper source
+    private readonly List<(string Global, string Path)> _helperModules;  // global name -> synthetic path
 
     public ControlScriptFileHost(
         IControlScriptSourceProvider sourceProvider,
@@ -84,6 +90,21 @@ public sealed class ControlScriptFileHost
         _sourceProvider = sourceProvider ?? throw new ArgumentNullException(nameof(sourceProvider));
         _instructionLimit = instructionLimit <= 0 ? DefaultInstructionLimit : instructionLimit;
         RuntimeServices = runtimeServices ?? new ControlScriptRuntimeServices();
+
+        // Profile-embedded helper scripts: each profile with a HelperScript + ScriptModule is exposed to control
+        // scripts as a global of that ScriptModule name (e.g. "x32"), so device-specific helper logic lives in the
+        // profile (data), not the runtime. Served as require-able modules and bound by the host entry script.
+        _helperSources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _helperModules = [];
+        foreach (var profile in RuntimeServices.Profiles)
+        {
+            if (string.IsNullOrWhiteSpace(profile.HelperScript) || string.IsNullOrWhiteSpace(profile.ScriptModule))
+                continue;
+
+            var path = HelperPathPrefix + profile.ScriptModule;
+            _helperSources[path] = profile.HelperScript!;
+            _helperModules.Add((profile.ScriptModule!, path));
+        }
     }
 
     public ControlScriptRuntimeServices RuntimeServices { get; }
@@ -97,7 +118,7 @@ public sealed class ControlScriptFileHost
         var state = CreateState();
         ConfigureRequireLibrary(state);
 
-        var exports = state.Run($"return require('{EscapeMondString(normalizedPath)}');", HostEntryPath);
+        var exports = state.Run(BuildEntryScript(normalizedPath), HostEntryPath);
         if (exports.Type != MondValueType.Object)
             throw new ControlScriptException($"Script '{normalizedPath}' did not export a module object.");
 
@@ -141,8 +162,23 @@ public sealed class ControlScriptFileHost
         });
     }
 
+    // Builds the host entry: bind each profile helper to its module global, then return the requested script's
+    // exports. With UseImplicitGlobals, `x32 = require(...)` makes `x32` a state global the loaded script can use.
+    private string BuildEntryScript(string mainScriptPath)
+    {
+        var sb = new StringBuilder();
+        foreach (var (global, path) in _helperModules)
+            sb.Append(global).Append(" = require('").Append(EscapeMondString(path)).Append("');\n");
+        sb.Append("return require('").Append(EscapeMondString(mainScriptPath)).Append("');");
+        return sb.ToString();
+    }
+
     private string ResolveModule(string moduleName, IEnumerable<string> searchDirectories)
     {
+        var normalized = ControlScriptPath.Normalize(moduleName);
+        if (_helperSources.ContainsKey(normalized))
+            return normalized;
+
         foreach (var candidate in ControlScriptPath.GetCandidatePaths(moduleName, searchDirectories))
         {
             if (_sourceProvider.TryReadScript(candidate, out _))
@@ -154,6 +190,9 @@ public sealed class ControlScriptFileHost
 
     private string LoadResolvedModule(string resolvedPath)
     {
+        if (_helperSources.TryGetValue(resolvedPath, out var helperSource))
+            return helperSource;
+
         if (_sourceProvider.TryReadScript(resolvedPath, out var source))
             return source;
 

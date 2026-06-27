@@ -410,9 +410,30 @@ and verified; full stitched-wall validation is the runtime soak above.
       skipped); **192 tests pass** (profiles load from embedded JSON, device managers/matcher, 14-bit CC, X32 meter
       decode, OSC listeners, Mond script runtime) → build 0/0, arch 4/4, **848 total**, old trees untouched. (One
       test had an old-tree relative path to `Profiles/`; fixed for the next/ layout.)
-      *Remaining for this item:* (a) **data-driven conversion** — retire the redundant hardcoded
-      `BuiltInControlDeviceProfileFactory`, JSON `Profiles/*.json` become the single source (devices = pure data);
-      (b) X32 meter decode as a registered capability.
+      **DATA-DRIVEN HELPERS — design locked + started (2026-06-27, user's call):** extend "no hardcoded devices"
+      to the *script helpers* too. Today the runtime always exposes a fixed `osc`/`midi`/**`x32`** module set
+      (`ControlScriptApiLibrary`); the `x32` module's address builders (`channelFaderAddress`…) are 200 lines of
+      hardcoded C# (`X32Presets`/`ControlPresets.cs`) that re-derive patterns the profile JSON already carries as
+      data (193 `address` entries). **User-confirmed design = "helpers read profile data":** a profile gains a
+      `HelperScript` (embedded Mond) + `ScriptModule` name; helpers look addresses up from the profile's own
+      commands — `device.command(id).address` — so the address string lives ONCE (in `commands`) and the runtime
+      has ZERO device-specific code. Command ids are globally unique (`x32.ch.01.fader`), so a **single global
+      `device.command(id)`** resolves across loaded profiles — no per-profile binding needed. **Foundation laid:**
+      `ControlDeviceProfile.HelperScript`/`ScriptModule` added (192 tests still green).
+      **(a)–(d) DONE + VERIFIED (2026-06-27):** (a) `ControlScriptRuntimeServices.Profiles` + the `devices.command(id)`
+      accessor (returns `{address, valueKind, access, cacheKey, min/max}` from the loaded profiles; ids globally
+      unique). (b) `ControlScriptFileHost` serves each profile's `HelperScript` as a require-able module and binds it
+      to its `ScriptModule` global via the entry script. (c) the X32 `HelperScript` (compact Mond) ports every
+      address builder (`channelFaderAddress`…→`devices.command('x32.ch.NN.fader').address`) **and** the fader-curve
+      math (`faderToDb`/`dbToFader`/`quantizeFader`). (d) the C# `x32` module (`CreateX32Api`+`RequireIndex`) is
+      **deleted** — the runtime has no device-specific script code. *Gotcha fixed:* Mond passes the receiver as the
+      first arg for `x32.fn(...)`, so each exported helper takes `(self, …)` (the C# modules skip it via
+      `ArgumentOffset`). Built-in profiles load by default so helpers are always available (old always-on parity).
+      New `ProfileHelperScriptTests` proves it; **850 total**, build 0/0, arch green. *Remaining (broader data-driven
+      cleanup, separable):* (e) retire the redundant hardcoded `BuiltInControlDeviceProfileFactory` (JSON = single
+      source; migrate its test users) → then `X32Presets`/`XAirPresets`/`X32Fader` C# can go; (f) X32 meter-blob
+      decode as a **registered C# capability** the profile references (`ControlDeviceProfileBehaviors.MeterBlobDecoder`
+      field exists; binary parsing can't be Mond).
 - [ ] Mond host API targets the `ShowSession` action façade (headless-drivable). **Confirmed the payoff (2026-06-27):**
       old scripts only expose device handles (`midi`/`osc`/`bus`/`channel`/`matrix` = device→device, e.g. XTouch→X32);
       NO player control today. `ShowSession` already has the façade (`GoAsync`/`FireCueAsync`/`SeekAsync`/`StopAsync`/

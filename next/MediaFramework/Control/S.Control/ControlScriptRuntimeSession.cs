@@ -37,10 +37,22 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
             monitor: _monitor,
             devices: _config.Devices,
             deviceHealth: _deviceHealth,
-            layers: _config.Layers);
+            layers: _config.Layers,
+            profiles: ResolveProfiles(_config));
         _runtime = new ControlScriptRuntime(_config, sourceProvider, services, instructionLimit);
         _oscRouter = new ControlScriptOscCommandRouter(_config, oscSender, OscCache);
         _midiRouter = new ControlScriptMidiCommandRouter(_config, midiSender);
+    }
+
+    // The profiles scripts can read command data from: built-in JSON profiles plus any config overrides (by id).
+    private static IReadOnlyList<ControlDeviceProfile> ResolveProfiles(ControlSystemConfig config)
+    {
+        var byId = new Dictionary<string, ControlDeviceProfile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var profile in BuiltInProfileLoader.Load())
+            byId[profile.Id] = profile;
+        foreach (var profile in config.DeviceProfileOverrides)
+            byId[profile.Id] = profile;
+        return byId.Values.ToArray();
     }
 
     public ControlValueCache OscCache { get; }

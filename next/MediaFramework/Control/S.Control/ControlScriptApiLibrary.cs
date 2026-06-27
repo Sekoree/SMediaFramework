@@ -13,7 +13,8 @@ public sealed class ControlScriptRuntimeServices
         IReadOnlyList<ControlDeviceInstanceConfig>? devices = null,
         ControlDeviceHealthRegistry? deviceHealth = null,
         Func<DateTimeOffset>? clock = null,
-        IReadOnlyList<ControlLayerConfig>? layers = null)
+        IReadOnlyList<ControlLayerConfig>? layers = null,
+        IReadOnlyList<ControlDeviceProfile>? profiles = null)
     {
         CommandSink = commandSink ?? NullControlScriptCommandSink.Instance;
         OscCache = oscCache ?? new ControlValueCache();
@@ -23,6 +24,10 @@ public sealed class ControlScriptRuntimeServices
         DeviceHealth = deviceHealth ?? new ControlDeviceHealthRegistry();
         Clock = clock ?? (() => DateTimeOffset.UtcNow);
         Layers = layers ?? [];
+        // Default to the built-in device profiles so their embedded helpers (e.g. x32) and command data are
+        // available to scripts out of the box — the old always-on C# x32 module behaved this way. The session
+        // passes an explicit resolved set (built-ins + config overrides).
+        Profiles = profiles ?? BuiltInProfileLoader.Load();
     }
 
     public IControlScriptCommandSink CommandSink { get; }
@@ -42,6 +47,10 @@ public sealed class ControlScriptRuntimeServices
 
     /// <summary>Configured layers, surfaced to the script <c>layers</c> library.</summary>
     public IReadOnlyList<ControlLayerConfig> Layers { get; }
+
+    /// <summary>Loaded device profiles (built-in JSON + config overrides), surfaced to scripts via
+    /// <c>devices.command(id)</c> so profile-embedded helpers can read address data instead of hardcoding it.</summary>
+    public IReadOnlyList<ControlDeviceProfile> Profiles { get; }
 
     /// <summary>Returns the currently active layer id; set by the runtime so <c>layers.active()</c> can read it.</summary>
     public Func<Guid?>? ActiveLayerProvider { get; set; }
@@ -173,7 +182,6 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
     {
         yield return new KeyValuePair<string, MondValue>("osc", CreateOscApi(state));
         yield return new KeyValuePair<string, MondValue>("midi", CreateMidiApi(state));
-        yield return new KeyValuePair<string, MondValue>("x32", CreateX32Api(state));
         yield return new KeyValuePair<string, MondValue>("math", CreateMathApi(state));
         yield return new KeyValuePair<string, MondValue>("state", CreateStateApi(state));
         yield return new KeyValuePair<string, MondValue>("monitor", CreateMonitorApi(state));
@@ -257,8 +265,37 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
             var device = ResolveDevice((string)args[offset]);
             return device is null ? "Unknown" : HealthStateName(device.Id);
         });
+        // Look up a profile command by its (globally-unique) id and expose its data — address, value kind, cache
+        // key, range. Profile-embedded helper scripts call this instead of re-deriving device-specific addresses,
+        // so the address string lives once in the profile's command data and the runtime stays device-agnostic.
+        devices["command"] = (MondFunction)((s, args) =>
+        {
+            var offset = ArgumentOffset(args);
+            if (args.Length <= offset)
+                throw new MondRuntimeException("devices.command requires a command id.");
+
+            var id = (string)args[offset];
+            var command = _services.Profiles
+                .SelectMany(profile => profile.Commands)
+                .FirstOrDefault(c => string.Equals(c.Id, id, StringComparison.OrdinalIgnoreCase));
+            return command is null ? MondValue.Null : ToMondCommand(s, command);
+        });
 
         return devices;
+    }
+
+    private static MondValue ToMondCommand(MondState state, ControlCommandProfile command)
+    {
+        var obj = MondValue.Object(state);
+        obj["id"] = command.Id;
+        obj["displayName"] = command.DisplayName;
+        obj["address"] = command.Address;
+        obj["valueKind"] = command.ValueKind.ToString();
+        obj["access"] = command.Access.ToString();
+        obj["cacheKey"] = command.CacheKey;
+        obj["minValue"] = command.MinValue.HasValue ? command.MinValue.Value : MondValue.Null;
+        obj["maxValue"] = command.MaxValue.HasValue ? command.MaxValue.Value : MondValue.Null;
+        return obj;
     }
 
     private MondValue ToMondDevice(MondState state, ControlDeviceInstanceConfig device)
@@ -757,57 +794,6 @@ public sealed class ControlScriptApiLibrary : IMondLibrary
         });
 
         return midi;
-    }
-
-    // Address builders delegate to X32Presets so the script library and the device profile/catalog
-    // share one source of truth for X32 OSC paths; the library validates ranges (throws) to surface
-    // script bugs instead of silently clamping.
-    private static MondValue CreateX32Api(MondState state)
-    {
-        var x32 = MondValue.Object(state);
-
-        x32["channelFaderAddress"] = (MondFunction)((_, args) => X32Presets.ChannelFaderAddress(RequireIndex(args, 1, 32, "channel")));
-        x32["channelMuteAddress"] = (MondFunction)((_, args) => X32Presets.ChannelMuteAddress(RequireIndex(args, 1, 32, "channel")));
-        x32["channelPanAddress"] = (MondFunction)((_, args) => X32Presets.ChannelPanAddress(RequireIndex(args, 1, 32, "channel")));
-        x32["channelSoloAddress"] = (MondFunction)((_, args) => X32Presets.ChannelSoloStatusAddress(RequireIndex(args, 1, 32, "channel")));
-        x32["dcaFaderAddress"] = (MondFunction)((_, args) => X32Presets.DcaFaderAddress(RequireIndex(args, 1, 8, "DCA")));
-        x32["dcaMuteAddress"] = (MondFunction)((_, args) => X32Presets.DcaMuteAddress(RequireIndex(args, 1, 8, "DCA")));
-        x32["busFaderAddress"] = (MondFunction)((_, args) => X32Presets.BusFaderAddress(RequireIndex(args, 1, 16, "bus")));
-        x32["busMuteAddress"] = (MondFunction)((_, args) => X32Presets.BusMuteAddress(RequireIndex(args, 1, 16, "bus")));
-        x32["matrixFaderAddress"] = (MondFunction)((_, args) => X32Presets.MatrixFaderAddress(RequireIndex(args, 1, 6, "matrix")));
-        x32["matrixMuteAddress"] = (MondFunction)((_, args) => X32Presets.MatrixMuteAddress(RequireIndex(args, 1, 6, "matrix")));
-        x32["mainFaderAddress"] = (MondFunction)((_, _) => X32Presets.MainStereoFaderAddress());
-        x32["mainMuteAddress"] = (MondFunction)((_, _) => X32Presets.MainStereoMuteAddress());
-        x32["faderToDb"] = (MondFunction)((_, args) =>
-        {
-            var offset = ArgumentOffset(args);
-            return args.Length > offset ? X32Fader.FromNormalized((double)args[offset]) : MondValue.Undefined;
-        });
-        x32["dbToFader"] = (MondFunction)((_, args) =>
-        {
-            var offset = ArgumentOffset(args);
-            return args.Length > offset ? X32Fader.ToNormalized((double)args[offset]) : MondValue.Undefined;
-        });
-        x32["quantizeFader"] = (MondFunction)((_, args) =>
-        {
-            var offset = ArgumentOffset(args);
-            return args.Length > offset ? X32Fader.ToKnownStep((double)args[offset]) : MondValue.Undefined;
-        });
-
-        return x32;
-    }
-
-    private static int RequireIndex(Span<MondValue> args, int min, int max, string label)
-    {
-        var offset = ArgumentOffset(args);
-        if (args.Length <= offset)
-            throw new MondRuntimeException($"x32 {label} address requires a {label} number.");
-
-        var index = (int)(double)args[offset];
-        if (index < min || index > max)
-            throw new MondRuntimeException($"X32 {label} must be between {min} and {max}.");
-
-        return index;
     }
 
     private MondValue CreateStateApi(MondState state)
