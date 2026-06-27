@@ -464,18 +464,56 @@ and verified; full stitched-wall validation is the runtime soak above.
       its profile (data + Mond helpers) + one tiny opt-in binary capability. **812 total, build 0/0, arch green.**
 
 **Plugin host (`S.Abi`) — the forever-surface:**
-- [ ] Define `include/mfp_plugin.h`: **full vtable surface** — source/output/audio-backend/layer-surface
+- [~] Define `include/mfp_plugin.h`: **full vtable surface** — source/output/audio-backend/layer-surface
       (GL)/subtitle/control-decoder (D9).
+      **DRAFTED (2026-06-27):** `next/MediaFramework/Interop/S.Abi/include/mfp_plugin.h` (323 lines, valid C11 —
+      `gcc -Wall -Wextra -std=c11` clean) realizes the §05 sketch: all **6 capability vtables** (audio-backend /
+      video-source + provider / video-output / layer-surface(GL) / subtitle / control-decoder), the per-kind
+      **frame union** (CPU/dma-buf/D3D11/GL — mirrors Core's `Dmabuf*`/`Win32Shared*` backings; item below),
+      negotiated **`MfpSync`** (keyed-mutex/binary+timeline-semaphore/fence; item below), the host API, the
+      registrar, and `mfp_plugin_register`. ABI-hygiene rules baked into the comments (append-only versioning /
+      int-status errors + thread-local last-error / 100ns ticks / host-pooled CPU frames + acquire-release+sync for
+      GPU / per-call threading / opt-in trust); OQ1 (frame union) + OQ2 (sync) flagged inline. ⚠️ Pending the
+      **review-hard-before-v1** pass — that's the gating decision, not the typing.
+      **REVISED post-evaluation (2026-06-27, 381 lines, still gcc-clean):** checked the draft against the *real*
+      managed interfaces — found + closed v1 gaps so the existing modules **and** a configurable layer are
+      expressible without a later ABI change: audio backend gained the **master-clock readout**
+      (`output_played_frames` ↔ `PlayedSamples`/`IClockedOutput`) + latency `MfpAudioOpts` + backpressure
+      (`output_writable_frames`); video output gained queue-control (`abandon_queued`/`wait_for_idle` ↔
+      `IVideoOutputQueueControl`); the source provider became a **media** provider opening correlated video+audio in
+      ONE `open()` (so NDI shares the receiver); **layer surfaces became a factory** taking an opaque `config_json`
+      (the MMD models/motion). Optional caps = NULL-fn-pointer convention. *Managed follow-on:* `AddLayerSurface`
+      needs the config param + `ShowDocument` a `surface`+`surfaceConfig` layer — sketched in §05. (Control transport
+      stays framework-only by design — only decoders/profiles are plugin surfaces.)
 - [ ] **Per-kind tagged frame union** incl. GPU handles: `MfpCpuFrame`/`MfpDmaBufFrame`/`MfpD3D11Frame`/
       `MfpGlTextureFrame` (GL = same-context only), mirroring Core's `Dmabuf*`/`Win32Shared*` (D8/OQ1).
 - [ ] **Negotiated `MfpSync`** (keyed-mutex / semaphore / fence via capability query — OQ2).
-- [ ] Managed adapters → scoped registries; ABI version gate; append-only structs.
+- [~] Managed adapters → scoped registries; ABI version gate; append-only structs.
+      **HOST LOADER + GATE (load+register half) DONE (2026-06-27):** `S.Abi.AbiPluginHost.Load(path)` —
+      `NativeLibrary.Load` + `GetExport("mfp_plugin_register")` + a host-API + registrar built from
+      `[UnmanagedCallersOnly]` callbacks (all NativeAOT-safe, no reflection) → calls the entry point, enforces the
+      **ABI version gate**, and **records every registered capability** (`AbiRegisteredCapability {capability, id,
+      vtable, self}`). Managed ABI mirrors in `AbiNative.cs` (layout-critical `[StructLayout(Sequential)]` + `delegate*
+      unmanaged`). New **`AbiSmoke`** tool gcc-compiles `test_plugin.c` → `.so`, loads it, and verifies a native C
+      plugin registers a **media-source-provider + a control-decoder** (`caps=0x42`) — the gate's load+register half.
+      Build 0/0, 812 tests, arch 4/4 (S.Abi→Core). *Next layer:* bind each recorded vtable to its managed interface
+      (`IVideoSource` via the frame-union marshalling; `IControlMeterBlobDecoder` — needs S.Control, so an arch add)
+      and register the adapter into the scoped registry, so the capabilities don't just register but *run*.
 - [ ] **Per-platform conformance plugin** exercising every vtable, in CI (D8/D9).
 - [ ] ⚠️ **Review `mfp_plugin.h` hard before tagging v1** — it's expensive to change after (OQ1/D9).
 
 **Gate:** subtitle render test; `OSCLib.Tests`/`PMLib.Tests`; sample C-ABI plugin loads + provides a
 source **and** a control decoder.
 **Exit:** a third-party native plugin adds a video source + a GL layer surface without touching the host.
+
+**AOT gate VERIFIED for Phase 6 (2026-06-27):** `AotSmoke` extended to reference + exercise the real AOT-risk
+paths — `S.Control` (Mond compile+run of a script that uses a profile `HelperScript` + the `show` bridge) and the
+`S.Media.Interop` subtitle factory glue — `dotnet publish -p:PublishAot=true -r linux-x64` succeeds and the **7.2 MB
+NativeAOT binary runs** them (`control profiles=4, mond+helper=/ch/01/mix/fader, subtitle factory reachable=True`).
+*Caveat:* one trim warning **IL2026** — Mond's `VirtualMachine.Machine.Run()` calls `StackFrame.GetMethod()`
+(`[RequiresUnreferencedCode]`); publish + run are unaffected, but Mond's *error stack-trace detail* can degrade
+under aggressive trimming. It's in the Mond package, not our code; accept + note (Mond was picked *for* AOT support
+and it runs). Windows-CI AOT still deferred (user).
 
 ---
 

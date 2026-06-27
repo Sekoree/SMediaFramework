@@ -254,6 +254,42 @@ foreach (var lib in Directory.EnumerateFiles(dir, NativeLibPattern))
 
 ---
 
+## Configurable layer surfaces — the cue integration (the MMD / 3D-object case)
+
+A layer surface that draws a fixed effect needs no config; a *content* layer — "render these PMX models
+playing that VMD motion" — needs per-instance config. The managed registry and the ABI
+(`MfpLayerSurfaceFactoryVTable.create(config_json)`) both model it as a **factory + opaque config blob**.
+Today's `AddLayerSurface(kind, Func<IVideoCompositorLayerSurface>)` gains the config parameter:
+
+```csharp
+// S.Media.Compositor — config-aware factory (the kind picks the plugin; the blob configures the instance)
+ICompositorRegistryBuilder AddLayerSurface(
+    string kind, Func<string /*configJson*/, IVideoCompositorLayerSurface> factory);
+// CompositorRegistry.TryCreateLayerSurface(kind, configJson, out surface)
+```
+
+A `ShowDocument` composition layer carries the kind + the blob; the runtime creates the surface and
+attaches it as a normal layer — the same path `ClipCompositionRuntime` already uses for the subtitle overlay:
+
+```jsonc
+{ "layer": 3, "surface": "mmd",
+  "surfaceConfig": { "models": ["YYB-Miku.pmx", "stage.pmx"],
+                     "motion": "rolling-girl.vmd", "camera": "cam.vmd" } }
+```
+
+Flow: `ShowSession` opens the composition → for a `surface` layer it calls
+`TryCreateLayerSurface("mmd", surfaceConfig)` → the surface loads its PMX/VMD in `ConfigureGl` →
+`Render(gl, fbo, masterTime, transform, opacity)` poses the skeleton at `masterTime` and draws into the
+canvas FBO. `masterTime` is the cue's audio-paced playhead, so the dance stays locked to the music; the
+layer composites with z-order/opacity beside the video/image layers. **A cue = "a motion + N models" is
+just one configured `mmd` layer** (plus the song as the cue's audio).
+
+Everything MMD-specific — PMX/VMD parsing, skinning, toon/sphere shading, bullet physics — is the
+plugin's own GL code; the host only hands over the GL context, the master time, the placement, and the
+config blob. The session and the cue model stay format-agnostic.
+
+---
+
 ## Decision summary
 
 | | Tier A (registration) | Tier B (native C-ABI) |

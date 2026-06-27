@@ -1,8 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Phase 0 AOT gate: the minimal executable that must `dotnet publish -p:PublishAot=true`.
-       It references S.Media.Core so the NativeAOT toolchain exercises the framework keystone.
-       Real parity-harness apps (PlaybackSmoke, CompositorSmoke, …) arrive in their phases. -->
+  <!-- AOT gate: the minimal executable that must `dotnet publish -p:PublishAot=true`. References S.Media.Core
+       (the keystone) plus the Phase-6 surfaces that carry the real AOT risk and exercises them at runtime so the
+       NativeAOT toolchain actually compiles those paths: S.Control (the Mond script engine + STJ profile load +
+       HelperScript loading + the show bridge) and S.Media.Interop (the host subtitle factory glue). -->
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -12,6 +13,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+    <ProjectReference Include="../../Control/S.Control/S.Control.csproj" />
+    <ProjectReference Include="../../Interop/S.Media.Interop/S.Media.Interop.csproj" />
   </ItemGroup>
 
 </Project>
