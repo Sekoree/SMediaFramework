@@ -10,12 +10,16 @@ namespace S.Media.Session;
 /// <param name="AudioStreamIndex">Audio track selection (03 §6 multi-track): <c>null</c> = automatic,
 /// <c>-1</c> (<see cref="S.Media.Players.MediaPlayerOpenOptions.DisabledStreamIndex"/>) = no audio, otherwise
 /// the chosen stream index. Lets a multi-track clip (e.g. language stems) pick which track this cue plays.</param>
+/// <param name="SubtitlePath">Optional sidecar subtitle file (SRT/VTT/ASS) shown over a composition-bound clip.
+/// When set (and the host wired a subtitle factory into <see cref="ShowSession"/>), it is rendered onto a
+/// top-z-order layer of the clip's composition. Ignored for clips with no <see cref="CompositionId"/>.</param>
 public sealed record ShowClipBinding(
     string CueId,
     string MediaPath,
     string? CompositionId = null,
     int LayerIndex = 0,
-    int? AudioStreamIndex = null);
+    int? AudioStreamIndex = null,
+    string? SubtitlePath = null);
 
 /// <summary>A composition canvas a clip's video can be placed onto (maps to a <c>ClipCompositionRuntime</c>).
 /// <paramref name="OutputMapping"/> cuts the composited canvas into placed sections for the output (projector

@@ -1,12 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- Phase 0 skeleton: S.Media.Interop — outbound C ABI s_media_player (NativeAOT shared lib, Phase 7).
-         NuGet/native refs are added in the phase noted above. Common build settings come
-         from next/Directory.Build.props; versions from next/Directory.Packages.props. -->
+    <!-- S.Media.Interop — the host that bundles backend modules (outbound C ABI s_media_player, NativeAOT shared
+         lib, Phase 7). It also carries cross-module host glue that needs more than one backend — e.g. the unified
+         subtitle factory (FFmpeg decode + libass render), which Session/Subtitles must not couple to directly. -->
 
     <ItemGroup>
         <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Subtitles/S.Media.Subtitles.csproj" />
+        <ProjectReference Include="../../Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
     </ItemGroup>
 
 </Project>

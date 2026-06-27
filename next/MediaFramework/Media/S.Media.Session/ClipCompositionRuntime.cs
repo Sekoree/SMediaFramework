@@ -1,8 +1,10 @@
 using S.Media.Players;
 using S.Media.Routing;
+using System.Buffers;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using S.Media.Time;
+using S.Media.Core;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Compositor;
@@ -79,6 +81,13 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>Optional composition-level video FX: a canvas-sized mapping applied after all layers
     /// are composited and before per-output mappings/fan-out.</summary>
     private volatile OutputMappingStage? _compositionMappingStage;
+
+    /// <summary>Optional subtitle layer: a top-z-order slot fed each frame from a time-addressed overlay source.
+    /// The overlay's borrowed frame is copied into a pooled, slot-owned frame and pushed like any other layer, so
+    /// the mixer composites it uniformly (z-order/opacity/blend). The source remains the caller's to dispose.</summary>
+    private volatile SubtitleLayerFeed? _subtitleFeed;
+
+    private sealed record SubtitleLayerFeed(IVideoOverlaySource Source, LayerSlot Layer);
 
     public ClipCompositionRuntime(
         ClipCompositionDefinition definition,
@@ -185,8 +194,10 @@ public sealed class ClipCompositionRuntime : IDisposable
     public ClipCompositionRuntimeStats GetStats()
     {
         long slotOverflow = 0;
+        int layerCount;
         lock (_gate)
         {
+            layerCount = _slots.Count;
             foreach (var slot in _slots)
                 slotOverflow += slot.RawSlot.OverflowFrames;
         }
@@ -200,7 +211,8 @@ public sealed class ClipCompositionRuntime : IDisposable
             TimeSpan.FromTicks(Volatile.Read(ref _lastPumpFrameTicks)),
             TimeSpan.FromTicks(Volatile.Read(ref _maxPumpFrameTicks)),
             Volatile.Read(ref _framesBehindMaster),
-            _master is not null);
+            _master is not null,
+            layerCount);
     }
 
     public void EnsurePumpStarted()
@@ -388,6 +400,82 @@ public sealed class ClipCompositionRuntime : IDisposable
         }
     }
 
+    /// <summary>
+    /// Attaches a subtitle/overlay source as a full-canvas, top-z-order layer. Each frame the runtime renders the
+    /// source at the master position, copies its (borrowed) overlay into a pooled, slot-owned frame, and pushes it
+    /// like any other layer — so the mixer composites it uniformly (z-order, opacity, blend). The source should
+    /// render at the canvas size and remains the <em>caller's</em> to dispose; the layer is torn down with the
+    /// runtime. Replaces any previously attached overlay.
+    /// </summary>
+    public void AttachSubtitleOverlay(IVideoOverlaySource source, int layerIndex = int.MaxValue)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        var previous = _subtitleFeed;
+        var placement = new VideoPlacementSpec(CompositionName, layerIndex, Placement: "stretch");
+        var layer = AddLayer(_canvasFormat, placement);
+        _subtitleFeed = new SubtitleLayerFeed(source, layer);
+        if (previous is not null)
+            RemoveLayer(previous.Layer);
+    }
+
+    /// <summary>Renders the subtitle source at <paramref name="masterPts"/> into the subtitle layer's slot, or
+    /// hides the layer (opacity 0) when nothing shows. Pump-thread only.</summary>
+    private void DriveSubtitleLayer(TimeSpan masterPts)
+    {
+        var feed = _subtitleFeed;
+        if (feed is null)
+            return;
+
+        VideoFrame? overlay;
+        try
+        {
+            overlay = feed.Source.RenderAt(masterPts);
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "ClipCompositionRuntime: subtitle render failed for {Composition}", CompositionName);
+            feed.Layer.Opacity = 0f;
+            return;
+        }
+
+        if (overlay is null)
+        {
+            feed.Layer.Opacity = 0f;
+            return;
+        }
+
+        try
+        {
+            // The overlay frame is borrowed (the source reuses it) and slots take ownership of pushed frames, so
+            // copy into a pooled, slot-owned frame. Pooled => no GC; the slot returns it to the pool on its swap.
+            feed.Layer.Output.Submit(CopyToPooledBgra(overlay));
+            feed.Layer.Opacity = 1f;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "ClipCompositionRuntime: subtitle push failed for {Composition}", CompositionName);
+            feed.Layer.Opacity = 0f;
+        }
+    }
+
+    private static VideoFrame CopyToPooledBgra(VideoFrame source)
+    {
+        var plane = source.Planes[0];
+        var length = plane.Length;
+        var buffer = ArrayPool<byte>.Shared.Rent(length);
+        plane.Span.CopyTo(buffer);
+        var owned = buffer;
+        return new VideoFrame(
+            source.PresentationTime,
+            source.Format,
+            new ReadOnlyMemory<byte>(buffer, 0, length),
+            source.Strides[0],
+            metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied),
+            release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)));
+    }
+
     private static ClipCompositionCompositor CreateDefaultCompositor(VideoFormat canvasFormat) =>
         new(new CpuVideoCompositor(canvasFormat), RequiresBgraLayerConversion: true, BackendName: "CPU");
 
@@ -487,6 +575,11 @@ public sealed class ClipCompositionRuntime : IDisposable
             try { masterPts = _master.ElapsedSinceStart; }
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
         }
+
+        // Subtitle layer: render the overlay for this instant and push it into its slot before either pump path
+        // reads the mixer, so it composites uniformly with the video layers (z-order/opacity/blend).
+        if (_subtitleFeed is not null)
+            DriveSubtitleLayer(masterPts ?? TimeSpan.Zero);
 
         List<AcquiredOutput> snapshot;
         lock (_gate) snapshot = _acquired.ToList();
@@ -1282,7 +1375,8 @@ public readonly record struct ClipCompositionRuntimeStats(
     TimeSpan LastPumpFrameTime,
     TimeSpan MaxPumpFrameTime,
     long FramesBehindMaster,
-    bool ClockMastered);
+    bool ClockMastered,
+    int LayerCount = 0);
 
 public readonly record struct ClipCompositionDriftWarning(
     string CompositionId,

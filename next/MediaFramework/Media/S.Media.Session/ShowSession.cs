@@ -38,14 +38,23 @@ public sealed class ShowSession : IAsyncDisposable
     private IReadOnlyList<OutputPatchRoute> _routes = [];
     private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
     private readonly SessionDispatcher _dispatcher = new("show-session");
+    private readonly Func<string, int, int, IVideoOverlaySource?>? _subtitleFactory;
+    private readonly List<IVideoOverlaySource> _subtitleSources = [];
     private volatile bool _disposed;
 
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
     /// master output created on this backend (D11). Null runs the cue/transport mechanics with no device.</param>
-    public ShowSession(IMediaRegistry registry, IAudioBackend? audioBackend = null)
+    /// <param name="subtitleFactory">Optional host-wired factory (subtitle path + canvas width/height → overlay
+    /// source). When set, a composition-bound clip's <see cref="ShowClipBinding.SubtitlePath"/> auto-attaches as a
+    /// top layer. Keeps the session renderer-agnostic — see <c>S.Media.Subtitles.SubtitleSourceFactory.FromFile</c>.</param>
+    public ShowSession(
+        IMediaRegistry registry,
+        IAudioBackend? audioBackend = null,
+        Func<string, int, int, IVideoOverlaySource?>? subtitleFactory = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
+        _subtitleFactory = subtitleFactory;
         if (audioBackend is not null)
         {
             var devices = audioBackend.EnumerateOutputDevices();
@@ -132,6 +141,8 @@ public sealed class ShowSession : IAsyncDisposable
             composition.Dispose();
         _compositions.Clear();
 
+        DisposeSubtitleSources();
+
         _cueGraph.Clear();
         _routes = document.Routes;
         _audioOutputs = document.AudioOutputs;
@@ -174,6 +185,20 @@ public sealed class ShowSession : IAsyncDisposable
         {
             var placement = new VideoPlacementSpec(compositionId, binding.LayerIndex, DestWidth: 1, DestHeight: 1);
             layer = composition.AddLayer(composition.CanvasFormat, placement);
+
+            // Auto-attach the clip's subtitle track as a top layer (the host wires the factory; the session stays
+            // renderer-agnostic). The runtime composites it like any other layer; the source is tracked and
+            // disposed with the session.
+            if (binding.SubtitlePath is { } subtitlePath && _subtitleFactory is { } subtitleFactory)
+            {
+                var overlay = subtitleFactory(
+                    subtitlePath, composition.CanvasFormat.Width, composition.CanvasFormat.Height);
+                if (overlay is not null)
+                {
+                    composition.AttachSubtitleOverlay(overlay);
+                    _subtitleSources.Add(overlay);
+                }
+            }
         }
 
         var graphBuilder = MediaGraphBuilder.File(binding.MediaPath);
@@ -365,6 +390,15 @@ public sealed class ShowSession : IAsyncDisposable
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
+        DisposeSubtitleSources();
+    }
+
+    // Compositions stop their pumps before this runs, so the subtitle sources they were rendering are idle.
+    private void DisposeSubtitleSources()
+    {
+        foreach (var source in _subtitleSources)
+            source.Dispose();
+        _subtitleSources.Clear();
     }
 
     /// <summary>One transport group: its session clock (D4), active clip, its audio outputs (D11 — first is

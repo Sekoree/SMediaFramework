@@ -322,10 +322,76 @@ and verified; full stitched-wall validation is the runtime soak above.
 **Goal:** subtitles, data-driven control, and the C-ABI plugin host.
 
 **Subtitles:**
-- [ ] `S.Media.Subtitles`: text (SRT/VTT) via Skia; **ASS/SSA via `LibAssLib`** (new Tier-0 wrapper)
+- [x] `S.Media.Subtitles`: text (SRT/VTT) via Skia; **ASS/SSA via `LibAssLib`** (new Tier-0 wrapper)
       bundling libass + FreeType + FriBidi + HarfBuzz + font provider (fontconfig/DirectWrite) (D14/OQ4);
       bitmap (PGS/DVB) via `Decode.FFmpeg` capability; `SubtitleLayerSource` aligned to master;
       none/one/many selection.
+      **Text slice DONE (2026-06-26):** `SubtitleTextParser` (one parser for SRT + VTT), plus **`SubtitleAssParser`**
+      (text-level ASS/SSA: reads `[Events]` Format/Dialogue, strips `{…}` overrides + `\k`/`\t`/`\fad`, converts
+      `\N`/`\h`; shared `SubtitleTimecode` handles ASS centiseconds). `SubtitleCue`/`SubtitleDocument` (active-cue
+      lookup, none/one/many), `SubtitleTextRenderer` (Skia → Bgra32-premul overlay, bottom-centered + outlined),
+      `SubtitleLayerSource` (master-aligned, cached per cue + a fast path that skips re-scanning while a cue holds).
+      **13 tests green.** Validated on a real fansub MKV (`THE IDOLM@STER MOVIE` — ASS stream extracted via FFmpeg):
+      readable dialogue out, but **64,140 Dialogue lines** of per-char animated typesetting + karaoke = the textbook
+      case for full libass. **Font resolution (fc-match):** SkiaSharp's Linux native has no system font manager, so
+      the renderer resolves the real default via fontconfig `fc-match` (then known paths), Windows/macOS via the
+      platform manager.
+      **`LibAssLib` P/Invoke binding DONE (2026-06-26):** new `Subtitles/LibAssLib` — pure `[LibraryImport]`
+      binding to libass (`ass_*`, no C shim; analogue of MALib/NDILib) with the `ASS_Image` mirror, managed
+      wrappers (`AssLibrary`/`AssRenderer`/`AssTrack`), and `AssImageBlender` (layer list → premultiplied BGRA32,
+      VSFilter alpha). **3 tests green** (init → fontconfig → parse → render → blend). **Verified on the real
+      karaoke file** at 2:10 → **66 layers, 94,309 px** — the full per-syllable styling the text path can't do.
+      Uses system `libass.so.9`.
+      **ASS renderer wired into `S.Media.Subtitles` (2026-06-26):** new `AssSubtitleLayerSource` (parallel to
+      `SubtitleLayerSource`) renders an ASS document → Bgra32-premul `VideoFrame` via libass — zero-alloc render
+      path (one reused buffer + frame; libass's `detect_change` drives a skip-blend fast path via the new safe
+      `AssRenderer.RenderInto`, so S.Media.Subtitles stays `unsafe`-free). **15 subtitle tests green; 633 total;
+      arch-test 4/4** (`S.Media.Subtitles → LibAssLib` allowed, like `MiniAudio → MALib`).
+      **Composition integration as a real LAYER (2026-06-26):** both sources implement Core's new `IVideoOverlaySource`
+      (`RenderAt(time)→VideoFrame?`). Per the user's call, subtitles are NOT a bespoke overlay path — `ClipCompositionRuntime.AttachSubtitleOverlay`
+      adds a full-canvas **top-z-order layer (a normal mixer slot)** and the pump renders the source each frame +
+      pushes it, so the mixer composites it uniformly with video (z-order/opacity/blend; one composite pass). The
+      one wrinkle: slots own/dispose pushed frames while the sources hand back borrowed/reused frames, so the pump
+      copies into a **pooled, slot-owned** frame (no GC). Builds 0/0, 633 tests (no regression — null-guarded for
+      non-subtitle compositions), arch-test green.
+      **ShowSession auto-attach + end-to-end PROVEN (2026-06-26):** `ShowClipBinding.SubtitlePath` (round-trips JSON,
+      D10) auto-attaches via a **host-wired factory delegate** — `ShowSession(…, Func<path,w,h,IVideoOverlaySource?>)`
+      + `S.Media.Subtitles.SubtitleSourceFactory.FromFile` (`.ass`→libass, `.srt`/`.vtt`→Skia), so Session stays
+      Subtitles-free (arch allows Session→Core only). Extended **`SessionSmoke`**: factory renders (1280×720), the
+      composition composites with **layers=2 (video + subtitle)** through the real pump — the production path, run
+      headless.
+      **ARCHITECTURE CONSOLIDATED on libass (2026-06-27, user's call):** dropped the whole Skia text path
+      (`SubtitleTextParser`/`SubtitleAssParser`/`SubtitleCue`/`SubtitleDocument`/`SubtitleTimecode`/`SubtitleRenderStyle`/
+      `SubtitleTextRenderer`/`SubtitleLayerSource` + their tests + the **SkiaSharp dependency**). Rationale: FFmpeg
+      *decodes* every text format to ASS events but does **not** rasterize ASS — libass is the renderer (FFmpeg's
+      own `subtitles` filter just wraps libass), so a Skia text path was redundant + lower-fidelity. New shape:
+      **libass renders ALL subtitles** — sidecar `.ass`/`.ssa` directly (`SubtitleSourceFactory.FromFile`); every
+      other format + in-container streams decode to ASS events via FFmpeg → libass. `S.Media.Subtitles` is now just
+      `AssSubtitleLayerSource` + `SubtitleSourceFactory` (deps: Core + LibAssLib). 620 tests, SessionSmoke green.
+      **FFmpeg subtitle-decode path DONE (2026-06-27):** `FFmpegSubtitleDecoder.Decode(path, streamIndex)` (in
+      `S.Media.Decode.FFmpeg`, libav `avcodec_decode_subtitle2`) decodes a sidecar file OR an in-container stream
+      → `DecodedSubtitleTrack` (ASS header + timed `SUBTITLE_ASS` events + embedded-font attachments). New
+      streaming `AssSubtitleLayerSource` ctor feeds them to libass (`ProcessCodecPrivate` + `ProcessChunk` +
+      `AddFont`). **`SubtitleDecodeSmoke` verified** SRT/MicroDVD(`.sub`)/SAMI(`.smi`)/SubViewer(`.sbv`)/ASS/VTT
+      from `Reference/TestSubs/` + an **in-container** muxed MKV (karaoke `{\k}` preserved) all decode→render
+      (10k–29k visible px).
+      **Host glue + ShowSession wiring DONE (2026-06-27):** `S.Media.Interop.SubtitleOverlayFactory.FromFile`
+      (Interop is the only host allowed to ref both Decode.FFmpeg + Subtitles) — sidecar `.ass`→libass direct,
+      every other format/container→FFmpeg-decode→libass. Wired as ShowSession's factory delegate; **`SessionSmoke`
+      now uses a `.srt`** (non-ASS) clip `SubtitlePath` → FFmpeg-decoded → auto-attached as a layer (**layers=2**,
+      composited) through the real pump. So a clip's `SubtitlePath` of ANY format renders in a show. arch 4/4
+      (Interop→Decode.FFmpeg+Subtitles allowed). **Native provisioning (user's call): Linux = user-provided**
+      (system libass + deps via the package manager); **Windows = a host build script (user, later)** — no
+      bundling needed from the framework.
+      **Bitmap subtitles DONE (2026-06-27):** `FFmpegBitmapSubtitleDecoder.Decode` (in `S.Media.Decode.FFmpeg`,
+      libav `SUBTITLE_BITMAP` rects) decodes PGS/DVB/VobSub → palette-indexed images → premultiplied-BGRA cues
+      (end = next presentation's start). `BitmapSubtitleLayerSource` (in `S.Media.Interop` — pure compositing, no
+      libass) blits the active cue's placed images onto an authored-res overlay (compositor scales the layer);
+      `SubtitleOverlayFactory` dispatches text→libass / no-text→bitmap. **`SubtitleDecodeSmoke` verified** the
+      `long-movie.sup` PGS (**25 cues @ 1920×1080**, composited) + a text SRT in one run. ✅ **The
+      `S.Media.Subtitles` checklist item is COMPLETE** — every text format + ASS + bitmap, sidecar + in-container,
+      rendered/composited as a layer + show-wired (`none/one/many` = pass none / one / compose several sources).
+      *Only loose end:* the embedded-font `AddFont` path is wired but **untested** (no fonts-attached MKV sample).
 
 **Control:**
 - [ ] Move `S.Control` engine; X32/XTouch → **data-driven profiles** + control registry (P6); X32 meter

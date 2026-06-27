@@ -6,6 +6,7 @@
 using S.Media.Audio.PortAudio;
 using S.Media.Core.Registry;
 using S.Media.Decode.FFmpeg;
+using S.Media.Interop;
 using S.Media.Session;
 
 if (args.Length < 1)
@@ -16,6 +17,24 @@ if (args.Length < 1)
 
 var audioFile = args[0];
 var videoFile = args.Length > 1 ? args[1] : args[0];
+
+// A sidecar SRT shown over the video cue's composition — a non-ASS format, so it exercises the full
+// FFmpeg-decode → ASS events → libass path through the unified factory, end-to-end.
+var subPath = Path.Combine(Path.GetTempPath(), "sessionsmoke-subs.srt");
+File.WriteAllText(subPath, "1\n00:00:00,000 --> 02:46:39,000\nSessionSmoke subtitle layer\n");
+
+// Verify the unified host factory (FFmpeg decode + libass render) independently: load the SRT, render a frame.
+using (var subProbe = SubtitleOverlayFactory.FromFile(subPath, 1280, 720))
+{
+    var subFrame = subProbe?.RenderAt(TimeSpan.FromSeconds(1));
+    Console.WriteLine($"subtitle factory: source={subProbe is not null}, renders={subFrame is not null} " +
+                      $"({subFrame?.Format.Width}x{subFrame?.Format.Height})");
+    if (subFrame is null)
+    {
+        Console.Error.WriteLine("FAIL: subtitle factory/renderer produced no overlay");
+        return 8;
+    }
+}
 
 var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()).Use(new PortAudioModule()));
 var backend = registry.AudioBackends.FirstOrDefault();
@@ -37,7 +56,7 @@ var document = new ShowDocument(
     Clips:
     [
         new ShowClipBinding("cue1", audioFile),
-        new ShowClipBinding("cue2", videoFile, CompositionId: "screen", LayerIndex: 0),
+        new ShowClipBinding("cue2", videoFile, CompositionId: "screen", LayerIndex: 0, SubtitlePath: subPath),
     ],
     Compositions:
     [
@@ -63,7 +82,7 @@ var reloaded = ShowDocument.FromJson(json);
 Console.WriteLine($"decoders: {string.Join(", ", registry.Decoders.Select(d => d.Name))}; backend: {backend.Name}");
 Console.WriteLine($"show: {reloaded.Cues.Count} cues, {reloaded.Clips.Count} clips, {reloaded.Compositions.Count} compositions (JSON {json.Length} B round-tripped)");
 
-await using var session = new ShowSession(registry, backend);
+await using var session = new ShowSession(registry, backend, SubtitleOverlayFactory.FromFile);
 session.LoadDocument(reloaded);
 
 // GO → cue 1 fires (audio clip opens through the registry + plays on the master output).
@@ -84,7 +103,7 @@ var comp = await session.GetCompositionStatsAsync("screen");
 var log = await session.GetCueExecutionLogAsync();
 Console.WriteLine($"GO1={go1} pos={afterFire.ClipPosition.TotalSeconds:F2}s running={afterFire.IsRunning}");
 Console.WriteLine($"SEEK pos={afterSeek.ClipPosition.TotalSeconds:F2}s");
-Console.WriteLine($"GO2={go2} composition: submitted={comp?.FramesSubmitted} composited={comp?.FramesComposited}");
+Console.WriteLine($"GO2={go2} composition: submitted={comp?.FramesSubmitted} composited={comp?.FramesComposited} layers={comp?.LayerCount}");
 Console.WriteLine($"cue log: {string.Join(", ", log.Select(e => $"{e.Number}:{e.Status}"))}");
 
 // --- gate assertions ---------------------------------------------------------------------------------
@@ -118,11 +137,18 @@ if (comp is not { FramesSubmitted: > 0, FramesComposited: > 0 })
     return 6;
 }
 
+// The composition must carry TWO layers — the clip's video + the auto-attached subtitle — and still composite.
+if (comp.Value.LayerCount < 2)
+{
+    Console.Error.WriteLine($"FAIL: subtitle layer not attached (LayerCount={comp.Value.LayerCount}, expected 2: video + subtitle)");
+    return 9;
+}
+
 if (log.Count != 2 || log.Any(e => e.Status != CueExecutionStatus.Fired))
 {
     Console.Error.WriteLine("FAIL: execution log did not record two fired cues");
     return 7;
 }
 
-Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited).");
+Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer).");
 return 0;
