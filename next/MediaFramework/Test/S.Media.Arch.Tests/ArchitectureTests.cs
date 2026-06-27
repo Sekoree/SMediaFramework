@@ -38,8 +38,9 @@ public sealed class ArchitectureTests
         ["S.Media.NDI"] = ["S.Media.Core", "S.Media.Time", "S.Media.Routing", "NDILib"],
         ["S.Media.Images.Skia"] = ["S.Media.Core"],
         ["S.Media.Subtitles"] = ["S.Media.Core", "LibAssLib"],
-        ["S.Control"] = ["S.Media.Core", "S.Media.Session", "PMLib", "OSCLib"],
-        ["S.Abi"] = ["S.Media.Core", "S.Media.Compositor", "S.Control"],
+        ["S.Control.Abstractions"] = ["OSCLib"],
+        ["S.Control"] = ["S.Media.Core", "S.Media.Session", "S.Control.Abstractions", "PMLib", "OSCLib"],
+        ["S.Abi"] = ["S.Media.Core", "S.Media.Time", "S.Media.Compositor", "S.Control.Abstractions"],
         // S.Media.Interop is the host: it bundles the backend modules it ships (Phase 7).
         ["S.Media.Interop"] =
         [
@@ -119,6 +120,15 @@ public sealed class ArchitectureTests
         var core = FrameworkProjects(NextRoot())
             .Single(f => Path.GetFileNameWithoutExtension(f) == "S.Media.Core");
         Assert.Empty(ProjectRefNames(core));
+    }
+
+    [Theory]
+    [InlineData("MIDI/PMLib/PMLib.csproj")]
+    [InlineData("OSC/OSCLib/OSCLib.csproj")]
+    public void TransportWrappersHaveNoFrameworkProjectReferences(string relativePath)
+    {
+        var project = Path.Combine(NextRoot(), "MediaFramework", relativePath);
+        Assert.Empty(ProjectRefNames(project));
     }
 
     [Fact]

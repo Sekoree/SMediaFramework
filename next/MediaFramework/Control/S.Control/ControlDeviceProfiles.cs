@@ -167,8 +167,6 @@ public sealed record ControlDeviceTaskProfile
 public enum ControlDeviceTaskKind
 {
     PeriodicOscSend,
-    ProtocolMaintenance,
-    X32ProtocolMaintenance = ProtocolMaintenance,
 }
 
 public sealed record ControlDeviceProfileValidationIssue(string Code, string Message);

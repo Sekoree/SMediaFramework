@@ -43,6 +43,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang zlib1g-dev
 
+      # The subtitle stack (libass + a font) and the GL/A-V smokes need native libs the runners don't ship.
+      - name: Install libass + smoke prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri
+
       - name: Build (Release)
         run: dotnet build next/MFPlayer.Next.sln -c Release
 
@@ -62,3 +67,26 @@ jobs:
           else
             ./aot-publish/AotSmoke
           fi
+
+      # The native plugin host gate: gcc-compile the C test plugin, load it, exercise every adapter. Linux only (gcc).
+      - name: ABI plugin smoke
+        if: runner.os == 'Linux'
+        run: dotnet run --project next/MediaFramework/Tools/AbiSmoke/AbiSmoke.csproj -c Release --no-build
+
+      # Best-effort (runner FFmpeg/GL versions vary): they run + report but don't gate until proven stable on CI.
+      - name: Subtitle decode smoke
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        run: >
+          dotnet run --project next/MediaFramework/Tools/SubtitleDecodeSmoke/SubtitleDecodeSmoke.csproj
+          -c Release --no-build -- Reference/TestSubs/karaoke-timing.ass
+
+      - name: ABI GL layer-surface smoke (xvfb, software GL)
+        if: runner.os == 'Linux'
+        continue-on-error: true
+        env:
+          MFPLAYER_NEXT_ROOT: ${{ github.workspace }}/next
+          LIBGL_ALWAYS_SOFTWARE: 1
+        run: >
+          xvfb-run -a dotnet run --project next/MediaFramework/Tools/AbiGlSmoke/AbiGlSmoke.csproj
+          -c Release --no-build

@@ -65,3 +65,51 @@ internal sealed class SinkAudioOutput(AudioFormat format) : IAudioOutput
     public AudioFormat Format => format;
     public void Submit(ReadOnlySpan<float> packedSamples) { }
 }
+
+internal sealed class FakeVideoDecoderProvider : IMediaDecoderProvider
+{
+    public string Name => "fake-video";
+
+    public double Probe(string uri, MediaKind kind) => kind == MediaKind.Video ? 1.0 : 0.0;
+
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => new SyntheticVideoSource();
+
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) =>
+        throw new NotSupportedException("fake provider is video-only");
+
+    public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new FakeVideoDecoderProvider()));
+}
+
+internal sealed class SyntheticVideoSource : IVideoSource
+{
+    private const int FrameCount = 30;
+    private int _next;
+
+    public VideoFormat Format { get; } = new(4, 4, PixelFormat.Bgra32, new Rational(30, 1));
+    public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [PixelFormat.Bgra32];
+    public bool IsExhausted => Volatile.Read(ref _next) >= FrameCount;
+
+    public void SelectOutputFormat(PixelFormat format)
+    {
+        if (format != PixelFormat.Bgra32)
+            throw new NotSupportedException();
+    }
+
+    public bool TryReadNextFrame(out VideoFrame frame)
+    {
+        var index = Interlocked.Increment(ref _next) - 1;
+        if (index >= FrameCount)
+        {
+            frame = null!;
+            return false;
+        }
+
+        var bytes = new byte[4 * 4 * 4];
+        frame = new VideoFrame(
+            TimeSpan.FromTicks(TimeSpan.TicksPerSecond * index / 30),
+            Format,
+            [bytes],
+            [4 * 4]);
+        return true;
+    }
+}

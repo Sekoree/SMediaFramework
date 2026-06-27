@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- Session-free control decoder contracts shared by S.Control and the native plugin host. -->
+
+    <ItemGroup>
+        <ProjectReference Include="../../OSC/OSCLib/OSCLib.csproj" />
+    </ItemGroup>
+
+</Project>

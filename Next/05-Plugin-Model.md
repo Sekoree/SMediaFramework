@@ -130,21 +130,25 @@ path to maintain.
 ### The contract (`include/mfp_plugin.h`)
 
 ```c
-#define MFP_PLUGIN_ABI_VERSION 1
+#define MFP_PLUGIN_ABI_VERSION MFP_MAKE_ABI_VERSION(1, 0)
 
 typedef struct MfpPluginInfo {
-    uint32_t abi_version;     // plugin sets = MFP_PLUGIN_ABI_VERSION; host rejects mismatched major
+    uint32_t abi_version;
+    uint32_t struct_size;     // host validates required fields and ignores unknown trailing fields
     const char* id;           // "com.acme.webcam"
     const char* display_name;
     uint32_t capabilities;    // bitset: AUDIO_BACKEND | VIDEO_SOURCE | VIDEO_OUTPUT | LAYER_SURFACE | CONTROL_DECODER | SUBTITLE …
 } MfpPluginInfo;
 
-// Host services handed to the plugin (logging, frame-buffer pool, GL helpers, time base).
+// Host services handed to the plugin (logging, diagnostics, time base, frame/sync capabilities).
 typedef struct MfpHostApi {
     uint32_t abi_version;
+    uint32_t struct_size;
     void (*log)(int level, const char* msg);
-    void* (*alloc_frame)(const MfpVideoFormat* fmt);   // pooled, host-owned
-    void  (*release_frame)(void* frame);
+    void (*set_last_error)(const char* msg);
+    int64_t (*now_ticks)(void);
+    uint32_t supported_frame_kinds;
+    uint32_t supported_sync_kinds;
     /* … append-only … */
 } MfpHostApi;
 
@@ -158,6 +162,8 @@ Each maps 1:1 to a managed interface. Example — an audio backend (mirrors `IAu
 
 ```c
 typedef struct MfpAudioBackendVTable {
+    uint32_t abi_version;
+    uint32_t struct_size;
     int  (*enumerate_outputs)(void* self, MfpAudioDeviceInfo* out, int cap, int* count);
     int  (*enumerate_inputs )(void* self, MfpAudioDeviceInfo* out, int cap, int* count);
     void*(*create_output)(void* self, const char* device_id, const MfpAudioFormat*, const MfpAudioOpts*);
@@ -175,8 +181,8 @@ Other vtables, each shadowing the framework interface it adapts to:
   struct per kind** (OQ1 — one `uint64 gpu_handle` is not enough), mirroring the existing `S.Media.Core`
   HW-backings so the managed adapter is a near-direct map:
   - `MfpCpuFrame { void* planes[4]; int strides[4]; }`
-  - `MfpDmaBufFrame { int n; int fds[4]; int offsets[4]; int strides[4]; uint64 drm_modifier; uint32 fourcc; }` (← `DmabufNv12/P010/P016Backing`)
-  - `MfpD3D11Frame { uint64 nt_shared_handle; uint32 dxgi_format; uint32 array_slice; }` (← `Win32SharedNv12Backing`)
+  - `MfpDmaBufFrame { int n; int fds[4]; int offsets[4]; int strides[4]; uint64 modifiers[4]; uint32 fourcc; }` (← `DmabufNv12/P010/P016Backing`)
+  - `MfpD3D11Frame { uint64 luma/chroma_nt_shared_handle; uint32 dxgi_format; uint32 array_slice; int y/uv_stride; }` (← `Win32SharedNv12Backing`)
   - `MfpGlTextureFrame { uint32 id; uint32 target; uint64 context_id; }` — **same-context only**, so for
     layer-surface plugins, never cross-process source/output frames.
 
@@ -216,15 +222,18 @@ foreach (var lib in Directory.EnumerateFiles(dir, NativeLibPattern))
 
 ### Cross-boundary rules (ABI hygiene)
 
-- **Versioning:** `abi_version` on every struct; host checks major, ignores unknown trailing fields
-  (append-only evolution). Reject + log on mismatch; never crash.
+- **Versioning:** `abi_version` + `struct_size` lead every public struct/vtable. The host validates the
+  required prefix, copies the known prefix into a zero-filled normalized table, and ignores unknown trailing
+  fields (append-only evolution). Reject + report on mismatch; never dereference an undersized table.
 - **Errors:** functions return `int` status (0 ok, negative error) like `s_media_player`; never throw
   across the boundary; a thread-local last-error string is fetchable.
-- **Ownership:** CPU frames are host-pooled (`alloc_frame`/`release_frame`); the side that last holds a
-  frame releases it, mirroring the managed `VideoFrame` release-callback contract. GPU-handle frames
-  (D8) add explicit `acquire`/`release` plus a **negotiated sync primitive** (`MfpSync` — keyed-mutex /
-  binary or timeline semaphore / fence, chosen by capability query, OQ2) so producer and consumer don't
-  race on the texture; the host owns import and lifetime of foreign handles.
+- **Ownership:** a source/subtitle producer keeps every returned CPU/GPU frame valid until the host calls
+  that capability's `release_frame`. Output submit is synchronous; a queuing output copies or retains what it
+  needs before returning. The host duplicates imported dma-buf/NT handles into Core-owned backings. GPU frames
+  carry a **negotiated sync primitive** (`MfpSync`); unsupported frame/sync kinds are rejected explicitly.
+- **Library lifetime:** disposing a plugin requests unload. Capability adapters and opened native instances hold
+  leases; capability `destroy` callbacks and optional `mfp_plugin_unregister` run before `NativeLibrary.Free`
+  only after the final lease is released.
 - **Threading:** the contract states which thread each call runs on (e.g. `submit`/`render` on the
   clock/compositor thread, must return promptly; slow work goes to the plugin's own thread) — same
   rule as `IVideoOutput.Submit` today.

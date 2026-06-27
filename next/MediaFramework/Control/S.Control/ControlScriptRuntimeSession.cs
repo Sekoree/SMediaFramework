@@ -22,7 +22,8 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
         IControlOscSender oscSender,
         int instructionLimit = ControlScriptFileHost.DefaultInstructionLimit,
         IControlMonitorSink? monitor = null,
-        IControlMidiSender? midiSender = null)
+        IControlMidiSender? midiSender = null,
+        ControlMeterBlobDecoderRegistry? meterBlobDecoders = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
         ArgumentNullException.ThrowIfNull(sourceProvider);
@@ -38,7 +39,8 @@ public sealed class ControlScriptRuntimeSession : IControlScriptDispatcher
             devices: _config.Devices,
             deviceHealth: _deviceHealth,
             layers: _config.Layers,
-            profiles: ResolveProfiles(_config));
+            profiles: ResolveProfiles(_config),
+            meterBlobDecoders: meterBlobDecoders);
         _runtime = new ControlScriptRuntime(_config, sourceProvider, services, instructionLimit);
         _oscRouter = new ControlScriptOscCommandRouter(_config, oscSender, OscCache);
         _midiRouter = new ControlScriptMidiCommandRouter(_config, midiSender);

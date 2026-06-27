@@ -15,7 +15,7 @@
  *
  * Conventions (ABI hygiene — keep all of these):
  *   - C ABI only; every callable is `extern "C"`, no C++ types cross the boundary.
- *   - Versioning: every top-level struct begins with `abi_version`; the host checks the *major* and
+ *   - Versioning: every public struct/vtable begins with `abi_version` + `struct_size`; the host checks the *major* and
  *     ignores unknown trailing fields, so the ABI evolves *append-only* — never reorder/resize/remove an
  *     existing field; only append (incl. appending optional function pointers to a vtable's end). On a
  *     major mismatch the host rejects + logs, never crashes.
@@ -26,9 +26,9 @@
  *   - Errors: functions return `int` (an MfpStatus; 0 ok, negative error). Never throw/longjmp across the
  *     boundary. After a negative return the host may read a thread-local string via MfpHostApi.set_last_error.
  *   - Time: 100-ns ticks everywhere (matches s_media_player and the managed clock).
- *   - Ownership: CPU frames are host-pooled (alloc_frame/release_frame); whichever side last holds a frame
- *     releases it (mirrors the managed VideoFrame release-callback contract). GPU-handle frames add a
- *     negotiated MfpSync so producer and consumer don't race; the host owns import + lifetime of foreign handles.
+ *   - Ownership: a source/subtitle producer owns each returned frame and keeps all CPU/GPU handles valid until
+ *     the host calls that capability's release_frame. Output submit is synchronous; an output that queues a frame
+ *     must copy/retain what it needs before returning. GPU-handle frames carry negotiated MfpSync metadata.
  *   - Threading: each vtable call documents its thread. Real-time calls (audio submit/read, output submit,
  *     layer render) run on the engine's clock/compositor thread and MUST return promptly — push slow work
  *     to the plugin's own thread. The (potentially slow) asset load for a layer happens in create/configure.
@@ -45,7 +45,14 @@
 extern "C" {
 #endif
 
-#define MFP_PLUGIN_ABI_VERSION 1u
+#define MFP_MAKE_ABI_VERSION(major, minor) ((((uint32_t)(major)) << 16) | ((uint32_t)(minor) & 0xffffu))
+#define MFP_ABI_VERSION_MAJOR(version) ((uint32_t)(version) >> 16)
+#define MFP_ABI_VERSION_MINOR(version) ((uint32_t)(version) & 0xffffu)
+#define MFP_PLUGIN_ABI_VERSION MFP_MAKE_ABI_VERSION(1, 0)
+
+#define MFP_STRUCT_HEADER \
+    uint32_t abi_version; \
+    uint32_t struct_size
 
 /* ------------------------------------------------------------------ status + logging ---------- */
 
@@ -144,6 +151,9 @@ typedef enum MfpFrameKind {
     MFP_FRAME_GL_TEXTURE         /* same-GL-context only (layer surfaces); never cross-process */
 } MfpFrameKind;
 
+#define MFP_FRAME_KIND_BIT(kind) (1u << (uint32_t)(kind))
+#define MFP_SYNC_KIND_BIT(kind)  (1u << (uint32_t)(kind))
+
 typedef struct MfpCpuFrame {
     void*   planes[4];
     int32_t strides[4];
@@ -155,14 +165,17 @@ typedef struct MfpDmaBufFrame {
     int32_t  fds[4];             /* dma-buf fds; the host imports, the producer keeps ownership until release */
     int32_t  offsets[4];
     int32_t  strides[4];
-    uint64_t drm_modifier;
+    uint64_t modifiers[4];       /* DRM_FORMAT_MOD_* per plane/object */
     uint32_t fourcc;             /* DRM FourCC */
 } MfpDmaBufFrame;
 
 typedef struct MfpD3D11Frame {
-    uint64_t nt_shared_handle;   /* NT handle to the shared texture */
+    uint64_t luma_nt_shared_handle;
+    uint64_t chroma_nt_shared_handle; /* may equal luma_nt_shared_handle */
     uint32_t dxgi_format;
     uint32_t array_slice;        /* 0 for non-array textures */
+    int32_t  y_stride;
+    int32_t  uv_stride;
 } MfpD3D11Frame;
 
 typedef struct MfpGlTextureFrame {
@@ -204,12 +217,12 @@ typedef struct MfpAudioDeviceInfo {
 
 /* ------------------------------------------------------ host services handed to the plugin ----- */
 typedef struct MfpHostApi {
-    uint32_t abi_version;
+    MFP_STRUCT_HEADER;
     void    (*log)(MfpLogLevel level, const char* msg);
     void    (*set_last_error)(const char* msg);          /* thread-local; host reads after a negative status */
     int64_t (*now_ticks)(void);                          /* host clock, 100-ns ticks */
-    void*   (*alloc_frame)(const MfpVideoFormat* fmt);   /* pooled, host-owned CPU frame buffer */
-    void    (*release_frame)(void* frame);
+    uint32_t supported_frame_kinds;                      /* MFP_FRAME_KIND_BIT mask */
+    uint32_t supported_sync_kinds;                       /* MFP_SYNC_KIND_BIT mask */
     /* … append-only … */
 } MfpHostApi;
 
@@ -220,12 +233,13 @@ typedef struct MfpHostApi {
 
 /* Audio backend ↔ IAudioBackend. submit/read_into run on the audio clock thread and MUST NOT block. */
 typedef struct MfpAudioBackendVTable {
+    MFP_STRUCT_HEADER;
     int   (*enumerate_outputs)(void* self, MfpAudioDeviceInfo* out, int cap, int* count);
     int   (*enumerate_inputs )(void* self, MfpAudioDeviceInfo* out, int cap, int* count);
     void* (*open_output)(void* self, const char* device_id, const MfpAudioFormat* fmt, const MfpAudioOpts* opts);
     void* (*open_input )(void* self, const char* device_id, const MfpAudioFormat* fmt, const MfpAudioOpts* opts);
     int   (*output_submit)(void* handle, const float* interleaved, int float_count);   /* push; MFP_ERR_AGAIN if full */
-    int   (*input_read_into)(void* handle, float* dst, int float_count);               /* pull → frames read */
+    int   (*input_read_into)(void* handle, float* dst, int float_count);               /* pull → floats written; negative MfpStatus */
     void  (*close_handle)(void* handle);
     void  (*destroy)(void* self);
     /* --- optional capabilities (NULL if unsupported) --- */
@@ -238,8 +252,9 @@ typedef struct MfpAudioBackendVTable {
 
 /* A pull audio source instance (e.g. NDI audio, a file's audio track, a synth). */
 typedef struct MfpAudioSourceVTable {
+    MFP_STRUCT_HEADER;
     int  (*native_format)(void* src, MfpAudioFormat* out);
-    int  (*read_into)(void* src, float* dst, int float_count);    /* → frames read; MFP_ERR_AGAIN / MFP_ERR_END */
+    int  (*read_into)(void* src, float* dst, int float_count);    /* → floats written; MFP_ERR_AGAIN / MFP_ERR_END */
     int  (*is_exhausted)(void* src);
     int  (*seek)(void* src, int64_t position_ticks);              /* MFP_ERR_UNSUPPORTED if not seekable */
     void (*destroy)(void* src);
@@ -247,6 +262,9 @@ typedef struct MfpAudioSourceVTable {
 
 /* A video source instance ↔ IVideoSource. try_read_frame may run on a decode thread. */
 typedef struct MfpVideoSourceVTable {
+    MFP_STRUCT_HEADER;
+    uint32_t supported_frame_kinds;  /* kinds try_read_frame may return */
+    uint32_t supported_sync_kinds;   /* sync kinds it may attach */
     int  (*native_pixel_formats)(void* src, MfpPixelFormat* out, int cap, int* count);
     int  (*select_output_format)(void* src, MfpPixelFormat chosen);
     int  (*get_format)(void* src, MfpVideoFormat* out);       /* resolved output format (w/h/pixel_format); host queries it before the first read (↔ IVideoSource.Format) */
@@ -267,6 +285,7 @@ typedef struct MfpMediaSource {
 
 /* Media source provider ↔ IMediaDecoderProvider (opens a URI → its sources). Registered with a scheme. */
 typedef struct MfpMediaSourceProviderVTable {
+    MFP_STRUCT_HEADER;
     int (*can_open)(void* self, const char* uri);             /* 1 = this provider handles `uri` */
     int (*open)(void* self, const char* uri, MfpMediaSource* out);  /* fills out->video/audio (NULL where N/A) */
     const MfpVideoSourceVTable* video_source_vtable;          /* NULL if this provider never opens video */
@@ -276,6 +295,9 @@ typedef struct MfpMediaSourceProviderVTable {
 
 /* Video output ↔ IVideoOutput. submit() runs on the clock/compositor thread; return promptly. */
 typedef struct MfpVideoOutputVTable {
+    MFP_STRUCT_HEADER;
+    uint32_t accepted_frame_kinds;   /* MFP_FRAME_KIND_BIT mask */
+    uint32_t accepted_sync_kinds;    /* MFP_SYNC_KIND_BIT mask */
     int  (*accepted_pixel_formats)(void* self, MfpPixelFormat* out, int cap, int* count);
     int  (*configure)(void* self, const MfpVideoFormat* fmt);
     int  (*submit)(void* self, const MfpVideoFrame* frame);
@@ -287,6 +309,7 @@ typedef struct MfpVideoOutputVTable {
 
 /* A created compositor layer-surface instance ↔ IVideoCompositorLayerSurface. render() on the compositor thread. */
 typedef struct MfpLayerSurfaceVTable {
+    MFP_STRUCT_HEADER;
     int  (*configure_gl)(void* surface, const MfpGlContext* ctx, uint32_t canvas_w, uint32_t canvas_h);
     int  (*render)(void* surface, const MfpGlContext* ctx, uint32_t target_fbo,
                    int64_t master_ticks, const MfpTransform2D* placement, float opacity);
@@ -296,6 +319,7 @@ typedef struct MfpLayerSurfaceVTable {
 /* Layer-surface FACTORY, registered per `kind` (e.g. "mmd", "shadertoy"). Carries the GL context + target
  * FBO across the boundary so a native plugin renders straight into the canvas. */
 typedef struct MfpLayerSurfaceFactoryVTable {
+    MFP_STRUCT_HEADER;
     /* Create a surface instance configured by `config_json` — an opaque, plugin-defined blob taken
      * verbatim from the cue/composition layer spec, e.g. for an "mmd" layer:
      *   {"models":["miku.pmx","stage.pmx"],"motion":"rolling-girl.vmd","camera":"cam.vmd"}
@@ -307,6 +331,7 @@ typedef struct MfpLayerSurfaceFactoryVTable {
 
 /* A created subtitle/overlay source instance ↔ ISubtitleSource / IVideoOverlaySource. */
 typedef struct MfpSubtitleVTable {
+    MFP_STRUCT_HEADER;
     /* MFP_OK = filled `out`; MFP_ERR_AGAIN = nothing visible at `position`; <0 = error. */
     int  (*render_at)(void* self, int64_t position_ticks, MfpVideoFrame* out);
     void (*release_frame)(void* self, MfpVideoFrame* frame);
@@ -315,6 +340,7 @@ typedef struct MfpSubtitleVTable {
 
 /* Subtitle provider ↔ ISubtitleProvider (opens a sidecar/stream → an overlay source at canvas size). */
 typedef struct MfpSubtitleProviderVTable {
+    MFP_STRUCT_HEADER;
     int   (*can_open)(void* self, const char* uri);
     void* (*open)(void* self, const char* uri, uint32_t canvas_w, uint32_t canvas_h);  /* → subtitle instance or NULL */
     const MfpSubtitleVTable* subtitle_vtable;
@@ -330,10 +356,34 @@ typedef struct MfpControlReading {
     double value;
 } MfpControlReading;
 
+typedef enum MfpControlArgKind {
+    MFP_CONTROL_ARG_UNSUPPORTED = 0,
+    MFP_CONTROL_ARG_INT32,
+    MFP_CONTROL_ARG_FLOAT32,
+    MFP_CONTROL_ARG_STRING,
+    MFP_CONTROL_ARG_BLOB,
+    MFP_CONTROL_ARG_INT64,
+    MFP_CONTROL_ARG_DOUBLE64,
+    MFP_CONTROL_ARG_TRUE,
+    MFP_CONTROL_ARG_FALSE,
+    MFP_CONTROL_ARG_NIL,
+    MFP_CONTROL_ARG_IMPULSE
+} MfpControlArgKind;
+
+/* `data` is UTF-8 for STRING and raw bytes for BLOB; it remains valid only for the decode call. */
+typedef struct MfpControlArg {
+    MfpControlArgKind kind;
+    int32_t           data_len;
+    int64_t           int_value;
+    double            float_value;
+    const uint8_t*    data;
+} MfpControlArg;
+
 typedef struct MfpControlDecoderVTable {
+    MFP_STRUCT_HEADER;
     int  (*decode)(void* self,
                    const char* osc_address,
-                   const uint8_t* blob, int blob_len,
+                   const MfpControlArg* args, int arg_count, int blob_arg_index,
                    MfpControlReading* out, int out_cap, int* out_count);
     void (*destroy)(void* self);
 } MfpControlDecoderVTable;
@@ -344,7 +394,7 @@ typedef struct MfpControlDecoderVTable {
  * passed back to every add_*; `self` is the plugin instance forwarded to that capability's vtable calls.
  * Each add_* returns an MfpStatus. */
 typedef struct MfpRegistrar {
-    uint32_t abi_version;
+    MFP_STRUCT_HEADER;
     void*    ctx;
     int (*add_audio_backend)(void* ctx, const char* id, const MfpAudioBackendVTable* vt, void* self);
     int (*add_media_source_provider)(void* ctx, const char* scheme, const MfpMediaSourceProviderVTable* vt, void* self);
@@ -356,7 +406,7 @@ typedef struct MfpRegistrar {
 } MfpRegistrar;
 
 typedef struct MfpPluginInfo {
-    uint32_t    abi_version;      /* plugin sets = MFP_PLUGIN_ABI_VERSION; host rejects a major mismatch */
+    MFP_STRUCT_HEADER;
     const char* id;               /* e.g. "com.acme.webcam" */
     const char* display_name;
     uint32_t    capabilities;     /* bitset of MfpCapability */

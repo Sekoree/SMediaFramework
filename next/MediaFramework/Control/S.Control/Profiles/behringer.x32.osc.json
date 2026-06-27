@@ -1927,7 +1927,7 @@
       "id": "x32.xremote",
       "displayName": "Maintain /xremote",
       "isDefaultEnabled": true,
-      "kind": 1,
+      "kind": 0,
       "address": "/xremote",
       "intervalMs": 8000,
       "arguments": []
@@ -1936,7 +1936,7 @@
       "id": "x32.subscribe.ch01.fader",
       "displayName": "Subscribe Ch 01 fader (optional)",
       "isDefaultEnabled": false,
-      "kind": 1,
+      "kind": 0,
       "address": "/subscribe",
       "intervalMs": 8000,
       "arguments": [
@@ -1959,7 +1959,7 @@
       "id": "x32.meters.bank6",
       "displayName": "Subscribe meter bank 6 (optional)",
       "isDefaultEnabled": false,
-      "kind": 1,
+      "kind": 0,
       "address": "/meters",
       "intervalMs": 8000,
       "arguments": [
@@ -1986,14 +1986,6 @@
     }
   ],
   "behaviors": {
-    "protocolMaintenance": {
-      "renewIntervalMs": 8000,
-      "maintenanceAddresses": [
-        "/xremote",
-        "/subscribe",
-        "/meters"
-      ]
-    },
     "meterBlobDecoder": "x32"
   }
 }

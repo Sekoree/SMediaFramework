@@ -164,6 +164,49 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task SelectedSubtitles_AttachAllWithClipTime_AndDisposeOnStop()
+    {
+        var overlays = new List<RecordingOverlay>();
+        var opened = new List<(string Path, int StreamIndex, int Width, int Height)>();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "Video")],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://video", CompositionId: "screen", Subtitles:
+                [
+                    new ShowSubtitleSelection(StreamIndex: 7),
+                    new ShowSubtitleSelection("/subs/commentary.ass"),
+                ]),
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 4, 4)],
+            Outputs: [], Routes: [], Devices: []);
+
+        await using var session = new ShowSession(
+            FakeVideoDecoderProvider.Registry(),
+            subtitleFactory: (path, streamIndex, width, height) =>
+            {
+                opened.Add((path, streamIndex, width, height));
+                var overlay = new RecordingOverlay();
+                overlays.Add(overlay);
+                return overlay;
+            });
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        Assert.Equal(
+            [("fake://video", 7, 16, 16), ("/subs/commentary.ass", -1, 16, 16)],
+            opened);
+
+        Assert.True(SpinWait.SpinUntil(
+            () => overlays.All(o => o.Positions.Any(p => p > TimeSpan.Zero)),
+            TimeSpan.FromSeconds(2)), "subtitle overlays were not driven from the active clip position");
+
+        await session.StopAsync();
+        Assert.All(overlays, overlay => Assert.True(overlay.IsDisposed));
+    }
+
+    [Fact]
     public async Task RoutingScene_AppliesMasterOutputChannelMatrix()
     {
         // A 2→4 channel matrix patched to the master output: the clip's 2 source channels fan out, so the
@@ -255,4 +298,26 @@ public sealed class ShowSessionTests
 
         Assert.Equal(new[] { 4, 6 }, backend.Created.Select(c => c.Channels));
     }
+}
+
+internal sealed class RecordingOverlay : IVideoOverlaySource
+{
+    private readonly object _gate = new();
+    private readonly List<TimeSpan> _positions = [];
+
+    public IReadOnlyList<TimeSpan> Positions
+    {
+        get { lock (_gate) return _positions.ToArray(); }
+    }
+
+    public bool IsDisposed { get; private set; }
+
+    public VideoFrame? RenderAt(TimeSpan position)
+    {
+        lock (_gate)
+            _positions.Add(position);
+        return null;
+    }
+
+    public void Dispose() => IsDisposed = true;
 }

@@ -7,6 +7,7 @@ using S.Control;
 using S.Media.Core.Audio;
 using S.Media.Core.Registry;
 using S.Media.Core.Video;
+using S.Media.Time;
 
 var root = FindNextRoot(AppContext.BaseDirectory);
 var pluginC = Path.Combine(root, "MediaFramework", "Tools", "AbiSmoke", "test_plugin.c");
@@ -33,7 +34,8 @@ if (plugin.Id != "com.example.testplugin" || !hasSource || !hasDecoder)
 // Exercise the registered control decoder through its managed adapter — proves the plugin's code actually RUNS
 // (not just that it registered): decode a one-byte blob and check the reading the plugin produced.
 var decoder = AbiPluginHost.BindControlDecoders(plugin).Single().Decoder;
-var readings = decoder.Decode("/test", Array.Empty<OSCArgument>(), 0, new byte[] { 128 }).ToList();
+var controlArguments = new[] { OSCArgument.String("meters"), OSCArgument.Blob(new byte[] { 128 }) };
+var readings = decoder.Decode("/test", controlArguments, 1, new byte[] { 128 }).ToList();
 Console.WriteLine($"decoder ran: {readings.Count} reading(s)");
 foreach (var r in readings)
     Console.WriteLine($"  {r.Address} = {r.Value:F3}");
@@ -53,6 +55,16 @@ if (bound is null || bound.Format.Width != 4 || bound.Format.Height != 4 || boun
 }
 Console.WriteLine($"source format: {bound.Format.Width}x{bound.Format.Height} {bound.Format.PixelFormat}");
 (bound as IDisposable)?.Dispose();
+var boundAudio = provider.TryOpenAudio("testsrc://demo");
+Span<float> boundSamples = stackalloc float[8];
+var boundSampleCount = boundAudio?.ReadInto(boundSamples) ?? 0;
+Console.WriteLine($"paired media audio: {boundAudio?.Format.SampleRate} Hz/{boundAudio?.Format.Channels}ch, floats={boundSampleCount}");
+(boundAudio as IDisposable)?.Dispose();
+if (boundSampleCount != 8 || boundSamples[0] != 0.25f)
+{
+    Console.Error.WriteLine("FAIL: the provider's correlated audio source did not produce the expected samples.");
+    return 5;
+}
 
 // (b) Register the plugin into a LIVE IMediaRegistry, route the URI through it, and read the frame — proves the
 // end-to-end live path + the frame-union marshalling (pixels must match what the plugin wrote).
@@ -60,7 +72,7 @@ var registry = MediaRegistry.Build(b => AbiPluginHost.RegisterInto(plugin, media
 if (!registry.TryOpenVideo("testsrc://demo", null, out var source) || !source.TryReadNextFrame(out var vframe) || vframe is null)
 {
     Console.Error.WriteLine("FAIL: IMediaRegistry did not route + open + read the plugin's source.");
-    return 5;
+    return 6;
 }
 var px = vframe.Planes[0].Span;
 Console.WriteLine($"registry-routed frame: {vframe.Format.Width}x{vframe.Format.Height} {vframe.Format.PixelFormat}, " +
@@ -69,16 +81,30 @@ if (vframe.Format.Width != 4 || vframe.Format.Height != 4 || vframe.Format.Pixel
     || px[0] != 10 || px[1] != 20 || px[2] != 30 || px[3] != 255)
 {
     Console.Error.WriteLine("FAIL: the registry-routed frame's format/pixels did not match the plugin's output.");
-    return 6;
+    return 7;
 }
 (source as IDisposable)?.Dispose();
+if (!registry.TryOpenAudio("testsrc://demo", null, out var registryAudio))
+{
+    Console.Error.WriteLine("FAIL: IMediaRegistry did not route the plugin's audio source.");
+    return 8;
+}
+Span<float> registrySamples = stackalloc float[4];
+var registrySampleCount = registryAudio.ReadInto(registrySamples);
+(registryAudio as IDisposable)?.Dispose();
+if (registrySampleCount != 4 || registrySamples[0] != 0.25f)
+{
+    Console.Error.WriteLine("FAIL: registry-routed plugin audio samples did not match.");
+    return 9;
+}
 
 // (c) Register the control decoder into a decoder registry and resolve it by id (the live control path).
-AbiPluginHost.RegisterInto(plugin, control: ControlMeterBlobDecoderRegistry.Default);
-if (ControlMeterBlobDecoderRegistry.Default.Resolve("test.decoder") is null)
+var controlDecoders = new ControlMeterBlobDecoderRegistry();
+AbiPluginHost.RegisterInto(plugin, control: controlDecoders);
+if (controlDecoders.Resolve("test.decoder") is null)
 {
     Console.Error.WriteLine("FAIL: the control decoder was not registered into ControlMeterBlobDecoderRegistry.");
-    return 7;
+    return 10;
 }
 
 // (d) Audio backend: enumerate a device, open an output, submit samples, read the played-frame clock.
@@ -87,12 +113,20 @@ var devices = audio.EnumerateOutputDevices();
 var output = audio.CreateOutput(null, new AudioFormat(48000, 2));
 output.Submit(stackalloc float[8]); // 8 floats / 2ch = 4 frames
 var played = (output as IAudioOutputPlaybackStats)!.PlayedSamples;
-Console.WriteLine($"audio backend: {devices.Count} device(s) '{(devices.Count > 0 ? devices[0].Name : "?")}', played frames={played}");
+var clocked = output as IClockedOutput;
+var playbackClock = output as IPlaybackClock;
+var input = audio.CreateInput(null, new AudioFormat(48000, 2));
+Span<float> captured = stackalloc float[6];
+var capturedCount = input.ReadInto(captured);
+Console.WriteLine($"audio backend: {devices.Count} device(s) '{(devices.Count > 0 ? devices[0].Name : "?")}', played frames={played}, captured floats={capturedCount}");
 (output as IDisposable)?.Dispose();
-if (devices.Count != 1 || devices[0].Name != "Plugin Output" || played != 4)
+(input as IDisposable)?.Dispose();
+if (devices.Count != 1 || devices[0].Name != "Plugin Output" || played != 4
+    || clocked is null || playbackClock is null || playbackClock.ElapsedSinceStart <= TimeSpan.Zero
+    || capturedCount != 6 || captured[0] != 0.5f)
 {
-    Console.Error.WriteLine("FAIL: audio backend enumerate/submit/played-frames mismatch.");
-    return 8;
+    Console.Error.WriteLine("FAIL: audio backend enumerate/clock/backpressure/input semantics mismatch.");
+    return 11;
 }
 
 // (e) Video output: configure + submit the frame the source produced; the plugin validates it + reports via host log.
@@ -100,12 +134,29 @@ var vout = AbiPluginHost.BindVideoOutputs(plugin).Single().Output;
 vout.Configure(vframe.Format);
 vout.Submit(vframe);
 Console.WriteLine($"video output reported: {AbiPluginHost.LastLogMessage}");
-(vout as IDisposable)?.Dispose();
 if (AbiPluginHost.LastLogMessage != "vout:ok")
 {
     Console.Error.WriteLine("FAIL: the video output did not receive the expected frame (reverse marshalling).");
-    return 9;
+    return 12;
 }
+
+var dmaSource = provider.TryOpenVideo("testsrc://dmabuf");
+if (dmaSource is null || !dmaSource.TryReadNextFrame(out var dmaFrame) || dmaFrame.DmabufNv12 is null)
+{
+    Console.Error.WriteLine("FAIL: the native dma-buf frame was not imported into a Core hardware backing.");
+    return 13;
+}
+vout.Configure(dmaFrame.Format);
+vout.Submit(dmaFrame);
+Console.WriteLine($"dma-buf source/output: fds=({dmaFrame.DmabufNv12.YPlaneFd},{dmaFrame.DmabufNv12.UvPlaneFd}), {AbiPluginHost.LastLogMessage}");
+if (AbiPluginHost.LastLogMessage != "vout:dmabuf")
+{
+    Console.Error.WriteLine("FAIL: the native video output did not receive the imported dma-buf frame.");
+    return 14;
+}
+dmaFrame.Dispose();
+(dmaSource as IDisposable)?.Dispose();
+(vout as IDisposable)?.Dispose();
 
 // (f) Subtitle provider: open + render an overlay frame at a position.
 var subProvider = AbiPluginHost.BindSubtitleProviders(plugin).Single().Provider;
@@ -114,18 +165,37 @@ var subFrame = overlay?.RenderAt(TimeSpan.FromSeconds(1));
 if (subFrame is null)
 {
     Console.Error.WriteLine("FAIL: the subtitle overlay rendered no frame.");
-    return 10;
+    return 15;
 }
 var sp = subFrame.Planes[0].Span;
 Console.WriteLine($"subtitle overlay: {subFrame.Format.Width}x{subFrame.Format.Height} px0=({sp[0]},{sp[1]},{sp[2]},{sp[3]})");
 overlay?.Dispose();
+subFrame.Dispose();
 if (sp[0] != 99 || sp[1] != 99 || sp[2] != 99 || sp[3] != 255)
 {
     Console.Error.WriteLine("FAIL: the subtitle overlay pixels did not match.");
-    return 11;
+    return 16;
 }
 
-Console.WriteLine("AbiSmoke OK — all six ABI capabilities run through managed adapters: source (registry-routed) + audio backend + video output + subtitle + control decoder, with media-source/audio/decoder registered into the live registries.");
+vframe.Dispose();
+(decoder as IDisposable)?.Dispose();
+provider.Dispose();
+audio.Dispose();
+subProvider.Dispose();
+foreach (var disposable in registry.Decoders.OfType<IDisposable>())
+    disposable.Dispose();
+foreach (var disposable in registry.AudioBackends.OfType<IDisposable>())
+    disposable.Dispose();
+(controlDecoders.Resolve("test.decoder") as IDisposable)?.Dispose();
+
+plugin.Dispose();
+if (!plugin.IsUnloaded || AbiPluginHost.LastLogMessage != "unregister:ok")
+{
+    Console.Error.WriteLine("FAIL: plugin unload was not deferred/completed cleanly or unregister was not called.");
+    return 17;
+}
+
+Console.WriteLine("AbiSmoke OK — all six ABI capabilities run through managed adapters, including correlated A/V, audio clock/backpressure/input semantics, scoped registries, and deferred plugin unload.");
 return 0;
 
 static bool CompilePlugin(string cFile, string includeDir, string outSo)
@@ -155,6 +225,11 @@ static bool CompilePlugin(string cFile, string includeDir, string outSo)
 
 static string FindNextRoot(string start)
 {
+    var configured = Environment.GetEnvironmentVariable("MFPLAYER_NEXT_ROOT");
+    if (!string.IsNullOrWhiteSpace(configured)
+        && File.Exists(Path.Combine(configured, "MFPlayer.Next.sln")))
+        return Path.GetFullPath(configured);
+
     var d = new DirectoryInfo(start);
     while (d is not null && !File.Exists(Path.Combine(d.FullName, "MFPlayer.Next.sln")))
         d = d.Parent;

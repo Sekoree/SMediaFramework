@@ -113,6 +113,11 @@ static bool CompilePlugin(string cFile, string includeDir, string outSo)
 
 static string FindNextRoot(string start)
 {
+    var configured = Environment.GetEnvironmentVariable("MFPLAYER_NEXT_ROOT");
+    if (!string.IsNullOrWhiteSpace(configured)
+        && File.Exists(Path.Combine(configured, "MFPlayer.Next.sln")))
+        return Path.GetFullPath(configured);
+
     var d = new DirectoryInfo(start);
     while (d is not null && !File.Exists(Path.Combine(d.FullName, "MFPlayer.Next.sln")))
         d = d.Parent;

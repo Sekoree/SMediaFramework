@@ -7,7 +7,6 @@ public sealed class ControlPeriodicOscSendManager
     private static readonly TimeSpan FailedRetryInterval = TimeSpan.FromSeconds(2);
 
     private readonly ControlSystemConfig _config;
-    private readonly IControlDeviceProfileRepository _profiles;
     private readonly IControlOscSender _sender;
     private readonly IControlMonitorSink _monitor;
     private readonly Dictionary<(Guid DeviceId, Guid SendId), DateTimeOffset> _lastSuccessfulUtc = new();
@@ -16,11 +15,9 @@ public sealed class ControlPeriodicOscSendManager
     public ControlPeriodicOscSendManager(
         ControlSystemConfig config,
         IControlOscSender sender,
-        IControlMonitorSink? monitor = null,
-        IControlDeviceProfileRepository? profiles = null)
+        IControlMonitorSink? monitor = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
-        _profiles = profiles ?? CompositeControlDeviceProfileRepository.ForProject(config);
         _sender = sender ?? throw new ArgumentNullException(nameof(sender));
         _monitor = monitor ?? NullControlMonitorSink.Instance;
     }
@@ -37,10 +34,6 @@ public sealed class ControlPeriodicOscSendManager
         {
             foreach (var send in device.PeriodicOscSends.Where(s => s.IsEnabled))
             {
-                var profile = _profiles.FindById(device.ProfileId ?? string.Empty);
-                if (ControlProfileProtocolBehavior.UsesProtocolMaintenance(profile, device, send))
-                    continue;
-
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!IsDue(device.Id, send, utcNow))
                     continue;

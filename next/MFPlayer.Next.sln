@@ -147,6 +147,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AbiSmoke", "MediaFramework\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AbiGlSmoke", "MediaFramework\Tools\AbiGlSmoke\AbiGlSmoke.csproj", "{DCC8602A-54E8-4C85-8865-727559434372}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "S.Control.Abstractions", "MediaFramework\Control\S.Control.Abstractions\S.Control.Abstractions.csproj", "{FB140C82-6898-4303-9AE6-99440E27883B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -889,6 +891,18 @@ Global
 		{DCC8602A-54E8-4C85-8865-727559434372}.Release|x64.Build.0 = Release|Any CPU
 		{DCC8602A-54E8-4C85-8865-727559434372}.Release|x86.ActiveCfg = Release|Any CPU
 		{DCC8602A-54E8-4C85-8865-727559434372}.Release|x86.Build.0 = Release|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Debug|x64.Build.0 = Debug|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Debug|x86.Build.0 = Debug|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Release|x64.ActiveCfg = Release|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Release|x64.Build.0 = Release|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Release|x86.ActiveCfg = Release|Any CPU
+		{FB140C82-6898-4303-9AE6-99440E27883B}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -965,5 +979,6 @@ Global
 		{E58FA897-21DD-47EC-BC2D-C23916242C89} = {411B656F-23C7-D328-05DC-3A2D6F5BEABE}
 		{1FE1B82C-F584-449A-9A06-0E8BF8DB0C9B} = {7ABDDB3F-50EC-7ED0-BC8B-1C1A33655ACB}
 		{DCC8602A-54E8-4C85-8865-727559434372} = {7ABDDB3F-50EC-7ED0-BC8B-1C1A33655ACB}
+		{FB140C82-6898-4303-9AE6-99440E27883B} = {6FA04593-616B-AEB6-4C9D-4B01C9C63251}
 	EndGlobalSection
 EndGlobal

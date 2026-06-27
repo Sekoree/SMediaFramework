@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-    <!-- PMLib — PortMidi P/Invoke binding: MIDI I/O, message parsing, SysEx accumulation, and a trigger bridge.
-         The MIDI transport for S.Control (the analogue of OSCLib for OSC); bridges inbound MIDI to Core's
-         TriggerBus. Native PortMidi is user-provided on the search path. Common build settings (incl.
+    <!-- PMLib — PortMidi P/Invoke binding: MIDI I/O, message parsing, and SysEx accumulation.
+         The MIDI transport for S.Control (the analogue of OSCLib for OSC); framework trigger adaptation lives
+         in S.Control. Native PortMidi is user-provided on the search path. Common build settings (incl.
          AllowUnsafeBlocks / IsAotCompatible) come from next/Directory.Build.props. -->
 
     <ItemGroup>
@@ -11,10 +11,6 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    </ItemGroup>
-
-    <ItemGroup>
-        <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
     </ItemGroup>
 
 </Project>

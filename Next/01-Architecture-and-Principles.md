@@ -112,8 +112,9 @@ Allowed reference rules (enforced by `.csproj` review and ideally an arch test):
 | `Subtitles` | Core (+ libass; embedded/bitmap subtitle support through registry capabilities, not concrete decoder references) |
 | `S.Media.Players` | Core, Time, Routing, **media registry contracts** |
 | `S.Media.Session` | Core, Time, Routing, Players, Compositor, **media/compositor registry contracts** (not concrete backends) |
-| `S.Control` | Core, Session (for actions), PMLib, OSCLib, Mond |
-| `S.Abi` | Core plus media/compositor/control capability packages as needed; adapts native plugins into framework interfaces |
+| `S.Control.Abstractions` | OSCLib (Session-free control-decoder contract + scoped registry) |
+| `S.Control` | Core, Session (for actions), Control.Abstractions, PMLib, OSCLib, Mond |
+| `S.Abi` | Core, Time, Compositor, Control.Abstractions; adapts native plugins without a transitive Session dependency |
 | `S.Media.Interop` | Core, Session, the backend modules it bundles (it's the host) |
 
 The crucial inversion: **`S.Media.Session` depends on media/compositor registry *contracts*, not on

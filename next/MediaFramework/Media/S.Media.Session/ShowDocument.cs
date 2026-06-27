@@ -10,16 +10,33 @@ namespace S.Media.Session;
 /// <param name="AudioStreamIndex">Audio track selection (03 §6 multi-track): <c>null</c> = automatic,
 /// <c>-1</c> (<see cref="S.Media.Players.MediaPlayerOpenOptions.DisabledStreamIndex"/>) = no audio, otherwise
 /// the chosen stream index. Lets a multi-track clip (e.g. language stems) pick which track this cue plays.</param>
-/// <param name="SubtitlePath">Optional sidecar subtitle file (SRT/VTT/ASS) shown over a composition-bound clip.
-/// When set (and the host wired a subtitle factory into <see cref="ShowSession"/>), it is rendered onto a
-/// top-z-order layer of the clip's composition. Ignored for clips with no <see cref="CompositionId"/>.</param>
+/// <param name="SubtitlePath">Backward-compatible single sidecar subtitle path. Prefer <paramref name="Subtitles"/>
+/// for explicit none/one/many selection and embedded stream selection.</param>
+/// <param name="Subtitles">Selected subtitle tracks. An empty/null list means none unless <paramref name="SubtitlePath"/>
+/// is set. A null selection path uses <see cref="MediaPath"/> as the container; <see cref="ShowSubtitleSelection.StreamIndex"/>
+/// selects an embedded stream.</param>
 public sealed record ShowClipBinding(
     string CueId,
     string MediaPath,
     string? CompositionId = null,
     int LayerIndex = 0,
     int? AudioStreamIndex = null,
-    string? SubtitlePath = null);
+    string? SubtitlePath = null,
+    IReadOnlyList<ShowSubtitleSelection>? Subtitles = null)
+{
+    public IReadOnlyList<ShowSubtitleSelection> GetSubtitleSelections()
+    {
+        if (Subtitles is { Count: > 0 })
+            return Subtitles;
+        return string.IsNullOrWhiteSpace(SubtitlePath)
+            ? []
+            : [new ShowSubtitleSelection(SubtitlePath)];
+    }
+}
+
+/// <summary>A selected subtitle source. <paramref name="Path"/> null means the clip's media container;
+/// <paramref name="StreamIndex"/> <c>-1</c> selects the best subtitle stream.</summary>
+public sealed record ShowSubtitleSelection(string? Path = null, int StreamIndex = -1);
 
 /// <summary>A composition canvas a clip's video can be placed onto (maps to a <c>ClipCompositionRuntime</c>).
 /// <paramref name="OutputMapping"/> cuts the composited canvas into placed sections for the output (projector

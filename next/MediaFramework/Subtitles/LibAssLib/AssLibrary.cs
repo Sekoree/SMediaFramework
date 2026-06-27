@@ -23,6 +23,22 @@ public sealed unsafe class AssLibrary : IDisposable
     /// <summary>libass runtime version (BCD, e.g. <c>0x01703000</c> for 1.17.3).</summary>
     public static int Version => LibAssNative.ass_library_version();
 
+    private static readonly Lazy<bool> AvailableProbe = new(() =>
+    {
+        try
+        {
+            return LibAssNative.ass_library_version() >= 0;
+        }
+        catch
+        {
+            return false; // DllNotFoundException / TypeInitializationException when the native isn't provisioned
+        }
+    });
+
+    /// <summary>True when native libass can be loaded on this machine (probed once). Lets callers — notably tests on
+    /// a runner without the package — skip gracefully instead of throwing <see cref="DllNotFoundException"/>.</summary>
+    public static bool IsAvailable => AvailableProbe.Value;
+
     /// <summary>Enable extraction of fonts embedded in containers (then registered via <see cref="AddFont"/>).</summary>
     public void SetExtractFonts(bool extract)
     {

@@ -36,7 +36,7 @@ public class AssSubtitleLayerSourceTests
         return n;
     }
 
-    [Fact]
+    [LibAssFact]
     public void RendersActiveCueToBgra32Premultiplied_NullOutside()
     {
         using var source = new AssSubtitleLayerSource(Doc, W, H);
@@ -50,7 +50,7 @@ public class AssSubtitleLayerSourceTests
         Assert.Null(source.RenderAt(TimeSpan.FromSeconds(10))); // after the cue ends
     }
 
-    [Fact]
+    [LibAssFact]
     public void ReusesFrameInstance_WhileContentIsStatic()
     {
         using var source = new AssSubtitleLayerSource(Doc, W, H);

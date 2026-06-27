@@ -645,8 +645,7 @@ public sealed class ControlScriptRuntime
         if (!_devices.TryGetValue(deviceInstanceId, out var device))
             return false;
 
-        var profile = _profiles.FindById(device.ProfileId ?? string.Empty);
-        return ControlProfileProtocolBehavior.SupportsMeterBlobDecoding(profile);
+        return ResolveMeterDecoder(deviceInstanceId) is not null;
     }
 
     private IControlMeterBlobDecoder? ResolveMeterDecoder(Guid deviceInstanceId)
@@ -655,7 +654,7 @@ public sealed class ControlScriptRuntime
             return null;
 
         var profile = _profiles.FindById(device.ProfileId ?? string.Empty);
-        return ControlMeterBlobDecoderRegistry.Default.Resolve(profile?.Behaviors?.MeterBlobDecoder);
+        return RuntimeServices.MeterBlobDecoders.Resolve(profile?.Behaviors?.MeterBlobDecoder);
     }
 
     private IReadOnlyList<ControlValueCacheChange> ApplyMeterBlobCache(

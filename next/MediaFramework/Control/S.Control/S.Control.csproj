@@ -22,6 +22,7 @@
     <ItemGroup>
         <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
         <ProjectReference Include="../../Media/S.Media.Session/S.Media.Session.csproj" />
+        <ProjectReference Include="../S.Control.Abstractions/S.Control.Abstractions.csproj" />
         <ProjectReference Include="../../MIDI/PMLib/PMLib.csproj" />
         <ProjectReference Include="../../OSC/OSCLib/OSCLib.csproj" />
     </ItemGroup>

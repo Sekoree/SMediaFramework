@@ -9,20 +9,24 @@ namespace S.Abi;
 /// Subtitles are consumed via a factory delegate (e.g. <c>ShowSession</c>'s overlay factory), not a registry, so
 /// this exposes <see cref="TryOpen"/> rather than registering into one.
 /// </summary>
-public sealed unsafe class NativeSubtitleProvider
+public sealed unsafe class NativeSubtitleProvider : IDisposable
 {
     private readonly MfpSubtitleProviderVTable* _vt;
     private readonly void* _self;
+    private readonly AbiPluginLease _lease;
+    private bool _disposed;
 
-    internal NativeSubtitleProvider(nint vtable, nint self)
+    internal NativeSubtitleProvider(nint vtable, nint self, AbiPluginLease lease)
     {
         _vt = (MfpSubtitleProviderVTable*)vtable;
         _self = (void*)self;
+        _lease = lease;
     }
 
     public bool CanOpen(string uri)
     {
         ArgumentNullException.ThrowIfNull(uri);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_vt->CanOpen == null)
             return false;
         var bytes = Utf8(uri);
@@ -33,6 +37,7 @@ public sealed unsafe class NativeSubtitleProvider
     public IVideoOverlaySource? TryOpen(string uri, int canvasWidth, int canvasHeight)
     {
         ArgumentNullException.ThrowIfNull(uri);
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_vt->Open == null || _vt->SubtitleVTable == null)
             return null;
 
@@ -41,7 +46,17 @@ public sealed unsafe class NativeSubtitleProvider
         fixed (byte* p = bytes)
             instance = _vt->Open(_self, p, (uint)canvasWidth, (uint)canvasHeight);
 
-        return instance == null ? null : new NativeSubtitleOverlay(_vt->SubtitleVTable, instance);
+        return instance == null
+            ? null
+            : new NativeSubtitleOverlay(_vt->SubtitleVTable, instance, _lease.AcquireDependent());
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        _lease.Dispose();
     }
 
     private static byte[] Utf8(string s)
@@ -59,12 +74,14 @@ internal sealed unsafe class NativeSubtitleOverlay : IVideoOverlaySource
 {
     private readonly MfpSubtitleVTable* _vt;
     private readonly void* _self;
+    private readonly AbiPluginLease _lease;
     private bool _disposed;
 
-    internal NativeSubtitleOverlay(MfpSubtitleVTable* vt, void* self)
+    internal NativeSubtitleOverlay(MfpSubtitleVTable* vt, void* self, AbiPluginLease lease)
     {
         _vt = vt;
         _self = self;
+        _lease = lease;
     }
 
     public VideoFrame? RenderAt(TimeSpan position)
@@ -73,8 +90,12 @@ internal sealed unsafe class NativeSubtitleOverlay : IVideoOverlaySource
             return null;
 
         MfpVideoFrame mf = default;
-        if (_vt->RenderAt(_self, position.Ticks, &mf) != (int)MfpStatus.Ok)
-            return null; // MFP_ERR_AGAIN => nothing visible at this position
+        AbiPluginHost.ClearLastError();
+        var status = _vt->RenderAt(_self, position.Ticks, &mf);
+        if (status == (int)MfpStatus.ErrAgain)
+            return null;
+        if (status != (int)MfpStatus.Ok)
+            throw AbiPluginHost.StatusException("plugin subtitle render", status);
 
         try
         {
@@ -94,5 +115,9 @@ internal sealed unsafe class NativeSubtitleOverlay : IVideoOverlaySource
         _disposed = true;
         if (_vt->Destroy != null)
             _vt->Destroy(_self);
+        _lease.Dispose();
+        GC.SuppressFinalize(this);
     }
+
+    ~NativeSubtitleOverlay() => Dispose();
 }

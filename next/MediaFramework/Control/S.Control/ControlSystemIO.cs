@@ -154,7 +154,6 @@ public sealed class UnsupportedControlSystemSchemaVersionException : Exception
 [JsonSerializable(typeof(ControlLayerProfile))]
 [JsonSerializable(typeof(ControlDeviceTaskProfile))]
 [JsonSerializable(typeof(ControlDeviceProfileBehaviors))]
-[JsonSerializable(typeof(ControlProtocolMaintenanceBehavior))]
 [JsonSerializable(typeof(ControlOscListenerConfig))]
 [JsonSerializable(typeof(ControlMonitorOptions))]
 [JsonSerializable(typeof(ControlDeviceInstanceConfig))]

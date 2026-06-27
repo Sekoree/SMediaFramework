@@ -61,8 +61,8 @@ public static unsafe class FFmpegBitmapSubtitleDecoder
                 throw new OutOfMemoryException("av_packet_alloc returned NULL");
             var msBase = new AVRational { num = 1, den = 1000 };
 
-            // Collect (pts, images) per presentation; an empty image list is a "clear".
-            var presentations = new List<(long Pts, List<BitmapSubtitleImage> Images)>();
+            // Collect (start, optional explicit end, images); an empty image list is a "clear".
+            var presentations = new List<BitmapPresentation>();
             var maxW = codecCtx->width;
             var maxH = codecCtx->height;
 
@@ -73,13 +73,21 @@ public static unsafe class FFmpegBitmapSubtitleDecoder
                 av_packet_unref(packet);
             }
 
+            presentations.Sort(static (left, right) => left.StartMs.CompareTo(right.StartMs));
             var cues = new List<BitmapSubtitleCue>();
             for (var i = 0; i < presentations.Count; i++)
             {
                 if (presentations[i].Images.Count == 0)
                     continue;
-                var end = i + 1 < presentations.Count ? presentations[i + 1].Pts : presentations[i].Pts + 5000;
-                cues.Add(new BitmapSubtitleCue(presentations[i].Pts, end, presentations[i].Images));
+                var presentation = presentations[i];
+                var nextStart = i + 1 < presentations.Count
+                    ? presentations[i + 1].StartMs
+                    : presentation.StartMs + 5000;
+                var end = presentation.EndMs is { } explicitEnd
+                    ? Math.Min(explicitEnd, nextStart)
+                    : nextStart;
+                if (end > presentation.StartMs)
+                    cues.Add(new BitmapSubtitleCue(presentation.StartMs, end, presentation.Images));
             }
 
             return new DecodedBitmapSubtitle(Math.Max(1, maxW), Math.Max(1, maxH), cues);
@@ -94,7 +102,7 @@ public static unsafe class FFmpegBitmapSubtitleDecoder
 
     private static void DecodePacket(
         AVCodecContext* codecCtx, AVPacket* packet, AVRational timeBase, AVRational msBase,
-        List<(long Pts, List<BitmapSubtitleImage> Images)> presentations, ref int maxW, ref int maxH)
+        List<BitmapPresentation> presentations, ref int maxW, ref int maxH)
     {
         AVSubtitle sub;
         var got = 0;
@@ -103,7 +111,16 @@ public static unsafe class FFmpegBitmapSubtitleDecoder
 
         try
         {
-            var pts = packet->pts != AV_NOPTS_VALUE ? av_rescale_q(packet->pts, timeBase, msBase) : 0;
+            var packetStartMs = packet->pts != AV_NOPTS_VALUE
+                ? av_rescale_q(packet->pts, timeBase, msBase)
+                : 0;
+            var decodedStartMs = sub.pts != AV_NOPTS_VALUE
+                ? av_rescale_q(sub.pts, new AVRational { num = 1, den = AV_TIME_BASE }, msBase)
+                : packetStartMs;
+            var startMs = decodedStartMs + sub.start_display_time;
+            long? endMs = sub.end_display_time > sub.start_display_time
+                ? decodedStartMs + sub.end_display_time
+                : null;
             var images = new List<BitmapSubtitleImage>();
             for (uint i = 0; i < sub.num_rects; i++)
             {
@@ -115,13 +132,18 @@ public static unsafe class FFmpegBitmapSubtitleDecoder
                 maxH = Math.Max(maxH, rect->y + rect->h);
             }
 
-            presentations.Add((pts, images));
+            presentations.Add(new BitmapPresentation(startMs, endMs, images));
         }
         finally
         {
             avsubtitle_free(&sub);
         }
     }
+
+    private sealed record BitmapPresentation(
+        long StartMs,
+        long? EndMs,
+        List<BitmapSubtitleImage> Images);
 
     // Palette-indexed (PAL8) → premultiplied BGRA32. libav's subtitle palette is RGB32: each uint32 reads as
     // 0xAARRGGBB on a little-endian host.

@@ -204,9 +204,9 @@ the affected phase freezes its public API or ABI.
 
 ### Resolutions (recommended approaches)
 
-- **OQ1 — tagged union, one struct per kind, mirroring the Core HW-backings.** `MfpCpuFrame` ·
-  `MfpDmaBufFrame` (fds/offsets/strides/`drm_modifier`/fourcc) · `MfpD3D11Frame` (NT shared handle +
-  dxgi format + array slice) · `MfpGlTextureFrame` (id/target/**context id — same-context only**, so
+- **OQ1 — resolved: tagged union, one struct per kind, mirroring the Core HW-backings.** `MfpCpuFrame` ·
+  `MfpDmaBufFrame` (per-plane fds/offsets/strides/modifiers + fourcc) · `MfpD3D11Frame` (luma/chroma NT shared handles +
+  dxgi format + array slice + strides) · `MfpGlTextureFrame` (id/target/**context id — same-context only**, so
   layer-surface plugins, never cross-process). Common header = kind + w/h + pixfmt + pts + `MfpSync`.
   *Reflected in:* [05](05-Plugin-Model.md) `MfpVideoSourceVTable`. **Review hard at Phase 6 — forever-surface.**
 - **OQ2 — a negotiated sync primitive, not "a semaphore".** Frame carries `MfpSync { None | KeyedMutex |
@@ -242,12 +242,10 @@ the affected phase freezes its public API or ABI.
   (`ma_device_notification_type`, incl. `rerouted`) + NDI (`find_wait_for_sources`); **poll** =
   PortAudio (list fixed until `Pa_Terminate`/`Pa_Initialize`) + PortMidi (header: reinit to rescan);
   **capture** = OS notify (udev / `WM_DEVICECHANGE`) or poll. *Reflected in:* D6.
-- **OQ10 — control capability contracts go in a Session-free home.** Put `IControlRegistryBuilder`,
-  `IControlFeedbackDecoder`, and `ControlDeviceProfile` in `S.Media.Core` (next to the media registry
-  contracts) or a small `S.Control.Abstractions` referenced by both `S.Control` and `S.Abi` — mirroring
-  how `IVideoCompositorLayerSurface` lives in `Compositor` (Session-free). That keeps `S.Abi`'s allowed
-  set `[Core, Compositor, <control-abstractions>]` with **no Session, direct or transitive**. Decide the
-  exact home when Phase 6 writes the control registry, then add it to the arch-test allow-list.
+- **OQ10 — resolved: control decoder contracts live in `S.Control.Abstractions`.** The scoped
+  `ControlMeterBlobDecoderRegistry` and `IControlMeterBlobDecoder` are referenced by both `S.Control` and
+  `S.Abi`; the plugin host's allowed set is `[Core, Time, Compositor, Control.Abstractions]` with **no
+  Session, direct or transitive**. The arch-test allow-list enforces this boundary.
   *Reflected in:* [02](02-Project-Structure.md) Tier 6/7; `S.Media.Arch.Tests` (Phase 6).
 
 When a decision is revisited, edit its entry here first (it's the source of truth for "what did we

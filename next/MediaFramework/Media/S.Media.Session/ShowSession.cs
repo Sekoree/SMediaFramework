@@ -38,19 +38,18 @@ public sealed class ShowSession : IAsyncDisposable
     private IReadOnlyList<OutputPatchRoute> _routes = [];
     private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
     private readonly SessionDispatcher _dispatcher = new("show-session");
-    private readonly Func<string, int, int, IVideoOverlaySource?>? _subtitleFactory;
-    private readonly List<IVideoOverlaySource> _subtitleSources = [];
+    private readonly Func<string, int, int, int, IVideoOverlaySource?>? _subtitleFactory;
     private volatile bool _disposed;
 
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
     /// master output created on this backend (D11). Null runs the cue/transport mechanics with no device.</param>
-    /// <param name="subtitleFactory">Optional host-wired factory (subtitle path + canvas width/height → overlay
-    /// source). When set, a composition-bound clip's <see cref="ShowClipBinding.SubtitlePath"/> auto-attaches as a
+    /// <param name="subtitleFactory">Optional host-wired factory (path + stream index + canvas width/height → overlay
+    /// source). When set, a composition-bound clip's selected subtitles auto-attach as
     /// top layer. Keeps the session renderer-agnostic — see <c>S.Media.Subtitles.SubtitleSourceFactory.FromFile</c>.</param>
     public ShowSession(
         IMediaRegistry registry,
         IAudioBackend? audioBackend = null,
-        Func<string, int, int, IVideoOverlaySource?>? subtitleFactory = null)
+        Func<string, int, int, int, IVideoOverlaySource?>? subtitleFactory = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
@@ -141,8 +140,6 @@ public sealed class ShowSession : IAsyncDisposable
             composition.Dispose();
         _compositions.Clear();
 
-        DisposeSubtitleSources();
-
         _cueGraph.Clear();
         _routes = document.Routes;
         _audioOutputs = document.AudioOutputs;
@@ -186,19 +183,6 @@ public sealed class ShowSession : IAsyncDisposable
             var placement = new VideoPlacementSpec(compositionId, binding.LayerIndex, DestWidth: 1, DestHeight: 1);
             layer = composition.AddLayer(composition.CanvasFormat, placement);
 
-            // Auto-attach the clip's subtitle track as a top layer (the host wires the factory; the session stays
-            // renderer-agnostic). The runtime composites it like any other layer; the source is tracked and
-            // disposed with the session.
-            if (binding.SubtitlePath is { } subtitlePath && _subtitleFactory is { } subtitleFactory)
-            {
-                var overlay = subtitleFactory(
-                    subtitlePath, composition.CanvasFormat.Width, composition.CanvasFormat.Height);
-                if (overlay is not null)
-                {
-                    composition.AttachSubtitleOverlay(overlay);
-                    _subtitleSources.Add(overlay);
-                }
-            }
         }
 
         var graphBuilder = MediaGraphBuilder.File(binding.MediaPath);
@@ -218,9 +202,10 @@ public sealed class ShowSession : IAsyncDisposable
             throw;
         }
 
+        var outputs = new List<IAudioOutput>();
+        var subtitleAttachments = new List<IDisposable>();
         try
         {
-            var outputs = new List<IAudioOutput>();
             if (_audioBackend is not null && graph.Player.AudioRouter is not null)
             {
                 var rate = graph.Player.SampleRate > 0 ? graph.Player.SampleRate : 48_000;
@@ -238,11 +223,36 @@ public sealed class ShowSession : IAsyncDisposable
                 }
             }
 
-            group.Replace(graph.Session, outputs, layer);
+            if (layer is not null
+                && binding.CompositionId is { } subtitleCompositionId
+                && _compositions.TryGetValue(subtitleCompositionId, out var subtitleComposition)
+                && _subtitleFactory is { } subtitleFactory)
+            {
+                var selections = binding.GetSubtitleSelections();
+                var nextLayerIndex = int.MaxValue - selections.Count;
+                foreach (var selection in selections)
+                {
+                    var path = string.IsNullOrWhiteSpace(selection.Path) ? binding.MediaPath : selection.Path!;
+                    var overlay = subtitleFactory(
+                        path, selection.StreamIndex,
+                        subtitleComposition.CanvasFormat.Width, subtitleComposition.CanvasFormat.Height);
+                    if (overlay is not null)
+                    {
+                        subtitleAttachments.Add(subtitleComposition.AttachSubtitleOverlay(
+                            overlay, () => graph.Player.Position, nextLayerIndex++));
+                    }
+                }
+            }
+
             graph.Player.Play();
+            group.Replace(graph.Session, outputs, layer, subtitleAttachments);
         }
         catch
         {
+            foreach (var attachment in subtitleAttachments)
+                attachment.Dispose();
+            foreach (var output in outputs)
+                (output as IDisposable)?.Dispose();
             graph.Dispose();
             layer?.Dispose();
             throw;
@@ -390,15 +400,6 @@ public sealed class ShowSession : IAsyncDisposable
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
-        DisposeSubtitleSources();
-    }
-
-    // Compositions stop their pumps before this runs, so the subtitle sources they were rendering are idle.
-    private void DisposeSubtitleSources()
-    {
-        foreach (var source in _subtitleSources)
-            source.Dispose();
-        _subtitleSources.Clear();
     }
 
     /// <summary>One transport group: its session clock (D4), active clip, its audio outputs (D11 — first is
@@ -409,14 +410,21 @@ public sealed class ShowSession : IAsyncDisposable
         public SessionClock Clock { get; } = new(new MonotonicWallClock(start: false));
         public MediaSession? Active { get; private set; }
         private IReadOnlyList<IAudioOutput> _outputs = [];
+        private IReadOnlyList<IDisposable> _subtitleAttachments = [];
         private ClipCompositionRuntime.LayerSlot? _layer;
         public int LastFiredNumber { get; set; } = int.MinValue;
 
-        public void Replace(MediaSession? session, IReadOnlyList<IAudioOutput> outputs, ClipCompositionRuntime.LayerSlot? layer)
+        public void Replace(
+            MediaSession? session,
+            IReadOnlyList<IAudioOutput> outputs,
+            ClipCompositionRuntime.LayerSlot? layer,
+            IReadOnlyList<IDisposable>? subtitleAttachments = null)
         {
             Clock.SetReference(session is null
                 ? new MonotonicWallClock(start: false)
                 : new PlayheadPlaybackClock(session.Player.PlayClock));
+            foreach (var attachment in _subtitleAttachments)
+                attachment.Dispose();
             _layer?.Dispose();
             Active?.Dispose();
             foreach (var output in _outputs)
@@ -424,6 +432,7 @@ public sealed class ShowSession : IAsyncDisposable
             Active = session;
             _outputs = outputs;
             _layer = layer;
+            _subtitleAttachments = subtitleAttachments ?? [];
         }
 
         public void Dispose() => Replace(null, [], null);

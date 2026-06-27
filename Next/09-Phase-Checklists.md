@@ -392,6 +392,12 @@ and verified; full stitched-wall validation is the runtime soak above.
       `S.Media.Subtitles` checklist item is COMPLETE** — every text format + ASS + bitmap, sidecar + in-container,
       rendered/composited as a layer + show-wired (`none/one/many` = pass none / one / compose several sources).
       *Only loose end:* the embedded-font `AddFont` path is wired but **untested** (no fonts-attached MKV sample).
+      **CORRECTNESS FOLLOW-UP (2026-06-27):** `ShowClipBinding.Subtitles` now models explicit none/one/many
+      sidecar or embedded-stream selections (legacy `SubtitlePath` remains compatible). Every selected source is a
+      separately ordered composition layer driven by the active clip's position and disposed on stop/replacement.
+      FFmpeg honors `AVSubtitle.pts` plus `start_display_time`/`end_display_time`; text/bitmap dispatch probes once,
+      and `FromFileDeferred` moves full-container decode off the session dispatcher. The real multi-track MKV stream
+      7 renders at 10.44s (64,139 events, 13,455 visible pixels); session regression covers multi-layer timing/dispose.
 
 **Control:** (foundation-first; the old engine is in old `MediaFramework/Control/S.Control` + `Extras/MIDI|OSC` — copy-salvage)
 - [x] Move `S.Control` engine; X32/XTouch → **data-driven profiles** + control registry (P6); X32 meter
@@ -434,7 +440,7 @@ and verified; full stitched-wall validation is the runtime soak above.
       + the test users now read the shipped JSON via `BuiltInControlDeviceProfileRepository.Instance` (new `TestProfiles`
       helper); the now-unused `XAirPresets` class is also deleted (`X32Presets`/`X32Fader` stay — still used by
       `XTouchMiniX32FaderMapping` + templates). (f) **meter-blob decode is now a registered capability:** new
-      `IControlMeterBlobDecoder` + `ControlMeterBlobDecoderRegistry.Default` (keyed by name; `"x32"`→`X32MeterBlobDecoder`
+      `IControlMeterBlobDecoder` + a scoped `ControlMeterBlobDecoderRegistry` (keyed by name; `"x32"`→`X32MeterBlobDecoder`
       wrapping `X32MeterCacheDecoder`); `SupportsMeterBlobDecoding` and the runtime dispatch resolve the decoder by the
       profile's `Behaviors.MeterBlobDecoder` name (the hardcoded `=="x32"` and the `/meters` literal are gone — the
       decoder owns its address). **850 total, build 0/0, arch green, old trees untouched.** ✅ **The "no hardcoded
@@ -462,9 +468,14 @@ and verified; full stitched-wall validation is the runtime soak above.
       escape hatch — it *could* be a profile "binary-format descriptor + generic decoder", but it's a hot path (~50Hz)
       where C# is right and the gain is marginal. So: the runtime has **zero device-specific *logic*** — a device is
       its profile (data + Mond helpers) + one tiny opt-in binary capability. **812 total, build 0/0, arch green.**
+      **CONTROL FOLLOW-UP (2026-06-27):** the remaining X32 maintenance manager/behavior is deleted. `/xremote`,
+      `/subscribe`, and `/meters` are ordinary `PeriodicOscSend` tasks handled by one generic scheduler (including
+      XAir); decoder registries are injected/scoped. MIDI/OSC TriggerBus adapters moved from Tier-0 PMLib/OSCLib
+      into `S.Control`, removing both wrappers' upward Core dependency. `S.Control.Abstractions` keeps `S.Abi`
+      Session-free; architecture tests enforce the new graph.
 
 **Plugin host (`S.Abi`) — the forever-surface:**
-- [~] Define `include/mfp_plugin.h`: **full vtable surface** — source/output/audio-backend/layer-surface
+- [x] Define `include/mfp_plugin.h`: **full vtable surface** — source/output/audio-backend/layer-surface
       (GL)/subtitle/control-decoder (D9).
       **DRAFTED (2026-06-27):** `next/MediaFramework/Interop/S.Abi/include/mfp_plugin.h` (323 lines, valid C11 —
       `gcc -Wall -Wextra -std=c11` clean) realizes the §05 sketch: all **6 capability vtables** (audio-backend /
@@ -472,7 +483,7 @@ and verified; full stitched-wall validation is the runtime soak above.
       **frame union** (CPU/dma-buf/D3D11/GL — mirrors Core's `Dmabuf*`/`Win32Shared*` backings; item below),
       negotiated **`MfpSync`** (keyed-mutex/binary+timeline-semaphore/fence; item below), the host API, the
       registrar, and `mfp_plugin_register`. ABI-hygiene rules baked into the comments (append-only versioning /
-      int-status errors + thread-local last-error / 100ns ticks / host-pooled CPU frames + acquire-release+sync for
+      int-status errors + thread-local last-error / 100ns ticks / producer-owned frames released by the host + sync for
       GPU / per-call threading / opt-in trust); OQ1 (frame union) + OQ2 (sync) flagged inline. ⚠️ Pending the
       **review-hard-before-v1** pass — that's the gating decision, not the typing.
       **REVISED post-evaluation (2026-06-27, 381 lines, still gcc-clean):** checked the draft against the *real*
@@ -485,9 +496,11 @@ and verified; full stitched-wall validation is the runtime soak above.
       (the MMD models/motion). Optional caps = NULL-fn-pointer convention. *Managed follow-on:* `AddLayerSurface`
       needs the config param + `ShowDocument` a `surface`+`surfaceConfig` layer — sketched in §05. (Control transport
       stays framework-only by design — only decoders/profiles are plugin surfaces.)
-- [ ] **Per-kind tagged frame union** incl. GPU handles: `MfpCpuFrame`/`MfpDmaBufFrame`/`MfpD3D11Frame`/
+- [x] **Per-kind tagged frame union** incl. GPU handles: `MfpCpuFrame`/`MfpDmaBufFrame`/`MfpD3D11Frame`/
       `MfpGlTextureFrame` (GL = same-context only), mirroring Core's `Dmabuf*`/`Win32Shared*` (D8/OQ1).
-- [ ] **Negotiated `MfpSync`** (keyed-mutex / semaphore / fence via capability query — OQ2).
+- [~] **Negotiated `MfpSync`** (keyed-mutex / semaphore / fence via capability query — OQ2). The ABI and
+      source/output/host capability masks are present; this host currently advertises `MFP_SYNC_NONE` only and
+      rejects unadvertised explicit-sync frames. Backend-specific explicit-sync import remains a later platform task.
 - [x] Managed adapters → scoped registries; ABI version gate; append-only structs. **ALL SIX capabilities done.**
       **HOST LOADER + GATE (load+register half) DONE (2026-06-27):** `S.Abi.AbiPluginHost.Load(path)` —
       `NativeLibrary.Load` + `GetExport("mfp_plugin_register")` + a host-API + registrar built from
@@ -500,7 +513,8 @@ and verified; full stitched-wall validation is the runtime soak above.
       **CONTROL-DECODER ADAPTER DONE + RUNS (2026-06-27):** `NativeControlDecoder : IControlMeterBlobDecoder` forwards
       `Decode` through the plugin's `MfpControlDecoderVTable` (address + blob in, readings out via a host-provided
       buffer; UTF-8 + `NativeMemory` marshalling). `AbiPluginHost.BindControlDecoders(plugin)` → `(id, decoder)` pairs
-      to register into `ControlMeterBlobDecoderRegistry`. Arch dict updated **S.Abi → +S.Control** (acyclic). `AbiSmoke`
+      to register into `ControlMeterBlobDecoderRegistry`. The final arch graph uses
+      **S.Abi → S.Control.Abstractions** (no transitive Session dependency). `AbiSmoke`
       now also EXERCISES it: the plugin's decoder decodes a 1-byte blob → `/test/decoded = 0.502` (128/255) through the
       managed interface — a plugin capability is now indistinguishable from a built-in. 812 tests, arch 4/4.
       **VIDEO-SOURCE ADAPTER DONE + RUNS (2026-06-27):** `NativeVideoSource : IVideoSource` +
@@ -514,7 +528,7 @@ and verified; full stitched-wall validation is the runtime soak above.
       **⇒ Phase-6 plugin gate MET: a native C plugin loads and both a video source (feeds a frame) AND a control
       decoder (decodes) RUN through managed adapters.** Build 0/0, 812 tests, arch 4/4.
       **LIVE-REGISTRY WIRING DONE (2026-06-27):** `NativeMediaSourceProvider` now implements
-      `IMediaDecoderProvider` (Name/Probe/OpenVideo; audio-source adapting unmodelled so Probe only claims video) and
+      `IMediaDecoderProvider` (Name/Probe/OpenVideo/OpenAudio, preserving correlated A/V from one native `open`) and
       `AbiPluginHost.RegisterInto(plugin, IMediaRegistryBuilder?, ControlMeterBlobDecoderRegistry?)` registers a
       plugin's providers + decoders into the live registries. `AbiSmoke` proves the **end-to-end live path**:
       `MediaRegistry.Build(b => RegisterInto(plugin, b))` then `registry.TryOpenVideo("testsrc://demo")` routes the URI
@@ -543,8 +557,25 @@ and verified; full stitched-wall validation is the runtime soak above.
       `px0=(40,0,0,255)` — config drove the colour, proving the factory + the proc-address bridge + the GL render. So
       **ALL SIX ABI capabilities now have working, exercised adapters.** Build 0/0, 814 tests, arch 4/4. (+ the
       per-platform conformance plugin in CI remains for hardening.)
-- [ ] **Per-platform conformance plugin** exercising every vtable, in CI (D8/D9).
-- [ ] ⚠️ **Review `mfp_plugin.h` hard before tagging v1** — it's expensive to change after (OQ1/D9).
+      **ABI HARDENING FOLLOW-UP (2026-06-27):** ABI 1.0 is major/minor encoded and every public struct/vtable has
+      `struct_size`; registration validates and normalizes known prefixes, including nested source/surface tables.
+      Adapters lease the library, so unload waits for all native instances; capability destroy callbacks and optional
+      unregister run before free. Plugin last-error text is surfaced. Native media audio, complete OSC arguments,
+      audio input float counts, `IClockedOutput`/`IPlaybackClock`, backpressure status handling, stable per-GL-context
+      ids, and callback status checks are implemented. `AbiSmoke` additionally round-trips a real Linux dma-buf
+      backing and verifies deferred unload/unregister. Windows native packaging/conformance remains deferred until
+      the user creates the final all-phase Windows build script.
+- [~] **Per-platform conformance plugin** exercising every vtable, in CI (D8/D9).
+      **CI HARDENING DONE (2026-06-27, review finding #10):** `AbiSmoke` (the C `test_plugin.so` exercising every
+      adapter) now runs in `next-build.yml` as a **gating Linux step**; `SubtitleDecodeSmoke` + `AbiGlSmoke` (xvfb,
+      software GL) run **best-effort** (continue-on-error — runner FFmpeg/GL versions vary). CI now provisions
+      `libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri`. The five libass tests were
+      unconditional (would crash on a libass-less runner); now a `[LibAssFact]` (`AssLibrary.IsAvailable` → sets
+      `Skip`) **skips** them gracefully on Windows / any runner without the package. *Remaining:* a dedicated
+      per-platform conformance plugin (vs the single test fixture) + flipping the best-effort smokes to gating once
+      the runner native versions are pinned.
+- [x] **Review `mfp_plugin.h` hard before tagging v1** — lifetime, table sizing, ownership, A/V correlation,
+      control arguments, audio clock/backpressure, and GPU capability negotiation were corrected before release.
 
 **Gate:** subtitle render test; `OSCLib.Tests`/`PMLib.Tests`; sample C-ABI plugin loads + provides a
 source **and** a control decoder. ✅ **MET (2026-06-27)** — `AbiSmoke` gcc-compiles `test_plugin.c` → `.so`, loads

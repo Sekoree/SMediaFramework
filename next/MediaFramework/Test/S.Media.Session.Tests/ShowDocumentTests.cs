@@ -75,6 +75,31 @@ public sealed class ShowDocumentTests
     }
 
     [Fact]
+    public void ToJson_FromJson_RoundTripsNoneOneManySubtitleSelection()
+    {
+        var doc = ShowDocument.Empty with
+        {
+            Clips =
+            [
+                new ShowClipBinding("none", "/video/none.mkv"),
+                new ShowClipBinding("legacy", "/video/legacy.mkv", SubtitlePath: "/subs/legacy.srt"),
+                new ShowClipBinding("many", "/video/many.mkv", Subtitles:
+                [
+                    new ShowSubtitleSelection(StreamIndex: 7),
+                    new ShowSubtitleSelection("/subs/commentary.ass"),
+                ]),
+            ],
+        };
+
+        var clips = ShowDocument.FromJson(doc.ToJson()).Clips;
+
+        Assert.Empty(clips[0].GetSubtitleSelections());
+        Assert.Equal("/subs/legacy.srt", Assert.Single(clips[1].GetSubtitleSelections()).Path);
+        Assert.Equal(7, clips[2].GetSubtitleSelections()[0].StreamIndex);
+        Assert.Equal("/subs/commentary.ass", clips[2].GetSubtitleSelections()[1].Path);
+    }
+
+    [Fact]
     public void ToJson_FromJson_RoundTripsRouteChannelMatrix_AndMaterializes()
     {
         // N→M routing (03 §6) as serializable show data: mono → stereo duplicate.

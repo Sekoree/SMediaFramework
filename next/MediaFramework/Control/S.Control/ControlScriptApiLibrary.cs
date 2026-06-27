@@ -15,7 +15,8 @@ public sealed class ControlScriptRuntimeServices
         Func<DateTimeOffset>? clock = null,
         IReadOnlyList<ControlLayerConfig>? layers = null,
         IReadOnlyList<ControlDeviceProfile>? profiles = null,
-        IControlShowActions? showActions = null)
+        IControlShowActions? showActions = null,
+        ControlMeterBlobDecoderRegistry? meterBlobDecoders = null)
     {
         CommandSink = commandSink ?? NullControlScriptCommandSink.Instance;
         OscCache = oscCache ?? new ControlValueCache();
@@ -30,6 +31,7 @@ public sealed class ControlScriptRuntimeServices
         // passes an explicit resolved set (built-ins + config overrides).
         Profiles = profiles ?? BuiltInProfileLoader.Load();
         ShowActions = showActions;
+        MeterBlobDecoders = meterBlobDecoders ?? ControlMeterBlobDecoderRegistries.CreateWithBuiltIns();
     }
 
     public IControlScriptCommandSink CommandSink { get; }
@@ -57,6 +59,9 @@ public sealed class ControlScriptRuntimeServices
     /// <summary>Optional bridge to the running show, surfaced to scripts as the <c>show</c> global so MIDI/OSC
     /// triggers can GO / fire / seek / stop cues. Null when no show is wired (the <c>show</c> calls are no-ops).</summary>
     public IControlShowActions? ShowActions { get; }
+
+    /// <summary>Runtime-scoped binary feedback decoders. Hosts may add plugin decoders without process-global state.</summary>
+    public ControlMeterBlobDecoderRegistry MeterBlobDecoders { get; }
 
     /// <summary>Returns the currently active layer id; set by the runtime so <c>layers.active()</c> can read it.</summary>
     public Func<Guid?>? ActiveLayerProvider { get; set; }

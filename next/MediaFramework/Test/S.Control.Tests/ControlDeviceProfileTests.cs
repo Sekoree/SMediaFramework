@@ -25,7 +25,6 @@ public sealed class ControlDeviceProfileTests
 
         Assert.Equal(4, repository.Profiles.Count);
         var x32 = Assert.Single(repository.Profiles, profile => profile.Id == "behringer.x32.osc");
-        Assert.NotNull(x32.Behaviors?.ProtocolMaintenance);
         Assert.Equal("x32", x32.Behaviors?.MeterBlobDecoder);
     }
 
@@ -195,7 +194,7 @@ public sealed class ControlDeviceProfileTests
         Assert.Equal(3, profile.Tasks.Count);
         var xremote = Assert.Single(profile.Tasks, t => t.Id == "x32.xremote");
         Assert.True(xremote.IsDefaultEnabled);
-        Assert.Equal(ControlDeviceTaskKind.ProtocolMaintenance, xremote.Kind);
+        Assert.Equal(ControlDeviceTaskKind.PeriodicOscSend, xremote.Kind);
         Assert.Equal("/xremote", xremote.Address);
         Assert.Equal(8000, xremote.IntervalMs);
 

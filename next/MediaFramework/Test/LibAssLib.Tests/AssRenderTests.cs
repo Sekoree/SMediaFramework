@@ -35,13 +35,13 @@ public class AssRenderTests
         return (lib, renderer, track);
     }
 
-    [Fact]
+    [LibAssFact]
     public void LibraryVersion_IsReported()
     {
         Assert.True(AssLibrary.Version > 0);
     }
 
-    [Fact]
+    [LibAssFact]
     public unsafe void RenderFrame_DuringCue_ProducesBlendablePixels()
     {
         var (lib, renderer, track) = NewPipeline();
@@ -68,7 +68,7 @@ public class AssRenderTests
         }
     }
 
-    [Fact]
+    [LibAssFact]
     public unsafe void RenderFrame_OutsideCue_ProducesNoLayers()
     {
         var (lib, renderer, track) = NewPipeline();

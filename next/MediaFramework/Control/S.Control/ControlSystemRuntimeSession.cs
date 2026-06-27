@@ -22,7 +22,8 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         IControlMonitorSink? monitor = null,
         int instructionLimit = ControlScriptFileHost.DefaultInstructionLimit,
         TimeSpan? tickInterval = null,
-        IControlMidiDeviceSessionRunner? midiSessions = null)
+        IControlMidiDeviceSessionRunner? midiSessions = null,
+        ControlMeterBlobDecoderRegistry? meterBlobDecoders = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(sourceProvider);
@@ -38,12 +39,12 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             oscSender,
             instructionLimit,
             Monitor,
-            midiSender);
+            midiSender,
+            meterBlobDecoders);
         EventQueue = new ControlEventQueue(ScriptSession, Monitor);
         OscListeners = new ControlOscListenerManager(config, EventQueue, Monitor);
         MidiDevices = new ControlMidiDeviceManager(config, EventQueue, Monitor);
         PeriodicOscSends = new ControlPeriodicOscSendManager(config, oscSender, Monitor);
-        X32ProtocolMaintenance = new ControlX32ProtocolMaintenanceManager(config, oscSender, Monitor);
 
         // The X32 (OSC server) replies to the source port of our requests — i.e. the OSC client's own
         // connected socket, not a separate listener. Route those replies into the same dispatch the
@@ -66,8 +67,6 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
     public ControlMidiDeviceManager MidiDevices { get; }
 
     public ControlPeriodicOscSendManager PeriodicOscSends { get; }
-
-    public ControlX32ProtocolMaintenanceManager X32ProtocolMaintenance { get; }
 
     /// <summary>True while the background tick loop is running.</summary>
     public bool IsTicking => _tickTask is { IsCompleted: false };
@@ -111,10 +110,7 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
         var scriptResult = await EventQueue.TickPeriodicAsync(utcNow, cancellationToken).ConfigureAwait(false);
         var periodicOscResults = await PeriodicOscSends.TickAsync(utcNow, cancellationToken).ConfigureAwait(false);
-        var x32MaintenanceResults = await X32ProtocolMaintenance.TickAsync(utcNow, cancellationToken).ConfigureAwait(false);
-        return new ControlSystemRuntimeTickResult(
-            scriptResult,
-            periodicOscResults.Concat(x32MaintenanceResults).ToArray());
+        return new ControlSystemRuntimeTickResult(scriptResult, periodicOscResults);
     }
 
     private void OnOscReplyReceived(ControlOscReceivedMessage message)

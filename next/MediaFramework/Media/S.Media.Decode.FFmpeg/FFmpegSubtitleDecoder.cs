@@ -104,12 +104,22 @@ public static unsafe class FFmpegSubtitleDecoder
 
         try
         {
-            var startMs = packet->pts != AV_NOPTS_VALUE ? av_rescale_q(packet->pts, timeBase, msBase) : 0;
-            var durationMs = packet->duration > 0 ? av_rescale_q(packet->duration, timeBase, msBase) : 0;
+            var packetStartMs = packet->pts != AV_NOPTS_VALUE
+                ? av_rescale_q(packet->pts, timeBase, msBase)
+                : 0;
+            var decodedStartMs = sub.pts != AV_NOPTS_VALUE
+                ? av_rescale_q(sub.pts, new AVRational { num = 1, den = AV_TIME_BASE }, msBase)
+                : packetStartMs;
+            var startMs = decodedStartMs + sub.start_display_time;
+            var durationMs = sub.end_display_time > sub.start_display_time
+                ? sub.end_display_time - sub.start_display_time
+                : packet->duration > 0
+                    ? av_rescale_q(packet->duration, timeBase, msBase)
+                    : 0;
             for (uint i = 0; i < sub.num_rects; i++)
             {
                 var rect = sub.rects[i];
-                if (rect->type == AVSubtitleType.SUBTITLE_ASS && rect->ass != null)
+                if (durationMs > 0 && rect->type == AVSubtitleType.SUBTITLE_ASS && rect->ass != null)
                     events.Add(new DecodedSubtitleEvent(CopyCString(rect->ass), startMs, durationMs));
             }
         }

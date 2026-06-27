@@ -82,7 +82,10 @@ var reloaded = ShowDocument.FromJson(json);
 Console.WriteLine($"decoders: {string.Join(", ", registry.Decoders.Select(d => d.Name))}; backend: {backend.Name}");
 Console.WriteLine($"show: {reloaded.Cues.Count} cues, {reloaded.Clips.Count} clips, {reloaded.Compositions.Count} compositions (JSON {json.Length} B round-tripped)");
 
-await using var session = new ShowSession(registry, backend, SubtitleOverlayFactory.FromFile);
+await using var session = new ShowSession(
+    registry,
+    backend,
+    (path, streamIndex, width, height) => SubtitleOverlayFactory.FromFileDeferred(path, width, height, streamIndex));
 session.LoadDocument(reloaded);
 
 // GO → cue 1 fires (audio clip opens through the registry + plays on the master output).

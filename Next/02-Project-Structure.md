@@ -190,7 +190,14 @@ via the C ABI; the UI persists only view-state on top.
 
 ---
 
-## Tier 6 — `S.Control`  *(→ Core, Session, PMLib, OSCLib, Mond)*
+## Tier 6 — control
+
+### `S.Control.Abstractions`  *(→ OSCLib)*
+
+**Job:** Session-free control-decoder contracts and the scoped decoder registry shared by `S.Control`
+and `S.Abi`. This is the resolved OQ10 boundary.
+
+### `S.Control`  *(→ Core, Session, Control.Abstractions, PMLib, OSCLib, Mond)*
 
 **Job:** MIDI/OSC ingest + Mond scripting + automations that drive the session and external devices.
 See [06](06-Control-Surface.md) for the device-profile refactor (P6).
@@ -208,7 +215,7 @@ plugin). `S.Control` keeps the *engine*; devices become *content*.
 
 ## Tier 7 — interop / plugin host
 
-### `S.Abi`  *(→ Core plus capability packages as needed)*
+### `S.Abi`  *(→ Core, Time, Compositor, Control.Abstractions)*
 **Job:** the **inbound** general native plugin host. Defines the C plugin ABI (`include/mfp_plugin.h`),
 `dlopen`s plugins, and adapts their vtables into media, compositor, and control capability providers
 (`IAudioBackend`, `IVideoSource`, `IVideoOutput`, `IVideoCompositorLayerSurface`, control decoders,

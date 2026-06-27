@@ -6,8 +6,8 @@ namespace S.Abi;
 /// Adapts a native plugin's <c>MfpVideoSourceVTable</c> to the managed <see cref="IVideoSource"/>. The resolved
 /// format + native pixel formats are queried up front (get_format / native_pixel_formats); each read pulls one
 /// <c>MfpVideoFrame</c>, copies its CPU planes into a managed <see cref="VideoFrame"/> via <see cref="AbiFrameMarshal"/>,
-/// then returns the native frame to the plugin via release_frame. Only the CPU frame kind is marshalled (GPU-handle
-/// kinds are released + skipped).
+/// then returns the native frame to the plugin via release_frame. CPU, Linux dma-buf, and Windows D3D11 shared
+/// frames are imported; hardware handles are duplicated before the native frame is released.
 /// </summary>
 internal sealed unsafe class NativeVideoSource : IVideoSource, IDisposable
 {
@@ -15,37 +15,40 @@ internal sealed unsafe class NativeVideoSource : IVideoSource, IDisposable
     private readonly void* _src;
     private readonly VideoFormat _format;
     private readonly PixelFormat[] _native;
+    private readonly AbiPluginLease _lease;
     private bool _disposed;
 
-    private NativeVideoSource(MfpVideoSourceVTable* vt, void* src, VideoFormat format, PixelFormat[] native)
+    private NativeVideoSource(
+        MfpVideoSourceVTable* vt, void* src, VideoFormat format, PixelFormat[] native, AbiPluginLease lease)
     {
         _vt = vt;
         _src = src;
         _format = format;
         _native = native;
+        _lease = lease;
     }
 
-    public static NativeVideoSource Create(nint vtable, nint src)
+    public static NativeVideoSource Create(nint vtable, nint src, AbiPluginLease lease)
     {
         var vt = (MfpVideoSourceVTable*)vtable;
         var s = (void*)src;
 
         var native = QueryNativeFormats(vt, s);
 
-        var format = new VideoFormat(0, 0, PixelFormat.Unknown, new Rational(30, 1));
-        if (vt->GetFormat != null)
-        {
-            MfpVideoFormat mf = default;
-            if (vt->GetFormat(s, &mf) == (int)MfpStatus.Ok)
-            {
-                var rate = mf.FpsNum > 0 && mf.FpsDen > 0
-                    ? new Rational((int)mf.FpsNum, (int)mf.FpsDen)
-                    : new Rational(30, 1);
-                format = new VideoFormat((int)mf.Width, (int)mf.Height, AbiFrameMarshal.ToCore(mf.PixelFormat), rate);
-            }
-        }
+        MfpVideoFormat mf = default;
+        AbiPluginHost.ClearLastError();
+        var status = vt->GetFormat(s, &mf);
+        if (status != (int)MfpStatus.Ok)
+            throw AbiPluginHost.StatusException("plugin video source format query", status);
+        if (mf.Width == 0 || mf.Height == 0 || AbiFrameMarshal.ToCore(mf.PixelFormat) == PixelFormat.Unknown)
+            throw new InvalidOperationException(
+                $"plugin video source returned invalid format {mf.Width}x{mf.Height}, pixel format {mf.PixelFormat}.");
+        var rate = mf.FpsNum > 0 && mf.FpsDen > 0
+            ? new Rational((int)mf.FpsNum, (int)mf.FpsDen)
+            : new Rational(30, 1);
+        var format = new VideoFormat((int)mf.Width, (int)mf.Height, AbiFrameMarshal.ToCore(mf.PixelFormat), rate);
 
-        return new NativeVideoSource(vt, s, format, native);
+        return new NativeVideoSource(vt, s, format, native, lease);
     }
 
     public VideoFormat Format => _format;
@@ -56,9 +59,10 @@ internal sealed unsafe class NativeVideoSource : IVideoSource, IDisposable
     {
         if (_vt->SelectOutputFormat == null)
             return;
+        AbiPluginHost.ClearLastError();
         var rc = _vt->SelectOutputFormat(_src, AbiFrameMarshal.FromCore(format));
         if (rc != (int)MfpStatus.Ok)
-            throw new InvalidOperationException($"plugin video source rejected output format {format} (status {rc}).");
+            throw AbiPluginHost.StatusException($"plugin video source output format {format}", rc);
     }
 
     public bool TryReadNextFrame(out VideoFrame frame)
@@ -68,14 +72,22 @@ internal sealed unsafe class NativeVideoSource : IVideoSource, IDisposable
             return false;
 
         MfpVideoFrame mf = default;
-        if (_vt->TryReadFrame(_src, &mf) != (int)MfpStatus.Ok)
+        AbiPluginHost.ClearLastError();
+        var status = _vt->TryReadFrame(_src, &mf);
+        if (status is (int)MfpStatus.ErrAgain or (int)MfpStatus.ErrEnd)
             return false;
+        if (status != (int)MfpStatus.Ok)
+            throw AbiPluginHost.StatusException("plugin video source read", status);
 
         try
         {
-            if (mf.Kind != MfpFrameKind.Cpu)
-                return false; // only CPU frames are marshalled in this slice
-            frame = AbiFrameMarshal.ToManagedCpuFrame(in mf, _format.FrameRate);
+            if ((_vt->SupportedFrameKinds & (1u << (int)mf.Kind)) == 0)
+                throw new InvalidOperationException(
+                    $"plugin video source returned unadvertised ABI frame kind {mf.Kind}.");
+            if ((uint)mf.Sync.Kind >= 32 || (_vt->SupportedSyncKinds & (1u << mf.Sync.Kind)) == 0)
+                throw new InvalidOperationException(
+                    $"plugin video source returned unadvertised ABI sync kind {mf.Sync.Kind}.");
+            frame = AbiFrameMarshal.ToManagedFrame(in mf, _format.FrameRate);
             return true;
         }
         finally
@@ -92,7 +104,11 @@ internal sealed unsafe class NativeVideoSource : IVideoSource, IDisposable
         _disposed = true;
         if (_vt->Destroy != null)
             _vt->Destroy(_src);
+        _lease.Dispose();
+        GC.SuppressFinalize(this);
     }
+
+    ~NativeVideoSource() => Dispose();
 
     private static PixelFormat[] QueryNativeFormats(MfpVideoSourceVTable* vt, void* s)
     {
@@ -101,7 +117,11 @@ internal sealed unsafe class NativeVideoSource : IVideoSource, IDisposable
         const int cap = 32;
         var buf = stackalloc int[cap];
         var count = 0;
-        if (vt->NativePixelFormats(s, buf, cap, &count) != (int)MfpStatus.Ok || count <= 0)
+        AbiPluginHost.ClearLastError();
+        var status = vt->NativePixelFormats(s, buf, cap, &count);
+        if (status != (int)MfpStatus.Ok)
+            throw AbiPluginHost.StatusException("plugin video source pixel-format query", status);
+        if (count <= 0)
             return [];
         count = Math.Min(count, cap);
         var result = new PixelFormat[count];

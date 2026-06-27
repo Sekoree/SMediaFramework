@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Text;
 using S.Media.Compositor;
 using S.Media.Core.Video;
@@ -11,19 +12,23 @@ namespace S.Abi;
 /// opaque <c>config_json</c> blob and wraps it as a managed <see cref="IVideoCompositorLayerSurface"/> via
 /// <see cref="NativeLayerSurface"/>. Registered into an <see cref="ICompositorRegistryBuilder"/> by kind.
 /// </summary>
-public sealed unsafe class NativeLayerSurfaceFactory
+public sealed unsafe class NativeLayerSurfaceFactory : IDisposable
 {
     private readonly MfpLayerSurfaceFactoryVTable* _vt;
     private readonly void* _self;
+    private readonly AbiPluginLease _lease;
+    private bool _disposed;
 
-    internal NativeLayerSurfaceFactory(nint vtable, nint self)
+    internal NativeLayerSurfaceFactory(nint vtable, nint self, AbiPluginLease lease)
     {
         _vt = (MfpLayerSurfaceFactoryVTable*)vtable;
         _self = (void*)self;
+        _lease = lease;
     }
 
     public IVideoCompositorLayerSurface? Create(string? configJson)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_vt->Create == null || _vt->SurfaceVTable == null)
             return null;
 
@@ -32,7 +37,26 @@ public sealed unsafe class NativeLayerSurfaceFactory
         fixed (byte* p = bytes)
             instance = _vt->Create(_self, p);
 
-        return instance == null ? null : new NativeLayerSurface(_vt->SurfaceVTable, instance);
+        if (instance == null)
+            return null;
+        try
+        {
+            return new NativeLayerSurface(_vt->SurfaceVTable, instance, _lease.AcquireDependent());
+        }
+        catch
+        {
+            if (_vt->SurfaceVTable->Destroy != null)
+                _vt->SurfaceVTable->Destroy(instance);
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        _lease.Dispose();
     }
 
     private static byte[] Utf8(string s)
@@ -54,15 +78,18 @@ public sealed unsafe class NativeLayerSurfaceFactory
 internal sealed unsafe class NativeLayerSurface : IVideoCompositorLayerSurface
 {
     [ThreadStatic] private static GL? s_currentGl;
+    private static readonly ConditionalWeakTable<GL, GlContextIdentity> ContextIds = new();
 
     private readonly MfpLayerSurfaceVTable* _vt;
     private readonly void* _surface;
+    private readonly AbiPluginLease _lease;
     private bool _disposed;
 
-    internal NativeLayerSurface(MfpLayerSurfaceVTable* vt, void* surface)
+    internal NativeLayerSurface(MfpLayerSurfaceVTable* vt, void* surface, AbiPluginLease lease)
     {
         _vt = vt;
         _surface = surface;
+        _lease = lease;
     }
 
     public void ConfigureGl(GL gl, VideoFormat canvas)
@@ -74,8 +101,11 @@ internal sealed unsafe class NativeLayerSurface : IVideoCompositorLayerSurface
         s_currentGl = gl;
         try
         {
-            var ctx = MakeContext();
-            _vt->ConfigureGl(_surface, &ctx, (uint)canvas.Width, (uint)canvas.Height);
+            var ctx = MakeContext(gl);
+            AbiPluginHost.ClearLastError();
+            var status = _vt->ConfigureGl(_surface, &ctx, (uint)canvas.Width, (uint)canvas.Height);
+            if (status != (int)MfpStatus.Ok)
+                throw AbiPluginHost.StatusException("plugin GL layer configure", status);
         }
         finally
         {
@@ -92,14 +122,17 @@ internal sealed unsafe class NativeLayerSurface : IVideoCompositorLayerSurface
         s_currentGl = gl;
         try
         {
-            var ctx = MakeContext();
+            var ctx = MakeContext(gl);
             var t = new MfpTransform2D
             {
                 A = transform.M11, B = transform.M12,
                 C = transform.M21, D = transform.M22,
                 Tx = transform.Tx, Ty = transform.Ty,
             };
-            _vt->Render(_surface, &ctx, targetFbo, masterTime.Ticks, &t, opacity);
+            AbiPluginHost.ClearLastError();
+            var status = _vt->Render(_surface, &ctx, targetFbo, masterTime.Ticks, &t, opacity);
+            if (status != (int)MfpStatus.Ok)
+                throw AbiPluginHost.StatusException("plugin GL layer render", status);
         }
         finally
         {
@@ -114,9 +147,17 @@ internal sealed unsafe class NativeLayerSurface : IVideoCompositorLayerSurface
         _disposed = true;
         if (_vt->Destroy != null)
             _vt->Destroy(_surface);
+        _lease.Dispose();
+        GC.SuppressFinalize(this);
     }
 
-    private static MfpGlContext MakeContext() => new() { ContextId = 1, GetProcAddress = &GlGetProcAddress };
+    ~NativeLayerSurface() => Dispose();
+
+    private static MfpGlContext MakeContext(GL gl) => new()
+    {
+        ContextId = ContextIds.GetValue(gl, _ => new GlContextIdentity()).Id,
+        GetProcAddress = &GlGetProcAddress,
+    };
 
     [UnmanagedCallersOnly]
     private static void* GlGetProcAddress(byte* name)
@@ -126,5 +167,11 @@ internal sealed unsafe class NativeLayerSurface : IVideoCompositorLayerSurface
             return null;
         var n = Marshal.PtrToStringUTF8((nint)name);
         return string.IsNullOrEmpty(n) ? null : (void*)gl.Context.GetProcAddress(n);
+    }
+
+    private sealed class GlContextIdentity
+    {
+        private static long s_nextId;
+        public ulong Id { get; } = (ulong)Interlocked.Increment(ref s_nextId);
     }
 }

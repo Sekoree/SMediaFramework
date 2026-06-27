@@ -82,12 +82,9 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// are composited and before per-output mappings/fan-out.</summary>
     private volatile OutputMappingStage? _compositionMappingStage;
 
-    /// <summary>Optional subtitle layer: a top-z-order slot fed each frame from a time-addressed overlay source.
-    /// The overlay's borrowed frame is copied into a pooled, slot-owned frame and pushed like any other layer, so
-    /// the mixer composites it uniformly (z-order/opacity/blend). The source remains the caller's to dispose.</summary>
-    private volatile SubtitleLayerFeed? _subtitleFeed;
-
-    private sealed record SubtitleLayerFeed(IVideoOverlaySource Source, LayerSlot Layer);
+    /// <summary>Clip-owned subtitle layers. Each feed has its own clip-position provider, allowing several
+    /// subtitle tracks and clips on one composition without sharing a global subtitle timeline.</summary>
+    private readonly List<SubtitleLayerFeed> _subtitleFeeds = [];
 
     public ClipCompositionRuntime(
         ClipCompositionDefinition definition,
@@ -402,36 +399,52 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     /// <summary>
     /// Attaches a subtitle/overlay source as a full-canvas, top-z-order layer. Each frame the runtime renders the
-    /// source at the master position, copies its (borrowed) overlay into a pooled, slot-owned frame, and pushes it
+    /// source at the owning clip's position, copies its (borrowed) overlay into a pooled, slot-owned frame, and pushes it
     /// like any other layer — so the mixer composites it uniformly (z-order, opacity, blend). The source should
-    /// render at the canvas size and remains the <em>caller's</em> to dispose; the layer is torn down with the
-    /// runtime. Replaces any previously attached overlay.
+    /// render at the canvas size. The returned lease removes the layer and disposes the source; dispose it when
+    /// the owning clip stops.
     /// </summary>
-    public void AttachSubtitleOverlay(IVideoOverlaySource source, int layerIndex = int.MaxValue)
+    public IDisposable AttachSubtitleOverlay(
+        IVideoOverlaySource source,
+        Func<TimeSpan> positionProvider,
+        int layerIndex = int.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(positionProvider);
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        var previous = _subtitleFeed;
         var placement = new VideoPlacementSpec(CompositionName, layerIndex, Placement: "stretch");
         var layer = AddLayer(_canvasFormat, placement);
-        _subtitleFeed = new SubtitleLayerFeed(source, layer);
-        if (previous is not null)
-            RemoveLayer(previous.Layer);
+        var feed = new SubtitleLayerFeed(this, source, layer, positionProvider);
+        lock (_gate)
+            _subtitleFeeds.Add(feed);
+        return feed;
     }
 
-    /// <summary>Renders the subtitle source at <paramref name="masterPts"/> into the subtitle layer's slot, or
-    /// hides the layer (opacity 0) when nothing shows. Pump-thread only.</summary>
-    private void DriveSubtitleLayer(TimeSpan masterPts)
+    private void RemoveSubtitleFeed(SubtitleLayerFeed feed)
     {
-        var feed = _subtitleFeed;
-        if (feed is null)
-            return;
+        lock (_gate)
+            _subtitleFeeds.Remove(feed);
+        RemoveLayer(feed.Layer);
+    }
 
+    /// <summary>Renders every subtitle source at its owning clip position. Pump-thread only.</summary>
+    private void DriveSubtitleLayers()
+    {
+        SubtitleLayerFeed[] feeds;
+        lock (_gate)
+            feeds = _subtitleFeeds.ToArray();
+
+        foreach (var feed in feeds)
+            DriveSubtitleLayer(feed);
+    }
+
+    private void DriveSubtitleLayer(SubtitleLayerFeed feed)
+    {
         VideoFrame? overlay;
         try
         {
-            overlay = feed.Source.RenderAt(masterPts);
+            overlay = feed.RenderAtCurrentPosition();
         }
         catch (Exception ex)
         {
@@ -450,7 +463,16 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             // The overlay frame is borrowed (the source reuses it) and slots take ownership of pushed frames, so
             // copy into a pooled, slot-owned frame. Pooled => no GC; the slot returns it to the pool on its swap.
-            feed.Layer.Output.Submit(CopyToPooledBgra(overlay));
+            var owned = CopyToPooledBgra(overlay);
+            try
+            {
+                feed.Layer.Output.Submit(owned);
+            }
+            catch
+            {
+                owned.Dispose();
+                throw;
+            }
             feed.Layer.Opacity = 1f;
         }
         catch (Exception ex)
@@ -462,6 +484,9 @@ public sealed class ClipCompositionRuntime : IDisposable
 
     private static VideoFrame CopyToPooledBgra(VideoFrame source)
     {
+        if (source.Format.PixelFormat != PixelFormat.Bgra32 || source.Planes.Length != 1 || source.Strides.Length != 1)
+            throw new NotSupportedException(
+                $"Subtitle overlays must be single-plane BGRA32, not {source.Format.PixelFormat} with {source.Planes.Length} planes.");
         var plane = source.Planes[0];
         var length = plane.Length;
         var buffer = ArrayPool<byte>.Shared.Rent(length);
@@ -474,6 +499,48 @@ public sealed class ClipCompositionRuntime : IDisposable
             source.Strides[0],
             metadata: new VideoFrameMetadata(AlphaMode: VideoAlphaMode.Premultiplied),
             release: DisposableRelease.Wrap(() => ArrayPool<byte>.Shared.Return(owned, clearArray: false)));
+    }
+
+    private sealed class SubtitleLayerFeed : IDisposable
+    {
+        private readonly ClipCompositionRuntime _owner;
+        private readonly IVideoOverlaySource _source;
+        private readonly Func<TimeSpan> _positionProvider;
+        private readonly object _gate = new();
+        private bool _disposed;
+
+        public SubtitleLayerFeed(
+            ClipCompositionRuntime owner,
+            IVideoOverlaySource source,
+            LayerSlot layer,
+            Func<TimeSpan> positionProvider)
+        {
+            _owner = owner;
+            _source = source;
+            Layer = layer;
+            _positionProvider = positionProvider;
+        }
+
+        public LayerSlot Layer { get; }
+
+        public VideoFrame? RenderAtCurrentPosition()
+        {
+            lock (_gate)
+                return _disposed ? null : _source.RenderAt(_positionProvider());
+        }
+
+        public void Dispose()
+        {
+            lock (_gate)
+            {
+                if (_disposed)
+                    return;
+                _disposed = true;
+            }
+
+            _owner.RemoveSubtitleFeed(this);
+            _source.Dispose();
+        }
     }
 
     private static ClipCompositionCompositor CreateDefaultCompositor(VideoFormat canvasFormat) =>
@@ -576,10 +643,9 @@ public sealed class ClipCompositionRuntime : IDisposable
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: master read"); }
         }
 
-        // Subtitle layer: render the overlay for this instant and push it into its slot before either pump path
+        // Subtitle layers render at their owning clips' positions before either pump path
         // reads the mixer, so it composites uniformly with the video layers (z-order/opacity/blend).
-        if (_subtitleFeed is not null)
-            DriveSubtitleLayer(masterPts ?? TimeSpan.Zero);
+        DriveSubtitleLayers();
 
         List<AcquiredOutput> snapshot;
         lock (_gate) snapshot = _acquired.ToList();
@@ -852,12 +918,15 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         MediaClock? slaveClock;
         List<AcquiredOutput> acquiredToRetire;
+        List<SubtitleLayerFeed> subtitleFeeds;
         lock (_gate)
         {
             if (_disposed) return;
             _disposed = true;
             slaveClock = _slaveClock;
             acquiredToRetire = _acquired.ToList();
+            subtitleFeeds = _subtitleFeeds.ToList();
+            _subtitleFeeds.Clear();
 
             // Retire mapping stages up front so the driver-thread dispose window below (and the
             // direct drain fallback at the end) can tear their compositors down.
@@ -867,6 +936,9 @@ public sealed class ClipCompositionRuntime : IDisposable
                 _retiredMappingStages.Enqueue(compositionStage);
             }
         }
+
+        foreach (var feed in subtitleFeeds)
+            feed.Dispose();
 
         foreach (var acquired in acquiredToRetire)
         {
