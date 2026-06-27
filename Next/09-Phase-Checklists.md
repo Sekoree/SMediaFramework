@@ -636,7 +636,15 @@ load → cue-list → go → transport advances → stop → close, all from pur
 ## Phase 8 — UI port (separate effort, firewalled)
 **Goal:** rebuild HaPlay on `ShowSession`; retire the old app.
 
-- [ ] `HaPlay.Core` / `HaPlay.Controls` / `HaPlay.App` / `HaPlay.Desktop` — thin MVVM over `ShowSession`.
+- [~] `HaPlay.Core` / `HaPlay.Controls` / `HaPlay.App` / `HaPlay.Desktop` — thin MVVM over `ShowSession`.
+      **FOUNDATION STARTED (2026-06-28):** new `next/UI/` tree (outside the arch-scanned `MediaFramework/{Media,Control,
+      Interop}`, so unconstrained). **`HaPlay.Core`** (CommunityToolkit.Mvvm 8.4.2) — `ShowSessionViewModel`: thin MVVM
+      over the headless `ShowSession` — `Go`/`Stop`/`Refresh` `[RelayCommand]`s that **swallow exceptions →
+      `StatusMessage`** (the async-RelayCommand no-rethrow rule, so a throw never leaves a button stuck disabled);
+      transport pulled from `TransportSnapshot` (position / duration / IsRunning). **`HaPlay.Core.Tests`: 2 green**
+      (load + GO updates status/transport without throwing; invalid JSON → StatusMessage). Build 0/0, arch 4/4.
+      *Next:* `HaPlay.App` + `HaPlay.Desktop` (an Avalonia 12 window binding the VM — GO button + transport readout,
+      reusing `VideoOpenGlControl` for preview), then strangle the old workspaces one at a time (P1–P6).
 - [ ] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
