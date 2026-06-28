@@ -53,4 +53,25 @@ public class ShowSessionViewModelTests
 
         Assert.Equal(1, vm.CueCount);
     }
+
+    [Fact]
+    public async Task FireSelectedCue_firesTheListSelection_withoutThrowing()
+    {
+        const string oneCueShow =
+            "{\"Version\":1,\"Cues\":[{\"Id\":\"cue1\",\"Number\":1,\"Label\":\"X\"}]," +
+            "\"Clips\":[],\"Compositions\":[],\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+
+        vm.LoadShow(oneCueShow);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Single(vm.Cues);
+        Assert.Equal("cue1", vm.Cues[0].Id);
+
+        vm.SelectedCue = vm.Cues[0];
+        await vm.FireSelectedCueCommand.ExecuteAsync(null);
+
+        Assert.Equal("fire cue 1", vm.StatusMessage);
+    }
 }

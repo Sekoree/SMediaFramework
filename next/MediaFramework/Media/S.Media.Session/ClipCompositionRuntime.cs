@@ -253,6 +253,34 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// to finish before the lease is released; future pump snapshots that still hold the retired output drop
     /// their frame instead of touching a runtime the host may be about to dispose.
     /// </summary>
+    /// <summary>
+    /// Attach an additional live output (e.g. a UI preview surface) to this running composition; the pump picks it up
+    /// on its next tick. Symmetric to <see cref="RemoveOutput"/>. The caller owns the output's lifetime unless the
+    /// lease sets <see cref="ClipCompositionOutputLease.DisposeOutputOnRuntimeDispose"/>.
+    /// </summary>
+    public bool AddOutput(ClipCompositionOutputLease output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+        if (output.Output is null)
+            return false;
+
+        var acquired = new AcquiredOutput(output);
+        if (output.Mapping is not null)
+            acquired.SetMapping(output.Mapping, _canvasFormat, out _);
+
+        lock (_gate)
+        {
+            // Disposed mid-attach: drop it. (A mapping stage, if any, is GC-reclaimed — preview attaches carry none.)
+            if (_disposed)
+                return false;
+            _acquired.Add(acquired);
+        }
+
+        acquired.SubscribePumpPressure(this);
+        ReevaluateIntegratedWarp();
+        return true;
+    }
+
     public bool RemoveOutput(string outputId)
     {
         ArgumentException.ThrowIfNullOrEmpty(outputId);

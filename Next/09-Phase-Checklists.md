@@ -655,8 +655,20 @@ load → cue-list → go → transport advances → stop → close, all from pur
       → `vm.LoadShow(json)` → refresh; async-void handler guards into `StatusMessage`), (3) **cue-count readout**
       (`ShowSessionViewModel.CueCount` from `GetCueDefinitionsAsync`, pulled in `RefreshAsync`). xvfb smoke still EXIT=0;
       817 tests (added a CueCount test), build 0/0, arch 4/4.
-      *Next:* a video preview (reuse `VideoOpenGlControl`) + `HaPlay.Controls`; then strangle the old workspaces one at
-      a time (transport → cue list → control → soundboard …), deleting each god-object as its workspace moves over.
+      **CUE-LIST WORKSPACE DONE (2026-06-28):** first workspace strangled over — `ShowSessionViewModel` now exposes
+      `Cues` (`ObservableCollection<CueListItem>`, rebuilt in `RefreshAsync` only when the set size changes so a
+      transport refresh keeps the selection), `SelectedCue`, and a `FireSelectedCue` `[RelayCommand]` over
+      `ShowSession.FireCueAsync`. `MainWindow` shows a cue `ListBox` + "Fire selected cue". xvfb smoke EXIT=0; 818 tests
+      (added a fire-cue test), build 0/0, arch 4/4.
+      **VIDEO-PREVIEW ENABLER DONE (2026-06-28):** the framework half — a live output can now attach to a running
+      composition. `ClipCompositionRuntime.AddOutput(lease)` (symmetric to `RemoveOutput`: builds an `AcquiredOutput`,
+      adds under `_gate`; the pump snapshots `_acquired` so it's picked up next tick) + `ShowSession`'s
+      `AttachCompositionOutputAsync(compositionId, IVideoOutput, outputId="preview")` (false if no such composition; the
+      caller owns the output's lifetime — lease `DisposeOutputOnRuntimeDispose=false`). Session test green (attach to a
+      loaded composition → true; unknown id → false). 819 tests, build 0/0, arch 4/4, HaPlay smoke still EXIT=0.
+      *Next:* the **visible half** — host a `VideoOpenGlControl` in a HaPlay window and `AttachCompositionOutputAsync`
+      it to the show's composition (GL lifecycle + frame-format pass to the control); then the remaining workspaces
+      (control → soundboard …), deleting each god-object as its workspace moves over.
 - [ ] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`

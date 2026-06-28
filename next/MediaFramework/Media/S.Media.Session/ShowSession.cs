@@ -341,6 +341,17 @@ public sealed class ShowSession : IAsyncDisposable
     public Task<IReadOnlyList<CueDefinition>> GetCueDefinitionsAsync() =>
         InvokeAsync(() => Task.FromResult(_cueGraph.Cues));
 
+    /// <summary>
+    /// Attach a live <see cref="IVideoOutput"/> (e.g. a UI preview surface) to a loaded composition's pump — the
+    /// composited canvas starts flowing to it on the next pump tick. Returns false if no composition has that id.
+    /// The caller owns the output's lifetime; it is not disposed with the runtime.
+    /// </summary>
+    public Task<bool> AttachCompositionOutputAsync(string compositionId, IVideoOutput output, string outputId = "preview") =>
+        InvokeAsync(() =>
+            _compositions.TryGetValue(compositionId, out var composition)
+                ? Task.FromResult(composition.AddOutput(new ClipCompositionOutputLease(outputId, outputId, output)))
+                : Task.FromResult(false));
+
     /// <summary>An immutable snapshot of the cue execution log.</summary>
     public Task<IReadOnlyList<CueExecutionLogEntry>> GetCueExecutionLogAsync() =>
         InvokeAsync(() => Task.FromResult(_cueGraph.ExecutionLog));
