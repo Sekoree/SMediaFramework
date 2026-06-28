@@ -672,9 +672,30 @@ load → cue-list → go → transport advances → stop → close, all from pur
       (attaches the control to the first composition via `AttachCompositionOutputAsync`); the window attaches after a
       load. **xvfb smoke EXIT=0** with the control in the window (it initializes GL under software rendering, no errors).
       820 tests (added an attach-wiring VM test), build 0/0, arch 4/4.
-      *Next:* the **end-to-end render proof** — load a generated composition+clip show, GO, and assert the control's
-      `RenderedFrameCount > 0` (a timing/media smoke); then the remaining workspaces (control → soundboard …).
-- [ ] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).
+      **RENDER PROOF — pipeline confirmed, frame doesn't surface yet (2026-06-28):** a `HAPLAY_SMOKE_SHOW` harness in
+      `App` loads a generated composition+clip show (ffmpeg testsrc), attaches the preview, GOes, then checks
+      `RenderedFrameCount`. Diagnostics prove the pipeline is wired: **attach=True**, cue **fires**, the video **plays**
+      (live position advances ~5.1 s) — but `VideoOpenGlControl.RenderedFrameCount=0` (it only counts frames *carrying
+      video*, so a composited frame never reached it). Same result with/without `LIBGL_ALWAYS_SOFTWARE`, no GL log.
+      Root cause **unconfirmed** — leads: the composition→control submit for a *dynamically-added* output, the Bgra32
+      canvas format vs the control's renderer, or `AvaloniaVideoSmoke` works as window **Content** (one output) while
+      this adds a **second** output to a composition. Normal `HAPLAY_SMOKE` still EXIT=0; 820 tests; the harness is kept
+      (gated) for the next debugging pass. *Next:* instrument the pump's `SubmitToOutput` for the dynamic output (is it
+      called? what format?); then the remaining workspaces (control → soundboard …).
+      **PREVIEW PULLED FROM THE UI (2026-06-28):** a user test on real hardware hit a **resize hang** with the
+      `VideoOpenGlControl` in the window (and it never rendered a frame anyway), so it was removed from `MainWindow`
+      (the `App` render-proof path + the control hosting + the `S.Media.Present.Avalonia` ref all reverted — it was
+      uncommitted). The **framework enabler** (`AttachCompositionOutput`/`AddOutput`) + the VM's `AttachPreviewAsync`
+      + both tests **stay** (820 tests, smoke EXIT=0). Re-add the preview surface only after the frame path AND the
+      resize behaviour of a *child* `VideoOpenGlControl` are sorted (likely needs real-GL-hardware iteration).
+- [~] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).
+      **CUE AUTHORING STARTED (2026-06-28):** the cue-editing half of `CuePlayerViewModel` (2013 LOC) is now thin in
+      `ShowSessionViewModel` — it holds the editable `ShowDocument` (a record); `AddCue`/`RemoveSelectedCue`
+      `[RelayCommand]`s rebuild it (`with`), reload the session via `ApplyDocumentAsync`, and `ToShowJson` saves it.
+      `MainWindow` gained Add cue / Remove cue / Save show… (the save does a **local-path `File.WriteAllTextAsync`** —
+      `IStorageFile.OpenWriteAsync` doesn't truncate, which would corrupt a shorter doc). 821 tests (add → count →
+      JSON round-trip → remove), build 0/0, arch 4/4, smoke EXIT=0. *Next:* cue rename/reorder + per-cue clip binding
+      (media path), then the control + soundboard workspaces.
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
       built in Phase 4 — audit each for any logic `ShowSession` still lacks, then delete it as its workspace

@@ -13,7 +13,6 @@
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Session/S.Media.Session.csproj" />
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Decode.FFmpeg/S.Media.Decode.FFmpeg.csproj" />
         <ProjectReference Include="../../MediaFramework/Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
-        <ProjectReference Include="../../MediaFramework/Media/S.Media.Present.Avalonia/S.Media.Present.Avalonia.csproj" />
     </ItemGroup>
 
     <ItemGroup>

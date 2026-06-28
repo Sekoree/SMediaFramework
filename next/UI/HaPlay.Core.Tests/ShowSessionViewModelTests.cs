@@ -93,4 +93,31 @@ public class ShowSessionViewModelTests
         vm.LoadShow(compositionShow);
         Assert.True(await vm.AttachPreviewAsync(new DiscardingVideoOutput()));
     }
+
+    [Fact]
+    public async Task AddAndRemoveCue_updatesCount_andSurvivesJsonRoundTrip()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+        vm.LoadShow(EmptyShow);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal(0, vm.CueCount);
+
+        await vm.AddCueCommand.ExecuteAsync(null);
+        await vm.AddCueCommand.ExecuteAsync(null);
+        Assert.Equal(2, vm.CueCount);
+        Assert.Equal(2, vm.Cues.Count);
+
+        // The edited document saves to JSON and round-trips into a fresh VM with the same cues.
+        await using var session2 = new ShowSession(MediaRegistry.Build(_ => { }));
+        var vm2 = new ShowSessionViewModel(session2);
+        vm2.LoadShow(vm.ToShowJson());
+        await vm2.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal(2, vm2.CueCount);
+
+        vm.SelectedCue = vm.Cues[0];
+        await vm.RemoveSelectedCueCommand.ExecuteAsync(null);
+        Assert.Equal(1, vm.CueCount);
+    }
 }

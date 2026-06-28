@@ -3,25 +3,29 @@
         xmlns:vm="clr-namespace:HaPlay.Core;assembly=HaPlay.Core"
         x:Class="HaPlay.App.MainWindow"
         x:DataType="vm:ShowSessionViewModel"
-        Width="480" Height="640" Title="HaPlay">
+        Width="480" Height="480" Title="HaPlay">
     <StackPanel Margin="16" Spacing="10">
         <TextBlock Text="HaPlay — ShowSession spine" FontWeight="Bold" FontSize="16" />
         <StackPanel Orientation="Horizontal" Spacing="8">
             <Button Content="Load show…" Click="OnLoadShowClick" />
+            <Button Content="Save show…" Click="OnSaveShowClick" />
             <Button Content="GO" Command="{Binding GoCommand}" />
             <Button Content="Stop" Command="{Binding StopCommand}" />
             <Button Content="Refresh" Command="{Binding RefreshCommand}" />
         </StackPanel>
         <TextBlock Text="{Binding CueCount, StringFormat='cues: {0}'}" />
-        <ListBox ItemsSource="{Binding Cues}" SelectedItem="{Binding SelectedCue}" Height="100">
+        <ListBox ItemsSource="{Binding Cues}" SelectedItem="{Binding SelectedCue}" Height="120">
             <ListBox.ItemTemplate>
                 <DataTemplate x:DataType="vm:CueListItem">
                     <TextBlock Text="{Binding Display}" />
                 </DataTemplate>
             </ListBox.ItemTemplate>
         </ListBox>
-        <Button Content="Fire selected cue" Command="{Binding FireSelectedCueCommand}" />
-        <Border x:Name="PreviewHost" Height="180" Background="#111111" />
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <Button Content="Add cue" Command="{Binding AddCueCommand}" />
+            <Button Content="Remove cue" Command="{Binding RemoveSelectedCueCommand}" />
+            <Button Content="Fire selected cue" Command="{Binding FireSelectedCueCommand}" />
+        </StackPanel>
         <TextBlock Text="{Binding PositionTicks, StringFormat='position: {0} ticks'}" />
         <TextBlock Text="{Binding DurationTicks, StringFormat='duration: {0} ticks'}" />
         <TextBlock Text="{Binding IsRunning, StringFormat='running: {0}'}" />
