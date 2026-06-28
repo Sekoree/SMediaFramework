@@ -23,7 +23,8 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
         int instructionLimit = ControlScriptFileHost.DefaultInstructionLimit,
         TimeSpan? tickInterval = null,
         IControlMidiDeviceSessionRunner? midiSessions = null,
-        ControlMeterBlobDecoderRegistry? meterBlobDecoders = null)
+        ControlMeterBlobDecoderRegistry? meterBlobDecoders = null,
+        IControlShowActions? showActions = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(sourceProvider);
@@ -40,7 +41,8 @@ public sealed class ControlSystemRuntimeSession : IAsyncDisposable, IDisposable
             instructionLimit,
             Monitor,
             midiSender,
-            meterBlobDecoders);
+            meterBlobDecoders,
+            showActions);
         EventQueue = new ControlEventQueue(ScriptSession, Monitor);
         OscListeners = new ControlOscListenerManager(config, EventQueue, Monitor);
         MidiDevices = new ControlMidiDeviceManager(config, EventQueue, Monitor);

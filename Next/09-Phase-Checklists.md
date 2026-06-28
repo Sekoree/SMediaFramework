@@ -705,8 +705,15 @@ load → cue-list → go → transport advances → stop → close, all from pur
       (`CueLog` from `GetCueExecutionLogAsync`, "3. Intro — Completed"). All thin `[RelayCommand]`s/bindings, no new
       code-behind. 826 tests (reorder→renumber; cue-log records a fire; seek no-throws), build 0/0, smoke EXIT=0.
       Cue authoring is now functionally complete (add/remove/rename/reorder/clip + save + log).
-      *Next (bigger):* the **control** (MIDI/OSC — `S.Control`) and **soundboard** (`Soundboard` class) workspaces are
-      separate subsystems needing real session integration, not thin VM layers — each is its own effort.
+      **CONTROL WORKSPACE STARTED — framework crux DONE (2026-06-28):** found the real gap — the device-driving
+      `ControlSystemRuntimeSession`/`ControlScriptRuntimeSession` could NOT drive the show (only the directly-invoked
+      `ControlScriptFileHost` accepted `IControlShowActions`). **Fixed:** threaded `IControlShowActions? showActions`
+      through both ctors into the `ControlScriptRuntimeServices` they already build → so a MIDI/OSC-*device-triggered*
+      script can now call `show.go()`/`fireCue()`/`seek()`/`stop()`. New test (`ControlShowBridgeTests`): a runtime-
+      session script driven by `DispatchManualAsync` fires the show actions. 827 tests, build 0/0, arch 4/4, old trees
+      untouched. *Next (the rest of this workspace, multi-step):* in HaPlay, assemble a `ControlSystemRuntimeSession`
+      (config = devices+scripts, an OSC sender, MIDI runners) wired to `new ShowSessionControlActions(session)` +
+      `StartAsync`; then the UI (device list / profile load / monitor / learn). Then the **soundboard** (`Soundboard`).
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
       built in Phase 4 — audit each for any logic `ShowSession` still lacks, then delete it as its workspace

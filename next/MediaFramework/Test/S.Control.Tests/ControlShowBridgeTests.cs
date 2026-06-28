@@ -1,3 +1,4 @@
+using OSCLib;
 using Xunit;
 
 namespace HaPlay.Tests;
@@ -14,6 +15,12 @@ public class ControlShowBridgeTests
         public void FireCue(string cueId) => Calls.Add($"fireCue:{cueId}");
         public void Seek(TimeSpan position, string? groupId = null) => Calls.Add($"seek:{position.TotalSeconds}:{groupId ?? "-"}");
         public void Stop(string? groupId = null) => Calls.Add($"stop:{groupId ?? "-"}");
+    }
+
+    private sealed class NullOscSender : IControlOscSender
+    {
+        public ValueTask SendAsync(string host, int port, string address, IReadOnlyList<OSCArgument> arguments,
+            CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
     }
 
     private static ControlScriptFileHost CreateHost(string scriptSource, IControlShowActions? showActions)
@@ -46,5 +53,46 @@ public class ControlShowBridgeTests
         var host = CreateHost("return { run: fun() { show.go(); return 1; } };", showActions: null);
 
         Assert.Equal(1, (int)(double)host.Invoke("test.mnd", "run"));
+    }
+
+    // The device-driving runtime (ControlSystemRuntimeSession/ControlScriptRuntimeSession) now also accepts the show
+    // actions, so a script triggered by a MIDI/OSC device — not just a directly-invoked one — can drive the show.
+    [Fact]
+    public async Task RuntimeSessionScript_DrivesShow_WhenShowActionsWired()
+    {
+        var recorder = new RecordingShowActions();
+        var config = new ControlSystemConfig
+        {
+            IsArmed = true,
+            Scripts =
+            [
+                new ControlScriptConfig
+                {
+                    Id = Guid.NewGuid(),
+                    Name = "Drive show",
+                    ScriptPath = "Scripts/show.mnd",
+                    Triggers = [new ControlScriptTriggerConfig { Kind = ControlScriptTriggerKind.Manual, FunctionName = "run" }],
+                },
+            ],
+        };
+        var session = new ControlScriptRuntimeSession(
+            config,
+            new InMemoryControlScriptSourceProvider(new Dictionary<string, string>
+            {
+                ["Scripts/show.mnd"] =
+                    """
+                    export fun run(event, context) {
+                        show.go();
+                        show.fireCue("intro");
+                    }
+                    """,
+            }),
+            new NullOscSender(),
+            showActions: recorder);
+
+        await session.DispatchManualAsync();
+
+        Assert.Contains("go:-", recorder.Calls);
+        Assert.Contains("fireCue:intro", recorder.Calls);
     }
 }
