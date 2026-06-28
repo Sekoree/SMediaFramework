@@ -700,7 +700,13 @@ load → cue-list → go → transport advances → stop → close, all from pur
       (a media file picker → a `ShowClipBinding` for the cue, replacing any prior clip). Fixed `RebuildCuesAsync` to
       force a rebuild on edits (so rename shows even when the cue count is unchanged) while restoring the selection by
       id. `MainWindow` gained Set clip… + a rename row. 823 tests (rename → label in list+JSON; set-clip → path in JSON).
-      *Next:* cue reorder (minor); then the **control** + **soundboard** workspaces.
+      **REORDER + SEEK + CUE-LOG DONE (2026-06-28):** `MoveCueUp`/`MoveCueDown` (swap + renumber sequentially, ids
+      stable), a `Seek` command (`SeekSeconds` text box → `ShowSession.SeekAsync`), and a **cue-execution log** panel
+      (`CueLog` from `GetCueExecutionLogAsync`, "3. Intro — Completed"). All thin `[RelayCommand]`s/bindings, no new
+      code-behind. 826 tests (reorder→renumber; cue-log records a fire; seek no-throws), build 0/0, smoke EXIT=0.
+      Cue authoring is now functionally complete (add/remove/rename/reorder/clip + save + log).
+      *Next (bigger):* the **control** (MIDI/OSC — `S.Control`) and **soundboard** (`Soundboard` class) workspaces are
+      separate subsystems needing real session integration, not thin VM layers — each is its own effort.
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
       built in Phase 4 — audit each for any logic `ShowSession` still lacks, then delete it as its workspace

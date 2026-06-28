@@ -154,4 +154,57 @@ public class ShowSessionViewModelTests
 
         Assert.Contains("/media/intro.mp4", vm.ToShowJson());
     }
+
+    [Fact]
+    public async Task MoveCueDown_reordersAndRenumbers()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+        vm.LoadShow(EmptyShow);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        await vm.AddCueCommand.ExecuteAsync(null);
+        await vm.AddCueCommand.ExecuteAsync(null);
+
+        var firstId = vm.Cues[0].Id;
+        vm.SelectedCue = vm.Cues[0];
+        await vm.MoveCueDownCommand.ExecuteAsync(null);
+
+        // The moved cue is now second (renumbered 2); the list reads 1..N in order.
+        Assert.Equal(firstId, vm.Cues[1].Id);
+        Assert.Equal(1, vm.Cues[0].Number);
+        Assert.Equal(2, vm.Cues[1].Number);
+    }
+
+    [Fact]
+    public async Task CueLog_recordsFiredCues()
+    {
+        const string oneCueShow =
+            "{\"Version\":1,\"Cues\":[{\"Id\":\"cue1\",\"Number\":1,\"Label\":\"X\"}]," +
+            "\"Clips\":[],\"Compositions\":[],\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+        vm.LoadShow(oneCueShow);
+        await vm.RefreshCommand.ExecuteAsync(null);
+
+        vm.SelectedCue = vm.Cues[0];
+        await vm.FireSelectedCueCommand.ExecuteAsync(null);
+
+        Assert.NotEmpty(vm.CueLog);
+    }
+
+    [Fact]
+    public async Task Seek_doesNotThrow_withoutActiveClip()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+        vm.LoadShow(EmptyShow);
+
+        vm.SeekSeconds = 1.5;
+        await vm.SeekCommand.ExecuteAsync(null);
+
+        Assert.StartsWith("seek ", vm.StatusMessage);
+    }
 }

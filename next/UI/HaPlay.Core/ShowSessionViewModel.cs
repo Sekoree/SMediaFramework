@@ -28,9 +28,13 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
     [ObservableProperty] private int _cueCount;
     [ObservableProperty] private CueListItem? _selectedCue;
     [ObservableProperty] private string _newCueLabel = "";
+    [ObservableProperty] private double _seekSeconds;
 
     /// <summary>The cues of the loaded show — the cue-list workspace binds to this.</summary>
     public ObservableCollection<CueListItem> Cues { get; } = new();
+
+    /// <summary>The cue-execution history (most-recent-last) — "3. Intro — Completed".</summary>
+    public ObservableCollection<string> CueLog { get; } = new();
 
     /// <summary>Load (replace) the show from a <see cref="ShowDocument"/> JSON string.</summary>
     public void LoadShow(string json)
@@ -112,10 +116,37 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
     }
 
     [RelayCommand]
+    private Task MoveCueUpAsync() => MoveSelectedCueAsync(-1);
+
+    [RelayCommand]
+    private Task MoveCueDownAsync() => MoveSelectedCueAsync(+1);
+
+    /// <summary>Move the selected cue one slot up/down and renumber sequentially (ids stay stable).</summary>
+    private Task MoveSelectedCueAsync(int delta)
+    {
+        if (SelectedCue is not { } cue)
+            return Task.CompletedTask;
+        var cues = _document.Cues.ToList();
+        var i = cues.FindIndex(c => c.Id == cue.Id);
+        var j = i + delta;
+        if (i < 0 || j < 0 || j >= cues.Count)
+            return Task.CompletedTask;
+        (cues[i], cues[j]) = (cues[j], cues[i]);
+        var renumbered = cues.Select((c, idx) => c with { Number = idx + 1 }).ToList();
+        _document = _document with { Cues = renumbered };
+        return ApplyDocumentAsync($"cue moved {(delta < 0 ? "up" : "down")}");
+    }
+
+    [RelayCommand]
     private Task GoAsync() => RunAsync(_session.GoAsync(), "GO");
 
     [RelayCommand]
     private Task StopAsync() => RunAsync(_session.StopAsync(), "stop");
+
+    /// <summary>Seek the active clip to <see cref="SeekSeconds"/> (no-op if nothing is playing).</summary>
+    [RelayCommand]
+    private Task SeekAsync() =>
+        RunAsync(_session.SeekAsync(TimeSpan.FromSeconds(SeekSeconds)), $"seek {SeekSeconds:0.0}s");
 
     /// <summary>Fire the cue selected in the cue list (no-op if none is selected).</summary>
     [RelayCommand]
@@ -136,6 +167,11 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
             }
 
             await RebuildCuesAsync();
+
+            var log = await _session.GetCueExecutionLogAsync();
+            CueLog.Clear();
+            foreach (var entry in log)
+                CueLog.Add($"{entry.Number}. {entry.Label} — {entry.Status}");
         }
         catch (Exception ex)
         {
@@ -162,7 +198,7 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
         var cues = await _session.GetCueDefinitionsAsync();
         CueCount = cues.Count;
         // A transport refresh only rebuilds on a count change (keeps the selection); an edit forces a rebuild so a
-        // rename/clip change shows even when the count is unchanged. Either way the selection is restored by id.
+        // rename/reorder shows even when the count is unchanged. Either way the selection is restored by id.
         if (!force && Cues.Count == cues.Count)
             return;
 
