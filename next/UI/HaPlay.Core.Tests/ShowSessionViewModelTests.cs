@@ -120,4 +120,38 @@ public class ShowSessionViewModelTests
         await vm.RemoveSelectedCueCommand.ExecuteAsync(null);
         Assert.Equal(1, vm.CueCount);
     }
+
+    [Fact]
+    public async Task RenameSelectedCue_updatesLabel_inListAndJson()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+        vm.LoadShow(EmptyShow);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        await vm.AddCueCommand.ExecuteAsync(null);
+
+        vm.SelectedCue = vm.Cues[0];
+        vm.NewCueLabel = "Intro music";
+        await vm.RenameSelectedCueCommand.ExecuteAsync(null);
+
+        Assert.Equal("Intro music", vm.Cues[0].Label);
+        Assert.Contains("Intro music", vm.ToShowJson());
+    }
+
+    [Fact]
+    public async Task SetClipForSelectedCue_bindsMediaPath_inSavedJson()
+    {
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+        vm.LoadShow(EmptyShow);
+        await vm.RefreshCommand.ExecuteAsync(null);
+        await vm.AddCueCommand.ExecuteAsync(null);
+
+        vm.SelectedCue = vm.Cues[0];
+        await vm.SetClipForSelectedCueAsync("/media/intro.mp4");
+
+        Assert.Contains("/media/intro.mp4", vm.ToShowJson());
+    }
 }

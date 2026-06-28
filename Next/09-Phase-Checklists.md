@@ -694,8 +694,13 @@ load → cue-list → go → transport advances → stop → close, all from pur
       `[RelayCommand]`s rebuild it (`with`), reload the session via `ApplyDocumentAsync`, and `ToShowJson` saves it.
       `MainWindow` gained Add cue / Remove cue / Save show… (the save does a **local-path `File.WriteAllTextAsync`** —
       `IStorageFile.OpenWriteAsync` doesn't truncate, which would corrupt a shorter doc). 821 tests (add → count →
-      JSON round-trip → remove), build 0/0, arch 4/4, smoke EXIT=0. *Next:* cue rename/reorder + per-cue clip binding
-      (media path), then the control + soundboard workspaces.
+      JSON round-trip → remove), build 0/0, arch 4/4, smoke EXIT=0.
+      **CUE RENAME + CLIP BINDING DONE (2026-06-28):** `ShowSessionViewModel` gained `RenameSelectedCue` (via a
+      `NewCueLabel` text box; `CueDefinition` is a record so `c with { Label = … }`) and `SetClipForSelectedCueAsync`
+      (a media file picker → a `ShowClipBinding` for the cue, replacing any prior clip). Fixed `RebuildCuesAsync` to
+      force a rebuild on edits (so rename shows even when the cue count is unchanged) while restoring the selection by
+      id. `MainWindow` gained Set clip… + a rename row. 823 tests (rename → label in list+JSON; set-clip → path in JSON).
+      *Next:* cue reorder (minor); then the **control** + **soundboard** workspaces.
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
       built in Phase 4 — audit each for any logic `ShowSession` still lacks, then delete it as its workspace

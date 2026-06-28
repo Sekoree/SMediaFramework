@@ -3,7 +3,7 @@
         xmlns:vm="clr-namespace:HaPlay.Core;assembly=HaPlay.Core"
         x:Class="HaPlay.App.MainWindow"
         x:DataType="vm:ShowSessionViewModel"
-        Width="480" Height="480" Title="HaPlay">
+        Width="500" Height="540" Title="HaPlay">
     <StackPanel Margin="16" Spacing="10">
         <TextBlock Text="HaPlay — ShowSession spine" FontWeight="Bold" FontSize="16" />
         <StackPanel Orientation="Horizontal" Spacing="8">
@@ -24,7 +24,12 @@
         <StackPanel Orientation="Horizontal" Spacing="8">
             <Button Content="Add cue" Command="{Binding AddCueCommand}" />
             <Button Content="Remove cue" Command="{Binding RemoveSelectedCueCommand}" />
+            <Button Content="Set clip…" Click="OnSetClipClick" />
             <Button Content="Fire selected cue" Command="{Binding FireSelectedCueCommand}" />
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBox Text="{Binding NewCueLabel}" Watermark="New label" Width="220" />
+            <Button Content="Rename cue" Command="{Binding RenameSelectedCueCommand}" />
         </StackPanel>
         <TextBlock Text="{Binding PositionTicks, StringFormat='position: {0} ticks'}" />
         <TextBlock Text="{Binding DurationTicks, StringFormat='duration: {0} ticks'}" />

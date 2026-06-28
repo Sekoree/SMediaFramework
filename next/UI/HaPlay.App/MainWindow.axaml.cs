@@ -72,4 +72,31 @@ public partial class MainWindow : Window
             vm.StatusMessage = $"save failed: {ex.Message}";
         }
     }
+
+    // "Set clip…" — bind the selected cue to a media file (the cue plays it when fired).
+    private async void OnSetClipClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ShowSessionViewModel vm)
+            return;
+
+        try
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Set cue clip (media file)",
+                AllowMultiple = false,
+            });
+            if (files.Count == 0)
+                return;
+
+            if (files[0].TryGetLocalPath() is { } path)
+                await vm.SetClipForSelectedCueAsync(path);
+            else
+                vm.StatusMessage = "set clip failed: not a local file";
+        }
+        catch (Exception ex)
+        {
+            vm.StatusMessage = $"set clip failed: {ex.Message}";
+        }
+    }
 }

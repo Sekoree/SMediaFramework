@@ -27,6 +27,7 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
     [ObservableProperty] private bool _isRunning;
     [ObservableProperty] private int _cueCount;
     [ObservableProperty] private CueListItem? _selectedCue;
+    [ObservableProperty] private string _newCueLabel = "";
 
     /// <summary>The cues of the loaded show — the cue-list workspace binds to this.</summary>
     public ObservableCollection<CueListItem> Cues { get; } = new();
@@ -63,6 +64,16 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
         return attached;
     }
 
+    /// <summary>Bind the selected cue to a media file (replacing any existing clip for that cue).</summary>
+    public Task SetClipForSelectedCueAsync(string mediaPath)
+    {
+        if (SelectedCue is not { } cue)
+            return Task.CompletedTask;
+        var others = _document.Clips.Where(clip => clip.CueId != cue.Id);
+        _document = _document with { Clips = [.. others, new ShowClipBinding(cue.Id, mediaPath)] };
+        return ApplyDocumentAsync($"cue {cue.Number} → {System.IO.Path.GetFileName(mediaPath)}");
+    }
+
     /// <summary>Append a new, empty cue (auto-numbered) and apply it to the session.</summary>
     [RelayCommand]
     private Task AddCueAsync()
@@ -85,6 +96,19 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
             Clips = [.. _document.Clips.Where(clip => clip.CueId != cue.Id)],
         };
         return ApplyDocumentAsync($"cue {cue.Number} removed");
+    }
+
+    /// <summary>Rename the selected cue to <see cref="NewCueLabel"/> (no-op if blank or none selected).</summary>
+    [RelayCommand]
+    private Task RenameSelectedCueAsync()
+    {
+        if (SelectedCue is not { } cue || string.IsNullOrWhiteSpace(NewCueLabel))
+            return Task.CompletedTask;
+        _document = _document with
+        {
+            Cues = [.. _document.Cues.Select(c => c.Id == cue.Id ? c with { Label = NewCueLabel } : c)],
+        };
+        return ApplyDocumentAsync($"cue {cue.Number} renamed");
     }
 
     [RelayCommand]
@@ -124,7 +148,7 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
         try
         {
             _session.LoadDocument(_document);
-            await RebuildCuesAsync();
+            await RebuildCuesAsync(force: true);
             StatusMessage = status;
         }
         catch (Exception ex)
@@ -133,17 +157,20 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
         }
     }
 
-    private async Task RebuildCuesAsync()
+    private async Task RebuildCuesAsync(bool force = false)
     {
         var cues = await _session.GetCueDefinitionsAsync();
         CueCount = cues.Count;
-        // Rebuild on count change (load/add/remove); a same-size edit keeps the list (rename is a later slice).
-        if (Cues.Count != cues.Count)
-        {
-            Cues.Clear();
-            foreach (var c in cues)
-                Cues.Add(new CueListItem(c.Id, c.Number, c.Label));
-        }
+        // A transport refresh only rebuilds on a count change (keeps the selection); an edit forces a rebuild so a
+        // rename/clip change shows even when the count is unchanged. Either way the selection is restored by id.
+        if (!force && Cues.Count == cues.Count)
+            return;
+
+        var selectedId = SelectedCue?.Id;
+        Cues.Clear();
+        foreach (var c in cues)
+            Cues.Add(new CueListItem(c.Id, c.Number, c.Label));
+        SelectedCue = Cues.FirstOrDefault(c => c.Id == selectedId);
     }
 
     private async Task RunAsync(Task action, string label)
