@@ -4,15 +4,25 @@ using Avalonia.Interactivity;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
 using HaPlay.Core;
+using S.Media.Present.Avalonia;
 
 namespace HaPlay.App;
 
 public partial class MainWindow : Window
 {
-    public MainWindow() => AvaloniaXamlLoader.Load(this);
+    // VideoOpenGlControl has no parameterless ctor, so XAML can't instantiate it — create it in code and host it in
+    // the named Border. The composition preview attaches to it once a show with a composition loads.
+    private readonly VideoOpenGlControl _preview = new();
 
-    // "Load show…" — pick a ShowDocument JSON and load it into the bound view model. An async-void handler must not
-    // let an exception escape (it would crash the app), so failures land in the VM's StatusMessage.
+    public MainWindow()
+    {
+        AvaloniaXamlLoader.Load(this);
+        if (this.FindControl<Border>("PreviewHost") is { } host)
+            host.Child = _preview;
+    }
+
+    // "Load show…" — pick a ShowDocument JSON, load it into the bound VM, and attach the preview surface to the
+    // show's first composition. An async-void handler must not let an exception escape; failures land in StatusMessage.
     private async void OnLoadShowClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not ShowSessionViewModel vm)
@@ -33,6 +43,7 @@ public partial class MainWindow : Window
             using var reader = new StreamReader(stream);
             vm.LoadShow(await reader.ReadToEndAsync());
             await vm.RefreshCommand.ExecuteAsync(null);
+            await vm.AttachPreviewAsync(_preview);
         }
         catch (Exception ex)
         {

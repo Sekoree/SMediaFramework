@@ -666,9 +666,14 @@ load → cue-list → go → transport advances → stop → close, all from pur
       `AttachCompositionOutputAsync(compositionId, IVideoOutput, outputId="preview")` (false if no such composition; the
       caller owns the output's lifetime — lease `DisposeOutputOnRuntimeDispose=false`). Session test green (attach to a
       loaded composition → true; unknown id → false). 819 tests, build 0/0, arch 4/4, HaPlay smoke still EXIT=0.
-      *Next:* the **visible half** — host a `VideoOpenGlControl` in a HaPlay window and `AttachCompositionOutputAsync`
-      it to the show's composition (GL lifecycle + frame-format pass to the control); then the remaining workspaces
-      (control → soundboard …), deleting each god-object as its workspace moves over.
+      **PREVIEW SURFACE DONE (2026-06-28):** `HaPlay.App` refs `S.Media.Present.Avalonia`; a `VideoOpenGlControl` is
+      hosted in `MainWindow` (created in code into a named `Border` — it has **no parameterless ctor**, so XAML can't
+      instantiate it: `AVLN3000`). `ShowSessionViewModel` tracks the loaded show's composition ids + `AttachPreviewAsync`
+      (attaches the control to the first composition via `AttachCompositionOutputAsync`); the window attaches after a
+      load. **xvfb smoke EXIT=0** with the control in the window (it initializes GL under software rendering, no errors).
+      820 tests (added an attach-wiring VM test), build 0/0, arch 4/4.
+      *Next:* the **end-to-end render proof** — load a generated composition+clip show, GO, and assert the control's
+      `RenderedFrameCount > 0` (a timing/media smoke); then the remaining workspaces (control → soundboard …).
 - [ ] Decompose the god-VMs (`MediaPlayerViewModel`, `ControlWorkspaceViewModel`, `CuePlayerViewModel`) (P5).
 - [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
       `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`

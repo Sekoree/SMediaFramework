@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using S.Media.Core.Video;
 using S.Media.Session;
 
 namespace HaPlay.Core;
@@ -15,6 +16,7 @@ namespace HaPlay.Core;
 public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDisposable
 {
     private readonly ShowSession _session;
+    private IReadOnlyList<string> _compositionIds = [];
 
     public ShowSessionViewModel(ShowSession session) =>
         _session = session ?? throw new ArgumentNullException(nameof(session));
@@ -34,13 +36,28 @@ public sealed partial class ShowSessionViewModel : ObservableObject, IAsyncDispo
     {
         try
         {
-            _session.LoadDocument(ShowDocument.FromJson(json));
+            var document = ShowDocument.FromJson(json);
+            _session.LoadDocument(document);
+            _compositionIds = [.. document.Compositions.Select(c => c.Id)];
             StatusMessage = "show loaded";
         }
         catch (Exception ex)
         {
             StatusMessage = $"load failed: {ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Attach a live preview surface to the loaded show's first composition (no-op if the show has none). The
+    /// composited canvas then renders into <paramref name="output"/> once a composition-bound clip plays.
+    /// </summary>
+    public async Task<bool> AttachPreviewAsync(IVideoOutput output)
+    {
+        if (_compositionIds.Count == 0)
+            return false;
+        var attached = await _session.AttachCompositionOutputAsync(_compositionIds[0], output);
+        StatusMessage = attached ? $"preview → {_compositionIds[0]}" : "preview attach failed";
+        return attached;
     }
 
     [RelayCommand]

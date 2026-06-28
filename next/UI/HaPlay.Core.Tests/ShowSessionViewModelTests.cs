@@ -1,5 +1,6 @@
 using HaPlay.Core;
 using S.Media.Core.Registry;
+using S.Media.Core.Video;
 using S.Media.Session;
 using Xunit;
 
@@ -73,5 +74,23 @@ public class ShowSessionViewModelTests
         await vm.FireSelectedCueCommand.ExecuteAsync(null);
 
         Assert.Equal("fire cue 1", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task AttachPreview_attachesWhenShowHasComposition_elseNoOp()
+    {
+        const string compositionShow =
+            "{\"Version\":1,\"Cues\":[],\"Clips\":[]," +
+            "\"Compositions\":[{\"Id\":\"screen\",\"Name\":\"S\",\"Width\":320,\"Height\":240,\"FrameRateNum\":24,\"FrameRateDen\":1}]," +
+            "\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
+        var registry = MediaRegistry.Build(_ => { });
+        await using var session = new ShowSession(registry);
+        var vm = new ShowSessionViewModel(session);
+
+        vm.LoadShow(EmptyShow);
+        Assert.False(await vm.AttachPreviewAsync(new DiscardingVideoOutput()));
+
+        vm.LoadShow(compositionShow);
+        Assert.True(await vm.AttachPreviewAsync(new DiscardingVideoOutput()));
     }
 }
