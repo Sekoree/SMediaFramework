@@ -464,8 +464,14 @@ public sealed class MediaPlayer : IDisposable
     /// provides a wrapper factory (FFmpeg). The router's per-output pump-pressure signal drives a small
     /// resample-rate bias on each non-master output; the master device stays the clock. No-op for
     /// single-output players (the only output is the master) and when no factory is registered.
+    /// <para>The registry-URI open paths (<see cref="Open(IMediaRegistry,string,MediaPlayerOpenOptions)"/> →
+    /// <c>TryOpen</c>) call this automatically. Hosts that open via the registry-less
+    /// <see cref="OpenLive(IAudioSource,IVideoSource)"/> sources path (they own their decoder) but still
+    /// want multi-output drift correction must call this explicitly with their registry before adding
+    /// secondary outputs — otherwise <see cref="AudioRouter.EnableAdaptiveRateOnNonMasterOutputs"/> throws
+    /// (the wrapper was never wired).</para>
     /// </summary>
-    private static void WireAdaptiveRateFromRegistry(IMediaRegistry registry, MediaPlayer player)
+    public static void WireAdaptiveRateFromRegistry(IMediaRegistry registry, MediaPlayer player)
     {
         if (!registry.SupportsAdaptiveRateOutput || player.AudioRouter is not { } router)
             return;

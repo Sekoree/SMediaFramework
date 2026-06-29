@@ -526,14 +526,20 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
             }
             else
             {
-                // Real layout comes from av_hwframe_transfer_data (first frame). Do not advertise NV12
-                // here: codecs such as ProRes transfer to YUV422P10LE, and pretending NV12 lets downstream
-                // negotiation pick a format before we know what swscale will actually receive.
+                // Real layout comes from av_hwframe_transfer_data (first frame). Do not advertise the
+                // native/transfer format here: codecs such as ProRes transfer to YUV422P10LE, and pretending
+                // NV12 lets downstream negotiation pick a format before we know what swscale will receive.
                 _vSrcPixFmt = AVPixelFormat.AV_PIX_FMT_NONE;
                 _vNativePixFmt = PixelFormat.Unknown;
                 _vPassThrough = false;
                 _vOutPixFmt = PixelFormat.Bgra32;
-                _vNativePixFormats = [];
+                // This branch is NOT passthrough — it sws-converts the transferred frame and always EMITS
+                // BGRA32 — so advertise that (what we emit), like the software + attached-pic paths below.
+                // Declaring nothing makes a HW source negotiate as [] AT OPEN (before the first frame primes
+                // the real layout); against a permissive empty-declaring sink (the deck's DiscardingVideoOutput
+                // negotiation lead) that throws "neither source nor output declared any pixel formats" and the
+                // file won't play — exactly HaPlayPlaybackSession's open path.
+                _vNativePixFormats = [PixelFormat.Bgra32];
             }
         }
         else

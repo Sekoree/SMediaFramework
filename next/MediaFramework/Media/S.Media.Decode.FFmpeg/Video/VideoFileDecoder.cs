@@ -457,14 +457,18 @@ public sealed unsafe class VideoFileDecoder : IVideoSource, ISeekableSource, IHa
             }
             else
             {
-                // Real layout comes from av_hwframe_transfer_data (first frame). Do not
-                // advertise NV12 here — negotiation would pick it before we know the
-                // transfer format (e.g. ProRes → YUV422P10LE) and break swscale.
+                // Real layout comes from av_hwframe_transfer_data (first frame). Do not advertise the
+                // native/transfer format here — negotiation would pick it before we know the transfer
+                // format (e.g. ProRes → YUV422P10LE) and break swscale. But this path is NOT passthrough:
+                // it sws-converts the transferred frame and always EMITS BGRA32, so advertise that (what
+                // we emit). A source that declares nothing throws "neither source nor output declared any
+                // pixel formats" when negotiated against a permissive empty-declaring sink (e.g. the deck's
+                // discard negotiation lead) — the same guard the software path below applies.
                 _srcPixelFormat = AVPixelFormat.AV_PIX_FMT_NONE;
                 _nativePixelFormat = PixelFormat.Unknown;
                 _passThrough = false;
                 _outPixelFormat = PixelFormat.Bgra32;
-                _nativePixelFormats = [];
+                _nativePixelFormats = [PixelFormat.Bgra32];
             }
         }
         else

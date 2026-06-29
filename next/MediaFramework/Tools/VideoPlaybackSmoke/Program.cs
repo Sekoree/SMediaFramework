@@ -27,6 +27,18 @@ if (!registry.TryOpenVideo(uri, null, out var source))
 
 Console.WriteLine($"opened {source.Format.Width}x{source.Format.Height} {source.Format.PixelFormat} @ {source.Format.FrameRate.Numerator}/{source.Format.FrameRate.Denominator}");
 
+// Repro the deck's negotiation (HaPlayPlaybackSession): negotiate AT OPEN (no priming) against a
+// discard lead (OpenLive with no video output). A HW source declaring [] here throws
+// "neither source nor output declared any pixel formats". Gated so it doesn't disturb the normal smoke.
+if (Environment.GetEnvironmentVariable("VPS_DECK_NEGOTIATE") == "1")
+{
+    Console.WriteLine($"pre-prime NativePixelFormats = [{string.Join(",", source.NativePixelFormats)}]");
+    var negotiated = MediaPlayer.OpenLive(null, source).TryBuild(out var deckPlayer, out var deckError);
+    Console.WriteLine(negotiated ? "DECK-NEGOTIATE OK" : $"DECK-NEGOTIATE FAIL: {deckError}");
+    deckPlayer?.Dispose();
+    return negotiated ? 0 : 1;
+}
+
 // Prime the decoder: a HW-decode source only publishes NativePixelFormats after its first frame, which
 // VideoPlayer's up-front format negotiation needs. Read + dispose one frame to populate it (smoke nicety;
 // the real session warms the decoder before wiring the player).

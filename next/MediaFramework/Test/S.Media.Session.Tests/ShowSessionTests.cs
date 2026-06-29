@@ -157,6 +157,41 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task SetPausedAsync_FreezesSessionClock_ThenResumes()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync();
+        await Task.Delay(50);
+
+        await session.SetPausedAsync(true);
+        var paused = Assert.Single(await session.SnapshotAsync());
+        await Task.Delay(50);
+        var stillPaused = Assert.Single(await session.SnapshotAsync());
+
+        Assert.False(stillPaused.IsRunning);
+        Assert.Equal(paused.SessionTime, stillPaused.SessionTime); // clock frozen while paused
+
+        await session.SetPausedAsync(false);
+        await Task.Delay(50);
+        var resumed = Assert.Single(await session.SnapshotAsync());
+
+        Assert.True(resumed.IsRunning);
+        Assert.True(resumed.SessionTime > stillPaused.SessionTime); // clock advanced after resume
+    }
+
+    [Fact]
+    public async Task SetPausedAsync_NoActiveClip_IsNoOp()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        session.LoadDocument(TwoAudioCues());
+
+        await session.SetPausedAsync(true); // nothing fired yet — must not throw
+
+        Assert.All(await session.SnapshotAsync(), s => Assert.False(s.IsRunning));
+    }
+
+    [Fact]
     public async Task GetCompositionStatsAsync_UnknownComposition_ReturnsNull()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());

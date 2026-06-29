@@ -3,6 +3,17 @@ using System.Text.Json.Serialization;
 
 namespace S.Media.Session;
 
+/// <summary>What a clip does when it reaches its (trimmed) end. Mirrors the GUI cue end behaviour
+/// (<c>CueEndBehavior</c>); honoured by the playback runtime in the 8b convergence slice (carried by
+/// the document until then).</summary>
+public enum ClipEndBehavior
+{
+    Stop,
+    FreezeLastFrame,
+    Loop,
+    FadeOutAndStop,
+}
+
 /// <summary>
 /// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
 /// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI — D2) and played on the cue's group.
@@ -32,6 +43,28 @@ public sealed record ShowClipBinding(
             ? []
             : [new ShowSubtitleSelection(SubtitlePath)];
     }
+
+    // --- Clip playback parameters (Phase 8a convergence) ----------------------------------------
+    // Carried so a GUI media cue maps losslessly onto a ShowDocument. PlayClipAsync honours these at
+    // runtime in the 8b playback slice; until then a clip opens head-to-tail (no trim/loop/fade).
+
+    /// <summary>Trim from the source start (GUI <c>MediaCueNode.StartOffsetMs</c>). Zero = from the head.</summary>
+    public TimeSpan StartOffset { get; init; }
+
+    /// <summary>Trim from the source end (GUI <c>MediaCueNode.EndOffsetMs</c>). Zero = through the probed duration.</summary>
+    public TimeSpan EndOffset { get; init; }
+
+    /// <summary>Fade-in at clip start (GUI <c>FadeInMs</c>).</summary>
+    public TimeSpan FadeIn { get; init; }
+
+    /// <summary>Fade-out at clip end (GUI <c>FadeOutMs</c>).</summary>
+    public TimeSpan FadeOut { get; init; }
+
+    /// <summary>Loop the trimmed clip (GUI <c>MediaCueNode.Loop</c>, also implied by <see cref="ClipEndBehavior.Loop"/>).</summary>
+    public bool Loop { get; init; }
+
+    /// <summary>What happens when the clip reaches its (trimmed) end (GUI <c>MediaCueNode.EndBehavior</c>).</summary>
+    public ClipEndBehavior EndBehavior { get; init; } = ClipEndBehavior.Stop;
 }
 
 /// <summary>A selected subtitle source. <paramref name="Path"/> null means the clip's media container;

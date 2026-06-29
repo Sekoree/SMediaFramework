@@ -1819,9 +1819,12 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     /// </summary>
     private static void EnableMultiOutputDriftCorrection(MediaPlayer player)
     {
-        if (player.AudioRouter is not { } audioRouter || !MediaRuntime.Registry.SupportsAdaptiveRateOutput)
-            return;
-        audioRouter.EnableAdaptiveRateOnNonMasterOutputs();
+        // The deck opens via the registry-less OpenLive(sources) path (it owns its decoder), so the
+        // registry's adaptive-rate wrapper was never wired onto the router — only the registry-URI open
+        // path auto-wires. Wire it here from MediaRuntime.Registry: this installs the wrapper AND enables
+        // it on non-master outputs. Internally guarded on registry support + a non-null router, so a host
+        // without the FFmpeg adaptive-rate factory degrades to prior behaviour instead of throwing.
+        MediaPlayer.WireAdaptiveRateFromRegistry(MediaRuntime.Registry, player);
     }
 
     public void ResetAllUnderrunBaselines()

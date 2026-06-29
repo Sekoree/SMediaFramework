@@ -245,6 +245,13 @@ public sealed class ShowSession : IAsyncDisposable
                 }
             }
 
+            // Trim-in (8b): position the decoder at the clip's start offset before playing. Correct for
+            // forward playback from the trim point; relative (0-based) position + a backward seek within a
+            // trimmed cue need the OffsetPlayhead / RetimingVideoOutput rebasing (the timebase trap) — the
+            // follow-up that routes this through ClipStandbyEngine (which already seeks-to-Start + holds warm).
+            if (binding.StartOffset > TimeSpan.Zero)
+                graph.Player.SeekCoordinated(binding.StartOffset);
+
             graph.Player.Play();
             group.Replace(graph.Session, outputs, layer, subtitleAttachments);
         }
@@ -317,6 +324,25 @@ public sealed class ShowSession : IAsyncDisposable
         InvokeAsync(() =>
         {
             GetOrAddGroup(groupId).Replace(null, [], null);
+            return Task.CompletedTask;
+        });
+
+    /// <summary>Pauses or resumes the active clip on <paramref name="groupId"/> — a seamless toggle (codec
+    /// pipelines are not flushed, so resume continues from the same frame, matching the GUI engine's
+    /// <c>SkipFlush</c> pause). On pause the player's playhead — and therefore the group's session clock +
+    /// transport-snapshot position — freezes; resume continues from there (the playback-clock freeze
+    /// contract). No-op when the group has no active clip.</summary>
+    public Task SetPausedAsync(bool paused, string groupId = DefaultGroup) =>
+        InvokeAsync(() =>
+        {
+            if (GetOrAddGroup(groupId).Active is { } active)
+            {
+                if (paused)
+                    active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                else
+                    active.Player.Play();
+            }
+
             return Task.CompletedTask;
         });
 

@@ -153,5 +153,33 @@ if (log.Count != 2 || log.Any(e => e.Status != CueExecutionStatus.Fired))
     return 7;
 }
 
-Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer).");
+// --- 8b trim-in: a clip with a StartOffset starts at the trim point (forward play) -----------------
+await using (var trimSession = new ShowSession(registry, backend))
+{
+    var trimOffset = TimeSpan.FromSeconds(3);
+    trimSession.LoadDocument(new ShowDocument(
+        1,
+        [new CueDefinition("trim", 1, "Trim-in")],
+        [new ShowClipBinding("trim", audioFile) { StartOffset = trimOffset }],
+        [], [], [], []));
+    await trimSession.GoAsync();
+    await Task.Delay(800);
+    var trim = (await trimSession.SnapshotAsync())[0];
+    Console.WriteLine($"TRIM-IN pos={trim.ClipPosition.TotalSeconds:F2}s dur={trim.ClipDuration.TotalSeconds:F2}s running={trim.IsRunning} (offset {trimOffset.TotalSeconds:F0}s)");
+
+    if (!trim.IsRunning)
+    {
+        Console.Error.WriteLine("FAIL: trimmed clip did not play");
+        return 10;
+    }
+
+    // Only assert the offset landed when the clip is long enough to honour it (a short CI tone can't).
+    if (trim.ClipDuration > trimOffset + TimeSpan.FromSeconds(1) && trim.ClipPosition < trimOffset)
+    {
+        Console.Error.WriteLine($"FAIL: trim-in did not seek to StartOffset (pos={trim.ClipPosition.TotalSeconds:F2}s < {trimOffset.TotalSeconds:F0}s)");
+        return 11;
+    }
+}
+
+Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in).");
 return 0;
