@@ -296,6 +296,19 @@ public sealed partial class CueNodeViewModel : ObservableObject
 
     partial void OnSubtitleFontScaleChanged(double? value) => OnPropertyChanged(nameof(SubtitleFontScaleValue));
 
+    /// <summary>Alignment options for the subtitle picker (ASS numpad). First entry keeps the document default.</summary>
+    public IReadOnlyList<SubtitleAlignmentChoice> SubtitleAlignmentChoices { get; } =
+    [
+        new(null, "Default"),
+        new(1, "Bottom-left"), new(2, "Bottom-center"), new(3, "Bottom-right"),
+        new(4, "Middle-left"), new(5, "Middle-center"), new(6, "Middle-right"),
+        new(7, "Top-left"), new(8, "Top-center"), new(9, "Top-right"),
+    ];
+
+    /// <summary>Cue-level alignment override applied to all selected text tracks.</summary>
+    [ObservableProperty]
+    private SubtitleAlignmentChoice? _selectedSubtitleAlignment;
+
     /// <summary>Replaces the subtitle picker entries from a probe, restoring the checked state and the cue-level
     /// font overrides from the persisted selections (matched by stream index).</summary>
     public void SetSubtitleTrackChoices(IReadOnlyList<S.Media.Decode.FFmpeg.MediaStreamInfo> tracks)
@@ -309,10 +322,13 @@ public sealed partial class CueNodeViewModel : ObservableObject
         foreach (var t in tracks)
             SubtitleTrackChoices.Add(new CueSubtitleTrackChoice(t.Index, t.ToDisplayString(), selectedIndices.Contains(t.Index)));
 
-        // Restore the cue-level font overrides from whichever persisted selection carried them.
-        var styled = PersistedSubtitles.FirstOrDefault(s => s.FontFamily is not null || s.FontScale is not null);
+        // Restore the cue-level style overrides from whichever persisted selection carried them.
+        var styled = PersistedSubtitles.FirstOrDefault(
+            s => s.FontFamily is not null || s.FontScale is not null || s.Alignment is not null);
         SubtitleFontFamily = styled?.FontFamily;
         SubtitleFontScale = styled?.FontScale;
+        SelectedSubtitleAlignment =
+            SubtitleAlignmentChoices.FirstOrDefault(a => a.Value == styled?.Alignment) ?? SubtitleAlignmentChoices[0];
 
         OnPropertyChanged(nameof(HasSubtitleTracks));
     }
@@ -330,14 +346,13 @@ public sealed partial class CueNodeViewModel : ObservableObject
         var result = new List<HaPlay.Models.CueSubtitleSelection>();
         foreach (var choice in SubtitleTrackChoices.Where(c => c.IsSelected))
         {
-            var prior = PersistedSubtitles.FirstOrDefault(s => s.IsEmbedded && s.StreamIndex == choice.StreamIndex);
             result.Add(new HaPlay.Models.CueSubtitleSelection
             {
                 StreamIndex = choice.StreamIndex,
                 Label = choice.Label,
                 FontFamily = family,
                 FontScale = SubtitleFontScale,
-                Alignment = prior?.Alignment, // alignment isn't editable yet — preserve any persisted value
+                Alignment = SelectedSubtitleAlignment?.Value,
             });
         }
 

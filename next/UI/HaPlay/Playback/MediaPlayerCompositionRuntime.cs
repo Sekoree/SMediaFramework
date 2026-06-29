@@ -67,6 +67,14 @@ internal sealed class MediaPlayerCompositionRuntime : IDisposable
     /// <summary>The layer-0 sink the deck's video router fans its decoded frames into.</summary>
     public IVideoOutput VideoSink => _videoLayer.Output;
 
+    /// <summary>The composition canvas format (size the subtitle overlays render at).</summary>
+    public VideoFormat CanvasFormat => _composition.CanvasFormat;
+
+    /// <summary>Attaches a subtitle/overlay source as a top layer composited each frame at the deck's playhead
+    /// (delegates to the framework runtime). Returns a handle that detaches + disposes the feed.</summary>
+    public IDisposable AttachSubtitleOverlay(S.Media.Core.Video.IVideoOverlaySource source, Func<TimeSpan> positionProvider) =>
+        _composition.AttachSubtitleOverlay(source, positionProvider);
+
     public int OutputCount => _composition.OutputCount;
 
     /// <summary>True when a hold/logo layer is present (hold has an effect).</summary>

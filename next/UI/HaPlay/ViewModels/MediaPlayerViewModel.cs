@@ -3225,6 +3225,10 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
                 ExitWaitingForSource();
                 _session = created;
+                // Render the item's selected subtitle tracks over the deck composition (no-op for live items,
+                // direct/logo-only output, or items with no subtitle selection).
+                if (item is FilePlaylistItem subFile && subFile.Subtitles.Count > 0)
+                    created.AttachMediaPlayerSubtitles(subFile.Subtitles, subFile.Path);
                 IsMediaLoaded = true;
                 // Play-what-you-can: a session can open with some lines skipped (dead NDI carrier,
                 // held PortAudio device) — keep playing but tell the operator which lines are silent.

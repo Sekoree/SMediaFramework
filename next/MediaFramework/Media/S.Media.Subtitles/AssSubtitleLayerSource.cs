@@ -48,7 +48,9 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
             _renderer = _library.CreateRenderer();
             _renderer.SetFrameSize(width, height);
             ApplyFontStyle(_renderer, defaultFontFamily, style);
-            _track = _library.ReadMemory(assDocument);
+            _track = style is { HasAlignment: true }
+                ? _library.ReadMemory(RewriteAssAlignment(assDocument, style.Alignment!.Value))
+                : _library.ReadMemory(assDocument);
         }
         catch
         {
@@ -68,6 +70,57 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
         renderer.SetFonts(family);
         if (style?.FontScale is { } scale && scale > 0)
             renderer.SetFontScale(scale);
+    }
+
+    // libass has no global alignment knob, so an alignment override is applied by rewriting the document's
+    // [V4+ Styles] rows' Alignment field (ASS numpad 1–9). Only V4+ (ASS) is rewritten — SSA's V4 alignment uses
+    // a different encoding, so it's left untouched. Style rows have a fixed comma-delimited field set (no free
+    // text), so a plain split is safe. Returns UTF-8 bytes for libass.
+    private static byte[] RewriteAssAlignment(ReadOnlySpan<byte> assText, int alignment)
+    {
+        var value = alignment.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var lines = System.Text.Encoding.UTF8.GetString(assText).Split('\n');
+        var inV4Plus = false;
+        var alignIndex = -1;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var hasCr = lines[i].EndsWith('\r');
+            var line = hasCr ? lines[i][..^1] : lines[i];
+            var trimmed = line.TrimStart();
+
+            if (trimmed.StartsWith('['))
+            {
+                inV4Plus = trimmed.StartsWith("[V4+ Styles]", StringComparison.OrdinalIgnoreCase);
+                alignIndex = -1;
+                continue;
+            }
+            if (!inV4Plus)
+                continue;
+
+            if (trimmed.StartsWith("Format:", StringComparison.OrdinalIgnoreCase))
+            {
+                var fields = trimmed["Format:".Length..].Split(',');
+                for (var f = 0; f < fields.Length; f++)
+                    if (fields[f].Trim().Equals("Alignment", StringComparison.OrdinalIgnoreCase))
+                    {
+                        alignIndex = f;
+                        break;
+                    }
+            }
+            else if (alignIndex >= 0 && trimmed.StartsWith("Style:", StringComparison.OrdinalIgnoreCase))
+            {
+                var lead = line[..(line.Length - trimmed.Length)]; // preserve any leading whitespace
+                var values = trimmed["Style:".Length..].Split(',');
+                if (alignIndex < values.Length)
+                {
+                    values[alignIndex] = value;
+                    lines[i] = lead + "Style:" + string.Join(',', values) + (hasCr ? "\r" : string.Empty);
+                }
+            }
+        }
+
+        return System.Text.Encoding.UTF8.GetBytes(string.Join('\n', lines));
     }
 
     /// <summary>
@@ -107,7 +160,10 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
             ApplyFontStyle(_renderer, defaultFontFamily, style);
 
             _track = _library.CreateTrack();
-            _track.ProcessCodecPrivate(header);
+            if (style is { HasAlignment: true })
+                _track.ProcessCodecPrivate(RewriteAssAlignment(header, style.Alignment!.Value));
+            else
+                _track.ProcessCodecPrivate(header);
             foreach (var chunk in events)
                 _track.ProcessChunk(chunk.Body, chunk.StartMs, chunk.DurationMs);
         }

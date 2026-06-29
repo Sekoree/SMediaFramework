@@ -423,6 +423,7 @@
                                 </MenuItem.Styles>
                             </MenuItem>
                             <Separator IsVisible="{Binding SelectedItemHasMultipleAudioTracks}" />
+                            <MenuItem Header="Subtitles…" Command="{Binding ConfigureSubtitlesCommand}" />
                             <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
                                       Click="OnCopyPlaylistItemApiUrlClick" />
                             <Separator />

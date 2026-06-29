@@ -257,6 +257,39 @@ public partial class MediaPlayerViewModel
 
     private bool CanAddNDIInput() => IsNdiAvailable;
 
+    /// <summary>Opens the subtitle track picker for the selected file item and stores the chosen tracks +
+    /// font/placement overrides on it. Applies on the item's next load/play (the deck composites them as a
+    /// top overlay layer — see <see cref="HaPlayPlaybackSession.AttachMediaPlayerSubtitles"/>).</summary>
+    [RelayCommand]
+    private async Task ConfigureSubtitlesAsync()
+    {
+        if (SelectedPlaylistItem is not FilePlaylistItem file)
+        {
+            StatusMessage = "Select a file in the playlist to choose its subtitle tracks.";
+            return;
+        }
+
+        var top = TryGetMainWindow();
+        if (top is null) return;
+
+        var dialogVm = new Dialogs.SubtitleSelectionDialogViewModel();
+        dialogVm.Load(file.Path, file.Subtitles);
+        var dialog = new Views.Dialogs.SubtitleSelectionDialog { DataContext = dialogVm };
+
+        var result = await dialog.ShowDialog<IReadOnlyList<CueSubtitleSelection>?>(top);
+        if (result is null)
+            return;
+
+        var updated = file with { Subtitles = result };
+        var idx = PlaylistItems.IndexOf(file);
+        if (idx >= 0)
+            PlaylistItems[idx] = updated;
+        SelectedPlaylistItem = updated;
+        StatusMessage = result.Count == 0
+            ? "Subtitles cleared — applies on next play."
+            : $"{result.Count} subtitle track(s) selected — applies on next play.";
+    }
+
     /// <summary>§8.5 quick-play — load and play the first dropped file without mutating the playlist.</summary>
     public async Task QuickPlayDroppedFilesAsync(IEnumerable<string> paths)
     {

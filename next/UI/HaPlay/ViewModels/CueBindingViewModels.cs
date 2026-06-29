@@ -447,3 +447,9 @@ public sealed partial class CueSubtitleTrackChoice : ObservableObject
 
     public override string ToString() => Label;
 }
+
+/// <summary>One subtitle alignment option (ASS numpad 1–9; <c>null</c> = keep the document's alignment).</summary>
+public sealed record SubtitleAlignmentChoice(int? Value, string Label)
+{
+    public override string ToString() => Label;
+}

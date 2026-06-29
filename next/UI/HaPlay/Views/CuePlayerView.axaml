@@ -77,6 +77,7 @@
             <MenuItem Header="{x:Static res:Strings.AddMediaButton}" Command="{Binding AddMediaCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddImageButton}" Command="{Binding AddImageCueCommand}" />
             <MenuItem Header="{x:Static res:Strings.AddTextButton}" Command="{Binding AddTextCueCommand}" />
+            <MenuItem Header="Subtitle cue" Command="{Binding AddSubtitleCueCommand}" />
             <Separator />
             <MenuItem Header="{x:Static res:Strings.AddNdiInputCueButton}"
                       Command="{Binding AddNdiInputCueCommand}"
@@ -570,11 +571,15 @@
                 <TextBlock Text="Font" FontWeight="SemiBold" Margin="0,6,0,0" />
                 <StackPanel Orientation="Horizontal" Spacing="6">
                   <TextBlock VerticalAlignment="Center" Text="Family" />
-                  <TextBox Width="180" Watermark="document default"
+                  <TextBox Width="180" PlaceholderText="document default"
                            Text="{Binding SelectedCueNode.SubtitleFontFamily, Mode=TwoWay}" />
                   <TextBlock VerticalAlignment="Center" Text="Size ×" />
-                  <NumericUpDown Width="120" Minimum="0.25" Maximum="5" Increment="0.1" Watermark="1.0"
+                  <NumericUpDown Width="120" Minimum="0.25" Maximum="5" Increment="0.1" PlaceholderText="1.0"
                                  Value="{Binding SelectedCueNode.SubtitleFontScaleValue, Mode=TwoWay}" />
+                  <TextBlock VerticalAlignment="Center" Text="Align" />
+                  <ComboBox MinWidth="150"
+                            ItemsSource="{Binding SelectedCueNode.SubtitleAlignmentChoices}"
+                            SelectedItem="{Binding SelectedCueNode.SelectedSubtitleAlignment, Mode=TwoWay}" />
                 </StackPanel>
                 <TextBlock Opacity="0.6" FontSize="11" TextWrapping="Wrap"
                            Text="Font overrides apply to the selected text tracks (ASS/SRT/…). Bitmap subtitles (PGS/DVB) carry their own pixels and ignore them." />

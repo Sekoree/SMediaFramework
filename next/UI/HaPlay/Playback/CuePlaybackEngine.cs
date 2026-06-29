@@ -605,6 +605,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
             FilePlaylistItem fileItem => BuildFileClipSource(cue, fileItem, hasAudioRoutes, hasVideoPlacements),
             ImagePlaylistItem imageItem => BuildImageClipSource(cue, imageItem),
             TextPlaylistItem textItem => BuildTextClipSource(cue, textItem),
+            SubtitlePlaylistItem subItem => BuildSubtitleClipSource(cue, subItem),
             NDIInputPlaylistItem ndiItem => BuildNdiClipSource(ndiItem),
             PortAudioInputPlaylistItem paItem => BuildPortAudioClipSource(paItem),
             _ => throw new InvalidOperationException($"Unsupported cue source: {cue.Source.GetType().Name}."),
@@ -777,6 +778,20 @@ public sealed partial class CuePlaybackEngine : IDisposable
                 var frame = TextFrameRenderer.Render(item, StaticFrameRate)
                     ?? throw new InvalidOperationException("Could not render text frame.");
                 return new LiveClipSources(null, new HeldFrameVideoSource(frame));
+            }),
+            CueClipWindow.From(cue, TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs))));
+
+    private static (IClipMediaSource Source, ClipWindow Window) BuildSubtitleClipSource(MediaCueNode cue, SubtitlePlaylistItem item) =>
+        (new HaPlayLiveClipMediaSource(
+            item.DisplayName,
+            () =>
+            {
+                var style = item.FontFamily is { Length: > 0 } || item.FontScale is > 0 || item.Alignment is >= 1 and <= 9
+                    ? new S.Media.Subtitles.SubtitleStyleOverride(item.FontFamily, item.FontScale, item.Alignment)
+                    : null;
+                var overlay = SubtitleOverlayFactory.FromFile(item.Path, item.CanvasWidth, item.CanvasHeight, style: style)
+                    ?? throw new InvalidOperationException($"Could not load subtitles '{item.Path}'.");
+                return new LiveClipSources(null, new SubtitleOverlayVideoSource(overlay, item.CanvasWidth, item.CanvasHeight));
             }),
             CueClipWindow.From(cue, TimeSpan.FromMilliseconds(Math.Max(0, cue.DurationMs))));
 
@@ -1587,8 +1602,8 @@ public sealed partial class CuePlaybackEngine : IDisposable
             if (string.IsNullOrEmpty(path))
                 continue;
             var streamIndex = sel.StreamIndex ?? -1;
-            var style = sel.FontFamily is { Length: > 0 } || sel.FontScale is > 0
-                ? new S.Media.Subtitles.SubtitleStyleOverride(sel.FontFamily, sel.FontScale)
+            var style = sel.FontFamily is { Length: > 0 } || sel.FontScale is > 0 || sel.Alignment is >= 1 and <= 9
+                ? new S.Media.Subtitles.SubtitleStyleOverride(sel.FontFamily, sel.FontScale, sel.Alignment)
                 : null;
 
             S.Media.Core.Video.IVideoOverlaySource? overlay;
@@ -1761,7 +1776,7 @@ public sealed partial class CuePlaybackEngine : IDisposable
     internal void ReleaseUnusedSharedAudioRuntimes() => ReleaseEmptyRuntimes();
 
     private static bool SupportsCueEngineSource(PlaylistItem? source) =>
-        source is FilePlaylistItem or ImagePlaylistItem or TextPlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
+        source is FilePlaylistItem or ImagePlaylistItem or TextPlaylistItem or SubtitlePlaylistItem or NDIInputPlaylistItem or PortAudioInputPlaylistItem;
 
     private bool ValidateAudioRoutes(
         MediaCueNode cue,

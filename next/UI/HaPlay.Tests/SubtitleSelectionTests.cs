@@ -50,4 +50,38 @@ public sealed class SubtitleSelectionTests
         Assert.Empty(SubtitleTrackProbe.List("/no/such/file.mkv"));
         Assert.Empty(SubtitleTrackProbe.List(""));
     }
+
+    [Fact]
+    public void FilePlaylistItem_Subtitles_RoundTrip()
+    {
+        var item = new FilePlaylistItem("/v/a.mkv")
+        {
+            Subtitles = [new CueSubtitleSelection { StreamIndex = 3, FontScale = 1.2, Alignment = 8 }],
+        };
+        var back = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(item, CueListJsonContext.Default.FilePlaylistItem),
+            CueListJsonContext.Default.FilePlaylistItem)!;
+        Assert.Equal(3, Assert.Single(back.Subtitles).StreamIndex);
+        Assert.Equal(1.2, back.Subtitles[0].FontScale);
+        Assert.Equal(8, back.Subtitles[0].Alignment);
+    }
+
+    [Fact]
+    public void SubtitleCue_PolymorphicSourceRoundTrips()
+    {
+        // The caption cue's Source is a SubtitlePlaylistItem; verifies the JsonDerivedType registration
+        // (without it, saving a subtitle cue throws).
+        var cue = new MediaCueNode
+        {
+            Source = new SubtitlePlaylistItem("/subs/a.ass") { FontFamily = "Noto Sans", FontScale = 1.5, Alignment = 2 },
+        };
+        var back = JsonSerializer.Deserialize(
+            JsonSerializer.Serialize(cue, CueListJsonContext.Default.MediaCueNode),
+            CueListJsonContext.Default.MediaCueNode)!;
+        var src = Assert.IsType<SubtitlePlaylistItem>(back.Source);
+        Assert.Equal("/subs/a.ass", src.Path);
+        Assert.Equal("Noto Sans", src.FontFamily);
+        Assert.Equal(1.5, src.FontScale);
+        Assert.Equal(2, src.Alignment);
+    }
 }

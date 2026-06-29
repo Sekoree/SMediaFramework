@@ -129,10 +129,12 @@ public sealed class MediaPlayer : IDisposable
     /// This is the raw source (for seek/position/format queries), distinct from the <see cref="Video"/> pipeline.</summary>
     public IVideoSource? VideoSource => _videoSource;
 
-    /// <summary>True when the media has a decodable audio stream.</summary>
+    /// <summary>True when the media has a decodable audio stream (then <see cref="AudioSource"/> is non-null).</summary>
+    [MemberNotNullWhen(true, nameof(AudioSource))]
     public bool HasAudio => _audioSource is not null;
 
-    /// <summary>True when the media has a decodable video stream.</summary>
+    /// <summary>True when the media has a decodable video stream (then <see cref="VideoSource"/> is non-null).</summary>
+    [MemberNotNullWhen(true, nameof(VideoSource))]
     public bool HasVideo => _videoSource is not null;
 
     /// <summary>True when the video source is live (NDI / capture) — presents Scheduled, re-anchored at Play.</summary>

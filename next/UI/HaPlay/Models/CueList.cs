@@ -458,6 +458,7 @@ public enum CueActionKind
 [JsonSerializable(typeof(NDIInputPlaylistItem))]
 [JsonSerializable(typeof(PortAudioInputPlaylistItem))]
 [JsonSerializable(typeof(ImagePlaylistItem))]
+[JsonSerializable(typeof(SubtitlePlaylistItem))]
 [JsonSerializable(typeof(TextPlaylistItem))]
 [JsonSerializable(typeof(CueListsCollectionDocument))]
 [JsonSerializable(typeof(CueCompositionsDocument))]

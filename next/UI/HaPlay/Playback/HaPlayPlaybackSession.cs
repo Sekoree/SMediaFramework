@@ -99,6 +99,46 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     /// seekable duration and no auto-end (§6.5).</summary>
     public bool IsLive { get; private init; }
 
+    /// <summary>
+    /// Attaches the played item's selected subtitle tracks as overlays on the deck composition, driven by the
+    /// media playhead. No-op when the deck isn't compositing (direct/logo-only output) or the item has none.
+    /// Handles are owned by the playback lifetime (disposed when the session tears down).
+    /// </summary>
+    public void AttachMediaPlayerSubtitles(IReadOnlyList<CueSubtitleSelection> selections, string mediaPath)
+    {
+        if (selections.Count == 0 || _mediaPlayerComposition is null || string.IsNullOrEmpty(mediaPath))
+            return;
+
+        var canvas = _mediaPlayerComposition.CanvasFormat;
+        if (canvas.Width <= 0 || canvas.Height <= 0)
+            return;
+
+        foreach (var sel in selections)
+        {
+            var path = sel.IsEmbedded ? mediaPath : sel.Path;
+            if (string.IsNullOrEmpty(path))
+                continue;
+            var streamIndex = sel.StreamIndex ?? -1;
+            var style = sel.FontFamily is { Length: > 0 } || sel.FontScale is > 0 || sel.Alignment is >= 1 and <= 9
+                ? new S.Media.Subtitles.SubtitleStyleOverride(sel.FontFamily, sel.FontScale, sel.Alignment)
+                : null;
+            try
+            {
+                var overlay = S.Media.Interop.SubtitleOverlayFactory.FromFileDeferred(
+                    path, canvas.Width, canvas.Height, streamIndex, style);
+                if (overlay is null)
+                    continue;
+                var handle = _mediaPlayerComposition.AttachSubtitleOverlay(overlay, () => Player.PlayClock.CurrentPosition);
+                _playbackOwnedDisposables.Add(handle);
+                _playbackOwnedDisposables.Add(overlay);
+            }
+            catch (Exception ex)
+            {
+                Trace.LogWarning(ex, "AttachMediaPlayerSubtitles: failed for {Path} stream {Stream}", path, streamIndex);
+            }
+        }
+    }
+
     /// <summary>Phase C.5 — source audio format (sample rate × channel count). For file items this is
     /// <see cref="MediaPlayer.Decoder"/>'s audio format; for live items this is the source format
     /// that <see cref="MediaPlayer.TryOpenLive"/> negotiated. Exposed so VMs that need source channel
@@ -1267,7 +1307,9 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     private static void WireAudio(List<OutputLineViewModel> lines, Dictionary<Guid, NDIOutput> ndiByDefinitionId,
         MediaPlayer player, HaPlayPlaybackSession playback, OutputManagementViewModel outputs,
         List<string>? openWarnings = null) =>
-        WireAudio(lines, ndiByDefinitionId, player, playback, outputs, player.AudioSource.Format, openWarnings);
+        // Derive the source format from the audio side when present; a video-only player has no audio source, in
+        // which case WireAudio finds no audio routes and no-ops, so a default format is harmless.
+        WireAudio(lines, ndiByDefinitionId, player, playback, outputs, player.AudioSource?.Format ?? default, openWarnings);
 
     /// <summary>Phase C.5 — live-source-aware audio wiring. Live items don't have a container decoder
     /// so the caller passes in the source <see cref="AudioFormat"/> (PortAudio capture rate / NDI

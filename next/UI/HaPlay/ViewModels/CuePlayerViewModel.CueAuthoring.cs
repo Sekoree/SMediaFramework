@@ -196,6 +196,53 @@ public partial class CuePlayerViewModel
         StatusMessage = null;
     }
 
+    /// <summary>Adds a standalone caption-overlay cue: a sidecar subtitle file rendered as timed captions,
+    /// placeable on a composition via the Video tab (no media clip). Held for the cue's custom duration.</summary>
+    [RelayCommand]
+    private async Task AddSubtitleCueAsync()
+    {
+        var parent = SelectedParentCollection();
+        if (parent is null) return;
+        var path = await PickSubtitleFilePathAsync();
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        var row = new CueNodeViewModel(CueNodeKind.Media)
+        {
+            Number = NextNumber(parent),
+            Label = Path.GetFileNameWithoutExtension(path),
+            MediaSourceItem = new SubtitlePlaylistItem(path),
+            SourceOrAction = path,
+            SourceHasVideo = true,
+            SourceVideoWidth = 1920,
+            SourceVideoHeight = 1080,
+            DurationMs = StaticCueDefaultDurationMs,
+        };
+        parent.Add(row);
+        FinalizeAddedCue(row);
+        SelectedCueNode = row;
+        GoCommand.NotifyCanExecuteChanged();
+        BackCommand.NotifyCanExecuteChanged();
+        StatusMessage = "Subtitle cue added — place it on a composition in the Video tab.";
+    }
+
+    private static async Task<string?> PickSubtitleFilePathAsync()
+    {
+        var owner = TryGetMainWindow();
+        if (owner is null) return null;
+        var opts = new FilePickerOpenOptions
+        {
+            Title = "Pick a subtitle file",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Subtitles") { Patterns = ["*.srt", "*.ass", "*.ssa", "*.vtt", "*.sub", "*.smi", "*.sbv"] },
+                new FilePickerFileType(Strings.AllFilesFileTypeLabel) { Patterns = ["*"] },
+            ],
+        };
+        var picked = await owner.StorageProvider.OpenFilePickerAsync(opts);
+        return picked.Select(f => f.TryGetLocalPath()).FirstOrDefault(p => !string.IsNullOrWhiteSpace(p));
+    }
+
     /// <summary>Adds an editable text/title cue (rendered, held for the cue's custom duration). Default 5 s.</summary>
     [RelayCommand]
     private void AddTextCue()

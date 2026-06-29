@@ -15,6 +15,7 @@ namespace HaPlay.Models;
 [JsonDerivedType(typeof(NDIInputPlaylistItem), typeDiscriminator: "ndi-input")]
 [JsonDerivedType(typeof(PortAudioInputPlaylistItem), typeDiscriminator: "pa-input")]
 [JsonDerivedType(typeof(ImagePlaylistItem), typeDiscriminator: "image")]
+[JsonDerivedType(typeof(SubtitlePlaylistItem), typeDiscriminator: "subtitle")]
 [JsonDerivedType(typeof(TextPlaylistItem), typeDiscriminator: "text")]
 public abstract record PlaylistItem
 {
@@ -43,6 +44,10 @@ public sealed record FilePlaylistItem(string Path) : PlaylistItem
     /// <summary>Explicit audio track (container stream index) for multi-track files; <c>null</c> =
     /// automatic. A stale index falls back to automatic inside the demuxer, never an open failure.</summary>
     public int? AudioTrackIndex { get; init; }
+
+    /// <summary>Subtitle tracks to render over this item when played in the media player — none / one / many
+    /// (embedded stream or sidecar, with optional font/placement overrides). Empty = no subtitles.</summary>
+    public IReadOnlyList<CueSubtitleSelection> Subtitles { get; init; } = [];
 
     public override string DisplayName =>
         string.IsNullOrEmpty(Path) ? "(empty)" : System.IO.Path.GetFileName(Path);
@@ -74,6 +79,32 @@ public sealed record ImagePlaylistItem(string Path) : PlaylistItem
     public override bool IsLive => false;
     public override string ToolTip => Path;
     public override string KindGlyph => "🖼";
+}
+
+/// <summary>A standalone caption-overlay cue source: a sidecar subtitle file (.srt/.ass/…) rendered as a
+/// timed transparent overlay, placeable on a composition like any video cue (no media clip). Font/placement
+/// overrides apply to text formats; the render canvas is scaled onto the composition by the placement.</summary>
+public sealed record SubtitlePlaylistItem(string Path) : PlaylistItem
+{
+    /// <summary>Override font family (libass fallback); <c>null</c> keeps the document font.</summary>
+    public string? FontFamily { get; init; }
+
+    /// <summary>Font-size multiplier (1.0 = document default); <c>null</c> keeps document sizing.</summary>
+    public double? FontScale { get; init; }
+
+    /// <summary>ASS numpad alignment 1–9; <c>null</c> keeps the document alignment.</summary>
+    public int? Alignment { get; init; }
+
+    /// <summary>Render canvas size; the placement scales it onto the composition.</summary>
+    public int CanvasWidth { get; init; } = 1920;
+
+    public int CanvasHeight { get; init; } = 1080;
+
+    public override string DisplayName =>
+        string.IsNullOrEmpty(Path) ? "(subtitles)" : System.IO.Path.GetFileName(Path);
+    public override bool IsLive => false;
+    public override string ToolTip => Path;
+    public override string KindGlyph => "💬";
 }
 
 /// <summary>A rendered text / title card shown as a cue for the cue's custom duration (a single held
