@@ -147,6 +147,18 @@ if (comp.Value.LayerCount < 2)
     return 9;
 }
 
+// 8b live-edit: reposition the active video cue's placement while it plays (UpdateActiveCueVideoPlacement).
+var livePlaced = await session.UpdateActivePlacementAsync(
+    "cue2", "screen", 0, new ShowVideoPlacement(DestX: 0.25, DestY: 0.25, DestWidth: 0.5, DestHeight: 0.5, Opacity: 0.8));
+await Task.Delay(200);
+var compAfterPlace = await session.GetCompositionStatsAsync("screen");
+Console.WriteLine($"LIVE-PLACE updated={livePlaced} stillComposites={compAfterPlace is { FramesComposited: > 0 }}");
+if (!livePlaced || compAfterPlace is not { FramesComposited: > 0 })
+{
+    Console.Error.WriteLine($"FAIL: live placement update did not apply / broke compositing (updated={livePlaced})");
+    return 14;
+}
+
 if (log.Count != 2 || log.Any(e => e.Status != CueExecutionStatus.Fired))
 {
     Console.Error.WriteLine("FAIL: execution log did not record two fired cues");
@@ -181,5 +193,51 @@ await using (var trimSession = new ShowSession(registry, backend))
     }
 }
 
-Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in).");
+// --- 8b end/loop: a clip with Loop + a trimmed out-point wraps back to the start ------------------
+await using (var loopSession = new ShowSession(registry, backend))
+{
+    loopSession.LoadDocument(new ShowDocument(
+        1,
+        [new CueDefinition("loop", 1, "Loop")],
+        [new ShowClipBinding("loop", audioFile) { Loop = true, EndOffset = TimeSpan.FromSeconds(4) }],
+        [], [], [], []));
+    await loopSession.GoAsync();
+    await Task.Delay(300);
+    var dur = (await loopSession.SnapshotAsync())[0].ClipDuration;
+    await Task.Delay(2800); // past the out-point — a non-looping clip would sit beyond it (or have ended)
+    var looped = (await loopSession.SnapshotAsync())[0];
+    var outPoint = dur - TimeSpan.FromSeconds(4);
+    Console.WriteLine($"LOOP pos={looped.ClipPosition.TotalSeconds:F2}s dur={dur.TotalSeconds:F2}s running={looped.IsRunning} (out-point {outPoint.TotalSeconds:F2}s)");
+
+    // Only assert the wrap when the clip is long enough to give a >1s loop window (a short CI tone can't).
+    if (outPoint > TimeSpan.FromSeconds(1) && (!looped.IsRunning || looped.ClipPosition >= outPoint))
+    {
+        Console.Error.WriteLine($"FAIL: clip did not loop at the out-point (pos={looped.ClipPosition.TotalSeconds:F2}s, expected wrapped < {outPoint.TotalSeconds:F2}s, running)");
+        return 12;
+    }
+}
+
+// --- 8b fade-in: a clip with FadeIn plays through the gain ramp without stalling ------------------
+await using (var fadeSession = new ShowSession(registry, backend))
+{
+    fadeSession.LoadDocument(new ShowDocument(
+        1,
+        [new CueDefinition("fade", 1, "Fade")],
+        [new ShowClipBinding("fade", audioFile) { FadeIn = TimeSpan.FromSeconds(1) }],
+        [], [], [], []));
+    await fadeSession.GoAsync();
+    await Task.Delay(1500); // past the 1s fade ramp
+    var faded = (await fadeSession.SnapshotAsync())[0];
+    Console.WriteLine($"FADE-IN pos={faded.ClipPosition.TotalSeconds:F2}s running={faded.IsRunning} (1s gain ramp — verify audibly on HW)");
+
+    // The ramp only touches gain, not transport — so position must still advance; a stall = the background
+    // ramp broke the session. (The audible 0→1 fade itself isn't observable headless; that's a HW check.)
+    if (faded.ClipPosition < TimeSpan.FromSeconds(0.3))
+    {
+        Console.Error.WriteLine($"FAIL: playback stalled during the fade-in ramp (pos={faded.ClipPosition.TotalSeconds:F2}s)");
+        return 13;
+    }
+}
+
+Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in + loop + fade-in).");
 return 0;

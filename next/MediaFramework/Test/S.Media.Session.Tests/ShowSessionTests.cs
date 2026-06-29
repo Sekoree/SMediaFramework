@@ -192,6 +192,91 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task WarmUpcomingAsync_PreparesUpcomingCues()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+
+        await session.WarmUpcomingAsync(); // explicit + awaited so the prepare completes deterministically
+
+        Assert.Contains("cue1", await session.GetPreparedCueIdsAsync());
+    }
+
+    [Fact]
+    public async Task GoAsync_ConsumesThePreparedClip_LeavingItArmedNotStandby()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.WarmUpcomingAsync();
+        Assert.Contains("cue1", await session.GetPreparedCueIdsAsync());
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync()); // arms cue1 — takes it out of standby
+
+        Assert.DoesNotContain("cue1", await session.GetPreparedCueIdsAsync());
+    }
+
+    [Fact]
+    public async Task StopCueAsync_StopsTheActiveCue()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync(); // fires cue1 → active + running
+        Assert.True((await session.SnapshotAsync())[0].IsRunning);
+
+        await session.StopCueAsync("cue1");
+
+        Assert.All(await session.SnapshotAsync(), s => Assert.False(s.IsRunning));
+    }
+
+    [Fact]
+    public async Task UpdateActivePlacementAsync_FalseWhenCueNotActive()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+
+        // Nothing fired → cue1 isn't the active clip → no-op false (and audio cues carry no layer anyway).
+        Assert.False(await session.UpdateActivePlacementAsync(
+            "cue1", "comp", 0, new ShowVideoPlacement(DestWidth: 0.5, DestHeight: 0.5)));
+    }
+
+    [Fact]
+    public async Task PreparedCuesChanged_FiresWhenStandbyChanges()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.WarmUpcomingAsync(); // cue1 prepared
+
+        IReadOnlyList<ClipPreparationStatus>? fired = null;
+        session.PreparedCuesChanged += s => fired = s;
+        await session.GoAsync(); // arms cue1 → prepared set changes → event fires synchronously on the dispatcher
+
+        Assert.NotNull(fired);
+    }
+
+    [Fact]
+    public async Task ApplyActiveAudioMatrixAsync_AppliesToActiveCue()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), new RecordingAudioBackend());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync(); // cue1 active, master output attached on the backend
+
+        var identity = new float[,] { { 1f, 0f }, { 0f, 1f } };
+        Assert.True(await session.ApplyActiveAudioMatrixAsync("cue1", ShowSession.MasterOutputId, identity));
+        Assert.False(await session.ApplyActiveAudioMatrixAsync("nope", ShowSession.MasterOutputId, identity));
+    }
+
+    [Fact]
+    public async Task PreviewCueAsync_StartsForLoadedCue_StopCleanlyReleases()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), new RecordingAudioBackend());
+        await session.LoadDocumentAsync(TwoAudioCues());
+
+        Assert.True(await session.PreviewCueAsync("cue1"));  // loaded cue → preview opens on the preview device
+        Assert.False(await session.PreviewCueAsync("nope")); // unknown cue → false (and releases the prior preview)
+        await session.StopPreviewAsync();                    // must not throw
+    }
+
+    [Fact]
     public async Task GetCompositionStatsAsync_UnknownComposition_ReturnsNull()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());

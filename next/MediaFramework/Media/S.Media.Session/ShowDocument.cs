@@ -14,6 +14,19 @@ public enum ClipEndBehavior
     FadeOutAndStop,
 }
 
+/// <summary>A clip's appearance on its composition canvas — where its video sits and how it fits. Defaults
+/// are full-canvas, opaque, Cover fit, upright (a clip with no placement composites exactly as before).
+/// <paramref name="Fit"/> is the fit mode within the dest rect (Cover/Contain/Letterbox/Center/Stretch/
+/// FillWidth/FillHeight; null = Cover). Maps to the compositor's <c>VideoPlacementSpec</c>.</summary>
+public sealed record ShowVideoPlacement(
+    double DestX = 0,
+    double DestY = 0,
+    double DestWidth = 1,
+    double DestHeight = 1,
+    double Opacity = 1,
+    string? Fit = null,
+    double RotationDegrees = 0);
+
 /// <summary>
 /// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
 /// session's <c>IMediaRegistry</c> (a bare path or a <c>scheme:</c> URI — D2) and played on the cue's group.
@@ -65,6 +78,10 @@ public sealed record ShowClipBinding(
 
     /// <summary>What happens when the clip reaches its (trimmed) end (GUI <c>MediaCueNode.EndBehavior</c>).</summary>
     public ClipEndBehavior EndBehavior { get; init; } = ClipEndBehavior.Stop;
+
+    /// <summary>Where/how this clip's video sits on its <see cref="CompositionId"/> canvas (GUI
+    /// <c>CueVideoPlacement</c>). Null ⇒ full-canvas, opaque, Cover (the prior hardcoded placement).</summary>
+    public ShowVideoPlacement? Placement { get; init; }
 }
 
 /// <summary>A selected subtitle source. <paramref name="Path"/> null means the clip's media container;

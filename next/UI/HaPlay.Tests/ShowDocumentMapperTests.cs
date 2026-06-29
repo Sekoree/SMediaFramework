@@ -140,6 +140,39 @@ public class ShowDocumentMapperTests
         Assert.Empty(doc.Clips);
     }
 
+    [Fact]
+    public void MapsVideoPlacement_Appearance()
+    {
+        var compId = Guid.NewGuid();
+        var cue = new MediaCueNode
+        {
+            Label = "Placed",
+            Source = new FilePlaylistItem("/m/v.mp4"),
+            VideoPlacements =
+            {
+                new CueVideoPlacement
+                {
+                    CompositionId = compId,
+                    LayerIndex = 2,
+                    Position = CueLayerPosition.Letterbox,
+                    Opacity = 0.5,
+                    DestX = 0.25, DestY = 0.1, DestWidth = 0.5, DestHeight = 0.4,
+                    RotationDegrees = 15,
+                },
+            },
+        };
+
+        var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }).Clips);
+        Assert.Equal(compId.ToString(), clip.CompositionId);
+        Assert.Equal(2, clip.LayerIndex);
+        Assert.NotNull(clip.Placement);
+        Assert.Equal(0.25, clip.Placement!.DestX, 3);
+        Assert.Equal(0.5, clip.Placement.DestWidth, 3);
+        Assert.Equal(0.5, clip.Placement.Opacity, 3);
+        Assert.Equal(15, clip.Placement.RotationDegrees, 3);
+        Assert.Equal("Letterbox", clip.Placement.Fit); // framework MapFit lowercases → Contain
+    }
+
     /// <summary>End-to-end: the mapper's output is a valid <see cref="ShowDocument"/> that a real
     /// <see cref="ShowSession"/> loads, exposing the cues in order with their groups (the 8a dispatch seam).</summary>
     [Fact]

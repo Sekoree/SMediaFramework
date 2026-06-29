@@ -92,6 +92,14 @@ public static class HaPlayShowMapper
             FadeOut = TimeSpan.FromMilliseconds(media.FadeOutMs),
             Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
             EndBehavior = MapEndBehavior(media.EndBehavior),
+            // First placement's appearance (dest-rect / opacity / fit / rotation). The fit enum name maps
+            // straight to the framework's fit string (MapFit lowercases it). Multi-placement, per-edge crop,
+            // and per-placement VideoFx are deferred (a clip binds one composition today).
+            Placement = placement is null
+                ? null
+                : new ShowVideoPlacement(
+                    placement.DestX, placement.DestY, placement.DestWidth, placement.DestHeight,
+                    placement.Opacity, placement.Position.ToString(), placement.RotationDegrees),
         };
     }
 
