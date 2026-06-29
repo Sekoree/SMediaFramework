@@ -1,0 +1,163 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:res="using:HaPlay.Resources"
+             mc:Ignorable="d" d:DesignWidth="860" d:DesignHeight="640"
+             x:Class="HaPlay.Views.MidiDevicesView"
+             x:DataType="vm:MainViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.device-id">
+      <Setter Property="FontFamily" Value="Cascadia Code, Consolas, monospace" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Opacity" Value="0.65" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TextBlock.device-name">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+  </UserControl.Styles>
+
+  <DockPanel Margin="16">
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="4" Margin="0,0,0,12">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="{x:Static res:Strings.MidiHeader}" FontSize="22" FontWeight="SemiBold" />
+      <Button Grid.Row="0" Grid.Column="1" Content="{x:Static res:Strings.RefreshButton}" Command="{Binding RefreshMidiDeviceCatalogCommand}" />
+      <StackPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="16">
+        <TextBlock Text="{Binding MidiDeviceStatus}" Opacity="0.75" />
+        <TextBlock Text="{Binding ProjectMidiInputRows.Count, StringFormat='Project inputs: {0}'}" Opacity="0.75" />
+        <TextBlock Text="{Binding ProjectMidiOutputRows.Count, StringFormat='Project outputs: {0}'}" Opacity="0.75" />
+      </StackPanel>
+    </Grid>
+
+    <Grid RowDefinitions="*,Auto" RowSpacing="10">
+      <Grid Grid.Row="0" ColumnDefinitions="*,*" ColumnSpacing="10">
+        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+          <Grid RowDefinitions="Auto,*">
+            <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
+              <TextBlock Text="{x:Static res:Strings.InputsHeader}" FontWeight="SemiBold" />
+              <Button HorizontalAlignment="Right"
+                      Content="Use selected input"
+                      Command="{Binding AddSelectedMidiInputToControlCommand}" />
+            </StackPanel>
+            <ListBox Grid.Row="1"
+                     ItemsSource="{Binding MidiInputOptions}"
+                     SelectedItem="{Binding SelectedMidiInputOption, Mode=TwoWay}"
+                     MinHeight="160">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <Grid ColumnDefinitions="54,*" ColumnSpacing="8" Margin="0,2">
+                    <TextBlock Grid.Column="0" Classes="device-id" Text="{Binding Id}" />
+                    <TextBlock Grid.Column="1" Classes="device-name" Text="{Binding Name}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Border>
+
+        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+          <Grid RowDefinitions="Auto,*">
+            <StackPanel Grid.Row="0" Spacing="6" Margin="0,0,0,8">
+              <TextBlock Text="{x:Static res:Strings.OutputsHeader}" FontWeight="SemiBold" />
+              <Button HorizontalAlignment="Right"
+                      Content="Use selected output"
+                      Command="{Binding AddSelectedMidiOutputToProjectCommand}" />
+            </StackPanel>
+            <ListBox Grid.Row="1"
+                     ItemsSource="{Binding MidiOutputOptions}"
+                     SelectedItem="{Binding SelectedMidiOutputOption, Mode=TwoWay}"
+                     MinHeight="160">
+              <ListBox.ItemTemplate>
+                <DataTemplate>
+                  <Grid ColumnDefinitions="54,*" ColumnSpacing="8" Margin="0,2">
+                    <TextBlock Grid.Column="0" Classes="device-id" Text="{Binding Id}" />
+                    <TextBlock Grid.Column="1" Classes="device-name" Text="{Binding Name}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </Grid>
+        </Border>
+      </Grid>
+
+      <Grid Grid.Row="1" ColumnDefinitions="*,*" ColumnSpacing="10">
+        <Border Grid.Column="0" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+          <DockPanel>
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" ColumnSpacing="6" Margin="0,0,0,8">
+              <TextBlock Grid.Column="0" Text="Project MIDI inputs" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <Button Grid.Column="1"
+                      Content="{x:Static res:Strings.RemoveButton}"
+                      Command="{Binding RemoveSelectedProjectMidiInputCommand}" />
+            </Grid>
+            <TextBlock DockPanel.Dock="Bottom"
+                       Text="Select an input above to make it available to Control scripts."
+                       Opacity="0.6"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0"
+                       IsVisible="{Binding HasNoProjectMidiInputs}" />
+            <ListBox ItemsSource="{Binding ProjectMidiInputRows}"
+                     SelectedItem="{Binding SelectedProjectMidiInputRow, Mode=TwoWay}"
+                     MinHeight="140">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:ProjectMidiInputRowViewModel">
+                  <Grid ColumnDefinitions="54,*,Auto" ColumnSpacing="8" Margin="0,2">
+                    <TextBlock Grid.Column="0" Classes="device-id" Text="{Binding DeviceIdText}" />
+                    <StackPanel Grid.Column="1" Spacing="1">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding UsageText}" FontSize="12" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <Border Grid.Column="1" BorderBrush="#22808080" BorderThickness="1" CornerRadius="6" Padding="10">
+          <DockPanel>
+            <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6" Margin="0,0,0,8">
+              <TextBlock Grid.Column="0" Text="Project MIDI outputs" FontWeight="SemiBold" VerticalAlignment="Center" />
+              <Button Grid.Column="1"
+                      Content="{x:Static res:Strings.TestDeviceButton}"
+                      Command="{Binding TestSelectedProjectMidiOutputCommand}" />
+              <Button Grid.Column="2"
+                      Content="{x:Static res:Strings.RemoveButton}"
+                      Command="{Binding RemoveSelectedProjectMidiOutputCommand}" />
+            </Grid>
+            <TextBlock DockPanel.Dock="Bottom"
+                       Text="{Binding EndpointTestStatus}"
+                       Opacity="0.75"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0" />
+            <TextBlock DockPanel.Dock="Bottom"
+                       Text="Select an output above to make it available to Control scripts and cue action targets."
+                       Opacity="0.6"
+                       FontSize="12"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0"
+                       IsVisible="{Binding HasNoProjectMidiOutputs}" />
+            <ListBox ItemsSource="{Binding ProjectMidiOutputRows}"
+                     SelectedItem="{Binding SelectedProjectMidiOutputRow, Mode=TwoWay}"
+                     MinHeight="140">
+              <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:ProjectMidiOutputRowViewModel">
+                  <Grid ColumnDefinitions="54,*,Auto" ColumnSpacing="8" Margin="0,2">
+                    <TextBlock Grid.Column="0" Classes="device-id" Text="{Binding DeviceIdText}" />
+                    <StackPanel Grid.Column="1" Spacing="1">
+                      <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                      <TextBlock Text="{Binding UsageText}" FontSize="12" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</UserControl>

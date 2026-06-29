@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using S.Media.Core.Audio;
 using S.Media.Core.Registry;
 using S.Media.Core.Video;
 
@@ -65,4 +66,56 @@ public sealed class MediaPlayerOpenFileBuilder : MediaPlayerOpenBuilder
 
     public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error) =>
         MediaPlayer.TryOpen(_registry, Uri, OpenOptions, VideoLead, out player, out error);
+}
+
+/// <summary>
+/// Builds a player from already-opened live/source objects (NDI/capture, or a host-owned container decoder's
+/// <see cref="IAudioSource"/>/<see cref="IVideoSource"/>). The registry-free counterpart to
+/// <see cref="MediaPlayerOpenFileBuilder"/>, for callers that manage their own decoders (e.g. a track-switch
+/// cache). The video source provided here is the negotiated/processed source — there is no separate override.
+/// </summary>
+public sealed class MediaPlayerOpenLiveBuilder : MediaPlayerOpenBuilder
+{
+    private readonly IAudioSource? _audio;
+    private readonly IVideoSource? _video;
+    private bool _disposeSourcesOnPlayerDispose;
+
+    internal MediaPlayerOpenLiveBuilder(IAudioSource? audio, IVideoSource? video)
+    {
+        _audio = audio;
+        _video = video;
+    }
+
+    public MediaPlayerOpenLiveBuilder WithOptions(MediaPlayerOpenOptions options)
+    {
+        OpenOptions = options;
+        return this;
+    }
+
+    public MediaPlayerOpenLiveBuilder WithOptions(Func<MediaPlayerOpenOptions, MediaPlayerOpenOptions> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        OpenOptions = configure(OpenOptions);
+        return this;
+    }
+
+    /// <summary>Uses <paramref name="output"/> as the video negotiation lead (local display/preview output).</summary>
+    public MediaPlayerOpenLiveBuilder WithVideoLead(IVideoOutput output, bool disposeOnPlayerDispose = false)
+    {
+        VideoLead = output ?? throw new ArgumentNullException(nameof(output));
+        DisposeVideoLeadOnPlayerDispose = disposeOnPlayerDispose;
+        return this;
+    }
+
+    /// <summary>When true, the player disposes the provided sources on its own dispose; when false the caller
+    /// retains ownership (e.g. a shared decoder cache).</summary>
+    public MediaPlayerOpenLiveBuilder WithDisposeSourcesOnPlayerDispose(bool dispose)
+    {
+        _disposeSourcesOnPlayerDispose = dispose;
+        return this;
+    }
+
+    public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error) =>
+        MediaPlayer.TryOpenLive(_audio, _video, OpenOptions, VideoLead, DisposeVideoLeadOnPlayerDispose,
+            _disposeSourcesOnPlayerDispose, out player, out error);
 }

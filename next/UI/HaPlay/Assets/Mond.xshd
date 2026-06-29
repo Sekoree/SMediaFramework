@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<SyntaxDefinition name="Mond" extensions=".mnd"
+                  xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" />
+  <Color name="String" foreground="#CE9178" />
+  <Color name="Number" foreground="#B5CEA8" />
+  <Color name="Keyword" foreground="#569CD6" />
+  <Color name="Literal" foreground="#569CD6" />
+  <Color name="Api" foreground="#4EC9B0" />
+
+  <RuleSet ignoreCase="false">
+    <Span color="Comment" begin="//" />
+    <Span color="Comment" multiline="true" begin="/\*" end="\*/" />
+
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet>
+        <Span begin="\\" end="." />
+      </RuleSet>
+    </Span>
+    <Span color="String">
+      <Begin>'</Begin>
+      <End>'</End>
+      <RuleSet>
+        <Span begin="\\" end="." />
+      </RuleSet>
+    </Span>
+
+    <Keywords color="Keyword">
+      <Word>var</Word>
+      <Word>const</Word>
+      <Word>fun</Word>
+      <Word>return</Word>
+      <Word>if</Word>
+      <Word>else</Word>
+      <Word>for</Word>
+      <Word>foreach</Word>
+      <Word>in</Word>
+      <Word>while</Word>
+      <Word>do</Word>
+      <Word>break</Word>
+      <Word>continue</Word>
+      <Word>switch</Word>
+      <Word>case</Word>
+      <Word>default</Word>
+      <Word>export</Word>
+      <Word>import</Word>
+      <Word>seq</Word>
+      <Word>yield</Word>
+      <Word>this</Word>
+    </Keywords>
+
+    <Keywords color="Literal">
+      <Word>true</Word>
+      <Word>false</Word>
+      <Word>null</Word>
+      <Word>undefined</Word>
+    </Keywords>
+
+    <Keywords color="Api">
+      <Word>osc</Word>
+      <Word>x32</Word>
+      <Word>midi</Word>
+      <Word>state</Word>
+      <Word>devices</Word>
+      <Word>monitor</Word>
+      <Word>time</Word>
+      <Word>math</Word>
+      <Word>event</Word>
+      <Word>context</Word>
+    </Keywords>
+
+    <Rule color="Number">
+      \b0[xX][0-9a-fA-F]+|(\b[0-9]+(\.[0-9]+)?|\.[0-9]+)([eE][+-]?[0-9]+)?
+    </Rule>
+  </RuleSet>
+</SyntaxDefinition>

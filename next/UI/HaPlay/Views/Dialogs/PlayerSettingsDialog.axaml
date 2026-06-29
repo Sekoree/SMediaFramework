@@ -1,0 +1,105 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels"
+        x:Class="HaPlay.Views.Dialogs.PlayerSettingsDialog"
+        x:DataType="vm:MediaPlayerViewModel"
+        Title="{x:Static res:Strings.PlayerSettingsDialogTitle}"
+        Width="560" Height="420"
+        MinWidth="480" MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+  <DockPanel Margin="10">
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Margin="0,10,0,0">
+      <Button Content="{x:Static res:Strings.CloseButton}" Click="CloseClick" IsCancel="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="16" Margin="8">
+
+        <StackPanel Spacing="8">
+          <TextBlock Classes="SectionText" Text="{x:Static res:Strings.TransitionLabel}" />
+          <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
+            <TextBlock Grid.Column="0" Text="{x:Static res:Strings.TransitionLabel}" VerticalAlignment="Center"
+                       ToolTip.Tip="{x:Static res:Strings.TransitionTooltip}" />
+            <ComboBox Grid.Column="1"
+                      ItemsSource="{Binding TransitionModes}"
+                      SelectedItem="{Binding TransitionMode}"
+                      ToolTip.Tip="{x:Static res:Strings.TransitionTooltip}"
+                      HorizontalAlignment="Stretch">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+            <TextBlock Grid.Column="2" Text="{x:Static res:Strings.MillisecondsShort}" VerticalAlignment="Center" />
+            <NumericUpDown Grid.Column="3" Width="120"
+                           Minimum="0" Maximum="10000" Increment="50"
+                           Value="{Binding TransitionDurationMs}"
+                           ToolTip.Tip="{x:Static res:Strings.TransitionTooltip}" />
+          </Grid>
+        </StackPanel>
+
+        <StackPanel Spacing="8">
+          <TextBlock Classes="SectionText" Text="{x:Static res:Strings.HeadphonesCueBusTab}" />
+          <StackPanel Spacing="8" IsVisible="{Binding HasHeadphonesCueOutputs}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="10">
+              <TextBlock Grid.Row="0" Grid.Column="0" VerticalAlignment="Center"
+                         Text="{x:Static res:Strings.Enable}" />
+              <ToggleButton Grid.Row="0" Grid.Column="1"
+                            Content="{x:Static res:Strings.Enable}"
+                            IsChecked="{Binding HeadphonesCueEnabled}"
+                            HorizontalAlignment="Left" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" VerticalAlignment="Center" Text="Cue output" />
+              <ComboBox Grid.Row="1" Grid.Column="1"
+                        ItemsSource="{Binding HeadphonesCueTargets}"
+                        SelectedItem="{Binding SelectedHeadphonesCueTarget}"
+                        IsEnabled="{Binding HeadphonesCueEnabled}"
+                        HorizontalAlignment="Stretch">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:HeadphonesCueTargetOption">
+                    <TextBlock Text="{Binding Display}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+
+              <TextBlock Grid.Row="2" Grid.Column="0" VerticalAlignment="Center"
+                         Text="{x:Static res:Strings.Tap}" />
+              <ComboBox Grid.Row="2" Grid.Column="1" MinWidth="140"
+                        ItemsSource="{Binding HeadphonesCueTapPoints}"
+                        SelectedItem="{Binding HeadphonesCueTapPoint}"
+                        IsEnabled="{Binding HeadphonesCueEnabled}"
+                        HorizontalAlignment="Left">
+                <ComboBox.ItemTemplate>
+                  <DataTemplate>
+                    <TextBlock Text="{Binding Converter={x:Static vm:EnumDisplayConverter.Instance}}" />
+                  </DataTemplate>
+                </ComboBox.ItemTemplate>
+              </ComboBox>
+
+              <TextBlock Grid.Row="3" Grid.Column="0" VerticalAlignment="Center" Text="Cue gain" />
+              <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <NumericUpDown Minimum="-60" Maximum="12" Increment="1"
+                               Value="{Binding HeadphonesCueGainDb}"
+                               IsEnabled="{Binding HeadphonesCueEnabled}"
+                               Width="140" />
+                <TextBlock VerticalAlignment="Center" FontFamily="Consolas,monospace"
+                           Text="{Binding HeadphonesCueGainDb, StringFormat='{}{0:0.#} dB'}" />
+              </StackPanel>
+            </Grid>
+            <TextBlock Opacity="0.55" FontSize="11"
+                       Text="{x:Static res:Strings.HeadphonesCueMatrixHint}" TextWrapping="Wrap" />
+          </StackPanel>
+          <TextBlock Opacity="0.55" FontSize="12"
+                     IsVisible="{Binding !HasHeadphonesCueOutputs}"
+                     Text="{x:Static res:Strings.NoOutputsConfiguredHint}" TextWrapping="Wrap" />
+        </StackPanel>
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

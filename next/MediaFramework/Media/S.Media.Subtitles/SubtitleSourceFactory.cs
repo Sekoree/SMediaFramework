@@ -18,7 +18,7 @@ public static class SubtitleSourceFactory
 {
     /// <summary>Creates an overlay source for a sidecar ASS/SSA <paramref name="path"/> at <paramref name="width"/>×
     /// <paramref name="height"/> (the composition canvas), or <c>null</c> if missing or not ASS/SSA.</summary>
-    public static IVideoOverlaySource? FromFile(string path, int width, int height)
+    public static IVideoOverlaySource? FromFile(string path, int width, int height, SubtitleStyleOverride? style = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
         if (!File.Exists(path))
@@ -26,7 +26,7 @@ public static class SubtitleSourceFactory
 
         return Path.GetExtension(path).ToLowerInvariant() switch
         {
-            ".ass" or ".ssa" => new AssSubtitleLayerSource(File.ReadAllBytes(path), width, height),
+            ".ass" or ".ssa" => new AssSubtitleLayerSource(File.ReadAllBytes(path), width, height, style: style),
             _ => null,
         };
     }

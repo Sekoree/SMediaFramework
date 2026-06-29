@@ -55,6 +55,12 @@ public sealed class MediaPlayer : IDisposable
     // presents Scheduled against the session clock (Doc 03), not master-less.
     private readonly ILiveVideoSource? _liveVideoSource;
 
+    // The opened source objects (Core abstractions) so callers can query stream presence / formats / album-art
+    // without a concrete-decoder dependency (S.Media.Players must not reference S.Media.Decode.FFmpeg). Null for
+    // the kind that was absent or disabled at open.
+    private readonly IAudioSource? _audioSource;
+    private readonly IVideoSource? _videoSource;
+
     private MediaPlayer(
         VideoRouter videoRouter,
         VideoPlayer video,
@@ -66,11 +72,15 @@ public sealed class MediaPlayer : IDisposable
         IVideoOutput videoInput,
         string? audioSourceId,
         IEnumerable<IDisposable>? ownedLiveDisposables,
-        ILiveVideoSource? liveVideoSource = null)
+        ILiveVideoSource? liveVideoSource = null,
+        IAudioSource? audioSource = null,
+        IVideoSource? videoSource = null)
     {
         _liveVideoRouter = videoRouter;
         _liveVideo = video;
         _liveVideoSource = liveVideoSource;
+        _audioSource = audioSource;
+        _videoSource = videoSource;
         _liveClock = clock;
         _liveAudioRouter = audioRouter;
         _liveAudioClock = audioClock;
@@ -111,6 +121,29 @@ public sealed class MediaPlayer : IDisposable
 
     /// <summary>Router source id for <see cref="MediaContainerDecoder.Audio"/> when <see cref="AudioRouter"/> is non-null.</summary>
     public string? AudioSourceId => _audioSourceId;
+
+    /// <summary>The opened audio source (Core abstraction), or null when the media has no audio / it was disabled.</summary>
+    public IAudioSource? AudioSource => _audioSource;
+
+    /// <summary>The opened video source (Core abstraction), or null when the media has no video / it was disabled.
+    /// This is the raw source (for seek/position/format queries), distinct from the <see cref="Video"/> pipeline.</summary>
+    public IVideoSource? VideoSource => _videoSource;
+
+    /// <summary>True when the media has a decodable audio stream.</summary>
+    public bool HasAudio => _audioSource is not null;
+
+    /// <summary>True when the media has a decodable video stream.</summary>
+    public bool HasVideo => _videoSource is not null;
+
+    /// <summary>True when the video source is live (NDI / capture) — presents Scheduled, re-anchored at Play.</summary>
+    public bool IsLive => _liveVideoSource is not null;
+
+    /// <summary>True when this player wraps a seekable file/container decoder (not a live source) with a stream.</summary>
+    public bool HasContainerDecoder => !IsLive && (_audioSource is not null || _videoSource is not null);
+
+    /// <summary>True when the video stream is album-art / cover (a single attached picture), so consumers can
+    /// drive a still-frame display mode. False unless the source advertises it via <see cref="IAttachedPictureSource"/>.</summary>
+    public bool VideoIsAttachedPicture => _videoSource is IAttachedPictureSource { IsAttachedPicture: true };
 
     public IMediaClock PlayClock => _liveClock!;
 
@@ -454,6 +487,12 @@ public sealed class MediaPlayer : IDisposable
     public static MediaPlayerOpenFileBuilder OpenUri(IMediaRegistry registry, Uri mediaUri) =>
         new(registry, (mediaUri ?? throw new ArgumentNullException(nameof(mediaUri))).ToString());
 
+    /// <summary>Fluent open from already-opened sources (live NDI/capture, or a host-managed decoder's
+    /// <see cref="IAudioSource"/>/<see cref="IVideoSource"/>): <c>OpenLive(audio, video).WithOptions(...).Build()</c>.
+    /// For callers that own their decoders; no registry needed.</summary>
+    public static MediaPlayerOpenLiveBuilder OpenLive(IAudioSource? audioSource, IVideoSource? videoSource) =>
+        new(audioSource, videoSource);
+
     /// <summary>Throwing form of <see cref="TryOpen"/>.</summary>
     public static MediaPlayer Open(IMediaRegistry registry, string uri, MediaPlayerOpenOptions? options = null) =>
         TryOpen(registry, uri, options ?? MediaPlayerOpenOptions.Default, videoNegotiationLead: null, out var player, out var error)
@@ -683,7 +722,9 @@ public sealed class MediaPlayer : IDisposable
                 vin.Output,
                 audioSourceId,
                 ownedDisposables,
-                liveVideo);
+                liveVideo,
+                audioSource,
+                videoSource);
 
             // Surface the media's duration (file clips) so transport queries — and the outbound C ABI
             // (mfp_session_duration_ticks) — can report it. Live sources carry no duration, so it stays zero.

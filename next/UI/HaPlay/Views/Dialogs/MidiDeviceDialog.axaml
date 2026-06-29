@@ -1,0 +1,39 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.MidiDeviceDialog"
+        x:DataType="vm:MidiDeviceDialogViewModel"
+        Title="{Binding Title}"
+        Width="460" Height="240"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        SizeToContent="Height">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="Save" Click="OkClick" IsDefault="True" IsEnabled="{Binding IsValid}" />
+    </StackPanel>
+
+    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="10">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="MIDI port" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DeviceName}" VerticalAlignment="Center"
+                 TextTrimming="CharacterEllipsis" Opacity="0.8" />
+
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Alias" VerticalAlignment="Center" />
+      <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Alias}"
+               PlaceholderText="bcf  (the deviceKey scripts use, e.g. midi.sendCc(&quot;bcf&quot;, …))" />
+
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Profile" VerticalAlignment="Center" />
+      <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                ItemsSource="{Binding ProfileOptions}" SelectedItem="{Binding SelectedProfile}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate DataType="vm:MidiDeviceProfileOption">
+            <TextBlock Text="{Binding Display}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+
+      <CheckBox Grid.Row="3" Grid.Column="1" Content="Enabled" IsChecked="{Binding IsEnabled}" />
+    </Grid>
+  </DockPanel>
+</Window>

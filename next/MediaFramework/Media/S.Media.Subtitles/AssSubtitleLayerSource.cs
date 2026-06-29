@@ -34,7 +34,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
     /// <paramref name="height"/>. <paramref name="defaultFontFamily"/> is the fallback family libass uses when a
     /// style's font is unavailable (resolved through fontconfig / DirectWrite / CoreText).
     /// </summary>
-    public AssSubtitleLayerSource(ReadOnlySpan<byte> assDocument, int width, int height, string? defaultFontFamily = "Sans")
+    public AssSubtitleLayerSource(ReadOnlySpan<byte> assDocument, int width, int height, string? defaultFontFamily = "Sans", SubtitleStyleOverride? style = null)
     {
         if (width <= 0 || height <= 0)
             throw new ArgumentOutOfRangeException(nameof(width), "width and height must be positive.");
@@ -47,7 +47,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
         {
             _renderer = _library.CreateRenderer();
             _renderer.SetFrameSize(width, height);
-            _renderer.SetFonts(defaultFontFamily);
+            ApplyFontStyle(_renderer, defaultFontFamily, style);
             _track = _library.ReadMemory(assDocument);
         }
         catch
@@ -58,6 +58,16 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
         }
 
         InitOverlayBuffer();
+    }
+
+    // Applies the operator's font overrides globally to the renderer: family via the font provider (falling back
+    // to the document/default family) and an optional global size multiplier.
+    private static void ApplyFontStyle(AssRenderer renderer, string? defaultFamily, SubtitleStyleOverride? style)
+    {
+        var family = style?.FontFamily is { Length: > 0 } f ? f : defaultFamily;
+        renderer.SetFonts(family);
+        if (style?.FontScale is { } scale && scale > 0)
+            renderer.SetFontScale(scale);
     }
 
     /// <summary>
@@ -72,7 +82,8 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
         ReadOnlySpan<byte> header,
         IReadOnlyList<AssEventChunk> events,
         IReadOnlyList<AssFontAttachment>? fonts = null,
-        string? defaultFontFamily = "Sans")
+        string? defaultFontFamily = "Sans",
+        SubtitleStyleOverride? style = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         if (width <= 0 || height <= 0)
@@ -93,7 +104,7 @@ public sealed class AssSubtitleLayerSource : IVideoOverlaySource
 
             _renderer = _library.CreateRenderer();
             _renderer.SetFrameSize(width, height);
-            _renderer.SetFonts(defaultFontFamily);
+            ApplyFontStyle(_renderer, defaultFontFamily, style);
 
             _track = _library.CreateTrack();
             _track.ProcessCodecPrivate(header);

@@ -1,0 +1,98 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:rootvm="using:HaPlay.ViewModels"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.AddLocalVideoOutputDialog"
+        x:DataType="vm:AddLocalVideoOutputDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="520" Height="520"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="420" MinHeight="460">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
+
+        <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
+        <TextBox Text="{Binding DisplayName}" />
+
+        <TextBlock Text="{x:Static res:Strings.OutputTypeLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Engines}"
+                  SelectedItem="{Binding SelectedEngine}"
+                  IsEnabled="{Binding !EngineLockedByEdit}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:VideoEngineChoice">
+              <StackPanel>
+                <TextBlock Text="{Binding Label}" />
+                <TextBlock Text="{Binding Subtitle}" Opacity="0.55" FontSize="11" />
+              </StackPanel>
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+        <TextBlock Text="{x:Static res:Strings.OutputTypeLockedByEditHint}"
+                   Foreground="#888"
+                   IsVisible="{Binding EngineLockedByEdit}" />
+
+        <TextBlock Text="{x:Static res:Strings.PresentationLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding SurfaceModes}" SelectedItem="{Binding SurfaceMode}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate>
+              <TextBlock Text="{Binding Converter={x:Static rootvm:EnumDisplayConverter.Instance}}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.ScreenLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Screens}" SelectedItem="{Binding SelectedScreen}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:ScreenListItem">
+              <TextBlock Text="{Binding Label}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.WindowWidthHeightWindowedLabel}" FontWeight="SemiBold" />
+        <Grid ColumnDefinitions="*,8,*" IsEnabled="{Binding WindowMetricsEnabled}">
+          <NumericUpDown Grid.Column="0" Minimum="320" Maximum="7680" Value="{Binding WindowWidth}" />
+          <NumericUpDown Grid.Column="2" Minimum="240" Maximum="4320" Value="{Binding WindowHeight}" />
+        </Grid>
+
+        <TextBlock Text="{x:Static res:Strings.CloneOfOptionalLabel}" FontWeight="SemiBold" Margin="0,8,0,0" />
+        <TextBlock Classes="hint"
+                   Text="{x:Static res:Strings.CloneOfHint}"
+                   Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+        <ComboBox ItemsSource="{Binding CloneParentChoices}"
+                  SelectedItem="{Binding SelectedCloneParent}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:CloneParentChoice">
+              <TextBlock Text="{Binding Label}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.BackgroundImageLabel}" FontWeight="SemiBold" Margin="0,8,0,0" />
+        <TextBlock Text="{x:Static res:Strings.BackgroundImageHint}"
+                   Opacity="0.6" FontSize="12" TextWrapping="Wrap" />
+        <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="6">
+          <TextBox Grid.Column="0" Text="{Binding BackgroundImagePath}"
+                   PlaceholderText="{x:Static res:Strings.BackgroundImagePlaceholder}" />
+          <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}" Click="BrowseBackgroundClick" />
+          <Button Grid.Column="2" Content="{x:Static res:Strings.ClearButton}" Click="ClearBackgroundClick" />
+        </Grid>
+
+        <CheckBox Content="{x:Static res:Strings.AlwaysOnTopLabel}"
+                  IsChecked="{Binding AlwaysOnTop}" Margin="0,8,0,0" />
+        <TextBlock Text="{x:Static res:Strings.AlwaysOnTopHint}"
+                   Opacity="0.6" FontSize="12" TextWrapping="Wrap"
+                   IsVisible="{Binding !AlwaysOnTopSupported}" />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

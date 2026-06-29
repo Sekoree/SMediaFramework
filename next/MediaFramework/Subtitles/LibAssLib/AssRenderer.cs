@@ -58,6 +58,15 @@ public sealed unsafe class AssRenderer : IDisposable
             LibAssNative.ass_set_fonts(_handle, font, fam, (int)provider, null, update ? 1 : 0);
     }
 
+    /// <summary>Global font-size multiplier (1.0 = the document's own sizing). Clamped to a sane range so an
+    /// operator typo can't shrink subtitles to nothing or blow them up off-screen.</summary>
+    public void SetFontScale(double fontScale)
+    {
+        ThrowIfDisposed();
+        var clamped = Math.Clamp(fontScale, 0.25, 5.0);
+        LibAssNative.ass_set_font_scale(_handle, clamped);
+    }
+
     /// <summary>
     /// Render <paramref name="track"/> at <paramref name="timeMs"/>. Returns the head of the layer list (or
     /// <c>null</c> when nothing shows); <paramref name="changed"/> is true when the image differs from the prior

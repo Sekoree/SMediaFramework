@@ -1,0 +1,67 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:port="using:S.Media.Audio.PortAudio"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.AddPortAudioOutputDialog"
+        x:DataType="vm:AddPortAudioOutputDialogViewModel"
+        Title="{Binding DialogTitle}"
+        Width="520" Height="560"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True"
+        MinWidth="420" MinHeight="480">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="{x:Static res:Strings.CancelButton}" Click="CancelClick" IsCancel="True" />
+      <Button Content="{Binding PrimaryButtonLabel}" Click="OkClick" IsDefault="True" />
+    </StackPanel>
+
+    <ScrollViewer>
+      <StackPanel Spacing="10">
+        <TextBlock Text="{Binding ValidationMessage}" Foreground="#C62828" TextWrapping="Wrap" />
+
+        <TextBlock Text="{x:Static res:Strings.DisplayNameLabel}" FontWeight="SemiBold" />
+        <TextBox Text="{Binding DisplayName}" />
+
+        <TextBlock Text="{x:Static res:Strings.AudioBackendLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Backends}"
+                  SelectedItem="{Binding SelectedBackend}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:AudioBackendChoice">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.HostApiLabel}"
+                   FontWeight="SemiBold"
+                   IsVisible="{Binding IsPortAudioBackend}" />
+        <ComboBox ItemsSource="{Binding HostApis}"
+                  SelectedItem="{Binding SelectedHostApi}"
+                  IsVisible="{Binding IsPortAudioBackend}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="port:PortAudioHostApiEntry">
+              <TextBlock Text="{Binding Name}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.OutputDeviceLabel}" FontWeight="SemiBold" />
+        <ComboBox ItemsSource="{Binding Devices}"
+                  SelectedItem="{Binding SelectedDevice}">
+          <ComboBox.ItemTemplate>
+            <DataTemplate x:DataType="vm:AudioOutputDeviceChoice">
+              <TextBlock Text="{Binding DisplayName}" />
+            </DataTemplate>
+          </ComboBox.ItemTemplate>
+        </ComboBox>
+
+        <TextBlock Text="{x:Static res:Strings.ChannelCountDeviceLimitLabel}" FontWeight="SemiBold" />
+        <NumericUpDown Minimum="1" Maximum="64" Value="{Binding ChannelCount}" />
+
+        <TextBlock Text="{x:Static res:Strings.SampleRateHzLabel}" FontWeight="SemiBold" />
+        <NumericUpDown Minimum="8000" Maximum="192000" Increment="1000" Value="{Binding SampleRate}" />
+      </StackPanel>
+    </ScrollViewer>
+  </DockPanel>
+</Window>

@@ -1,0 +1,450 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:views="using:HaPlay.Views"
+             xmlns:models="using:HaPlay.Models"
+             xmlns:res="using:HaPlay.Resources"
+             xmlns:controls="using:HaPlay.Views.Controls"
+             mc:Ignorable="d" d:DesignWidth="460" d:DesignHeight="720"
+             x:Class="HaPlay.Views.MediaPlayerView"
+             x:DataType="vm:MediaPlayerViewModel">
+
+    <UserControl.Styles>
+        <Style Selector="TextBlock.section-title">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+        <Style Selector="TextBlock.time">
+            <Setter Property="FontFamily" Value="Consolas,monospace" />
+            <Setter Property="FontSize" Value="13" />
+        </Style>
+        <!-- Low-time warning: highlight the clock when a finite track is near its end. -->
+        <Style Selector="TextBlock.time.lowtime">
+            <Setter Property="Foreground" Value="#E53935" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="TextBlock.time-label">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Opacity" Value="0.6" />
+            <Setter Property="TextAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.card">
+            <Setter Property="BorderBrush" Value="#22808080" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Background" Value="#08808080" />
+        </Style>
+        <!-- Small rounded pills for the playback-state + source-kind indicators. -->
+        <Style Selector="Border.chip">
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Padding" Value="6,2" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <!-- Bottom routing summary strip. -->
+        <Style Selector="Border.strip">
+            <Setter Property="BorderBrush" Value="#22808080" />
+            <Setter Property="BorderThickness" Value="0,1,0,0" />
+            <Setter Property="Padding" Value="10,6" />
+        </Style>
+        <!-- Count badge on the Options button. -->
+        <Style Selector="Border.badge">
+            <Setter Property="Background" Value="#2E7D32" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="MinWidth" Value="16" />
+            <Setter Property="Height" Value="16" />
+            <Setter Property="Padding" Value="4,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.badge TextBlock">
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <!-- The slim indeterminate busy bar. -->
+        <Style Selector="ProgressBar.busy">
+            <Setter Property="MinHeight" Value="3" />
+            <Setter Property="Height" Value="3" />
+        </Style>
+        <!-- Drag affordance on each playlist row. -->
+        <Style Selector="TextBlock.drag-handle">
+            <Setter Property="Text" Value="&#x2261;" />
+            <Setter Property="Opacity" Value="0.35" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Cursor" Value="SizeNorthSouth" />
+        </Style>
+
+        <!-- Compact mode: shrink/hide secondary controls when the player is narrow. -->
+        <Style Selector="UserControl.compact TextBlock.hide-compact">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="UserControl.compact StackPanel.hide-compact">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="UserControl.compact Border.hide-compact">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="UserControl.compact Button.hide-compact">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="UserControl.compact controls|LevelMeterControl.hide-compact">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="UserControl.compact Slider.vol">
+            <Setter Property="Width" Value="78" />
+        </Style>
+        <Style Selector="UserControl.compact Border.card">
+            <Setter Property="Padding" Value="8" />
+        </Style>
+    </UserControl.Styles>
+
+    <DockPanel LastChildFill="True">
+
+        <!-- ============ Now-playing / transport deck header (pinned) ============ -->
+        <Border DockPanel.Dock="Top" Classes="card" Margin="0,0,0,8">
+            <StackPanel Spacing="10">
+
+                <!-- Title row: state pill · editable name · source kind · current media · menus -->
+                <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto">
+                    <Border Grid.Column="0" Classes="chip" Margin="0,0,8,0"
+                            Background="{Binding PlaybackStateColor}">
+                        <TextBlock FontSize="10" FontWeight="SemiBold"
+                                   Text="{Binding PlaybackStateLabel}" />
+                    </Border>
+
+                    <TextBox Grid.Column="1" FontWeight="SemiBold" FontSize="16"
+                             VerticalAlignment="Center" Text="{Binding Name, Mode=TwoWay}"
+                             BorderThickness="0" Background="Transparent"
+                             MinWidth="60" Padding="2,0"
+                             IsReadOnly="True"
+                             DoubleTapped="OnPlayerNameDoubleTapped"
+                             LostFocus="OnPlayerNameLostFocus"
+                             KeyDown="OnPlayerNameKeyDown" />
+
+                    <Border Grid.Column="2" Classes="chip hide-compact" Margin="8,0,6,0"
+                            Background="#22808080"
+                            ToolTip.Tip="{x:Static res:Strings.SourceKindTooltip}">
+                        <TextBlock FontSize="11" FontWeight="SemiBold"
+                                   Text="{Binding SourceKindLabel}" />
+                    </Border>
+
+                    <TextBlock Grid.Column="3" Opacity="0.7" FontSize="12" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               Text="{Binding CurrentMediaDisplay, FallbackValue={x:Static res:Strings.NoMediaLoadedHint}, TargetNullValue={x:Static res:Strings.NoMediaLoadedHint}}"
+                               ToolTip.Tip="{Binding CurrentMediaDisplay}" />
+
+                    <StackPanel Grid.Column="4" Orientation="Horizontal" Spacing="4">
+                        <!-- Single overflow menu (gear icon). Player Settings lives inside it, so there is
+                             no second "Settings" button competing with it. -->
+                        <Button Padding="8,4" Content="&#x2699;"
+                                ToolTip.Tip="{x:Static res:Strings.MediaPlayerSettingsTooltip}">
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuItem Header="{x:Static res:Strings.PlayerSettingsButton}"
+                                              Command="{Binding OpenPlayerSettingsCommand}" />
+                                    <MenuItem Header="{x:Static res:Strings.AudioMatrixButton}"
+                                              Command="{Binding OpenAudioMatrixCommand}" />
+                                    <Separator />
+                                    <MenuItem Header="{x:Static res:Strings.SavePlayerConfigMenuHeader}"
+                                              Command="{Binding SavePlayerConfigCommand}" />
+                                    <MenuItem Header="{x:Static res:Strings.LoadPlayerConfigMenuHeader}"
+                                              Command="{Binding LoadPlayerConfigCommand}" />
+                                    <Separator />
+                                    <MenuItem Header="{x:Static res:Strings.SaveTabButton}"
+                                              Command="{Binding SavePlaylistTabCommand}" />
+                                    <MenuItem Header="{x:Static res:Strings.LoadTabButton}"
+                                              Command="{Binding LoadPlaylistTabCommand}" />
+                                    <Separator />
+                                    <MenuItem Header="{x:Static res:Strings.UnloadCurrentSessionMenuHeader}"
+                                              Command="{Binding CloseSessionCommand}" />
+                                    <MenuItem Header="{x:Static res:Strings.RemoveThisPlayerMenuHeader}"
+                                              Command="{Binding RemovePlayerCommand}"
+                                              IsVisible="{Binding CanRemove}" />
+                                    <Separator />
+                                    <MenuItem Header="{x:Static res:Strings.DetachPlayerButton}"
+                                              Command="{Binding DetachPlayerCommand}"
+                                              ToolTip.Tip="{x:Static res:Strings.DetachPlayerTooltip}" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </StackPanel>
+                </Grid>
+
+                <!-- P5: fixed-height status line — transient status + sticky load errors live here
+                     (and in toasts); nothing above the transport ever appears/disappears. -->
+                <controls:StatusLineControl Text="{Binding DeckStatusText}"
+                                            Severity="{Binding DeckStatusSeverity}"
+                                            ToolTip.Tip="{Binding DeckStatusText}" />
+
+                <!-- Busy indicator: slim indeterminate bar + status (loading / analysing / waiting). -->
+                <StackPanel Spacing="3" IsVisible="{Binding IsBusy}">
+                    <ProgressBar Classes="busy" IsIndeterminate="True" Minimum="0" Maximum="100" />
+                    <TextBlock Text="{Binding BusyStatusText}" FontSize="11" Opacity="0.7"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+
+                <!-- Scrubber with waveform overlay (finite/seekable sources only). -->
+                <Grid IsVisible="{Binding IsTransportSeekable}">
+                    <controls:WaveformControl Height="24" Margin="8,0"
+                                              Peaks="{Binding WaveformPeaks}"
+                                              Revision="{Binding WaveformRevision}"
+                                              IsHitTestVisible="False" />
+                    <Slider Name="SeekSlider"
+                            Minimum="0" Maximum="1000"
+                            Value="{Binding SeekSliderValue, Mode=TwoWay}"
+                            IsEnabled="{Binding IsMediaLoaded}"
+                            ToolTip.ShowDelay="200"
+                            ToolTip.Tip="{x:Static res:Strings.SeekSliderTooltip}" />
+                </Grid>
+
+                <!-- Three clocks: position / middle (toggle elapsed/remaining) / total. -->
+                <Grid ColumnDefinitions="*,*,*" IsVisible="{Binding IsTransportSeekable}">
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Classes="time" HorizontalAlignment="Center"
+                                   Text="{Binding CurrentPositionText}" />
+                        <TextBlock Classes="time-label hide-compact"
+                                   Text="{x:Static res:Strings.PositionTimeLabel}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Tapped="OnMiddleTimeTapped" Cursor="Hand"
+                                ToolTip.Tip="{x:Static res:Strings.ToggleTimeDisplayTooltip}">
+                        <TextBlock Classes="time" HorizontalAlignment="Center"
+                                   Classes.lowtime="{Binding IsNearEndOfTrack}"
+                                   Text="{Binding MiddleTimeText}" />
+                        <TextBlock Classes="time-label hide-compact" Text="{Binding MiddleTimeLabel}" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2">
+                        <TextBlock Classes="time" HorizontalAlignment="Center" Opacity="0.75"
+                                   Text="{Binding DurationText}" />
+                        <TextBlock Classes="time-label hide-compact"
+                                   Text="{x:Static res:Strings.DurationTimeLabel}" />
+                    </StackPanel>
+                </Grid>
+
+                <!-- P5 transport: the touch tier. Prev/Play/Next/Stop + HOLD are >=56 px panic-path
+                     controls; HOLD pushes the configured idle image to this player's video outputs
+                     (long-press the flyout arrow for the image picker). Mute/volume moved to the
+                     slim row below — frequently used, but not panic-path. -->
+                <DockPanel LastChildFill="True">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="6"
+                                VerticalAlignment="Center">
+                        <ToggleButton Classes="Touch Warn"
+                                      IsChecked="{Binding HoldFallbackVideo}"
+                                      Content="{x:Static res:Strings.HoldButtonLabel}"
+                                      ToolTip.Tip="{x:Static res:Strings.HoldButtonTooltip}" />
+                        <Button Classes="Std" VerticalAlignment="Center"
+                                ToolTip.Tip="{x:Static res:Strings.HoldImagePickerTooltip}">
+                            <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7" />
+                            <Button.Flyout>
+                                <Flyout Placement="Bottom">
+                                    <StackPanel Spacing="6" Margin="4" MinWidth="280">
+                                        <TextBlock Classes="CaptionText" TextWrapping="Wrap"
+                                                   Text="{x:Static res:Strings.IdleImageHeaderTooltip}" />
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                            <TextBox Grid.Column="0"
+                                                     PlaceholderText="{x:Static res:Strings.FallbackPathPlaceholder}"
+                                                     Text="{Binding FallbackImagePath}" />
+                                            <Button Grid.Column="1" Content="{x:Static res:Strings.BrowseButton}"
+                                                    Command="{Binding BrowseFallbackCommand}" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+
+                        <!-- Options flyout: loop / auto-advance / shuffle / repeat-all + active badge. -->
+                        <Button Classes="Std" Padding="10,6"
+                                ToolTip.Tip="{x:Static res:Strings.PlaybackOptionsTooltip}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="{x:Static res:Strings.PlaybackOptionsButton}"
+                                           VerticalAlignment="Center" />
+                                <Border Classes="badge" IsVisible="{Binding HasActiveOptions}">
+                                    <TextBlock Text="{Binding ActiveOptionCount}" />
+                                </Border>
+                                <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <Flyout Placement="Bottom">
+                                    <StackPanel Spacing="6" Margin="4" MinWidth="160">
+                                        <CheckBox Content="{x:Static res:Strings.LoopToggleLabel}"
+                                                  IsChecked="{Binding IsLooping}"
+                                                  ToolTip.Tip="{x:Static res:Strings.LoopToggleTooltip}" />
+                                        <CheckBox Content="{x:Static res:Strings.AutoAdvanceToggleLabel}"
+                                                  IsChecked="{Binding AutoAdvancePlaylist}"
+                                                  ToolTip.Tip="{x:Static res:Strings.AutoAdvanceToggleTooltip}" />
+                                        <CheckBox Content="{x:Static res:Strings.ShuffleToggleLabel}"
+                                                  IsChecked="{Binding ShufflePlaylist}"
+                                                  ToolTip.Tip="{x:Static res:Strings.ShuffleToggleTooltip}" />
+                                        <CheckBox Content="{x:Static res:Strings.RepeatAllToggleLabel}"
+                                                  IsChecked="{Binding RepeatAllPlaylist}"
+                                                  ToolTip.Tip="{x:Static res:Strings.RepeatAllToggleTooltip}" />
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center"
+                                VerticalAlignment="Center">
+                        <Button Classes="Touch" Content="{x:Static res:Strings.PreviousTrackGlyph}"
+                                Command="{Binding PreviousTrackCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.PreviousTrackTooltip}" />
+                        <Button Classes="Touch Go" MinWidth="84"
+                                Content="{Binding PlayPauseLabel}"
+                                Command="{Binding TogglePlayPauseCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.PlayPauseTooltip}" />
+                        <Button Classes="Touch" Content="{x:Static res:Strings.NextTrackGlyph}"
+                                Command="{Binding NextTrackCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.NextTrackTooltip}" />
+                        <Button Classes="Touch" Content="{x:Static res:Strings.StopTrackGlyph}"
+                                Command="{Binding StopCommand}"
+                                ToolTip.Tip="{x:Static res:Strings.StopTrackTooltip}" />
+                    </StackPanel>
+                </DockPanel>
+
+                <!-- Volume row (Std tier): mute / slider / dB / meter. -->
+                <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                    <ToggleButton Classes="Std" Content="{x:Static res:Strings.MuteToggleLabel}"
+                                  IsChecked="{Binding MasterMuted}"
+                                  ToolTip.Tip="{x:Static res:Strings.MuteToggleTooltip}" />
+                    <Slider Name="VolumeSlider" Classes="vol" Width="140" Minimum="-60" Maximum="12"
+                            Value="{Binding MasterVolumeDb, Mode=TwoWay}"
+                            VerticalAlignment="Center"
+                            ToolTip.Tip="{x:Static res:Strings.ResetVolumeTooltip}" />
+                    <TextBlock Classes="time hide-compact" Width="52" VerticalAlignment="Center"
+                               Text="{Binding MasterVolumeDb, StringFormat='{}{0:0.#} dB'}" />
+                    <controls:LevelMeterControl Classes="hide-compact" Width="56" Height="10"
+                                                VerticalAlignment="Center"
+                                                Level="{Binding PeakLevelNormalized}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- ============ Routing summary strip (pinned bottom) ============ -->
+        <Border DockPanel.Dock="Bottom" Classes="strip">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Text="{x:Static res:Strings.RoutingSectionTitle}"
+                           FontWeight="SemiBold" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Opacity="0.7" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"
+                           Text="{Binding RoutingSummary}" />
+                <Button Grid.Column="2"
+                        Content="{x:Static res:Strings.RoutingEditButton}"
+                        Command="{Binding OpenRoutingCommand}"
+                        ToolTip.Tip="{x:Static res:Strings.RoutingEditTooltip}" />
+            </Grid>
+        </Border>
+
+        <!-- ============ Playlist (fills remaining height) ============ -->
+        <Border Classes="card">
+            <DockPanel LastChildFill="True">
+
+                <!-- Tabs row + consolidated "+ Add" menu. -->
+                <DockPanel DockPanel.Dock="Top" LastChildFill="True" Margin="0,0,0,8">
+                    <Button DockPanel.Dock="Right" Padding="10,4"
+                            ToolTip.Tip="{x:Static res:Strings.AddToPlaylistTooltip}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{x:Static res:Strings.AddToPlaylistButton}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock Text="&#x25BE;" FontSize="10" Opacity="0.7"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Button.Flyout>
+                            <MenuFlyout>
+                                <MenuItem Header="{x:Static res:Strings.AddFilesButton}"
+                                          Command="{Binding AddFilesToPlaylistCommand}" />
+                                <Separator />
+                                <MenuItem Header="{x:Static res:Strings.PortAudioInputMenuHeader}"
+                                          Command="{Binding AddPortAudioInputCommand}" />
+                                <MenuItem Header="{x:Static res:Strings.NdiInputMenuHeader}"
+                                          Command="{Binding AddNDIInputCommand}"
+                                          IsVisible="{Binding IsNdiAvailable}" />
+                            </MenuFlyout>
+                        </Button.Flyout>
+                    </Button>
+
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TabStrip ItemsSource="{Binding PlaylistTabs}"
+                                      SelectedItem="{Binding SelectedPlaylistTab}">
+                                <TabStrip.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:PlaylistTabViewModel">
+                                        <TextBox Text="{Binding Name, Mode=TwoWay}"
+                                                 MinWidth="64"
+                                                 BorderThickness="0"
+                                                 Background="Transparent" />
+                                    </DataTemplate>
+                                </TabStrip.ItemTemplate>
+                            </TabStrip>
+                            <Button Content="{x:Static res:Strings.AddPlaylistTabButton}" MinWidth="32"
+                                    VerticalAlignment="Center"
+                                    Command="{Binding AddPlaylistTabCommand}"
+                                    ToolTip.Tip="{x:Static res:Strings.AddPlaylistTabTooltip}" />
+                            <Button Content="{x:Static res:Strings.RemoveTabButton}" MinWidth="32"
+                                    VerticalAlignment="Center"
+                                    Command="{Binding RemovePlaylistTabCommand}" />
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+
+                <!-- Reorder hint (hidden when compact). -->
+                <TextBlock DockPanel.Dock="Bottom" Classes="hide-compact"
+                           Opacity="0.4" FontSize="11" Margin="2,6,0,0"
+                           Text="{x:Static res:Strings.PlaylistDragReorderHint}" />
+
+                <!-- Drag-to-reorder via Xaml.Behaviors (ListBox.draggable from the package styles).
+                     External OS file drops are handled in code-behind. -->
+                <ListBox Name="PlaylistListBox" Classes="draggable" MinHeight="160"
+                         ItemsSource="{Binding PlaylistItems}"
+                         SelectedItem="{Binding SelectedPlaylistItem, Mode=TwoWay}"
+                         DoubleTapped="OnPlaylistItemDoubleTapped"
+                         ToolTip.Tip="{x:Static res:Strings.PlaylistCardTooltip}">
+                    <ListBox.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextMoveUp}"
+                                      Command="{Binding MovePlaylistItemUpCommand}" />
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextMoveDown}"
+                                      Command="{Binding MovePlaylistItemDownCommand}" />
+                            <Separator />
+                            <!-- Multi-track files only (MKV with several languages); hidden otherwise. -->
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextAudioTrack}"
+                                      IsVisible="{Binding SelectedItemHasMultipleAudioTracks}"
+                                      ItemsSource="{Binding SelectedItemAudioTrackChoices}">
+                                <MenuItem.Styles>
+                                    <Style Selector="MenuItem MenuItem" x:DataType="vm:PlaylistAudioTrackChoiceViewModel">
+                                        <Setter Property="Header" Value="{Binding Label}" />
+                                        <Setter Property="Command" Value="{Binding SelectCommand}" />
+                                    </Style>
+                                </MenuItem.Styles>
+                            </MenuItem>
+                            <Separator IsVisible="{Binding SelectedItemHasMultipleAudioTracks}" />
+                            <MenuItem Header="{x:Static res:Strings.CopyApiUrlMenuItem}"
+                                      Click="OnCopyPlaylistItemApiUrlClick" />
+                            <Separator />
+                            <MenuItem Header="{x:Static res:Strings.PlaylistContextRemove}"
+                                      Command="{Binding RemoveFromPlaylistCommand}" />
+                        </ContextMenu>
+                    </ListBox.ContextMenu>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="models:PlaylistItem">
+                            <Grid ColumnDefinitions="Auto,Auto,*" >
+                                <TextBlock Grid.Column="0" Classes="drag-handle" Margin="0,0,8,0" />
+                                <TextBlock Grid.Column="1" Text="{Binding KindGlyph}"
+                                           Opacity="0.85" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="2" Text="{Binding DisplayName}"
+                                           ToolTip.Tip="{Binding ToolTip}"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" />
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+    </DockPanel>
+</UserControl>

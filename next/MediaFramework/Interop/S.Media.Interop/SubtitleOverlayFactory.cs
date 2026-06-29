@@ -22,7 +22,8 @@ public static class SubtitleOverlayFactory
     /// Creates an overlay source for <paramref name="path"/> at the composition canvas size, or <c>null</c> when
     /// the file is missing, carries no decodable text subtitle, or is a bitmap subtitle.
     /// </summary>
-    public static IVideoOverlaySource? FromFile(string path, int width, int height, int streamIndex = -1)
+    public static IVideoOverlaySource? FromFile(string path, int width, int height, int streamIndex = -1,
+        SubtitleStyleOverride? style = null)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return null;
@@ -30,13 +31,13 @@ public static class SubtitleOverlayFactory
         // Sidecar ASS/SSA renders directly — no FFmpeg round-trip.
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (streamIndex < 0 && ext is (".ass" or ".ssa"))
-            return SubtitleSourceFactory.FromFile(path, width, height);
+            return SubtitleSourceFactory.FromFile(path, width, height, style);
 
         try
         {
             return FFmpegSubtitleStreamProbe.Probe(path, streamIndex) switch
             {
-                FFmpegSubtitleStreamKind.Text => OpenText(path, width, height, streamIndex),
+                FFmpegSubtitleStreamKind.Text => OpenText(path, width, height, streamIndex, style),
                 FFmpegSubtitleStreamKind.Bitmap => OpenBitmap(path, streamIndex),
                 _ => null,
             };
@@ -52,14 +53,15 @@ public static class SubtitleOverlayFactory
     /// <see cref="IVideoOverlaySource.RenderAt"/> returns no frame.
     /// </summary>
     public static IVideoOverlaySource? FromFileDeferred(
-        string path, int width, int height, int streamIndex = -1)
+        string path, int width, int height, int streamIndex = -1, SubtitleStyleOverride? style = null)
     {
         if (string.IsNullOrEmpty(path) || !File.Exists(path))
             return null;
-        return new DeferredSubtitleOverlaySource(() => FromFile(path, width, height, streamIndex));
+        return new DeferredSubtitleOverlaySource(() => FromFile(path, width, height, streamIndex, style));
     }
 
-    private static IVideoOverlaySource? OpenText(string path, int width, int height, int streamIndex)
+    private static IVideoOverlaySource? OpenText(string path, int width, int height, int streamIndex,
+        SubtitleStyleOverride? style)
     {
         var track = FFmpegSubtitleDecoder.Decode(path, streamIndex);
         if (track.Events.Count == 0)
@@ -67,7 +69,7 @@ public static class SubtitleOverlayFactory
 
         var events = track.Events.Select(e => new AssEventChunk(e.Body, e.StartMs, e.DurationMs)).ToList();
         var fonts = track.Fonts.Select(f => new AssFontAttachment(f.Name, f.Data)).ToList();
-        return new AssSubtitleLayerSource(width, height, track.Header, events, fonts);
+        return new AssSubtitleLayerSource(width, height, track.Header, events, fonts, style: style);
     }
 
     private static IVideoOverlaySource? OpenBitmap(string path, int streamIndex)

@@ -1,0 +1,64 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:res="using:HaPlay.Resources"
+        xmlns:vm="using:HaPlay.ViewModels"
+        x:Class="HaPlay.Views.Dialogs.RoutingDialog"
+        x:DataType="vm:MediaPlayerViewModel"
+        Title="{x:Static res:Strings.RoutingSectionTitle}"
+        Width="560" Height="420"
+        MinWidth="420" MinHeight="300"
+        WindowStartupLocation="CenterOwner"
+        CanResize="True">
+  <DockPanel Margin="10">
+    <StackPanel DockPanel.Dock="Bottom"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Margin="0,10,0,0">
+      <Button Content="{x:Static res:Strings.CloseButton}" Click="CloseClick" IsCancel="True" />
+    </StackPanel>
+
+    <StackPanel Spacing="8">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0" Opacity="0.7" FontSize="12"
+                   Text="{x:Static res:Strings.RoutingHint}" />
+        <Button Grid.Column="1" Content="{x:Static res:Strings.AddOutputButton}" Padding="10,4">
+          <Button.Flyout>
+            <MenuFlyout>
+              <MenuItem Header="{x:Static res:Strings.LocalAudioOutputMenuHeader}"
+                        Command="{Binding AddPortAudioOutputCommand}" />
+              <MenuItem Header="{x:Static res:Strings.LocalVideoOutputMenuHeader}"
+                        Command="{Binding AddLocalVideoOutputCommand}" />
+              <MenuItem Header="{x:Static res:Strings.NdiOutputMenuHeader}"
+                        Command="{Binding AddNDIOutputCommand}"
+                        IsVisible="{Binding IsNdiAvailable}" />
+            </MenuFlyout>
+          </Button.Flyout>
+        </Button>
+      </Grid>
+
+      <ItemsControl ItemsSource="{Binding Outputs}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate x:DataType="vm:PlayerOutputBinding">
+            <Grid ColumnDefinitions="Auto,*" Margin="0,2">
+              <CheckBox Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0"
+                        IsChecked="{Binding IsSelected}"
+                        IsEnabled="{Binding Line.SupportsMediaPlayerRouting}" />
+              <StackPanel Grid.Column="1" Spacing="1"
+                          ToolTip.Tip="{Binding Line.Summary}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                  <TextBlock FontWeight="SemiBold" Text="{Binding Line.KindLabel}" />
+                  <TextBlock Text="{x:Static res:Strings.EmDash}" Opacity="0.5" />
+                  <TextBlock Text="{Binding Line.Definition.EffectiveName}" />
+                </StackPanel>
+              </StackPanel>
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <TextBlock Opacity="0.55" FontSize="11"
+                 IsVisible="{Binding HasNoOutputs}"
+                 Text="{x:Static res:Strings.NoOutputsConfiguredHint}" />
+    </StackPanel>
+  </DockPanel>
+</Window>

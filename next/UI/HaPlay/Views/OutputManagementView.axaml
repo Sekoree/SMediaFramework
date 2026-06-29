@@ -1,0 +1,195 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:HaPlay.ViewModels"
+             xmlns:ctrls="using:HaPlay.Views.Controls"
+             xmlns:res="using:HaPlay.Resources"
+             mc:Ignorable="d" d:DesignWidth="960" d:DesignHeight="640"
+             x:Class="HaPlay.Views.OutputManagementView"
+             x:DataType="vm:OutputManagementViewModel">
+
+  <UserControl.Styles>
+    <Style Selector="Border.card">
+      <Setter Property="BorderBrush" Value="#22808080" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Padding" Value="6" />
+      <Setter Property="Background" Value="#08808080" />
+    </Style>
+    <Style Selector="TextBlock.hint">
+      <Setter Property="Opacity" Value="0.65" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+  </UserControl.Styles>
+
+  <!-- Rows: header / outputs (fills) / shared-headphones / virtual-channels. Previously a DockPanel,
+       which docked these cards Left as columns and squeezed the outputs list — a Grid stacks them. -->
+  <Grid Margin="16" RowDefinitions="Auto,*,Auto" RowSpacing="10">
+    <Grid Grid.Row="0" ColumnDefinitions="*,Auto,Auto">
+      <StackPanel Grid.Column="0" Spacing="2">
+        <TextBlock Text="{x:Static res:Strings.OutputManagementHeader}" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock Classes="hint"
+                   Text="{x:Static res:Strings.OutputManagementHint}" />
+      </StackPanel>
+      <!-- §8.1 aggregate health chip — recolors when any line is warn/error. -->
+      <Border Grid.Column="1" Margin="0,0,8,0" Padding="10,4" CornerRadius="12"
+              VerticalAlignment="Center"
+              Background="{Binding HasAggregateIssues, Converter={x:Static vm:AggregateBrushConverter.Instance}}">
+        <TextBlock Text="{Binding AggregateSummary}" FontSize="12" FontWeight="SemiBold"
+                   Foreground="#FFE6E6" />
+      </Border>
+      <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+        <Button Content="{x:Static res:Strings.ClearHealthButton}" Command="{Binding ClearHealthCommand}" />
+        <Button Content="{x:Static res:Strings.AddPortAudioButton}" Command="{Binding AddPortAudioCommand}" />
+        <Button Content="{x:Static res:Strings.AddLocalVideoButton}" Command="{Binding AddLocalVideoCommand}" />
+        <Button Content="{x:Static res:Strings.AddNdiButton}"
+                Command="{Binding AddNDICommand}"
+                IsVisible="{Binding IsNdiAvailable}" />
+      </StackPanel>
+    </Grid>
+
+    <!-- I/O master-detail (plan §5): slim line list on the left, detail + live stats for the
+         selected line on the right. Per-line action buttons and the sparkline moved into the
+         detail pane; rows stay scannable (health dot · kind · name · badges). -->
+    <Grid Grid.Row="1" ColumnDefinitions="340,10,*">
+
+      <Border Grid.Column="0" Classes="card">
+        <Grid>
+          <TextBlock Text="{x:Static res:Strings.NoOutputsEmptyHint}"
+                     TextWrapping="Wrap"
+                     Opacity="0.65"
+                     HorizontalAlignment="Center"
+                     VerticalAlignment="Center"
+                     IsVisible="{Binding HasNoOutputs}" />
+          <ListBox ItemsSource="{Binding Outputs}"
+                   SelectedItem="{Binding SelectedLine, Mode=TwoWay}"
+                   Background="Transparent">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:OutputLineViewModel">
+                <StackPanel Orientation="Horizontal" Spacing="6" Margin="{Binding IndentMargin}">
+                  <Ellipse Width="10" Height="10"
+                           VerticalAlignment="Center"
+                           Fill="{Binding HealthColor}"
+                           ToolTip.Tip="{Binding HealthToolTip}" />
+                  <TextBlock Text="{x:Static res:Strings.CloneOutputGlyph}" Opacity="0.6" IsVisible="{Binding IsClone}" />
+                  <TextBlock Text="{Binding KindLabel}" Opacity="0.7" FontSize="12" VerticalAlignment="Center"
+                             ToolTip.Tip="{Binding KindTechnicalLabel}" />
+                  <TextBlock Text="{Binding EffectiveName}" FontWeight="SemiBold" VerticalAlignment="Center"
+                             TextTrimming="CharacterEllipsis"
+                             ToolTip.Tip="{Binding Definition.DisplayName}" />
+                </StackPanel>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+      </Border>
+
+      <Border Grid.Column="2" Classes="card">
+        <Grid>
+          <TextBlock Text="{x:Static res:Strings.OutputDetailEmptyHint}"
+                     Opacity="0.55" TextWrapping="Wrap"
+                     HorizontalAlignment="Center" VerticalAlignment="Center"
+                     IsVisible="{Binding SelectedLine, Converter={x:Static ObjectConverters.IsNull}}" />
+          <ContentControl Content="{Binding SelectedLine}">
+            <ContentControl.ContentTemplate>
+              <DataTemplate x:DataType="vm:OutputLineViewModel">
+                <StackPanel Spacing="10">
+
+                  <!-- Identity: alias editor (blank restores device name) + technical identity. -->
+                  <StackPanel Spacing="2">
+                    <TextBox Text="{Binding NameEdit, Mode=TwoWay}" FontWeight="SemiBold" FontSize="16"
+                             BorderThickness="0" Background="Transparent" Padding="2,0"
+                             ToolTip.Tip="{x:Static res:Strings.OutputAliasTooltip}" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                      <TextBlock Classes="CaptionText" Text="{Binding KindTechnicalLabel}" />
+                      <TextBlock Classes="CaptionText" Text="{Binding Definition.DisplayName}" />
+                      <TextBlock Classes="CaptionText" Text="{Binding CloneParentLabel}" IsVisible="{Binding IsClone}" />
+                    </StackPanel>
+                  </StackPanel>
+
+                  <TextBlock Classes="hint" Text="{Binding Summary}" />
+
+                  <!-- Actions -->
+                  <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button Content="{x:Static res:Strings.FullscreenPreviewMenuHeader}"
+                            Command="{Binding FullscreenPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                    <Button Content="{x:Static res:Strings.WindowedPreviewMenuHeader}"
+                            Command="{Binding WindowedPreviewCommand}"
+                            IsVisible="{Binding IsLocalVideo}" />
+                    <Button Content="{x:Static res:Strings.EditButton}" Command="{Binding EditCommand}" />
+                    <Button Content="{x:Static res:Strings.RemoveButton}" Command="{Binding RemoveCommand}" />
+                  </StackPanel>
+
+                  <!-- Live stats card (plan §5): health + delivery counters + 60 s throughput. -->
+                  <Border Classes="card">
+                    <StackPanel Spacing="6">
+                      <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Ellipse Width="10" Height="10" VerticalAlignment="Center" Fill="{Binding HealthColor}" />
+                        <TextBlock Text="{Binding HealthToolTip}" TextWrapping="Wrap" FontSize="12" />
+                      </StackPanel>
+                      <TextBlock FontFamily="Consolas,monospace" FontSize="12" Opacity="0.8"
+                                 Text="{Binding StatsSummary}"
+                                 IsVisible="{Binding StatsSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                      <ctrls:SparklineControl Height="48" HorizontalAlignment="Stretch"
+                                              Samples="{Binding SparklineSamples}"
+                                              PeakSample="{Binding SparklinePeakSample}"
+                                              Revision="{Binding SparklineRevision}"
+                                              Stroke="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.Instance}}"
+                                              AreaFill="{Binding HealthColor, Converter={x:Static vm:BrushFromHexConverter.AreaInstance}}"
+                                              ToolTip.Tip="{x:Static res:Strings.OutputThroughputTooltip}" />
+                    </StackPanel>
+                  </Border>
+                </StackPanel>
+              </DataTemplate>
+            </ContentControl.ContentTemplate>
+          </ContentControl>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <Expander Grid.Row="2"
+              Header="{x:Static res:Strings.AdvancedRoutingHeader}"
+              Classes="dense"
+              IsExpanded="False"
+              IsVisible="{Binding HasAdvancedRoutingConfiguration}">
+      <StackPanel Spacing="10" Margin="0,8,0,0">
+        <Border Classes="card">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="{x:Static res:Strings.SharedHeadphonesBusesLabel}" FontWeight="SemiBold" Margin="0,0,0,6" />
+            <TextBlock DockPanel.Dock="Top" Classes="hint"
+                       Text="{x:Static res:Strings.SharedHeadphonesBusesHint}" />
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+              <Button Content="{x:Static res:Strings.AddBusButton}" Command="{Binding AddSharedHeadphonesBusCommand}" />
+            </StackPanel>
+            <ListBox ItemsSource="{Binding SharedHeadphonesBuses}" Background="Transparent" Margin="0,6,0,0" MaxHeight="180">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:SharedHeadphonesBusViewModel">
+                  <Grid ColumnDefinitions="220,*,Auto" ColumnSpacing="8" Margin="0,2">
+                    <TextBox Grid.Column="0" Text="{Binding Label, Mode=TwoWay}" />
+                    <ComboBox Grid.Column="1"
+                              ItemsSource="{Binding $parent[UserControl].((vm:OutputManagementViewModel)DataContext).PortAudioOutputLines}"
+                              SelectedValueBinding="{Binding Definition.Id}"
+                              SelectedValue="{Binding PortAudioOutputId, Mode=TwoWay}">
+                      <ComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:OutputLineViewModel">
+                          <TextBlock Text="{Binding EffectiveName}" />
+                        </DataTemplate>
+                      </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Grid.Column="2" Content="{x:Static res:Strings.RemoveButton}"
+                            Command="{Binding $parent[UserControl].((vm:OutputManagementViewModel)DataContext).RemoveSharedHeadphonesBusCommand}"
+                            CommandParameter="{Binding}" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+      </StackPanel>
+    </Expander>
+  </Grid>
+</UserControl>

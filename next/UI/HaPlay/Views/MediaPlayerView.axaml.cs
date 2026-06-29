@@ -1,0 +1,288 @@
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
+using HaPlay.Resources;
+using HaPlay.ViewModels;
+using S.Media.Core;
+
+namespace HaPlay.Views;
+
+public partial class MediaPlayerView : UserControl
+{
+    private const double CompactWidthThreshold = 500;
+
+    public MediaPlayerView()
+    {
+        InitializeComponent();
+        SeekSlider.AddHandler(PointerPressedEvent, OnSeekSliderPointerPressed,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        SeekSlider.AddHandler(PointerReleasedEvent, OnSeekSliderPointerReleased,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        SeekSlider.AddHandler(KeyDownEvent, OnSeekSliderKeyDown,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        SeekSlider.AddHandler(KeyUpEvent, OnSeekSliderKeyUp,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        VolumeSlider.AddHandler(InputElement.DoubleTappedEvent, OnVolumeSliderDoubleTapped,
+            RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        AddHandler(KeyDownEvent, OnUserControlKeyDown, RoutingStrategies.Tunnel | RoutingStrategies.Bubble);
+        // Internal row reordering is handled by the Xaml.Behaviors ItemDragBehavior (ListBox.draggable).
+        // The code-behind only handles external OS file drops onto the playlist.
+        DragDrop.SetAllowDrop(PlaylistListBox, true);
+        PlaylistListBox.AddHandler(DragDrop.DragOverEvent, OnPlaylistDragOver, RoutingStrategies.Bubble);
+        PlaylistListBox.AddHandler(DragDrop.DropEvent, OnPlaylistDrop, RoutingStrategies.Bubble);
+        SeekSlider.AddHandler(PointerMovedEvent, OnSeekSliderPointerMoved, RoutingStrategies.Tunnel);
+        SizeChanged += OnSizeChanged;
+    }
+
+    private void OnSizeChanged(object? sender, SizeChangedEventArgs e)
+    {
+        var isCompact = e.NewSize.Width < CompactWidthThreshold;
+        if (isCompact && !Classes.Contains("compact"))
+            Classes.Add("compact");
+        else if (!isCompact && Classes.Contains("compact"))
+            Classes.Remove("compact");
+    }
+
+    private void OnPlaylistDragOver(object? sender, DragEventArgs e)
+    {
+        _ = sender;
+        // Only external file drops are accepted here; row reordering is owned by ItemDragBehavior.
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.File)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+    }
+
+    /// <summary>Copies the remote API URL playing the selected playlist item (the menu operates on
+    /// the selection, like the other playlist context actions). Player/playlist/item numbers are
+    /// 1-based to match the UI labels.</summary>
+    private async void OnCopyPlaylistItemApiUrlClick(object? sender, RoutedEventArgs e)
+    {
+        _ = sender;
+        _ = e;
+        if (DataContext is not MediaPlayerViewModel vm
+            || vm.SelectedPlaylistTab is not { } tab
+            || vm.SelectedPlaylistItem is not { } item)
+            return;
+
+        var itemIndex = tab.Items.IndexOf(item);
+        var tabIndex = vm.PlaylistTabs.IndexOf(tab);
+        var playerIndex = (TopLevel.GetTopLevel(this)?.DataContext as MainViewModel)?.Players.IndexOf(vm) ?? -1;
+        if (itemIndex < 0 || tabIndex < 0 || playerIndex < 0)
+            return;
+
+        var url = Remote.RemoteApi.PlaylistItemPlayUrl(playerIndex + 1, tabIndex + 1, itemIndex + 1);
+        var clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
+        if (clipboard is null)
+            return;
+        await clipboard.SetTextAsync(url);
+        ToastCenter.Info(Strings.Format(nameof(Strings.CopiedToClipboardToastFormat), url));
+    }
+
+    private void OnPlaylistDrop(object? sender, DragEventArgs e)
+    {
+        _ = sender;
+        if (DataContext is not MediaPlayerViewModel vm)
+            return;
+
+        var files = e.DataTransfer.TryGetFiles();
+        if (files is null || !files.Any())
+            return;
+
+        var paths = files
+            .Select(f => f.Path.LocalPath)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+        if (paths.Count > 0)
+            vm.AddDroppedFilesToPlaylist(paths);
+    }
+
+    private void OnPlayerNameDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (sender is TextBox tb)
+        {
+            tb.IsReadOnly = false;
+            tb.SelectAll();
+        }
+    }
+
+    private void OnPlayerNameLostFocus(object? sender, RoutedEventArgs e)
+    {
+        if (sender is TextBox tb)
+            tb.IsReadOnly = true;
+    }
+
+    private void OnPlayerNameKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is TextBox tb && e.Key is Key.Return or Key.Escape)
+        {
+            tb.IsReadOnly = true;
+            e.Handled = true;
+        }
+    }
+
+    private void OnSeekSliderPointerMoved(object? sender, PointerEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm || vm.Duration <= TimeSpan.Zero)
+            return;
+
+        var pos = e.GetPosition(SeekSlider);
+        var width = SeekSlider.Bounds.Width;
+        if (width <= 0) return;
+
+        var ratio = Math.Clamp(pos.X / width, 0, 1);
+        var hoverTime = TimeSpan.FromTicks((long)(vm.Duration.Ticks * ratio));
+        var formatted = hoverTime.TotalHours >= 1
+            ? hoverTime.ToString(@"hh\:mm\:ss")
+            : hoverTime.ToString(@"mm\:ss");
+        ToolTip.SetTip(SeekSlider, formatted);
+    }
+
+    private void OnVolumeSliderDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (DataContext is MediaPlayerViewModel vm)
+            vm.ResetVolume();
+    }
+
+    private void OnMiddleTimeTapped(object? sender, TappedEventArgs e)
+    {
+        if (DataContext is MediaPlayerViewModel vm)
+            vm.ToggleMiddleTimeDisplay();
+    }
+
+    private void OnPlaylistItemDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        SDebug.ChangeTrace.Begin("playlist double-tap");
+        if (DataContext is not MediaPlayerViewModel vm)
+        {
+            SDebug.ChangeTrace.End("cancelled (no VM)");
+            return;
+        }
+
+        if (sender is not ListBox lb || lb.SelectedItem is not PlaylistItem item)
+        {
+            SDebug.ChangeTrace.End("cancelled (no item)");
+            return;
+        }
+
+        SDebug.ChangeTrace.Step("view prechecks done");
+        _ = vm.PlayPlaylistItemAsync(item);
+    }
+
+    private static bool IsSeekNavKey(Key key) =>
+        key is Key.Left or Key.Right or Key.Home or Key.End or Key.PageUp or Key.PageDown;
+
+    private void OnSeekSliderPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // Take ownership of the thumb the instant the drag begins so the playback clock stops writing
+        // SeekSliderValue out from under the user (see MediaPlayerViewModel.IsScrubbing).
+        if (DataContext is MediaPlayerViewModel vm)
+            vm.IsScrubbing = true;
+    }
+
+    private void OnSeekSliderPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm) return;
+        // Execute synchronously captures the dragged target into the seek arc before we hand the slider
+        // back to the clock, so clearing IsScrubbing here can't race the committed value.
+        if (vm.SeekToSliderCommand.CanExecute(null))
+            vm.SeekToSliderCommand.Execute(null);
+        vm.IsScrubbing = false;
+    }
+
+    private void OnSeekSliderKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is MediaPlayerViewModel vm && IsSeekNavKey(e.Key))
+            vm.IsScrubbing = true;
+    }
+
+    private void OnSeekSliderKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is not MediaPlayerViewModel vm) return;
+        if (IsSeekNavKey(e.Key))
+        {
+            if (vm.SeekToSliderCommand.CanExecute(null))
+                vm.SeekToSliderCommand.Execute(null);
+            vm.IsScrubbing = false;
+        }
+    }
+
+    private void OnUserControlKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.Handled) return;
+        if (DataContext is not MediaPlayerViewModel vm) return;
+
+        if (e.Source is TextBox || e.Source is NumericUpDown)
+            return;
+        if (e.Source is Slider)
+            return;
+        if (e.KeyModifiers != KeyModifiers.None)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.Space:
+                if (vm.TogglePlayPauseCommand.CanExecute(null))
+                {
+                    vm.TogglePlayPauseCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            case Key.OemOpenBrackets:
+                if (vm.PreviousTrackCommand.CanExecute(null))
+                {
+                    vm.PreviousTrackCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            case Key.OemCloseBrackets:
+                if (vm.NextTrackCommand.CanExecute(null))
+                {
+                    vm.NextTrackCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            case Key.OemComma:
+                if (vm.JogBackCommand.CanExecute(null))
+                {
+                    vm.JogBackCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            case Key.OemPeriod:
+                if (vm.JogForwardCommand.CanExecute(null))
+                {
+                    vm.JogForwardCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            case Key.Home:
+                if (vm.SeekToStartCommand.CanExecute(null))
+                {
+                    vm.SeekToStartCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            // `+` / `-` (and numpad) nudge master volume. Arrow keys are intentionally avoided so
+            // they keep navigating the playlist list.
+            case Key.OemPlus:
+            case Key.Add:
+                if (vm.VolumeUpCommand.CanExecute(null))
+                {
+                    vm.VolumeUpCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+            case Key.OemMinus:
+            case Key.Subtract:
+                if (vm.VolumeDownCommand.CanExecute(null))
+                {
+                    vm.VolumeDownCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+        }
+    }
+}

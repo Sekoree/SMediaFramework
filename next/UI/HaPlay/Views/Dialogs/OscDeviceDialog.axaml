@@ -1,0 +1,48 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:HaPlay.ViewModels.Dialogs"
+        x:Class="HaPlay.Views.Dialogs.OscDeviceDialog"
+        x:DataType="vm:OscDeviceDialogViewModel"
+        Title="{Binding Title}"
+        Width="460" Height="320"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        SizeToContent="Height">
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Cancel" Click="CancelClick" IsCancel="True" />
+      <Button Content="Save" Click="OkClick" IsDefault="True" IsEnabled="{Binding IsValid}" />
+    </StackPanel>
+
+    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10" RowSpacing="10">
+      <TextBlock Grid.Row="0" Grid.Column="0" Text="Name" VerticalAlignment="Center" />
+      <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Name}" PlaceholderText="X32" />
+
+      <TextBlock Grid.Row="1" Grid.Column="0" Text="Profile" VerticalAlignment="Center" />
+      <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                ItemsSource="{Binding ProfileOptions}" SelectedItem="{Binding SelectedProfile}">
+        <ComboBox.ItemTemplate>
+          <DataTemplate DataType="vm:OscDeviceProfileOption">
+            <TextBlock Text="{Binding Display}" />
+          </DataTemplate>
+        </ComboBox.ItemTemplate>
+      </ComboBox>
+
+      <TextBlock Grid.Row="2" Grid.Column="0" Text="Host / Port" VerticalAlignment="Center" />
+      <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,80" ColumnSpacing="8">
+        <TextBox Grid.Column="0" Text="{Binding Host}" PlaceholderText="192.168.2.76" />
+        <TextBox Grid.Column="1" Text="{Binding PortText}" PlaceholderText="10023" />
+      </Grid>
+
+      <TextBlock Grid.Row="3" Grid.Column="0" Text="Alias" VerticalAlignment="Center" />
+      <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Alias}"
+               PlaceholderText="x32  (the deviceKey scripts use, e.g. osc.send(&quot;x32&quot;, …))" />
+
+      <TextBlock Grid.Row="4" Grid.Column="0" Text="Client source port" VerticalAlignment="Center" />
+      <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding LocalPortText}"
+               PlaceholderText="blank = automatic; avoid app listener ports such as 10020" />
+
+      <CheckBox Grid.Row="5" Grid.Column="1" Content="Enabled" IsChecked="{Binding IsEnabled}" />
+    </Grid>
+  </DockPanel>
+</Window>

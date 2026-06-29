@@ -45,6 +45,9 @@ public static unsafe partial class LibAssNative
     [LibraryImport(Library, EntryPoint = "ass_set_frame_size")]
     public static partial void ass_set_frame_size(nint renderer, int w, int h);
 
+    [LibraryImport(Library, EntryPoint = "ass_set_font_scale")]
+    public static partial void ass_set_font_scale(nint renderer, double fontScale);
+
     [LibraryImport(Library, EntryPoint = "ass_set_storage_size")]
     public static partial void ass_set_storage_size(nint renderer, int w, int h);
 

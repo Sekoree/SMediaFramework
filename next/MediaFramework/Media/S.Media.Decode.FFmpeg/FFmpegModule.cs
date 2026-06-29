@@ -110,7 +110,7 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
 }
 
 /// <summary>Owns a <see cref="MediaContainerDecoder"/> and exposes its video track as an <see cref="IVideoSource"/>.</summary>
-internal sealed class ContainerOwnedVideoSource : IVideoSource, IDisposable
+internal sealed class ContainerOwnedVideoSource : IVideoSource, IAttachedPictureSource, IDisposable
 {
     private readonly MediaContainerDecoder _container;
     private readonly IVideoSource _inner;
@@ -121,6 +121,10 @@ internal sealed class ContainerOwnedVideoSource : IVideoSource, IDisposable
         _container = container ?? throw new ArgumentNullException(nameof(container));
         _inner = container.Video;
     }
+
+    /// <summary>Surfaces the container's album-art disposition so consumers (e.g. MediaPlayer.VideoIsAttachedPicture)
+    /// can drive a still-frame display mode.</summary>
+    public bool IsAttachedPicture => _container.VideoIsAttachedPicture;
 
     public VideoFormat Format => _inner.Format;
     public IReadOnlyList<PixelFormat> NativePixelFormats => _inner.NativePixelFormats;
