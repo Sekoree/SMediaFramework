@@ -48,6 +48,9 @@ public sealed class ClipCompositionRuntime : IDisposable
     private readonly VideoCompositorSource _mixer;
     private readonly object _gate = new();
     private readonly List<AcquiredOutput> _acquired = [];
+    // Lock-free, allocation-free read of the acquired outputs for the per-frame pump (NXT-11): republished under
+    // _gate whenever _acquired changes, so PumpOneFrame reads a stable immutable view without a per-frame ToList.
+    private volatile IReadOnlyList<AcquiredOutput> _acquiredSnapshot = [];
     private readonly List<LayerSlot> _slots = [];
     private readonly TimeSpan _canvasPeriod;
     private long _nextLayerSequence;
@@ -85,6 +88,9 @@ public sealed class ClipCompositionRuntime : IDisposable
     /// <summary>Clip-owned subtitle layers. Each feed has its own clip-position provider, allowing several
     /// subtitle tracks and clips on one composition without sharing a global subtitle timeline.</summary>
     private readonly List<SubtitleLayerFeed> _subtitleFeeds = [];
+    // Same lock-free snapshot pattern as _acquiredSnapshot — the per-frame DriveSubtitleLayers reads this
+    // instead of snapshotting _subtitleFeeds.ToArray() every tick (NXT-11).
+    private volatile IReadOnlyList<SubtitleLayerFeed> _subtitleFeedsSnapshot = [];
 
     public ClipCompositionRuntime(
         ClipCompositionDefinition definition,
@@ -123,10 +129,16 @@ public sealed class ClipCompositionRuntime : IDisposable
             _acquired.Add(acquired);
             acquired.SubscribePumpPressure(this);
         }
+        RepublishAcquiredSnapshot();
 
         SetCompositionMappingCore(compositionMapping, out _);
         ReevaluateIntegratedWarp();
     }
+
+    // Rebuilds the lock-free pump snapshots after a mutation (NXT-11). Callers either hold _gate or run during
+    // single-threaded construction; the volatile publish makes the new view visible to the pump thread.
+    private void RepublishAcquiredSnapshot() => _acquiredSnapshot = _acquired.ToArray();
+    private void RepublishSubtitleFeedsSnapshot() => _subtitleFeedsSnapshot = _subtitleFeeds.ToArray();
 
     /// <summary>
     /// Routes the warp through the canvas compositor itself when possible: with exactly one mapped
@@ -274,6 +286,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (_disposed)
                 return false;
             _acquired.Add(acquired);
+            RepublishAcquiredSnapshot();
         }
 
         acquired.SubscribePumpPressure(this);
@@ -297,6 +310,7 @@ public sealed class ClipCompositionRuntime : IDisposable
 
                 removed = _acquired[i];
                 _acquired.RemoveAt(i);
+                RepublishAcquiredSnapshot();
                 break;
             }
         }
@@ -445,23 +459,27 @@ public sealed class ClipCompositionRuntime : IDisposable
         var layer = AddLayer(_canvasFormat, placement);
         var feed = new SubtitleLayerFeed(this, source, layer, positionProvider);
         lock (_gate)
+        {
             _subtitleFeeds.Add(feed);
+            RepublishSubtitleFeedsSnapshot();
+        }
         return feed;
     }
 
     private void RemoveSubtitleFeed(SubtitleLayerFeed feed)
     {
         lock (_gate)
+        {
             _subtitleFeeds.Remove(feed);
+            RepublishSubtitleFeedsSnapshot();
+        }
         RemoveLayer(feed.Layer);
     }
 
     /// <summary>Renders every subtitle source at its owning clip position. Pump-thread only.</summary>
     private void DriveSubtitleLayers()
     {
-        SubtitleLayerFeed[] feeds;
-        lock (_gate)
-            feeds = _subtitleFeeds.ToArray();
+        var feeds = _subtitleFeedsSnapshot; // lock-free, allocation-free per-frame read (NXT-11)
 
         foreach (var feed in feeds)
             DriveSubtitleLayer(feed);
@@ -675,8 +693,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         // reads the mixer, so it composites uniformly with the video layers (z-order/opacity/blend).
         DriveSubtitleLayers();
 
-        List<AcquiredOutput> snapshot;
-        lock (_gate) snapshot = _acquired.ToList();
+        var snapshot = _acquiredSnapshot; // lock-free, allocation-free per-frame read (NXT-11)
 
         if (snapshot.Count == 0)
             return;
@@ -786,7 +803,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         RecordPumpTiming(sw.Elapsed, _canvasPeriod);
     }
 
-    private bool TryPumpIntegratedMultiWarp(TimeSpan? masterPts, List<AcquiredOutput> snapshot, Stopwatch sw)
+    private bool TryPumpIntegratedMultiWarp(TimeSpan? masterPts, IReadOnlyList<AcquiredOutput> snapshot, Stopwatch sw)
     {
         if (_compositionMappingStage is not null
             || _integratedWarpActive
@@ -955,6 +972,7 @@ public sealed class ClipCompositionRuntime : IDisposable
             acquiredToRetire = _acquired.ToList();
             subtitleFeeds = _subtitleFeeds.ToList();
             _subtitleFeeds.Clear();
+            RepublishSubtitleFeedsSnapshot();
 
             // Retire mapping stages up front so the driver-thread dispose window below (and the
             // direct drain fallback at the end) can tear their compositors down.
@@ -995,6 +1013,7 @@ public sealed class ClipCompositionRuntime : IDisposable
         {
             _slots.Clear();
             _acquired.Clear();
+            RepublishAcquiredSnapshot();
         }
 
         // Best-effort fallback for stages the driver window didn't reach (pump never started, or

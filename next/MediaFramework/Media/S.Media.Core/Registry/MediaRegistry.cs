@@ -14,6 +14,7 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
     internal Func<IAudioSource, int, IAudioSource>? ResamplerFactory;
     internal AdaptiveRateOutputFactory? AdaptiveRateFactory;
     internal Func<VideoFormat, IDeinterlacer>? DeinterlacerFactory;
+    internal readonly List<IDisposable> Lifetimes = [];
 
     public IMediaRegistryBuilder AddDecoder(IMediaDecoderProvider provider)
     {
@@ -68,6 +69,13 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
         return this;
     }
 
+    public IMediaRegistryBuilder AddLifetime(IDisposable lifetime)
+    {
+        ArgumentNullException.ThrowIfNull(lifetime);
+        Lifetimes.Add(lifetime);
+        return this;
+    }
+
     internal static string NormalizeExtension(string extension)
     {
         var ext = extension.Trim();
@@ -82,7 +90,7 @@ public sealed class MediaRegistryBuilder : IMediaRegistryBuilder
 /// root and inject it. No process-wide mutable state — two registries with different capabilities can
 /// coexist in one process, and tests build a registry per case (replaces the old PreserveDefaults hack).
 /// </summary>
-public sealed class MediaRegistry : IMediaRegistry
+public sealed class MediaRegistry : IMediaRegistry, IDisposable
 {
     private readonly IReadOnlyList<IMediaDecoderProvider> _decoders;
     private readonly Dictionary<string, Func<string, IVideoSource>> _imageFactories;
@@ -90,6 +98,8 @@ public sealed class MediaRegistry : IMediaRegistry
     private readonly Func<IAudioSource, int, IAudioSource>? _resampler;
     private readonly AdaptiveRateOutputFactory? _adaptiveRate;
     private readonly Func<VideoFormat, IDeinterlacer>? _deinterlacer;
+    private readonly List<IDisposable> _lifetimes;
+    private bool _disposed;
 
     public IReadOnlyList<IAudioBackend> AudioBackends { get; }
 
@@ -104,6 +114,22 @@ public sealed class MediaRegistry : IMediaRegistry
         _resampler = b.ResamplerFactory;
         _adaptiveRate = b.AdaptiveRateFactory;
         _deinterlacer = b.DeinterlacerFactory;
+        _lifetimes = [.. b.Lifetimes];
+    }
+
+    /// <summary>Releases the native/runtime lifetimes registered by modules (NXT-05), in reverse registration
+    /// order. Idempotent. Dispose only when no player/session still uses the registry — that is the owning
+    /// host's responsibility (a borrowing <c>ShowSession</c> must NOT dispose a registry it was handed).</summary>
+    public void Dispose()
+    {
+        if (_disposed)
+            return;
+        _disposed = true;
+        for (var i = _lifetimes.Count - 1; i >= 0; i--)
+        {
+            try { _lifetimes[i].Dispose(); }
+            catch { /* a lifetime release must never throw out of registry disposal */ }
+        }
     }
 
     /// <summary>Builds an immutable registry from a configuration callback (the composition root).</summary>

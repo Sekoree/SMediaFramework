@@ -75,6 +75,7 @@ internal static unsafe class NativeApi
             {
                 try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
                 catch { /* teardown best-effort */ }
+                (box.Registry as IDisposable)?.Dispose(); // release native runtime holds (NXT-05)
             }
             s_initialized = false;
             FreeLastErrorNative();
@@ -142,6 +143,7 @@ internal static unsafe class NativeApi
                 return; // unknown / already-destroyed handle → idempotent no-op (no throw, no double-free)
             try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
             catch { /* teardown is best-effort */ }
+            (box.Registry as IDisposable)?.Dispose(); // release the session's PortAudio/NDI runtime holds (NXT-05)
         }
         catch { /* no-throw boundary across the ABI */ }
     }

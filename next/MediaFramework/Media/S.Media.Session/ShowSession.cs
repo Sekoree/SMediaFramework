@@ -46,6 +46,10 @@ public sealed class ShowSession : IAsyncDisposable
     // session NEVER disposes it (NXT-01: disposing a borrowed SDL/NDI output is a use-after-reload defect).
     // Null ⇒ headless discard. Lets the GUI surface composited video to its output lines.
     private readonly Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? _videoOutputFactory;
+    // Host compositor factory (canvas format → compositor). Null ⇒ the default CPU compositor; a host that has a
+    // GL context can inject a GPU/warp compositor so session compositions use the intended zero-copy GPU path
+    // instead of building full-BGRA CPU canvases (NXT-11). Threaded into every ClipCompositionRuntime at load.
+    private readonly Func<VideoFormat, ClipCompositionCompositor>? _compositorFactory;
     // Opens + warms clips (seek-to-Start trim-in, standby pre-roll). Clips arm through here instead of a
     // direct MediaGraph build so the show can pre-roll upcoming cues (8b convergence). All access is on the
     // serial dispatcher; the engine is also internally thread-safe.
@@ -85,12 +89,14 @@ public sealed class ShowSession : IAsyncDisposable
         IMediaRegistry registry,
         IAudioBackend? audioBackend = null,
         Func<string, int, int, int, IVideoOverlaySource?>? subtitleFactory = null,
-        Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? videoOutputFactory = null)
+        Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? videoOutputFactory = null,
+        Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
         _subtitleFactory = subtitleFactory;
         _videoOutputFactory = videoOutputFactory;
+        _compositorFactory = compositorFactory;
         _standby.StandbyStatesChanged += states => PreparedCuesChanged?.Invoke(states);
         if (audioBackend is not null)
         {
@@ -206,7 +212,7 @@ public sealed class ShowSession : IAsyncDisposable
                     : [new ClipCompositionOutputLease(
                         $"{comp.Id}_out", comp.Name, new DiscardingVideoOutput(), DisposeOutputOnRuntimeDispose: true)];
                 newCompositions[comp.Id] = new ClipCompositionRuntime(
-                    definition, leases, compositionMapping: comp.OutputMapping);
+                    definition, leases, compositorFactory: _compositorFactory, compositionMapping: comp.OutputMapping);
             }
         }
         catch
@@ -260,11 +266,13 @@ public sealed class ShowSession : IAsyncDisposable
         // (warm) clip be reused across fires — the layer is per-fire. The free-running composition pump then
         // composites the fed frames (CPU headless), selecting the latest frame (no clock master → no rebasing).
         ClipCompositionRuntime.LayerSlot? layer = null;
+        ClipCompositionRuntime? composition = null;
         if (binding.CompositionId is { } compositionId &&
-            _compositions.TryGetValue(compositionId, out var composition))
+            _compositions.TryGetValue(compositionId, out var comp))
         {
-            layer = composition.AddLayer(
-                composition.CanvasFormat,
+            composition = comp;
+            layer = comp.AddLayer(
+                comp.CanvasFormat,
                 BuildVideoPlacementSpec(compositionId, binding.LayerIndex, binding.Placement));
         }
 
@@ -291,7 +299,19 @@ public sealed class ShowSession : IAsyncDisposable
         try
         {
             if (layer is not null)
+            {
                 player.AttachVideoOutput(layer.Output); // the clip's video feeds the composition layer
+                // NXT-04: clock-master the composition pump to this transport group, so it composites at the
+                // group clock's cadence and selects frames against the clip's playhead instead of free-running
+                // (showing the latest frame). The master is the GROUP's SessionClock — stable across cues (it
+                // re-references each active clip and survives replacement), so SetClockMaster's once-only master
+                // stays valid as cues change while the per-clip timeline (the playhead) updates each fire.
+                // ShowSession feeds the layer raw source frames (no retiming), so the playhead and frame PTS
+                // share the source timebase — no trim offset needed. Live sources keep the free-run "latest
+                // frame" path: their A/V correlation is the separate live-sync work (NXT-04 live half).
+                if (!player.IsLive)
+                    composition!.SetClockMaster(new SessionClockMaster(group.Clock), player.PlayClock);
+            }
 
             if (_audioBackend is not null && player.AudioRouter is not null)
             {
@@ -1226,5 +1246,16 @@ public sealed class ShowSession : IAsyncDisposable
     {
         public TimeSpan ElapsedSinceStart => playhead.CurrentPosition;
         public bool IsAdvancing => playhead.IsRunning;
+    }
+
+    /// <summary>Exposes a transport group's <see cref="SessionClock"/> as an <see cref="IPlaybackClock"/> so a
+    /// composition pump can be clock-mastered to the group (NXT-04). It follows whatever clip the group is
+    /// playing (the SessionClock re-references the active clip's playhead) and survives clip replacement, unlike
+    /// a per-clip clock which dies when its clip is released — which is what lets the once-only composition
+    /// master stay valid across successive cues.</summary>
+    private sealed class SessionClockMaster(SessionClock clock) : IPlaybackClock
+    {
+        public TimeSpan ElapsedSinceStart => clock.Now;
+        public bool IsAdvancing => clock.IsAdvancing;
     }
 }

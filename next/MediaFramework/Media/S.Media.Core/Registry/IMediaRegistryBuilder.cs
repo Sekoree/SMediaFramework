@@ -36,5 +36,11 @@ public interface IMediaRegistryBuilder
     /// <summary>Applies a module's registrations. Fluent so a composition root reads as a list of modules.</summary>
     IMediaRegistryBuilder Use(IMediaModule module);
 
+    /// <summary>Registers a disposable lifetime (e.g. a native runtime lease) that the built
+    /// <see cref="IMediaRegistry"/> owns and disposes when the registry is disposed — so a module can acquire a
+    /// process/native resource at registration and release it deterministically with the registry instead of
+    /// leaking it (NXT-05). Lifetimes are disposed in reverse registration order.</summary>
+    IMediaRegistryBuilder AddLifetime(IDisposable lifetime);
+
     // Presenter (SDL3/Avalonia/NDI-out) and subtitle registration arrive with those modules in Phase 3/6.
 }

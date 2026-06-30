@@ -24,14 +24,14 @@ public sealed class NDIModule(TimeSpan? audioMinBuffer = null) : IMediaModule
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        // One ref-counted NDI runtime reference. NDIRuntime has a static refcount and no finalizer, so the
-        // native runtime stays initialised for the process; the disposable handle is released by host /
-        // session shutdown wiring (deferred — the same model as PortAudio). Fail at registration if the
-        // SDK/CPU is unavailable rather than silently at first open.
+        // One ref-counted NDI runtime reference, owned by the registry: the disposable handle is registered as a
+        // lifetime and released when the registry is disposed (NXT-05), instead of being dropped on the floor and
+        // leaking the ref. Fail at registration if the SDK/CPU is unavailable rather than silently at first open.
         var rc = NDIRuntime.Create(out var runtime);
         if (rc != 0 || runtime is null)
             throw new InvalidOperationException($"NDI runtime init failed (error {rc}).");
 
+        builder.AddLifetime(runtime);
         builder.AddDecoder(new NDIDecoderProvider(audioMinBuffer));
     }
 }

@@ -12,9 +12,23 @@ public sealed class PortAudioModule : IMediaModule
     public void Register(IMediaRegistryBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        // Acquire one PortAudio runtime reference. Release is ref-counted; host/session disposal wiring
-        // (the equivalent of the old MediaFrameworkRuntime.Shutdown) lands with the session in Phase 4.
+        // Acquire one PortAudio runtime reference for the registry's lifetime and register its release, so the
+        // ref is dropped when the registry is disposed (NXT-05) instead of leaking. Without this a C-ABI host
+        // that creates/destroys sessions in a loop ratchets the PortAudio refcount up forever (Pa_Terminate
+        // never runs). Release is ref-counted, so device-driven Acquire/Release still balance independently.
         PortAudioRuntime.Acquire();
+        builder.AddLifetime(new PortAudioRuntimeLease());
         builder.AddAudioBackend(new PortAudioBackend());
+    }
+
+    /// <summary>Drops the registry's PortAudio runtime hold exactly once on dispose (NXT-05).</summary>
+    private sealed class PortAudioRuntimeLease : IDisposable
+    {
+        private int _released;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+                PortAudioRuntime.Release();
+        }
     }
 }

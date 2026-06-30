@@ -58,6 +58,22 @@ public static class PortAudioDeviceCatalog
         }
     }
 
+    /// <summary>The PortAudio device index treated as the "default" output. Honors the
+    /// <c>MFP_PORTAUDIO_HOST_API</c> environment variable (substring match against a host API name, e.g.
+    /// <c>JACK</c>): when set and that host API is present, its default output device is used instead of
+    /// PortAudio's global default. Lets a deployment — or a test run — route through JACK/PipeWire instead of
+    /// the box's ALSA default, whose virtual-PCM config is noisy and can be flaky under test. Unset / no match
+    /// ⇒ PortAudio's global default. Call only while the runtime is acquired (it enumerates host APIs).</summary>
+    private static int ResolveDefaultOutputDevice()
+    {
+        if (Environment.GetEnvironmentVariable("MFP_PORTAUDIO_HOST_API") is { Length: > 0 } preferred)
+            foreach (var api in EnumerateHostApis())
+                if (api.DefaultOutputDeviceIndex >= 0
+                    && api.Name.Contains(preferred, StringComparison.OrdinalIgnoreCase))
+                    return api.DefaultOutputDeviceIndex;
+        return Native.Pa_GetDefaultOutputDevice();
+    }
+
     /// <summary>
     /// Returns output-capable devices. When <paramref name="hostApiIndex"/> is set, only devices
     /// belonging to that host API are returned.
@@ -71,7 +87,7 @@ public static class PortAudioDeviceCatalog
             if (count <= 0)
                 return [];
 
-            var defaultOutput = Native.Pa_GetDefaultOutputDevice();
+            var defaultOutput = ResolveDefaultOutputDevice();
             var list = new List<PortAudioOutputDeviceEntry>(count);
             for (var i = 0; i < count; i++)
             {

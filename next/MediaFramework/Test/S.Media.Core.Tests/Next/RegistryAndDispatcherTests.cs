@@ -16,6 +16,31 @@ public class MediaRegistryTests
         Assert.Null(r.CreateResampler(new FakeAudioSource(), 48000));
     }
 
+    private sealed class DisposeSpy(Action onDispose) : IDisposable
+    {
+        public void Dispose() => onDispose();
+    }
+
+    [Fact]
+    public void Dispose_ReleasesRegisteredLifetimes_InReverseOrder_AndIsIdempotent()
+    {
+        // NXT-05: modules register native-runtime leases as lifetimes; disposing the registry releases them all,
+        // last-registered first, so a per-session (e.g. C-ABI) registry frees its native holds deterministically.
+        var order = new List<string>();
+        var registry = MediaRegistry.Build(b =>
+        {
+            b.AddLifetime(new DisposeSpy(() => order.Add("a")));
+            b.AddLifetime(new DisposeSpy(() => order.Add("b")));
+        });
+        Assert.Empty(order); // nothing released until the registry is disposed
+
+        registry.Dispose();
+        Assert.Equal(new[] { "b", "a" }, order); // reverse registration order
+
+        registry.Dispose(); // idempotent — no second release
+        Assert.Equal(new[] { "b", "a" }, order);
+    }
+
     [Fact]
     public void Highest_confidence_decoder_wins()
     {

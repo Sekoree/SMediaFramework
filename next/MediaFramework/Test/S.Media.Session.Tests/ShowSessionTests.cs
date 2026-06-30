@@ -586,6 +586,49 @@ public sealed class ShowSessionTests
         Assert.Contains(("screen", 1280, 720), seen);
     }
 
+    [Fact]
+    public async Task CompositorFactory_IsConsulted_PerComposition_AtLoad()
+    {
+        // NXT-11: ShowSession threads the injected compositor factory into each composition, so a host with a GL
+        // context can supply a GPU/warp compositor instead of the default CPU one. Prove the seam is consulted.
+        var seen = new List<(int W, int H)>();
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            compositorFactory: fmt =>
+            {
+                seen.Add((fmt.Width, fmt.Height));
+                return new ClipCompositionCompositor(new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU");
+            });
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips: [],
+            Compositions: [new ShowComposition("screen", "Screen", 640, 480, 30, 1)],
+            Outputs: [], Routes: [], Devices: []));
+
+        Assert.Contains((640, 480), seen);
+    }
+
+    [Fact]
+    public async Task CompositionBoundClip_ClockMastersTheComposition_NotFreeRunning()
+    {
+        // NXT-04: a composition-bound clip clock-masters its composition to the transport group, so the pump
+        // follows the clip's playhead instead of free-running (showing the latest frame, no clock master).
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips: [new ShowClipBinding("c", "fake://v", CompositionId: "screen")],
+            Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+
+        Assert.False((await session.GetCompositionStatsAsync("screen"))!.Value.ClockMastered); // free-run before any clip
+
+        await session.GoAsync();
+        Assert.True((await session.GetCompositionStatsAsync("screen"))!.Value.ClockMastered); // now mastered to the group
+    }
+
     /// <summary>An output that records how many times it was disposed — to prove the borrow contract.</summary>
     private sealed class DisposeCountingVideoOutput : IVideoOutput, IDisposable
     {
