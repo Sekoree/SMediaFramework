@@ -38,6 +38,23 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// the thread pool (it is uncancellable and the UI thread may be busy, e.g. behind a modal file dialog).</summary>
     public IReadOnlyList<OutputDefinition> DefinitionsSnapshot => _definitionsSnapshot;
 
+    /// <summary>Acquires the real <see cref="IVideoOutput"/> for an output line so a playback engine can render
+    /// onto it — the ShowSession cue re-back's video-output seam (mirrors how the cue engine acquires outputs).
+    /// MUST be called on the UI thread (realizes the SDL window / NDI sender). Returns null for a non-video line
+    /// or one with no realized runtime.</summary>
+    public IVideoOutput? AcquireVideoOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return null;
+        if (_localPreviews.TryGetValue(line, out var local))
+            return local.AcquireForPlayback();
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                return ndi.AcquireForPlayback(needsVideo: true, needsAudio: false)?.Video;
+        return null;
+    }
+
     /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
     /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
     public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();

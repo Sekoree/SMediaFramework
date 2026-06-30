@@ -17,6 +17,7 @@ using HaPlay.Resources;
 using Microsoft.Extensions.Logging;
 using S.Control;
 using S.Media.Core.Diagnostics;
+using S.Media.Core.Video;
 using S.Media.Interop;
 using S.Media.Session;
 using OSCLib;
@@ -38,6 +39,9 @@ public partial class MainViewModel : ViewModelBase
     // 8a.4 convergence: when HAPLAY_USE_SHOWSESSION=1, the cue transport re-backs onto this headless session
     // instead of the engine above (off by default → the engine path is untouched). See TryWireShowSessionCueTransport.
     private ShowSession? _cueShowSession;
+    // compositionId → the real video outputs it renders to, acquired on the UI thread in ReloadCueShowSession
+    // so ShowSession's video factory is a pure lookup during (synchronous) LoadDocument (no deadlock).
+    private Dictionary<string, IVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
     private bool _midiInitialized;
     private CancellationTokenSource? _endpointHealthCts;
     private DispatcherTimer? _endpointHealthTimer;
@@ -216,7 +220,8 @@ public partial class MainViewModel : ViewModelBase
             _cueShowSession = new ShowSession(
                 MediaRuntime.Registry,
                 backend,
-                (path, streamIndex, w, h) => SubtitleOverlayFactory.FromFileDeferred(path, w, h, streamIndex));
+                (path, streamIndex, w, h) => SubtitleOverlayFactory.FromFileDeferred(path, w, h, streamIndex),
+                (compId, _, _, _) => _cueVideoOutputs.TryGetValue(compId, out var outs) ? outs : Array.Empty<IVideoOutput>());
 
             CuePlayer.PropertyChanged += (_, e) =>
             {
@@ -257,8 +262,25 @@ public partial class MainViewModel : ViewModelBase
             return;
         try
         {
+            var model = list.ToModel();
+            // (UI thread) acquire the real video outputs for the cue list's composition→line bindings up front,
+            // so ShowSession's video factory is a pure lookup during LoadDocument — acquisition (SDL window /
+            // NDI sender) must be on the UI thread, and doing it here avoids a cross-thread acquire that would
+            // deadlock the synchronous LoadDocument. Old leases release as their compositions are disposed below.
+            var videoOutputs = new Dictionary<string, IVideoOutput[]>(StringComparer.Ordinal);
+            foreach (var binding in model.VideoOutputs)
+            {
+                if (binding.OutputLineId == Guid.Empty)
+                    continue;
+                if (OutputManagement.AcquireVideoOutputForLine(binding.OutputLineId) is not { } output)
+                    continue;
+                var key = binding.CompositionId.ToString();
+                videoOutputs[key] = videoOutputs.TryGetValue(key, out var existing) ? [.. existing, output] : [output];
+            }
+            _cueVideoOutputs = videoOutputs;
+
             _cueShowSession.LoadDocument(
-                HaPlayShowMapper.ToShowDocument(list.ToModel(), OutputManagement.DefinitionsSnapshot));
+                HaPlayShowMapper.ToShowDocument(model, OutputManagement.DefinitionsSnapshot));
         }
         catch (Exception ex)
         {
