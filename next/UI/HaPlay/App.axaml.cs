@@ -40,10 +40,13 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             Trace.LogDebug("App lifetime: classic desktop");
+            var mainVm = new MainViewModel();
             desktop.MainWindow = new MainWindow
             {
-                DataContext = new MainViewModel()
+                DataContext = mainVm
             };
+            // Best-effort teardown of the gated ShowSession cue re-back at shutdown (no-op when disabled).
+            desktop.ShutdownRequested += (_, _) => mainVm.ShutdownCleanup();
         }
         else if (ApplicationLifetime is IActivityApplicationLifetime singleViewFactoryApplicationLifetime)
         {

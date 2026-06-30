@@ -33,53 +33,79 @@ public partial class MediaPlayerViewModel
 
     /// <summary>Gated file open: builds/loads the 1-cue player show and fires it. Returns false (and leaves the
     /// engine path to run) when disabled or on any failure.</summary>
-    private async Task<bool> TryOpenViaShowSessionAsync(FilePlaylistItem item, IReadOnlyList<OutputLineViewModel> lines)
+    private async Task<bool> TryOpenViaShowSessionAsync(PlaylistItem item, IReadOnlyList<OutputLineViewModel> lines)
     {
         if (!UseShowSessionPlayer)
             return false;
 
+        // Resolve the registry URI + whether there's a video composition. Files probe for a video stream; an NDI
+        // deck source maps to ndi://<name> (the registry's NDIModule opens it live). Other kinds stay on the engine.
+        string mediaPath;
+        bool hasVideo;
+        switch (item)
+        {
+            case FilePlaylistItem file:
+                mediaPath = file.Path;
+                var probe = await CueMediaProbe.TryProbeAsync(file.Path).ConfigureAwait(true);
+                hasVideo = probe?.HasVideo == true;
+                break;
+            case NDIInputPlaylistItem ndi when RuntimeModules.IsNdiAvailable:
+                mediaPath = $"ndi://{Uri.EscapeDataString(ndi.SourceName)}";
+                hasVideo = !ndi.AudioOnly;
+                break;
+            default:
+                return false;
+        }
+
         try
         {
-            var probe = await CueMediaProbe.TryProbeAsync(item.Path).ConfigureAwait(true);
-            var hasVideo = probe?.HasVideo == true;
-
             _playerShowSession ??= new ShowSession(
                 MediaRuntime.Registry,
                 MediaRuntime.Registry.AudioBackends.FirstOrDefault(),
                 (path, streamIndex, w, h) => SubtitleOverlayFactory.FromFileDeferred(path, w, h, streamIndex),
                 (compId, _, _, _) => _playerVideoOutputs.TryGetValue(compId, out var outs) ? outs : Array.Empty<IVideoOutput>());
 
-            // Release the previous play's single-holder video leases before re-acquiring (else they stay held).
-            foreach (var held in _playerAcquiredLines)
-                _outputs.ReleaseVideoOutputForLine(held);
-            _playerAcquiredLines.Clear();
-
-            var outputs = new List<IVideoOutput>();
-            if (hasVideo)
+            // UI thread: drop any idle logo, release the prior single-holder leases, then (re)acquire the video
+            // lines for this source. Acquire realizes the SDL window / NDI sender, so it must run on the UI thread;
+            // doing it before LoadDocument keeps the video factory a pure lookup during the (synchronous) load.
+            await Dispatcher.UIThread.InvokeAsync(() =>
             {
-                foreach (var line in lines)
+                StopIdleSlate();
+                foreach (var held in _playerAcquiredLines)
+                    _outputs.ReleaseVideoOutputForLine(held);
+                _playerAcquiredLines.Clear();
+
+                var outputs = new List<IVideoOutput>();
+                if (hasVideo)
                 {
-                    if (_outputs.AcquireVideoOutputForLine(line.Definition.Id) is not { } o)
-                        continue;
-                    outputs.Add(o);
-                    _playerAcquiredLines.Add(line.Definition.Id);
+                    foreach (var line in lines)
+                    {
+                        if (_outputs.AcquireVideoOutputForLine(line.Definition.Id) is not { } o)
+                            continue;
+                        outputs.Add(o);
+                        _playerAcquiredLines.Add(line.Definition.Id);
+                    }
                 }
-            }
-            _playerVideoOutputs = new Dictionary<string, IVideoOutput[]>(StringComparer.Ordinal)
-            {
-                [MediaPlayerShowMapper.PlayerCompositionId] = outputs.ToArray(),
-            };
+                _playerVideoOutputs = new Dictionary<string, IVideoOutput[]>(StringComparer.Ordinal)
+                {
+                    [MediaPlayerShowMapper.PlayerCompositionId] = outputs.ToArray(),
+                };
+            });
 
-            _playerShowSession.LoadDocument(MediaPlayerShowMapper.ToShowDocument(item.Path, hasVideo));
+            _playerShowSession.LoadDocument(MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo));
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
 
-            ShowSessionActive = true;
-            MediaFilePath = item.Path;
-            IsMediaLoaded = true;
-            LoadState = PlayerLoadState.Ready;
-            IsPlaying = true;
-            StartShowSessionPoll();
-            ShowLog.LogInformation("MediaPlayer: file re-backed onto per-player ShowSession (HAPLAY_USE_SHOWSESSION=1).");
+            // UI thread: flip the deck into the playing state (observable-property writes).
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                ShowSessionActive = true;
+                MediaFilePath = (item as FilePlaylistItem)?.Path;
+                IsMediaLoaded = true;
+                LoadState = PlayerLoadState.Ready;
+                IsPlaying = true;
+                StartShowSessionPoll();
+            });
+            ShowLog.LogInformation("MediaPlayer: re-backed onto per-player ShowSession (HAPLAY_USE_SHOWSESSION=1).");
             return true;
         }
         catch (Exception ex)
@@ -102,20 +128,26 @@ public partial class MediaPlayerViewModel
     /// <summary>Stops the player ShowSession, releases its video leases, and returns the deck to idle.</summary>
     private async Task ShowSessionStopAsync()
     {
-        StopShowSessionPoll();
         if (_playerShowSession is not null)
         {
             try { await _playerShowSession.StopAsync().ConfigureAwait(true); }
             catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession stop"); }
         }
-        foreach (var held in _playerAcquiredLines)
-            _outputs.ReleaseVideoOutputForLine(held);
-        _playerAcquiredLines.Clear();
-        _playerVideoOutputs = new(StringComparer.Ordinal);
-        ShowSessionActive = false;
-        IsPlaying = false;
-        IsMediaLoaded = false;
-        CurrentPosition = TimeSpan.Zero;
+        // UI thread: stop the poll, release the video leases, reset deck state, then hand the outputs to the
+        // idle logo slate (FallbackImagePath) — the same idle fallback the engine path shows when it stops.
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            StopShowSessionPoll();
+            foreach (var held in _playerAcquiredLines)
+                _outputs.ReleaseVideoOutputForLine(held);
+            _playerAcquiredLines.Clear();
+            _playerVideoOutputs = new(StringComparer.Ordinal);
+            ShowSessionActive = false;
+            IsPlaying = false;
+            IsMediaLoaded = false;
+            CurrentPosition = TimeSpan.Zero;
+            SyncIdleSlate();
+        });
     }
 
     private void StartShowSessionPoll()
@@ -150,9 +182,17 @@ public partial class MediaPlayerViewModel
                     SeekSliderValue = snap.ClipPosition.Ticks * 1000.0 / Duration.Ticks;
             }
 
-            // Natural end: the clip finished and we're not paused → return the deck to idle.
+            // Natural end: auto-advance to the next playlist item when enabled (honoring the tab's
+            // shuffle/repeat), else return the deck to idle. Stop the poll first so the (async) advance can't
+            // be re-entered by the next tick.
             if (!snap.IsRunning && IsPlaying)
-                await ShowSessionStopAsync().ConfigureAwait(true);
+            {
+                StopShowSessionPoll();
+                if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
+                    await PlayPlaylistItemAsync(next).ConfigureAwait(true);
+                else
+                    await ShowSessionStopAsync().ConfigureAwait(true);
+            }
         }
         catch (Exception ex)
         {

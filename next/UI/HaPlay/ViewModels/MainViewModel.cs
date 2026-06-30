@@ -331,6 +331,30 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Best-effort shutdown teardown of the gated cue re-back (no-op when disabled): release its video
+    /// leases (UI thread) and dispose the headless <see cref="ShowSession"/>. The session disposes on its own
+    /// dispatcher (no Avalonia marshalling), so the bounded block here can't deadlock the UI thread. Players and
+    /// the engine path are reclaimed by process-exit, as before.</summary>
+    public void ShutdownCleanup()
+    {
+        if (_cueShowSession is null)
+            return;
+        try
+        {
+            foreach (var held in _cueAcquiredVideoLines)
+                OutputManagement.ReleaseVideoOutputForLine(held);
+            _cueAcquiredVideoLines.Clear();
+
+            var session = _cueShowSession;
+            _cueShowSession = null;
+            session.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(2));
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "HaPlay: ShowSession shutdown cleanup");
+        }
+    }
+
     private readonly Remote.RestApiServer _restApiServer = new();
     private Remote.RemoteApiDispatcher? _restApiDispatcher;
 

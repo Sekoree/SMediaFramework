@@ -279,6 +279,15 @@ public partial class MediaPlayerViewModel : ViewModelBase
             await CloseSessionCoreInnerAsync(deferIdleSync: true, resetPlayingUi: false).ConfigureAwait(false);
 
             var lines = await Dispatcher.UIThread.InvokeAsync(SelectedOutputLines);
+
+            // 8a.4 re-back: when gated, play the NDI source through the per-player ShowSession (it opens its own
+            // ndi:// connection via the registry), so the pre-connected receiver is unused — dispose it.
+            if (await TryOpenViaShowSessionAsync(item, lines))
+            {
+                try { receiver.Dispose(); } catch { /* best effort */ }
+                return;
+            }
+
             HaPlayPlaybackSession? created = null;
             string? createErr = null;
             await Task.Run(() =>
@@ -3204,8 +3213,13 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
             // 8a.4 re-back: a file plays through the per-player ShowSession when HAPLAY_USE_SHOWSESSION=1
             // (no-op + falls through to the engine otherwise, or for live/non-file items).
-            if (item is FilePlaylistItem ssFile && await TryOpenViaShowSessionAsync(ssFile, selected))
+            if (await TryOpenViaShowSessionAsync(item, selected))
                 return;
+
+            // The new item isn't going onto ShowSession (live/non-file, or the gate is off) — tear down any
+            // active ShowSession play before the engine path takes over (e.g. auto-advance from a file to NDI).
+            if (ShowSessionActive)
+                await ShowSessionStopAsync();
 
             HaPlayPlaybackSession? created = null;
             string? createErr = null;
