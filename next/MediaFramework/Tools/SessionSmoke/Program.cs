@@ -5,6 +5,7 @@
 // No Avalonia, no GL — proves the cue → clip → audio-master and cue → clip → video-layer → composite paths.
 using S.Media.Audio.PortAudio;
 using S.Media.Core.Registry;
+using S.Media.Core.Video;
 using S.Media.Decode.FFmpeg;
 using S.Media.Interop;
 using S.Media.Session;
@@ -82,10 +83,16 @@ var reloaded = ShowDocument.FromJson(json);
 Console.WriteLine($"decoders: {string.Join(", ", registry.Decoders.Select(d => d.Name))}; backend: {backend.Name}");
 Console.WriteLine($"show: {reloaded.Cues.Count} cues, {reloaded.Clips.Count} clips, {reloaded.Compositions.Count} compositions (JSON {json.Length} B round-tripped)");
 
+// A counting video output proves the composition fans composited frames out to a host-provided output —
+// the IShowVideoOutputFactory seam the GUI uses to surface video onto its NDI/SDL/local lines.
+var screenOutput = new RecordingVideoOutput();
 await using var session = new ShowSession(
     registry,
     backend,
-    (path, streamIndex, width, height) => SubtitleOverlayFactory.FromFileDeferred(path, width, height, streamIndex));
+    (path, streamIndex, width, height) => SubtitleOverlayFactory.FromFileDeferred(path, width, height, streamIndex),
+    (compId, _, _, _) => compId == "screen"
+        ? new IVideoOutput[] { screenOutput }
+        : Array.Empty<IVideoOutput>());
 session.LoadDocument(reloaded);
 
 // GO → cue 1 fires (audio clip opens through the registry + plays on the master output).
@@ -139,6 +146,15 @@ if (comp is not { FramesSubmitted: > 0, FramesComposited: > 0 })
     Console.Error.WriteLine($"FAIL: video did not composite (submitted={comp?.FramesSubmitted}, composited={comp?.FramesComposited}) — pass a video file as arg 2");
     return 6;
 }
+
+// The composited frames must also reach the host factory's output — the IShowVideoOutputFactory seam the
+// GUI uses to surface composited video onto a real NDI/SDL/local line.
+if (screenOutput.Submitted == 0)
+{
+    Console.Error.WriteLine("FAIL: composition did not fan out to the host video-output factory output");
+    return 15;
+}
+Console.WriteLine($"VIDEO-FACTORY output received {screenOutput.Submitted} composited frames");
 
 // The composition must carry TWO layers — the clip's video + the auto-attached subtitle — and still composite.
 if (comp.Value.LayerCount < 2)
@@ -239,5 +255,20 @@ await using (var fadeSession = new ShowSession(registry, backend))
     }
 }
 
-Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in + loop + fade-in).");
+Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in + loop + fade-in + host video-output fan-out).");
 return 0;
+
+// Counts the composited frames a composition fans out to a host-provided video-output lease.
+sealed class RecordingVideoOutput : IVideoOutput
+{
+    private VideoFormat _format;
+    public int Submitted { get; private set; }
+    public VideoFormat Format => _format;
+    public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = Array.Empty<PixelFormat>();
+    public void Configure(VideoFormat format) => _format = format;
+    public void Submit(VideoFrame frame)
+    {
+        Submitted++;
+        frame.Dispose();
+    }
+}

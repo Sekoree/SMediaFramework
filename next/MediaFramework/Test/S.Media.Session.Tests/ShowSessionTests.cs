@@ -430,6 +430,29 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task VideoOutputFactory_ConsultedPerComposition_AtLoad()
+    {
+        // The host video-output factory (the GUI's NDI/SDL/local seam) is invoked per composition at load,
+        // with its id + canvas dimensions, so the host can hand back the real outputs to render onto.
+        var seen = new List<(string Id, int W, int H)>();
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            videoOutputFactory: (id, _, w, h) =>
+            {
+                seen.Add((id, w, h));
+                return Array.Empty<S.Media.Core.Video.IVideoOutput>(); // none ⇒ headless discard, but still consulted
+            });
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips: [],
+            Compositions: [new ShowComposition("screen", "Screen", 1280, 720, 30, 1)],
+            Outputs: [], Routes: [], Devices: []));
+
+        Assert.Contains(("screen", 1280, 720), seen);
+    }
+
+    [Fact]
     public async Task RoutingScene_MatchesRouteSourceId_ForSameOutput()
     {
         // Two cues route to the same master output, each with a different matrix. The route source id is the

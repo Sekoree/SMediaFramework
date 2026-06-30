@@ -40,6 +40,9 @@ public sealed class ShowSession : IAsyncDisposable
     private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
     private readonly SessionDispatcher _dispatcher = new("show-session");
     private readonly Func<string, int, int, int, IVideoOverlaySource?>? _subtitleFactory;
+    // Host video-output factory (compositionId, name, width, height) → the real outputs a composition renders
+    // to (NDI/SDL/local). Null ⇒ headless discard. Lets the GUI surface composited video to its output lines.
+    private readonly Func<string, string, int, int, IReadOnlyList<IVideoOutput>>? _videoOutputFactory;
     // Opens + warms clips (seek-to-Start trim-in, standby pre-roll). Clips arm through here instead of a
     // direct MediaGraph build so the show can pre-roll upcoming cues (8b convergence). All access is on the
     // serial dispatcher; the engine is also internally thread-safe.
@@ -61,11 +64,13 @@ public sealed class ShowSession : IAsyncDisposable
     public ShowSession(
         IMediaRegistry registry,
         IAudioBackend? audioBackend = null,
-        Func<string, int, int, int, IVideoOverlaySource?>? subtitleFactory = null)
+        Func<string, int, int, int, IVideoOverlaySource?>? subtitleFactory = null,
+        Func<string, string, int, int, IReadOnlyList<IVideoOutput>>? videoOutputFactory = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
         _subtitleFactory = subtitleFactory;
+        _videoOutputFactory = videoOutputFactory;
         _standby.StandbyStatesChanged += states => PreparedCuesChanged?.Invoke(states);
         if (audioBackend is not null)
         {
@@ -166,11 +171,16 @@ public sealed class ShowSession : IAsyncDisposable
         {
             var definition = new ClipCompositionDefinition(
                 comp.Id, comp.Name, comp.Width, comp.Height, comp.FrameRateNum, comp.FrameRateDen);
-            // Headless: the default CPU compositor; a discarding lease keeps the pump composing with no device.
-            var lease = new ClipCompositionOutputLease(
-                $"{comp.Id}_out", comp.Name, new DiscardingVideoOutput(), DisposeOutputOnRuntimeDispose: true);
+            // Real outputs from the host factory (the GUI's NDI/SDL/local lines for this composition); when the
+            // factory is absent or returns none, a discarding lease keeps the CPU pump composing headless.
+            var realOutputs = _videoOutputFactory?.Invoke(comp.Id, comp.Name, comp.Width, comp.Height);
+            var leases = realOutputs is { Count: > 0 }
+                ? realOutputs.Select((o, i) =>
+                    new ClipCompositionOutputLease($"{comp.Id}_out{i}", comp.Name, o, DisposeOutputOnRuntimeDispose: true)).ToList()
+                : [new ClipCompositionOutputLease(
+                    $"{comp.Id}_out", comp.Name, new DiscardingVideoOutput(), DisposeOutputOnRuntimeDispose: true)];
             _compositions[comp.Id] = new ClipCompositionRuntime(
-                definition, [lease], compositionMapping: comp.OutputMapping);
+                definition, leases, compositionMapping: comp.OutputMapping);
         }
 
         _clipsByCue = document.Clips.ToDictionary(c => c.CueId, StringComparer.Ordinal);
