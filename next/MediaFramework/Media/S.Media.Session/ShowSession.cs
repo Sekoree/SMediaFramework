@@ -54,6 +54,10 @@ public sealed class ShowSession : IAsyncDisposable
     private IArmedClip? _previewClip;
     private IReadOnlyList<IAudioOutput> _previewOutputs = [];
     private CancellationTokenSource? _previewCts;
+    // Soundboard voices (task #10): polyphonic one-shots, each a fresh MediaPlayer on an output, keyed by a
+    // host id (the GUI's soundboard tile). Independent of the transport groups — the keyed generalization of
+    // the single preview above. Owned by the dispatcher.
+    private readonly Dictionary<string, VoiceHandle> _voices = new(StringComparer.Ordinal);
     private volatile bool _disposed;
 
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
@@ -90,6 +94,13 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>Raised (with the cue id) when a preview started by <see cref="PreviewCueAsync"/> ends on its
     /// own (the GUI's <c>PreviewEnded</c>). Not raised on an explicit <see cref="StopPreviewAsync"/>.</summary>
     public event Action<string>? PreviewEnded;
+
+    /// <summary>Raised (with the voice id) when a soundboard voice started by <see cref="FireVoiceAsync"/> ends
+    /// on its own. Not raised on an explicit <see cref="StopVoiceAsync"/> / <see cref="FadeVoiceAsync"/>.</summary>
+    public event Action<string>? VoiceEnded;
+
+    private sealed record VoiceHandle(
+        IArmedClip Clip, IReadOnlyList<IAudioOutput> Outputs, string OutputId, CancellationTokenSource Cts);
 
     // --- dispatcher (D5) ---------------------------------------------------------------------------
 
@@ -450,6 +461,177 @@ public sealed class ShowSession : IAsyncDisposable
             await clip.ReleaseAsync().ConfigureAwait(false);
         foreach (var output in outputs)
             (output as IDisposable)?.Dispose();
+    }
+
+    // --- soundboard voices (task #10) --------------------------------------------------------------
+
+    /// <summary>Fires a soundboard voice: opens <paramref name="mediaPath"/> as a fresh player on
+    /// <paramref name="deviceId"/> (or the default) at <paramref name="volume"/> and tracks it under
+    /// <paramref name="voiceId"/>. Polyphonic across ids; re-firing the same id replaces its voice. Raises
+    /// <see cref="VoiceEnded"/> at the voice's natural end. (Loop is a later refinement.)</summary>
+    public Task FireVoiceAsync(string voiceId, string mediaPath, string? deviceId = null, float volume = 1f) =>
+        InvokeAsync(async () =>
+        {
+            await ReleaseVoiceAsync(voiceId).ConfigureAwait(false); // re-trigger replaces the prior voice
+            var outputId = $"voice:{voiceId}";
+            var armed = await _standby.ArmAsync(new ClipSpec(
+                outputId,
+                ClipMediaSource.File(_registry, mediaPath),
+                S.Media.Core.ClipWindow.Unbounded,
+                outputId)).ConfigureAwait(false);
+            var player = armed.Player;
+            var outputs = new List<IAudioOutput>();
+            try
+            {
+                if (_audioBackend is not null && player.AudioRouter is not null)
+                {
+                    var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
+                    var output = _audioBackend.CreateOutput(deviceId ?? _outputDeviceId, new AudioFormat(rate, 2));
+                    player.AttachAudioOutput(output, outputId, gain: volume);
+                    outputs.Add(output);
+                }
+
+                armed.Start();
+                var cts = new CancellationTokenSource();
+                _voices[voiceId] = new VoiceHandle(armed, outputs, outputId, cts);
+                StartVoiceEndMonitor(voiceId, player, cts.Token);
+            }
+            catch
+            {
+                foreach (var output in outputs)
+                    (output as IDisposable)?.Dispose();
+                await armed.ReleaseAsync().ConfigureAwait(false);
+                throw;
+            }
+        });
+
+    /// <summary>Stops one soundboard voice (no <see cref="VoiceEnded"/>).</summary>
+    public Task StopVoiceAsync(string voiceId) => InvokeAsync(() => ReleaseVoiceAsync(voiceId).AsTask());
+
+    /// <summary>Stops every soundboard voice (the GUI's StopAllSounds).</summary>
+    public Task StopAllVoicesAsync() =>
+        InvokeAsync(async () =>
+        {
+            foreach (var id in _voices.Keys.ToArray())
+                await ReleaseVoiceAsync(id).ConfigureAwait(false);
+        });
+
+    /// <summary>Live-sets a voice's output gain (linear). No-op when the voice isn't playing.</summary>
+    public Task SetVoiceVolumeAsync(string voiceId, float volume) =>
+        InvokeAsync(() =>
+        {
+            if (_voices.TryGetValue(voiceId, out var v)
+                && v.Clip.Player.AudioRouter is { } router
+                && v.Clip.Player.AudioSourceId is { } sourceId)
+                router.SetRouteGain(sourceId, v.OutputId, volume);
+            return Task.CompletedTask;
+        });
+
+    /// <summary>Fades a voice's gain to silence over <paramref name="duration"/>, then stops it (the GUI's
+    /// FadeOutSound). No <see cref="VoiceEnded"/>. A zero/negative duration stops immediately.</summary>
+    public Task FadeVoiceAsync(string voiceId, TimeSpan duration) =>
+        InvokeAsync(() =>
+        {
+            if (!_voices.TryGetValue(voiceId, out var v))
+                return Task.CompletedTask;
+            if (duration <= TimeSpan.Zero)
+                return ReleaseVoiceAsync(voiceId).AsTask();
+            StartVoiceFadeOut(voiceId, v.Clip.Player, duration, v.Cts.Token);
+            return Task.CompletedTask;
+        });
+
+    /// <summary>Whether a soundboard voice is currently playing.</summary>
+    public Task<bool> IsVoicePlayingAsync(string voiceId) =>
+        InvokeAsync(() => Task.FromResult(_voices.ContainsKey(voiceId)));
+
+    private async ValueTask ReleaseVoiceAsync(string voiceId)
+    {
+        if (!_voices.Remove(voiceId, out var v))
+            return;
+        v.Cts.Cancel();
+        v.Cts.Dispose();
+        await v.Clip.ReleaseAsync().ConfigureAwait(false);
+        foreach (var output in v.Outputs)
+            (output as IDisposable)?.Dispose();
+    }
+
+    /// <summary>Watches a voice; on natural end releases it + raises <see cref="VoiceEnded"/> (the keyed
+    /// counterpart of the preview end-monitor).</summary>
+    private void StartVoiceEndMonitor(string voiceId, S.Media.Players.MediaPlayer player, CancellationToken ct)
+    {
+        using (ExecutionContext.SuppressFlow())
+        {
+            _ = Task.Run(
+                async () =>
+                {
+                    try
+                    {
+                        while (!ct.IsCancellationRequested)
+                        {
+                            await Task.Delay(EndMonitorPollInterval, ct).ConfigureAwait(false);
+                            var ended = await InvokeAsync<bool>(() =>
+                                Task.FromResult(
+                                    !_voices.TryGetValue(voiceId, out var cur) || !ReferenceEquals(cur.Clip.Player, player)
+                                    || (!player.IsRunning && player.Position > TimeSpan.Zero)))
+                                .ConfigureAwait(false);
+                            if (!ended)
+                                continue;
+                            await InvokeAsync(async () =>
+                            {
+                                if (_voices.TryGetValue(voiceId, out var cur) && ReferenceEquals(cur.Clip.Player, player))
+                                {
+                                    await ReleaseVoiceAsync(voiceId).ConfigureAwait(false);
+                                    VoiceEnded?.Invoke(voiceId);
+                                }
+                            }).ConfigureAwait(false);
+                            return;
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch { /* best-effort — a voice-monitor hiccup must never crash the session */ }
+                },
+                ct);
+        }
+    }
+
+    /// <summary>Ramps a voice's gain to 0 over <paramref name="duration"/> then releases it (fade-out).</summary>
+    private void StartVoiceFadeOut(string voiceId, S.Media.Players.MediaPlayer player, TimeSpan duration, CancellationToken ct)
+    {
+        if (player.AudioSourceId is not { } sourceId)
+            return;
+        var outputId = $"voice:{voiceId}";
+        using (ExecutionContext.SuppressFlow())
+        {
+            _ = Task.Run(
+                async () =>
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    try
+                    {
+                        while (!ct.IsCancellationRequested)
+                        {
+                            var level = (float)Math.Clamp(1d - sw.Elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d);
+                            var done = await InvokeAsync<bool>(() =>
+                            {
+                                if (ct.IsCancellationRequested
+                                    || !_voices.TryGetValue(voiceId, out var cur) || !ReferenceEquals(cur.Clip.Player, player)
+                                    || player.AudioRouter is not { } router)
+                                    return Task.FromResult(true);
+                                router.SetRouteGain(sourceId, outputId, level);
+                                return Task.FromResult(level <= 0f);
+                            }).ConfigureAwait(false);
+                            if (done)
+                                break;
+                            await Task.Delay(EndMonitorPollInterval, ct).ConfigureAwait(false);
+                        }
+                        if (!ct.IsCancellationRequested)
+                            await InvokeAsync(() => ReleaseVoiceAsync(voiceId).AsTask()).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { }
+                    catch { /* best-effort */ }
+                },
+                ct);
+        }
     }
 
     /// <summary>Watches the preview clip; when it ends on its own (ran, then stopped) it releases it and raises
@@ -828,6 +1010,8 @@ public sealed class ShowSession : IAsyncDisposable
     private async Task DisposeStateAsync()
     {
         await ReleasePreviewAsync().ConfigureAwait(false);
+        foreach (var id in _voices.Keys.ToArray())
+            await ReleaseVoiceAsync(id).ConfigureAwait(false);
         foreach (var group in _groups.Values)
             await group.DisposeAsync().ConfigureAwait(false);
         _groups.Clear();

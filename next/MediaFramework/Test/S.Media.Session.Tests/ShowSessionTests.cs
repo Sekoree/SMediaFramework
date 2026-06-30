@@ -277,6 +277,29 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task SoundboardVoices_FirePolyphonicOnDevices_StopAndStopAll()
+    {
+        // Soundboard voices (task #10): concurrent one-shots on independent output devices, keyed by tile id.
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+
+        await session.FireVoiceAsync("v1", "fake://1", deviceId: "hw:0");
+        await session.FireVoiceAsync("v2", "fake://2", deviceId: "hw:1", volume: 0.5f);
+
+        Assert.True(await session.IsVoicePlayingAsync("v1"));
+        Assert.True(await session.IsVoicePlayingAsync("v2"));
+        Assert.Contains("hw:0", backend.Created.Select(c => c.DeviceId));
+        Assert.Contains("hw:1", backend.Created.Select(c => c.DeviceId));
+
+        await session.StopVoiceAsync("v1");
+        Assert.False(await session.IsVoicePlayingAsync("v1"));
+        Assert.True(await session.IsVoicePlayingAsync("v2")); // polyphonic — stopping one leaves the others
+
+        await session.StopAllVoicesAsync();
+        Assert.False(await session.IsVoicePlayingAsync("v2"));
+    }
+
+    [Fact]
     public async Task GetCompositionStatsAsync_UnknownComposition_ReturnsNull()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
