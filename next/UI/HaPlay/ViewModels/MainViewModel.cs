@@ -17,6 +17,8 @@ using HaPlay.Resources;
 using Microsoft.Extensions.Logging;
 using S.Control;
 using S.Media.Core.Diagnostics;
+using S.Media.Interop;
+using S.Media.Session;
 using OSCLib;
 using PMLib;
 using PMLib.Devices;
@@ -33,6 +35,9 @@ public partial class MainViewModel : ViewModelBase
     private readonly object _midiInitSync = new();
     private readonly Playback.CuePlaybackEngine _cuePlaybackEngine;
     private readonly Playback.SoundboardEngine _soundboardEngine;
+    // 8a.4 convergence: when HAPLAY_USE_SHOWSESSION=1, the cue transport re-backs onto this headless session
+    // instead of the engine above (off by default → the engine path is untouched). See TryWireShowSessionCueTransport.
+    private ShowSession? _cueShowSession;
     private bool _midiInitialized;
     private CancellationTokenSource? _endpointHealthCts;
     private DispatcherTimer? _endpointHealthTimer;
@@ -118,6 +123,7 @@ public partial class MainViewModel : ViewModelBase
             FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync suggested");
         CuePlayer.CueStandbyInvalidated += (_, cueId) => _cuePlaybackEngine.MarkPreparedCueStale(cueId);
         CuePlayer.RefreshPreviewAudioDevices();
+        TryWireShowSessionCueTransport(); // 8a.4: optionally re-back cue transport onto ShowSession (gated, off by default)
         foreach (var player in Players)
             player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         RebuildEndpointWorkspaceLists();
@@ -193,6 +199,71 @@ public partial class MainViewModel : ViewModelBase
     }
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
+
+    /// <summary>8a.4 convergence (gated by <c>HAPLAY_USE_SHOWSESSION=1</c>): re-back the cue workspace's
+    /// transport onto the headless <see cref="ShowSession"/> instead of <c>CuePlaybackEngine</c>. Off by
+    /// default → the engine wiring above stands untouched. Audio realizes on the default device via the
+    /// session's backend; video output realization (NDI/SDL/local via OutputManagement) is a later slice.
+    /// Best-effort: any failure logs and leaves the engine active. The show reloads on cue-list change.</summary>
+    private void TryWireShowSessionCueTransport()
+    {
+        if (Environment.GetEnvironmentVariable("HAPLAY_USE_SHOWSESSION") != "1")
+            return;
+
+        try
+        {
+            var backend = MediaRuntime.Registry.AudioBackends.FirstOrDefault();
+            _cueShowSession = new ShowSession(
+                MediaRuntime.Registry,
+                backend,
+                (path, streamIndex, w, h) => SubtitleOverlayFactory.FromFileDeferred(path, w, h, streamIndex));
+
+            CuePlayer.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(CuePlayer.SelectedCueList))
+                    ReloadCueShowSession();
+            };
+            ReloadCueShowSession();
+
+            // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
+            // them to the executors, so we fire by id (FireCueAsync) — independent of ShowSession's GO anchor.
+            CuePlayer.StopPlaybackCallback = () => _cueShowSession!.StopAsync();
+            CuePlayer.SetPlaybackPausedCallback = paused => _cueShowSession!.SetPausedAsync(paused);
+            CuePlayer.SeekCueCallback = (_, pos) => _cueShowSession!.SeekAsync(pos);
+            CuePlayer.CancelCueCallback = id => _cueShowSession!.StopCueAsync(id.ToString());
+            CuePlayer.MediaCueExecutor = async (cue, _) =>
+                await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false) == CueExecutionStatus.Fired
+                    ? null
+                    : $"cue '{cue.Label}' not ready";
+            CuePlayer.MediaCueGroupExecutor = async (cues, _) =>
+            {
+                foreach (var cue in cues)
+                    await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
+                return null;
+            };
+            Trace.LogInformation("HaPlay: cue transport re-backed onto ShowSession (HAPLAY_USE_SHOWSESSION=1).");
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "HaPlay: ShowSession cue re-back failed; staying on the engine.");
+            _cueShowSession = null;
+        }
+    }
+
+    /// <summary>Loads the selected cue list into the re-back <see cref="ShowSession"/> (no-op when disabled).</summary>
+    private void ReloadCueShowSession()
+    {
+        if (_cueShowSession is null || CuePlayer.SelectedCueList is not { } list)
+            return;
+        try
+        {
+            _cueShowSession.LoadDocument(HaPlayShowMapper.ToShowDocument(list.ToModel()));
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "HaPlay: ShowSession LoadDocument from cue list failed");
+        }
+    }
 
     private readonly Remote.RestApiServer _restApiServer = new();
     private Remote.RemoteApiDispatcher? _restApiDispatcher;
