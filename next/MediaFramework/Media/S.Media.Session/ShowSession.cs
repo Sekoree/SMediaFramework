@@ -75,10 +75,17 @@ public sealed class ShowSession : IAsyncDisposable
 
     private sealed record GroupClockView(string GroupId, SessionClock Clock, S.Media.Players.MediaPlayer? Player);
 
-    // The cancellation source of the in-flight cue fire (its pre/post-wait + open + auto-continue chain). Set on
-    // the dispatcher while a fire runs; read off-dispatcher by CancelActiveFire so STOP/LOAD/DISPOSE can abort a
-    // long pre-wait that would otherwise park the serial loop and block them indefinitely (NXT-03).
+    // The cancellation source of the in-flight cue fire (its pre/post-wait + open + auto-continue chain). Set
+    // while a fire runs; read off-dispatcher by CancelActiveFire so STOP/LOAD/DISPOSE can abort it (NXT-03).
     private volatile CancellationTokenSource? _activeFireCts;
+
+    // Off-dispatcher fire model (NXT-03): a cue fire runs OFF the serial dispatcher (its pre-wait + media open
+    // no longer park the loop, so STOP/seek/load/queries stay responsive), re-entering only for short state
+    // commits. _fireLock serializes fires (the app drives GO serially); _showGeneration is bumped on every load
+    // so a fire whose open straddled a reload discards its (now-stale) clip at commit instead of corrupting the
+    // newer show.
+    private readonly SemaphoreSlim _fireLock = new(1, 1);
+    private volatile int _showGeneration;
 
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
     /// master output created on this backend (D11). Null runs the cue/transport mechanics with no device.</param>
@@ -248,6 +255,7 @@ public sealed class ShowSession : IAsyncDisposable
         _clipsByCue = newClipsByCue;
         _routes = document.Routes;
         _audioOutputs = document.AudioOutputs;
+        _showGeneration++; // a fire whose open straddled this reload bails at commit (NXT-03 off-dispatcher)
 
         _ = WarmUpcomingAsync(); // background pre-roll of the first cues so the first GO arms instantly
     }
@@ -258,27 +266,29 @@ public sealed class ShowSession : IAsyncDisposable
         if (binding is null)
             return; // a control/stop cue with no media of its own
 
-        var group = GetOrAddGroup(groupId);
-
-        // Mint the composition layer (if any). The clip is armed through the standby engine WITHOUT a video
-        // lead: its source declares its emit format up front (the HW-decode branch advertises Bgra32), so it
-        // negotiates at open and the layer is attached post-arm. Arming lead-free is what lets a prepared
-        // (warm) clip be reused across fires — the layer is per-fire. The free-running composition pump then
-        // composites the fed frames (CPU headless), selecting the latest frame (no clock master → no rebasing).
-        ClipCompositionRuntime.LayerSlot? layer = null;
-        ClipCompositionRuntime? composition = null;
-        if (binding.CompositionId is { } compositionId &&
-            _compositions.TryGetValue(compositionId, out var comp))
+        // --- SETUP (on the dispatcher): capture the show generation, get/add the group, mint the composition
+        // layer. Short; the slow media open below runs OFF the dispatcher so the loop stays free (NXT-03).
+        var setup = await InvokeAsync(() =>
         {
-            composition = comp;
-            layer = comp.AddLayer(
-                comp.CanvasFormat,
-                BuildVideoPlacementSpec(compositionId, binding.LayerIndex, binding.Placement));
-        }
+            var generation = _showGeneration;
+            var grp = GetOrAddGroup(groupId);
+            ClipCompositionRuntime? comp = null;
+            ClipCompositionRuntime.LayerSlot? lyr = null;
+            // Arming lead-free lets a warm prepared clip be reused across fires — the layer is per-fire, attached
+            // post-arm (the source declares its emit format up front, so it negotiates at open).
+            if (binding.CompositionId is { } compositionId && _compositions.TryGetValue(compositionId, out var found))
+            {
+                comp = found;
+                lyr = found.AddLayer(
+                    found.CanvasFormat,
+                    BuildVideoPlacementSpec(compositionId, binding.LayerIndex, binding.Placement));
+            }
+            return Task.FromResult((generation, group: grp, composition: comp, layer: lyr));
+        }).ConfigureAwait(false);
 
-        // Arm through the standby engine: it opens via the registry (which auto-wires adaptive-rate drift
-        // correction) and seeks to the trim-in (Window.Start), reusing a warm prepared clip when present
-        // (matched by ClipSpec.Key = (cueId, mediaPath) — the same spec the pre-roll prepared).
+        // --- OPEN (OFF the dispatcher): arm the clip through the standby engine — it opens via the registry
+        // (auto-wiring adaptive-rate drift correction) and seeks to the trim-in (Window.Start), reusing a warm
+        // prepared clip when present. The long part; the dispatcher loop stays free throughout (NXT-03).
         IArmedClip armed;
         try
         {
@@ -286,10 +296,37 @@ public sealed class ShowSession : IAsyncDisposable
         }
         catch
         {
-            layer?.Dispose();
+            if (setup.layer is not null)
+                await InvokeAsync(() => { setup.layer.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
             throw;
         }
 
+        // --- COMMIT (on the dispatcher): swap the armed clip in, or discard it if the show was reloaded / the
+        // fire was cancelled (STOP) during the open (NXT-03).
+        await InvokeAsync(() => CommitClipAsync(groupId, binding, cancellationToken, setup, armed)).ConfigureAwait(false);
+    }
+
+    /// <summary>The on-dispatcher commit half of <see cref="PlayClipAsync"/> (NXT-03): attaches the freshly-armed
+    /// clip's outputs, masters the composition, and swaps it in — unless the show was reloaded (generation moved)
+    /// or the fire was cancelled while the clip opened off the dispatcher, in which case it discards the now-stale
+    /// clip without touching the live show.</summary>
+    private async Task CommitClipAsync(
+        string groupId,
+        ShowClipBinding binding,
+        CancellationToken cancellationToken,
+        (int generation, TransportGroup group, ClipCompositionRuntime? composition, ClipCompositionRuntime.LayerSlot? layer) setup,
+        IArmedClip armed)
+    {
+        if (cancellationToken.IsCancellationRequested || _showGeneration != setup.generation || _disposed)
+        {
+            setup.layer?.Dispose();
+            await armed.ReleaseAsync().ConfigureAwait(false);
+            return;
+        }
+
+        var group = setup.group;
+        var composition = setup.composition;
+        var layer = setup.layer;
         var player = armed.Player;
         var outputs = new List<IAudioOutput>();
         var subtitleAttachments = new List<IDisposable>();
@@ -917,31 +954,29 @@ public sealed class ShowSession : IAsyncDisposable
 
     // --- transport commands (marshaled — D5) -------------------------------------------------------
 
-    /// <summary>Fires a specific cue by id (PreWait/PostWait/AutoContinue honoured by the cue graph). The fire is
-    /// cancellable: STOP/LOAD/DISPOSE abort an in-flight pre-wait/open so they are never blocked behind it (NXT-03).
-    /// A cancelled fire returns <see cref="CueExecutionStatus.Failed"/>.</summary>
-    public Task<CueExecutionStatus> FireCueAsync(string cueId) =>
-        InvokeAsync(async () =>
-        {
-            try { return await FireWithCancellationAsync(cueId).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled by stop/load/dispose
-        });
+    /// <summary>Fires a specific cue by id (PreWait/PostWait/AutoContinue honoured by the cue graph). Runs OFF the
+    /// serial dispatcher (NXT-03), so its pre-wait + media open don't park the loop — STOP/seek/load/queries stay
+    /// responsive and can abort it. A cancelled fire returns <see cref="CueExecutionStatus.Failed"/>.</summary>
+    public async Task<CueExecutionStatus> FireCueAsync(string cueId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        await _fireLock.WaitAsync().ConfigureAwait(false);
+        try { return await FireCoreAsync(cueId).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled by stop/load/dispose
+        finally { _fireLock.Release(); }
+    }
 
-    /// <summary>Runs a cue fire under a fresh cancellation source published to <see cref="_activeFireCts"/>, so
-    /// <see cref="CancelActiveFire"/> (called off the dispatcher by stop/load/dispose) can interrupt its waits and
-    /// cancellable open. Always runs on the dispatcher (fires are serial), so the simple field assignment is safe.</summary>
-    private async Task<CueExecutionStatus> FireWithCancellationAsync(string cueId)
+    /// <summary>The lock-free fire core (the caller MUST hold <see cref="_fireLock"/>): runs the cue graph fire OFF
+    /// the serial dispatcher (NXT-03) — its pre/post-wait and media open no longer park the loop; only the short
+    /// state commits re-enter it (see <see cref="PlayClipAsync"/>). The fire's cancellation source is published to
+    /// <see cref="_activeFireCts"/> so <see cref="CancelActiveFire"/> aborts it; cancellation propagates as
+    /// <see cref="OperationCanceledException"/> (callers map it to a non-advancing result).</summary>
+    private async Task<CueExecutionStatus> FireCoreAsync(string cueId)
     {
         using var cts = new CancellationTokenSource();
         _activeFireCts = cts;
-        try
-        {
-            return await _cueGraph.FireAsync(cueId, cts.Token).ConfigureAwait(false);
-        }
-        finally
-        {
-            _activeFireCts = null;
-        }
+        try { return await _cueGraph.FireAsync(cueId, cts.Token).ConfigureAwait(false); }
+        finally { _activeFireCts = null; }
     }
 
     /// <summary>Cancels the in-flight cue fire, if any, WITHOUT marshaling onto the dispatcher — so a stop/load/
@@ -960,28 +995,45 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>GO — fires the next armed and enabled cue in <paramref name="groupId"/> after the cursor. A
     /// disabled or unarmed cue is skipped (never fired); the cursor advances only when the chosen cue actually
     /// ran or faulted, so a cue that was momentarily not fireable can still be reached by a later GO (NXT-07).</summary>
-    public Task<CueExecutionStatus> GoAsync(string groupId = DefaultGroup) =>
-        InvokeAsync(async () =>
+    public async Task<CueExecutionStatus> GoAsync(string groupId = DefaultGroup)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        // Hold the fire-lock across select → fire → advance, so a concurrent GO (e.g. two rapid remote commands)
+        // can't read the same cursor and double-fire the same cue. The fire itself still runs off the dispatcher.
+        await _fireLock.WaitAsync().ConfigureAwait(false);
+        try
         {
-            var group = GetOrAddGroup(groupId);
-            var next = _cueGraph.Cues
-                .Where(c => (c.GroupId ?? DefaultGroup) == groupId && c.Number > group.LastFiredNumber
-                            && c.Armed && c.Enabled)
-                .OrderBy(c => c.Number)
-                .FirstOrDefault();
+            // Selection on the dispatcher (reads the cue graph + the group cursor).
+            var (group, next) = await InvokeAsync(() =>
+            {
+                var grp = GetOrAddGroup(groupId);
+                var nxt = _cueGraph.Cues
+                    .Where(c => (c.GroupId ?? DefaultGroup) == groupId && c.Number > grp.LastFiredNumber
+                                && c.Armed && c.Enabled)
+                    .OrderBy(c => c.Number)
+                    .FirstOrDefault();
+                return Task.FromResult((grp, nxt));
+            }).ConfigureAwait(false);
+
             if (next is null)
                 return CueExecutionStatus.NotReady;
 
+            // Fire OFF the dispatcher (we already hold the fire-lock — FireCoreAsync is the lock-free core).
             CueExecutionStatus status;
-            try { status = await FireWithCancellationAsync(next.Id).ConfigureAwait(false); }
-            catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled — do NOT advance the cursor
-            // Advance the cursor only when the cue actually ran (or faulted) — never on a skip/cancel, so it is not
-            // wrongly stepped past a cue that a concurrent edit (or a stop) made non-fireable in the selection window.
+            try { status = await FireCoreAsync(next.Id).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled — do NOT advance
+
+            // Advance the cursor on the dispatcher — only when the cue actually ran (or faulted), never a skip/cancel.
             if (status is CueExecutionStatus.Fired or CueExecutionStatus.Failed)
-                group.LastFiredNumber = next.Number;
+                await InvokeAsync(() => { group.LastFiredNumber = next.Number; return Task.CompletedTask; }).ConfigureAwait(false);
             _ = WarmUpcomingAsync(groupId); // pre-roll the next cue(s) in the background so the next GO is instant
             return status;
-        });
+        }
+        finally
+        {
+            _fireLock.Release();
+        }
+    }
 
     /// <summary>Seeks the active clip on <paramref name="groupId"/> (coordinated A/V seek).</summary>
     public Task SeekAsync(TimeSpan position, string groupId = DefaultGroup) =>

@@ -420,7 +420,8 @@ public sealed class MediaPlayer : IDisposable
         in MediaPlayerOpenOptions options,
         IVideoOutput? videoNegotiationLead,
         [NotNullWhen(true)] out MediaPlayer? player,
-        out string? error)
+        out string? error,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentException.ThrowIfNullOrEmpty(uri);
@@ -449,9 +450,14 @@ public sealed class MediaPlayer : IDisposable
         try
         {
             // Sync-over-async: the open is a synchronous native call regardless; the async signature is the
-            // forward path for cancellable network prepares. The provider's REAL failure (decode/network/auth)
-            // surfaces here as the thrown exception instead of a generic "no decoder" message (NXT-02).
-            result = registry.OpenAsync(request).AsTask().GetAwaiter().GetResult();
+            // forward path for cancellable network prepares. The token lets a caller (a ShowSession STOP) abort
+            // a slow/blocked open mid-flight (NXT-03). The provider's REAL failure (decode/network/auth) surfaces
+            // here as the thrown exception instead of a generic "no decoder" message (NXT-02).
+            result = registry.OpenAsync(request, null, cancellationToken).AsTask().GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // an aborted open propagates as cancellation, not a generic open failure (NXT-03)
         }
         catch (Exception ex)
         {

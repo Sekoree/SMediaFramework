@@ -15,6 +15,25 @@ internal sealed class FakeAudioDecoderProvider : IMediaDecoderProvider
     public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new FakeAudioDecoderProvider()));
 }
 
+/// <summary>A provider whose atomic open BLOCKS until the token is cancelled — to verify a STOP/abort preempts
+/// an in-flight cold clip open (NXT-03). Probes only the <c>blocking://</c> scheme.</summary>
+internal sealed class BlockingOpenProvider : IMediaDecoderProvider
+{
+    public string Name => "blocking";
+    public double Probe(string uri, MediaKind kind) => uri.StartsWith("blocking://", StringComparison.Ordinal) ? 1.0 : 0.0;
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => throw new NotSupportedException();
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => throw new NotSupportedException();
+
+    public async ValueTask<MediaOpenResult> OpenAsync(
+        MediaOpenRequest request, IProgress<MediaPrepareProgress>? progress = null, CancellationToken cancellationToken = default)
+    {
+        await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false); // blocks until cancelled
+        throw new InvalidOperationException("unreachable");
+    }
+
+    public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new BlockingOpenProvider()));
+}
+
 /// <summary>A finite stereo source that yields a few chunks of silence then exhausts — enough for a clip
 /// to open and Play() without a real decoder or device.</summary>
 internal sealed class SyntheticSilentSource : IAudioSource

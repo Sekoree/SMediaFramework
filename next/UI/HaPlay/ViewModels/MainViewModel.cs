@@ -212,8 +212,10 @@ public partial class MainViewModel : ViewModelBase
     /// <summary>8a.4 convergence (gated by <c>HAPLAY_USE_SHOWSESSION=1</c>): re-back the cue workspace's
     /// transport onto the headless <see cref="ShowSession"/> instead of <c>CuePlaybackEngine</c>. Off by
     /// default → the engine wiring above stands untouched. Audio realizes on the default device via the
-    /// session's backend; video output realization (NDI/SDL/local via OutputManagement) is a later slice.
-    /// Best-effort: any failure logs and leaves the engine active. The show reloads on cue-list change.</summary>
+    /// session's backend; cue video realizes on the OutputManagement NDI/SDL/local lines acquired per
+    /// composition→line binding in <see cref="ReloadCueShowSession"/> and fanned out through the session's
+    /// composition-id video factory. Best-effort: any failure logs and leaves the engine active. The show
+    /// reloads on cue-list change. (Cutover remainders: live-input cues + logo/hold slate.)</summary>
     private void TryWireShowSessionCueTransport()
     {
         if (Environment.GetEnvironmentVariable("HAPLAY_USE_SHOWSESSION") != "1")

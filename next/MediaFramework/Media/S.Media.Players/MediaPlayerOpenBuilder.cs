@@ -19,6 +19,10 @@ public abstract class MediaPlayerOpenBuilder
     /// <summary>The options currently configured on this builder.</summary>
     public MediaPlayerOpenOptions CurrentOptions => OpenOptions;
 
+    /// <summary>Token that aborts a slow/blocked media open mid-flight (NXT-03). Honoured by the registry-driven
+    /// file/URI builder; ignored by the live-source builder (its sources are already open). Default: none.</summary>
+    public CancellationToken Cancellation { get; set; }
+
     /// <summary>Builds the player; returns <see langword="false"/> instead of throwing on open/wiring failure.</summary>
     public abstract bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error);
 
@@ -65,7 +69,7 @@ public sealed class MediaPlayerOpenFileBuilder : MediaPlayerOpenBuilder
     }
 
     public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error) =>
-        MediaPlayer.TryOpen(_registry, Uri, OpenOptions, VideoLead, out player, out error);
+        MediaPlayer.TryOpen(_registry, Uri, OpenOptions, VideoLead, out player, out error, Cancellation);
 }
 
 /// <summary>

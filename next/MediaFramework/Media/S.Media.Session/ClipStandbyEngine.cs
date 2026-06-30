@@ -402,7 +402,9 @@ public sealed class ClipStandbyEngine : IClipStandbyEngine
                 () =>
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    return MediaSession.Owning(spec.Source.CreateOpenBuilder().Build());
+                    var builder = spec.Source.CreateOpenBuilder();
+                    builder.Cancellation = cancellationToken; // abort a slow cold open mid-flight on STOP/cancel (NXT-03)
+                    return MediaSession.Owning(builder.Build());
                 },
                 cancellationToken)
             .ConfigureAwait(false);

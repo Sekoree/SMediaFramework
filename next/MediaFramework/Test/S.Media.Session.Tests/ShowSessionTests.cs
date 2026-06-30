@@ -267,6 +267,74 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task Stop_PreemptsABlockedColdOpen_InsteadOfWaitingForIt()
+    {
+        // NXT-03: a STOP cancels an in-flight COLD clip open (here a provider that blocks until cancelled), so
+        // STOP returns bounded instead of waiting for the open — the cue token now threads to the media open.
+        await using var session = new ShowSession(BlockingOpenProvider.Registry());
+        await session.LoadDocumentAsync(new ShowDocument(1,
+            [new CueDefinition("c", 1, "C")],
+            [new ShowClipBinding("c", "blocking://x")],
+            [], [], [], []));
+
+        var fire = session.FireCueAsync("c"); // cold open blocks until cancelled
+        await Task.Delay(150);                 // let the fire reach the (blocked) open
+
+        var stop = session.StopAsync();
+        var winner = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(stop, winner);             // STOP returned without waiting out the (infinite) open
+        await stop;
+
+        Assert.Equal(CueExecutionStatus.Failed, await fire); // the open was aborted, the fire cancelled
+    }
+
+    [Fact]
+    public async Task Fire_RunsOffDispatcher_SoASlowOpenDoesNotParkOtherCommands()
+    {
+        // NXT-03 off-dispatcher: a fire's media open runs OFF the serial dispatcher, so a dispatcher-marshaled
+        // command (here a seek) is NOT queued behind a slow/blocked open — the loop stays responsive.
+        await using var session = new ShowSession(BlockingOpenProvider.Registry());
+        await session.LoadDocumentAsync(new ShowDocument(1,
+            [new CueDefinition("c", 1, "C")],
+            [new ShowClipBinding("c", "blocking://x")],
+            [], [], [], []));
+
+        var fire = session.FireCueAsync("c"); // open blocks indefinitely
+        await Task.Delay(150);
+
+        var seek = session.SeekAsync(TimeSpan.FromSeconds(1)); // a real dispatcher op (no-op on the idle group)
+        var winner = await Task.WhenAny(seek, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(seek, winner); // the seek ran while the fire's open was still blocked → loop not parked
+        await seek;
+
+        await session.StopAsync();                           // release the blocked fire
+        Assert.Equal(CueExecutionStatus.Failed, await fire);
+    }
+
+    [Fact]
+    public async Task Reload_DuringASlowFireOpen_DiscardsTheStraddlingClip()
+    {
+        // NXT-03 off-dispatcher: a reload bumps the show generation and cancels the in-flight fire; the fire,
+        // whose open straddled the reload, discards its now-stale clip and leaves the new show clean.
+        await using var session = new ShowSession(BlockingOpenProvider.Registry());
+        await session.LoadDocumentAsync(new ShowDocument(1,
+            [new CueDefinition("c", 1, "C")],
+            [new ShowClipBinding("c", "blocking://x")],
+            [], [], [], []));
+
+        var fire = session.FireCueAsync("c"); // open blocks
+        await Task.Delay(150);
+
+        var reload = session.LoadDocumentAsync(new ShowDocument(1, [], [], [], [], [], []));
+        var winner = await Task.WhenAny(reload, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(reload, winner); // the reload completed while the fire's open was blocked
+        await reload;
+
+        Assert.Equal(CueExecutionStatus.Failed, await fire);                 // the straddling fire was cancelled
+        Assert.All(session.Snapshot(), s => Assert.False(s.IsRunning));      // no leftover clip is running
+    }
+
+    [Fact]
     public async Task StopAsync_FreezesSessionClock()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
