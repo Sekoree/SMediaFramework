@@ -42,6 +42,64 @@ public class MediaRegistryTests
     }
 
     [Fact]
+    public async Task OpenAsync_AtomicResult_OwnsAsset_DisposedExactlyOnce()
+    {
+        // NXT-02: an atomic open returns one MediaOpenResult owning the (shared) asset; disposing the result
+        // tears it down once — both correlated tracks come from the single asset, not two independent opens.
+        var provider = new SharedAssetProvider();
+        IMediaRegistry registry = MediaRegistry.Build(b => b.AddDecoder(provider));
+
+        await using (var result = await registry.OpenAsync(MediaOpenRequest.AudioAndVideo("file:///x.mp4")))
+        {
+            Assert.NotNull(result.Video);
+            Assert.NotNull(result.Audio);
+            Assert.Equal(TimeSpan.FromSeconds(5), result.Duration);
+            Assert.True(result.CanSeek);
+            Assert.False(result.IsLive);
+            Assert.Equal(0, provider.AssetDisposeCount); // alive while in use
+        }
+        Assert.Equal(1, provider.AssetDisposeCount); // exactly one teardown on result dispose
+    }
+
+    [Fact]
+    public async Task OpenAsync_DefaultBridge_PicksHighestConfidence_AndHonoursRequestedKinds()
+    {
+        // The default OpenAsync bridges to OpenVideo/OpenAudio; the registry selects the highest-confidence provider.
+        IMediaRegistry registry = MediaRegistry.Build(b => b
+            .AddDecoder(new FakeDecoderProvider("A", 0.5))
+            .AddDecoder(new FakeDecoderProvider("B", 0.9)));
+
+        await using var both = await registry.OpenAsync(MediaOpenRequest.AudioAndVideo("file:///x.mp4"));
+        Assert.Equal("B", ((FakeVideoSource)both.Video!).Tag);
+        Assert.Equal("B", ((FakeAudioSource)both.Audio!).Tag);
+
+        // A video-only request opens no audio track.
+        await using var videoOnly = await registry.OpenAsync(
+            new MediaOpenRequest("file:///x.mp4") { Video = new VideoSourceOpenOptions() });
+        Assert.NotNull(videoOnly.Video);
+        Assert.Null(videoOnly.Audio);
+    }
+
+    [Fact]
+    public async Task OpenAsync_NoProviderForUri_Throws()
+    {
+        IMediaRegistry registry = MediaRegistry.Build(_ => { });
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await registry.OpenAsync(MediaOpenRequest.AudioAndVideo("file:///x.mp4")));
+    }
+
+    [Fact]
+    public async Task OpenAsync_HonoursCancellation()
+    {
+        // NXT-02: the open is cancellable — an already-cancelled token aborts before doing work.
+        IMediaRegistry registry = MediaRegistry.Build(b => b.AddDecoder(new FakeDecoderProvider("A", 0.9)));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await registry.OpenAsync(MediaOpenRequest.AudioAndVideo("file:///x.mp4"), cancellationToken: cts.Token));
+    }
+
+    [Fact]
     public void Highest_confidence_decoder_wins()
     {
         var r = MediaRegistry.Build(b => b

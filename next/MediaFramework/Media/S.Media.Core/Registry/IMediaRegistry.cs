@@ -41,6 +41,50 @@ public interface IMediaRegistry
     /// <summary>Opens a still image by file extension (an image source registered by a module).</summary>
     bool TryOpenImage(string path, [MaybeNullWhen(false)] out IVideoSource source);
 
+    /// <summary>
+    /// Opens <paramref name="request"/> atomically (NXT-02) via the highest-confidence provider (or the pinned
+    /// <see cref="MediaOpenRequest.ProviderHint"/>): for a correlated A/V item, capable providers share a single
+    /// demux for both tracks (one open/probe, one buffering/seek state) instead of the split video+audio opens.
+    /// Throws when no provider can open the URI; the provider's real failure surfaces as the thrown exception.
+    /// Default implementation picks the provider by confidence and delegates to <see cref="IMediaDecoderProvider.OpenAsync"/>.
+    /// </summary>
+    ValueTask<MediaOpenResult> OpenAsync(
+        MediaOpenRequest request,
+        IProgress<MediaPrepareProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrEmpty(request.Uri);
+
+        IMediaDecoderProvider? provider;
+        if (request.ProviderHint is { Length: > 0 } hint)
+        {
+            provider = FindDecoder(hint);
+        }
+        else
+        {
+            // Highest-confidence provider across either kind (most providers open both); ties to earliest-registered.
+            provider = null;
+            var best = 0.0;
+            foreach (var d in Decoders)
+            {
+                var score = Math.Max(d.Probe(request.Uri, MediaKind.Video), d.Probe(request.Uri, MediaKind.Audio));
+                if (score > best)
+                {
+                    best = score;
+                    provider = d;
+                }
+            }
+        }
+
+        if (provider is null)
+            throw new InvalidOperationException(
+                $"no registered decoder could open '{request.Uri}' " +
+                $"(registered: {string.Join(", ", Decoders.Select(d => d.Name))}).");
+
+        return provider.OpenAsync(request, progress, cancellationToken);
+    }
+
     /// <summary>Creates a CPU pixel converter, or <c>null</c> when no module registered one.</summary>
     IVideoCpuFrameConverter? CreateCpuConverter();
 

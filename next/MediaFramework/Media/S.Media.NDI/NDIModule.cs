@@ -107,6 +107,48 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         }
     }
 
+    /// <summary>NXT-02 atomic open: leases the requested video + audio from <strong>one</strong> shared NDI
+    /// receiver (anchored on a single audio-driven ingest clock), reported as a live, non-seekable result.</summary>
+    public async ValueTask<MediaOpenResult> OpenAsync(
+        MediaOpenRequest request,
+        IProgress<MediaPrepareProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Video is null && request.Audio is null)
+            throw new ArgumentException("MediaOpenRequest must request at least one of video or audio.", nameof(request));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return await Task.Run(() =>
+        {
+            progress?.Report(new MediaPrepareProgress("connecting", Message: request.Uri));
+            var name = SourceNameFromUri(request.Uri);
+            var video = request.Video is not null ? _cache.LeaseVideo(name) : null;
+            IAudioSource? audio = null;
+            try
+            {
+                audio = request.Audio is not null ? _cache.LeaseAudio(name) : null;
+                _ = video?.Format; // surface formats before returning (live NDI delivers none until the first frame)
+                _ = audio?.Format;
+            }
+            catch
+            {
+                (audio as IDisposable)?.Dispose();
+                (video as IDisposable)?.Dispose();
+                throw;
+            }
+
+            return new MediaOpenResult(
+                Name, video, audio, TimeSpan.Zero, isLive: true, canSeek: false,
+                disposeAsync: () =>
+                {
+                    (audio as IDisposable)?.Dispose();
+                    (video as IDisposable)?.Dispose();
+                    return ValueTask.CompletedTask;
+                });
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
     private static NDIDiscoveredSource ResolveSource(string name)
     {
         foreach (var s in NDISource.Find(DiscoveryTimeout))

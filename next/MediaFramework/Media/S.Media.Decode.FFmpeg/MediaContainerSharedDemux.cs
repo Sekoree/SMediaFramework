@@ -42,6 +42,10 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
 
     private volatile bool _disposed;
     private volatile bool _demuxerStopRequest;
+    // Cancellation for the (blocking, native) open — checked by the interrupt callback ONLY while an open is in
+    // flight, then cleared, so a slow/blocked open (e.g. a network connect) aborts promptly on cancel without
+    // the open token leaking into later reads/seeks (NXT-02 cancellable open / NXT-03 STOP-preempts-open).
+    private CancellationToken _openCancellation;
     private int _videoDecodeYieldRequested;
     private volatile bool _fileReadCompleted;
     private volatile Exception? _demuxFault;
@@ -176,17 +180,21 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         _interruptHandle = GCHandle.Alloc(this);
     }
 
-    internal static MediaContainerSharedDemux Open(string path, VideoDecoderOpenOptions? videoOptions)
+    internal static MediaContainerSharedDemux Open(
+        string path, VideoDecoderOpenOptions? videoOptions, CancellationToken cancellationToken = default)
     {
         var d = new MediaContainerSharedDemux();
+        d._openCancellation = cancellationToken;
         try
         {
             d.OpenInternal(path, videoOptions);
+            d._openCancellation = default; // open complete — don't let the open token abort later reads/seeks
             return d;
         }
         catch
         {
             d.Dispose();
+            cancellationToken.ThrowIfCancellationRequested(); // an interrupt-aborted open surfaces as cancellation
             throw;
         }
     }
@@ -1301,7 +1309,7 @@ internal sealed unsafe partial class MediaContainerSharedDemux : IDisposable
         if (handle.Target is not MediaContainerSharedDemux demux)
             return 1;
 
-        return demux._disposed || demux._demuxerStopRequest ? 1 : 0;
+        return demux._disposed || demux._demuxerStopRequest || demux._openCancellation.IsCancellationRequested ? 1 : 0;
     }
 
     private void FreeInterruptHandle()

@@ -36,4 +36,62 @@ public interface IMediaDecoderProvider
     /// with the FFmpeg provider in Phase 2.
     /// </summary>
     IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options);
+
+    /// <summary>
+    /// Opens the tracks requested by <paramref name="request"/> in <strong>one atomic operation</strong> (NXT-02),
+    /// returning a <see cref="MediaOpenResult"/> that owns the asset. A provider that can demux a correlated A/V
+    /// item once (e.g. FFmpeg) overrides this to share a <em>single</em> demux for the audio and video tracks —
+    /// one open/probe, one buffering/seek state — instead of the split <see cref="OpenVideo"/> + <see cref="OpenAudio"/>
+    /// path that opened two independent contexts. The default bridges to those per-kind methods (preserving older
+    /// behaviour for providers that don't override) and runs on a worker thread so a slow open doesn't block the
+    /// caller. Cancellation is honoured at stage boundaries (a synchronous native open can't be interrupted mid-call).
+    /// </summary>
+    async ValueTask<MediaOpenResult> OpenAsync(
+        MediaOpenRequest request,
+        IProgress<MediaPrepareProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Video is null && request.Audio is null)
+            throw new ArgumentException("MediaOpenRequest must request at least one of video or audio.", nameof(request));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return await Task.Run(() =>
+        {
+            progress?.Report(new MediaPrepareProgress("opening", Message: request.Uri));
+            // Open each requested kind opportunistically: a split-open provider legitimately throws for a kind
+            // the source lacks (an audio-only file has no video, and vice-versa). Tolerate that and fail only
+            // when BOTH requested sides fail — surfacing the real cause(s), not a generic message (NXT-02).
+            IVideoSource? video = null;
+            Exception? videoError = null;
+            if (request.Video is not null)
+                try { video = OpenVideo(request.Uri, request.Video); }
+                catch (Exception ex) { videoError = ex; }
+
+            IAudioSource? audio = null;
+            Exception? audioError = null;
+            if (request.Audio is not null)
+                try { audio = OpenAudio(request.Uri, request.Audio); }
+                catch (Exception ex) { audioError = ex; }
+
+            if (video is null && audio is null)
+            {
+                var causes = new List<string>();
+                if (videoError is not null) causes.Add($"video: {videoError.Message}");
+                if (audioError is not null) causes.Add($"audio: {audioError.Message}");
+                throw new InvalidOperationException(causes.Count > 0
+                    ? $"could not open '{request.Uri}' — {string.Join("; ", causes)}"
+                    : $"'{request.Uri}' produced neither a requested audio nor video track.");
+            }
+
+            return new MediaOpenResult(
+                Name, video, audio, TimeSpan.Zero, isLive: false, canSeek: false,
+                disposeAsync: () =>
+                {
+                    (audio as IDisposable)?.Dispose();
+                    (video as IDisposable)?.Dispose();
+                    return ValueTask.CompletedTask;
+                });
+        }, cancellationToken).ConfigureAwait(false);
+    }
 }

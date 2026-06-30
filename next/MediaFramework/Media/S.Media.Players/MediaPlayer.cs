@@ -427,44 +427,73 @@ public sealed class MediaPlayer : IDisposable
         player = null;
         error = null;
 
-        // Open both kinds opportunistically: a confidence-matched decoder still throws when the source lacks
-        // that stream (an audio-only file has no video, and vice-versa). Tolerate that here so the dual-open
-        // falls back to whichever kind exists, but RETAIN the real exceptions: when BOTH sides fail we surface
-        // the actual decoder/network cause instead of a generic "no decoder" message (NXT-02 partial — the
-        // split open hid the real error and turned a genuine failure into silent audio-only/video-only).
-        IVideoSource? video = null;
-        Exception? videoError = null;
-        if (options.VideoStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
-            try { registry.TryOpenVideo(uri, options.ToVideoSourceOpenOptions(), out video); }
-            catch (Exception ex) { videoError = ex; video = null; }
-        IAudioSource? audio = null;
-        Exception? audioError = null;
-        if (options.IncludeAudioRouter && options.AudioStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
-            try { registry.TryOpenAudio(uri, options.ToAudioSourceOpenOptions(), out audio); }
-            catch (Exception ex) { audioError = ex; audio = null; }
-
-        if (video is null && audio is null)
+        // NXT-02: open audio + video as ONE atomic asset (a single shared demux for a correlated A/V file —
+        // one open/probe, one buffering/seek state) instead of two independent opens. The result owns the
+        // asset; the player adopts it as an owned companion so a single dispose tears the whole thing down.
+        var request = new MediaOpenRequest(uri)
         {
-            var causes = new List<string>();
-            if (videoError is not null) causes.Add($"video: {videoError.Message}");
-            if (audioError is not null) causes.Add($"audio: {audioError.Message}");
-            error = causes.Count > 0
-                ? $"could not open '{uri}' — {string.Join("; ", causes)}"
-                : $"no registered decoder could open '{uri}' for audio or video " +
-                  $"(registered: {string.Join(", ", registry.Decoders.Select(d => d.Name))}).";
+            Video = options.VideoStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex
+                ? options.ToVideoSourceOpenOptions()
+                : null,
+            Audio = options.IncludeAudioRouter && options.AudioStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex
+                ? options.ToAudioSourceOpenOptions()
+                : null,
+        };
+        if (request.Video is null && request.Audio is null)
+        {
+            error = $"nothing to open for '{uri}' (both audio and video disabled by the open options).";
             return false;
         }
 
-        if (TryOpenLive(audio, video, options, videoNegotiationLead, disposeNegotiationLead: false,
-                disposeSourcesOnDispose: true, out player, out error))
+        MediaOpenResult result;
+        try
         {
+            // Sync-over-async: the open is a synchronous native call regardless; the async signature is the
+            // forward path for cancellable network prepares. The provider's REAL failure (decode/network/auth)
+            // surfaces here as the thrown exception instead of a generic "no decoder" message (NXT-02).
+            result = registry.OpenAsync(request).AsTask().GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            error = $"could not open '{uri}': {ex.Message}";
+            return false;
+        }
+
+        if (result.Video is null && result.Audio is null)
+        {
+            error = $"'{uri}' opened but contains neither a requested audio nor video track.";
+            result.Dispose();
+            return false;
+        }
+
+        // Preserve the album-art / attached-picture display mode without an OWNING wrapper (the result owns the
+        // underlying source; this view just re-advertises IAttachedPictureSource that the raw track doesn't).
+        var video = result.VideoIsAttachedPicture && result.Video is not null
+            ? new AttachedPictureVideoSource(result.Video)
+            : result.Video;
+
+        if (TryOpenLive(result.Audio, video, options, videoNegotiationLead, disposeNegotiationLead: false,
+                disposeSourcesOnDispose: false, out player, out error))
+        {
+            player.RegisterOwnedCompanion(result); // the player owns the atomic asset; disposes it on dispose
             WireAdaptiveRateFromRegistry(registry, player);
             return true;
         }
 
-        (video as IDisposable)?.Dispose();
-        (audio as IDisposable)?.Dispose();
+        result.Dispose();
         return false;
+    }
+
+    /// <summary>Re-advertises an attached-picture (album-art) source through <see cref="IAttachedPictureSource"/>
+    /// without owning it — the <see cref="MediaOpenResult"/> owns the underlying track and disposes it (NXT-02).</summary>
+    private sealed class AttachedPictureVideoSource(IVideoSource inner) : IVideoSource, IAttachedPictureSource
+    {
+        public bool IsAttachedPicture => true;
+        public VideoFormat Format => inner.Format;
+        public IReadOnlyList<PixelFormat> NativePixelFormats => inner.NativePixelFormats;
+        public bool IsExhausted => inner.IsExhausted;
+        public void SelectOutputFormat(PixelFormat format) => inner.SelectOutputFormat(format);
+        public bool TryReadNextFrame(out VideoFrame frame) => inner.TryReadNextFrame(out frame);
     }
 
     /// <summary>

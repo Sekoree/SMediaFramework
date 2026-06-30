@@ -67,6 +67,80 @@ internal sealed class FFmpegDecoderProvider : IMediaDecoderProvider
             ? AudioFileDecoder.OpenUri(parsed, MapAudio(options))
             : AudioFileDecoder.Open(uri, MapAudio(options));
 
+    /// <summary>
+    /// NXT-02 atomic open: opens the requested audio + video tracks from <strong>one</strong>
+    /// <see cref="MediaContainerDecoder"/> (a single shared demux), so an A/V file is opened/probed once with
+    /// one buffering/seek state — instead of the split <see cref="OpenVideo"/> + <see cref="OpenAudio"/> path
+    /// that built two independent demux contexts. Runs the (synchronous, native) open on a worker thread.
+    /// </summary>
+    public async ValueTask<MediaOpenResult> OpenAsync(
+        MediaOpenRequest request,
+        IProgress<MediaPrepareProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Video is null && request.Audio is null)
+            throw new ArgumentException("MediaOpenRequest must request at least one of video or audio.", nameof(request));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return await Task.Run(() =>
+        {
+            progress?.Report(new MediaPrepareProgress("opening", Message: request.Uri));
+            var opts = MapCombined(request);
+            var container = TryCreateAbsoluteMediaUri(request.Uri, out var parsed)
+                ? MediaContainerDecoder.OpenUri(parsed, opts, cancellationToken)
+                : MediaContainerDecoder.Open(request.Uri, opts, cancellationToken);
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                // The container owns the demux; Video/Audio are correlated views into it. Return them only when
+                // requested AND present (a video file opened audio-only has no video track, and vice-versa).
+                var video = request.Video is not null && container.HasVideo ? container.Video : null;
+                var audio = request.Audio is not null && container.HasAudio ? container.Audio : null;
+                var tracks = container.Streams.Select(ToTrackInfo).ToArray();
+                return new MediaOpenResult(
+                    Name, video, audio, container.Duration, isLive: false, canSeek: true, tracks,
+                    disposeAsync: () => { container.Dispose(); return ValueTask.CompletedTask; })
+                {
+                    VideoIsAttachedPicture = container.VideoIsAttachedPicture,
+                };
+            }
+            catch
+            {
+                container.Dispose();
+                throw;
+            }
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static MediaTrackInfo ToTrackInfo(MediaStreamInfo s) =>
+        new(s.Index, s.Kind switch
+        {
+            MediaStreamKind.Video => MediaTrackKind.Video,
+            MediaStreamKind.Audio => MediaTrackKind.Audio,
+            MediaStreamKind.Subtitle => MediaTrackKind.Subtitle,
+            _ => MediaTrackKind.Data,
+        }, s.CodecName, s.Language);
+
+    // Combined video-decoder options enabling exactly the requested sides on one shared demux: a side the
+    // request omits is Disabled so the container doesn't demux/decode it.
+    private static VideoDecoderOpenOptions MapCombined(MediaOpenRequest request)
+    {
+        var v = request.Video;
+        return new VideoDecoderOpenOptions
+        {
+            TryHardwareAcceleration = v?.TryHardwareAcceleration ?? true,
+            RetainDmabufForGl = v?.RetainDmabufForGl ?? false,
+            RetainD3D11SharedHandleForGl = v?.RetainD3D11SharedHandleForGl ?? false,
+            Win32Nv12SharedHandleOnlyExport = v?.Win32Nv12SharedHandleOnlyExport ?? false,
+            AudioPacketQueueDepth = v?.AudioPacketQueueDepth ?? 0,
+            VideoPacketQueueDepth = v?.VideoPacketQueueDepth ?? 0,
+            FileReadBufferBytes = v?.FileReadBufferBytes ?? 0,
+            VideoStreamIndex = request.Video is not null ? v?.VideoStreamIndex : MediaStreamSelection.Disabled,
+            AudioStreamIndex = request.Audio is not null ? request.Audio.AudioStreamIndex : MediaStreamSelection.Disabled,
+        };
+    }
+
     /// <summary>Known URI scheme, lowercased; empty for a bare path.</summary>
     private static string SchemeOf(string uri)
     {

@@ -86,8 +86,9 @@ public sealed class MediaContainerDecoder : IDisposable
     /// </summary>
     public bool Win32Nv12SharedHandleOnlyActive => _shared.Win32Nv12SharedHandleOnlyActive;
 
-    public static MediaContainerDecoder Open(string path, VideoDecoderOpenOptions? videoOptions = null) =>
-        OpenInput(path, videoOptions, validateLocalFile: true, ownedTempPath: null);
+    public static MediaContainerDecoder Open(
+        string path, VideoDecoderOpenOptions? videoOptions = null, CancellationToken cancellationToken = default) =>
+        OpenInput(path, videoOptions, validateLocalFile: true, ownedTempPath: null, cancellationToken);
 
     /// <summary>
     /// Opens a local media file. Prefer this explicit helper when accepting file paths from end users;
@@ -100,15 +101,16 @@ public sealed class MediaContainerDecoder : IDisposable
     /// Opens a media URI. <c>file:</c> URIs are validated as local files; other absolute URI schemes
     /// are passed to FFmpeg as protocol inputs (for example <c>http:</c>, <c>https:</c>, or <c>rtsp:</c>).
     /// </summary>
-    public static MediaContainerDecoder OpenUri(Uri uri, VideoDecoderOpenOptions? videoOptions = null)
+    public static MediaContainerDecoder OpenUri(
+        Uri uri, VideoDecoderOpenOptions? videoOptions = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(uri);
         if (!uri.IsAbsoluteUri)
             throw new ArgumentException("media URI must be absolute.", nameof(uri));
 
         return uri.IsFile
-            ? OpenInput(uri.LocalPath, videoOptions, validateLocalFile: true, ownedTempPath: null)
-            : OpenInput(uri.AbsoluteUri, videoOptions, validateLocalFile: false, ownedTempPath: null);
+            ? OpenInput(uri.LocalPath, videoOptions, validateLocalFile: true, ownedTempPath: null, cancellationToken)
+            : OpenInput(uri.AbsoluteUri, videoOptions, validateLocalFile: false, ownedTempPath: null, cancellationToken);
     }
 
     /// <summary>
@@ -180,7 +182,8 @@ public sealed class MediaContainerDecoder : IDisposable
         string input,
         VideoDecoderOpenOptions? videoOptions,
         bool validateLocalFile,
-        string? ownedTempPath)
+        string? ownedTempPath,
+        CancellationToken cancellationToken = default)
     {
         using var timing = MediaDiagnostics.BeginTimedOperation(Trace, "MediaContainerDecoder.OpenInput", slowWarningMs: 1000);
         ArgumentException.ThrowIfNullOrEmpty(input);
@@ -190,7 +193,7 @@ public sealed class MediaContainerDecoder : IDisposable
         FFmpegRuntime.EnsureInitialized();
 
         var opt = videoOptions ?? new VideoDecoderOpenOptions();
-        var shared = MediaContainerSharedDemux.Open(input, opt);
+        var shared = MediaContainerSharedDemux.Open(input, opt, cancellationToken);
         timing?.SetOutcome($"input={Path.GetFileName(input)} local={validateLocalFile} audio={shared.HasAudio} video={shared.HasVideo} duration={shared.Duration}");
         return new MediaContainerDecoder(shared, ownedTempPath);
     }
