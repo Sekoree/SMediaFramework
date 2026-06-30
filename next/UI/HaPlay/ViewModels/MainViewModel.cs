@@ -42,6 +42,8 @@ public partial class MainViewModel : ViewModelBase
     // compositionId → the real video outputs it renders to, acquired on the UI thread in ReloadCueShowSession
     // so ShowSession's video factory is a pure lookup during (synchronous) LoadDocument (no deadlock).
     private Dictionary<string, IVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
+    // soundboard tile → its configured fade-out (ms), captured at play so FadeOutSound (tile-only) can use it.
+    private readonly Dictionary<Guid, int> _soundboardFadeMs = new();
     private bool _midiInitialized;
     private CancellationTokenSource? _endpointHealthCts;
     private DispatcherTimer? _endpointHealthTimer;
@@ -246,7 +248,38 @@ public partial class MainViewModel : ViewModelBase
                     await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
                 return null;
             };
-            Trace.LogInformation("HaPlay: cue transport re-backed onto ShowSession (HAPLAY_USE_SHOWSESSION=1).");
+
+            // Soundboard voices on the same session (task #10): re-back the soundboard transport onto the
+            // ShowSession voice subsystem (a streaming player per tile on its routed output line).
+            Soundboard.PlaySoundCallback = async req =>
+            {
+                try
+                {
+                    var device = OutputManagement.DefinitionsSnapshot
+                        .OfType<PortAudioOutputDefinition>()
+                        .FirstOrDefault(d => d.Id == req.OutputLineId)?.EffectiveAudioBackendDeviceId;
+                    _soundboardFadeMs[req.TileId] = req.FadeOutMs;
+                    await _cueShowSession!.FireVoiceAsync(req.TileId.ToString(), req.FilePath, device, (float)req.Volume);
+                    Soundboard.OnSoundStarted(req.TileId);
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    return ex.Message;
+                }
+            };
+            Soundboard.StopSoundCallback = id => _cueShowSession!.StopVoiceAsync(id.ToString());
+            Soundboard.StopAllSoundsCallback = () => _cueShowSession!.StopAllVoicesAsync();
+            Soundboard.SetSoundVolumeCallback = (id, vol) => _ = _cueShowSession!.SetVoiceVolumeAsync(id.ToString(), (float)vol);
+            Soundboard.FadeOutSoundCallback = id =>
+                _cueShowSession!.FadeVoiceAsync(id.ToString(), TimeSpan.FromMilliseconds(_soundboardFadeMs.GetValueOrDefault(id)));
+            _cueShowSession.VoiceEnded += id =>
+            {
+                if (Guid.TryParse(id, out var tileId))
+                    Dispatcher.UIThread.Post(() => Soundboard.OnSoundEnded(tileId));
+            };
+
+            Trace.LogInformation("HaPlay: cue transport + soundboard re-backed onto ShowSession (HAPLAY_USE_SHOWSESSION=1).");
         }
         catch (Exception ex)
         {
