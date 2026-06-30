@@ -230,4 +230,28 @@ public class ShowDocumentMapperTests
         // the mapped document also round-trips through the source-gen JSON (it is persistable).
         Assert.Equal(doc.Cues.Count, ShowDocument.FromJson(doc.ToJson()).Cues.Count);
     }
+
+    [Fact]
+    public void MediaPlayerShowMapper_FileWithVideo_BuildsOneCueShowOnAComposition()
+    {
+        var doc = MediaPlayerShowMapper.ToShowDocument(
+            "/m/clip.mp4", hasVideo: true, audioRoutes: [new ShowClipAudioRoute(DeviceId: "hw:0")]);
+
+        var cue = Assert.Single(doc.Cues);
+        Assert.Equal(MediaPlayerShowMapper.PlayerCueId, cue.Id);
+        var clip = Assert.Single(doc.Clips);
+        Assert.Equal("/m/clip.mp4", clip.MediaPath);
+        Assert.Equal(MediaPlayerShowMapper.PlayerCompositionId, clip.CompositionId);
+        Assert.Equal("hw:0", Assert.Single(clip.AudioRoutes!).DeviceId);
+        Assert.Single(doc.Compositions);
+    }
+
+    [Fact]
+    public void MediaPlayerShowMapper_AudioOnly_HasNoComposition()
+    {
+        var doc = MediaPlayerShowMapper.ToShowDocument("/m/song.wav", hasVideo: false);
+
+        Assert.Empty(doc.Compositions);
+        Assert.Null(Assert.Single(doc.Clips).CompositionId);
+    }
 }
