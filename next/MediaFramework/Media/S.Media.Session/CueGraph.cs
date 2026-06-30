@@ -3,15 +3,37 @@ using System.Text.Json.Serialization;
 
 namespace S.Media.Session;
 
+/// <summary>
+/// What the cue runtime does when a cue's action faults. <strong>Only <see cref="StopShow"/> and
+/// <see cref="Continue"/> have implemented behaviour today</strong>; every other value currently degrades to
+/// "log and continue" (NXT-07). The unimplemented values are retained for forward-compatible persistence and
+/// the GUI mapping — do not rely on their named behaviour until <see cref="CueGraph"/> implements it, and do
+/// not add a value without implementing it in <c>FireEntryAsync</c>.
+/// </summary>
 public enum CueFaultPolicy
 {
+    /// <summary>Implemented: rethrow the fault so the show stops.</summary>
     StopShow,
+
+    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
     SkipCue,
+
+    /// <summary>Implemented: log the fault and continue (the fall-through for every non-StopShow value).</summary>
     Continue,
+
+    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
     HoldLastFrame,
+
+    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
     FadeToBlackOrSilence,
+
+    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
     ContinueAudioOnly,
+
+    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
     ContinueVideoOnly,
+
+    /// <summary>Not yet implemented — currently behaves as <see cref="Continue"/>.</summary>
     RouteToFallbackOutput,
 }
 
@@ -201,9 +223,17 @@ public sealed class CueGraph
         JsonSerializer.Deserialize(json, CueShowFileJsonContext.Default.CueShowFile)
         ?? throw new InvalidOperationException("show file JSON did not contain a valid cue show.");
 
-    private async ValueTask<CueExecutionStatus> FireEntryAsync(CueEntry entry, CancellationToken cancellationToken)
+    private async ValueTask<CueExecutionStatus> FireEntryAsync(
+        CueEntry entry, CancellationToken cancellationToken, HashSet<string>? autoContinueChain = null)
     {
         var cue = entry.Definition;
+        // Defence in depth against a cyclic auto-continue chain — ShowDocumentValidator rejects these at load,
+        // but CueGraph can be driven directly. If this cue is already in the active auto-continue chain, the
+        // follow-on links form a cycle that would otherwise recurse forever (NXT-07).
+        if (autoContinueChain is not null && !autoContinueChain.Add(cue.Id))
+            throw new InvalidOperationException(
+                $"auto-continue follow-on cycle detected at cue '{cue.Id}' — aborting to avoid infinite recursion.");
+
         if (!cue.Enabled)
             return Log(cue, CueExecutionStatus.SkippedDisabled, "cue is disabled");
         if (!cue.Armed)
@@ -226,7 +256,9 @@ public sealed class CueGraph
             {
                 var follow = GetEntry(cue.FollowOnCueId)
                     ?? throw new InvalidOperationException($"follow-on cue '{cue.FollowOnCueId}' is not registered.");
-                await FireEntryAsync(follow, cancellationToken).ConfigureAwait(false);
+                await FireEntryAsync(
+                    follow, cancellationToken,
+                    autoContinueChain ?? new HashSet<string>(StringComparer.Ordinal) { cue.Id }).ConfigureAwait(false);
             }
 
             return CueExecutionStatus.Fired;
@@ -234,6 +266,9 @@ public sealed class CueGraph
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log(cue, CueExecutionStatus.Failed, ex.Message);
+            // Only StopShow is implemented as a distinct fault policy; every other CueFaultPolicy value currently
+            // degrades to "log the failure and continue the show" (see the enum's doc). Do not add a policy value
+            // without implementing its behaviour here, or it silently becomes Continue (NXT-07).
             if (cue.FaultPolicy == CueFaultPolicy.StopShow)
                 throw;
             return CueExecutionStatus.Failed;

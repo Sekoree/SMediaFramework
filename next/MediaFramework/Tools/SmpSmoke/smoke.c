@@ -12,6 +12,7 @@
 #include "s_media_player.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 
 static const char* EMPTY_SHOW =
     "{\"Version\":1,\"Cues\":[],\"Clips\":[],\"Compositions\":[],\"Outputs\":[],\"Routes\":[],\"Devices\":[]}";
@@ -68,10 +69,30 @@ int main(int argc, char** argv) {
         CHECK(dur > 0, "media clip reports a duration");
 
     CHECK(mfp_session_stop(s, NULL) == MFP_OK, "mfp_session_stop");
-    mfp_session_destroy(s);
-    mfp_shutdown();
 
-    printf("SmpSmoke OK — a C host ran a %s show (load/cue-list/go/query/stop/close) through s_media_player.h.\n",
+    /* --- NXT-08 negative-handle gate: bad/stale/double-freed handles must be REJECTED, never crash the
+     * process. With the old raw-GCHandle scheme a garbage token was dereferenced and could fault across the
+     * unmanaged boundary; the handle table now resolves by lookup and rejects safely. --- */
+    {
+        mfp_session garbage = (mfp_session)(intptr_t)0xDEADBEEFu;
+        CHECK(mfp_session_state(garbage, NULL) < 0, "garbage handle rejected by state (no crash)");
+        CHECK(mfp_session_load_show(garbage, EMPTY_SHOW) == MFP_ERR_INVALID_HANDLE, "garbage handle rejected by load");
+        CHECK(mfp_session_state(NULL, NULL) < 0, "null handle rejected by state");
+        CHECK(mfp_session_go(NULL, NULL) == MFP_ERR_INVALID_HANDLE, "null handle rejected by go");
+    }
+
+    mfp_session_destroy(s);
+    /* Use-after-destroy and double-destroy are safe errors / no-ops, not crashes or double-frees. */
+    CHECK(mfp_session_state(s, NULL) < 0, "use-after-destroy rejected");
+    mfp_session_destroy(s); /* double destroy */
+
+    mfp_shutdown();
+    /* After shutdown the runtime refuses handles but does not crash, and destroy stays valid (no-op). */
+    CHECK(mfp_session_state(s, NULL) < 0, "post-shutdown call rejected");
+    mfp_session_destroy(s);
+
+    printf("SmpSmoke OK — a C host ran a %s show (load/cue-list/go/query/stop/close) through s_media_player.h, "
+           "and bad/stale/double-freed/post-shutdown handles were rejected without crashing.\n",
            media ? "media" : "empty");
     return 0;
 }

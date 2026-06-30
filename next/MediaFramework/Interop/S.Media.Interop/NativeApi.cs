@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using S.Media.Audio.PortAudio;
@@ -32,6 +33,14 @@ internal static unsafe class NativeApi
     [ThreadStatic] private static string? s_lastError;
     [ThreadStatic] private static nint s_lastErrorNative;
 
+    // Session handles are opaque, monotonically-increasing tokens into a synchronized table — NEVER raw
+    // GCHandle pointers handed back by (untrusted) C callers. A stale, random, or double-freed token simply
+    // isn't in the table, so it is rejected without ever dereferencing caller-supplied memory (NXT-08). Ids
+    // are never reused (64-bit monotonic), so there is no ABA window that a separate generation would guard.
+    private static readonly Lock s_handleGate = new();
+    private static readonly Dictionary<nint, SessionBox> s_handles = new();
+    private static nint s_nextHandle; // 0 is reserved as the null/invalid handle; first issued is 1
+
     private sealed class SessionBox
     {
         public required ShowSession Session;
@@ -48,19 +57,50 @@ internal static unsafe class NativeApi
         return MfpOk;
     }
 
+    /// <summary>Destroys every live session deterministically, then closes the runtime. The old behaviour only
+    /// flipped a flag — after which destruction was refused, so live sessions and their native resources leaked
+    /// (NXT-08). No-throw across the boundary.</summary>
     [UnmanagedCallersOnly(EntryPoint = "mfp_shutdown")]
-    private static void Shutdown() => s_initialized = false;
+    private static void Shutdown()
+    {
+        try
+        {
+            SessionBox[] live;
+            lock (s_handleGate)
+            {
+                live = s_handles.Values.ToArray();
+                s_handles.Clear();
+            }
+            foreach (var box in live)
+            {
+                try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                catch { /* teardown best-effort */ }
+            }
+            s_initialized = false;
+            FreeLastErrorNative();
+        }
+        catch { /* no-throw boundary across the ABI */ }
+    }
 
     [UnmanagedCallersOnly(EntryPoint = "mfp_abi_version")]
     private static uint AbiVersion() => 1u;
 
+    /// <summary>The last error string for the calling thread, or "" if none. The returned pointer is owned by
+    /// the library and is valid <strong>only until the next <c>mfp_*</c> call on this thread</strong> (it is
+    /// freed and re-issued on each call) — C callers must copy it immediately (NXT-17). Never throws.</summary>
     [UnmanagedCallersOnly(EntryPoint = "mfp_last_error")]
     private static byte* LastError()
     {
-        if (s_lastErrorNative != 0)
-            Marshal.FreeCoTaskMem(s_lastErrorNative);
-        s_lastErrorNative = Marshal.StringToCoTaskMemUTF8(s_lastError ?? string.Empty);
-        return (byte*)s_lastErrorNative;
+        try
+        {
+            FreeLastErrorNative();
+            s_lastErrorNative = Marshal.StringToCoTaskMemUTF8(s_lastError ?? string.Empty);
+            return (byte*)s_lastErrorNative;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // ----------------------------------------------------------------- session ---------------------
@@ -84,7 +124,7 @@ internal static unsafe class NativeApi
 
             var box = new SessionBox { Session = session, Registry = registry };
             ClearLastError();
-            return GCHandle.ToIntPtr(GCHandle.Alloc(box));
+            return RegisterSession(box);
         }
         catch (Exception ex)
         {
@@ -96,26 +136,20 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_destroy")]
     private static void SessionDestroy(nint session)
     {
-        if (!TryBox(session, out var handle, out var box))
-            return;
         try
         {
-            box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            if (!TryRemove(session, out var box))
+                return; // unknown / already-destroyed handle → idempotent no-op (no throw, no double-free)
+            try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+            catch { /* teardown is best-effort */ }
         }
-        catch
-        {
-            // teardown is best-effort
-        }
-        finally
-        {
-            handle.Free();
-        }
+        catch { /* no-throw boundary across the ABI */ }
     }
 
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_load_show")]
     private static int SessionLoadShow(nint session, byte* showJson)
     {
-        if (!TryBox(session, out _, out var box))
+        if (!TryResolve(session, out var box))
             return MfpErrInvalidHandle;
         try
         {
@@ -141,7 +175,7 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_fire_cue")]
     private static int SessionFireCue(nint session, byte* cueId)
     {
-        if (!TryBox(session, out _, out var box))
+        if (!TryResolve(session, out var box))
             return MfpErrInvalidHandle;
         var id = Utf8(cueId);
         if (string.IsNullOrEmpty(id))
@@ -179,7 +213,7 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_cue_count")]
     private static int SessionCueCount(nint session)
     {
-        if (!TryBox(session, out _, out var box))
+        if (!TryResolve(session, out var box))
             return MfpErrInvalidHandle;
         try
         {
@@ -197,7 +231,7 @@ internal static unsafe class NativeApi
     [UnmanagedCallersOnly(EntryPoint = "mfp_session_cue_id")]
     private static int SessionCueId(nint session, int index, byte* outBuf, int outCapacity)
     {
-        if (!TryBox(session, out _, out var box))
+        if (!TryResolve(session, out var box))
             return MfpErrInvalidHandle;
         if (outBuf == null || outCapacity <= 0)
             return MfpErrInvalidArg;
@@ -232,7 +266,7 @@ internal static unsafe class NativeApi
 
     private static int Run(nint session, byte* groupId, Action<ShowSession, string?> action)
     {
-        if (!TryBox(session, out _, out var box))
+        if (!TryResolve(session, out var box))
             return MfpErrInvalidHandle;
         var g = Utf8(groupId);
         return Run(box, () => action(box.Session, string.IsNullOrEmpty(g) ? null : g));
@@ -255,7 +289,7 @@ internal static unsafe class NativeApi
 
     private static long Snapshot(nint session, byte* groupId, Func<TransportSnapshot, long> pick, long onBadHandle)
     {
-        if (!TryBox(session, out _, out var box))
+        if (!TryResolve(session, out var box))
             return onBadHandle;
         try
         {
@@ -274,10 +308,22 @@ internal static unsafe class NativeApi
         }
     }
 
-    private static bool TryBox(nint session, out GCHandle handle, out SessionBox box)
+    private static nint RegisterSession(SessionBox box)
     {
-        handle = default;
-        box = null!;
+        lock (s_handleGate)
+        {
+            var handle = ++s_nextHandle; // monotonic, never reused → a freed token can never alias a live one
+            s_handles[handle] = box;
+            return handle;
+        }
+    }
+
+    /// <summary>Resolves a caller-supplied handle to its session by table lookup. Never dereferences the token
+    /// as a pointer, so a stale/garbage/double-freed handle is rejected safely instead of throwing across the
+    /// unmanaged boundary (NXT-08).</summary>
+    private static bool TryResolve(nint session, [NotNullWhen(true)] out SessionBox? box)
+    {
+        box = null;
         if (!s_initialized)
         {
             SetLastError("mfp_initialize() has not been called.");
@@ -288,17 +334,35 @@ internal static unsafe class NativeApi
             SetLastError("null session handle.");
             return false;
         }
-        handle = GCHandle.FromIntPtr(session);
-        if (handle.Target is not SessionBox b)
-        {
-            SetLastError("invalid session handle.");
+        lock (s_handleGate)
+            if (s_handles.TryGetValue(session, out box))
+                return true;
+        SetLastError("invalid or stale session handle.");
+        return false;
+    }
+
+    /// <summary>Atomically removes a handle from the table (for destruction). Returns false for an unknown or
+    /// already-removed handle, so double-destroy is a safe no-op. Does not gate on initialization so a session
+    /// can always be torn down.</summary>
+    private static bool TryRemove(nint session, [NotNullWhen(true)] out SessionBox? box)
+    {
+        box = null;
+        if (session == 0)
             return false;
-        }
-        box = b;
-        return true;
+        lock (s_handleGate)
+            return s_handles.Remove(session, out box);
     }
 
     private static string Utf8(byte* p) => p == null ? string.Empty : Marshal.PtrToStringUTF8((nint)p) ?? string.Empty;
     private static void SetLastError(string message) => s_lastError = message;
     private static void ClearLastError() => s_lastError = null;
+
+    private static void FreeLastErrorNative()
+    {
+        if (s_lastErrorNative != 0)
+        {
+            Marshal.FreeCoTaskMem(s_lastErrorNative);
+            s_lastErrorNative = 0;
+        }
+    }
 }

@@ -33,16 +33,19 @@ public sealed class ShowSession : IAsyncDisposable
     private readonly IMediaRegistry _registry;
     private readonly IAudioBackend? _audioBackend;
     private readonly string? _outputDeviceId;
-    private readonly CueGraph _cueGraph = new();
+    private CueGraph _cueGraph = new(); // swapped atomically on load (NXT-12 transactional load)
     private readonly Dictionary<string, TransportGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
     private IReadOnlyList<OutputPatchRoute> _routes = [];
     private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
     private readonly SessionDispatcher _dispatcher = new("show-session");
     private readonly Func<string, int, int, int, IVideoOverlaySource?>? _subtitleFactory;
-    // Host video-output factory (compositionId, name, width, height) → the real outputs a composition renders
-    // to (NDI/SDL/local). Null ⇒ headless discard. Lets the GUI surface composited video to its output lines.
-    private readonly Func<string, string, int, int, IReadOnlyList<IVideoOutput>>? _videoOutputFactory;
+    // Host video-output factory (compositionId, name, width, height) → the leases a composition renders to
+    // (NDI/SDL/local). The HOST owns each returned output's lifetime and declares it on the lease — a borrowed
+    // host output is returned with DisposeOutputOnRuntimeDispose=false (+ an optional release callback), so the
+    // session NEVER disposes it (NXT-01: disposing a borrowed SDL/NDI output is a use-after-reload defect).
+    // Null ⇒ headless discard. Lets the GUI surface composited video to its output lines.
+    private readonly Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? _videoOutputFactory;
     // Opens + warms clips (seek-to-Start trim-in, standby pre-roll). Clips arm through here instead of a
     // direct MediaGraph build so the show can pre-roll upcoming cues (8b convergence). All access is on the
     // serial dispatcher; the engine is also internally thread-safe.
@@ -60,6 +63,19 @@ public sealed class ShowSession : IAsyncDisposable
     private readonly Dictionary<string, VoiceHandle> _voices = new(StringComparer.Ordinal);
     private volatile bool _disposed;
 
+    // Lock-free query view (NXT-16): a volatile snapshot of each group's clock + active player, republished on
+    // the dispatcher whenever the group set or active clip changes. Snapshot() reads THIS and pulls live
+    // (thread-safe) position/duration/run-state off the captured references, so a position/state poll never
+    // serializes behind a long-running command on the dispatcher.
+    private volatile IReadOnlyList<GroupClockView> _groupViews = [];
+
+    private sealed record GroupClockView(string GroupId, SessionClock Clock, S.Media.Players.MediaPlayer? Player);
+
+    // The cancellation source of the in-flight cue fire (its pre/post-wait + open + auto-continue chain). Set on
+    // the dispatcher while a fire runs; read off-dispatcher by CancelActiveFire so STOP/LOAD/DISPOSE can abort a
+    // long pre-wait that would otherwise park the serial loop and block them indefinitely (NXT-03).
+    private volatile CancellationTokenSource? _activeFireCts;
+
     /// <param name="audioBackend">Optional. When supplied, each transport group plays its active clip on a
     /// master output created on this backend (D11). Null runs the cue/transport mechanics with no device.</param>
     /// <param name="subtitleFactory">Optional host-wired factory (path + stream index + canvas width/height → overlay
@@ -69,7 +85,7 @@ public sealed class ShowSession : IAsyncDisposable
         IMediaRegistry registry,
         IAudioBackend? audioBackend = null,
         Func<string, int, int, int, IVideoOverlaySource?>? subtitleFactory = null,
-        Func<string, string, int, int, IReadOnlyList<IVideoOutput>>? videoOutputFactory = null)
+        Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? videoOutputFactory = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
@@ -161,46 +177,71 @@ public sealed class ShowSession : IAsyncDisposable
     public Task LoadDocumentAsync(ShowDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
+        CancelActiveFire(); // a reload must not wait behind a long in-flight fire (NXT-03)
         return InvokeAsync(() => LoadDocumentCoreAsync(document));
     }
 
     private async Task LoadDocumentCoreAsync(ShowDocument document)
     {
+        // Validate BEFORE any teardown — a malformed document (bad version, duplicate ids/numbers, dangling
+        // references, a cyclic auto-continue chain) must never destroy the running show (NXT-12 / NXT-07).
+        ShowDocumentValidator.ThrowIfInvalid(document);
+
+        // Stage the replacement graph in locals. If a composition fails to construct (or the host video factory
+        // throws), dispose only the partially-built NEW compositions and rethrow — the live show is untouched.
+        var newCompositions = new Dictionary<string, ClipCompositionRuntime>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var comp in document.Compositions)
+            {
+                var definition = new ClipCompositionDefinition(
+                    comp.Id, comp.Name, comp.Width, comp.Height, comp.FrameRateNum, comp.FrameRateDen);
+                // Host-provided leases (the GUI's NDI/SDL/local lines for this composition). The host owns each
+                // output's lifetime and declares dispose/release on its lease — the session must NOT dispose a
+                // borrowed host output (NXT-01). When the factory is absent or returns none, a session-owned
+                // discarding lease keeps the CPU pump composing headless.
+                var hostLeases = _videoOutputFactory?.Invoke(comp.Id, comp.Name, comp.Width, comp.Height);
+                var leases = hostLeases is { Count: > 0 }
+                    ? hostLeases
+                    : [new ClipCompositionOutputLease(
+                        $"{comp.Id}_out", comp.Name, new DiscardingVideoOutput(), DisposeOutputOnRuntimeDispose: true)];
+                newCompositions[comp.Id] = new ClipCompositionRuntime(
+                    definition, leases, compositionMapping: comp.OutputMapping);
+            }
+        }
+        catch
+        {
+            foreach (var built in newCompositions.Values)
+                built.Dispose();
+            throw; // running show left intact — fields are not mutated until the commit below
+        }
+
+        var newClipsByCue = document.Clips.ToDictionary(c => c.CueId, StringComparer.Ordinal);
+        var newCueGraph = new CueGraph();
+        foreach (var cue in document.Cues.OrderBy(c => c.Number))
+        {
+            var groupId = cue.GroupId ?? DefaultGroup;
+            var binding = newClipsByCue.GetValueOrDefault(cue.Id);
+            newCueGraph.AddCue(cue, ct => PlayClipAsync(groupId, binding, ct));
+        }
+
+        // Commit (atomic on the dispatcher): retire the running show, then swap in the staged graph. Nothing
+        // below can fail, so the swap can't leave a half-built replacement.
         foreach (var group in _groups.Values)
             await group.DisposeAsync().ConfigureAwait(false);
         _groups.Clear();
+        PublishGroupViews();
 
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
+        foreach (var (id, runtime) in newCompositions)
+            _compositions[id] = runtime;
 
-        _cueGraph.Clear();
+        _cueGraph = newCueGraph;
+        _clipsByCue = newClipsByCue;
         _routes = document.Routes;
         _audioOutputs = document.AudioOutputs;
-
-        foreach (var comp in document.Compositions)
-        {
-            var definition = new ClipCompositionDefinition(
-                comp.Id, comp.Name, comp.Width, comp.Height, comp.FrameRateNum, comp.FrameRateDen);
-            // Real outputs from the host factory (the GUI's NDI/SDL/local lines for this composition); when the
-            // factory is absent or returns none, a discarding lease keeps the CPU pump composing headless.
-            var realOutputs = _videoOutputFactory?.Invoke(comp.Id, comp.Name, comp.Width, comp.Height);
-            var leases = realOutputs is { Count: > 0 }
-                ? realOutputs.Select((o, i) =>
-                    new ClipCompositionOutputLease($"{comp.Id}_out{i}", comp.Name, o, DisposeOutputOnRuntimeDispose: true)).ToList()
-                : [new ClipCompositionOutputLease(
-                    $"{comp.Id}_out", comp.Name, new DiscardingVideoOutput(), DisposeOutputOnRuntimeDispose: true)];
-            _compositions[comp.Id] = new ClipCompositionRuntime(
-                definition, leases, compositionMapping: comp.OutputMapping);
-        }
-
-        _clipsByCue = document.Clips.ToDictionary(c => c.CueId, StringComparer.Ordinal);
-        foreach (var cue in document.Cues.OrderBy(c => c.Number))
-        {
-            var groupId = cue.GroupId ?? DefaultGroup;
-            var binding = _clipsByCue.GetValueOrDefault(cue.Id);
-            _cueGraph.AddCue(cue, ct => PlayClipAsync(groupId, binding, ct));
-        }
 
         _ = WarmUpcomingAsync(); // background pre-roll of the first cues so the first GO arms instantly
     }
@@ -245,7 +286,8 @@ public sealed class ShowSession : IAsyncDisposable
         var outputs = new List<IAudioOutput>();
         var subtitleAttachments = new List<IDisposable>();
         var fadeIn = binding.FadeIn > TimeSpan.Zero;
-        var fadingOutputIds = fadeIn ? new List<string>() : null;
+        // Each entry is (outputId, the route's configured target gain) — the fade ramps up to THAT level.
+        var fadingRoutes = fadeIn ? new List<(string OutputId, float TargetGain)>() : null;
         try
         {
             if (layer is not null)
@@ -258,8 +300,8 @@ public sealed class ShowSession : IAsyncDisposable
                 {
                     // Per-clip routing (GUI per-cue audio): the clip plays on exactly its routed outputs/devices,
                     // each with its own N→M channel map + static gain. The first route is the master/clock; the
-                    // rest auto-slave. (A fade-in ramps every route 0→1, so per-route gain applies only without
-                    // a fade — the common GUI case for a fader; fade+fader is a later refinement.)
+                    // rest auto-slave. With a fade-in the route attaches silent and ramps up to its own configured
+                    // gain (the fade scales the target, so a fader set below/above unity is honoured — NXT-07).
                     for (var i = 0; i < clipRoutes.Count; i++)
                     {
                         var route = clipRoutes[i];
@@ -269,7 +311,7 @@ public sealed class ShowSession : IAsyncDisposable
                         var o = _audioBackend.CreateOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
                         player.AttachAudioOutput(o, outputId, map: channelMap, gain: fadeIn ? 0f : route.Gain);
                         outputs.Add(o);
-                        fadingOutputIds?.Add(outputId);
+                        fadingRoutes?.Add((outputId, route.Gain));
                     }
                 }
                 else
@@ -283,10 +325,10 @@ public sealed class ShowSession : IAsyncDisposable
                         var channelMap = ResolveOutputChannelMap(binding, outDef.Id);
                         var channels = channelMap?.OutputChannels ?? 2;
                         var o = _audioBackend.CreateOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
-                        // Fade-in: attach silent (gain 0) and ramp the route gain up over FadeIn after Start.
+                        // Fade-in: attach silent (gain 0) and ramp the route gain up to unity over FadeIn after Start.
                         player.AttachAudioOutput(o, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
                         outputs.Add(o);
-                        fadingOutputIds?.Add(outDef.Id);
+                        fadingRoutes?.Add((outDef.Id, 1f));
                     }
                 }
             }
@@ -313,7 +355,7 @@ public sealed class ShowSession : IAsyncDisposable
             }
 
             armed.Start();
-            await group.ReplaceAsync(armed, outputs, layer, subtitleAttachments).ConfigureAwait(false);
+            await ReplaceActiveAsync(group, armed, outputs, layer, subtitleAttachments).ConfigureAwait(false);
 
             // Background per-clip work — the fade-in ramp + the end-of-clip (loop/trim-out/freeze) monitor —
             // shares one cancellation, cancelled when the clip is replaced. Both gated, so a plain
@@ -326,8 +368,8 @@ public sealed class ShowSession : IAsyncDisposable
             {
                 var clipCts = new CancellationTokenSource();
                 group.SetClipWorkCts(clipCts);
-                if (fadeIn && fadingOutputIds is { Count: > 0 })
-                    StartFadeIn(groupId, player, fadingOutputIds, binding.FadeIn, clipCts.Token);
+                if (fadeIn && fadingRoutes is { Count: > 0 })
+                    StartFadeIn(groupId, player, fadingRoutes, binding.FadeIn, clipCts.Token);
                 if (endHandling)
                     StartEndMonitor(groupId, binding, player, end, clipCts.Token);
             }
@@ -719,10 +761,12 @@ public sealed class ShowSession : IAsyncDisposable
 
     private static readonly TimeSpan FadeStepInterval = TimeSpan.FromMilliseconds(25);
 
-    /// <summary>Ramps the clip's audio route gain 0→1 over <paramref name="duration"/> on each output (the clip
-    /// was attached silent). A background poll that marshals each gain step onto the dispatcher; cancelled when
-    /// the clip is replaced. Best-effort — a hiccup just leaves the clip at its current gain.</summary>
-    private void StartFadeIn(string groupId, S.Media.Players.MediaPlayer player, IReadOnlyList<string> outputIds, TimeSpan duration, CancellationToken ct)
+    /// <summary>Ramps each route's gain from silence up to its configured target over <paramref name="duration"/>
+    /// (the clip was attached silent). The ramp fraction multiplies each route's <c>TargetGain</c>, so a route
+    /// set below or above unity fades up to exactly that level rather than to a hardcoded 1.0 (NXT-07). A
+    /// background poll that marshals each gain step onto the dispatcher; cancelled when the clip is replaced.</summary>
+    private void StartFadeIn(string groupId, S.Media.Players.MediaPlayer player,
+        IReadOnlyList<(string OutputId, float TargetGain)> routes, TimeSpan duration, CancellationToken ct)
     {
         if (player.AudioSourceId is not { } sourceId)
             return;
@@ -739,7 +783,7 @@ public sealed class ShowSession : IAsyncDisposable
                         while (!ct.IsCancellationRequested)
                         {
                             var elapsed = sw.Elapsed;
-                            var level = elapsed >= duration
+                            var frac = elapsed >= duration
                                 ? 1f
                                 : (float)Math.Clamp(elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d);
                             var done = await InvokeAsync<bool>(() =>
@@ -748,9 +792,9 @@ public sealed class ShowSession : IAsyncDisposable
                                     _groups.GetValueOrDefault(groupId)?.Active?.Player != player ||
                                     player.AudioRouter is not { } router)
                                     return Task.FromResult(true);
-                                foreach (var outId in outputIds)
-                                    router.SetRouteGain(sourceId, outId, level);
-                                return Task.FromResult(level >= 1f);
+                                foreach (var (outId, targetGain) in routes)
+                                    router.SetRouteGain(sourceId, outId, frac * targetGain);
+                                return Task.FromResult(frac >= 1f);
                             }).ConfigureAwait(false);
                             if (done)
                                 return;
@@ -814,7 +858,7 @@ public sealed class ShowSession : IAsyncDisposable
                                     return true; // held on the last frame
                                 }
                                 // Stop / FadeOutAndStop (fade ramp deferred): release the clip at the out-point.
-                                await GetOrAddGroup(groupId).ReplaceAsync(null, [], null).ConfigureAwait(false);
+                                await ReplaceActiveAsync(GetOrAddGroup(groupId), null, [], null).ConfigureAwait(false);
                                 return true;
                             }).ConfigureAwait(false);
                             if (done)
@@ -853,24 +897,68 @@ public sealed class ShowSession : IAsyncDisposable
 
     // --- transport commands (marshaled — D5) -------------------------------------------------------
 
-    /// <summary>Fires a specific cue by id (PreWait/PostWait/AutoContinue honoured by the cue graph).</summary>
+    /// <summary>Fires a specific cue by id (PreWait/PostWait/AutoContinue honoured by the cue graph). The fire is
+    /// cancellable: STOP/LOAD/DISPOSE abort an in-flight pre-wait/open so they are never blocked behind it (NXT-03).
+    /// A cancelled fire returns <see cref="CueExecutionStatus.Failed"/>.</summary>
     public Task<CueExecutionStatus> FireCueAsync(string cueId) =>
-        InvokeAsync(() => _cueGraph.FireAsync(cueId).AsTask());
+        InvokeAsync(async () =>
+        {
+            try { return await FireWithCancellationAsync(cueId).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled by stop/load/dispose
+        });
 
-    /// <summary>GO — fires the next armed/enabled cue in <paramref name="groupId"/> after the last fired.</summary>
+    /// <summary>Runs a cue fire under a fresh cancellation source published to <see cref="_activeFireCts"/>, so
+    /// <see cref="CancelActiveFire"/> (called off the dispatcher by stop/load/dispose) can interrupt its waits and
+    /// cancellable open. Always runs on the dispatcher (fires are serial), so the simple field assignment is safe.</summary>
+    private async Task<CueExecutionStatus> FireWithCancellationAsync(string cueId)
+    {
+        using var cts = new CancellationTokenSource();
+        _activeFireCts = cts;
+        try
+        {
+            return await _cueGraph.FireAsync(cueId, cts.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _activeFireCts = null;
+        }
+    }
+
+    /// <summary>Cancels the in-flight cue fire, if any, WITHOUT marshaling onto the dispatcher — so a stop/load/
+    /// dispose can unblock the serial loop that a long pre-wait or open is parking, then run promptly (NXT-03).
+    /// A no-op when nothing is firing. Note: a synchronous, uninterruptible native open still runs to completion;
+    /// this preempts the (common) pre/post-wait and any cancellable stage.</summary>
+    private void CancelActiveFire()
+    {
+        var cts = _activeFireCts;
+        if (cts is null)
+            return;
+        try { cts.Cancel(); }
+        catch (ObjectDisposedException) { /* the fire already finished and disposed it */ }
+    }
+
+    /// <summary>GO — fires the next armed and enabled cue in <paramref name="groupId"/> after the cursor. A
+    /// disabled or unarmed cue is skipped (never fired); the cursor advances only when the chosen cue actually
+    /// ran or faulted, so a cue that was momentarily not fireable can still be reached by a later GO (NXT-07).</summary>
     public Task<CueExecutionStatus> GoAsync(string groupId = DefaultGroup) =>
         InvokeAsync(async () =>
         {
             var group = GetOrAddGroup(groupId);
             var next = _cueGraph.Cues
-                .Where(c => (c.GroupId ?? DefaultGroup) == groupId && c.Number > group.LastFiredNumber)
+                .Where(c => (c.GroupId ?? DefaultGroup) == groupId && c.Number > group.LastFiredNumber
+                            && c.Armed && c.Enabled)
                 .OrderBy(c => c.Number)
                 .FirstOrDefault();
             if (next is null)
                 return CueExecutionStatus.NotReady;
 
-            group.LastFiredNumber = next.Number;
-            var status = await _cueGraph.FireAsync(next.Id).ConfigureAwait(false);
+            CueExecutionStatus status;
+            try { status = await FireWithCancellationAsync(next.Id).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return CueExecutionStatus.Failed; } // cancelled — do NOT advance the cursor
+            // Advance the cursor only when the cue actually ran (or faulted) — never on a skip/cancel, so it is not
+            // wrongly stepped past a cue that a concurrent edit (or a stop) made non-fireable in the selection window.
+            if (status is CueExecutionStatus.Fired or CueExecutionStatus.Failed)
+                group.LastFiredNumber = next.Number;
             _ = WarmUpcomingAsync(groupId); // pre-roll the next cue(s) in the background so the next GO is instant
             return status;
         });
@@ -883,19 +971,26 @@ public sealed class ShowSession : IAsyncDisposable
             return Task.CompletedTask;
         });
 
-    /// <summary>Stops and releases the active clip (and its master output) on <paramref name="groupId"/>.</summary>
-    public Task StopAsync(string groupId = DefaultGroup) =>
-        InvokeAsync(() => GetOrAddGroup(groupId).ReplaceAsync(null, [], null).AsTask());
+    /// <summary>Stops and releases the active clip (and its master output) on <paramref name="groupId"/>. Cancels
+    /// any in-flight cue fire first so STOP never waits behind a long pre-wait/open (NXT-03).</summary>
+    public Task StopAsync(string groupId = DefaultGroup)
+    {
+        CancelActiveFire();
+        return InvokeAsync(() => ReplaceActiveAsync(GetOrAddGroup(groupId), null, [], null).AsTask());
+    }
 
     /// <summary>Stops the cue with <paramref name="cueId"/> wherever it is the active clip (per-cue stop /
     /// cancel — the GUI's <c>CancelCueCallback</c>). No-op when that cue isn't currently playing.</summary>
-    public Task StopCueAsync(string cueId) =>
-        InvokeAsync(async () =>
+    public Task StopCueAsync(string cueId)
+    {
+        CancelActiveFire();
+        return InvokeAsync(async () =>
         {
             foreach (var group in _groups.Values)
                 if (group.Active?.Spec.Id == cueId)
-                    await group.ReplaceAsync(null, [], null).ConfigureAwait(false);
+                    await ReplaceActiveAsync(group, null, [], null).ConfigureAwait(false);
         });
+    }
 
     /// <summary>Pauses or resumes the active clip on <paramref name="groupId"/> — a seamless toggle (codec
     /// pipelines are not flushed, so resume continues from the same frame, matching the GUI engine's
@@ -918,20 +1013,39 @@ public sealed class ShowSession : IAsyncDisposable
 
     // --- queries (immutable snapshots — D5) --------------------------------------------------------
 
-    /// <summary>An immutable snapshot of each transport group's session time, clip position, and run state.</summary>
-    public Task<IReadOnlyList<TransportSnapshot>> SnapshotAsync() =>
-        InvokeAsync<IReadOnlyList<TransportSnapshot>>(() =>
+    /// <summary>An immutable snapshot of each transport group's session time, clip position, and run state.
+    /// Lock-free (NXT-16): reads the published group view and pulls live position/run-state off the captured
+    /// clock/player without marshaling, so it never queues behind a long-running command on the dispatcher.</summary>
+    public Task<IReadOnlyList<TransportSnapshot>> SnapshotAsync() => Task.FromResult(Snapshot());
+
+    /// <summary>The synchronous, lock-free form of <see cref="SnapshotAsync"/> — safe to call from any thread
+    /// (e.g. a 250 ms UI position poll) even while the session dispatcher is busy with a long command.</summary>
+    public IReadOnlyList<TransportSnapshot> Snapshot()
+    {
+        var views = _groupViews; // single volatile read of the published view
+        var snaps = new TransportSnapshot[views.Count];
+        for (var i = 0; i < views.Count; i++)
         {
-            var snaps = _groups
-                .Select(kv => new TransportSnapshot(
-                    kv.Key,
-                    kv.Value.Clock.Now,
-                    kv.Value.Active?.Player.Position ?? TimeSpan.Zero,
-                    kv.Value.Active?.Player.Duration ?? TimeSpan.Zero,
-                    kv.Value.Active?.Player.IsRunning ?? false))
-                .ToArray();
-            return Task.FromResult<IReadOnlyList<TransportSnapshot>>(snaps);
-        });
+            var v = views[i];
+            // The captured player/clock may be torn down concurrently by a transport command; a racing read
+            // just yields a stale/zero value for one poll tick rather than throwing across the query.
+            TimeSpan now = TimeSpan.Zero, pos = TimeSpan.Zero, dur = TimeSpan.Zero;
+            var running = false;
+            try
+            {
+                now = v.Clock.Now;
+                if (v.Player is { } p)
+                {
+                    pos = p.Position;
+                    dur = p.Duration;
+                    running = p.IsRunning;
+                }
+            }
+            catch { /* concurrent teardown — leave zeros for this tick */ }
+            snaps[i] = new TransportSnapshot(v.GroupId, now, pos, dur, running);
+        }
+        return snaps;
+    }
 
     /// <summary>An immutable snapshot of the loaded cue definitions, ordered by cue number.</summary>
     public Task<IReadOnlyList<CueDefinition>> GetCueDefinitionsAsync() =>
@@ -980,8 +1094,28 @@ public sealed class ShowSession : IAsyncDisposable
     private TransportGroup GetOrAddGroup(string groupId)
     {
         if (!_groups.TryGetValue(groupId, out var group))
+        {
             _groups[groupId] = group = new TransportGroup();
+            PublishGroupViews();
+        }
         return group;
+    }
+
+    /// <summary>Republishes the lock-free query view (NXT-16). Called on the dispatcher after any change to the
+    /// group set or a group's active clip, so <see cref="Snapshot"/> reads never round-trip the dispatcher.</summary>
+    private void PublishGroupViews() =>
+        _groupViews = _groups
+            .Select(kv => new GroupClockView(kv.Key, kv.Value.Clock, kv.Value.Active?.Player))
+            .ToArray();
+
+    /// <summary>Swaps a group's active clip and republishes the query view so a position/state poll always sees
+    /// the new run-state without waiting behind the dispatcher.</summary>
+    private async ValueTask ReplaceActiveAsync(
+        TransportGroup group, IArmedClip? clip, IReadOnlyList<IAudioOutput> outputs,
+        ClipCompositionRuntime.LayerSlot? layer, IReadOnlyList<IDisposable>? subtitleAttachments = null)
+    {
+        await group.ReplaceAsync(clip, outputs, layer, subtitleAttachments).ConfigureAwait(false);
+        PublishGroupViews();
     }
 
     public async ValueTask DisposeAsync()
@@ -989,6 +1123,7 @@ public sealed class ShowSession : IAsyncDisposable
         if (_disposed)
             return;
         _disposed = true;
+        CancelActiveFire(); // unblock the dispatcher so disposal isn't stuck behind a long in-flight fire (NXT-03)
 
         if (_dispatcher.IsOnDispatcherThread)
         {
@@ -1015,6 +1150,7 @@ public sealed class ShowSession : IAsyncDisposable
         foreach (var group in _groups.Values)
             await group.DisposeAsync().ConfigureAwait(false);
         _groups.Clear();
+        PublishGroupViews();
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();

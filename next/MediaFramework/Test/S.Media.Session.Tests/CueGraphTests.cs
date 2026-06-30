@@ -27,6 +27,30 @@ public sealed class CueGraphTests
     }
 
     [Fact]
+    public async Task FireAsync_CyclicAutoContinue_TerminatesInsteadOfRecursingForever()
+    {
+        // NXT-07: a cyclic auto-continue chain (a→b→a) must terminate via the cycle guard, not blow the stack.
+        var graph = new CueGraph();
+        var aRuns = 0;
+        var bRuns = 0;
+        graph.AddCue(
+            new CueDefinition("a", 1, "A", AutoContinue: true, FollowOnCueId: "b", FaultPolicy: CueFaultPolicy.Continue),
+            _ => { Interlocked.Increment(ref aRuns); return ValueTask.CompletedTask; });
+        graph.AddCue(
+            new CueDefinition("b", 2, "B", AutoContinue: true, FollowOnCueId: "a", FaultPolicy: CueFaultPolicy.Continue),
+            _ => { Interlocked.Increment(ref bRuns); return ValueTask.CompletedTask; });
+
+        var fire = graph.FireAsync("a").AsTask();
+        var done = await Task.WhenAny(fire, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(fire, done); // completed — did not hang or recurse forever
+        await fire;
+
+        // Each cue ran a small bounded number of times (the guard stops before re-firing a cue in the chain).
+        Assert.InRange(aRuns, 1, 2);
+        Assert.InRange(bRuns, 1, 2);
+    }
+
+    [Fact]
     public async Task FireAsync_RunsActionAndLogsFired()
     {
         var graph = new CueGraph();

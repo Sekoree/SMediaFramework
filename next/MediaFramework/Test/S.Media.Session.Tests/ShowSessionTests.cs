@@ -140,6 +140,117 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task Snapshot_LockFree_ReflectsFireAndStop_WithoutMarshaling()
+    {
+        // NXT-16: the synchronous Snapshot() reads a volatile published view, not the dispatcher — it reflects
+        // the fired group and then the stop, so a UI position poll never has to queue behind a long command.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        Assert.Empty(session.Snapshot()); // nothing loaded yet
+
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync();
+        var running = Assert.Single(session.Snapshot());
+        Assert.Equal(ShowSession.DefaultGroup, running.GroupId);
+        Assert.True(running.IsRunning);
+
+        await session.StopAsync();
+        Assert.False(Assert.Single(session.Snapshot()).IsRunning);
+    }
+
+    [Fact]
+    public void Validator_RejectsBadVersionDuplicatesDanglingAndCycles()
+    {
+        // NXT-12 / NXT-07: every structural problem is reported, and a well-formed show passes.
+        Assert.NotEmpty(ShowDocumentValidator.Validate(new ShowDocument(2, [], [], [], [], [], [])));
+
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A"), new CueDefinition("b", 1, "B")], [], [], [], [], [])),
+            e => e.Contains("duplicate cue number"));
+
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A", FollowOnCueId: "ghost")], [], [], [], [], [])),
+            e => e.Contains("unknown follow-on"));
+
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A", FollowOnCueId: "b", AutoContinue: true),
+                 new CueDefinition("b", 2, "B", FollowOnCueId: "a", AutoContinue: true)], [], [], [], [], [])),
+            e => e.Contains("cycle"));
+
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A")],
+                [new ShowClipBinding("a", "x"), new ShowClipBinding("a", "y")], [], [], [], [])),
+            e => e.Contains("more than one clip"));
+
+        Assert.Empty(ShowDocumentValidator.Validate(TwoAudioCues()));
+    }
+
+    [Fact]
+    public async Task Go_SkipsDisabledCue_AndFiresNextEnabled()
+    {
+        // NXT-07: GO fires the next ARMED+ENABLED cue — a disabled cue is stepped over, never "fired" as a no-op.
+        var doc = new ShowDocument(1,
+            [new CueDefinition("a", 1, "A"),
+             new CueDefinition("b", 2, "B", Enabled: false),
+             new CueDefinition("c", 3, "C")],
+            [new ShowClipBinding("a", "fake://a"),
+             new ShowClipBinding("b", "fake://b"),
+             new ShowClipBinding("c", "fake://c")],
+            [], [], [], []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync()); // a
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync()); // skips disabled b → fires c
+
+        var log = await session.GetCueExecutionLogAsync();
+        Assert.Contains(log, e => e.CueId == "c" && e.Status == CueExecutionStatus.Fired);
+        Assert.DoesNotContain(log, e => e.CueId == "b"); // b was never attempted
+    }
+
+    [Fact]
+    public async Task LoadDocument_InvalidDocument_Throws_AndLeavesRunningShowIntact()
+    {
+        // NXT-12: a malformed load must not tear down the live show. Fire a cue, then attempt an invalid load.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync();
+        Assert.True(Assert.Single(session.Snapshot()).IsRunning);
+
+        await Assert.ThrowsAsync<ShowDocumentValidationException>(
+            () => session.LoadDocumentAsync(new ShowDocument(2, [], [], [], [], [], []))); // unsupported version
+
+        // The original show is untouched: still running, still has its two cues.
+        Assert.True(Assert.Single(session.Snapshot()).IsRunning);
+        Assert.Equal(2, (await session.GetCueDefinitionsAsync()).Count);
+    }
+
+    [Fact]
+    public async Task Stop_PreemptsLongPreWait_InsteadOfQueuingBehindIt()
+    {
+        // NXT-03: a cue with a long pre-wait must not park the serial dispatcher — STOP cancels the in-flight
+        // fire and returns promptly instead of queuing behind the (here 30s) pre-wait.
+        var doc = new ShowDocument(1,
+            [new CueDefinition("slow", 1, "Slow", PreWait: TimeSpan.FromSeconds(30))],
+            [new ShowClipBinding("slow", "fake://x")], [], [], [], []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+
+        var fire = session.FireCueAsync("slow"); // begins the 30s pre-wait on the dispatcher
+        await Task.Delay(150);                   // let the fire reach the pre-wait
+
+        var stop = session.StopAsync();
+        var winner = await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Same(stop, winner);               // STOP returned well before the 30s pre-wait would elapse
+        await stop;
+
+        Assert.Equal(CueExecutionStatus.Failed, await fire); // the fire was cancelled, not run
+    }
+
+    [Fact]
     public async Task StopAsync_FreezesSessionClock()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
@@ -463,7 +574,7 @@ public sealed class ShowSessionTests
             videoOutputFactory: (id, _, w, h) =>
             {
                 seen.Add((id, w, h));
-                return Array.Empty<S.Media.Core.Video.IVideoOutput>(); // none ⇒ headless discard, but still consulted
+                return Array.Empty<ClipCompositionOutputLease>(); // none ⇒ headless discard, but still consulted
             });
         await session.LoadDocumentAsync(new ShowDocument(
             Version: 1,
@@ -473,6 +584,60 @@ public sealed class ShowSessionTests
             Outputs: [], Routes: [], Devices: []));
 
         Assert.Contains(("screen", 1280, 720), seen);
+    }
+
+    /// <summary>An output that records how many times it was disposed — to prove the borrow contract.</summary>
+    private sealed class DisposeCountingVideoOutput : IVideoOutput, IDisposable
+    {
+        private VideoFormat _format;
+        public int DisposeCount { get; private set; }
+        public VideoFormat Format => _format;
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = Array.Empty<PixelFormat>();
+        public void Configure(VideoFormat format) => _format = format;
+        public void Submit(VideoFrame frame) => frame.Dispose();
+        public void Dispose() => DisposeCount++;
+    }
+
+    private static ShowDocument OneComposition() => new(
+        Version: 1,
+        Cues: [new CueDefinition("c", 1, "C")],
+        Clips: [],
+        Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)],
+        Outputs: [], Routes: [], Devices: []);
+
+    [Fact]
+    public async Task BorrowedVideoOutput_NotDisposed_OnReloadOrDispose()
+    {
+        // NXT-01: a host-borrowed output (DisposeOutputOnRuntimeDispose=false) must survive document reload AND
+        // session disposal — the host owns its lifetime. Disposing it would tear down the SDL/NDI window the host
+        // reuses across plays (a concrete use-after-reload defect before this fix).
+        var borrowed = new DisposeCountingVideoOutput();
+        var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            videoOutputFactory: (id, name, _, _) =>
+                [new ClipCompositionOutputLease($"{id}_out", name, borrowed, DisposeOutputOnRuntimeDispose: false)]);
+
+        await session.LoadDocumentAsync(OneComposition());
+        await session.LoadDocumentAsync(OneComposition()); // reload retires the first composition's lease
+        Assert.Equal(0, borrowed.DisposeCount);
+
+        await session.DisposeAsync();
+        Assert.Equal(0, borrowed.DisposeCount);
+    }
+
+    [Fact]
+    public async Task SessionOwnedVideoOutput_Disposed_OnDispose()
+    {
+        // Complement: a lease that opts INTO disposal (e.g. a session-created output) IS disposed on retire.
+        var owned = new DisposeCountingVideoOutput();
+        var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            videoOutputFactory: (id, name, _, _) =>
+                [new ClipCompositionOutputLease($"{id}_out", name, owned, DisposeOutputOnRuntimeDispose: true)]);
+
+        await session.LoadDocumentAsync(OneComposition());
+        await session.DisposeAsync();
+        Assert.True(owned.DisposeCount >= 1);
     }
 
     [Fact]

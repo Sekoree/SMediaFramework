@@ -226,7 +226,13 @@ public partial class MainViewModel : ViewModelBase
                 MediaRuntime.Registry,
                 backend,
                 (path, streamIndex, w, h) => SubtitleOverlayFactory.FromFileDeferred(path, w, h, streamIndex),
-                (compId, _, _, _) => _cueVideoOutputs.TryGetValue(compId, out var outs) ? outs : Array.Empty<IVideoOutput>());
+                // Borrowed lines: the cue workspace owns each output's lifetime (acquire/release via
+                // _cueAcquiredVideoLines), so the leases declare DisposeOutputOnRuntimeDispose=false — the session
+                // never disposes them (NXT-01).
+                (compId, name, _, _) => _cueVideoOutputs.TryGetValue(compId, out var outs)
+                    ? outs.Select((o, i) => new ClipCompositionOutputLease(
+                        $"{compId}_out{i}", name, o, DisposeOutputOnRuntimeDispose: false)).ToArray()
+                    : Array.Empty<ClipCompositionOutputLease>());
 
             CuePlayer.PropertyChanged += (_, e) =>
             {

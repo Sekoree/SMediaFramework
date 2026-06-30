@@ -6,7 +6,9 @@ name: Next Build
 
 on:
   push:
-    branches: [next]
+    # Glob so the gate runs on the active rewrite branch and any successor (next, next-2, next-3, …) — not just
+    # the original 'next' (NXT-15: pushes to the working branch were silently skipping CI).
+    branches: ['next', 'next-*']
     paths: ['next/**', '.github/workflows/next-build.yml']
   pull_request:
     paths: ['next/**', '.github/workflows/next-build.yml']

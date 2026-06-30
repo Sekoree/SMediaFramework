@@ -429,21 +429,29 @@ public sealed class MediaPlayer : IDisposable
 
         // Open both kinds opportunistically: a confidence-matched decoder still throws when the source lacks
         // that stream (an audio-only file has no video, and vice-versa). Tolerate that here so the dual-open
-        // falls back to whichever kind exists; a genuinely unopenable source surfaces as the "no decoder"
-        // error below (both null).
+        // falls back to whichever kind exists, but RETAIN the real exceptions: when BOTH sides fail we surface
+        // the actual decoder/network cause instead of a generic "no decoder" message (NXT-02 partial — the
+        // split open hid the real error and turned a genuine failure into silent audio-only/video-only).
         IVideoSource? video = null;
+        Exception? videoError = null;
         if (options.VideoStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
             try { registry.TryOpenVideo(uri, options.ToVideoSourceOpenOptions(), out video); }
-            catch { video = null; }
+            catch (Exception ex) { videoError = ex; video = null; }
         IAudioSource? audio = null;
+        Exception? audioError = null;
         if (options.IncludeAudioRouter && options.AudioStreamIndex != MediaPlayerOpenOptions.DisabledStreamIndex)
             try { registry.TryOpenAudio(uri, options.ToAudioSourceOpenOptions(), out audio); }
-            catch { audio = null; }
+            catch (Exception ex) { audioError = ex; audio = null; }
 
         if (video is null && audio is null)
         {
-            error = $"no registered decoder could open '{uri}' for audio or video " +
-                $"(registered: {string.Join(", ", registry.Decoders.Select(d => d.Name))}).";
+            var causes = new List<string>();
+            if (videoError is not null) causes.Add($"video: {videoError.Message}");
+            if (audioError is not null) causes.Add($"audio: {audioError.Message}");
+            error = causes.Count > 0
+                ? $"could not open '{uri}' — {string.Join("; ", causes)}"
+                : $"no registered decoder could open '{uri}' for audio or video " +
+                  $"(registered: {string.Join(", ", registry.Decoders.Select(d => d.Name))}).";
             return false;
         }
 

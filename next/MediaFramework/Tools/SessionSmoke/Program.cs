@@ -90,9 +90,9 @@ await using var session = new ShowSession(
     registry,
     backend,
     (path, streamIndex, width, height) => SubtitleOverlayFactory.FromFileDeferred(path, width, height, streamIndex),
-    (compId, _, _, _) => compId == "screen"
-        ? new IVideoOutput[] { screenOutput }
-        : Array.Empty<IVideoOutput>());
+    (compId, name, _, _) => compId == "screen"
+        ? new[] { new ClipCompositionOutputLease("screen_out", name, screenOutput, DisposeOutputOnRuntimeDispose: false) }
+        : Array.Empty<ClipCompositionOutputLease>());
 session.LoadDocument(reloaded);
 
 // GO → cue 1 fires (audio clip opens through the registry + plays on the master output).
