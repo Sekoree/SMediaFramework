@@ -21,11 +21,15 @@ namespace HaPlay.Playback;
 /// </remarks>
 public static class HaPlayShowMapper
 {
-    /// <summary>Builds a runnable <see cref="ShowDocument"/> from a GUI cue list.</summary>
-    public static ShowDocument ToShowDocument(CueList cueList)
+    /// <summary>Builds a runnable <see cref="ShowDocument"/> from a GUI cue list. Pass the output definitions
+    /// (<c>OutputManagement.DefinitionsSnapshot</c>) to resolve per-cue audio routes onto their real devices;
+    /// omit them and clips fall back to the per-group/default output.</summary>
+    public static ShowDocument ToShowDocument(CueList cueList, IReadOnlyList<OutputDefinition>? outputs = null)
     {
         ArgumentNullException.ThrowIfNull(cueList);
 
+        var outputsById = outputs?.GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First())
+                          ?? new Dictionary<Guid, OutputDefinition>();
         var cues = new List<CueDefinition>();
         var clips = new List<ShowClipBinding>();
         var number = 0;
@@ -52,7 +56,7 @@ public static class HaPlayShowMapper
                             PreWait: TimeSpan.FromMilliseconds(media.PreWaitMs),
                             GroupId: groupId));
 
-                        if (MapClip(cueId, media) is { } binding)
+                        if (MapClip(cueId, media, outputsById) is { } binding)
                             clips.Add(binding);
                         break;
 
@@ -73,7 +77,8 @@ public static class HaPlayShowMapper
         };
     }
 
-    private static ShowClipBinding? MapClip(string cueId, MediaCueNode media)
+    private static ShowClipBinding? MapClip(
+        string cueId, MediaCueNode media, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
     {
         if (ResolveMediaPath(media.Source) is not { } mediaPath)
             return null; // media cue with no resolvable source (unbound / text) — nothing to play yet.
@@ -100,7 +105,40 @@ public static class HaPlayShowMapper
                 : new ShowVideoPlacement(
                     placement.DestX, placement.DestY, placement.DestWidth, placement.DestHeight,
                     placement.Opacity, placement.Position.ToString(), placement.RotationDegrees),
+            // Per-cue audio routing → per-clip outputs (device + N→M channel map + gain), so the cue plays on
+            // exactly its routed lines. Null when the cue declares no routes (then the group/default output).
+            AudioRoutes = MapAudioRoutes(media, outputsById),
         };
+    }
+
+    /// <summary>GUI per-cue <see cref="CueAudioRoute"/>s → per-clip <see cref="ShowClipAudioRoute"/>s, one per
+    /// output line: the line's PortAudio device, an N→M <see cref="ChannelMap"/> array (out-channel ← src-channel,
+    /// unrouted = silent), and a line gain (mean of its routes' dB → linear). Muted routes are dropped; a fully
+    /// muted line contributes no output. Returns null when the cue has no routes.</summary>
+    private static IReadOnlyList<ShowClipAudioRoute>? MapAudioRoutes(
+        MediaCueNode media, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
+    {
+        if (media.AudioRoutes is not { Count: > 0 } routes)
+            return null;
+
+        var mapped = new List<ShowClipAudioRoute>();
+        foreach (var line in routes.Where(r => !r.Muted).GroupBy(r => r.OutputLineId))
+        {
+            var lineRoutes = line.ToList();
+            var matrix = new int[lineRoutes.Max(r => r.OutputChannel) + 1];
+            Array.Fill(matrix, -1); // ChannelMap.Silence — channels with no route stay silent
+            foreach (var r in lineRoutes)
+                if (r.OutputChannel >= 0 && r.SourceChannel >= 0)
+                    matrix[r.OutputChannel] = r.SourceChannel;
+
+            var deviceId = outputsById.TryGetValue(line.Key, out var def)
+                ? (def as PortAudioOutputDefinition)?.EffectiveAudioBackendDeviceId
+                : null;
+            var gain = (float)Math.Pow(10, lineRoutes.Average(r => r.GainDb) / 20.0);
+            mapped.Add(new ShowClipAudioRoute(deviceId, matrix, gain));
+        }
+
+        return mapped.Count > 0 ? mapped : null;
     }
 
     /// <summary>GUI media source → a registry path / URI (D2). Files and images map to their path; live

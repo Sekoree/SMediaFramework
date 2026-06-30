@@ -173,6 +173,41 @@ public class ShowDocumentMapperTests
         Assert.Equal("Letterbox", clip.Placement.Fit); // framework MapFit lowercases → Contain
     }
 
+    [Fact]
+    public void MapsPerCueAudioRoutes_ToClipAudioRoutes_WithDeviceAndChannelMap()
+    {
+        var lineId = Guid.NewGuid();
+        var cue = new MediaCueNode
+        {
+            Label = "Routed",
+            Source = new FilePlaylistItem("/m/a.wav"),
+            AudioRoutes =
+            {
+                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 0, GainDb = 0 },
+                new CueAudioRoute { SourceChannel = 1, OutputLineId = lineId, OutputChannel = 1, GainDb = 0 },
+                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 2, Muted = true }, // dropped
+            },
+        };
+        var output = new PortAudioOutputDefinition(
+            Id: lineId, DisplayName: "Main Out", HostApiIndex: 0, HostApiName: "JACK",
+            GlobalDeviceIndex: 7, DeviceName: "system", ChannelCount: 2, SampleRate: 48_000);
+
+        var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }, [output]).Clips);
+
+        var route = Assert.Single(clip.AudioRoutes!);
+        Assert.Equal("7", route.DeviceId);                  // EffectiveAudioBackendDeviceId → GlobalDeviceIndex
+        Assert.Equal(new[] { 0, 1 }, route.ChannelMatrix);  // identity stereo; the muted out-channel 2 is dropped
+        Assert.Equal(1f, route.Gain);                       // 0 dB → linear 1.0
+    }
+
+    [Fact]
+    public void NoAudioRoutes_LeavesClipAudioRoutesNull()
+    {
+        var cue = new MediaCueNode { Label = "Plain", Source = new FilePlaylistItem("/m/a.wav") };
+        var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }).Clips);
+        Assert.Null(clip.AudioRoutes); // ⇒ ShowSession falls back to the per-group/default output
+    }
+
     /// <summary>End-to-end: the mapper's output is a valid <see cref="ShowDocument"/> that a real
     /// <see cref="ShowSession"/> loads, exposing the cues in order with their groups (the 8a dispatch seam).</summary>
     [Fact]

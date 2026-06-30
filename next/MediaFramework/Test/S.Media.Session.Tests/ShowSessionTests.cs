@@ -393,6 +393,43 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task PerClipAudioRoutes_OverrideGroupOutputs_WithDevicesAndChannelMaps()
+    {
+        // The cue carries per-clip routes (GUI per-cue audio): device "hw:0" stereo + device "hw:1" 2→4.
+        // Even though the group declares its own outputs, the clip must play on exactly its routed devices.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One")],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://1")
+                {
+                    AudioRoutes =
+                    [
+                        new ShowClipAudioRoute(DeviceId: "hw:0"),
+                        new ShowClipAudioRoute(DeviceId: "hw:1", ChannelMatrix: [0, 1, 0, 1]),
+                    ],
+                },
+            ],
+            Compositions: [],
+            Outputs: [],
+            Routes: [],
+            Devices: [])
+        {
+            AudioOutputs = [new ShowAudioOutput("main"), new ShowAudioOutput("monitor")],
+        };
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+
+        Assert.Equal(2, backend.OutputCount); // the two clip routes — NOT the (null-device) group outputs
+        Assert.Contains(("hw:0", 2), backend.Created.Select(c => (c.DeviceId, c.Channels)));
+        Assert.Contains(("hw:1", 4), backend.Created.Select(c => (c.DeviceId, c.Channels))); // 2→4 remap
+    }
+
+    [Fact]
     public async Task RoutingScene_MatchesRouteSourceId_ForSameOutput()
     {
         // Two cues route to the same master output, each with a different matrix. The route source id is the

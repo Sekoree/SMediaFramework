@@ -233,19 +233,40 @@ public sealed class ShowSession : IAsyncDisposable
             if (_audioBackend is not null && player.AudioRouter is not null)
             {
                 var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-                // D11 per-group outputs: attach the clip's audio to each output the group declares (the first
-                // is the master/clock; the rest auto-slave with adaptive-rate). Each output's N→M channel
-                // matrix (03 §6) comes from the matching source→output route — it remaps the source channels +
-                // sets the channel count; an output with no route for this clip is plain stereo.
-                foreach (var outDef in ResolveGroupOutputs(groupId))
+                if (binding.AudioRoutes is { Count: > 0 } clipRoutes)
                 {
-                    var channelMap = ResolveOutputChannelMap(binding, outDef.Id);
-                    var channels = channelMap?.OutputChannels ?? 2;
-                    var o = _audioBackend.CreateOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
-                    // Fade-in: attach silent (gain 0) and ramp the route gain up over FadeIn after Start.
-                    player.AttachAudioOutput(o, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
-                    outputs.Add(o);
-                    fadingOutputIds?.Add(outDef.Id);
+                    // Per-clip routing (GUI per-cue audio): the clip plays on exactly its routed outputs/devices,
+                    // each with its own N→M channel map + static gain. The first route is the master/clock; the
+                    // rest auto-slave. (A fade-in ramps every route 0→1, so per-route gain applies only without
+                    // a fade — the common GUI case for a fader; fade+fader is a later refinement.)
+                    for (var i = 0; i < clipRoutes.Count; i++)
+                    {
+                        var route = clipRoutes[i];
+                        var channelMap = route.ToChannelMap();
+                        var channels = channelMap?.OutputChannels ?? 2;
+                        var outputId = $"clip{i}";
+                        var o = _audioBackend.CreateOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+                        player.AttachAudioOutput(o, outputId, map: channelMap, gain: fadeIn ? 0f : route.Gain);
+                        outputs.Add(o);
+                        fadingOutputIds?.Add(outputId);
+                    }
+                }
+                else
+                {
+                    // D11 per-group outputs: attach the clip's audio to each output the group declares (the first
+                    // is the master/clock; the rest auto-slave with adaptive-rate). Each output's N→M channel
+                    // matrix (03 §6) comes from the matching source→output route — it remaps the source channels +
+                    // sets the channel count; an output with no route for this clip is plain stereo.
+                    foreach (var outDef in ResolveGroupOutputs(groupId))
+                    {
+                        var channelMap = ResolveOutputChannelMap(binding, outDef.Id);
+                        var channels = channelMap?.OutputChannels ?? 2;
+                        var o = _audioBackend.CreateOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+                        // Fade-in: attach silent (gain 0) and ramp the route gain up over FadeIn after Start.
+                        player.AttachAudioOutput(o, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
+                        outputs.Add(o);
+                        fadingOutputIds?.Add(outDef.Id);
+                    }
                 }
             }
 

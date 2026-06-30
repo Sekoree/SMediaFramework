@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using S.Media.Core.Audio;
 
 namespace S.Media.Session;
 
@@ -26,6 +27,18 @@ public sealed record ShowVideoPlacement(
     double Opacity = 1,
     string? Fit = null,
     double RotationDegrees = 0);
+
+/// <summary>One audio output a clip plays on (GUI per-cue audio routing — a group of <c>CueAudioRoute</c>s to
+/// the same output line). Unlike a per-group <see cref="ShowAudioOutput"/>, this is carried on the clip so a
+/// cue plays on exactly its routed outputs. <see cref="ChannelMatrix"/> is the N→M <see cref="ChannelMap"/>
+/// array (length = output channels, each entry = the source channel feeding it, -1 = silence); null = stereo.</summary>
+public sealed record ShowClipAudioRoute(
+    string? DeviceId = null,
+    int[]? ChannelMatrix = null,
+    float Gain = 1f)
+{
+    public ChannelMap? ToChannelMap() => ChannelMatrix is { Length: > 0 } m ? new ChannelMap(m) : null;
+}
 
 /// <summary>
 /// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the
@@ -82,6 +95,11 @@ public sealed record ShowClipBinding(
     /// <summary>Where/how this clip's video sits on its <see cref="CompositionId"/> canvas (GUI
     /// <c>CueVideoPlacement</c>). Null ⇒ full-canvas, opaque, Cover (the prior hardcoded placement).</summary>
     public ShowVideoPlacement? Placement { get; init; }
+
+    /// <summary>Per-clip audio output routing (GUI per-cue <c>CueAudioRoute</c>s, one entry per output line).
+    /// When non-empty, the clip plays on exactly these outputs/devices instead of its group's declared outputs;
+    /// null/empty ⇒ the per-group fan-out (the prior behaviour). See <see cref="ShowClipAudioRoute"/>.</summary>
+    public IReadOnlyList<ShowClipAudioRoute>? AudioRoutes { get; init; }
 }
 
 /// <summary>A selected subtitle source. <paramref name="Path"/> null means the clip's media container;

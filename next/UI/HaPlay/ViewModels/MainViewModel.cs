@@ -257,7 +257,8 @@ public partial class MainViewModel : ViewModelBase
             return;
         try
         {
-            _cueShowSession.LoadDocument(HaPlayShowMapper.ToShowDocument(list.ToModel()));
+            _cueShowSession.LoadDocument(
+                HaPlayShowMapper.ToShowDocument(list.ToModel(), OutputManagement.DefinitionsSnapshot));
         }
         catch (Exception ex)
         {
