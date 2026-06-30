@@ -55,6 +55,24 @@ public partial class OutputManagementViewModel : ViewModelBase
         return null;
     }
 
+    /// <summary>Releases a video output acquired via <see cref="AcquireVideoOutputForLine"/> (single-holder, so
+    /// the ShowSession cue re-back MUST release before re-acquiring on a reload, else the line stays held). UI
+    /// thread. No-op for an unknown/non-video line.</summary>
+    public void ReleaseVideoOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return;
+        if (_localPreviews.TryGetValue(line, out var local))
+        {
+            local.ReleaseFromPlayback();
+            return;
+        }
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                ndi.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
+    }
+
     /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
     /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
     public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();

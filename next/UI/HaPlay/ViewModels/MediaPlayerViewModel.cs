@@ -816,6 +816,23 @@ public partial class MediaPlayerViewModel : ViewModelBase
         });
 
         await CloseSessionAsync().ConfigureAwait(false);
+
+        // 8a.4 re-back: tear down the per-player ShowSession (poll stop + lease release on the UI thread; the
+        // session disposes on its own dispatcher). No observable-property writes here — the VM is going away.
+        await Dispatcher.UIThread.InvokeAsync(StopShowSessionPoll);
+        var playerSession = _playerShowSession;
+        _playerShowSession = null;
+        if (playerSession is not null)
+        {
+            try { await playerSession.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession dispose"); }
+        }
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            foreach (var held in _playerAcquiredLines)
+                _outputs.ReleaseVideoOutputForLine(held);
+            _playerAcquiredLines.Clear();
+        });
     }
 
     private void CancelPreOpen()
@@ -3184,6 +3201,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
             SDebug.ChangeTrace.Step($"OpenOrReload: outputs selected (count={selected.Count})");
 
             if (item is null) return;
+
+            // 8a.4 re-back: a file plays through the per-player ShowSession when HAPLAY_USE_SHOWSESSION=1
+            // (no-op + falls through to the engine otherwise, or for live/non-file items).
+            if (item is FilePlaylistItem ssFile && await TryOpenViaShowSessionAsync(ssFile, selected))
+                return;
 
             HaPlayPlaybackSession? created = null;
             string? createErr = null;

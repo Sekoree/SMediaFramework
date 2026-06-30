@@ -42,6 +42,9 @@ public partial class MainViewModel : ViewModelBase
     // compositionId → the real video outputs it renders to, acquired on the UI thread in ReloadCueShowSession
     // so ShowSession's video factory is a pure lookup during (synchronous) LoadDocument (no deadlock).
     private Dictionary<string, IVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
+    // The output lines currently held by the re-back (single-holder leases) — released before each reload so a
+    // cue-list change doesn't leave them stuck-held (which would make the re-acquire return null = no video).
+    private readonly List<Guid> _cueAcquiredVideoLines = new();
     // soundboard tile → its configured fade-out (ms), captured at play so FadeOutSound (tile-only) can use it.
     private readonly Dictionary<Guid, int> _soundboardFadeMs = new();
     private bool _midiInitialized;
@@ -300,6 +303,12 @@ public partial class MainViewModel : ViewModelBase
             // so ShowSession's video factory is a pure lookup during LoadDocument — acquisition (SDL window /
             // NDI sender) must be on the UI thread, and doing it here avoids a cross-thread acquire that would
             // deadlock the synchronous LoadDocument. Old leases release as their compositions are disposed below.
+            // Release the previous reload's holds first — these are single-holder leases, so re-acquiring without
+            // releasing returns null (the line stays held), which would silently drop video after a cue-list switch.
+            foreach (var heldLine in _cueAcquiredVideoLines)
+                OutputManagement.ReleaseVideoOutputForLine(heldLine);
+            _cueAcquiredVideoLines.Clear();
+
             var videoOutputs = new Dictionary<string, IVideoOutput[]>(StringComparer.Ordinal);
             foreach (var binding in model.VideoOutputs)
             {
@@ -307,6 +316,7 @@ public partial class MainViewModel : ViewModelBase
                     continue;
                 if (OutputManagement.AcquireVideoOutputForLine(binding.OutputLineId) is not { } output)
                     continue;
+                _cueAcquiredVideoLines.Add(binding.OutputLineId);
                 var key = binding.CompositionId.ToString();
                 videoOutputs[key] = videoOutputs.TryGetValue(key, out var existing) ? [.. existing, output] : [output];
             }

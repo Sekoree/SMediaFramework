@@ -30,6 +30,15 @@ public partial class MediaPlayerViewModel
     [RelayCommand(CanExecute = nameof(CanPlay))]
     private async Task PlayAsync()
     {
+        // 8a.4 re-back: when a file is already playing through the per-player ShowSession, Play resumes it
+        // (no re-open); a fresh play falls through to OpenOrReloadAsync, which diverts into the ShowSession.
+        if (ShowSessionActive)
+        {
+            if (!IsPlaying)
+                await ShowSessionPauseAsync(false);
+            return;
+        }
+
         // Stays on the dispatcher context: the code between awaits sets observable properties
         // (StatusMessage / MediaFilePath / IsPlaying) whose change notifications must be raised on
         // the UI thread. The helpers do their own Task.Run/InvokeAsync marshalling.
@@ -61,7 +70,7 @@ public partial class MediaPlayerViewModel
     /// <summary>One-button transport: pause if playing, play otherwise.</summary>
     [RelayCommand(CanExecute = nameof(CanTogglePlayPause))]
     private Task TogglePlayPauseAsync() =>
-        IsPlaying && _session is not null ? PauseAsync() : PlayAsync();
+        IsPlaying && (_session is not null || ShowSessionActive) ? PauseAsync() : PlayAsync();
 
     private bool CanTogglePlayPause() =>
         !_isTransportBusy &&
@@ -254,6 +263,11 @@ public partial class MediaPlayerViewModel
     [RelayCommand(CanExecute = nameof(CanTransport))]
     private async Task PauseAsync()
     {
+        if (ShowSessionActive)
+        {
+            await ShowSessionPauseAsync(true);
+            return;
+        }
         SDebug.ChangeTrace.Begin("Pause");
         await WithPlaybackArcAsync(async () =>
         {
@@ -287,6 +301,11 @@ public partial class MediaPlayerViewModel
     [RelayCommand(CanExecute = nameof(CanStop))]
     private async Task StopAsync()
     {
+        if (ShowSessionActive)
+        {
+            await ShowSessionStopAsync();
+            return;
+        }
         SDebug.ChangeTrace.Begin("Stop");
         await WithPlaybackArcAsync(async () =>
         {
@@ -574,6 +593,12 @@ public partial class MediaPlayerViewModel
 
     private async Task SeekToTargetAsync(double sliderValue)
     {
+        if (ShowSessionActive)
+        {
+            if (Duration > TimeSpan.Zero)
+                await ShowSessionSeekAsync(TimeSpan.FromTicks((long)(Duration.Ticks * sliderValue / 1000.0)));
+            return;
+        }
         await WithPlaybackArcAsync(async () =>
         {
             var (session, playing, holdFb) = await Dispatcher.UIThread.InvokeAsync(() =>
