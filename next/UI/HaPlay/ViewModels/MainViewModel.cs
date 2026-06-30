@@ -45,6 +45,27 @@ public partial class MainViewModel : ViewModelBase
     // The output lines currently held by the re-back (single-holder leases) — released before each reload so a
     // cue-list change doesn't leave them stuck-held (which would make the re-acquire return null = no video).
     private readonly List<Guid> _cueAcquiredVideoLines = new();
+    // The selected cue list's node collection we watch so an in-place edit (add/remove cue) reloads the stale
+    // ShowSession graph — otherwise only a SelectedCueList *switch* reloaded, so a freshly-built/edited cue fired
+    // "cue '…' is not registered". Reloads are debounced so a burst of edits (or loading a list) collapses to one.
+    private INotifyCollectionChanged? _subscribedCueNodes;
+    private DispatcherTimer? _cueReloadDebounce;
+    // Re-back cue → its transport group (from the mapped doc), and each group's currently-active cue, so the
+    // snapshot poll can drive BOTH progress (OnCueProgress) and end (OnCueEnded) per group — the ShowSession
+    // transport raises neither event, so without this the now-playing countdown is frozen and rows never clear.
+    private Dictionary<Guid, string> _cueGroupByCueId = new();
+    private readonly Dictionary<string, CueShowActiveState> _cueShowActiveByGroup = new(StringComparer.Ordinal);
+    private DispatcherTimer? _cueShowProgressPoll;
+
+    /// <summary>Per-group active-cue state for the re-back progress poll. <see cref="ObservedRunning"/> guards the
+    /// warmup race — the play clock takes a moment to start, so the poll must not treat the first not-running tick
+    /// as "ended" until the clip has actually been seen running (or its warmup grace elapses).</summary>
+    private sealed class CueShowActiveState
+    {
+        public required Guid CueId;
+        public bool ObservedRunning;
+        public int NotRunningTicks;
+    }
     // soundboard tile → its configured fade-out (ms), captured at play so FadeOutSound (tile-only) can use it.
     private readonly Dictionary<Guid, int> _soundboardFadeMs = new();
     private bool _midiInitialized;
@@ -239,24 +260,68 @@ public partial class MainViewModel : ViewModelBase
             CuePlayer.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(CuePlayer.SelectedCueList))
-                    ReloadCueShowSession();
+                {
+                    SubscribeCueNodesForReload(); // re-bind the node watch to the newly-selected list
+                    ReloadCueShowSession();       // a list switch is discrete → reload now (its nodes are populated)
+                }
             };
+            SubscribeCueNodesForReload();
             ReloadCueShowSession();
 
             // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
             // them to the executors, so we fire by id (FireCueAsync) — independent of ShowSession's GO anchor.
-            CuePlayer.StopPlaybackCallback = () => _cueShowSession!.StopAsync();
-            CuePlayer.SetPlaybackPausedCallback = paused => _cueShowSession!.SetPausedAsync(paused);
-            CuePlayer.SeekCueCallback = (_, pos) => _cueShowSession!.SeekAsync(pos);
-            CuePlayer.CancelCueCallback = id => _cueShowSession!.StopCueAsync(id.ToString());
+            // Each transport op is guarded so a failure is LOGGED (not only surfaced as a UI notification).
+            CuePlayer.StopPlaybackCallback = () => GuardedCueShowOp("stop", () => _cueShowSession!.StopAsync());
+            CuePlayer.SetPlaybackPausedCallback = paused => GuardedCueShowOp("pause", () => _cueShowSession!.SetPausedAsync(paused));
+            CuePlayer.SeekCueCallback = (_, pos) => GuardedCueShowOp("seek", () => _cueShowSession!.SeekAsync(pos));
+            CuePlayer.SeekCuesCallback = positions => GuardedCueShowOp("seek-cues", async () =>
+            {
+                // Multi-cue seek → seek each cue's transport group (a group runs one active clip, so this lands on
+                // the cue currently active in it).
+                foreach (var (cueId, pos) in positions)
+                    await _cueShowSession!.SeekAsync(pos, _cueGroupByCueId.GetValueOrDefault(cueId, ShowSession.DefaultGroup))
+                        .ConfigureAwait(false);
+            });
+            CuePlayer.CancelCueCallback = id => GuardedCueShowOp("cancel", () => _cueShowSession!.StopCueAsync(id.ToString()));
             CuePlayer.MediaCueExecutor = async (cue, _) =>
-                await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false) == CueExecutionStatus.Fired
-                    ? null
-                    : $"cue '{cue.Label}' not ready";
+            {
+                try
+                {
+                    var status = await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
+                    if (status != CueExecutionStatus.Fired)
+                    {
+                        Trace.LogWarning("HaPlay: cue '{Label}' ({Id}) did not fire — status {Status}", cue.Label, cue.Id, status);
+                        return $"not ready ({status})";
+                    }
+                    // Engine-callback parity: report the cue active so the UI shows it Triggered/now-playing —
+                    // the result handler treats a cue absent from _activeCueIds as "Failed to start" even on a
+                    // successful fire, because the ShowSession path doesn't raise the engine's OnCueStarted.
+                    await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
+                    return null;
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogError(ex, "HaPlay: firing cue '{Label}' ({Id}) through ShowSession failed", cue.Label, cue.Id);
+                    return ex.Message;
+                }
+            };
             CuePlayer.MediaCueGroupExecutor = async (cues, _) =>
             {
                 foreach (var cue in cues)
-                    await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
+                {
+                    try
+                    {
+                        var status = await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
+                        if (status == CueExecutionStatus.Fired)
+                            await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
+                        else
+                            Trace.LogWarning("HaPlay: group cue '{Label}' ({Id}) did not fire — status {Status}", cue.Label, cue.Id, status);
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.LogError(ex, "HaPlay: firing group cue '{Label}' ({Id}) through ShowSession failed", cue.Label, cue.Id);
+                    }
+                }
                 return null;
             };
 
@@ -299,6 +364,115 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Watches the selected cue list's node collection so an in-place edit (add/remove/reorder a cue)
+    /// reloads the ShowSession graph — without this, only switching cue lists reloaded, so a cue built or edited
+    /// in place fired "cue '…' is not registered" against a stale graph. Re-bound whenever SelectedCueList changes.</summary>
+    private void SubscribeCueNodesForReload()
+    {
+        if (_subscribedCueNodes is not null)
+            _subscribedCueNodes.CollectionChanged -= OnCueNodesChanged;
+        _subscribedCueNodes = CuePlayer.SelectedCueList?.Nodes;
+        if (_subscribedCueNodes is not null)
+            _subscribedCueNodes.CollectionChanged += OnCueNodesChanged;
+    }
+
+    private void OnCueNodesChanged(object? sender, NotifyCollectionChangedEventArgs e) => ScheduleCueShowSessionReload();
+
+    /// <summary>Debounces a graph reload (UI thread) so a burst of edits — or loading a list, which adds many
+    /// nodes — collapses into a single reload instead of one per node.</summary>
+    private void ScheduleCueShowSessionReload()
+    {
+        if (_cueShowSession is null)
+            return;
+        _cueReloadDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _cueReloadDebounce.Tick -= OnCueReloadDebounceTick;
+        _cueReloadDebounce.Tick += OnCueReloadDebounceTick;
+        _cueReloadDebounce.Stop();
+        _cueReloadDebounce.Start(); // restart the window on each change → fires 300ms after the last edit
+    }
+
+    private void OnCueReloadDebounceTick(object? sender, EventArgs e)
+    {
+        _cueReloadDebounce?.Stop();
+        ReloadCueShowSession();
+    }
+
+    /// <summary>Runs a re-back transport op (stop/pause/seek/cancel) and logs any failure, so a fault surfaces in
+    /// the console/log instead of only as a UI notification (or being silently swallowed by the caller).</summary>
+    private async Task GuardedCueShowOp(string op, Func<Task> action)
+    {
+        try { await action().ConfigureAwait(false); }
+        catch (Exception ex) { Trace.LogError(ex, "HaPlay: cue ShowSession {Op} failed", op); }
+    }
+
+    /// <summary>(UI thread) Records a re-back cue as started — drives the GUI's Triggered/now-playing state via
+    /// <see cref="CuePlayerViewModel.OnCueStarted"/> and starts the snapshot poll that feeds progress/end. The
+    /// ShowSession transport raises no cue lifecycle events, so the poll (below) is how the now-playing countdown
+    /// advances and rows clear.</summary>
+    private void MarkCueShowCueStarted(Guid cueId)
+    {
+        var group = _cueGroupByCueId.GetValueOrDefault(cueId, ShowSession.DefaultGroup);
+        // A new cue replacing a still-active one on the same group → end the prior so its row doesn't orphan.
+        if (_cueShowActiveByGroup.TryGetValue(group, out var prior) && prior.CueId != cueId)
+            CuePlayer.OnCueEnded(prior.CueId);
+        _cueShowActiveByGroup[group] = new CueShowActiveState { CueId = cueId };
+        CuePlayer.OnCueStarted(cueId);
+        Trace.LogInformation("HaPlay: cue {Cue} started in group '{Group}'", cueId, group);
+
+        _cueShowProgressPoll ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _cueShowProgressPoll.Tick -= OnCueShowProgressPollTick;
+        _cueShowProgressPoll.Tick += OnCueShowProgressPollTick;
+        _cueShowProgressPoll.Start();
+    }
+
+    /// <summary>Polls the per-group session snapshot to drive <see cref="CuePlayerViewModel.OnCueProgress"/> (the
+    /// now-playing countdown/scrubber) while a group runs, and <see cref="CuePlayerViewModel.OnCueEnded"/> when it
+    /// goes idle (natural end / Stop / Cancel). Per group, so concurrent cues on different groups track
+    /// independently; a looping/freeze cue keeps its group "running" and so stays correctly active.</summary>
+    private async void OnCueShowProgressPollTick(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_cueShowSession is null || _cueShowActiveByGroup.Count == 0)
+            {
+                _cueShowProgressPoll?.Stop();
+                return;
+            }
+            var snapshot = await _cueShowSession.SnapshotAsync().ConfigureAwait(true);
+            var byGroup = snapshot.ToDictionary(s => s.GroupId, StringComparer.Ordinal);
+            foreach (var (group, st) in _cueShowActiveByGroup.ToArray())
+            {
+                if (byGroup.TryGetValue(group, out var s) && s.IsRunning)
+                {
+                    st.ObservedRunning = true;
+                    st.NotRunningTicks = 0;
+                    CuePlayer.OnCueProgress(new CuePlaybackProgress(st.CueId, s.ClipPosition, s.ClipDuration));
+                    continue;
+                }
+
+                // Not running. End it only if it was actually seen running (so it really ended), OR it never
+                // started within the warmup grace (~3s at 200ms) — the latter is logged as it indicates a clip
+                // that committed but whose play clock never advanced (e.g. a dead/contended audio device).
+                if (st.ObservedRunning || ++st.NotRunningTicks > 15)
+                {
+                    if (!st.ObservedRunning)
+                        Trace.LogWarning(
+                            "HaPlay: cue {Cue} never started running within grace — group '{Group}' present={Present} (snapshot: [{Snap}])",
+                            st.CueId, group, byGroup.ContainsKey(group),
+                            string.Join(", ", snapshot.Select(x => $"{x.GroupId}:run={x.IsRunning}:pos={x.ClipPosition}:dur={x.ClipDuration}")));
+                    CuePlayer.OnCueEnded(st.CueId);
+                    _cueShowActiveByGroup.Remove(group);
+                }
+            }
+            if (_cueShowActiveByGroup.Count == 0)
+                _cueShowProgressPoll?.Stop();
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "HaPlay: cue ShowSession progress poll failed");
+        }
+    }
+
     /// <summary>Loads the selected cue list into the re-back <see cref="ShowSession"/> (no-op when disabled).</summary>
     private void ReloadCueShowSession()
     {
@@ -330,8 +504,17 @@ public partial class MainViewModel : ViewModelBase
             }
             _cueVideoOutputs = videoOutputs;
 
-            _cueShowSession.LoadDocument(
-                HaPlayShowMapper.ToShowDocument(model, OutputManagement.DefinitionsSnapshot));
+            var doc = HaPlayShowMapper.ToShowDocument(model, OutputManagement.DefinitionsSnapshot);
+            _cueShowSession.LoadDocument(doc);
+            // Map each cue → its transport group so the progress poll can attribute per-group snapshot state.
+            var groupByCue = new Dictionary<Guid, string>();
+            foreach (var c in doc.Cues)
+                if (Guid.TryParse(c.Id, out var cueGuid))
+                    groupByCue[cueGuid] = c.GroupId ?? ShowSession.DefaultGroup;
+            _cueGroupByCueId = groupByCue;
+            Trace.LogInformation(
+                "HaPlay: cue ShowSession reloaded — {Cues} cues, {Comps} compositions, {Lines} video lines",
+                doc.Cues.Count, doc.Compositions.Count, _cueAcquiredVideoLines.Count);
         }
         catch (Exception ex)
         {
