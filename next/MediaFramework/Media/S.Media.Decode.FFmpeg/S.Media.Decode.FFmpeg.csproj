@@ -33,7 +33,6 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.FFmpeg.Tests" />
-        <InternalsVisibleTo Include="S.Media.Encode.FFmpeg" />
     </ItemGroup>
 
 </Project>

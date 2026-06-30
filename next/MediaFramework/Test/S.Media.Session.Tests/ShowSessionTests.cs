@@ -185,6 +185,22 @@ public sealed class ShowSessionTests
                 [new ShowClipBinding("a", "x"), new ShowClipBinding("a", "y")], [], [], [], [])),
             e => e.Contains("more than one clip"));
 
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A"), new CueDefinition("a", 2, "A2")], [], [], [], [], [])),
+            e => e.Contains("duplicate cue id"));
+
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "")], [], [], [], [], [])),
+            e => e.Contains("empty label"));
+
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A")],
+                [new ShowClipBinding("a", "x", CompositionId: "ghost")], [], [], [], [])),
+            e => e.Contains("unknown composition"));
+
         Assert.Empty(ShowDocumentValidator.Validate(TwoAudioCues()));
     }
 
