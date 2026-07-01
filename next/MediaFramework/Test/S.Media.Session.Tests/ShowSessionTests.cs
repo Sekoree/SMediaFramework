@@ -525,6 +525,95 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task ClipAudioRoute_HostAudioFactory_BorrowedOutputUsed_AndNeverDisposedBySession()
+    {
+        // The audio-output factory seam: a host can supply a BORROWED sink for a route's device (an NDI sender's
+        // audio side that must share the carrier emitting the composition's video). The session must WIRE it but
+        // never dispose it — only run its Release hook on teardown — mirroring the video-lease ownership contract.
+        var borrowed = new TrackingAudioOutput(new AudioFormat(48_000, 2));
+        var released = 0;
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            new RecordingAudioBackend(),
+            audioOutputFactory: (deviceId, _) => deviceId == "ndi:cam"
+                ? new ClipAudioOutputLease(borrowed, DisposeOutputOnRuntimeDispose: false,
+                    Release: () => Interlocked.Increment(ref released))
+                : null);
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One")],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://1")
+                {
+                    AudioRoutes = [new ShowClipAudioRoute(DeviceId: "ndi:cam", ChannelMatrix: [0, 1], Gain: 1f)],
+                },
+            ],
+            Compositions: [], Outputs: [], Routes: [], Devices: []);
+        await session.LoadDocumentAsync(doc);
+        await session.GoAsync();
+
+        // The route wired to the host's device (so the backend was NOT asked to create "ndi:cam").
+        Assert.True(session.GetActiveAudioPumpStatsByDevice().ContainsKey("ndi:cam"),
+            "the route must be wired to the host-provided output's device");
+
+        await session.StopAsync(fade: false);
+
+        Assert.Equal(0, borrowed.DisposeCount);        // borrowed → the session never disposes it
+        Assert.True(released >= 1, "the lease's Release hook must run on teardown");
+        Assert.False(session.GetActiveAudioPumpStatsByDevice().ContainsKey("ndi:cam")); // cleared on stop
+    }
+
+    [Fact]
+    public async Task RebuildActiveClipAudioOutputs_AddsAndRemovesDeviceOutputsLive_IncludingToZero()
+    {
+        // Deck hot output add/remove: rebuild the active clip's audio outputs from a fresh route set — unlike the
+        // in-place ApplyActiveAudioRoutesAsync, this handles a COUNT change (a line routed/unrouted), down to ZERO
+        // device outputs (the clip keeps running on its discard sink). Proven via the per-device pump snapshot.
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One")],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://1")
+                {
+                    AudioRoutes =
+                    [
+                        new ShowClipAudioRoute(DeviceId: "hw:0", ChannelMatrix: [0, 1], Gain: 1f),
+                        new ShowClipAudioRoute(DeviceId: "hw:1", ChannelMatrix: [0, 1], Gain: 1f),
+                    ],
+                },
+            ],
+            Compositions: [], Outputs: [], Routes: [], Devices: []);
+        await session.LoadDocumentAsync(doc);
+        await session.GoAsync();
+
+        var devices = session.GetActiveAudioPumpStatsByDevice();
+        Assert.True(devices.ContainsKey("hw:0") && devices.ContainsKey("hw:1"), "both fire-time devices routed");
+
+        // Unroute hw:1 (count drops 2→1) — the in-place path would defer this; the rebuild applies it.
+        Assert.True(await session.RebuildActiveClipAudioOutputsAsync("cue1",
+            [new ShowClipAudioRoute(DeviceId: "hw:0", ChannelMatrix: [0, 1], Gain: 1f)]));
+        devices = session.GetActiveAudioPumpStatsByDevice();
+        Assert.True(devices.ContainsKey("hw:0"));
+        Assert.False(devices.ContainsKey("hw:1"), "the unrouted device is gone");
+
+        // Unroute the LAST device (→ zero) — the clip must not fault; it runs on its discard sink.
+        Assert.True(await session.RebuildActiveClipAudioOutputsAsync("cue1", []));
+        Assert.Empty(session.GetActiveAudioPumpStatsByDevice());
+        Assert.True(Assert.Single(session.Snapshot()).IsActive, "the clip stays active with zero device outputs");
+
+        // Re-route a different device (→ one) — re-attaches live.
+        Assert.True(await session.RebuildActiveClipAudioOutputsAsync("cue1",
+            [new ShowClipAudioRoute(DeviceId: "hw:2", ChannelMatrix: [0, 1], Gain: 1f)]));
+        Assert.True(session.GetActiveAudioPumpStatsByDevice().ContainsKey("hw:2"));
+
+        Assert.False(await session.RebuildActiveClipAudioOutputsAsync("nope", [])); // not the active cue
+    }
+
+    [Fact]
     public async Task GetActiveAudioPumpStatsByDevice_ReflectsRoutedDevice_AndClearsOnStop()
     {
         // NXT-06 cutover (cue audio line-health parity): the outputs panel reverse-maps a line to its PortAudio
@@ -701,6 +790,28 @@ public sealed class ShowSessionTests
         Assert.True(await session.ApplyOutputMappingAsync("screen", "line-42", null));
         Assert.False(await session.ApplyOutputMappingAsync("screen", "missing-line", mapping));
         Assert.False(await session.ApplyOutputMappingAsync("missing-comp", "line-42", mapping));
+    }
+
+    [Fact]
+    public async Task AddRemoveCompositionOutput_HotAttachesAndDetachesOnLiveComposition()
+    {
+        // Hot add/remove output under the ShowSession path (the GUI's TryAddOutput/TryRemoveOutput re-back): a
+        // LOADED composition can gain or lose an output lease WITHOUT a re-fire, so a playing deck starts/stops
+        // feeding a newly-selected screen/NDI line live.
+        var doc = new ShowDocument(
+            Version: 1, Cues: [], Clips: [],
+            Compositions: [new ShowComposition("screen", "S", 320, 240)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        session.LoadDocument(doc);
+
+        var lease = new ClipCompositionOutputLease("hot-line", "Projector", new DiscardingVideoOutput());
+        Assert.True(await session.AddCompositionOutputAsync("screen", lease));         // attaches live
+        Assert.True(await session.RemoveCompositionOutputAsync("screen", "hot-line")); // detaches by lease id
+        Assert.False(await session.RemoveCompositionOutputAsync("screen", "hot-line")); // already gone
+
+        Assert.False(await session.AddCompositionOutputAsync("missing", lease));        // no such composition
+        Assert.False(await session.RemoveCompositionOutputAsync("missing", "hot-line"));
     }
 
     [Fact]

@@ -953,7 +953,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private bool ShouldHotAddAddedClone(OutputLineViewModel line)
     {
-        if (_session is null)
+        if (_session is null && !ShowSessionHotSwapActive) // neither engine nor ShowSession is playing
             return false;
         if (line.Definition is not LocalVideoOutputDefinition { CloneOfId: { } parentId })
             return false;
@@ -976,6 +976,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
         if (!await Dispatcher.UIThread.InvokeAsync(() => line.IsPreviewRunning && ShouldHotAddAddedClone(line)))
             return;
+
+        // ShowSession deck: hot-add the clone to the live composition (HotAdd is idempotent + guards already-driven).
+        if (ShowSessionHotSwapActive)
+        {
+            await WithPlaybackArcAsync(() => Dispatcher.UIThread.InvokeAsync(() =>
+                ShouldRouteLine(line) ? HotAddOutputToShowSessionAsync(line) : Task.CompletedTask)).ConfigureAwait(false);
+            return;
+        }
 
         await WithPlaybackArcAsync(() =>
         {
@@ -2334,10 +2342,11 @@ public partial class MediaPlayerViewModel : ViewModelBase
             if (binding.IsSelected)
                 binding.Matrix.Resize(MatrixInputChannelCountFor(_session), OutputChannelCountOrZero(binding.Line));
             RebuildAudioMatrixRows();
-            // Hot toggle: if a session is running, mirror the checkbox change into the playback graph so
-            // routing takes effect without reload. Without this, ticking a new output mid-play did nothing
-            // until next Open / Play, and unticking left the route alive until the session was torn down.
-            if (_session is not null)
+            // Hot toggle: if playback is running (engine session OR the ShowSession deck), mirror the checkbox
+            // change into the playback graph so routing takes effect without reload. Without this, ticking a new
+            // output mid-play did nothing until next Open / Play, and unticking left the route alive. The
+            // ShowSession branch was missing, so under the flipped default a toggle silently did nothing.
+            if (_session is not null || ShowSessionHotSwapActive)
                 _ = HotApplyRoutingToggleAsync(binding);
             SyncIdleSlate();
             return;
@@ -2703,6 +2712,23 @@ public partial class MediaPlayerViewModel : ViewModelBase
         var targets = new List<OutputLineViewModel> { line };
         targets.AddRange(_outputs.GetClonesOf(line.Definition.Id));
 
+        // ShowSession deck (the flipped default, _session is null): hot add/remove each target on the LIVE
+        // composition rather than the engine. Hold the playback arc so a toggle can't race Stop/switch, and
+        // marshal the (UI-affine) acquire/attach to the UI thread — the arc runs its action off-thread.
+        if (ShowSessionHotSwapActive)
+        {
+            await WithPlaybackArcAsync(async () =>
+            {
+                foreach (var target in targets)
+                {
+                    var t = target;
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                        add ? HotAddOutputToShowSessionAsync(t) : HotRemoveOutputFromShowSessionAsync(t));
+                }
+            }).ConfigureAwait(false);
+            return;
+        }
+
         await WithPlaybackArcAsync(() =>
         {
             var session = _session;
@@ -2748,6 +2774,14 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         // Synchronous: the management VM is about to dispose the runtime. Drop our route now so the
         // router doesn't keep submitting to a output that's seconds away from disposal.
+        // ShowSession deck (_session is null): detach the line from the live composition + release it. The
+        // detach hops the session dispatcher (best-effort, fire-and-forget) but the runtime is only disposed
+        // "seconds away", so it completes first.
+        if (ShowSessionHotSwapActive)
+        {
+            _ = HotRemoveOutputFromShowSessionAsync(line);
+            return;
+        }
         var session = _session;
         if (session is null) return;
         try { session.TryRemoveOutput(line, out _); }

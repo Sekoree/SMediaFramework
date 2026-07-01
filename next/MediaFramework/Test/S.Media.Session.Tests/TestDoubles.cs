@@ -85,6 +85,18 @@ internal sealed class SinkAudioOutput(AudioFormat format) : IAudioOutput
     public void Submit(ReadOnlySpan<float> packedSamples) { }
 }
 
+/// <summary>An <see cref="IAudioOutput"/> that also counts Dispose calls — lets a test prove the session did
+/// (or did NOT) dispose a host-provided output, i.e. the borrowed-output ownership contract of the audio-output
+/// factory seam (an NDI carrier's audio side must never be disposed by the session).</summary>
+internal sealed class TrackingAudioOutput(AudioFormat format) : IAudioOutput, IDisposable
+{
+    private int _disposes;
+    public int DisposeCount => Volatile.Read(ref _disposes);
+    public AudioFormat Format => format;
+    public void Submit(ReadOnlySpan<float> packedSamples) { }
+    public void Dispose() => Interlocked.Increment(ref _disposes);
+}
+
 /// <summary>A video source that reports a finite Duration but NEVER exhausts (like a rendered text / still held
 /// frame). Used to prove <c>EndAtDuration</c> stops the clip via the time-based end-monitor, not source EOF.</summary>
 internal sealed class UnboundedHeldVideoSource(TimeSpan duration) : IVideoSource, ISeekableSource

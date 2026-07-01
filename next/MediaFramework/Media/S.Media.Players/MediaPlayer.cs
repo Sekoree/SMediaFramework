@@ -140,6 +140,13 @@ public sealed class MediaPlayer : IDisposable
     /// <summary>True when the video source is live (NDI / capture) — presents Scheduled, re-anchored at Play.</summary>
     public bool IsLive => _liveVideoSource is not null;
 
+    /// <summary>True when this is a LIVE source whose upstream has DROPPED — its live video or audio source now
+    /// reports exhausted. A host uses it to end a live clip whose input disconnected (the GUI's live-source
+    /// disconnect handling), distinct from <see cref="IsRunning"/> which a live router can keep true while it
+    /// waits for data. False for a file/container source (a finished file ends via normal EOF, not this).</summary>
+    public bool IsLiveSourceExhausted =>
+        IsLive && ((_liveVideoSource?.IsExhausted ?? false) || (_audioSource?.IsExhausted ?? false));
+
     /// <summary>True when this player wraps a seekable file/container decoder (not a live source) with a stream.</summary>
     public bool HasContainerDecoder => !IsLive && (_audioSource is not null || _videoSource is not null);
 

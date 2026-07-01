@@ -5,6 +5,7 @@ using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using S.Media.Time;
 using S.Media.Core;
+using S.Media.Core.Audio;
 using S.Media.Core.Diagnostics;
 using S.Media.Core.Video;
 using S.Media.Compositor;
@@ -26,6 +27,16 @@ public sealed record ClipCompositionOutputLease(
     Action? Release = null,
     bool DisposeOutputOnRuntimeDispose = false,
     ClipOutputMappingSpec? Mapping = null);
+
+/// <summary>A host-provided audio output for a clip route's device — the audio analogue of
+/// <see cref="ClipCompositionOutputLease"/>. Lets the host route a clip's audio to a sink the session's
+/// <c>IAudioBackend</c> can't create, e.g. an NDI sender's audio side that must share the SAME carrier as the
+/// composition's video. A BORROWED output declares <see cref="DisposeOutputOnRuntimeDispose"/> = false so the
+/// session never disposes it (the host owns the carrier's lifetime); <see cref="Release"/> runs on teardown.</summary>
+public sealed record ClipAudioOutputLease(
+    IAudioOutput Output,
+    bool DisposeOutputOnRuntimeDispose = false,
+    Action? Release = null);
 
 public sealed record ClipCompositionCompositor(
     IVideoCompositor Compositor,

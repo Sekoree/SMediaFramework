@@ -45,7 +45,11 @@ public static class MediaPlayerShowMapper
                     CompositionId: hasVideo ? PlayerCompositionId : null,
                     LayerIndex: 0)
                 {
-                    AudioRoutes = audioRoutes is { Count: > 0 } ? audioRoutes : null,
+                    // The deck states its outputs EXPLICITLY — never null. No route routed ⇒ an empty list ⇒ NO
+                    // audio output at all: the deck plays to nothing (a "no output routed" banner is shown), and
+                    // no default device is ever opened. Only a null here would trip the framework's default-device
+                    // fallback, which must never happen for the deck — so coerce to an empty list.
+                    AudioRoutes = audioRoutes ?? [],
                     Subtitles = MapSubtitles(subtitles, hasVideo),
                 },
             ],

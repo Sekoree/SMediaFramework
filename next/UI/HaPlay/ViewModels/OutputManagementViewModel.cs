@@ -73,6 +73,34 @@ public partial class OutputManagementViewModel : ViewModelBase
                 ndi.ReleaseFromPlayback(releaseVideo: true, releaseAudio: false);
     }
 
+    /// <summary>Acquires the AUDIO side of an NDI output line's carrier — the SAME sender that carries the
+    /// composition's video — so a ShowSession clip can route audio into that NDI stream (the ShowSession audio
+    /// re-back for NDI lines). Returns the carrier's audio sink at its configured audio format, or null for a
+    /// non-NDI / unknown line or an audio-less NDI mode. UI thread; single-holder like the video side — release
+    /// with <see cref="ReleaseAudioOutputForLine"/>.</summary>
+    public IAudioOutput? AcquireAudioOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return null;
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                return ndi.AcquireForPlayback(needsVideo: false, needsAudio: true)?.Audio;
+        return null;
+    }
+
+    /// <summary>Releases an audio output acquired via <see cref="AcquireAudioOutputForLine"/>. UI thread. No-op
+    /// for a non-NDI / unknown line.</summary>
+    public void ReleaseAudioOutputForLine(Guid lineId)
+    {
+        var line = Outputs.FirstOrDefault(o => o.Definition.Id == lineId);
+        if (line is null)
+            return;
+        lock (_ndiOutputsGate)
+            if (_ndiOutputs.TryGetValue(line, out var ndi))
+                ndi.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
+    }
+
     /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
     /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
     public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();

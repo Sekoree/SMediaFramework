@@ -17,7 +17,8 @@ public sealed record TransportSnapshot(
     TimeSpan ClipPosition,
     TimeSpan ClipDuration,
     bool IsRunning,
-    bool IsActive = false);
+    bool IsActive = false,
+    bool LiveSourceDisconnected = false);
 
 /// <summary>A soundboard voice's playhead — for the UI's per-tile progress/countdown.</summary>
 public readonly record struct VoiceProgress(string VoiceId, TimeSpan Position, TimeSpan Duration);
@@ -66,6 +67,11 @@ public sealed class ShowSession : IAsyncDisposable
     // GL context can inject a GPU/warp compositor so session compositions use the intended zero-copy GPU path
     // instead of building full-BGRA CPU canvases (NXT-11). Threaded into every ClipCompositionRuntime at load.
     private readonly Func<VideoFormat, ClipCompositionCompositor>? _compositorFactory;
+    // Host audio-output factory (route deviceId, format) → a borrowed sink for that device, or null to let the
+    // IAudioBackend create it. Mirrors _videoOutputFactory: a returned lease with DisposeOutputOnRuntimeDispose
+    // = false is NEVER disposed by the session (the host owns it — e.g. an NDI sender's audio side sharing the
+    // carrier that also emits the composition's video). Null ⇒ every route uses the backend device.
+    private readonly Func<string, AudioFormat, ClipAudioOutputLease?>? _audioOutputFactory;
     // Opens + warms clips (seek-to-Start trim-in, standby pre-roll). Clips arm through here instead of a
     // direct MediaGraph build so the show can pre-roll upcoming cues (8b convergence). All access is on the
     // serial dispatcher; the engine is also internally thread-safe.
@@ -98,6 +104,29 @@ public sealed class ShowSession : IAsyncDisposable
 
     private readonly record struct ActiveAudioPump(AudioRouter Router, string OutputId, string DeviceId);
 
+    // A clip's attached audio output plus its ownership. The session disposes it on clip replace only when
+    // DisposeOnRelease (a backend-created device it owns); a host lease (e.g. an NDI carrier's audio) is
+    // BORROWED — never disposed, only its Release hook is invoked so the host can drop its reference.
+    private readonly record struct ClipAudioOutput(IAudioOutput Output, bool DisposeOnRelease, Action? Release);
+
+    /// <summary>Resolves a route's device to a sink: the host audio factory first (a borrowed lease it owns),
+    /// else the session's <see cref="IAudioBackend"/> creates one it owns. Called only when a backend exists.</summary>
+    private ClipAudioOutput ResolveAudioOutput(string? deviceId, AudioFormat format)
+    {
+        if (deviceId is { } id && _audioOutputFactory?.Invoke(id, format) is { } lease)
+            return new ClipAudioOutput(lease.Output, lease.DisposeOutputOnRuntimeDispose, lease.Release);
+        return new ClipAudioOutput(_audioBackend!.CreateOutput(deviceId, format), DisposeOnRelease: true, Release: null);
+    }
+
+    /// <summary>Teardown for one attached audio output: run the host's release hook (if any), then dispose the
+    /// sink only when the session owns it.</summary>
+    private static void ReleaseClipAudioOutput(ClipAudioOutput o)
+    {
+        o.Release?.Invoke();
+        if (o.DisposeOnRelease)
+            (o.Output as IDisposable)?.Dispose();
+    }
+
     /// <summary>A composition layer the active clip's video is fanned to, tagged by its composition + layer index
     /// so a live placement edit can target the right one when a clip is placed onto more than one layer.</summary>
     private readonly record struct PlacedLayer(
@@ -125,13 +154,15 @@ public sealed class ShowSession : IAsyncDisposable
         IAudioBackend? audioBackend = null,
         Func<string, int, int, int, IVideoOverlaySource?>? subtitleFactory = null,
         Func<string, string, int, int, IReadOnlyList<ClipCompositionOutputLease>>? videoOutputFactory = null,
-        Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null)
+        Func<VideoFormat, ClipCompositionCompositor>? compositorFactory = null,
+        Func<string, AudioFormat, ClipAudioOutputLease?>? audioOutputFactory = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _audioBackend = audioBackend;
         _subtitleFactory = subtitleFactory;
         _videoOutputFactory = videoOutputFactory;
         _compositorFactory = compositorFactory;
+        _audioOutputFactory = audioOutputFactory;
         _standby.StandbyStatesChanged += states => PreparedCuesChanged?.Invoke(states);
         if (audioBackend is not null)
         {
@@ -344,7 +375,7 @@ public sealed class ShowSession : IAsyncDisposable
         var group = setup.group;
         var player = armed.Player;
         var layers = new List<PlacedLayer>();
-        var outputs = new List<IAudioOutput>();
+        var outputs = new List<ClipAudioOutput>();
         var subtitleAttachments = new List<IDisposable>();
         var fadeIn = binding.FadeIn > TimeSpan.Zero;
         // Retained for the active clip so both fade-in and every stop path ramp each route relative to its
@@ -401,8 +432,8 @@ public sealed class ShowSession : IAsyncDisposable
                         var channelMap = route.ToChannelMap();
                         var channels = channelMap?.OutputChannels ?? 2;
                         var outputId = $"clip{i}";
-                        var o = _audioBackend.CreateOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
-                        player.AttachAudioOutput(o, outputId, map: channelMap, gain: fadeIn ? 0f : route.Gain);
+                        var o = ResolveAudioOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+                        player.AttachAudioOutput(o.Output, outputId, map: channelMap, gain: fadeIn ? 0f : route.Gain);
                         outputs.Add(o);
                         routeTargets.Add((outputId, route.Gain));
                         if (route.DeviceId is { } clipDevice)
@@ -419,9 +450,9 @@ public sealed class ShowSession : IAsyncDisposable
                     {
                         var channelMap = ResolveOutputChannelMap(binding, outDef.Id);
                         var channels = channelMap?.OutputChannels ?? 2;
-                        var o = _audioBackend.CreateOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+                        var o = ResolveAudioOutput(outDef.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
                         // Fade-in: attach silent (gain 0) and ramp the route gain up to unity over FadeIn after Start.
-                        player.AttachAudioOutput(o, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
+                        player.AttachAudioOutput(o.Output, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
                         outputs.Add(o);
                         routeTargets.Add((outDef.Id, 1f));
                         if (outDef.DeviceId is { } groupDevice)
@@ -483,7 +514,7 @@ public sealed class ShowSession : IAsyncDisposable
             foreach (var attachment in subtitleAttachments)
                 attachment.Dispose();
             foreach (var output in outputs)
-                (output as IDisposable)?.Dispose();
+                ReleaseClipAudioOutput(output);
             await armed.ReleaseAsync().ConfigureAwait(false);
             foreach (var placed in layers)
                 placed.Slot.Dispose();
@@ -569,6 +600,30 @@ public sealed class ShowSession : IAsyncDisposable
             return Task.FromResult(false);
         });
 
+    /// <summary>Hot-attaches an output lease to a LIVE composition so a playing clip starts fanning its
+    /// composited video to a newly-selected line WITHOUT a re-fire (the GUI's <c>TryAddOutput</c> under the
+    /// ShowSession path). Returns false when the composition isn't currently loaded. The lease carries the same
+    /// borrowed/owned ownership contract as the fire-path video leases (a borrowed host output declares
+    /// <see cref="ClipCompositionOutputLease.DisposeOutputOnRuntimeDispose"/> = false).</summary>
+    public Task<bool> AddCompositionOutputAsync(string compositionId, ClipCompositionOutputLease lease)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(compositionId);
+        ArgumentNullException.ThrowIfNull(lease);
+        return InvokeAsync(() => Task.FromResult(
+            _compositions.TryGetValue(compositionId, out var composition) && composition.AddOutput(lease)));
+    }
+
+    /// <summary>Hot-detaches an output (by its lease <c>OutputId</c>) from a LIVE composition — the GUI's
+    /// <c>TryRemoveOutput</c> under the ShowSession path. Returns false when the composition isn't loaded or had
+    /// no such output. The detached output is NOT disposed here (the host that leased it owns its lifetime).</summary>
+    public Task<bool> RemoveCompositionOutputAsync(string compositionId, string outputId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(compositionId);
+        ArgumentException.ThrowIfNullOrEmpty(outputId);
+        return InvokeAsync(() => Task.FromResult(
+            _compositions.TryGetValue(compositionId, out var composition) && composition.RemoveOutput(outputId)));
+    }
+
     /// <summary>Live-edit the active cue's audio routing matrix (source channels → <paramref name="outputId"/>'s
     /// channels) while it plays (the GUI's <c>UpdateActiveCueAudioRoutes</c>). Returns false when the cue isn't
     /// the active clip on any group (or has no audio router). Applies on the clip's source→output route.</summary>
@@ -632,6 +687,62 @@ public sealed class ShowSession : IAsyncDisposable
 
                     return Task.FromResult(true);
                 }
+
+            return Task.FromResult(false);
+        });
+    }
+
+    /// <summary>REBUILDS the active cue's audio outputs from a fresh route set while it plays — the count-change
+    /// counterpart of <see cref="ApplyActiveAudioRoutesAsync"/> (which only re-applies in place for a stable
+    /// count). Removes EVERY current <c>clip{i}</c> output from the router (its <c>_audio_discard</c>
+    /// negotiation-lead sink stays, so the router keeps running — the clip plays on even with ZERO device
+    /// outputs, on the wall clock), then re-adds one output per route. Used by the deck's hot output add/remove so
+    /// unrouting an output keeps playback going and re-routing re-attaches at the live position. Returns false
+    /// when the cue isn't the active clip on any group.</summary>
+    public Task<bool> RebuildActiveClipAudioOutputsAsync(string cueId, IReadOnlyList<ShowClipAudioRoute> routes)
+    {
+        ArgumentNullException.ThrowIfNull(routes);
+        return InvokeAsync(() =>
+        {
+            foreach (var group in _groups.Values)
+            {
+                if (group.Active is not { } active || active.Spec.Id != cueId
+                    || active.Player.AudioRouter is not { } router || active.Player.AudioSourceId is null)
+                    continue;
+
+                // 1) Drop every current clip{i} output from the router FIRST (before releasing the tracked sinks,
+                //    so no route dangles to a released output). The discard sink is left, so the router keeps pacing.
+                foreach (var id in router.GetRegisteredOutputIds()
+                             .Where(id => id.StartsWith("clip", StringComparison.Ordinal)).ToList())
+                    router.RemoveOutput(id);
+
+                // 2) Re-add one output per route (mirrors CommitClipAsync's per-clip audio block).
+                var rate = active.Player.SampleRate > 0 ? active.Player.SampleRate : 48_000;
+                var newOutputs = new List<ClipAudioOutput>(routes.Count);
+                var audioPumps = new List<(string OutputId, string DeviceId)>();
+                var routeTargets = new List<(string OutputId, float TargetGain)>();
+                for (var i = 0; i < routes.Count; i++)
+                {
+                    var route = routes[i];
+                    var channelMap = route.ToChannelMap();
+                    var channels = channelMap?.OutputChannels ?? 2;
+                    var outputId = $"clip{i}";
+                    var o = ResolveAudioOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
+                    active.Player.AttachAudioOutput(o.Output, outputId, map: channelMap, gain: route.Gain);
+                    newOutputs.Add(o);
+                    routeTargets.Add((outputId, route.Gain));
+                    if (route.DeviceId is { } dev)
+                        audioPumps.Add((outputId, dev));
+                }
+
+                // 3) Swap the group's tracked set, release the OLD one per ownership, refresh route targets + pumps.
+                foreach (var o in group.SwapAudioOutputs(newOutputs))
+                    ReleaseClipAudioOutput(o);
+                group.SetActiveRouteTargets(routeTargets);
+                group.SetActiveAudioPumps(audioPumps);
+                PublishGroupViews();
+                return Task.FromResult(true);
+            }
 
             return Task.FromResult(false);
         });
@@ -1557,6 +1668,7 @@ public sealed class ShowSession : IAsyncDisposable
             // just yields a stale/zero value for one poll tick rather than throwing across the query.
             TimeSpan now = TimeSpan.Zero, pos = TimeSpan.Zero, dur = TimeSpan.Zero;
             var running = false;
+            var liveDisconnected = false;
             var active = v.Player is not null; // has a clip (playing/paused/frozen) — independent of the clock
             try
             {
@@ -1566,10 +1678,11 @@ public sealed class ShowSession : IAsyncDisposable
                     pos = p.Position;
                     dur = p.Duration;
                     running = p.IsRunning;
+                    liveDisconnected = p.IsLiveSourceExhausted; // live input dropped (router may still report running)
                 }
             }
             catch { /* concurrent teardown — leave zeros for this tick */ }
-            snaps[i] = new TransportSnapshot(v.GroupId, now, pos, dur, running, active);
+            snaps[i] = new TransportSnapshot(v.GroupId, now, pos, dur, running, active, liveDisconnected);
         }
         return snaps;
     }
@@ -1734,7 +1847,7 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>Swaps a group's active clip and republishes the query view so a position/state poll always sees
     /// the new run-state without waiting behind the dispatcher.</summary>
     private async ValueTask ReplaceActiveAsync(
-        TransportGroup group, IArmedClip? clip, IReadOnlyList<IAudioOutput> outputs,
+        TransportGroup group, IArmedClip? clip, IReadOnlyList<ClipAudioOutput> outputs,
         IReadOnlyList<PlacedLayer> layers, IReadOnlyList<IDisposable>? subtitleAttachments = null)
     {
         await group.ReplaceAsync(clip, outputs, layers, subtitleAttachments).ConfigureAwait(false);
@@ -1789,7 +1902,7 @@ public sealed class ShowSession : IAsyncDisposable
     {
         public SessionClock Clock { get; } = new(new MonotonicWallClock(start: false));
         public IArmedClip? Active { get; private set; }
-        private IReadOnlyList<IAudioOutput> _outputs = [];
+        private IReadOnlyList<ClipAudioOutput> _outputs = [];
         private IReadOnlyList<IDisposable> _subtitleAttachments = [];
         private IReadOnlyList<PlacedLayer> _layers = [];
         private CancellationTokenSource? _clipWorkCts;
@@ -1810,6 +1923,21 @@ public sealed class ShowSession : IAsyncDisposable
         /// on the dispatcher after the clip's outputs are attached.</summary>
         public void SetActiveAudioPumps(IReadOnlyList<(string OutputId, string DeviceId)> pumps) =>
             _activeAudioPumps = pumps as (string, string)[] ?? pumps.ToArray();
+
+        /// <summary>Replaces the tracked audio outputs for a LIVE rebuild (hot add/remove of a deck output).
+        /// Returns the previous set so the caller releases each per its ownership AFTER removing it from the
+        /// router — releasing an owned sink while its route still exists would dangle.</summary>
+        public IReadOnlyList<ClipAudioOutput> SwapAudioOutputs(IReadOnlyList<ClipAudioOutput> newOutputs)
+        {
+            var old = _outputs;
+            _outputs = newOutputs;
+            return old;
+        }
+
+        /// <summary>Updates the active route targets (OutputId → target gain) after a rebuild so the fade/gain
+        /// ride rides the NEW output set. Keeps the binding and current audio scale.</summary>
+        public void SetActiveRouteTargets(IReadOnlyList<(string OutputId, float TargetGain)> routeTargets) =>
+            _activeRouteTargets = routeTargets.ToArray();
         // Every placement fades on one ramp, so the primary (first) layer's opacity is representative for the
         // cross-fade opacity readback.
         public ClipCompositionRuntime.LayerSlot? ActiveLayer => _layers.Count > 0 ? _layers[0].Slot : null;
@@ -1884,7 +2012,7 @@ public sealed class ShowSession : IAsyncDisposable
 
         public async ValueTask ReplaceAsync(
             IArmedClip? clip,
-            IReadOnlyList<IAudioOutput> outputs,
+            IReadOnlyList<ClipAudioOutput> outputs,
             IReadOnlyList<PlacedLayer> layers,
             IReadOnlyList<IDisposable>? subtitleAttachments = null)
         {
@@ -1921,7 +2049,7 @@ public sealed class ShowSession : IAsyncDisposable
             if (oldActive is not null)
                 await oldActive.ReleaseAsync().ConfigureAwait(false);
             foreach (var output in oldOutputs)
-                (output as IDisposable)?.Dispose();
+                ReleaseClipAudioOutput(output);
         }
 
         public ValueTask DisposeAsync() => ReplaceAsync(null, [], []);
