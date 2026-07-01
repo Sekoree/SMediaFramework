@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Xunit;
 
 namespace S.Media.Core.Tests.Audio;
@@ -138,6 +139,40 @@ public sealed class AudioRouterPumpLifecycleTests
             if (disposeTask is { IsCompleted: false })
                 await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(2)));
         }
+    }
+
+    [Fact]
+    public void EvictionDrops_DoNotStall_StopWaitForIdle()
+    {
+        // Regression: Commit's pool-exhaustion eviction removed an already-enqueued chunk from _ready but did
+        // not mark it "no longer in flight" (only counted the drop). So processed stayed permanently below
+        // enqueued and WaitForIdle — which Pause/Stop/Seek call to quiesce a pump — spun to its FULL timeout
+        // after ANY drop. The _audio_discard negotiation-lead sink hit this on every deck stop (~1s stall).
+        // A blocked non-primary output floods the pump until it evicts; after release, Stop's per-pump
+        // WaitForIdle must return at once (evictions counted as settled), not burn the ~1s timeout.
+        var output = new BlockingOutput(Stereo);
+        using var r = new AudioRouter(SampleRate, chunkSamples: 64);
+        r.AddSource(new SilenceSource(Stereo), "src");
+        r.AddOutput(output, "out");
+        r.AddRoute("src", "out", ChannelMap.Identity(2));
+
+        r.Start();
+        Assert.True(output.Entered.Wait(TimeSpan.FromSeconds(2)), "output pump should block inside Submit");
+        // With the drainer stuck in Submit, the producer floods the pump; once the buffer pool is exhausted
+        // Commit evicts the oldest queued chunk (a drop). Wait until at least one eviction is recorded.
+        Assert.True(SpinUntil(() => r.GetPumpStats("out").Dropped > 0, 2000),
+            "a blocked non-primary output should force eviction drops");
+
+        output.Release();
+        var sw = Stopwatch.StartNew();
+        r.Stop();
+        sw.Stop();
+
+        Assert.True(r.GetPumpStats("out").Dropped > 0, "the scenario must have produced eviction drops");
+        // Fixed: Stop returns immediately. Broken: it spins the full ~1s WaitForIdle timeout. 500ms decisively
+        // separates the two while leaving generous slack for scheduling under a loaded test run.
+        Assert.True(sw.ElapsedMilliseconds < 500,
+            $"Stop should not stall on WaitForIdle after eviction drops (took {sw.ElapsedMilliseconds}ms)");
     }
 
     private static bool SpinUntil(Func<bool> cond, int timeoutMs)

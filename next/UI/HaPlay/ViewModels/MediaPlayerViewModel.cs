@@ -2385,7 +2385,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void ApplyOutputMatrixToSession(PlayerOutputBinding binding)
     {
         var session = _session;
-        if (session is null) return;
+        if (session is null) { ReapplyDeckAudioToShowSessionIfActive(); return; }
         var compound = CompoundEnvelope(binding);
         if (!session.TrySetOutputMatrix(binding.Line, BuildEffectiveRouteCells(binding), compound, out var err) &&
             !string.IsNullOrWhiteSpace(err))
@@ -2427,7 +2427,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void ApplyOutputCompoundGainToSession(OutputLineViewModel line)
     {
         var session = _session;
-        if (session is null) return;
+        if (session is null) { ReapplyDeckAudioToShowSessionIfActive(); return; }
         var binding = Outputs.FirstOrDefault(b => b.Line == line);
         if (binding is null) return;
 
@@ -2442,6 +2442,9 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     private void ApplyAllOutputGainsToSession()
     {
+        // ShowSession deck: a single live re-apply covers every line's compound gain; the per-line engine ride
+        // below is for the legacy _session only (and would otherwise re-apply once per line).
+        if (_session is null) { ReapplyDeckAudioToShowSessionIfActive(); return; }
         foreach (var binding in Outputs)
             ApplyOutputCompoundGainToSession(binding.Line);
     }
@@ -2472,7 +2475,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void ApplyAllOutputMatricesToSession()
     {
         var session = _session;
-        if (session is null) return;
+        if (session is null) { ReapplyDeckAudioToShowSessionIfActive(); return; }
         foreach (var binding in Outputs)
         {
             if (!binding.IsSelected) continue;

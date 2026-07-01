@@ -48,6 +48,10 @@ public sealed partial class AudioRouter
         private long _enqueued;
         private long _processed;
         private long _dropped;
+        // Enqueued chunks evicted from _ready in Commit (pool-exhaustion drop) — they leave the queue without
+        // ever being delivered, so WaitForIdle counts them as "no longer in flight" without inflating the
+        // delivered (_processed) count that per-output pacing relies on.
+        private long _readyEvictions;
         private long _lastBackpressureWarnTicks;
         private long _lastSlowSubmitWarnTicks;
         private int _stuck;
@@ -139,7 +143,15 @@ public sealed partial class AudioRouter
                     // is room below; fall through to publish without dropping.
                 }
                 else if (_ready.TryTake(out next!))
+                {
+                    // The evicted chunk was already counted in _enqueued; it leaves _ready here without ever
+                    // reaching the drainer. Record it as a ready-queue eviction so WaitForIdle stops treating
+                    // it as still-in-flight — otherwise processed < enqueued forever after any drop and every
+                    // pause/stop/seek spins the full WaitForIdle timeout (e.g. the _audio_discard sink). We do
+                    // NOT bump _processed here: that counter means "delivered to the sink" (per-output pacing).
+                    Interlocked.Increment(ref _readyEvictions);
                     RecordDrop();
+                }
                 else
                 {
                     // Pool and consumer queue are empty: drop this mixed chunk and
@@ -215,18 +227,22 @@ public sealed partial class AudioRouter
         {
             var started = Stopwatch.GetTimestamp();
             var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
-            while (Volatile.Read(ref _processed) < Volatile.Read(ref _enqueued))
+            // A chunk is "in flight" until it leaves _ready — either delivered (_processed, incl. AbandonQueue)
+            // or evicted in Commit (_readyEvictions). Counting evictions here is what keeps a dropped chunk
+            // from wedging WaitForIdle at processed < enqueued forever.
+            while (Volatile.Read(ref _processed) + Volatile.Read(ref _readyEvictions) < Volatile.Read(ref _enqueued))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (Environment.TickCount64 > deadline)
                 {
                     Trace.LogWarning(
-                        "AudioRouter.OutputPump {OutputId}: WaitForIdle timed out after {ElapsedMs:0.00}ms (timeout={TimeoutMs:0.00}ms, enqueued={Enqueued}, processed={Processed}, dropped={Dropped})",
+                        "AudioRouter.OutputPump {OutputId}: WaitForIdle timed out after {ElapsedMs:0.00}ms (timeout={TimeoutMs:0.00}ms, enqueued={Enqueued}, processed={Processed}, evicted={Evicted}, dropped={Dropped})",
                         _sinkId,
                         MediaDiagnostics.ElapsedMillisecondsSince(started),
                         timeout.TotalMilliseconds,
                         Volatile.Read(ref _enqueued),
                         Volatile.Read(ref _processed),
+                        Volatile.Read(ref _readyEvictions),
                         Volatile.Read(ref _dropped));
                     return;
                 }

@@ -224,6 +224,34 @@ public partial class MediaPlayerViewModel
         return matrix;
     }
 
+    /// <summary>Live-re-apply the deck's current audio routing (per-line channel maps + compound gains + mutes)
+    /// to the RUNNING ShowSession clip, so matrix / gain / mute edits take effect DURING playback — the
+    /// ShowSession analog of the engine deck's <c>TrySetOutputMatrix</c> ride. No-op off the ShowSession path
+    /// (the engine methods handle their own case). Fire-and-forget: it hops the session dispatcher; a
+    /// stable-composition edit (gain / per-cell route / output-mute) is applied in place, while a change that
+    /// adds/removes a whole route (a line selected/deselected or all-cells-muted) is deferred by the framework
+    /// to the next fire — see <see cref="ShowSession.ApplyActiveAudioRoutesAsync"/>.</summary>
+    private void ReapplyDeckAudioToShowSessionIfActive()
+    {
+        if (_session is not null || !ShowSessionActive || _playerShowSession is not { } session)
+            return;
+        var routes = BuildDeckShowAudioRoutes(SelectedOutputLines());
+        _ = ReapplyShowSessionAudioRoutesAsync(session, routes);
+    }
+
+    private static async Task ReapplyShowSessionAudioRoutesAsync(
+        ShowSession session, IReadOnlyList<ShowClipAudioRoute> routes)
+    {
+        try
+        {
+            await session.ApplyActiveAudioRoutesAsync(MediaPlayerShowMapper.PlayerCueId, routes).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ShowLog.LogWarning(ex, "MediaPlayer: ShowSession live audio re-apply");
+        }
+    }
+
     /// <summary>Stops the player ShowSession, releases its video leases, and returns the deck to idle.</summary>
     private async Task ShowSessionStopAsync()
     {
