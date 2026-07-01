@@ -535,12 +535,14 @@ public partial class MediaPlayerViewModel
         }
     }
 
-    private bool CanTransport() => !_isTransportBusy && _session is not null && IsMediaLoaded;
+    // Pause is available under either path: the legacy engine session OR the ShowSession deck (the flipped
+    // default, where _session is null). PauseAsync dispatches to the right one via ShowSessionActive.
+    private bool CanTransport() => !_isTransportBusy && ((_session is not null && IsMediaLoaded) || ShowSessionActive);
 
     /// <summary>Phase C.5 — Stop is enabled while a session is loaded OR while a live item is in the
     /// waiting-for-source state. Without the second clause, Stop can't cancel the retry loop on a
     /// manual-name NDI item whose source never came online.</summary>
-    private bool CanStop() => !_isTransportBusy && ((_session is not null && IsMediaLoaded) || IsWaitingForSource);
+    private bool CanStop() => !_isTransportBusy && ((_session is not null && IsMediaLoaded) || IsWaitingForSource || ShowSessionActive);
 
     private readonly object _seekGate = new();
     private double? _pendingSeekValue;
@@ -549,7 +551,9 @@ public partial class MediaPlayerViewModel
     [RelayCommand(CanExecute = nameof(CanSeek))]
     private async Task SeekToSliderAsync()
     {
-        if (_session is null || Duration <= TimeSpan.Zero)
+        // Seek runs under either path: the legacy engine session OR the ShowSession deck (flipped default, where
+        // _session is null). SeekToTargetAsync dispatches to the right one, so bail only when NEITHER is active.
+        if ((_session is null && !ShowSessionActive) || Duration <= TimeSpan.Zero)
             return;
 
         // Coalesce rapid scrub commits (each pointer release / arrow key-up calls this) to
@@ -618,7 +622,9 @@ public partial class MediaPlayerViewModel
         }).ConfigureAwait(false);
     }
 
-    private bool CanSeek() => _session is not null && IsMediaLoaded && Duration > TimeSpan.Zero;
+    // Seek is available under either playback path: the legacy engine session OR the ShowSession deck path
+    // (the flipped default, where _session is null). SeekToTargetAsync dispatches to the right one.
+    private bool CanSeek() => (_session is not null || ShowSessionActive) && IsMediaLoaded && Duration > TimeSpan.Zero;
 
     /// <summary>Phase C — Keyboard `,` jog backward 5 s. Routes through <see cref="SeekToSliderAsync"/>
     /// so the bounded-CT teardown timing matches a normal drag-end commit.</summary>

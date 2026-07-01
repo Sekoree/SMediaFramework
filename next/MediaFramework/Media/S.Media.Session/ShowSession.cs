@@ -1349,7 +1349,17 @@ public sealed class ShowSession : IAsyncDisposable
     public Task SeekAsync(TimeSpan position, string groupId = DefaultGroup) =>
         InvokeAsync(() =>
         {
-            GetOrAddGroup(groupId).Active?.Player.SeekCoordinated(position);
+            if (GetOrAddGroup(groupId).Active is { } active)
+            {
+                // SeekCoordinated pauses+seeks but does NOT resume, so preserve the pre-seek play state: a
+                // scrub while playing must keep playing, not freeze. Without this the clip is left paused
+                // (IsRunning=false) after every seek, and the media-player deck's poll reads that as "ended"
+                // and tears the deck down — i.e. seek "stops playback" (matches SeekManyAsync's resume).
+                var wasRunning = active.Player.IsRunning;
+                active.Player.SeekCoordinated(position);
+                if (wasRunning)
+                    active.Player.Play();
+            }
             return Task.CompletedTask;
         });
 
@@ -1392,13 +1402,17 @@ public sealed class ShowSession : IAsyncDisposable
     /// <summary>Soft-stops and releases the active clip on <paramref name="groupId"/>. The cue's configured
     /// fade-out is used, falling back to the legacy HaPlay 750 ms stop fade. Cancels any in-flight cue fire first
     /// so STOP never waits behind a long pre-wait/open (NXT-03).</summary>
-    public Task StopAsync(string groupId = DefaultGroup)
+    /// <param name="fade">When true (the cue Stop/Panic default) the group's audio + layers ramp to silence over
+    /// its <see cref="ShowClipBinding.FadeOut"/> or <see cref="SoftStopFadeDuration"/> first; when false the clip is
+    /// cut immediately (the media-player deck stops hard — it has no soft-stop fade).</param>
+    public Task StopAsync(string groupId = DefaultGroup, bool fade = true)
     {
         CancelActiveFire();
         return InvokeAsync(async () =>
         {
             var group = GetOrAddGroup(groupId);
-            await FadeGroupsAsync([group]).ConfigureAwait(false);
+            if (fade)
+                await FadeGroupsAsync([group]).ConfigureAwait(false);
             await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
         });
     }

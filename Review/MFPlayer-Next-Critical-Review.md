@@ -1041,17 +1041,32 @@ migrate with the deck path itself, not as a helper move.
 *Stage 2 (in progress).* The ShowSession deck path (`MediaPlayerViewModel.ShowSession.cs`) already covers
 file/NDI transport + auto-advance + idle logo. Closing the remaining deck-parity gaps so `_session` is never
 constructed:
+- **Deck transport parity under the flipped default — FIXED (2026-07-01, hardware-found).** The flipped default
+  exposed transport commands still gated on the (now-null) engine session: **seek/pause/stop** were disabled
+  (`CanSeek`/`CanTransport`/`CanStop` required `_session is not null`), and a **source switch while playing** left
+  the deck stopped instead of switching (the reuse-in-place open never stopped the old clip, so the old poll
+  auto-advanced/stopped and the new clip's audio output contended for the still-held device). Fixes: the three
+  `Can*` gates now also accept `ShowSessionActive` (the dispatch already routed to the ShowSession path); and
+  `TryOpenViaShowSessionAsync` now stops the current show + its poll before re-acquiring/firing the next source.
+  Hardware-confirmed: deck audio routing works; seek + switch to be re-tested.
 - **Output health — video DONE (2026-07-01).** `MediaPlayerViewModel.TryGetShowSessionLineHealthMetrics` reads the
   per-player ShowSession's composition throughput (lock-free `GetCompositionStats`) and scores a line's video
   health like the engine; `OutputManagementViewModel.RefreshOutputHealth` now prefers it over the (idle-under-the-
   flipped-default) engine session, falling back to the engine evaluator when a player isn't ShowSession-driving the
   line. So a ShowSession-playing deck's video output LED lights up instead of showing Idle. Suite 1400/0.
-- **Audio routing / matrix — OPEN, functional + hardware-critical.** `MediaPlayerShowMapper.ToShowDocument` is
-  called with **no `ShowClipAudioRoute`s**, so a deck's ShowSession audio plays on the **default device only** — the
-  deck's selected audio output line(s) + channel matrix (`TrySetOutputMatrix`, applied on the engine session) are
-  **ignored** under the flipped default. This is the priority functional gap; it needs the deck's `PlayerOutputBinding`
-  → `ShowClipAudioRoute` mapping (mirroring the cue `MapAudioRoutes`) + live-matrix re-apply, and **must be validated
-  on real audio devices** (it also unblocks the audio side of deck output-health).
+- **Audio routing — initial routing to the selected device(s) DONE (2026-07-01); full matrix + live re-apply
+  deferred (hardware).** Previously `MediaPlayerShowMapper.ToShowDocument` was called with **no `ShowClipAudioRoute`s**,
+  so a deck's ShowSession audio played on the **default device only** — the operator's selected audio line was
+  ignored under the flipped default. Now `MediaPlayerViewModel.BuildDeckShowAudioRoutes` maps each selected PortAudio
+  output binding → a `ShowClipAudioRoute` (device + out←src channel map + compound master×per-output gain) and
+  `TryOpenViaShowSessionAsync` feeds them to `ToShowDocument`, so audio lands on the **selected device(s)** via the
+  hardware-proven `ShowClipAudioRoute` mechanism the cue path already uses. The channel-map builder
+  (`BuildDeckChannelMatrix`) is pure + unit-tested (stereo/identity/swap/muted/sparse/collision — 6 tests). *Deferred,
+  needs hardware validation:* (a) the **full per-cell gain matrix** and **live re-apply** on matrix/gain/mute edits
+  during playback — both via `ShowSession.ApplyActiveAudioMatrixAsync` (the deck's `TrySetOutputMatrix` already builds
+  the same `float[,]` the framework's `AudioRouter.ApplyMatrix` consumes, so it is a near-1:1 wire-up); (b) **NDI-output
+  audio** (PortAudio device lines only for now); (c) input-trim folding. No regression: the pre-change state ignored
+  the matrix entirely under the flipped default.
 - **Subtitle attach** and **output-resolution / composition sizing** (currently hardcoded 1920×1080) remain.
 
 *Stage 3 (remaining).* Migrate the 93 `_session` usages to the ShowSession deck path, then the engine is never

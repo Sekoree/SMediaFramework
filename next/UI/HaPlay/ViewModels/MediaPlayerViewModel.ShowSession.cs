@@ -24,6 +24,9 @@ public partial class MediaPlayerViewModel
     private Dictionary<string, IVideoOutput[]> _playerVideoOutputs = new(StringComparer.Ordinal);
     private readonly List<Guid> _playerAcquiredLines = new();
     private DispatcherTimer? _playerShowPoll;
+    // Consecutive poll ticks that observed the clip stopped-while-playing. A coordinated seek transiently
+    // pauses the clip, so the deck only treats "not running" as end-of-track once it PERSISTS across ticks.
+    private int _showSessionEndConfirmTicks;
 
     /// <summary>True while a file is playing through the per-player ShowSession (the transport guards divert here).</summary>
     public bool ShowSessionActive { get; private set; }
@@ -69,9 +72,22 @@ public partial class MediaPlayerViewModel
                         $"{compId}_out{i}", name, o, DisposeOutputOnRuntimeDispose: false)).ToArray()
                     : Array.Empty<ClipCompositionOutputLease>());
 
+            // Switching from a currently-playing source: stop its poll and clip FIRST so the old clip releases its
+            // audio DEVICE and borrowed video leases before we re-acquire and fire the new source. Without this the
+            // reuse-in-place path (a) leaves the old poll running so it sees the intermediate stopped state and
+            // auto-advances/stops the deck, and (b) opens the new clip's audio output on a device the old clip
+            // still holds → contention → the new clip faults and the deck "just stops" instead of switching.
+            if (ShowSessionActive)
+            {
+                await Dispatcher.UIThread.InvokeAsync(StopShowSessionPoll);
+                try { await _playerShowSession.StopAsync(fade: false).ConfigureAwait(true); }
+                catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession stop before source switch"); }
+            }
+
             // UI thread: drop any idle logo, release the prior single-holder leases, then (re)acquire the video
             // lines for this source. Acquire realizes the SDL window / NDI sender, so it must run on the UI thread;
             // doing it before LoadDocument keeps the video factory a pure lookup during the (synchronous) load.
+            IReadOnlyList<ShowClipAudioRoute> audioRoutes = [];
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
@@ -94,9 +110,11 @@ public partial class MediaPlayerViewModel
                 {
                     [MediaPlayerShowMapper.PlayerCompositionId] = outputs.ToArray(),
                 };
+                // Route audio to the deck's selected device(s) (on the UI thread — reads deck observable state).
+                audioRoutes = BuildDeckShowAudioRoutes(lines);
             });
 
-            _playerShowSession.LoadDocument(MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo));
+            _playerShowSession.LoadDocument(MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes));
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
 
             // UI thread: flip the deck into the playing state (observable-property writes).
@@ -108,6 +126,11 @@ public partial class MediaPlayerViewModel
                 LoadState = PlayerLoadState.Ready;
                 IsPlaying = true;
                 StartShowSessionPoll();
+                // Kick the scrubber waveform explicitly. The engine path starts it post-arc (OpenOrReload's tail),
+                // but the ShowSession path returns before that, and OnMediaFilePathChanged bails while a transport
+                // is busy — so without this the waveform intermittently never loads on the deck. Safe/idempotent:
+                // StartWaveformExtraction cancels any in-flight run and no-ops for a null/NDI (non-file) path.
+                StartWaveformExtraction((item as FilePlaylistItem)?.Path);
             });
             ShowLog.LogInformation("MediaPlayer: playing through the per-player ShowSession (convergence default).");
             return true;
@@ -157,12 +180,56 @@ public partial class MediaPlayerViewModel
             state, videoSubmitted, videoDropped, 0, 0, 0, 0);
     }
 
+    /// <summary>Builds the deck's initial ShowSession audio routes from its selected PortAudio output bindings, so
+    /// a deck on the ShowSession path plays audio on the operator-SELECTED device(s) (with the binding's channel
+    /// map + effective gain) instead of the default device — the core parity fix for the flipped default.
+    /// Runs on the UI thread (reads deck observable state).</summary>
+    /// <remarks>First cut: one device route per selected audio line with an out←src channel map + the compound
+    /// (master × per-output) gain. Deferred (needs hardware validation): the full per-cell gain matrix and live
+    /// re-apply on matrix/gain/mute edits during playback — both via <see cref="ShowSession.ApplyActiveAudioMatrixAsync"/>
+    /// (the deck's <c>TrySetOutputMatrix</c> already builds the same <c>float[,]</c> the framework's
+    /// <c>AudioRouter.ApplyMatrix</c> consumes); and NDI-output audio (PortAudio device lines only here).</remarks>
+    private IReadOnlyList<ShowClipAudioRoute> BuildDeckShowAudioRoutes(IReadOnlyList<OutputLineViewModel> lines)
+    {
+        var routes = new List<ShowClipAudioRoute>();
+        foreach (var line in lines)
+        {
+            if (line.Definition is not PortAudioOutputDefinition pa)
+                continue; // NDI-output audio on the ShowSession deck is a follow-up
+            if (Outputs.FirstOrDefault(b => b.Line == line) is not { } binding)
+                continue;
+            if (BuildDeckChannelMatrix(binding.Matrix.Cells.Select(c => (c.InputChannel, c.OutputChannel, c.Muted)).ToArray())
+                is not { } matrix)
+                continue; // all cells muted → silent line, no route
+            routes.Add(new ShowClipAudioRoute(
+                pa.EffectiveAudioBackendDeviceId, matrix, CompoundEnvelope(binding),
+                pa.SampleRate > 0 ? pa.SampleRate : null));
+        }
+        return routes;
+    }
+
+    /// <summary>Pure: an out←src channel map (index = output channel, value = source channel, -1 = silence) from a
+    /// binding's non-muted matrix cells. Defaults to a stereo identity (<c>[0,1]</c>) when the grid isn't sized yet
+    /// (the source channel count is unknown until the clip opens); null when every declared cell is muted.</summary>
+    internal static int[]? BuildDeckChannelMatrix(IReadOnlyList<(int Input, int Output, bool Muted)> cells)
+    {
+        var audible = cells.Where(c => !c.Muted).ToList();
+        if (audible.Count == 0)
+            return cells.Count == 0 ? [0, 1] : null; // unsized grid → stereo default; declared-but-all-muted → silent
+        // Size to the widest DECLARED output so a muted high output stays an explicit silence (-1), not dropped.
+        var matrix = new int[cells.Max(c => c.Output) + 1];
+        Array.Fill(matrix, -1); // ChannelMap.Silence
+        foreach (var c in audible)
+            matrix[c.Output] = c.Input;
+        return matrix;
+    }
+
     /// <summary>Stops the player ShowSession, releases its video leases, and returns the deck to idle.</summary>
     private async Task ShowSessionStopAsync()
     {
         if (_playerShowSession is not null)
         {
-            try { await _playerShowSession.StopAsync().ConfigureAwait(true); }
+            try { await _playerShowSession.StopAsync(fade: false).ConfigureAwait(true); }
             catch (Exception ex) { ShowLog.LogWarning(ex, "MediaPlayer: ShowSession stop"); }
         }
         // UI thread: stop the poll, release the video leases, reset deck state, then hand the outputs to the
@@ -184,6 +251,7 @@ public partial class MediaPlayerViewModel
 
     private void StartShowSessionPoll()
     {
+        _showSessionEndConfirmTicks = 0;
         _playerShowPoll ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _playerShowPoll.Tick -= OnShowSessionPollTick;
         _playerShowPoll.Tick += OnShowSessionPollTick;
@@ -217,7 +285,15 @@ public partial class MediaPlayerViewModel
             // Natural end: auto-advance to the next playlist item when enabled (honoring the tab's
             // shuffle/repeat), else return the deck to idle. Stop the poll first so the (async) advance can't
             // be re-entered by the next tick.
-            if (!snap.IsRunning && IsPlaying)
+            //
+            // A coordinated seek transiently pauses the clip (IsRunning=false) while it reseeks the demux —
+            // sometimes 100ms+ when the audio pump is slow to idle. Without discrimination the poll mistakes
+            // that transient for end-of-track and tears the deck down ("freezes then stops" after a few seeks).
+            // Guard on it two ways: skip while a seek/scrub is in flight, AND require the stopped state to
+            // PERSIST across two ticks (a seek's pause is far shorter than the 250ms interval, so it can never
+            // span two ticks; a genuine end does).
+            if (ConfirmShowSessionEnded(snap.IsRunning, IsPlaying, IsScrubbing, _seekArcRunning,
+                    ref _showSessionEndConfirmTicks))
             {
                 StopShowSessionPoll();
                 if (AutoAdvancePlaylist && TryGetAutoAdvanceItem(out var next))
@@ -230,5 +306,19 @@ public partial class MediaPlayerViewModel
         {
             ShowLog.LogTrace("MediaPlayer: ShowSession poll: {Message}", ex.Message);
         }
+    }
+
+    /// <summary>Pure end-of-track decision for the deck poll. A coordinated seek transiently pauses the clip
+    /// (IsRunning=false) while it reseeks the demux, so this treats "stopped while playing" as the true end
+    /// only when NOT mid-seek/scrub AND the stopped state has PERSISTED across two poll ticks — a seek's pause
+    /// is far shorter than the 250 ms poll interval, so it can never span two ticks; a genuine end does.
+    /// <paramref name="confirmTicks"/> accumulates consecutive qualifying ticks and is reset otherwise.</summary>
+    internal static bool ConfirmShowSessionEnded(
+        bool isRunning, bool isPlaying, bool isScrubbing, bool seekInFlight, ref int confirmTicks)
+    {
+        if (!isRunning && isPlaying && !isScrubbing && !seekInFlight)
+            return ++confirmTicks >= 2;
+        confirmTicks = 0;
+        return false;
     }
 }

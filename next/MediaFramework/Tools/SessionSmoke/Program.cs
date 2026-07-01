@@ -135,6 +135,15 @@ if (afterSeek.ClipPosition < afterFire.ClipPosition + TimeSpan.FromSeconds(3))
     return 4;
 }
 
+// A seek while playing must KEEP playing. SeekCoordinated pauses+seeks (no resume), so ShowSession.SeekAsync
+// must restore the pre-seek play state. Without it the clip is frozen after every seek and the media-player
+// deck's poll reads the non-running clip as "ended" and tears the deck down — seek "stops playback".
+if (!afterSeek.IsRunning)
+{
+    Console.Error.WriteLine("FAIL: clip stopped running after a seek (ShowSession.SeekAsync did not resume playback)");
+    return 16;
+}
+
 if (go2 != CueExecutionStatus.Fired)
 {
     Console.Error.WriteLine($"FAIL: GO2 did not fire (was {go2})");
