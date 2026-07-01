@@ -85,6 +85,50 @@ internal sealed class SinkAudioOutput(AudioFormat format) : IAudioOutput
     public void Submit(ReadOnlySpan<float> packedSamples) { }
 }
 
+/// <summary>A video source that reports a finite Duration but NEVER exhausts (like a rendered text / still held
+/// frame). Used to prove <c>EndAtDuration</c> stops the clip via the time-based end-monitor, not source EOF.</summary>
+internal sealed class UnboundedHeldVideoSource(TimeSpan duration) : IVideoSource, ISeekableSource
+{
+    private long _next;
+
+    public VideoFormat Format { get; } = new(4, 4, PixelFormat.Bgra32, new Rational(30, 1));
+    public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [PixelFormat.Bgra32];
+    public bool IsExhausted => false; // held frame — never runs out
+    public TimeSpan Duration { get; } = duration;
+    public TimeSpan Position => TimeSpan.FromTicks(TimeSpan.TicksPerSecond * Volatile.Read(ref _next) / 30);
+
+    public void SelectOutputFormat(PixelFormat format)
+    {
+        if (format != PixelFormat.Bgra32)
+            throw new NotSupportedException();
+    }
+
+    public void Seek(TimeSpan position) =>
+        Volatile.Write(ref _next, Math.Max(0, (long)(position.TotalSeconds * 30)));
+
+    public bool TryReadNextFrame(out VideoFrame frame)
+    {
+        var index = Interlocked.Increment(ref _next) - 1;
+        var bytes = new byte[4 * 4 * 4];
+        for (var i = 3; i < bytes.Length; i += 4)
+            bytes[i] = 255;
+        frame = new VideoFrame(TimeSpan.FromTicks(TimeSpan.TicksPerSecond * index / 30), Format, [bytes], [4 * 4]);
+        return true;
+    }
+}
+
+internal sealed class UnboundedHeldProvider(TimeSpan duration) : IMediaDecoderProvider
+{
+    public string Name => "held";
+    public double Probe(string uri, MediaKind kind) =>
+        kind == MediaKind.Video && uri.StartsWith("held://", StringComparison.Ordinal) ? 1.0 : 0.0;
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => new UnboundedHeldVideoSource(duration);
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => throw new NotSupportedException();
+
+    public static IMediaRegistry Registry(TimeSpan duration) =>
+        MediaRegistry.Build(b => b.AddDecoder(new UnboundedHeldProvider(duration)));
+}
+
 internal sealed class FakeVideoDecoderProvider : IMediaDecoderProvider
 {
     public string Name => "fake-video";

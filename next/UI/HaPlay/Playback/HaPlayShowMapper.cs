@@ -10,15 +10,15 @@ namespace HaPlay.Playback;
 /// </summary>
 /// <remarks>
 /// Lossless today for the cue core: the media/group node tree flattens to ordered cues carrying a
-/// <see cref="CueDefinition.GroupId"/>; each media cue maps to a <see cref="ShowClipBinding"/> with its
-/// clip playback params (trim / fade / loop / end-behaviour) and its first composition placement; and
-/// each <see cref="CueComposition"/> maps to a <see cref="ShowComposition"/> including its output-mapping
-/// warp sections (affine + mesh).
-/// <para>Deferred (tracked, surfaced inline where they bite): action/comment cues; nested groups beyond
-/// one level and group fire modes; multi-composition cues (a clip binds one composition); corner-pin
-/// (the framework section is affine +
-/// mesh only — <see cref="CueOutputMappingSection.Corners"/> is dropped); and the GUI string cue number
-/// (cues are renumbered 1..N by document order).</para>
+/// <see cref="CueDefinition.GroupId"/> (nested groups collapse onto their outermost transport unit); each media
+/// cue maps to a <see cref="ShowClipBinding"/> with its clip playback params (trim / fade / loop / end-behaviour)
+/// and <em>all</em> of its composition placements (primary + <see cref="ShowClipBinding.ExtraPlacements"/>, fanned
+/// out at play time); and each <see cref="CueComposition"/> maps to a <see cref="ShowComposition"/> including its
+/// output-mapping warp sections (affine + mesh).
+/// <para>Deferred (tracked, surfaced inline where they bite): action/comment cues; group fire modes are resolved
+/// by the VM trigger plan, not the document; corner-pin (the framework section is affine + mesh only —
+/// <see cref="CueOutputMappingSection.Corners"/> is dropped); and the GUI string cue number (cues are renumbered
+/// 1..N by document order).</para>
 /// </remarks>
 public static class HaPlayShowMapper
 {
@@ -97,10 +97,14 @@ public static class HaPlayShowMapper
                 switch (node)
                 {
                     case CueGroupNode group:
-                        // One level of grouping today: the group's children inherit its id as their
-                        // GroupId so GoAsync(groupId) fires them together. Nested groups + fire modes
-                        // (FirstCueOnly / …) are a later slice.
-                        Walk(group.Children, group.Id.ToString());
+                        // A top-level group is one transport/clock unit: its cues share a SessionClock
+                        // (so they seek/pause together and, when fired simultaneously, stay phase-locked).
+                        // Nested subgroups collapse into their OUTERMOST ancestor (first non-null wins) so
+                        // the whole tree moves as one unit rather than splitting across per-subgroup clocks.
+                        // WHICH cues fire on GO — including per-subgroup fire modes (FirstCueOnly / …) — is
+                        // resolved by the VM's trigger plan and fired by explicit cue id, so it needs no
+                        // representation in the ShowDocument.
+                        Walk(group.Children, groupId ?? group.Id.ToString());
                         break;
 
                     case MediaCueNode media:
@@ -136,15 +140,34 @@ public static class HaPlayShowMapper
     private static ShowClipBinding? MapClip(
         string cueId, MediaCueNode media, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
     {
-        if (ResolveMediaPath(media.Source) is not { } mediaPath)
-            return null; // media cue with no resolvable source (unbound / text) — nothing to play yet.
+        // Text cues encode their render spec + duration into a `text:` URI so the ShowSession `text:` provider can
+        // render + play them (NXT-06); every other source resolves to a path/scheme URI.
+        var mediaPath = media.Source is TextPlaylistItem text
+            ? TextSourceUri.Encode(text, media.DurationMs)
+            : ResolveMediaPath(media.Source);
+        if (mediaPath is null)
+            return null; // media cue with no resolvable source (unbound) — nothing to play yet.
 
-        var placement = media.VideoPlacements.FirstOrDefault();
+        // A cue may place its one decoded source onto several composition layers at once (PiP, the same feed in
+        // two regions, or mirrored to a second canvas). Bound placements only (empty composition id = unbound),
+        // ordered by layer index like the legacy engine. The first fills the binding's primary fields; the rest
+        // become ExtraPlacements — ShowSession fans the video out to every one.
+        var placements = media.VideoPlacements
+            .Where(p => p.CompositionId != Guid.Empty)
+            .OrderBy(p => p.LayerIndex)
+            .ToList();
+        var primary = placements.Count > 0 ? placements[0] : null;
+        var extra = placements.Count > 1
+            ? placements.Skip(1)
+                .Select(p => new ShowClipPlacement(
+                    p.CompositionId.ToString(), p.LayerIndex, ToShowVideoPlacement(p)))
+                .ToArray()
+            : null;
         return new ShowClipBinding(
             CueId: cueId,
             MediaPath: mediaPath,
-            CompositionId: placement?.CompositionId.ToString(),
-            LayerIndex: placement?.LayerIndex ?? 0,
+            CompositionId: primary?.CompositionId.ToString(),
+            LayerIndex: primary?.LayerIndex ?? 0,
             AudioStreamIndex: media.AudioTrackIndex)
         {
             StartOffset = TimeSpan.FromMilliseconds(media.StartOffsetMs),
@@ -153,9 +176,14 @@ public static class HaPlayShowMapper
             FadeOut = TimeSpan.FromMilliseconds(media.FadeOutMs),
             Loop = media.Loop || media.EndBehavior == CueEndBehavior.Loop,
             EndBehavior = MapEndBehavior(media.EndBehavior),
-            // First placement's full appearance. The fit enum name maps straight to the framework's fit
-            // string (MapFit lowercases it). Multi-placement remains deferred: a clip binds one composition.
-            Placement = placement is null ? null : ToShowVideoPlacement(placement),
+            // A text cue plays a held frame that never signals EOF, so end it at its duration via the time-based
+            // monitor (EndAtDuration) rather than by source exhaustion — otherwise a resize/live-edit re-read ends
+            // it early. Only when a positive duration is set; a 0-duration text cue holds until the next cue.
+            EndAtDuration = media.Source is TextPlaylistItem && media.DurationMs > 0,
+            // Primary placement's full appearance; the fit enum name maps straight to the framework's fit string
+            // (MapFit lowercases it). Any additional placements ride along in ExtraPlacements.
+            Placement = primary is null ? null : ToShowVideoPlacement(primary),
+            ExtraPlacements = extra is { Length: > 0 } ? extra : null,
             // Per-cue audio routing → per-clip outputs (device + N→M channel map + gain), so the cue plays on
             // exactly its routed lines. Null when the cue declares no routes (then the group/default output).
             AudioRoutes = MapAudioRoutes(media, outputsById),
@@ -169,8 +197,23 @@ public static class HaPlayShowMapper
     /// HaPlay never falls back to an inferred/default device.</summary>
     private static IReadOnlyList<ShowClipAudioRoute>? MapAudioRoutes(
         MediaCueNode media, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
+        => MapAudioRoutes(media.AudioRoutes, outputsById);
+
+    /// <summary>Live-edit entry: map a cue's edited <see cref="CueAudioRoute"/>s with the current output
+    /// definitions, for <c>ShowSession.ApplyActiveAudioRoutesAsync</c>. Same conversion + ordering as the load
+    /// path so the <c>clip{i}</c> output order lines up with what the fire path attached.</summary>
+    public static IReadOnlyList<ShowClipAudioRoute> MapActiveAudioRoutes(
+        IReadOnlyList<CueAudioRoute> routes, IReadOnlyList<OutputDefinition>? outputs)
     {
-        if (media.AudioRoutes is not { Count: > 0 } routes)
+        var outputsById = outputs?.GroupBy(o => o.Id).ToDictionary(g => g.Key, g => g.First())
+                          ?? new Dictionary<Guid, OutputDefinition>();
+        return MapAudioRoutes(routes, outputsById);
+    }
+
+    private static IReadOnlyList<ShowClipAudioRoute> MapAudioRoutes(
+        IReadOnlyList<CueAudioRoute>? cueRoutes, IReadOnlyDictionary<Guid, OutputDefinition> outputsById)
+    {
+        if (cueRoutes is not { Count: > 0 } routes)
             return []; // HaPlay is manual-route-only: no cue routes means deliberately silent.
 
         var mapped = new List<ShowClipAudioRoute>();
@@ -203,7 +246,8 @@ public static class HaPlayShowMapper
     }
 
     /// <summary>GUI media source → a registry path / URI (D2). Files and images map to their path; live
-    /// sources to a <c>scheme:</c> URI. Text cues are deferred (no headless text source binding yet).</summary>
+    /// sources to a <c>scheme:</c> URI. Text cues are handled by the caller (encoded into a <c>text:</c> URI with
+    /// their duration, since that needs the cue node, not just the source).</summary>
     private static string? ResolveMediaPath(PlaylistItem? source) => source switch
     {
         FilePlaylistItem f => f.Path,
@@ -262,6 +306,9 @@ public static class HaPlayShowMapper
         Brightness: section.Brightness,
         MeshColumns: section.MeshColumns,
         MeshRows: section.MeshRows,
-        // Corner-pin (section.Corners) has no framework equivalent yet (affine + mesh only) — deferred.
+        // section.Corners is Phase-3-reserved corner-pin (CueList: "ignored in Phase 1"): no editor produces it
+        // and no compositor consumes it — the shipping path drops it too, so omitting it here is exact parity, not
+        // a ShowSession regression. When Phase 3 lands, corners will bake to a fine MeshPoints grid (the GL warp is
+        // already perspective-correct), so no framework change is needed — only this mapper + the editor.
         MeshPoints: section.MeshPoints?.Select(p => new ClipMeshPoint(p.X, p.Y)).ToArray());
 }

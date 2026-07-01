@@ -33,6 +33,16 @@ public sealed record ShowVideoPlacement(
     double CropBottom = 0,
     ClipOutputMappingSpec? VideoFx = null);
 
+/// <summary>One composition placement of a clip's video: which composition canvas (<paramref name="CompositionId"/>),
+/// which layer (<paramref name="LayerIndex"/>), and where/how the frame sits on it (<paramref name="Placement"/>).
+/// A cue may place the SAME decoded source onto several compositions/layers at once — picture-in-picture, the
+/// same feed in two regions, or mirrored to a second canvas — so <see cref="ShowClipBinding.GetPlacements"/>
+/// returns every placement and <c>PlayClipAsync</c> fans the one clip's video out to each (decoded once).</summary>
+public sealed record ShowClipPlacement(
+    string CompositionId,
+    int LayerIndex = 0,
+    ShowVideoPlacement? Placement = null);
+
 /// <summary>One audio output a clip plays on (GUI per-cue audio routing — a group of <c>CueAudioRoute</c>s to
 /// the same output line). Unlike a per-group <see cref="ShowAudioOutput"/>, this is carried on the clip so a
 /// cue plays on exactly its routed outputs. <see cref="ChannelMatrix"/> is the N→M <see cref="ChannelMap"/>
@@ -98,9 +108,37 @@ public sealed record ShowClipBinding(
     /// <summary>What happens when the clip reaches its (trimmed) end (GUI <c>MediaCueNode.EndBehavior</c>).</summary>
     public ClipEndBehavior EndBehavior { get; init; } = ClipEndBehavior.Stop;
 
+    /// <summary>Run the end-of-clip monitor purely off the reported <see cref="StartOffset"/>→duration window even
+    /// for a plain <see cref="ClipEndBehavior.Stop"/> with no trim/fade/loop. Set for a <em>held</em> source (a
+    /// rendered text or still cue) that never signals EOF on its own: the clip is stopped at its duration by the
+    /// time-based monitor instead of by source exhaustion, so a resize/live-edit re-read can't end it early.</summary>
+    public bool EndAtDuration { get; init; }
+
     /// <summary>Where/how this clip's video sits on its <see cref="CompositionId"/> canvas (GUI
     /// <c>CueVideoPlacement</c>). Null ⇒ full-canvas, opaque, Cover (the prior hardcoded placement).</summary>
     public ShowVideoPlacement? Placement { get; init; }
+
+    /// <summary>Composition placements <em>beyond</em> the primary (<see cref="CompositionId"/>/<see cref="LayerIndex"/>/
+    /// <see cref="Placement"/>). When set, the clip's one decoded video is fanned to every placement here as well as
+    /// the primary — each its own composition layer. Empty/null ⇒ the clip appears only on the primary composition.
+    /// Use <see cref="GetPlacements"/> for the layer-ordered effective set.</summary>
+    public IReadOnlyList<ShowClipPlacement>? ExtraPlacements { get; init; }
+
+    /// <summary>The layer-ordered effective set of composition placements for this clip: the primary
+    /// (<see cref="CompositionId"/>) plus any <see cref="ExtraPlacements"/>, sorted by layer index. Empty when the
+    /// clip targets no composition (audio-only). The one decoded source is fanned to every entry at commit time.</summary>
+    public IReadOnlyList<ShowClipPlacement> GetPlacements()
+    {
+        var primary = CompositionId is { } id ? new ShowClipPlacement(id, LayerIndex, Placement) : null;
+        if (ExtraPlacements is not { Count: > 0 })
+            return primary is null ? [] : [primary];
+        var all = new List<ShowClipPlacement>(ExtraPlacements.Count + 1);
+        if (primary is not null)
+            all.Add(primary);
+        all.AddRange(ExtraPlacements);
+        all.Sort(static (a, b) => a.LayerIndex.CompareTo(b.LayerIndex));
+        return all;
+    }
 
     /// <summary>Per-clip audio output routing (GUI per-cue <c>CueAudioRoute</c>s, one entry per output line).
     /// Non-empty plays on exactly these outputs; an empty list is explicitly silent; <see langword="null"/>

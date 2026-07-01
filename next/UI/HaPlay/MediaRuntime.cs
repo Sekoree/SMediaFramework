@@ -88,6 +88,10 @@ internal static class MediaRuntime
                 TryUse(b, static () => new NDIModule(), "NDI");
             else
                 Trace.LogInformation("MediaRuntime: NDI module skipped — {Reason}", RuntimeModules.NdiUnavailableReason);
+
+            // Text cues (NXT-06 cutover): a `text:` provider so the ShowSession path can play a rendered text cue
+            // through the registry like any other source (the old engine rendered it via a held frame directly).
+            b.AddDecoder(new Playback.TextDecoderProvider());
         });
 
         Trace.LogInformation("MediaRuntime ready — audio backends: {Backends}",

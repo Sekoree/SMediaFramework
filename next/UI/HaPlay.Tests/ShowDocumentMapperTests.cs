@@ -181,6 +181,61 @@ public class ShowDocumentMapperTests
     }
 
     [Fact]
+    public void NestedGroups_CollapseIntoOutermostGroupId()
+    {
+        // A top-level group is one transport/clock unit; nested subgroups must not split their cues
+        // into a separate SessionClock — every descendant carries the OUTERMOST group's id.
+        var deep = new MediaCueNode { Label = "Deep", Source = new FilePlaylistItem("/m/deep.mp4") };
+        var mid = new MediaCueNode { Label = "Mid", Source = new FilePlaylistItem("/m/mid.mp4") };
+        var inner = new CueGroupNode { Label = "Inner", Children = { deep } };
+        var outer = new CueGroupNode { Label = "Outer", Children = { mid, inner } };
+        var loose = new MediaCueNode { Label = "Loose", Source = new FilePlaylistItem("/m/loose.mp4") };
+
+        var doc = HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { outer, loose } });
+
+        Assert.Equal(new[] { "Mid", "Deep", "Loose" }, doc.Cues.Select(c => c.Label).ToArray());
+        // Both the direct child (Mid) and the nested grandchild (Deep) share the OUTER group's id.
+        Assert.Equal(outer.Id.ToString(), doc.Cues[0].GroupId);
+        Assert.Equal(outer.Id.ToString(), doc.Cues[1].GroupId);
+        Assert.NotEqual(inner.Id.ToString(), doc.Cues[1].GroupId);
+        // A top-level media cue outside any group stays ungrouped.
+        Assert.Null(doc.Cues[2].GroupId);
+    }
+
+    [Fact]
+    public void MultiplePlacements_MapToPrimaryPlusExtras_OrderedByLayer()
+    {
+        var compA = Guid.NewGuid();
+        var compB = Guid.NewGuid();
+        var cue = new MediaCueNode
+        {
+            Label = "PiP",
+            Source = new FilePlaylistItem("/m/v.mp4"),
+            VideoPlacements =
+            {
+                // Deliberately out of layer order + one unbound (empty composition) placement that must be dropped.
+                new CueVideoPlacement { CompositionId = compB, LayerIndex = 5, Opacity = 0.5 },
+                new CueVideoPlacement { CompositionId = Guid.Empty, LayerIndex = 0 },
+                new CueVideoPlacement { CompositionId = compA, LayerIndex = 1 },
+            },
+        };
+
+        var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }).Clips);
+
+        // Primary = lowest layer index (compA @1); the higher layer (compB @5) rides along in ExtraPlacements.
+        Assert.Equal(compA.ToString(), clip.CompositionId);
+        Assert.Equal(1, clip.LayerIndex);
+        var extra = Assert.Single(clip.ExtraPlacements!);
+        Assert.Equal(compB.ToString(), extra.CompositionId);
+        Assert.Equal(5, extra.LayerIndex);
+        Assert.Equal(0.5, extra.Placement!.Opacity, 3);
+
+        // GetPlacements() presents the full, layer-ordered fan-out set (unbound placement excluded).
+        var all = clip.GetPlacements();
+        Assert.Equal(new[] { compA.ToString(), compB.ToString() }, all.Select(p => p.CompositionId).ToArray());
+    }
+
+    [Fact]
     public void LoopEndBehavior_SetsLoopFlag()
     {
         var cue = new MediaCueNode

@@ -233,6 +233,11 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     public IReadOnlyList<TextAlignV> TextVAlignOptions { get; } = Enum.GetValues<TextAlignV>();
 
+    /// <summary>Installed system font family names for the text-cue font dropdown. The dropdown actually binds to
+    /// the selected node's <c>FontFamilyOptions</c> (which also pins the cue's current family, e.g. the embedded
+    /// "Inter" default); this stays for anything that wants the plain system list.</summary>
+    public IReadOnlyList<string> AvailableFontFamilies => FontCatalog.SystemFamilies;
+
     [ObservableProperty]
     private CueListEditorViewModel? _selectedCueList;
 
@@ -551,6 +556,32 @@ public partial class CuePlayerViewModel : ViewModelBase
             or nameof(CueNodeViewModel.MediaSourceItem)   // text restyle replaces the source -> re-render
             or nameof(CueNodeViewModel.AudioTrackIndex))  // track change is part of the prepared-cue key
             OnWatchedCueEdited();
+
+        // A text/style edit replaces the TextPlaylistItem source; if that cue is playing, re-render its frame in
+        // place so the change shows immediately (the deferred document rebuild otherwise only lands on the next
+        // fire — see MainViewModel's reload deferral, which keeps the running cue from being torn down mid-edit).
+        if (e.PropertyName is nameof(CueNodeViewModel.MediaSourceItem))
+            PushActiveTextUpdate();
+    }
+
+    private static readonly Microsoft.Extensions.Logging.ILogger LiveTextTrace =
+        S.Media.Core.Diagnostics.MediaDiagnostics.CreateLogger("HaPlay.LiveText");
+
+    private void PushActiveTextUpdate()
+    {
+        var watched = _preRollWatchedCue;
+        var isText = watched?.MediaSourceItem is TextPlaylistItem;
+        var isActive = watched is not null && _activeCueIds.Contains(watched.Id);
+        Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(LiveTextTrace,
+            "PushActiveTextUpdate: watched={Watched} isText={IsText} isActive={IsActive} hasCallback={HasCb} activeCount={Count}",
+            watched?.Id, isText, isActive, UpdateActiveCueTextCallback is not null, _activeCueIds.Count);
+
+        if (watched is { } cue
+            && isText
+            && UpdateActiveCueTextCallback is { } callback
+            && isActive
+            && cue.ToModel() is MediaCueNode model)
+            _ = callback(cue.Id, model);
     }
 
     private void OnWatchedCueRouteCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -958,6 +989,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// one for AutoFollow / transport-state purposes.</summary>
     private readonly HashSet<Guid> _activeCueIds = new();
 
+    /// <summary>True while any cue is currently playing (fired via <see cref="OnCueStarted"/>, not yet
+    /// <see cref="OnCueEnded"/>). The authoritative "is something playing" signal — used to defer the ShowSession
+    /// document rebuild on an in-place edit so it never stops a running cue (unlike a clock's <c>IsRunning</c>,
+    /// which is unreliable for a video-only held/text clip).</summary>
+    public bool HasActiveCues => _activeCueIds.Count > 0;
+
     /// <summary>Rows visible in the right-side Now Playing panel. Maintained by
     /// <see cref="OnCueStarted"/> / <see cref="OnCueEnded"/>; their progress fields update via
     /// <see cref="OnCueProgress"/>.</summary>
@@ -1097,6 +1134,10 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host callback for reconciling the selected cue's running audio routes after route
     /// row edits. No-op in tests or when the cue is not playing.</summary>
     public Func<Guid, IReadOnlyList<CueAudioRoute>, Task>? UpdateActiveCueAudioRoutesCallback { get; set; }
+
+    /// <summary>Host callback to live-re-render a playing text cue after a text/style edit (so it updates in
+    /// place instead of only on the next fire). No-op in tests or when the cue is not playing.</summary>
+    public Func<Guid, MediaCueNode, Task>? UpdateActiveCueTextCallback { get; set; }
 
     /// <summary>Host callback — live-applies an output mapping (warp sections) to a running
     /// composition: (compositionId, outputLineId, mapping). No-op when the composition isn't live.</summary>

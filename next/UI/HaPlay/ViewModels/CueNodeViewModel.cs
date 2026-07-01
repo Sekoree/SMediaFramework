@@ -90,12 +90,17 @@ public sealed partial class CueNodeViewModel : ObservableObject
         OnPropertyChanged(nameof(IsImageCue));
         OnPropertyChanged(nameof(TextContent));
         OnPropertyChanged(nameof(TextFontFamily));
+        OnPropertyChanged(nameof(FontFamilyOptions));
+        OnPropertyChanged(nameof(TextBounds));
         OnPropertyChanged(nameof(TextFontSizePx));
         OnPropertyChanged(nameof(TextBold));
         OnPropertyChanged(nameof(TextItalic));
         OnPropertyChanged(nameof(TextColorHex));
         OnPropertyChanged(nameof(TextBackgroundHex));
         OnPropertyChanged(nameof(TextOutlineHex));
+        OnPropertyChanged(nameof(TextColor));
+        OnPropertyChanged(nameof(TextBackgroundColor));
+        OnPropertyChanged(nameof(TextOutlineColor));
         OnPropertyChanged(nameof(TextOutlineWidthPx));
         OnPropertyChanged(nameof(TextHAlign));
         OnPropertyChanged(nameof(TextVAlign));
@@ -146,6 +151,17 @@ public sealed partial class CueNodeViewModel : ObservableObject
         set { if (TextSource is { } t && t.FontFamily != value && !string.IsNullOrWhiteSpace(value)) MutateText(_ => _ with { FontFamily = value }); }
     }
 
+    /// <summary>Font families for the dropdown: the installed system fonts plus this cue's current family pinned at
+    /// the top (so the embedded "Inter" default — which isn't an OS system font — still shows and stays selected).</summary>
+    public IReadOnlyList<string> FontFamilyOptions => FontCatalog.WithCurrent(TextFontFamily);
+
+    /// <summary>The tight bounding box of this text cue's rendered text, as fractions (0..1) of its canvas — for
+    /// the placement editor to outline the actual text extent inside the placed frame. Null for a non-text cue.</summary>
+    public Avalonia.Rect? TextBounds =>
+        TextSource is { } t && HaPlay.Playback.TextFrameRenderer.MeasureNormalizedBounds(t) is { } b
+            ? new Avalonia.Rect(b.X, b.Y, b.W, b.H)
+            : null;
+
     public double TextFontSizePx
     {
         get => TextSource?.FontSizePx ?? 96;
@@ -182,6 +198,27 @@ public sealed partial class CueNodeViewModel : ObservableObject
         set { if (TextSource is { } t) MutateText(_ => _ with { OutlineArgb = ParseHex(value, t.OutlineArgb) }); }
     }
 
+    // Avalonia.Media.Color views over the ARGB fields for the ColorPicker controls (kept in sync with the *Hex
+    // strings, which stay for scripting/round-trip). A no-op guard avoids a set→render loop when the picker
+    // re-emits the same colour.
+    public Avalonia.Media.Color TextColor
+    {
+        get => ToColor(TextSource?.ColorArgb ?? 0xFFFFFFFF);
+        set { if (TextSource is { } t && FromColor(value) != t.ColorArgb) MutateText(_ => _ with { ColorArgb = FromColor(value) }); }
+    }
+
+    public Avalonia.Media.Color TextBackgroundColor
+    {
+        get => ToColor(TextSource?.BackgroundArgb ?? 0);
+        set { if (TextSource is { } t && FromColor(value) != t.BackgroundArgb) MutateText(_ => _ with { BackgroundArgb = FromColor(value) }); }
+    }
+
+    public Avalonia.Media.Color TextOutlineColor
+    {
+        get => ToColor(TextSource?.OutlineArgb ?? 0xFF000000);
+        set { if (TextSource is { } t && FromColor(value) != t.OutlineArgb) MutateText(_ => _ with { OutlineArgb = FromColor(value) }); }
+    }
+
     public double TextOutlineWidthPx
     {
         get => TextSource?.OutlineWidthPx ?? 0;
@@ -207,6 +244,12 @@ public sealed partial class CueNodeViewModel : ObservableObject
     }
 
     private static string ToHex(uint argb) => $"#{argb:X8}";
+
+    private static Avalonia.Media.Color ToColor(uint argb) =>
+        Avalonia.Media.Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
+
+    private static uint FromColor(Avalonia.Media.Color c) =>
+        ((uint)c.A << 24) | ((uint)c.R << 16) | ((uint)c.G << 8) | c.B;
 
     private static uint ParseHex(string? value, uint fallback)
     {

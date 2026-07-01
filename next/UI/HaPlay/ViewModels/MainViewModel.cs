@@ -68,6 +68,7 @@ public partial class MainViewModel : ViewModelBase
     private Dictionary<Guid, string> _cueGroupByCueId = new();
     private readonly Dictionary<string, CueShowActiveState> _cueShowActiveByGroup = new(StringComparer.Ordinal);
     private DispatcherTimer? _cueShowProgressPoll;
+    private DispatcherTimer? _soundboardProgressPoll;
 
     /// <summary>Per-group active-cue state for the re-back progress poll. <see cref="ObservedRunning"/> guards the
     /// warmup race — the play clock takes a moment to start, so the poll must not treat the first not-running tick
@@ -301,6 +302,52 @@ public partial class MainViewModel : ViewModelBase
                 _cueShowSession!.SeekManyAsync(
                     positions.Select(p => (_cueGroupByCueId.GetValueOrDefault(p.CueId, ShowSession.DefaultGroup), p.Position)).ToList()));
             CuePlayer.CancelCueCallback = id => GuardedCueShowOp("cancel", () => _cueShowSession!.StopCueAsync(id.ToString()));
+            // Cue preview (audition on the preview/headphone device) goes through ShowSession too — otherwise it was
+            // the last cue callback still driving the now-inactive engine under the gate. The PortAudio backend takes
+            // the global device index as its device id (see CuePreviewSession), so the preview device selection
+            // carries straight through; PreviewEnded flows back to the UI like the engine's event did.
+            CuePlayer.PreviewCueCallback = async (cue, _) =>
+            {
+                try
+                {
+                    await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
+                    var deviceId = CuePlayer.PreviewAudioDeviceIndex?.ToString(CultureInfo.InvariantCulture);
+                    return await _cueShowSession!.PreviewCueAsync(cue.Id.ToString(), deviceId).ConfigureAwait(false)
+                        ? null
+                        : "cue has no ShowSession media binding to preview";
+                }
+                catch (Exception ex)
+                {
+                    return ex.Message;
+                }
+            };
+            CuePlayer.StopPreviewCallback = () => _cueShowSession!.StopPreviewAsync();
+            _cueShowSession.PreviewEnded += id =>
+            {
+                if (Guid.TryParse(id, out var previewCueId))
+                    Dispatcher.UIThread.Post(() => CuePlayer.OnPreviewEnded(previewCueId));
+            };
+            // Drive the cue-list pre-roll "warm/ready" badges from the session's standby (mirrors the engine's
+            // PreparedCuesChanged wiring) — otherwise a warmed cue never showed Ready under the gate.
+            _cueShowSession.PreparedCuesChanged += statuses =>
+            {
+                var warm = new HashSet<Guid>();
+                var mapped = new List<Playback.CuePreparationStatus>(statuses.Count);
+                foreach (var s in statuses)
+                {
+                    if (!Guid.TryParse(s.Key.Id, out var cueId))
+                        continue; // non-cue keys (e.g. "preview") aren't cue-list rows
+                    var state = MapClipPreparationState(s.State);
+                    mapped.Add(new Playback.CuePreparationStatus(cueId, state, s.Error));
+                    if (state == Playback.PreparedCueState.Ready)
+                        warm.Add(cueId);
+                }
+                Dispatcher.UIThread.Post(() =>
+                {
+                    CuePlayer.OnPreRollCacheChanged(warm);
+                    CuePlayer.OnPreparedCueStatesChanged(mapped);
+                });
+            };
             CuePlayer.MediaCueExecutor = async (cue, _) =>
             {
                 try
@@ -335,31 +382,39 @@ public partial class MainViewModel : ViewModelBase
             };
             CuePlayer.MediaCueGroupExecutor = async (cues, _) =>
             {
-                foreach (var cue in cues)
+                // Flush any pending graph edits ONCE, then fire the whole group through the start barrier so a
+                // simultaneous cue group opens its decoders in parallel and starts in sync (parity with the engine's
+                // ExecuteGroupAsync) instead of staggered by each cue's open in turn.
+                await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
+                var bound = cues.Where(c => _cueShowBoundCueIds.Contains(c.Id)).ToList();
+                foreach (var unbound in cues.Where(c => !_cueShowBoundCueIds.Contains(c.Id)))
+                    Trace.LogError("HaPlay: group cue '{Label}' ({Id}) has no current ShowSession media binding",
+                        unbound.Label, unbound.Id);
+                if (bound.Count == 0)
+                    return null;
+
+                IReadOnlyList<CueExecutionStatus> statuses;
+                try
                 {
-                    try
-                    {
-                        await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
-                        if (!_cueShowBoundCueIds.Contains(cue.Id))
-                        {
-                            Trace.LogError(
-                                "HaPlay: group cue '{Label}' ({Id}) has no current ShowSession media binding",
-                                cue.Label, cue.Id);
-                            continue;
-                        }
-                        var status = await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
-                        if (status == CueExecutionStatus.Fired)
-                            await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
-                        else
-                            Trace.LogWarning(
-                                "HaPlay: group cue '{Label}' ({Id}) did not fire — status {Status}: {Detail}",
-                                cue.Label, cue.Id, status,
-                                await DescribeCueShowFailureAsync(cue.Id, status).ConfigureAwait(false));
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.LogError(ex, "HaPlay: firing group cue '{Label}' ({Id}) through ShowSession failed", cue.Label, cue.Id);
-                    }
+                    statuses = await _cueShowSession!.FireCuesAsync(bound.Select(c => c.Id.ToString()).ToList())
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    Trace.LogError(ex, "HaPlay: firing cue group through ShowSession failed");
+                    return null;
+                }
+
+                for (var i = 0; i < bound.Count; i++)
+                {
+                    var cue = bound[i];
+                    if (statuses[i] == CueExecutionStatus.Fired)
+                        await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
+                    else
+                        Trace.LogWarning(
+                            "HaPlay: group cue '{Label}' ({Id}) did not fire — status {Status}: {Detail}",
+                            cue.Label, cue.Id, statuses[i],
+                            await DescribeCueShowFailureAsync(cue.Id, statuses[i]).ConfigureAwait(false));
                 }
                 return null;
             };
@@ -375,6 +430,35 @@ public partial class MainViewModel : ViewModelBase
                 if (!updated)
                     Trace.LogWarning("HaPlay: live placement update missed cue {Cue} / composition {Composition}",
                         cueId, placement.CompositionId);
+            };
+            // The audio counterpart of the live placement edit: re-apply the active cue's audio routing to the
+            // running clip (was left on the now-inactive engine, so live level/channel tweaks silently no-op'd).
+            // Mapped through the same MapAudioRoutes the fire path uses so the clip{i} outputs line up.
+            CuePlayer.UpdateActiveCueAudioRoutesCallback = async (cueId, routes) =>
+            {
+                var mapped = HaPlayShowMapper.MapActiveAudioRoutes(routes, OutputManagement.DefinitionsSnapshot);
+                var applied = await _cueShowSession!.ApplyActiveAudioRoutesAsync(cueId.ToString(), mapped)
+                    .ConfigureAwait(false);
+                if (!applied)
+                    Trace.LogWarning("HaPlay: live audio-route update missed cue {Cue} (not the active clip)", cueId);
+            };
+            // Live-re-render a playing text cue on a text/style edit: render the new frame and swap it onto the
+            // running clip's held source in place (IReplaceableFrameSource), so the change shows immediately instead
+            // of only on the next fire. No-op when the cue isn't the active clip (the frame is disposed by the session).
+            CuePlayer.UpdateActiveCueTextCallback = async (cueId, model) =>
+            {
+                if (model.Source is not HaPlay.Models.TextPlaylistItem textItem)
+                    return;
+                var frame = TextFrameRenderer.Render(textItem, new Rational(30, 1));
+                if (frame is null)
+                {
+                    Trace.LogWarning("HaPlay: live text update cue {Cue} — render returned null", cueId);
+                    return;
+                }
+                var w = frame.Format.Width;
+                var h = frame.Format.Height;
+                var applied = await _cueShowSession!.UpdateActiveClipFrameAsync(cueId.ToString(), frame).ConfigureAwait(false);
+                Trace.LogInformation("HaPlay: live text update cue {Cue} — applied={Applied} frame={W}x{H}", cueId, applied, w, h);
             };
             // An idle cue's placement edit only lives in the model; the show document is rebuilt at (re)load,
             // not on placement edits. Mark it stale (flag only — no debounced auto-reload that would interrupt a
@@ -394,9 +478,32 @@ public partial class MainViewModel : ViewModelBase
                     "ShowSession composition mapping update");
                 return true;
             };
-            // Calibration-grid injection has not yet moved to ShowSession. Do not call the inactive legacy
-            // engine and claim success; the editor can accurately leave the toggle off.
-            CuePlayer.SetCompositionTestPatternCallback = (_, _, _, _) => false;
+            // Calibration-grid injection on the ShowSession path: render the grid (masked to the visible/binding
+            // mapping — the host owns the masking) and hold it in a top-most composition layer via ShowSession.
+            CuePlayer.SetCompositionTestPatternCallback = (compositionId, outputLineId, mapping, show) =>
+            {
+                if (_cueShowSession is null)
+                    return false;
+                if (!show)
+                {
+                    FireAndLog(_cueShowSession.SetCompositionTestPatternAsync(compositionId.ToString(), null),
+                        "ShowSession test-pattern hide");
+                    return true;
+                }
+
+                var model = CuePlayer.SelectedCueList?.ToModel();
+                if (model?.Compositions.FirstOrDefault(c => c.Id == compositionId) is not { } comp)
+                    return false;
+                var canvas = new S.Media.Core.Video.VideoFormat(
+                    comp.Width, comp.Height, S.Media.Core.Video.PixelFormat.Bgra32,
+                    new Rational(comp.FrameRateNum, comp.FrameRateDen));
+                var bindingMapping = model.VideoOutputs
+                    .FirstOrDefault(b => b.CompositionId == compositionId && b.OutputLineId == outputLineId)?.Mapping;
+                var frame = MappingTestPattern.Render(canvas, mapping ?? bindingMapping);
+                FireAndLog(_cueShowSession.SetCompositionTestPatternAsync(compositionId.ToString(), frame),
+                    "ShowSession test-pattern show");
+                return true;
+            };
 
             // Soundboard voices on the same session (task #10): re-back the soundboard transport onto the
             // ShowSession voice subsystem (a streaming player per tile on its routed output line).
@@ -410,6 +517,7 @@ public partial class MainViewModel : ViewModelBase
                     _soundboardFadeMs[req.TileId] = req.FadeOutMs;
                     await _cueShowSession!.FireVoiceAsync(req.TileId.ToString(), req.FilePath, device, (float)req.Volume);
                     Soundboard.OnSoundStarted(req.TileId);
+                    StartSoundboardProgressPoll(); // drive per-tile countdown from the session's voice playheads
                     return null;
                 }
                 catch (Exception ex)
@@ -543,6 +651,20 @@ public partial class MainViewModel : ViewModelBase
     private void OnCueReloadDebounceTick(object? sender, EventArgs e)
     {
         _cueReloadDebounce?.Stop();
+        // Rebuilding the document swaps the graph and disposes the active compositions, which STOPS any running
+        // cue. Doing that on every in-place edit ended a playing cue the moment its text/font/routes changed. While
+        // something is playing, defer: leave the graph marked dirty (EnsureCueShowSessionCurrentAsync rebuilds it
+        // before the next fire), so the edit lands on the next GO instead of interrupting the running cue. A live
+        // text cue additionally re-renders in place (UpdateActiveCueTextCallback) so its change shows immediately.
+        // Use the VM's authoritative active-cue set, NOT the session clock's IsRunning: a video-only text/held clip
+        // may report IsRunning=false while clearly on screen, which let the rebuild through and stopped the cue on
+        // every edit. HasActiveCues is true from fire until the cue actually ends.
+        if (CuePlayer.HasActiveCues)
+        {
+            _cueReloadDebounce?.Start(); // re-check shortly; reload once playback stops (keeps the edit pending)
+            return;
+        }
+
         ReloadCueShowSession();
     }
 
@@ -565,6 +687,17 @@ public partial class MainViewModel : ViewModelBase
         if (_cueShowGraphDirty)
             throw new InvalidOperationException("The ShowSession cue graph could not be refreshed before firing.");
     }
+
+    /// <summary>Maps the session standby's clip-preparation state to the cue-list's badge state. The two enums are
+    /// value-identical today, but a switch keeps them decoupled.</summary>
+    private static Playback.PreparedCueState MapClipPreparationState(ClipPreparationState state) => state switch
+    {
+        ClipPreparationState.Preparing => Playback.PreparedCueState.Preparing,
+        ClipPreparationState.Ready => Playback.PreparedCueState.Ready,
+        ClipPreparationState.Stale => Playback.PreparedCueState.Stale,
+        ClipPreparationState.Failed => Playback.PreparedCueState.Failed,
+        _ => Playback.PreparedCueState.Idle,
+    };
 
     /// <summary>Runs a re-back transport op (stop/pause/seek/cancel) and logs any failure, so a fault surfaces in
     /// the console/log instead of only as a UI notification (or being silently swallowed by the caller).</summary>
@@ -674,7 +807,11 @@ public partial class MainViewModel : ViewModelBase
             var byGroup = snapshot.ToDictionary(s => s.GroupId, StringComparer.Ordinal);
             foreach (var (group, st) in _cueShowActiveByGroup.ToArray())
             {
-                if (byGroup.TryGetValue(group, out var s) && s.IsRunning)
+                // Use IsActive (the group still holds a clip), NOT IsRunning (clock advancing): a video-only
+                // held/text clip is on screen with IsRunning=false, and keying end-detection off IsRunning marked
+                // such a cue "ended" after the grace, which cleared now-playing AND let an edit's document rebuild
+                // through (it tore the clip down abruptly). IsActive stays true until the clip is really released.
+                if (byGroup.TryGetValue(group, out var s) && s.IsActive)
                 {
                     st.ObservedRunning = true;
                     st.NotRunningTicks = 0;
@@ -682,9 +819,9 @@ public partial class MainViewModel : ViewModelBase
                     continue;
                 }
 
-                // Not running. End it only if it was actually seen running (so it really ended), OR it never
-                // started within the warmup grace (~3s at 200ms) — the latter is logged as it indicates a clip
-                // that committed but whose play clock never advanced (e.g. a dead/contended audio device).
+                // No active clip. End it only if it was actually seen active (so it really ended), OR it never
+                // committed within the warmup grace (~3s at 200ms) — the latter is logged as it indicates a clip
+                // that never became active (e.g. a failed open).
                 if (st.ObservedRunning || ++st.NotRunningTicks > 15)
                 {
                     if (!st.ObservedRunning)
@@ -702,6 +839,41 @@ public partial class MainViewModel : ViewModelBase
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "HaPlay: cue ShowSession progress poll failed");
+        }
+    }
+
+    /// <summary>Starts (or re-arms) the poll that drives per-tile soundboard countdowns from the session's voice
+    /// playheads — the engine had a <c>SoundProgress</c> event; the re-back has none, so we poll instead.</summary>
+    private void StartSoundboardProgressPoll()
+    {
+        _soundboardProgressPoll ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _soundboardProgressPoll.Tick -= OnSoundboardProgressPollTick;
+        _soundboardProgressPoll.Tick += OnSoundboardProgressPollTick;
+        _soundboardProgressPoll.Start();
+    }
+
+    private async void OnSoundboardProgressPollTick(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (_cueShowSession is null)
+            {
+                _soundboardProgressPoll?.Stop();
+                return;
+            }
+            var voices = await _cueShowSession.GetVoiceProgressAsync().ConfigureAwait(true);
+            if (voices.Count == 0)
+            {
+                _soundboardProgressPoll?.Stop();
+                return;
+            }
+            foreach (var v in voices)
+                if (Guid.TryParse(v.VoiceId, out var tileId))
+                    Soundboard.OnSoundProgress(new SoundboardSoundProgress(tileId, v.Position, v.Duration, null));
+        }
+        catch (Exception ex)
+        {
+            Trace.LogDebug(ex, "HaPlay: soundboard voice-progress poll");
         }
     }
 
@@ -1661,7 +1833,12 @@ public partial class MainViewModel : ViewModelBase
                     // legacy CuePlaybackEngine pre-roll here opened a second, differently-configured player
                     // (often video-only when cue audio routes existed), obscured diagnostics, and could leave the
                     // actual ShowSession graph stale. Flush pending edits first, then warm its upcoming cue(s).
-                    await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
+                    // BUT NOT while a cue is playing: the flush is a full LoadDocument that rebuilds the graph and
+                    // tears down the running cue — which is exactly what stopped a playing text cue on every edit
+                    // (pre-roll refresh fires per edit). While playing, the edit lands live (the frame swap) or on
+                    // the next fire's own flush; warm the current graph as-is.
+                    if (!CuePlayer.HasActiveCues)
+                        await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
                     await showSession.WarmUpcomingAsync(count: Math.Max(1, engineTargets.Count)).ConfigureAwait(false);
                 }
                 else

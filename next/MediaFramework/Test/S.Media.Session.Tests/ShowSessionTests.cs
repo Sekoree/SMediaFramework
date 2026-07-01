@@ -480,6 +480,42 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task ApplyActiveAudioRoutesAsync_ReAppliesRoutesToTheActiveClip()
+    {
+        // NXT-06 live audio-route edit: a cue with per-clip audio routes attaches clip{i} outputs at fire; the
+        // live edit re-applies each route to its clip{i} in place (via AddRoute's legacy id — NOT ApplyMatrix,
+        // which would double it). Asserts the active-clip lookup + apply path; the audible result is HW-verified.
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One")],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://1")
+                {
+                    AudioRoutes = [new ShowClipAudioRoute(DeviceId: "hw:0", ChannelMatrix: [0, 1], Gain: 1f)],
+                },
+            ],
+            Compositions: [], Outputs: [], Routes: [], Devices: []);
+        await session.LoadDocumentAsync(doc);
+        await session.GoAsync(); // cue1 active with its clip0 output attached
+
+        var updated = new[] { new ShowClipAudioRoute(DeviceId: "hw:0", ChannelMatrix: [1, 0], Gain: 0.5f) };
+        Assert.True(await session.ApplyActiveAudioRoutesAsync("cue1", updated)); // found + re-applied
+        Assert.False(await session.ApplyActiveAudioRoutesAsync("nope", updated)); // not the active clip
+
+        // A count change (an extra route vs the one live clip output) is not mis-patched live — it still returns
+        // true (deferred to the next fire) rather than throwing or writing to the wrong output.
+        var twoRoutes = new[]
+        {
+            new ShowClipAudioRoute(DeviceId: "hw:0", ChannelMatrix: [0, 1], Gain: 1f),
+            new ShowClipAudioRoute(DeviceId: "hw:1", ChannelMatrix: [0, 1], Gain: 1f),
+        };
+        Assert.True(await session.ApplyActiveAudioRoutesAsync("cue1", twoRoutes));
+    }
+
+    [Fact]
     public async Task PreviewCueAsync_StartsForLoadedCue_StopCleanlyReleases()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), new RecordingAudioBackend());
@@ -780,6 +816,40 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task ClipWithMultiplePlacements_FansVideoToEveryComposition()
+    {
+        // A cue may place its ONE decoded source onto several compositions at once (PiP, or mirrored to a second
+        // canvas). Each placement gets its own composition layer fed by the same clip, and each distinct
+        // composition is clock-mastered to the group — so BOTH canvases master, not just the primary.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "a")
+                {
+                    ExtraPlacements = [new ShowClipPlacement("b", 0)],
+                },
+            ],
+            Compositions:
+            [
+                new ShowComposition("a", "A", 320, 240, 30, 1),
+                new ShowComposition("b", "B", 320, 240, 30, 1),
+            ],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+
+        Assert.False((await session.GetCompositionStatsAsync("a"))!.Value.ClockMastered);
+        Assert.False((await session.GetCompositionStatsAsync("b"))!.Value.ClockMastered);
+
+        await session.GoAsync();
+
+        Assert.True((await session.GetCompositionStatsAsync("a"))!.Value.ClockMastered);
+        Assert.True((await session.GetCompositionStatsAsync("b"))!.Value.ClockMastered); // fanned to the second canvas
+    }
+
+    [Fact]
     public async Task CompositionBoundClip_UsesOpenedVideoDimensionsForFullCanvasPlacement()
     {
         // The synthetic source is 4x4 while the composition is 8x8. A full-canvas placement must scale the
@@ -1032,6 +1102,35 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task FireCuesAsync_FiresEveryCueInTheGroup_Together()
+    {
+        // NXT-04/06: the fire-time start barrier fires a simultaneous cue group together (opens overlap), so both
+        // cues end up active — vs a sequential loop that starts them staggered. Both groups run after one call.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoGroupAudioCues());
+
+        var statuses = await session.FireCuesAsync(["cue1", "cue2"]);
+        Assert.Equal(2, statuses.Count);
+        Assert.All(statuses, s => Assert.Equal(CueExecutionStatus.Fired, s));
+
+        static bool Running(IReadOnlyList<TransportSnapshot> s, string g) => s.Single(x => x.GroupId == g).IsRunning;
+        var snap = await session.SnapshotAsync();
+        Assert.True(Running(snap, "A"));
+        Assert.True(Running(snap, "B"));
+    }
+
+    [Fact]
+    public async Task FireCuesAsync_SingleCue_DelegatesToFireCue()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoGroupAudioCues());
+
+        var statuses = await session.FireCuesAsync(["cue1"]);
+        Assert.Equal([CueExecutionStatus.Fired], statuses);
+        Assert.True((await session.SnapshotAsync()).Single(x => x.GroupId == "A").IsRunning);
+    }
+
+    [Fact]
     public async Task SeekManyAsync_SeeksEachTargetedGroup_BehindOneBarrier()
     {
         // NXT-04: the group-seek barrier seeks several groups together. Both groups must land at their target — a
@@ -1078,6 +1177,79 @@ public sealed class ShowSessionTests
 
         Assert.True(Pos(snap, "A") >= TimeSpan.FromMilliseconds(450), $"group A did not seek forward (was {Pos(snap, "A")})");
         Assert.True(Pos(snap, "B") >= TimeSpan.FromMilliseconds(450), $"group B did not seek forward (was {Pos(snap, "B")})");
+    }
+
+    [Fact]
+    public async Task EndAtDuration_StopsAHeldClip_ViaTheMonitor_WithoutSourceEof()
+    {
+        // NXT-06 text cue: a held (text/still) source never signals EOF, so EndAtDuration ends the clip at its
+        // reported duration via the time-based monitor. This is what keeps a resize/live-edit re-read from ending
+        // it early — the clip stops on the clock, not on how many frames got read.
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "Text")],
+            Clips:
+            [
+                new ShowClipBinding("c", "held://x", CompositionId: "screen")
+                {
+                    EndAtDuration = true,
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            UnboundedHeldProvider.Registry(TimeSpan.FromMilliseconds(400)),
+            videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2)); // playing (source never EOFs)
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while ((await session.SnapshotAsync()).Single().IsRunning && DateTime.UtcNow < deadline)
+            await Task.Delay(25);
+
+        var snap = Assert.Single(await session.SnapshotAsync());
+        Assert.False(snap.IsRunning);                        // stopped at ~its duration by the monitor
+        Assert.Equal(TimeSpan.Zero, snap.ClipDuration);      // released (not merely frozen)
+    }
+
+    [Fact]
+    public async Task Snapshot_IsActive_WhileAHeldClipIsUp()
+    {
+        // A held (text/still) clip is on screen with a clock that may report IsRunning=false. The snapshot must
+        // still say IsActive=true so the UI's end-detection poll doesn't declare it ended (which cleared now-playing
+        // and let an edit's document rebuild abruptly tear it down).
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "Held")],
+            Clips:
+            [
+                new ShowClipBinding("c", "held://x", CompositionId: "screen")
+                {
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            UnboundedHeldProvider.Registry(TimeSpan.FromSeconds(30)), // long — stays up for the assertion
+            videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.True(Assert.Single(await session.SnapshotAsync()).IsActive);
     }
 
     private sealed class PixelRecordingVideoOutput : IVideoOutput

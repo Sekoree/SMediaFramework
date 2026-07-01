@@ -458,7 +458,8 @@
                   <controls:CompositionPlacementCanvas
                       Placements="{Binding VisibleVideoPlacements}"
                       SelectedPlacement="{Binding SelectedVideoPlacement, Mode=TwoWay}"
-                      AspectRatio="{Binding PlacementCanvasAspect}" />
+                      AspectRatio="{Binding PlacementCanvasAspect}"
+                      TextBounds="{Binding SelectedCueNode.TextBounds}" />
                 </Border>
                 <TextBlock Opacity="0.55" FontSize="11" TextWrapping="Wrap"
                            Text="Drag a layer to move it. Drag the bottom-right handle to resize; hold Shift to resize without locking the aspect ratio." />
@@ -595,7 +596,15 @@
                          Text="{Binding SelectedCueNode.TextContent, Mode=TwoWay}" />
                 <Grid ColumnDefinitions="Auto,*,Auto,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="6">
                   <TextBlock Grid.Row="0" Grid.Column="0" Text="Font family" VerticalAlignment="Center" Opacity="0.7" />
-                  <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding SelectedCueNode.TextFontFamily, Mode=TwoWay}" />
+                  <ComboBox Grid.Row="0" Grid.Column="1" HorizontalAlignment="Stretch"
+                            ItemsSource="{Binding SelectedCueNode.FontFamilyOptions}"
+                            SelectedItem="{Binding SelectedCueNode.TextFontFamily, Mode=TwoWay}">
+                    <ComboBox.ItemTemplate>
+                      <DataTemplate>
+                        <TextBlock Text="{Binding}" FontFamily="{Binding}" />
+                      </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                  </ComboBox>
                   <CheckBox Grid.Row="0" Grid.Column="2" Content="Bold" IsChecked="{Binding SelectedCueNode.TextBold, Mode=TwoWay}" />
                   <CheckBox Grid.Row="0" Grid.Column="3" Content="Italic" IsChecked="{Binding SelectedCueNode.TextItalic, Mode=TwoWay}" />
                   <TextBlock Grid.Row="1" Grid.Column="0" Text="Font size" VerticalAlignment="Center" Opacity="0.7" />
@@ -605,11 +614,11 @@
                 </Grid>
                 <WrapPanel ItemSpacing="8" LineSpacing="6">
                   <TextBlock Text="Text color" VerticalAlignment="Center" Opacity="0.7" />
-                  <TextBox Width="110" Text="{Binding SelectedCueNode.TextColorHex, Mode=TwoWay}" />
+                  <ColorPicker Color="{Binding SelectedCueNode.TextColor, Mode=TwoWay}" />
                   <TextBlock Text="Background color" VerticalAlignment="Center" Opacity="0.7" />
-                  <TextBox Width="110" Text="{Binding SelectedCueNode.TextBackgroundHex, Mode=TwoWay}" />
+                  <ColorPicker Color="{Binding SelectedCueNode.TextBackgroundColor, Mode=TwoWay}" />
                   <TextBlock Text="Outline color" VerticalAlignment="Center" Opacity="0.7" />
-                  <TextBox Width="110" Text="{Binding SelectedCueNode.TextOutlineHex, Mode=TwoWay}" />
+                  <ColorPicker Color="{Binding SelectedCueNode.TextOutlineColor, Mode=TwoWay}" />
                   <NumericUpDown Width="92" Minimum="0" Maximum="40" Increment="1" FormatString="0"
                                  Value="{Binding SelectedCueNode.TextOutlineWidthPx, Mode=TwoWay}" />
                 </WrapPanel>

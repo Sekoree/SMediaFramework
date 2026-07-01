@@ -843,8 +843,162 @@ These remain open by design; each is a substantial effort the review itself sequ
 - **NXT-03 — DONE.** Fires run off the serial dispatcher (setup→open→commit with a fire-lock + show-generation guard), STOP/LOAD/DISPOSE preempt the pre-wait and the (now-cancellable) media open, queries are lock-free (NXT-16), and a fire straddling a reload discards its stale clip. The remaining theoretical gap is moving the per-clip *monitor/fade background loops* off their own `Task.Run` into a unified operation scheduler — they already run off the dispatcher and are cancelled on clip replacement, so this is a tidiness refactor, not a safety gap.
 - **NXT-06 (cutover) — readiness audited; partially progressed.** The `HAPLAY_USE_SHOWSESSION=1` path already re-backs media-player file playback, cue transport, soundboard, **and cue video-output realization** (cue video fans out to the OutputManagement NDI/SDL/local lines — this was already wired and is now regression-tested; see Fixed). The remaining parity gaps before the old `CuePlaybackEngine`/`SoundboardEngine` can be **deleted**: (a) **live-input cues** — *now wired* (2026-06-30): NDI input already had its `ndi:` registry provider, and the PortAudio side now has a `padev:` capture provider (`PortAudioCaptureDecoderProvider`, registered by `PortAudioModule`) so a `padev://<device>` cue opens a live input through the registry like any other source; the cue mapper already produced these URIs. Pure scheme/name/format resolution is unit-tested (`S.Media.PortAudio.Tests`, new — also closes the NXT-14 "no PortAudio test project" gap); the actual capture stream is a hardware-soak path. (b) **logo/hold idle slate** in the cue mapper — still open. (c) then flip the default + soak on hardware + delete the engines. The capture-open path and the final flip need hardware verification.
 - **NXT-09 / NXT-10** — the plugin-host feature set and first-class GPU surface layers. Gate 3–4 work; the review advises deferring the plugin host until the YouTube/MMD design exercises the ABI.
-- **NXT-04 (remainder)** — session compositions now follow the group clock (see Fixed). *Progress (2026-07-01):* a first **multi-group transport barrier** landed — `ShowSession.SeekManyAsync` seeks several groups behind one shared epoch (pause-freeze → seek-all → resume-together, the old-engine `group_seek_barrier` pattern) and `SetAllPausedAsync` pauses/resumes every active group together. Both are wired into HaPlay's cue transport (the multi-cue seek no longer loops one dispatcher hop per group, and **pause now hits every group, not just the default one** — a real multi-group cutover bug, since stop already did all groups). Headless tests: `SetAllPausedAsync_PausesAndResumesEveryActiveGroup`, `SeekManyAsync_SeeksEachTargetedGroup_BehindOneBarrier`. What remains: the full per-group timeline/discontinuity contract threaded through every audio renderer / live source / output presentation, the multi-source **start** barrier (shared start epoch at fire time), and toleranced A/V + output-skew tests over seek/pause/loop on real hardware.
+- **NXT-04 (remainder)** — session compositions now follow the group clock (see Fixed). *Progress (2026-07-01):* a first **multi-group transport barrier** landed — `ShowSession.SeekManyAsync` seeks several groups behind one shared epoch (pause-freeze → seek-all → resume-together, the old-engine `group_seek_barrier` pattern) and `SetAllPausedAsync` pauses/resumes every active group together. Both are wired into HaPlay's cue transport (the multi-cue seek no longer loops one dispatcher hop per group, and **pause now hits every group, not just the default one** — a real multi-group cutover bug, since stop already did all groups). Headless tests: `SetAllPausedAsync_PausesAndResumesEveryActiveGroup`, `SeekManyAsync_SeeksEachTargetedGroup_BehindOneBarrier`. *Also (2026-07-01):* the **fire-time start barrier** — `ShowSession.FireCuesAsync` fires a simultaneous cue group with their clips opening **concurrently** under one shared cancellation source (old-engine `FireGroupAsync`/`ExecuteGroupAsync` parity), so a coordinated trigger step starts together instead of staggered by the sum of the opens. It replaced the cue re-back's sequential `foreach await FireCueAsync` group executor (`MediaCueGroupExecutor`). Tests: `FireCuesAsync_FiresEveryCueInTheGroup_Together`, `FireCuesAsync_SingleCue_DelegatesToFireCue`. **Needs hardware verification:** the actual audible/visible *tightness* of the coordinated start (and the seek no-drift) can only be measured on real output — the headless tests prove all members fire/seek, not sub-frame skew. What remains: the full per-group timeline/discontinuity contract threaded through every audio renderer / live source / output presentation, and toleranced A/V + output-skew tests over seek/pause/loop on real hardware.
 - **NXT-05 (remainder)** — **substantially done (2026-07-01):** the single `MediaHost : IDisposable, IAsyncDisposable` now owns the media registry + module native-runtime lifetimes and carries reference-counted plugin leases with leaked-lease reporting; HaPlay (`MediaRuntime.Shutdown()` on app exit) and the C-ABI both dispose it (see *Fixed → NXT-05 (MediaHost)*). What remains is gated on other deferred work: nothing acquires a plugin lease until the **NXT-09** plugin host exists to hang capability/surface/factory leases off it, and the host owning *compositor/control/subtitle/output* registries is only meaningful once those become framework-level registries (today they are HaPlay-side app state, not `IMediaRegistry`-style capability sets).
 - **NXT-11 (remainder)** — the injectable compositor seam + per-frame allocations are done (see Fixed). **Subtitle-overlay render caching is also already done** (verified 2026-06-30): `AssRenderer.RenderInto` feeds libass's `detect_change` flag and returns `AssRenderOutcome.Unchanged` to skip the blend, and `AssSubtitleLayerSource.RenderAt` returns the cached frame on `Unchanged` — the full-canvas BGRA rebuild is skipped when the event is unchanged. What remains: actually wiring a GPU compositor in the host, removing the `CompositeWithSurfaces` CPU readback, and the perf/allocation benchmark gates.
 - **NXT-13 (remainder)** — the empty leftover projects are removed (see Fixed); the larger split of god-object types and retirement of the duplicate orchestration engines remains with the NXT-06 cutover.
 - **NXT-14 (remainder)** — the broader adversarial/sync/perf/cutover test build-out beyond the targeted regressions added so far (much of it depends on the deferred gates' behavior existing first). *Progress (2026-07-01):* the end-of-clip state machine — previously covered only for the natural-end **fade** path — now has explicit **loop / freeze / plain-stop** coverage (`NaturalEnd_Loop_KeepsRunningPastOutPoint_InsteadOfReleasing`, `NaturalEnd_Freeze_HoldsClipInsteadOfReleasing`, `NaturalEnd_PlainStop_ReleasesClipAtOutPoint` in `ShowSessionTests`, using an `EndOffset`-trimmed synthetic clip so each behaviour fires fast and is distinguished by the transport snapshot: loop → still running past the out-point; freeze → paused but still attached; stop → detached/zero-duration). Session tests 67 → 70.
+
+---
+
+# Cutover readiness audit (NXT-06, 2026-07-01)
+
+A systematic diff of every `CuePlayer`/`Soundboard` callback between the default **engine** path
+(`MainViewModel` ~L100-165) and the gated **ShowSession** path (`TryWireShowSessionCueTransport`, ~L290-440),
+to establish exactly what stands between the current opt-in and flipping `HAPLAY_USE_SHOWSESSION` on by default
+then deleting `CuePlaybackEngine`/`HaPlayPlaybackSession`/`SoundboardEngine`.
+
+## Parity-complete on the ShowSession path
+Media cue fire (single + **coordinated group start barrier** `FireCuesAsync`) and GO; transport **stop-all**,
+**pause-all** (the multi-group pause bug — pause hit only the default group — is fixed), **seek** + **multi-cue
+seek barrier** (`SeekManyAsync`), cancel-cue; soundboard voices (play/stop/stop-all/volume/fade); live
+**video-placement** edit on the active cue; output-mapping + composition video-fx live edit; cue **video
+output fan-out** (NDI/SDL/local); **live inputs** (`ndi://` + `padev://`); subtitles; **cue preview** (wired to
+`PreviewCueAsync` this pass — previously the last callback still driving the inactive engine); shutdown disposal
+(`MediaHost`).
+
+## Gaps — status after the 2026-07-01 parity pass
+1. **Live audio-route edit on an actively-playing cue — FIXED.** New `ShowSession.ApplyActiveAudioRoutesAsync`
+   re-applies each edited route to the active clip's `clip{i}` output through the SAME
+   `AudioRouter.AddRoute(map,gain)` the fire path used (legacy route id → **replace in place**), wired into the
+   gated `UpdateActiveCueAudioRoutesCallback` via `HaPlayShowMapper.MapActiveAudioRoutes`. Deliberately **not**
+   `ApplyMatrix` — that registers a *matrix*-id route and would play *on top of* the fire path's legacy-id route
+   (doubled audio; the pre-existing `ApplyActiveAudioMatrixAsync` only asserts the bool, so it never caught this).
+   A mid-playback line add/remove/mute changes the positional `clip{i}` count, so the live apply is skipped
+   (guarded via `GetRegisteredOutputIds`) and that edit lands on the next fire instead of mis-patching.
+   *Headless test proves the lookup/apply path (`ApplyActiveAudioRoutesAsync_ReAppliesRoutesToTheActiveClip`); the
+   audible result is **hardware-verified**.*
+2. **Action & comment cues already work under the gate — NOT a gap.** They are dispatched by *view-model* executors
+   (`ActionCueExecutor = ExecuteCueActionAsync` → OSC/MIDI send; `CueNodeKind.Comment` → a no-op status), both
+   independent of the playback engine and **not** overridden on the gated path. The mapper only omits them from the
+   headless `ShowDocument`, which is irrelevant to the running app (GO order is VM-driven, executors are VM-level).
+   They keep working after the engine is deleted.
+3. **Text cues — FIXED (2026-07-01).** A `TextDecoderProvider` (HaPlay, registered in `MediaRuntime`) opens
+   `text:<base64-json>` URIs: it decodes a `TextSourceSpec` (the `TextPlaylistItem` render fields + the cue
+   duration, source-generated JSON so the headless `ShowDocument`'s single `MediaPath` still round-trips), renders
+   the frame with `TextFrameRenderer` (SkiaSharp CPU — headless/off-UI-thread safe), and returns a
+   `TextHeldVideoSource` (wraps the proven `HeldFrameVideoSource`, adds a finite seekable duration → emits
+   `duration × fps` identical frames then exhausts). `HaPlayShowMapper` now emits the `text:` URI for a
+   `TextPlaylistItem` cue. Matches the `ndi:`/`padev:` pattern. Headless tests: `TextSourceTests` (URI round-trip,
+   render + duration-bound, unbounded hold, mapper binding). **Hardware-verify** the rendered text's visual
+   correctness. *Note:* a plain-`Stop` text cue with no fade/trim doesn't hit the end-monitor (`endHandling`
+   requires a trigger), so it holds its last frame until the next cue/stop rather than auto-clearing at its
+   duration — same as any plain `Stop` clip; the source is duration-bounded so a fade/freeze/loop end behavior
+   terminates it exactly. (Image cues were already fine — file path → FFmpeg single frame.)
+4. **Calibration grid / test pattern** — `SetCompositionTestPatternCallback` honestly returns `false` on the gated
+   path (not moved to ShowSession).
+5. **Idle logo / hold slate is NOT a cue-path feature** — it is a *media-player deck* feature
+   (`FallbackImagePath`/`HoldFallbackVideo`, already wired via `SyncIdleSlate`); the cue workspace has no
+   fallback-image setting. The earlier "cutover remainder: logo/hold slate" note was a misattribution.
+
+## What the flip needs (exit conditions)
+- Hardware soak of the full gated path (the review's own Gate-4 exit) — including visual checks of the new
+  cue-preview, live audio-route edit, and text-cue rendering.
+- Then: flip the default and delete `CuePlaybackEngine`/`HaPlayPlaybackSession`/`SoundboardEngine`
+  (the review's largest simplification — NXT-13).
+
+With cue preview, the live audio-route edit, and text cues all now on the ShowSession path (action/comment cues
+were never engine-bound), the gated cue path's **transport/playback parity is complete** — the flip is gated on
+hardware soak, not on more transport wiring. As of the 2026-07-01 pass the mapper advanced-feature items are also
+closed: multi-composition-per-cue now fans out, nested groups collapse onto their outermost transport unit (fire
+modes were always VM-resolved), and the pre-roll-badge / soundboard-progress / test-pattern indicators are wired.
+The only item still open is corner-pin, which is **not a cutover blocker** — it is unimplemented (Phase-3-reserved)
+and dropped identically by the shipping app. See the **Cutover flip readiness checklist** for the full status.
+
+---
+
+# Cutover flip readiness checklist (2026-07-01)
+
+A pre-flip audit of the gated `HAPLAY_USE_SHOWSESSION=1` path: what is parity-complete, the remaining gaps
+(functional vs UI-feedback), a hardware soak checklist, and the engine-deletion footprint. Method: diffed every
+`CuePlayer`/`Soundboard` callback + engine event against the gated wiring, and scanned `HaPlayShowMapper` for
+deferred/dropped semantics.
+
+## Parity-complete on the ShowSession path
+Every transport/playback callback is either re-backed onto `ShowSession` or is engine-independent:
+- **Cue:** fire (single + coordinated-group start barrier `FireCuesAsync`), GO, stop-all, pause-all, seek +
+  multi-cue seek barrier, cancel; **preview** (`PreviewCueAsync`); live **video-placement** AND live **audio-route**
+  edit; output/composition mapping; **video fan-out** to NDI/SDL/local lines; **live inputs** (`ndi:`/`padev:`);
+  subtitles; **text cues** (`text:` provider) with live re-render.
+- **Media-player deck:** file playback, transport, end-of-track auto-advance, idle logo/hold slate, NDI input,
+  shutdown teardown (all gated in `MediaPlayerViewModel.ShowSession.cs`).
+- **Soundboard:** play/stop/stop-all/volume/fade via `ShowSession` voices.
+- **Action & comment cues:** dispatched by view-model executors (`ExecuteCueActionAsync` OSC/MIDI; `Comment` no-op),
+  independent of the playback engine — they keep working after the engines are deleted.
+- **The two callbacks the gated path does NOT override** (`ActionCueExecutor`, soundboard `ProbeDurationCallback`)
+  are both engine-independent (a VM method / a static probe), so **no callback depends on the old engine under the
+  gate**.
+
+## Remaining gaps — CLOSED (2026-07-01)
+All six gaps below were closed in the 2026-07-01 pass; the notes record the resolution and, where the finding
+turned out to be a mis-diagnosis, why. Only corner-pin (Gap 1) remains open, and it is **not** a cutover blocker.
+
+### Functional
+1. **Corner-pin output mapping** — *reclassified: NOT a cutover gap (parity with the shipping app).* A section's
+   `Corners` is Phase-3-reserved (`CueList`: "ignored in Phase 1"): **no editor produces it and no compositor
+   consumes it** — the shipping/legacy path drops it identically, so `HaPlayShowMapper` omitting it is exact parity,
+   not a ShowSession regression. Corner-pin is a net-new Phase-3 feature (needs an editor + a finalized data model);
+   when it lands, corners bake to a fine `MeshPoints` grid — the GL warp is already perspective-correct — so **only
+   the mapper + editor change, no framework work**. It does not gate the flip.
+2. **Multiple compositions/placements per cue** — *FIXED.* `ShowClipBinding` now carries every placement
+   (`ExtraPlacements` + `GetPlacements()`); `CommitClipAsync` fans the one decoded source out to a composition layer
+   per placement (unique video-output id), clock-mastering each distinct composition once; `TransportGroup` tracks a
+   list of layers (fades all together, live-edits the addressed one). Mapper maps all bound placements, layer-ordered.
+   Tests: mapper multi-placement + `ClipWithMultiplePlacements_FansVideoToEveryComposition` (both canvases master).
+3. **Nested cue groups + group fire modes** — *reclassified + improved.* Group **fire modes** (`FirstCueOnly`,
+   `FireAllSimultaneously`, …) are resolved entirely by the VM's `BuildTriggerPlan`/`EnumerateFireableCueOrder` and
+   fired by explicit cue id — **not** a ShowDocument concern, so they already work under the gate. The only
+   ShowDocument effect of nesting is which `TransportGroup`/clock a nested cue lands in; the mapper now collapses
+   nested cues onto their **outermost** group so a whole top-level group is one transport/clock unit (was: leaf group,
+   which split simultaneous-fire cues across clocks). Test: `NestedGroups_CollapseIntoOutermostGroupId`.
+
+### UI-feedback
+4. **Pre-roll "ready" badges** — *FIXED.* The gated path subscribes to `ShowSession.PreparedCuesChanged` and maps
+   `ClipPreparationStatus` → cue Guid + `PreparedCueState` via `MapClipPreparationState`.
+5. **Soundboard tile progress** — *FIXED.* A per-voice progress poll (`StartSoundboardProgressPoll` /
+   `OnSoundboardProgressPollTick`) drives tile countdown/progress from `GetVoiceProgressAsync`.
+6. **Calibration grid / test pattern** — *FIXED.* `SetCompositionTestPatternCallback` renders the grid
+   (`MappingTestPattern.Render`, masked to the visible/binding mapping) and holds it in a top-most composition layer
+   via `ShowSession.SetCompositionTestPatternAsync` (`_testPatternSlots`).
+
+## Hardware soak checklist (run before flipping the default)
+Under `HAPLAY_USE_SHOWSESSION=1`, on real audio/NDI/SDL output:
+- [ ] File cue: fire, pause-all, seek, stop; end behaviours (stop / freeze-last-frame / loop / fade-out) land at the
+      right time; GO advances correctly.
+- [ ] **Multi-group show:** cues on 2+ groups — pause pauses ALL of them; multi-cue seek lands together; a
+      coordinated (same-trigger) group starts **in sync**, not staggered.
+- [ ] Live audio-route edit on a PLAYING cue → audio follows, **not doubled** in level.
+- [ ] Cue **preview** → auditions on the selected preview device; ends cleanly.
+- [ ] **Text cue:** renders at its font size (not blown up); editing text/font/colour on a playing cue updates live
+      (~0.5 s) and does NOT stop it.
+- [ ] Live inputs: `ndi://` and `padev://` cues open and play.
+- [ ] Cue **video fan-out** to NDI + SDL + local windows simultaneously.
+- [ ] Soundboard: polyphonic play, stop-one, stop-all, volume, fade — on the routed devices.
+- [ ] Media-player deck (its own gated path): playback, auto-advance, idle logo, NDI input.
+- [ ] **Clean shutdown:** app exits without hang; `Pa_Terminate`/NDI release logged (MediaHost).
+- [ ] **Multi-composition cue:** a cue placing its source on 2+ compositions/canvases at once (PiP / mirror) shows
+      on every one, in sync, and fades together on stop.
+- [ ] **Nested group:** a top-level group containing a subgroup pauses/seeks as one unit; per-subgroup fire modes
+      (first-only / all) fire the right cues on GO.
+- [ ] **Calibration grid:** the test-pattern toggle overlays the grid on the selected composition/output and clears.
+- [ ] Corner-pin (Phase 3) is *not* wired anywhere yet — no show can depend on it (parity with the shipping app).
+
+## Engine-deletion footprint (after soak passes)
+Delete order, smallest blast radius first:
+- `SoundboardEngine` — **2 files**.
+- `CuePlaybackEngine` (+ `CuePlaybackEngineTypes`, `CuePlaybackEngine.AudioRouting`) — **9 files**.
+- `HaPlayPlaybackSession` — **19 files** (the media-player deck's engine; the largest and last, since the deck's
+  ShowSession re-back must be confirmed on hardware first).
+Each deletion also removes its unconditional event subscriptions in `MainViewModel` (`CueStarted/Ended/Progress/
+NaturalEnd/PreparedCues*/PreviewEnded`, `Sound*`) — dead under the gate today — and lets the `HAPLAY_USE_SHOWSESSION`
+branch become the only path (removing the flag). This is NXT-13's biggest simplification.
