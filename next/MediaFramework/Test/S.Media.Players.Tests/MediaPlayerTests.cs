@@ -79,6 +79,29 @@ public sealed class MediaPlayerTests
     }
 
     [Fact]
+    public void TryOpen_TargetAudioSampleRate_ResamplesTheDecodedSource()
+    {
+        var source = new ToneSource(sampleRate: 44_100, channels: 2, chunks: 8);
+        var requestedRate = 0;
+        var registry = MediaRegistry.Build(b => b
+            .AddDecoder(new FixedDecoderProvider(source))
+            .SetResamplerFactory((inner, rate) =>
+            {
+                requestedRate = rate;
+                return new TargetRateAudioSource(inner, rate);
+            }));
+        var options = MediaPlayerOpenOptions.Default with { TargetAudioSampleRate = 48_000 };
+
+        Assert.True(MediaPlayer.TryOpen(
+            registry, "file:///tone.wav", options, null, out var player, out var error), error);
+        using (player)
+        {
+            Assert.Equal(48_000, requestedRate);
+            Assert.Equal(48_000, player.SampleRate);
+        }
+    }
+
+    [Fact]
     public void IsRunning_TracksFreerunClockForVideoOnlyPlayback()
     {
         var provider = new CapturingDecoderProvider();
@@ -143,6 +166,14 @@ public sealed class MediaPlayerTests
                 destination[i] = ((i % channels) + 1) / 16f;
             return destination.Length;
         }
+    }
+
+    /// <summary>Format-only test resampler. The test verifies graph negotiation and never starts playback.</summary>
+    private sealed class TargetRateAudioSource(IAudioSource inner, int sampleRate) : IAudioSource
+    {
+        public AudioFormat Format { get; } = new(sampleRate, inner.Format.Channels);
+        public bool IsExhausted => inner.IsExhausted;
+        public int ReadInto(Span<float> destination) => inner.ReadInto(destination);
     }
 
     private sealed class SyntheticVideoSource : IVideoSource, ISeekableSource

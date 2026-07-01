@@ -47,6 +47,11 @@ public readonly record struct MediaPlayerOpenOptions(
 {
     public const int DisabledStreamIndex = -1;
 
+    /// <summary>Optional nominal audio-router/output rate. When it differs from the decoded source rate,
+    /// registry-backed opens resample the source before routing. Null uses the source rate. Hardware hosts
+    /// such as JACK commonly require their fixed device rate (typically 48 kHz).</summary>
+    public int? TargetAudioSampleRate { get; init; }
+
     public MediaPlayerOpenOptions()
         : this(
             TryHardwareAcceleration: true,

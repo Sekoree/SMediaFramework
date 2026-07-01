@@ -127,6 +127,25 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task FireCueAsync_CueWithoutClip_IsNotReadyInsteadOfSuccessfulNoOp()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("empty", 1, "Unbound media cue")],
+            Clips: [], Compositions: [], Outputs: [], Routes: [], Devices: []));
+
+        Assert.Equal(CueExecutionStatus.NotReady, await session.FireCueAsync("empty"));
+        var entry = Assert.Single(await session.GetCueExecutionLogAsync());
+        Assert.Equal(CueExecutionStatus.NotReady, entry.Status);
+        Assert.All(session.Snapshot(), snapshot =>
+        {
+            Assert.False(snapshot.IsRunning);
+            Assert.Equal(TimeSpan.Zero, snapshot.ClipDuration);
+        });
+    }
+
+    [Fact]
     public async Task SnapshotAsync_ReturnsTheGroupAfterACueFires()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
@@ -585,6 +604,29 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task ApplyOutputMappingAsync_TargetsHostLeaseId()
+    {
+        var output = new DiscardingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1, Cues: [], Clips: [],
+            Compositions: [new ShowComposition("screen", "S", 320, 240)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            FakeAudioDecoderProvider.Registry(),
+            videoOutputFactory: (_, _, _, _) =>
+                [new ClipCompositionOutputLease("line-42", "Projector", output)]);
+        session.LoadDocument(doc);
+
+        var mapping = new ClipOutputMappingSpec(
+            [new ClipOutputMappingSection("s", Enabled: true, 0, 0, 1, 1, 0, 0, 320, 240)]);
+
+        Assert.True(await session.ApplyOutputMappingAsync("screen", "line-42", mapping));
+        Assert.True(await session.ApplyOutputMappingAsync("screen", "line-42", null));
+        Assert.False(await session.ApplyOutputMappingAsync("screen", "missing-line", mapping));
+        Assert.False(await session.ApplyOutputMappingAsync("missing-comp", "line-42", mapping));
+    }
+
+    [Fact]
     public async Task MultiOutput_AttachesEachDeclaredGroupOutput()
     {
         // Two outputs on the "main" group: a stereo "main" (no route) + a 4-channel "monitor" (2→4 route).
@@ -625,7 +667,8 @@ public sealed class ShowSessionTests
                     AudioRoutes =
                     [
                         new ShowClipAudioRoute(DeviceId: "hw:0"),
-                        new ShowClipAudioRoute(DeviceId: "hw:1", ChannelMatrix: [0, 1, 0, 1]),
+                        new ShowClipAudioRoute(
+                            DeviceId: "hw:1", ChannelMatrix: [0, 1, 0, 1], SampleRate: 48_000),
                     ],
                 },
             ],
@@ -645,6 +688,29 @@ public sealed class ShowSessionTests
         Assert.Equal(2, backend.OutputCount); // the two clip routes — NOT the (null-device) group outputs
         Assert.Contains(("hw:0", 2), backend.Created.Select(c => (c.DeviceId, c.Channels)));
         Assert.Contains(("hw:1", 4), backend.Created.Select(c => (c.DeviceId, c.Channels))); // 2→4 remap
+        Assert.All(backend.Created, created => Assert.Equal(48_000, created.SampleRate));
+    }
+
+    [Fact]
+    public async Task ExplicitlyEmptyClipAudioRoutes_DoNotCreateImplicitMasterOutput()
+    {
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "Silent")],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://1")
+                {
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [], Outputs: [], Routes: [], Devices: []);
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        Assert.Equal(0, backend.OutputCount);
     }
 
     [Fact]
@@ -704,13 +770,154 @@ public sealed class ShowSessionTests
             Clips: [new ShowClipBinding("c", "fake://v", CompositionId: "screen")],
             Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)],
             Outputs: [], Routes: [], Devices: []);
-        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
         await session.LoadDocumentAsync(doc);
 
         Assert.False((await session.GetCompositionStatsAsync("screen"))!.Value.ClockMastered); // free-run before any clip
 
         await session.GoAsync();
         Assert.True((await session.GetCompositionStatsAsync("screen"))!.Value.ClockMastered); // now mastered to the group
+    }
+
+    [Fact]
+    public async Task CompositionBoundClip_UsesOpenedVideoDimensionsForFullCanvasPlacement()
+    {
+        // The synthetic source is 4x4 while the composition is 8x8. A full-canvas placement must scale the
+        // source to the entire canvas; using the canvas as the pre-open source placeholder leaves only 4x4 drawn.
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "Video")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "screen")
+                {
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            FakeVideoDecoderProvider.Registry(),
+            videoOutputFactory: (_, _, _, _) =>
+                [new ClipCompositionOutputLease("screen-out", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(255, output.BottomRightAlpha);
+    }
+
+    [Fact]
+    public async Task StopAllAsync_FadesCompositionLayerBeforeRelease()
+    {
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "Video")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "screen")
+                {
+                    FadeOut = TimeSpan.FromMilliseconds(180),
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            FakeVideoDecoderProvider.Registry(),
+            videoOutputFactory: (_, _, _, _) =>
+                [new ClipCompositionOutputLease("screen-out", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        output.ClearAlphas();
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await session.StopAllAsync();
+        sw.Stop();
+
+        Assert.True(sw.Elapsed >= TimeSpan.FromMilliseconds(140), $"stop returned before its fade ({sw.Elapsed})");
+        Assert.Contains(output.Alphas, alpha => alpha is > 0 and < 255);
+        Assert.False(Assert.Single(await session.SnapshotAsync()).IsRunning);
+    }
+
+    [Fact]
+    public async Task NaturalEnd_StartsConfiguredFadeBeforeReleasingClip()
+    {
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "Video")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "screen")
+                {
+                    FadeOut = TimeSpan.FromMilliseconds(250),
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            FakeVideoDecoderProvider.Registry(),
+            videoOutputFactory: (_, _, _, _) =>
+                [new ClipCompositionOutputLease("screen-out", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        output.ClearAlphas();
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        while ((await session.SnapshotAsync()).Single().IsRunning && DateTime.UtcNow < deadline)
+            await Task.Delay(25);
+
+        Assert.False((await session.SnapshotAsync()).Single().IsRunning);
+        Assert.Contains(output.Alphas, alpha => alpha is > 0 and < 255);
+    }
+
+    private sealed class PixelRecordingVideoOutput : IVideoOutput
+    {
+        private readonly object _gate = new();
+        private readonly List<int> _alphas = [];
+        private VideoFormat _format;
+        public TaskCompletionSource FirstFrame { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int BottomRightAlpha { get; private set; }
+        public int[] Alphas { get { lock (_gate) return _alphas.ToArray(); } }
+        public VideoFormat Format => _format;
+        public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = [PixelFormat.Bgra32];
+        public void Configure(VideoFormat format) => _format = format;
+        public void Submit(VideoFrame frame)
+        {
+            try
+            {
+                var offset = (frame.Format.Height - 1) * frame.Strides[0] + (frame.Format.Width - 1) * 4 + 3;
+                BottomRightAlpha = frame.Planes[0].Span[offset];
+                lock (_gate) _alphas.Add(BottomRightAlpha);
+                FirstFrame.TrySetResult();
+            }
+            finally
+            {
+                frame.Dispose();
+            }
+        }
+
+        public void ClearAlphas()
+        {
+            lock (_gate) _alphas.Clear();
+        }
     }
 
     /// <summary>An output that records how many times it was disposed — to prove the borrow contract.</summary>

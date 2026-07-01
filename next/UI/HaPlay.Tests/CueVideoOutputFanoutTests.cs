@@ -20,6 +20,62 @@ namespace HaPlay.Tests;
 public sealed class CueVideoOutputFanoutTests
 {
     [Fact]
+    public async Task ImplicitLayoutTile_IsActiveBeforeFirstSave_AndLiveMoveKeepsOutputRaster()
+    {
+        var compId = Guid.NewGuid();
+        var lineId = Guid.NewGuid();
+        var bindingId = Guid.NewGuid();
+        var cue = new MediaCueNode
+        {
+            Label = "V",
+            Source = new FilePlaylistItem("synthetic://v"),
+            VideoPlacements = { new CueVideoPlacement { CompositionId = compId, LayerIndex = 0 } },
+        };
+        var cueList = new CueList
+        {
+            Nodes = { cue },
+            Compositions = { new CueComposition { Id = compId, Name = "screen", Width = 24, Height = 24, FrameRateNum = 30 } },
+            VideoOutputs =
+            {
+                new CueVideoOutputBinding
+                {
+                    Id = bindingId, CompositionId = compId, OutputLineId = lineId, MappingEnabled = true,
+                },
+            },
+        };
+        OutputDefinition definition = new LocalVideoOutputDefinition(
+            lineId, "Program", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            ScreenIndex: 0, WindowWidth: 16, WindowHeight: 16);
+        var effective = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(cueList, [definition]);
+        var initialMapping = Assert.IsType<CueOutputMapping>(effective[bindingId]);
+        var screen = new CountingVideoOutput();
+        await using var session = new ShowSession(
+            MediaRegistry.Build(b => b.AddDecoder(new SyntheticVideoProvider())),
+            videoOutputFactory: (_, name, _, _) =>
+                [new ClipCompositionOutputLease(
+                    lineId.ToString("N"), name, screen,
+                    Mapping: HaPlayShowMapper.ToClipOutputMapping(initialMapping))]);
+        session.LoadDocument(HaPlayShowMapper.ToShowDocument(cueList));
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync(cue.Id.ToString()));
+        Assert.True(await WaitUntilAsync(() => screen.Count > 0, TimeSpan.FromSeconds(3)));
+        Assert.Equal((16, 16), (screen.Format.Width, screen.Format.Height));
+
+        var moved = initialMapping with
+        {
+            Sections =
+            [
+                initialMapping.Sections[0] with { SrcX = 1d / 3, SrcY = 1d / 3 },
+            ],
+        };
+        var before = screen.Count;
+        Assert.True(await session.ApplyOutputMappingAsync(
+            compId.ToString(), lineId.ToString("N"), HaPlayShowMapper.ToClipOutputMapping(moved)));
+        Assert.True(await WaitUntilAsync(() => screen.Count > before, TimeSpan.FromSeconds(3)));
+        Assert.Equal((16, 16), (screen.Format.Width, screen.Format.Height));
+    }
+
+    [Fact]
     public async Task CueVideo_FansOutToHostAcquiredOutputs_ViaTheCompositionIdFactory()
     {
         var compId = Guid.NewGuid();

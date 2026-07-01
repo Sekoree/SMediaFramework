@@ -505,7 +505,13 @@ public sealed class VideoPlayer : IDisposable
 
                 try
                 {
-                    var waitStarted = Trace.IsEnabled(LogLevel.Warning) ? Stopwatch.GetTimestamp() : 0;
+                    // A prepared player can fill its queue before the transport clock delivers its first tick.
+                    // That intentional pre-roll backpressure is not a slow consumer and must not be reported as
+                    // one when the first tick eventually releases the wait.
+                    var waitStarted = Trace.IsEnabled(LogLevel.Warning)
+                                      && Volatile.Read(ref _firstTickLogged) != 0
+                        ? Stopwatch.GetTimestamp()
+                        : 0;
                     _slotsAvailable.Wait(token);
                     if (waitStarted != 0)
                         MaybeLogSlowQueueSlotWait(waitStarted);

@@ -479,7 +479,11 @@ public sealed class MediaPlayer : IDisposable
             : result.Video;
 
         if (TryOpenLive(result.Audio, video, options, videoNegotiationLead, disposeNegotiationLead: false,
-                disposeSourcesOnDispose: false, out player, out error))
+                disposeSourcesOnDispose: false,
+                (source, targetRate) => registry.CreateResampler(source, targetRate)
+                    ?? throw new InvalidOperationException(
+                        $"no audio resampler is registered for {source.Format.SampleRate} Hz → {targetRate} Hz"),
+                out player, out error))
         {
             player.RegisterOwnedCompanion(result); // the player owns the atomic asset; disposes it on dispose
             WireAdaptiveRateFromRegistry(registry, player);
@@ -649,6 +653,7 @@ public sealed class MediaPlayer : IDisposable
             videoNegotiationLead,
             disposeNegotiationLead,
             disposeSourcesOnDispose: true,
+            resamplerFactory: null,
             out player,
             out errorMessage);
 
@@ -665,6 +670,7 @@ public sealed class MediaPlayer : IDisposable
         IVideoOutput? videoNegotiationLead,
         bool disposeNegotiationLead,
         bool disposeSourcesOnDispose,
+        Func<IAudioSource, int, IAudioSource>? resamplerFactory,
         [NotNullWhen(true)] out MediaPlayer? player,
         out string? errorMessage)
     {
@@ -702,16 +708,27 @@ public sealed class MediaPlayer : IDisposable
             if (options.IncludeAudioRouter && audioSource is not null)
             {
                 audioClock = new MediaClock();
-                audioRouter = new AudioRouter(audioSource.Format.SampleRate, options.AudioChunkSamples);
+                var targetAudioRate = options.TargetAudioSampleRate is > 0
+                    ? options.TargetAudioSampleRate.Value
+                    : audioSource.Format.SampleRate;
+                audioRouter = new AudioRouter(targetAudioRate, options.AudioChunkSamples);
                 audioRouter.AttachMasterClock(audioClock);
+                if (targetAudioRate != audioSource.Format.SampleRate)
+                {
+                    audioRouter.ResamplerFactory = resamplerFactory
+                        ?? throw new InvalidOperationException(
+                            $"audio source is {audioSource.Format.SampleRate} Hz but the requested output rate is " +
+                            $"{targetAudioRate} Hz and this open path has no resampler factory");
+                }
                 audioSourceId = disposeSourcesOnDispose
-                    ? audioRouter.AddOwnedSource(audioSource)
-                    : audioRouter.AddSource(audioSource);
+                    ? audioRouter.AddOwnedSource(audioSource, autoResample: true)
+                    : audioRouter.AddSource(audioSource, autoResample: true);
                 // Route the audio source to a discard sink so it is actually consumed — advancing the
                 // master clock and reaching EOF for "play to completion". Sources are only pulled when
                 // routed; a real clocked output (e.g. PortAudio) attached later still becomes the pacing
                 // primary and plays the audio — this sink just drops its copy.
-                var audioDiscardId = audioRouter.AddOutput(new DiscardingAudioOutput(audioSource.Format), "_audio_discard");
+                var routerFormat = new AudioFormat(targetAudioRate, audioSource.Format.Channels);
+                var audioDiscardId = audioRouter.AddOutput(new DiscardingAudioOutput(routerFormat), "_audio_discard");
                 audioRouter.Connect(audioSourceId, audioDiscardId);
                 playClock = audioClock;
             }
@@ -786,7 +803,7 @@ public sealed class MediaPlayer : IDisposable
             Trace.LogInformation("TryOpenLive: opened (hasAudio={HasAudio} hasVideo={HasVideo} audioRate={AudioRate}Hz videoFmt={VideoFmt} clockType={Clock} negotiationLead={Lead})",
                 audioSource is not null,
                 videoSource is not null,
-                audioSource?.Format.SampleRate ?? 0,
+                audioRouter?.SampleRate ?? audioSource?.Format.SampleRate ?? 0,
                 videoPlayer.Format,
                 playClock.GetType().Name,
                 videoNegotiationLead?.GetType().Name ?? "(discard)");

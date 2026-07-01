@@ -14,6 +14,72 @@ namespace HaPlay.Tests;
 public class ShowDocumentMapperTests
 {
     [Fact]
+    public void EffectiveOutputMappings_UsesEditorImplicitTileBeforeFirstSave()
+    {
+        var compositionId = Guid.NewGuid();
+        var lineId = Guid.NewGuid();
+        var bindingId = Guid.NewGuid();
+        var cueList = new CueList
+        {
+            Compositions =
+            {
+                new CueComposition { Id = compositionId, Width = 1920, Height = 1080 },
+            },
+            VideoOutputs =
+            {
+                new CueVideoOutputBinding
+                {
+                    Id = bindingId,
+                    CompositionId = compositionId,
+                    OutputLineId = lineId,
+                    Mapping = null,
+                    MappingEnabled = true,
+                },
+            },
+        };
+        OutputDefinition output = new LocalVideoOutputDefinition(
+            lineId, "Program", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            ScreenIndex: 0, WindowWidth: 1280, WindowHeight: 720);
+
+        var mappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(cueList, [output]);
+
+        var mapping = Assert.IsType<CueOutputMapping>(mappings[bindingId]);
+        Assert.Equal((1280, 720), (mapping.OutputWidth, mapping.OutputHeight));
+        var section = Assert.Single(mapping.Sections);
+        Assert.Equal((0d, 0d), (section.SrcX, section.SrcY));
+        Assert.Equal(2d / 3d, section.SrcWidth, precision: 6);
+        Assert.Equal(2d / 3d, section.SrcHeight, precision: 6);
+        Assert.Equal((1280d, 720d), (section.DestWidth, section.DestHeight));
+    }
+
+    [Fact]
+    public void EffectiveOutputMappings_DisabledBindingRemainsRaw()
+    {
+        var compositionId = Guid.NewGuid();
+        var lineId = Guid.NewGuid();
+        var bindingId = Guid.NewGuid();
+        var cueList = new CueList
+        {
+            Compositions = { new CueComposition { Id = compositionId, Width = 1920, Height = 1080 } },
+            VideoOutputs =
+            {
+                new CueVideoOutputBinding
+                {
+                    Id = bindingId, CompositionId = compositionId, OutputLineId = lineId,
+                    MappingEnabled = false,
+                },
+            },
+        };
+        OutputDefinition output = new LocalVideoOutputDefinition(
+            lineId, "Program", VideoOutputEngine.SdlOpenGl, VideoSurfaceMode.Windowed,
+            ScreenIndex: 0, WindowWidth: 1280, WindowHeight: 720);
+
+        var mappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(cueList, [output]);
+
+        Assert.Null(mappings[bindingId]);
+    }
+
+    [Fact]
     public void MapsCueTree_FlattensGroups_Clips_And_Compositions()
     {
         var compId = Guid.NewGuid();
@@ -157,6 +223,7 @@ public class ShowDocumentMapperTests
                     Position = CueLayerPosition.Letterbox,
                     Opacity = 0.5,
                     DestX = 0.25, DestY = 0.1, DestWidth = 0.5, DestHeight = 0.4,
+                    CropLeft = 0.05,
                     RotationDegrees = 15,
                 },
             },
@@ -167,8 +234,10 @@ public class ShowDocumentMapperTests
         Assert.Equal(2, clip.LayerIndex);
         Assert.NotNull(clip.Placement);
         Assert.Equal(0.25, clip.Placement!.DestX, 3);
+        Assert.Equal(0.5, clip.Placement.DestY, 3); // UI top-left 0.1 -> compositor bottom-left 1-.1-.4
         Assert.Equal(0.5, clip.Placement.DestWidth, 3);
         Assert.Equal(0.5, clip.Placement.Opacity, 3);
+        Assert.Equal(0.05, clip.Placement.CropLeft, 3);
         Assert.Equal(15, clip.Placement.RotationDegrees, 3);
         Assert.Equal("Letterbox", clip.Placement.Fit); // framework MapFit lowercases → Contain
     }
@@ -183,9 +252,11 @@ public class ShowDocumentMapperTests
             Source = new FilePlaylistItem("/m/a.wav"),
             AudioRoutes =
             {
-                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 0, GainDb = 0 },
-                new CueAudioRoute { SourceChannel = 1, OutputLineId = lineId, OutputChannel = 1, GainDb = 0 },
-                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 2, Muted = true }, // dropped
+                // Cue routes use the UI/persistence convention: output channels are 1-based.
+                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 1, GainDb = 0 },
+                new CueAudioRoute { SourceChannel = 1, OutputLineId = lineId, OutputChannel = 2, GainDb = 0 },
+                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 3, Muted = true }, // dropped
+                new CueAudioRoute { SourceChannel = 0, OutputLineId = lineId, OutputChannel = 0, GainDb = 0 }, // invalid/dropped
             },
         };
         var output = new PortAudioOutputDefinition(
@@ -196,16 +267,18 @@ public class ShowDocumentMapperTests
 
         var route = Assert.Single(clip.AudioRoutes!);
         Assert.Equal("7", route.DeviceId);                  // EffectiveAudioBackendDeviceId → GlobalDeviceIndex
-        Assert.Equal(new[] { 0, 1 }, route.ChannelMatrix);  // identity stereo; the muted out-channel 2 is dropped
+        Assert.Equal(new[] { 0, 1 }, route.ChannelMatrix);  // identity stereo; muted/invalid routes are dropped
         Assert.Equal(1f, route.Gain);                       // 0 dB → linear 1.0
+        Assert.Equal(48_000, route.SampleRate);              // output/device rate, not the media source rate
     }
 
     [Fact]
-    public void NoAudioRoutes_LeavesClipAudioRoutesNull()
+    public void NoAudioRoutes_MapsToExplicitSilence()
     {
         var cue = new MediaCueNode { Label = "Plain", Source = new FilePlaylistItem("/m/a.wav") };
         var clip = Assert.Single(HaPlayShowMapper.ToShowDocument(new CueList { Nodes = { cue } }).Clips);
-        Assert.Null(clip.AudioRoutes); // ⇒ ShowSession falls back to the per-group/default output
+        Assert.NotNull(clip.AudioRoutes);
+        Assert.Empty(clip.AudioRoutes); // HaPlay never assumes a default device; routing is operator-authored.
     }
 
     /// <summary>End-to-end: the mapper's output is a valid <see cref="ShowDocument"/> that a real

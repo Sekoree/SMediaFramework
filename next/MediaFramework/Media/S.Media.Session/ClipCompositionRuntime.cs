@@ -119,6 +119,10 @@ public sealed class ClipCompositionRuntime : IDisposable
         _disposeCompositorOnDriverThread = compositor.DisposeOnDriverThread;
         _mixer = new VideoCompositorSource(_canvasFormat, _compositor, disposeCompositorOnDispose: false);
 
+        Trace.LogInformation(
+            "ClipCompositionRuntime: composition {Composition} initialized ({Width}x{Height} {Rate}, compositor={Backend})",
+            CompositionName, _canvasFormat.Width, _canvasFormat.Height, _canvasFormat.FrameRate, CompositorBackendName);
+
         foreach (var output in outputs)
         {
             if (output.Output is null)

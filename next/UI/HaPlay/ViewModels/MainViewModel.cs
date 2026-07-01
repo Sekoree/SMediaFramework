@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Globalization;
 using System.Net;
 using System.Reflection;
@@ -41,7 +42,8 @@ public partial class MainViewModel : ViewModelBase
     private ShowSession? _cueShowSession;
     // compositionId → the real video outputs it renders to, acquired on the UI thread in ReloadCueShowSession
     // so ShowSession's video factory is a pure lookup during (synchronous) LoadDocument (no deadlock).
-    private Dictionary<string, IVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
+    private Dictionary<string, CueShowVideoOutput[]> _cueVideoOutputs = new(StringComparer.Ordinal);
+    private sealed record CueShowVideoOutput(Guid LineId, IVideoOutput Output, CueOutputMapping? Mapping);
     // The output lines currently held by the re-back (single-holder leases) — released before each reload so a
     // cue-list change doesn't leave them stuck-held (which would make the re-acquire return null = no video).
     private readonly List<Guid> _cueAcquiredVideoLines = new();
@@ -49,7 +51,17 @@ public partial class MainViewModel : ViewModelBase
     // ShowSession graph — otherwise only a SelectedCueList *switch* reloaded, so a freshly-built/edited cue fired
     // "cue '…' is not registered". Reloads are debounced so a burst of edits (or loading a list) collapses to one.
     private INotifyCollectionChanged? _subscribedCueNodes;
+    private CueListEditorViewModel? _subscribedCueGraphList;
+    private readonly HashSet<CueCompositionViewModel> _subscribedCueCompositions = new();
+    private readonly HashSet<CueVideoOutputBindingViewModel> _subscribedCueOutputBindings = new();
     private DispatcherTimer? _cueReloadDebounce;
+    // Set as soon as the GUI cue model changes and cleared only after ReloadCueShowSession commits it. Fire paths
+    // flush a dirty graph synchronously on the UI thread, so GO cannot race the 300 ms edit debounce and execute
+    // an older cue definition (notably a media cue captured before its Source was assigned).
+    private volatile bool _cueShowGraphDirty;
+    // Immutable-by-convention snapshot replaced after each document load. Used to turn an unbound/stale media
+    // cue into an explicit operator error instead of calling a no-op session action.
+    private volatile IReadOnlySet<Guid> _cueShowBoundCueIds = new HashSet<Guid>();
     // Re-back cue → its transport group (from the mapped doc), and each group's currently-active cue, so the
     // snapshot poll can drive BOTH progress (OnCueProgress) and end (OnCueEnded) per group — the ShowSession
     // transport raises neither event, so without this the now-playing countdown is frozen and rows never clear.
@@ -151,7 +163,11 @@ public partial class MainViewModel : ViewModelBase
         CuePlayer.ActionCueExecutor = ExecuteCueActionAsync;
         CuePlayer.PreRollRefreshSuggested += (_, _) =>
             FireAndLog(RefreshCuePreRollAsync(), "RefreshCuePreRollAsync suggested");
-        CuePlayer.CueStandbyInvalidated += (_, cueId) => _cuePlaybackEngine.MarkPreparedCueStale(cueId);
+        CuePlayer.CueStandbyInvalidated += (_, cueId) =>
+        {
+            _cuePlaybackEngine.MarkPreparedCueStale(cueId);
+            ScheduleCueShowSessionReload();
+        };
         CuePlayer.RefreshPreviewAudioDevices();
         TryWireShowSessionCueTransport(); // 8a.4: optionally re-back cue transport onto ShowSession (gated, off by default)
         foreach (var player in Players)
@@ -253,25 +269,28 @@ public partial class MainViewModel : ViewModelBase
                 // _cueAcquiredVideoLines), so the leases declare DisposeOutputOnRuntimeDispose=false — the session
                 // never disposes them (NXT-01).
                 (compId, name, _, _) => _cueVideoOutputs.TryGetValue(compId, out var outs)
-                    ? outs.Select((o, i) => new ClipCompositionOutputLease(
-                        $"{compId}_out{i}", name, o, DisposeOutputOnRuntimeDispose: false)).ToArray()
-                    : Array.Empty<ClipCompositionOutputLease>());
+                    ? outs.Select(o => new ClipCompositionOutputLease(
+                        o.LineId.ToString("N"), name, o.Output,
+                        DisposeOutputOnRuntimeDispose: false,
+                        Mapping: HaPlayShowMapper.ToClipOutputMapping(o.Mapping))).ToArray()
+                    : Array.Empty<ClipCompositionOutputLease>(),
+                CueCompositionRuntime.CreateShowSessionCompositor);
 
             CuePlayer.PropertyChanged += (_, e) =>
             {
                 if (e.PropertyName == nameof(CuePlayer.SelectedCueList))
                 {
-                    SubscribeCueNodesForReload(); // re-bind the node watch to the newly-selected list
+                    SubscribeCueGraphForReload(); // re-bind model watches to the newly-selected list
                     ReloadCueShowSession();       // a list switch is discrete → reload now (its nodes are populated)
                 }
             };
-            SubscribeCueNodesForReload();
+            SubscribeCueGraphForReload();
             ReloadCueShowSession();
 
             // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
             // them to the executors, so we fire by id (FireCueAsync) — independent of ShowSession's GO anchor.
             // Each transport op is guarded so a failure is LOGGED (not only surfaced as a UI notification).
-            CuePlayer.StopPlaybackCallback = () => GuardedCueShowOp("stop", () => _cueShowSession!.StopAsync());
+            CuePlayer.StopPlaybackCallback = () => GuardedCueShowOp("stop", () => _cueShowSession!.StopAllAsync());
             CuePlayer.SetPlaybackPausedCallback = paused => GuardedCueShowOp("pause", () => _cueShowSession!.SetPausedAsync(paused));
             CuePlayer.SeekCueCallback = (_, pos) => GuardedCueShowOp("seek", () => _cueShowSession!.SeekAsync(pos));
             CuePlayer.SeekCuesCallback = positions => GuardedCueShowOp("seek-cues", async () =>
@@ -287,11 +306,21 @@ public partial class MainViewModel : ViewModelBase
             {
                 try
                 {
+                    await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
+                    if (!_cueShowBoundCueIds.Contains(cue.Id))
+                    {
+                        var detail = "cue has no current ShowSession media binding; its source may be empty or unsupported";
+                        Trace.LogError("HaPlay: cue '{Label}' ({Id}) cannot fire — {Detail}", cue.Label, cue.Id, detail);
+                        return detail;
+                    }
                     var status = await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
                     if (status != CueExecutionStatus.Fired)
                     {
-                        Trace.LogWarning("HaPlay: cue '{Label}' ({Id}) did not fire — status {Status}", cue.Label, cue.Id, status);
-                        return $"not ready ({status})";
+                        var detail = await DescribeCueShowFailureAsync(cue.Id, status).ConfigureAwait(false);
+                        Trace.LogWarning(
+                            "HaPlay: cue '{Label}' ({Id}) did not fire — status {Status}: {Detail}",
+                            cue.Label, cue.Id, status, detail);
+                        return detail;
                     }
                     // Engine-callback parity: report the cue active so the UI shows it Triggered/now-playing —
                     // the result handler treats a cue absent from _activeCueIds as "Failed to start" even on a
@@ -311,11 +340,22 @@ public partial class MainViewModel : ViewModelBase
                 {
                     try
                     {
+                        await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
+                        if (!_cueShowBoundCueIds.Contains(cue.Id))
+                        {
+                            Trace.LogError(
+                                "HaPlay: group cue '{Label}' ({Id}) has no current ShowSession media binding",
+                                cue.Label, cue.Id);
+                            continue;
+                        }
                         var status = await _cueShowSession!.FireCueAsync(cue.Id.ToString()).ConfigureAwait(false);
                         if (status == CueExecutionStatus.Fired)
                             await Dispatcher.UIThread.InvokeAsync(() => MarkCueShowCueStarted(cue.Id));
                         else
-                            Trace.LogWarning("HaPlay: group cue '{Label}' ({Id}) did not fire — status {Status}", cue.Label, cue.Id, status);
+                            Trace.LogWarning(
+                                "HaPlay: group cue '{Label}' ({Id}) did not fire — status {Status}: {Detail}",
+                                cue.Label, cue.Id, status,
+                                await DescribeCueShowFailureAsync(cue.Id, status).ConfigureAwait(false));
                     }
                     catch (Exception ex)
                     {
@@ -324,6 +364,40 @@ public partial class MainViewModel : ViewModelBase
                 }
                 return null;
             };
+
+            // The editor callbacks are independent of transport. Leaving these on CuePlaybackEngine made every
+            // placement/output-layout edit target an engine with no active ShowSession composition, so the model
+            // persisted but the running image never changed.
+            CuePlayer.UpdateActiveCueVideoPlacementCallback = async (cueId, _, placement) =>
+            {
+                var updated = await _cueShowSession.UpdateActivePlacementAsync(
+                    cueId.ToString(), placement.CompositionId.ToString(), placement.LayerIndex,
+                    HaPlayShowMapper.ToShowVideoPlacement(placement)).ConfigureAwait(false);
+                if (!updated)
+                    Trace.LogWarning("HaPlay: live placement update missed cue {Cue} / composition {Composition}",
+                        cueId, placement.CompositionId);
+            };
+            // An idle cue's placement edit only lives in the model; the show document is rebuilt at (re)load,
+            // not on placement edits. Mark it stale (flag only — no debounced auto-reload that would interrupt a
+            // running composition mid-drag) so the next GO reloads with the current placement. The flush before
+            // firing (EnsureCueShowSessionCurrentAsync) then rebuilds the document so the cue fires with the
+            // geometry the operator set, instead of the placement captured at the last structural reload.
+            CuePlayer.CueClipModelStaleCallback = () => _cueShowGraphDirty = true;
+            CuePlayer.UpdateOutputMappingCallback = (compositionId, outputLineId, mapping) =>
+            {
+                FireAndLog(ApplyCueShowOutputMappingAsync(compositionId, outputLineId, mapping),
+                    "ShowSession output mapping update");
+                return true; // accepted for serialized application by ShowSession
+            };
+            CuePlayer.UpdateCompositionVideoFxCallback = (compositionId, mapping) =>
+            {
+                FireAndLog(ApplyCueShowCompositionMappingAsync(compositionId, mapping),
+                    "ShowSession composition mapping update");
+                return true;
+            };
+            // Calibration-grid injection has not yet moved to ShowSession. Do not call the inactive legacy
+            // engine and claim success; the editor can accurately leave the toggle off.
+            CuePlayer.SetCompositionTestPatternCallback = (_, _, _, _) => false;
 
             // Soundboard voices on the same session (task #10): re-back the soundboard transport onto the
             // ShowSession voice subsystem (a streaming player per tile on its routed output line).
@@ -364,19 +438,94 @@ public partial class MainViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Watches the selected cue list's node collection so an in-place edit (add/remove/reorder a cue)
-    /// reloads the ShowSession graph — without this, only switching cue lists reloaded, so a cue built or edited
-    /// in place fired "cue '…' is not registered" against a stale graph. Re-bound whenever SelectedCueList changes.</summary>
-    private void SubscribeCueNodesForReload()
+    /// <summary>Watches structural parts of the selected cue list that are compiled into a ShowDocument:
+    /// cue nodes, composition definitions, and composition/output bindings. Mapping geometry has its own live
+    /// update path and is deliberately excluded from reload-on-property-change so an editor drag cannot stop
+    /// the running composition.</summary>
+    private void SubscribeCueGraphForReload()
     {
         if (_subscribedCueNodes is not null)
             _subscribedCueNodes.CollectionChanged -= OnCueNodesChanged;
-        _subscribedCueNodes = CuePlayer.SelectedCueList?.Nodes;
+        if (_subscribedCueGraphList is not null)
+        {
+            _subscribedCueGraphList.Compositions.CollectionChanged -= OnCueCompositionsChanged;
+            _subscribedCueGraphList.VideoOutputs.CollectionChanged -= OnCueOutputBindingsChanged;
+        }
+        foreach (var composition in _subscribedCueCompositions)
+            composition.PropertyChanged -= OnCueCompositionPropertyChanged;
+        foreach (var binding in _subscribedCueOutputBindings)
+            binding.PropertyChanged -= OnCueOutputBindingPropertyChanged;
+        _subscribedCueCompositions.Clear();
+        _subscribedCueOutputBindings.Clear();
+
+        _subscribedCueGraphList = CuePlayer.SelectedCueList;
+        _subscribedCueNodes = _subscribedCueGraphList?.Nodes;
         if (_subscribedCueNodes is not null)
             _subscribedCueNodes.CollectionChanged += OnCueNodesChanged;
+        if (_subscribedCueGraphList is null)
+            return;
+
+        _subscribedCueGraphList.Compositions.CollectionChanged += OnCueCompositionsChanged;
+        _subscribedCueGraphList.VideoOutputs.CollectionChanged += OnCueOutputBindingsChanged;
+        RebindCueGraphItemSubscriptions();
     }
 
     private void OnCueNodesChanged(object? sender, NotifyCollectionChangedEventArgs e) => ScheduleCueShowSessionReload();
+
+    private void OnCueCompositionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        RebindCueGraphItemSubscriptions();
+        ScheduleCueShowSessionReload();
+    }
+
+    private void OnCueOutputBindingsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        RebindCueGraphItemSubscriptions();
+        ScheduleCueShowSessionReload();
+    }
+
+    private void RebindCueGraphItemSubscriptions()
+    {
+        foreach (var composition in _subscribedCueCompositions)
+            composition.PropertyChanged -= OnCueCompositionPropertyChanged;
+        foreach (var binding in _subscribedCueOutputBindings)
+            binding.PropertyChanged -= OnCueOutputBindingPropertyChanged;
+        _subscribedCueCompositions.Clear();
+        _subscribedCueOutputBindings.Clear();
+
+        if (_subscribedCueGraphList is null)
+            return;
+        foreach (var composition in _subscribedCueGraphList.Compositions)
+        {
+            _subscribedCueCompositions.Add(composition);
+            composition.PropertyChanged += OnCueCompositionPropertyChanged;
+        }
+        foreach (var binding in _subscribedCueGraphList.VideoOutputs)
+        {
+            _subscribedCueOutputBindings.Add(binding);
+            binding.PropertyChanged += OnCueOutputBindingPropertyChanged;
+        }
+    }
+
+    private void OnCueCompositionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        // Video FX is pushed directly through ApplyCompositionMappingAsync while its editor is open.
+        if (e.PropertyName is nameof(CueCompositionViewModel.VideoFx)
+            or nameof(CueCompositionViewModel.VideoFxEnabled))
+            return;
+        ScheduleCueShowSessionReload();
+    }
+
+    private void OnCueOutputBindingPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        // Mapping edits are live-applied; LineRef is display-only. Device/composition reassignment needs a
+        // fresh set of host leases and therefore a document reload.
+        if (e.PropertyName is nameof(CueVideoOutputBindingViewModel.Mapping)
+            or nameof(CueVideoOutputBindingViewModel.MappingEnabled)
+            or nameof(CueVideoOutputBindingViewModel.LineRef))
+            return;
+        ScheduleCueShowSessionReload();
+    }
 
     /// <summary>Debounces a graph reload (UI thread) so a burst of edits — or loading a list, which adds many
     /// nodes — collapses into a single reload instead of one per node.</summary>
@@ -384,6 +533,7 @@ public partial class MainViewModel : ViewModelBase
     {
         if (_cueShowSession is null)
             return;
+        _cueShowGraphDirty = true;
         _cueReloadDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _cueReloadDebounce.Tick -= OnCueReloadDebounceTick;
         _cueReloadDebounce.Tick += OnCueReloadDebounceTick;
@@ -397,12 +547,95 @@ public partial class MainViewModel : ViewModelBase
         ReloadCueShowSession();
     }
 
+    /// <summary>Flushes a pending debounced cue-model edit before firing. Media execution runs on a worker
+    /// thread, while output acquisition and document mapping must run on Avalonia's UI thread.</summary>
+    private async Task EnsureCueShowSessionCurrentAsync()
+    {
+        if (!_cueShowGraphDirty)
+            return;
+
+        await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (_cueShowGraphDirty)
+            {
+                _cueReloadDebounce?.Stop();
+                ReloadCueShowSession();
+            }
+        });
+
+        if (_cueShowGraphDirty)
+            throw new InvalidOperationException("The ShowSession cue graph could not be refreshed before firing.");
+    }
+
     /// <summary>Runs a re-back transport op (stop/pause/seek/cancel) and logs any failure, so a fault surfaces in
     /// the console/log instead of only as a UI notification (or being silently swallowed by the caller).</summary>
     private async Task GuardedCueShowOp(string op, Func<Task> action)
     {
         try { await action().ConfigureAwait(false); }
         catch (Exception ex) { Trace.LogError(ex, "HaPlay: cue ShowSession {Op} failed", op); }
+    }
+
+    private async Task ApplyCueShowOutputMappingAsync(
+        Guid compositionId, Guid outputLineId, CueOutputMapping? mapping)
+    {
+        var applied = _cueShowSession is not null
+            && await _cueShowSession.ApplyOutputMappingAsync(
+                compositionId.ToString(), outputLineId.ToString("N"),
+                HaPlayShowMapper.ToClipOutputMapping(mapping)).ConfigureAwait(false);
+        if (!applied)
+        {
+            Trace.LogWarning(
+                "HaPlay: output mapping update missed composition {Composition} / line {Line}",
+                compositionId, outputLineId);
+            return;
+        }
+
+        Trace.LogInformation(
+            "HaPlay: output mapping applied — composition={Composition} line={Line} mapping={Mapping}",
+            compositionId, outputLineId, DescribeCueOutputMapping(mapping));
+    }
+
+    private static string DescribeCueOutputMapping(CueOutputMapping? mapping)
+    {
+        if (mapping is null)
+            return "raw-canvas";
+        return $"out={mapping.OutputWidth?.ToString() ?? "canvas"}x{mapping.OutputHeight?.ToString() ?? "canvas"} " +
+               $"sections=[{string.Join("; ", mapping.Sections.Select(s =>
+                   $"src({s.SrcX:0.###},{s.SrcY:0.###},{s.SrcWidth:0.###},{s.SrcHeight:0.###})" +
+                   $"->dst({s.DestX:0.#},{s.DestY:0.#},{s.DestWidth:0.#},{s.DestHeight:0.#})"))}]";
+    }
+
+    private async Task ApplyCueShowCompositionMappingAsync(Guid compositionId, CueOutputMapping? mapping)
+    {
+        if (_cueShowSession is null
+            || !await _cueShowSession.ApplyCompositionMappingAsync(
+                compositionId.ToString(), HaPlayShowMapper.ToClipOutputMapping(mapping)).ConfigureAwait(false))
+        {
+            Trace.LogWarning("HaPlay: composition mapping update missed composition {Composition}", compositionId);
+        }
+    }
+
+    /// <summary>Preserves the cue graph's actual failure message when its policy returns a Failed status
+    /// instead of throwing. Without this lookup the UI and console only said "not ready (Failed)", hiding
+    /// device/open errors that explain an immediate cue termination.</summary>
+    private async Task<string> DescribeCueShowFailureAsync(Guid cueId, CueExecutionStatus status)
+    {
+        if (_cueShowSession is null)
+            return $"cue session unavailable ({status})";
+
+        try
+        {
+            var log = await _cueShowSession.GetCueExecutionLogAsync().ConfigureAwait(false);
+            var entry = log.LastOrDefault(x => string.Equals(x.CueId, cueId.ToString(), StringComparison.Ordinal));
+            if (!string.IsNullOrWhiteSpace(entry?.Message))
+                return entry.Message!;
+        }
+        catch (Exception ex)
+        {
+            Trace.LogDebug(ex, "HaPlay: could not read ShowSession execution detail for cue {Cue}", cueId);
+        }
+
+        return $"cue did not fire ({status})";
     }
 
     /// <summary>(UI thread) Records a re-back cue as started — drives the GUI's Triggered/now-playing state via
@@ -491,7 +724,14 @@ public partial class MainViewModel : ViewModelBase
                 OutputManagement.ReleaseVideoOutputForLine(heldLine);
             _cueAcquiredVideoLines.Clear();
 
-            var videoOutputs = new Dictionary<string, IVideoOutput[]>(StringComparer.Ordinal);
+            // Mapping=null historically meant "raw full canvas" to the runtime, but the layout editor presents
+            // an unmapped output as an implicit native-sized tile (for example 1280x720 at the top-left of a
+            // 1920x1080 composition). Feeding null here made the running output disagree with the editor until
+            // the first Save, at which point it appeared to resize from the full composition to the tile. Resolve
+            // those same implicit tiles up front so initial playback and the editor describe one layout.
+            var effectiveMappings = HaPlayShowMapper.ResolveEffectiveVideoOutputMappings(
+                model, OutputManagement.DefinitionsSnapshot);
+            var videoOutputs = new Dictionary<string, CueShowVideoOutput[]>(StringComparer.Ordinal);
             foreach (var binding in model.VideoOutputs)
             {
                 if (binding.OutputLineId == Guid.Empty)
@@ -500,7 +740,11 @@ public partial class MainViewModel : ViewModelBase
                     continue;
                 _cueAcquiredVideoLines.Add(binding.OutputLineId);
                 var key = binding.CompositionId.ToString();
-                videoOutputs[key] = videoOutputs.TryGetValue(key, out var existing) ? [.. existing, output] : [output];
+                var target = new CueShowVideoOutput(
+                    binding.OutputLineId,
+                    output,
+                    effectiveMappings.GetValueOrDefault(binding.Id));
+                videoOutputs[key] = videoOutputs.TryGetValue(key, out var existing) ? [.. existing, target] : [target];
             }
             _cueVideoOutputs = videoOutputs;
 
@@ -512,15 +756,21 @@ public partial class MainViewModel : ViewModelBase
                 if (Guid.TryParse(c.Id, out var cueGuid))
                     groupByCue[cueGuid] = c.GroupId ?? ShowSession.DefaultGroup;
             _cueGroupByCueId = groupByCue;
+            _cueShowBoundCueIds = doc.Clips
+                .Select(clip => Guid.TryParse(clip.CueId, out var cueId) ? cueId : Guid.Empty)
+                .Where(cueId => cueId != Guid.Empty)
+                .ToHashSet();
+            _cueShowGraphDirty = false;
             Trace.LogInformation(
-                "HaPlay: cue ShowSession reloaded — {Cues} cues, {Comps} compositions, {Lines} video lines",
-                doc.Cues.Count, doc.Compositions.Count, _cueAcquiredVideoLines.Count);
+                "HaPlay: cue ShowSession reloaded — {Cues} cues, {Clips} clips, {Comps} compositions, {Lines} video lines",
+                doc.Cues.Count, doc.Clips.Count, doc.Compositions.Count, _cueAcquiredVideoLines.Count);
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "HaPlay: ShowSession LoadDocument from cue list failed");
         }
     }
+
 
     /// <summary>Best-effort shutdown teardown of the gated cue re-back (no-op when disabled): release its video
     /// leases (UI thread) and dispose the headless <see cref="ShowSession"/>. The session disposes on its own
@@ -1406,7 +1656,19 @@ public partial class MainViewModel : ViewModelBase
                     player?.Name ?? "<none>");
 
                 player?.InvalidateCuePreRoll();
-                await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets, ct).ConfigureAwait(false);
+                if (_cueShowSession is { } showSession)
+                {
+                    // The gated transport must prepare through the same ShowSession graph it fires. Running the
+                    // legacy CuePlaybackEngine pre-roll here opened a second, differently-configured player
+                    // (often video-only when cue audio routes existed), obscured diagnostics, and could leave the
+                    // actual ShowSession graph stale. Flush pending edits first, then warm its upcoming cue(s).
+                    await EnsureCueShowSessionCurrentAsync().ConfigureAwait(false);
+                    await showSession.WarmUpcomingAsync(count: Math.Max(1, engineTargets.Count)).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _cuePlaybackEngine.RefreshPreparedCuesAsync(engineTargets, ct).ConfigureAwait(false);
+                }
                 if (player is null)
                 {
                     timing?.SetOutcome("no-selected-player");

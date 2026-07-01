@@ -121,5 +121,5 @@ public sealed class MediaPlayerOpenLiveBuilder : MediaPlayerOpenBuilder
 
     public override bool TryBuild([NotNullWhen(true)] out MediaPlayer? player, out string? error) =>
         MediaPlayer.TryOpenLive(_audio, _video, OpenOptions, VideoLead, DisposeVideoLeadOnPlayerDispose,
-            _disposeSourcesOnPlayerDispose, out player, out error);
+            _disposeSourcesOnPlayerDispose, resamplerFactory: null, out player, out error);
 }

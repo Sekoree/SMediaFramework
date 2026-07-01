@@ -12,7 +12,7 @@
   <DockPanel Margin="12">
 
     <TextBlock DockPanel.Dock="Top" Margin="0,0,0,8" TextWrapping="Wrap" Opacity="0.85"
-               Text="Drag each output to the part of the composition canvas it shows; the bottom-right handle resizes it. Select an output and use the arrow keys to nudge one pixel (Shift = 10). Where outputs overlap is a blend zone; canvas not covered by any output stays black (a gap)." />
+               Text="Drag each output to select the part of the composition it shows; that source slice is scaled to fill the output raster. The rectangle is not a viewport inside the output window. The bottom-right handle resizes the slice. Use the arrow keys to nudge one pixel (Shift = 10). Overlap creates a blend zone; uncovered canvas is a gap." />
 
     <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right"
                 Spacing="8" Margin="0,8,0,0">

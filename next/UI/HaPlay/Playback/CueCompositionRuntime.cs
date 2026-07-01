@@ -252,13 +252,19 @@ internal sealed class CueCompositionRuntime : IDisposable
         return leases;
     }
 
-    private static ClipCompositionCompositor CreateCompositor(VideoFormat canvasFormat, CueComposition composition)
+    internal static ClipCompositionCompositor CreateShowSessionCompositor(VideoFormat canvasFormat) =>
+        CreateCompositor(canvasFormat, "ShowSession");
+
+    private static ClipCompositionCompositor CreateCompositor(VideoFormat canvasFormat, CueComposition composition) =>
+        CreateCompositor(canvasFormat, composition.Name);
+
+    private static ClipCompositionCompositor CreateCompositor(VideoFormat canvasFormat, string compositionName)
     {
         var requested = Environment.GetEnvironmentVariable("HAPLAY_CUE_COMPOSITOR");
         if (string.Equals(requested, "cpu", StringComparison.OrdinalIgnoreCase))
         {
             Trace.LogInformation("CueCompositionRuntime: composition {Composition} using CPU compositor (env override)",
-                composition.Name);
+                compositionName);
             return new ClipCompositionCompositor(
                 new CpuVideoCompositor(canvasFormat),
                 RequiresBgraLayerConversion: true,
@@ -268,7 +274,7 @@ internal sealed class CueCompositionRuntime : IDisposable
         if (SDL3GLVideoCompositor.TryProbe(out var glError))
         {
             var gpu = new SDL3GLVideoCompositor(canvasFormat);
-            Trace.LogInformation("CueCompositionRuntime: composition {Composition} using OpenGL compositor", composition.Name);
+            Trace.LogInformation("CueCompositionRuntime: composition {Composition} using OpenGL compositor", compositionName);
             return new ClipCompositionCompositor(
                 gpu,
                 RequiresBgraLayerConversion: false,
@@ -283,14 +289,14 @@ internal sealed class CueCompositionRuntime : IDisposable
         {
             Trace.LogWarning(
                 "CueCompositionRuntime: OpenGL compositor requested for {Composition} but unavailable: {Error}; falling back to CPU",
-                composition.Name,
+                compositionName,
                 glError);
         }
         else
         {
             Trace.LogInformation(
                 "CueCompositionRuntime: OpenGL compositor unavailable for {Composition}: {Error}; using CPU compositor",
-                composition.Name,
+                compositionName,
                 glError);
         }
 

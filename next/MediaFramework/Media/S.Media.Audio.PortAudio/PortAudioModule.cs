@@ -18,7 +18,13 @@ public sealed class PortAudioModule : IMediaModule
         // never runs). Release is ref-counted, so device-driven Acquire/Release still balance independently.
         PortAudioRuntime.Acquire();
         builder.AddLifetime(new PortAudioRuntimeLease());
-        builder.AddAudioBackend(new PortAudioBackend());
+        var backend = new PortAudioBackend();
+        builder.AddAudioBackend(backend);
+        // Open `padev://<device>` as a live capture source through the same backend (NXT-06 cutover): the cue
+        // mapper already produces padev:// URIs for PortAudioInputPlaylistItem, but without this provider the
+        // registry could not open them, so a live audio-input cue faulted. NDI input has had its provider; this
+        // is the PortAudio counterpart.
+        builder.AddDecoder(new PortAudioCaptureDecoderProvider(backend));
     }
 
     /// <summary>Drops the registry's PortAudio runtime hold exactly once on dispose (NXT-05).</summary>

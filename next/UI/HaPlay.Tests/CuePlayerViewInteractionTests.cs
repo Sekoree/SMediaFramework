@@ -160,6 +160,57 @@ public sealed class CuePlayerViewInteractionTests
         });
     }
 
+    [Fact]
+    public void IdleCuePlacementEdit_FlagsShowDocumentStaleForNextFire()
+    {
+        DispatchUi(() =>
+        {
+            var vm = new CuePlayerViewModel();
+            var staleMarks = 0;
+            var liveUpdates = 0;
+            vm.CueClipModelStaleCallback = () => staleMarks++;
+            vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => { liveUpdates++; return Task.CompletedTask; };
+
+            vm.AddMediaCueCommand.Execute(null);
+            Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            vm.AddVideoPlacementCommand.Execute(null);
+            var placement = Assert.Single(vm.VisibleVideoPlacements);
+
+            // The cue was never fired → editing its placement must flag the backing show document stale (so the
+            // next GO reloads the current geometry) rather than attempting a live update on a non-running cue.
+            placement.DestX = 0.25;
+            placement.DestWidth = 1.0;
+
+            Assert.True(staleMarks > 0, "idle placement edit should flag the show document stale");
+            Assert.Equal(0, liveUpdates);
+        });
+    }
+
+    [Fact]
+    public void ActiveCuePlacementEdit_PushesLiveUpdate_WithoutMarkingStale()
+    {
+        DispatchUi(() =>
+        {
+            var vm = new CuePlayerViewModel();
+            var staleMarks = 0;
+            var liveUpdates = 0;
+            vm.CueClipModelStaleCallback = () => staleMarks++;
+            vm.UpdateActiveCueVideoPlacementCallback = (_, _, _) => { liveUpdates++; return Task.CompletedTask; };
+
+            vm.AddMediaCueCommand.Execute(null);
+            var cue = Assert.IsType<CueNodeViewModel>(vm.SelectedCueNode);
+            vm.AddVideoPlacementCommand.Execute(null);
+            var placement = Assert.Single(vm.VisibleVideoPlacements);
+
+            vm.OnCueStarted(cue.Id); // now running → live path, not document reload
+
+            placement.DestX = 0.25;
+
+            Assert.True(liveUpdates > 0, "running cue placement edit should push a live update");
+            Assert.Equal(0, staleMarks);
+        });
+    }
+
     private static void DispatchUi(Action action) =>
         HeadlessUnitTestSession
             .GetOrStartForAssembly(typeof(CuePlayerViewInteractionTests).Assembly)

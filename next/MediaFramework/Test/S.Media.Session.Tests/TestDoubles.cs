@@ -58,9 +58,9 @@ internal sealed class SyntheticSilentSource : IAudioSource
 internal sealed class RecordingAudioBackend : IAudioBackend
 {
     public string Name => "recording";
-    private readonly List<(int Channels, string? DeviceId)> _created = [];
+    private readonly List<(int Channels, string? DeviceId, int SampleRate)> _created = [];
 
-    public IReadOnlyList<(int Channels, string? DeviceId)> Created => _created;
+    public IReadOnlyList<(int Channels, string? DeviceId, int SampleRate)> Created => _created;
     public int OutputCount => _created.Count;
     public int LastOutputChannels => _created.Count > 0 ? _created[^1].Channels : 0;
 
@@ -71,7 +71,7 @@ internal sealed class RecordingAudioBackend : IAudioBackend
 
     public IAudioOutput CreateOutput(string? deviceId, AudioFormat format, AudioBackendOptions? options = null)
     {
-        _created.Add((format.Channels, deviceId));
+        _created.Add((format.Channels, deviceId, format.SampleRate));
         return new SinkAudioOutput(format);
     }
 
@@ -99,7 +99,7 @@ internal sealed class FakeVideoDecoderProvider : IMediaDecoderProvider
     public static IMediaRegistry Registry() => MediaRegistry.Build(b => b.AddDecoder(new FakeVideoDecoderProvider()));
 }
 
-internal sealed class SyntheticVideoSource : IVideoSource
+internal sealed class SyntheticVideoSource : IVideoSource, ISeekableSource
 {
     private const int FrameCount = 30;
     private int _next;
@@ -107,12 +107,17 @@ internal sealed class SyntheticVideoSource : IVideoSource
     public VideoFormat Format { get; } = new(4, 4, PixelFormat.Bgra32, new Rational(30, 1));
     public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [PixelFormat.Bgra32];
     public bool IsExhausted => Volatile.Read(ref _next) >= FrameCount;
+    public TimeSpan Duration => TimeSpan.FromSeconds(FrameCount / 30.0);
+    public TimeSpan Position => TimeSpan.FromTicks(TimeSpan.TicksPerSecond * Volatile.Read(ref _next) / 30);
 
     public void SelectOutputFormat(PixelFormat format)
     {
         if (format != PixelFormat.Bgra32)
             throw new NotSupportedException();
     }
+
+    public void Seek(TimeSpan position) =>
+        Volatile.Write(ref _next, Math.Clamp((int)(position.TotalSeconds * 30), 0, FrameCount));
 
     public bool TryReadNextFrame(out VideoFrame frame)
     {
@@ -124,6 +129,8 @@ internal sealed class SyntheticVideoSource : IVideoSource
         }
 
         var bytes = new byte[4 * 4 * 4];
+        for (var i = 3; i < bytes.Length; i += 4)
+            bytes[i] = 255; // opaque black: placement tests can distinguish content from the clear canvas
         frame = new VideoFrame(
             TimeSpan.FromTicks(TimeSpan.TicksPerSecond * index / 30),
             Format,

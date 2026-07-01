@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Media/S.Media.Core/S.Media.Core.csproj" />
+    <ProjectReference Include="../../Media/S.Media.Audio.PortAudio/S.Media.Audio.PortAudio.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="S.Media.Core.Audio" />
+    <Using Include="S.Media.Core.Registry" />
+    <Using Include="S.Media.Audio.PortAudio" />
+  </ItemGroup>
+
+</Project>

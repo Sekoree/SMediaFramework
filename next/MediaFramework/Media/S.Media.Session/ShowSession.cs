@@ -30,6 +30,8 @@ public sealed class ShowSession : IAsyncDisposable
     /// <see cref="OutputPatchRoute"/> (<c>OutputId</c>) to apply an N→M channel remap when clips play (03 §6).</summary>
     public const string MasterOutputId = "_master";
 
+    private static readonly TimeSpan SoftStopFadeDuration = TimeSpan.FromMilliseconds(750);
+
     private readonly IMediaRegistry _registry;
     private readonly IAudioBackend? _audioBackend;
     private readonly string? _outputDeviceId;
@@ -235,7 +237,13 @@ public sealed class ShowSession : IAsyncDisposable
         {
             var groupId = cue.GroupId ?? DefaultGroup;
             var binding = newClipsByCue.GetValueOrDefault(cue.Id);
-            newCueGraph.AddCue(cue, ct => PlayClipAsync(groupId, binding, ct));
+            // A cue without a clip currently has no executable session action. Do not report it as Fired: that
+            // produced a successful no-op and made HaPlay briefly mark a stale/unbound media cue as playing.
+            // Future control/stop cues need their own action binding rather than relying on an empty clip.
+            newCueGraph.AddCue(
+                cue,
+                ct => PlayClipAsync(groupId, binding, ct),
+                binding is null ? static () => false : null);
         }
 
         // Commit (atomic on the dispatcher): retire the running show, then swap in the staged graph. Nothing
@@ -266,40 +274,23 @@ public sealed class ShowSession : IAsyncDisposable
         if (binding is null)
             return; // a control/stop cue with no media of its own
 
-        // --- SETUP (on the dispatcher): capture the show generation, get/add the group, mint the composition
-        // layer. Short; the slow media open below runs OFF the dispatcher so the loop stays free (NXT-03).
+        // --- SETUP (on the dispatcher): capture the show generation, group and composition. The layer is
+        // intentionally NOT created yet: its placement transform needs the media's actual negotiated source
+        // dimensions, which are unknown until ArmAsync opens the clip below.
         var setup = await InvokeAsync(() =>
         {
             var generation = _showGeneration;
             var grp = GetOrAddGroup(groupId);
             ClipCompositionRuntime? comp = null;
-            ClipCompositionRuntime.LayerSlot? lyr = null;
-            // Arming lead-free lets a warm prepared clip be reused across fires — the layer is per-fire, attached
-            // post-arm (the source declares its emit format up front, so it negotiates at open).
             if (binding.CompositionId is { } compositionId && _compositions.TryGetValue(compositionId, out var found))
-            {
                 comp = found;
-                lyr = found.AddLayer(
-                    found.CanvasFormat,
-                    BuildVideoPlacementSpec(compositionId, binding.LayerIndex, binding.Placement));
-            }
-            return Task.FromResult((generation, group: grp, composition: comp, layer: lyr));
+            return Task.FromResult((generation, group: grp, composition: comp));
         }).ConfigureAwait(false);
 
         // --- OPEN (OFF the dispatcher): arm the clip through the standby engine — it opens via the registry
         // (auto-wiring adaptive-rate drift correction) and seeks to the trim-in (Window.Start), reusing a warm
         // prepared clip when present. The long part; the dispatcher loop stays free throughout (NXT-03).
-        IArmedClip armed;
-        try
-        {
-            armed = await _standby.ArmAsync(BuildClipSpec(binding), cancellationToken).ConfigureAwait(false);
-        }
-        catch
-        {
-            if (setup.layer is not null)
-                await InvokeAsync(() => { setup.layer.Dispose(); return Task.CompletedTask; }).ConfigureAwait(false);
-            throw;
-        }
+        var armed = await _standby.ArmAsync(BuildClipSpec(binding), cancellationToken).ConfigureAwait(false);
 
         // --- COMMIT (on the dispatcher): swap the armed clip in, or discard it if the show was reloaded / the
         // fire was cancelled (STOP) during the open (NXT-03).
@@ -314,27 +305,39 @@ public sealed class ShowSession : IAsyncDisposable
         string groupId,
         ShowClipBinding binding,
         CancellationToken cancellationToken,
-        (int generation, TransportGroup group, ClipCompositionRuntime? composition, ClipCompositionRuntime.LayerSlot? layer) setup,
+        (int generation, TransportGroup group, ClipCompositionRuntime? composition) setup,
         IArmedClip armed)
     {
         if (cancellationToken.IsCancellationRequested || _showGeneration != setup.generation || _disposed)
         {
-            setup.layer?.Dispose();
             await armed.ReleaseAsync().ConfigureAwait(false);
             return;
         }
 
         var group = setup.group;
         var composition = setup.composition;
-        var layer = setup.layer;
         var player = armed.Player;
+        ClipCompositionRuntime.LayerSlot? layer = null;
         var outputs = new List<IAudioOutput>();
         var subtitleAttachments = new List<IDisposable>();
         var fadeIn = binding.FadeIn > TimeSpan.Zero;
-        // Each entry is (outputId, the route's configured target gain) — the fade ramps up to THAT level.
-        var fadingRoutes = fadeIn ? new List<(string OutputId, float TargetGain)>() : null;
+        // Retained for the active clip so both fade-in and every stop path ramp each route relative to its
+        // configured gain rather than assuming unity.
+        var routeTargets = new List<(string OutputId, float TargetGain)>();
         try
         {
+            if (composition is not null
+                && binding.CompositionId is { } compositionId
+                && player.VideoSource is { } videoSource)
+            {
+                // PlacementResolver scales source pixels into the normalized destination rectangle. Passing the
+                // canvas format here (the old pre-open placeholder) made a 1280x720 clip on a 1920x1080 canvas
+                // use an identity/full-HD transform, leaving the real frame undersized and offset.
+                layer = composition.AddLayer(
+                    videoSource.Format,
+                    BuildVideoPlacementSpec(compositionId, binding.LayerIndex, binding.Placement));
+            }
+
             if (layer is not null)
             {
                 player.AttachVideoOutput(layer.Output); // the clip's video feeds the composition layer
@@ -353,12 +356,12 @@ public sealed class ShowSession : IAsyncDisposable
             if (_audioBackend is not null && player.AudioRouter is not null)
             {
                 var rate = player.SampleRate > 0 ? player.SampleRate : 48_000;
-                if (binding.AudioRoutes is { Count: > 0 } clipRoutes)
+                if (binding.AudioRoutes is { } clipRoutes)
                 {
                     // Per-clip routing (GUI per-cue audio): the clip plays on exactly its routed outputs/devices,
-                    // each with its own N→M channel map + static gain. The first route is the master/clock; the
-                    // rest auto-slave. With a fade-in the route attaches silent and ramps up to its own configured
-                    // gain (the fade scales the target, so a fader set below/above unity is honoured — NXT-07).
+                    // each with its own N→M channel map + static gain. An explicitly empty collection means silent;
+                    // only null inherits the show's group/default routing. The first route is the master/clock;
+                    // the rest auto-slave. With a fade-in the route attaches silent and ramps up to its target.
                     for (var i = 0; i < clipRoutes.Count; i++)
                     {
                         var route = clipRoutes[i];
@@ -368,7 +371,7 @@ public sealed class ShowSession : IAsyncDisposable
                         var o = _audioBackend.CreateOutput(route.DeviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
                         player.AttachAudioOutput(o, outputId, map: channelMap, gain: fadeIn ? 0f : route.Gain);
                         outputs.Add(o);
-                        fadingRoutes?.Add((outputId, route.Gain));
+                        routeTargets.Add((outputId, route.Gain));
                     }
                 }
                 else
@@ -385,7 +388,7 @@ public sealed class ShowSession : IAsyncDisposable
                         // Fade-in: attach silent (gain 0) and ramp the route gain up to unity over FadeIn after Start.
                         player.AttachAudioOutput(o, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
                         outputs.Add(o);
-                        fadingRoutes?.Add((outDef.Id, 1f));
+                        routeTargets.Add((outDef.Id, 1f));
                     }
                 }
             }
@@ -413,20 +416,22 @@ public sealed class ShowSession : IAsyncDisposable
 
             armed.Start();
             await ReplaceActiveAsync(group, armed, outputs, layer, subtitleAttachments).ConfigureAwait(false);
+            group.SetActiveFadeMetadata(binding, routeTargets, fadeIn ? 0f : 1f);
 
             // Background per-clip work — the fade-in ramp + the end-of-clip (loop/trim-out/freeze) monitor —
             // shares one cancellation, cancelled when the clip is replaced. Both gated, so a plain
             // play-to-end cue with no fade starts nothing. End handling needs a known duration (live = 0).
             var end = player.Duration - binding.EndOffset;
-            var endHandling = (binding.Loop || binding.EndBehavior != ClipEndBehavior.Stop || binding.EndOffset > TimeSpan.Zero)
+            var endHandling = (binding.Loop || binding.EndBehavior != ClipEndBehavior.Stop
+                               || binding.EndOffset > TimeSpan.Zero || binding.FadeOut > TimeSpan.Zero)
                 && player.Duration > TimeSpan.Zero
                 && end > binding.StartOffset;
             if (fadeIn || endHandling)
             {
                 var clipCts = new CancellationTokenSource();
                 group.SetClipWorkCts(clipCts);
-                if (fadeIn && fadingRoutes is { Count: > 0 })
-                    StartFadeIn(groupId, player, fadingRoutes, binding.FadeIn, clipCts.Token);
+                if (fadeIn && routeTargets.Count > 0)
+                    StartFadeIn(groupId, player, routeTargets, binding.FadeIn, clipCts.Token);
                 if (endHandling)
                     StartEndMonitor(groupId, binding, player, end, clipCts.Token);
             }
@@ -447,9 +452,25 @@ public sealed class ShowSession : IAsyncDisposable
     /// (prepare) and fire (arm) paths, so a warmed clip is found by its key (cue id + media path).</summary>
     private ClipSpec BuildClipSpec(ShowClipBinding binding, string? variant = null)
     {
+        var targetAudioRate = binding.AudioRoutes switch
+        {
+            { Count: 0 } => null, // explicitly silent: do not infer anything from the default hardware device
+            { } routes => routes.Select(route => route.SampleRate).FirstOrDefault(rate => rate is > 0)
+                          ?? ResolveBackendSampleRate(routes.FirstOrDefault()?.DeviceId ?? _outputDeviceId),
+            null => ResolveBackendSampleRate(_outputDeviceId), // standalone/group-routing compatibility
+        };
         var options = binding.AudioStreamIndex is { } audioTrack
-            ? S.Media.Players.MediaPlayerOpenOptions.Default with { AudioStreamIndex = audioTrack } // multi-track select (03 §6)
-            : S.Media.Players.MediaPlayerOpenOptions.Default;
+            ? S.Media.Players.MediaPlayerOpenOptions.Default with
+            {
+                AudioStreamIndex = audioTrack,
+                TargetAudioSampleRate = targetAudioRate,
+                FileVideoDecodeQueueCapacity = 16,
+            } // multi-track select (03 §6)
+            : S.Media.Players.MediaPlayerOpenOptions.Default with
+            {
+                TargetAudioSampleRate = targetAudioRate,
+                FileVideoDecodeQueueCapacity = 16,
+            };
         var window = binding.StartOffset > TimeSpan.Zero
             ? new S.Media.Core.ClipWindow(binding.StartOffset, TimeSpan.Zero, TimeSpan.Zero, HasKnownEnd: false)
             : S.Media.Core.ClipWindow.Unbounded;
@@ -459,7 +480,25 @@ public sealed class ShowSession : IAsyncDisposable
             variant is null ? binding.CueId : $"{binding.CueId}:{variant}",
             ClipMediaSource.File(_registry, binding.MediaPath, options),
             window,
-            cacheKey: variant is null ? binding.MediaPath : $"{binding.MediaPath}#{variant}");
+            cacheKey: $"{binding.MediaPath}|audio:{binding.AudioStreamIndex?.ToString() ?? "auto"}" +
+                      $"|rate:{targetAudioRate?.ToString() ?? "source"}" +
+                      (variant is null ? string.Empty : $"#{variant}"));
+    }
+
+    /// <summary>Returns the hardware/backend nominal rate for a device. JACK devices expose their fixed
+    /// graph rate here; opening PortAudio at the media's source rate would fail for 44.1 kHz media on a
+    /// 48 kHz JACK graph.</summary>
+    private int? ResolveBackendSampleRate(string? deviceId)
+    {
+        if (_audioBackend is null)
+            return null;
+        var devices = _audioBackend.EnumerateOutputDevices();
+        var device = !string.IsNullOrWhiteSpace(deviceId)
+            ? devices.FirstOrDefault(d => string.Equals(d.Id, deviceId, StringComparison.Ordinal))
+            : devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
+        return device is { DefaultSampleRate: > 0 }
+            ? checked((int)Math.Round(device.DefaultSampleRate))
+            : null;
     }
 
     private static VideoPlacementSpec BuildVideoPlacementSpec(string compositionId, int layerIndex, ShowVideoPlacement? p) =>
@@ -469,7 +508,10 @@ public sealed class ShowSession : IAsyncDisposable
                 compositionId, layerIndex,
                 Opacity: p.Opacity, Placement: p.Fit,
                 DestX: p.DestX, DestY: p.DestY, DestWidth: p.DestWidth, DestHeight: p.DestHeight,
-                RotationDegrees: p.RotationDegrees);
+                CropLeft: p.CropLeft, CropTop: p.CropTop,
+                CropRight: p.CropRight, CropBottom: p.CropBottom,
+                RotationDegrees: p.RotationDegrees,
+                VideoFx: p.VideoFx);
 
     /// <summary>Live-edit the active cue's composition placement while it plays (the GUI's
     /// <c>UpdateActiveCueVideoPlacement</c>) — repositions / re-opacities its layer. Returns false when the
@@ -573,11 +615,18 @@ public sealed class ShowSession : IAsyncDisposable
         {
             await ReleaseVoiceAsync(voiceId).ConfigureAwait(false); // re-trigger replaces the prior voice
             var outputId = $"voice:{voiceId}";
+            var targetAudioRate = ResolveBackendSampleRate(deviceId ?? _outputDeviceId);
             var armed = await _standby.ArmAsync(new ClipSpec(
                 outputId,
-                ClipMediaSource.File(_registry, mediaPath),
+                ClipMediaSource.File(
+                    _registry,
+                    mediaPath,
+                    S.Media.Players.MediaPlayerOpenOptions.Default with
+                    {
+                        TargetAudioSampleRate = targetAudioRate,
+                    }),
                 S.Media.Core.ClipWindow.Unbounded,
-                outputId)).ConfigureAwait(false);
+                $"{outputId}|rate:{targetAudioRate?.ToString() ?? "source"}")).ConfigureAwait(false);
             var player = armed.Player;
             var outputs = new List<IAudioOutput>();
             try
@@ -825,7 +874,7 @@ public sealed class ShowSession : IAsyncDisposable
     private void StartFadeIn(string groupId, S.Media.Players.MediaPlayer player,
         IReadOnlyList<(string OutputId, float TargetGain)> routes, TimeSpan duration, CancellationToken ct)
     {
-        if (player.AudioSourceId is not { } sourceId)
+        if (player.AudioSourceId is null)
             return;
 
         // Suppress ExecutionContext flow (see StartEndMonitor) so InvokeAsync marshals onto the dispatcher.
@@ -847,10 +896,10 @@ public sealed class ShowSession : IAsyncDisposable
                             {
                                 if (ct.IsCancellationRequested ||
                                     _groups.GetValueOrDefault(groupId)?.Active?.Player != player ||
-                                    player.AudioRouter is not { } router)
+                                    player.AudioRouter is null)
                                     return Task.FromResult(true);
-                                foreach (var (outId, targetGain) in routes)
-                                    router.SetRouteGain(sourceId, outId, frac * targetGain);
+                                var group = _groups.GetValueOrDefault(groupId);
+                                group?.ApplyAudioScale(player, routes, frac);
                                 return Task.FromResult(frac >= 1f);
                             }).ConfigureAwait(false);
                             if (done)
@@ -897,10 +946,37 @@ public sealed class ShowSession : IAsyncDisposable
                             await Task.Delay(EndMonitorPollInterval, ct).ConfigureAwait(false);
                             var done = await InvokeAsync<bool>(async () =>
                             {
-                                if (ct.IsCancellationRequested ||
-                                    _groups.GetValueOrDefault(groupId)?.Active?.Player != player)
+                                if (ct.IsCancellationRequested
+                                    || _groups.GetValueOrDefault(groupId) is not { } group
+                                    || group.Active?.Player != player)
                                     return true; // clip replaced/gone → stop monitoring
-                                if (player.Position < end - EndMonitorGuard)
+                                var position = player.Position;
+                                var remaining = end - position;
+                                var naturalFade = binding.FadeOut > TimeSpan.Zero
+                                    ? binding.FadeOut
+                                    : binding.EndBehavior == ClipEndBehavior.FadeOutAndStop
+                                        ? SoftStopFadeDuration
+                                        : TimeSpan.Zero;
+
+                                // Old HaPlay starts the configured fade before the out-point, fading audio and
+                                // video together. Once started, the fade task owns the final release so this
+                                // monitor exits and cannot race it with an immediate hard stop.
+                                if (!loops && !freezes && naturalFade > TimeSpan.Zero
+                                    && remaining > TimeSpan.Zero && remaining <= naturalFade
+                                    && group.TryBeginFadeOut(player))
+                                {
+                                    StartNaturalFadeOut(
+                                        groupId,
+                                        group.Active!,
+                                        group.ActiveRouteTargets,
+                                        group.ActiveAudioScale,
+                                        group.ActiveLayer?.Opacity ?? 0f,
+                                        remaining,
+                                        ct);
+                                    return true;
+                                }
+
+                                if (position < end - EndMonitorGuard)
                                     return false; // not at the out-point yet (frozen here if paused)
                                 if (loops)
                                 {
@@ -914,7 +990,7 @@ public sealed class ShowSession : IAsyncDisposable
                                     player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                                     return true; // held on the last frame
                                 }
-                                // Stop / FadeOutAndStop (fade ramp deferred): release the clip at the out-point.
+                                // Plain Stop: release the clip at the out-point. FadeOutAndStop is handled above.
                                 await ReplaceActiveAsync(GetOrAddGroup(groupId), null, [], null).ConfigureAwait(false);
                                 return true;
                             }).ConfigureAwait(false);
@@ -926,6 +1002,64 @@ public sealed class ShowSession : IAsyncDisposable
                     catch
                     {
                         // best-effort — an end-monitor hiccup must never crash the session
+                    }
+                },
+                ct);
+        }
+    }
+
+    /// <summary>Runs a natural-end audio/video fade without occupying the session dispatcher between steps,
+    /// then releases the clip if it is still active.</summary>
+    private void StartNaturalFadeOut(
+        string groupId,
+        IArmedClip clip,
+        IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+        float startAudioScale,
+        float startOpacity,
+        TimeSpan duration,
+        CancellationToken ct)
+    {
+        using (ExecutionContext.SuppressFlow())
+        {
+            _ = Task.Run(
+                async () =>
+                {
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    try
+                    {
+                        while (!ct.IsCancellationRequested)
+                        {
+                            var scale = (float)Math.Clamp(
+                                1d - sw.Elapsed.TotalMilliseconds / duration.TotalMilliseconds, 0d, 1d);
+                            var done = await InvokeAsync<bool>(() =>
+                            {
+                                if (ct.IsCancellationRequested
+                                    || _groups.GetValueOrDefault(groupId) is not { } group
+                                    || !ReferenceEquals(group.Active, clip))
+                                    return Task.FromResult(true);
+                                group.ApplyFadeLevel(
+                                    clip.Player, routeTargets, startAudioScale, startOpacity, scale);
+                                return Task.FromResult(scale <= 0f);
+                            }).ConfigureAwait(false);
+                            if (done)
+                                break;
+                            await Task.Delay(FadeStepInterval, ct).ConfigureAwait(false);
+                        }
+
+                        if (!ct.IsCancellationRequested)
+                        {
+                            await InvokeAsync(async () =>
+                            {
+                                if (_groups.GetValueOrDefault(groupId) is { } group
+                                    && ReferenceEquals(group.Active, clip))
+                                    await ReplaceActiveAsync(group, null, [], null).ConfigureAwait(false);
+                            }).ConfigureAwait(false);
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                    catch
+                    {
+                        // Best effort: a fade failure must not terminate the session process.
                     }
                 },
                 ct);
@@ -1043,12 +1177,31 @@ public sealed class ShowSession : IAsyncDisposable
             return Task.CompletedTask;
         });
 
-    /// <summary>Stops and releases the active clip (and its master output) on <paramref name="groupId"/>. Cancels
-    /// any in-flight cue fire first so STOP never waits behind a long pre-wait/open (NXT-03).</summary>
+    /// <summary>Soft-stops and releases the active clip on <paramref name="groupId"/>. The cue's configured
+    /// fade-out is used, falling back to the legacy HaPlay 750 ms stop fade. Cancels any in-flight cue fire first
+    /// so STOP never waits behind a long pre-wait/open (NXT-03).</summary>
     public Task StopAsync(string groupId = DefaultGroup)
     {
         CancelActiveFire();
-        return InvokeAsync(() => ReplaceActiveAsync(GetOrAddGroup(groupId), null, [], null).AsTask());
+        return InvokeAsync(async () =>
+        {
+            var group = GetOrAddGroup(groupId);
+            await FadeGroupsAsync([group]).ConfigureAwait(false);
+            await ReplaceActiveAsync(group, null, [], null).ConfigureAwait(false);
+        });
+    }
+
+    /// <summary>Soft-stops every active transport group together (HaPlay Stop/Panic parity).</summary>
+    public Task StopAllAsync()
+    {
+        CancelActiveFire();
+        return InvokeAsync(async () =>
+        {
+            var active = _groups.Values.Where(group => group.Active is not null).ToArray();
+            await FadeGroupsAsync(active).ConfigureAwait(false);
+            foreach (var group in active)
+                await ReplaceActiveAsync(group, null, [], null).ConfigureAwait(false);
+        });
     }
 
     /// <summary>Stops the cue with <paramref name="cueId"/> wherever it is the active clip (per-cue stop /
@@ -1060,9 +1213,65 @@ public sealed class ShowSession : IAsyncDisposable
         {
             foreach (var group in _groups.Values)
                 if (group.Active?.Spec.Id == cueId)
+                {
+                    await FadeGroupsAsync([group]).ConfigureAwait(false);
                     await ReplaceActiveAsync(group, null, [], null).ConfigureAwait(false);
+                }
         });
     }
+
+    /// <summary>Ramps active audio routes and composition layers to silence. All groups advance from one
+    /// stopwatch so Panic fades them concurrently instead of serially. Must be called by the session dispatcher.</summary>
+    private static async Task FadeGroupsAsync(IReadOnlyList<TransportGroup> groups)
+    {
+        var fades = new List<GroupFade>(groups.Count);
+        foreach (var group in groups)
+        {
+            if (group.Active is not { } clip || !group.TryBeginFadeOut(clip.Player))
+                continue;
+            fades.Add(new GroupFade(
+                group,
+                clip,
+                group.ActiveBinding?.FadeOut is { } configured && configured > TimeSpan.Zero
+                    ? configured
+                    : SoftStopFadeDuration,
+                group.ActiveAudioScale,
+                group.ActiveLayer?.Opacity ?? 0f,
+                group.ActiveRouteTargets));
+        }
+        if (fades.Count == 0)
+            return;
+
+        var maxDuration = fades.Max(fade => fade.Duration);
+        if (maxDuration <= TimeSpan.Zero)
+            return;
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            var elapsed = sw.Elapsed;
+            foreach (var fade in fades)
+            {
+                if (!ReferenceEquals(fade.Group.Active, fade.Clip))
+                    continue;
+                var scale = (float)Math.Clamp(1d - elapsed.TotalMilliseconds / fade.Duration.TotalMilliseconds, 0d, 1d);
+                fade.Group.ApplyFadeLevel(
+                    fade.Clip.Player, fade.RouteTargets, fade.StartAudioScale, fade.StartOpacity, scale);
+            }
+
+            if (elapsed >= maxDuration)
+                return;
+            await Task.Delay(FadeStepInterval).ConfigureAwait(false);
+        }
+    }
+
+    private sealed record GroupFade(
+        TransportGroup Group,
+        IArmedClip Clip,
+        TimeSpan Duration,
+        float StartAudioScale,
+        float StartOpacity,
+        IReadOnlyList<(string OutputId, float TargetGain)> RouteTargets);
 
     /// <summary>Pauses or resumes the active clip on <paramref name="groupId"/> — a seamless toggle (codec
     /// pipelines are not flushed, so resume continues from the same frame, matching the GUI engine's
@@ -1163,6 +1372,14 @@ public sealed class ShowSession : IAsyncDisposable
             return Task.FromResult(true);
         });
 
+    /// <summary>Applies (or clears) the mapping for one physical output of a composition. The output id is
+    /// supplied by the host's <see cref="ClipCompositionOutputLease"/> and remains stable across live edits.</summary>
+    public Task<bool> ApplyOutputMappingAsync(
+        string compositionId, string outputId, ClipOutputMappingSpec? mapping) =>
+        InvokeAsync(() => Task.FromResult(
+            _compositions.TryGetValue(compositionId, out var composition)
+            && composition.UpdateOutputMapping(outputId, mapping)));
+
     private TransportGroup GetOrAddGroup(string groupId)
     {
         if (!_groups.TryGetValue(groupId, out var group))
@@ -1240,11 +1457,62 @@ public sealed class ShowSession : IAsyncDisposable
         private IReadOnlyList<IDisposable> _subtitleAttachments = [];
         private ClipCompositionRuntime.LayerSlot? _layer;
         private CancellationTokenSource? _clipWorkCts;
+        private ShowClipBinding? _activeBinding;
+        private IReadOnlyList<(string OutputId, float TargetGain)> _activeRouteTargets = [];
+        private float _activeAudioScale = 1f;
+        private int _fadeOutStarted;
         public int LastFiredNumber { get; set; } = int.MinValue;
+
+        public ShowClipBinding? ActiveBinding => _activeBinding;
+        public ClipCompositionRuntime.LayerSlot? ActiveLayer => _layer;
+        public IReadOnlyList<(string OutputId, float TargetGain)> ActiveRouteTargets => _activeRouteTargets;
+        public float ActiveAudioScale => _activeAudioScale;
 
         /// <summary>Hands the group the cancellation source for the active clip's background work (the fade-in
         /// ramp + the end-of-clip loop/stop/freeze monitor). Cancelled when the clip is replaced.</summary>
         public void SetClipWorkCts(CancellationTokenSource cts) => _clipWorkCts = cts;
+
+        public void SetActiveFadeMetadata(
+            ShowClipBinding binding,
+            IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+            float initialAudioScale)
+        {
+            _activeBinding = binding;
+            _activeRouteTargets = routeTargets.ToArray();
+            _activeAudioScale = Math.Clamp(initialAudioScale, 0f, 1f);
+            Volatile.Write(ref _fadeOutStarted, 0);
+        }
+
+        public bool TryBeginFadeOut(S.Media.Players.MediaPlayer player) =>
+            Active?.Player == player && Interlocked.Exchange(ref _fadeOutStarted, 1) == 0;
+
+        public void ApplyAudioScale(
+            S.Media.Players.MediaPlayer player,
+            IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+            float scale)
+        {
+            if (Active?.Player != player)
+                return;
+            _activeAudioScale = Math.Clamp(scale, 0f, 1f);
+            if (player.AudioRouter is { } router && player.AudioSourceId is { } sourceId)
+                foreach (var (outputId, targetGain) in routeTargets)
+                    router.SetRouteGain(sourceId, outputId, targetGain * _activeAudioScale);
+        }
+
+        public void ApplyFadeLevel(
+            S.Media.Players.MediaPlayer player,
+            IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+            float startAudioScale,
+            float startOpacity,
+            float scale)
+        {
+            if (Active?.Player != player)
+                return;
+            scale = Math.Clamp(scale, 0f, 1f);
+            ApplyAudioScale(player, routeTargets, startAudioScale * scale);
+            if (_layer is not null)
+                _layer.Opacity = startOpacity * scale;
+        }
 
         /// <summary>Live-repositions the active clip's composition layer; false if it has no layer.</summary>
         public bool UpdateActivePlacement(VideoPlacementSpec spec)
@@ -1265,6 +1533,10 @@ public sealed class ShowSession : IAsyncDisposable
             _clipWorkCts?.Cancel();
             _clipWorkCts?.Dispose();
             _clipWorkCts = null;
+            _activeBinding = null;
+            _activeRouteTargets = [];
+            _activeAudioScale = 1f;
+            Volatile.Write(ref _fadeOutStarted, 0);
 
             Clock.SetReference(clip is null
                 ? new MonotonicWallClock(start: false)

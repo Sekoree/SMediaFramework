@@ -636,9 +636,21 @@ public partial class CuePlayerViewModel : ViewModelBase
 
     private void PushActiveVideoPlacementUpdate(CueVideoPlacementViewModel placement)
     {
-        if (_preRollWatchedCue is not { } cue
-            || UpdateActiveCueVideoPlacementCallback is not { } callback
-            || !_activeCueIds.Contains(cue.Id))
+        if (_preRollWatchedCue is not { } cue)
+            return;
+
+        // Not running yet: the edited placement lives only in the cue model, and the backing ShowSession
+        // document a GO fires from is NOT rebuilt on placement edits (only structural changes reload it).
+        // Flag it stale so the next fire reloads with the current placement — otherwise the cue fires with
+        // the placement captured at the last reload and the new geometry only takes hold once the operator
+        // nudges it again (which then takes the live path below). A running cue is updated live instead.
+        if (!_activeCueIds.Contains(cue.Id))
+        {
+            CueClipModelStaleCallback?.Invoke();
+            return;
+        }
+
+        if (UpdateActiveCueVideoPlacementCallback is not { } callback)
             return;
 
         var index = cue.VideoPlacements.IndexOf(placement);
@@ -1075,6 +1087,12 @@ public partial class CuePlayerViewModel : ViewModelBase
     /// <summary>Host callback for mutating a placement's already-running compositor slot while the
     /// selected cue is active. No-op in tests or when the cue is not playing.</summary>
     public Func<Guid, int, CueVideoPlacement, Task>? UpdateActiveCueVideoPlacementCallback { get; set; }
+
+    /// <summary>Host callback raised when an <em>idle</em> (not-yet-fired) cue's clip model is edited in a way
+    /// the backing show document captures only at (re)load — e.g. a video placement nudge. The host flags its
+    /// document stale so the next GO rebuilds it with the current model, instead of firing stale geometry. A
+    /// running cue is updated live via <see cref="UpdateActiveCueVideoPlacementCallback"/> and does not raise this.</summary>
+    public Action? CueClipModelStaleCallback { get; set; }
 
     /// <summary>Host callback for reconciling the selected cue's running audio routes after route
     /// row edits. No-op in tests or when the cue is not playing.</summary>
