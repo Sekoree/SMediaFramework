@@ -88,6 +88,7 @@ public partial class MediaPlayerViewModel
             // lines for this source. Acquire realizes the SDL window / NDI sender, so it must run on the UI thread;
             // doing it before LoadDocument keeps the video factory a pure lookup during the (synchronous) load.
             IReadOnlyList<ShowClipAudioRoute> audioRoutes = [];
+            var canvas = (Width: 1920, Height: 1080);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 StopIdleSlate();
@@ -96,6 +97,7 @@ public partial class MediaPlayerViewModel
                 _playerAcquiredLines.Clear();
 
                 var outputs = new List<IVideoOutput>();
+                var resolutions = new List<(int Width, int Height)>();
                 if (hasVideo)
                 {
                     foreach (var line in lines)
@@ -104,7 +106,12 @@ public partial class MediaPlayerViewModel
                             continue;
                         outputs.Add(o);
                         _playerAcquiredLines.Add(line.Definition.Id);
+                        if (HaPlayPlaybackHelpers.TryGetOutputResolution(line.Definition, out var rw, out var rh))
+                            resolutions.Add((rw, rh));
                     }
+                    // Composite at the driven outputs' resolution (largest, for best quality) rather than a fixed
+                    // 1080p — otherwise 4K content on a 4K line is needlessly downscaled through the canvas.
+                    canvas = ResolveDeckCanvasSize(resolutions);
                 }
                 _playerVideoOutputs = new Dictionary<string, IVideoOutput[]>(StringComparer.Ordinal)
                 {
@@ -114,7 +121,9 @@ public partial class MediaPlayerViewModel
                 audioRoutes = BuildDeckShowAudioRoutes(lines);
             });
 
-            _playerShowSession.LoadDocument(MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes));
+            _playerShowSession.LoadDocument(
+                MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes, canvas.Width, canvas.Height,
+                    (item as FilePlaylistItem)?.Subtitles));
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
 
             // UI thread: flip the deck into the playing state (observable-property writes).
@@ -206,6 +215,18 @@ public partial class MediaPlayerViewModel
                 pa.SampleRate > 0 ? pa.SampleRate : null));
         }
         return routes;
+    }
+
+    /// <summary>Pure: the deck's composition-canvas size = the LARGEST driven output resolution (by pixel area),
+    /// so a single canvas feeds every line at native quality and each line scales down as needed. Falls back to
+    /// 1080p when no output advertises a locked resolution (e.g. an auto-sized local window).</summary>
+    internal static (int Width, int Height) ResolveDeckCanvasSize(IEnumerable<(int Width, int Height)> outputResolutions)
+    {
+        int w = 0, h = 0;
+        foreach (var (rw, rh) in outputResolutions)
+            if (rw > 0 && rh > 0 && (long)rw * rh > (long)w * h)
+                (w, h) = (rw, rh);
+        return w > 0 && h > 0 ? (w, h) : (1920, 1080);
     }
 
     /// <summary>Pure: an out←src channel map (index = output channel, value = source channel, -1 = silence) from a

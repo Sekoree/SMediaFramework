@@ -1,3 +1,4 @@
+using HaPlay.Models;
 using S.Media.Session;
 
 namespace HaPlay.Playback;
@@ -28,7 +29,8 @@ public static class MediaPlayerShowMapper
         bool hasVideo,
         IReadOnlyList<ShowClipAudioRoute>? audioRoutes = null,
         int canvasWidth = 1920,
-        int canvasHeight = 1080)
+        int canvasHeight = 1080,
+        IReadOnlyList<CueSubtitleSelection>? subtitles = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(mediaPath);
 
@@ -44,11 +46,34 @@ public static class MediaPlayerShowMapper
                     LayerIndex: 0)
                 {
                     AudioRoutes = audioRoutes is { Count: > 0 } ? audioRoutes : null,
+                    Subtitles = MapSubtitles(subtitles, hasVideo),
                 },
             ],
             Compositions = hasVideo
                 ? [new ShowComposition(PlayerCompositionId, "Player", canvasWidth, canvasHeight, 30, 1)]
                 : [],
         };
+    }
+
+    /// <summary>Maps the deck's selected subtitle tracks to the framework's <see cref="ShowSubtitleSelection"/>
+    /// (an embedded stream index, or a sidecar path). Subtitles only render on a video composition, so this is
+    /// null for an audio-only source (no canvas to draw on). Per-selection styling (font family / scale /
+    /// alignment) is not yet carried on <see cref="ShowSubtitleSelection"/> — the document's styling applies;
+    /// per-track overrides are a follow-up.</summary>
+    private static IReadOnlyList<ShowSubtitleSelection>? MapSubtitles(
+        IReadOnlyList<CueSubtitleSelection>? subtitles, bool hasVideo)
+    {
+        if (!hasVideo || subtitles is not { Count: > 0 })
+            return null;
+
+        var mapped = new List<ShowSubtitleSelection>(subtitles.Count);
+        foreach (var s in subtitles)
+        {
+            if (s.StreamIndex is { } idx)
+                mapped.Add(new ShowSubtitleSelection(StreamIndex: idx)); // embedded container stream
+            else if (!string.IsNullOrWhiteSpace(s.Path))
+                mapped.Add(new ShowSubtitleSelection(Path: s.Path)); // sidecar file (StreamIndex stays -1)
+        }
+        return mapped.Count > 0 ? mapped : null;
     }
 }
