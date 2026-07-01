@@ -1177,6 +1177,42 @@ public sealed class ShowSession : IAsyncDisposable
             return Task.CompletedTask;
         });
 
+    /// <summary>Seeks several groups together behind one shared epoch — the group-seek barrier (NXT-04 /
+    /// old-engine <c>group_seek_barrier</c> parity). Every target group is paused first so its clock freezes,
+    /// each is seeked (coordinated), then the ones that were running resume together — so a multi-cue seek lands
+    /// atomically instead of each group seeking (and drifting while the others keep advancing) in turn. Runs as
+    /// one dispatcher operation, so no other transport command interleaves between the seeks. Groups with no
+    /// active clip are skipped; a repeated group id just re-seeks its one active player (last position wins).</summary>
+    public Task SeekManyAsync(IReadOnlyList<(string GroupId, TimeSpan Position)> seeks)
+    {
+        ArgumentNullException.ThrowIfNull(seeks);
+        if (seeks.Count == 0)
+            return Task.CompletedTask;
+        return InvokeAsync(() =>
+        {
+            // 1) Freeze every target's clock (shared epoch) so a slow demux seek on one group can't let another
+            //    group's playhead run on past it. Remember which were running so paused cues stay paused.
+            var targets = new List<(S.Media.Players.MediaPlayer Player, TimeSpan Position, bool Resume)>(seeks.Count);
+            foreach (var (groupId, position) in seeks)
+            {
+                if (GetOrAddGroup(groupId).Active is not { } active)
+                    continue;
+                var wasRunning = active.Player.IsRunning;
+                if (wasRunning)
+                    active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                targets.Add((active.Player, position, wasRunning));
+            }
+
+            // 2) Seek all with clocks frozen, then 3) release the running ones together from the shared epoch.
+            foreach (var (player, position, _) in targets)
+                player.SeekCoordinated(position);
+            foreach (var (player, _, resume) in targets)
+                if (resume)
+                    player.Play();
+            return Task.CompletedTask;
+        });
+    }
+
     /// <summary>Soft-stops and releases the active clip on <paramref name="groupId"/>. The cue's configured
     /// fade-out is used, falling back to the legacy HaPlay 750 ms stop fade. Cancels any in-flight cue fire first
     /// so STOP never waits behind a long pre-wait/open (NXT-03).</summary>
@@ -1288,6 +1324,25 @@ public sealed class ShowSession : IAsyncDisposable
                 else
                     active.Player.Play();
             }
+
+            return Task.CompletedTask;
+        });
+
+    /// <summary>Pauses or resumes EVERY active transport group together — the all-groups form the UI drives, and
+    /// the pause parity of <see cref="StopAllAsync"/>. The single-group <see cref="SetPausedAsync"/> only touches
+    /// one group, so a multi-group cue show (cues fired onto several groups) would leave the other groups running
+    /// when paused. Runs as one dispatcher operation so the groups toggle behind one epoch.</summary>
+    public Task SetAllPausedAsync(bool paused) =>
+        InvokeAsync(() =>
+        {
+            foreach (var group in _groups.Values)
+                if (group.Active is { } active)
+                {
+                    if (paused)
+                        active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                    else
+                        active.Player.Play();
+                }
 
             return Task.CompletedTask;
         });

@@ -888,6 +888,198 @@ public sealed class ShowSessionTests
         Assert.Contains(output.Alphas, alpha => alpha is > 0 and < 255);
     }
 
+    // A finite video clip whose out-point is trimmed early (EndOffset) so its end-of-clip behaviour fires fast.
+    // The synthetic source is 1s/30fps; a 700ms trim puts the out-point at ~300ms.
+    private static readonly TimeSpan EndTrim = TimeSpan.FromMilliseconds(700);
+
+    private static (ShowDocument Doc, PixelRecordingVideoOutput Output) EndBehaviorShow(ClipEndBehavior behavior)
+    {
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "Video")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "screen")
+                {
+                    EndBehavior = behavior,
+                    EndOffset = EndTrim,
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        return (doc, output);
+    }
+
+    private static ShowSession EndBehaviorSession(PixelRecordingVideoOutput output) =>
+        new(FakeVideoDecoderProvider.Registry(),
+            videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("screen-out", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+
+    [Fact]
+    public async Task NaturalEnd_Loop_KeepsRunningPastOutPoint_InsteadOfReleasing()
+    {
+        // NXT-07/14: ClipEndBehavior.Loop must seek back to the in-point and keep running at the out-point, not
+        // release like a plain Stop. Observable: the clip is still running well past its (trimmed) out-point.
+        var (doc, output) = EndBehaviorShow(ClipEndBehavior.Loop);
+        await using var session = EndBehaviorSession(output);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2)); // clip started (position now advances)
+
+        // Past the ~300ms out-point + the monitor's poll/guard: a Stop clip would be released here.
+        await Task.Delay(TimeSpan.FromMilliseconds(900));
+        var snap = Assert.Single(await session.SnapshotAsync());
+        Assert.True(snap.IsRunning, "looping clip should still be running past its out-point");
+        Assert.True(snap.ClipDuration > TimeSpan.Zero, "looping clip should still be attached");
+    }
+
+    [Fact]
+    public async Task NaturalEnd_Freeze_HoldsClipInsteadOfReleasing()
+    {
+        // NXT-07/14: ClipEndBehavior.FreezeLastFrame pauses on the last frame — the clip stays ATTACHED (held),
+        // unlike a plain Stop which releases it. Observable: IsRunning goes false but the player is still attached
+        // (ClipDuration > 0), whereas a released clip reports a zero duration.
+        var (doc, output) = EndBehaviorShow(ClipEndBehavior.FreezeLastFrame);
+        await using var session = EndBehaviorSession(output);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        TransportSnapshot snap;
+        do
+        {
+            await Task.Delay(25);
+            snap = Assert.Single(await session.SnapshotAsync());
+        }
+        while (snap.IsRunning && DateTime.UtcNow < deadline);
+
+        Assert.False(snap.IsRunning, "frozen clip should be paused at its out-point");
+        Assert.True(snap.ClipDuration > TimeSpan.Zero, "frozen clip should stay attached (held), not be released");
+    }
+
+    [Fact]
+    public async Task NaturalEnd_PlainStop_ReleasesClipAtOutPoint()
+    {
+        // The contrast case that makes the Freeze assertion meaningful: a plain Stop releases the clip at the
+        // out-point, so the group's player detaches and the snapshot reports a zero clip duration.
+        var (doc, output) = EndBehaviorShow(ClipEndBehavior.Stop);
+        await using var session = EndBehaviorSession(output);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        TransportSnapshot snap;
+        do
+        {
+            await Task.Delay(25);
+            snap = Assert.Single(await session.SnapshotAsync());
+        }
+        while (snap.IsRunning && DateTime.UtcNow < deadline);
+
+        Assert.False(snap.IsRunning, "clip should have stopped at its out-point");
+        Assert.Equal(TimeSpan.Zero, snap.ClipDuration); // released → player detached
+    }
+
+    private static ShowDocument TwoGroupAudioCues() => new(
+        Version: 1,
+        Cues: [new CueDefinition("cue1", 1, "A", GroupId: "A"), new CueDefinition("cue2", 2, "B", GroupId: "B")],
+        Clips: [new ShowClipBinding("cue1", "fake://1"), new ShowClipBinding("cue2", "fake://2")],
+        Compositions: [], Outputs: [], Routes: [], Devices: []);
+
+    [Fact]
+    public async Task SetAllPausedAsync_PausesAndResumesEveryActiveGroup()
+    {
+        // NXT-04/06: pause parity with StopAllAsync. The single-group SetPausedAsync only touches one group, so a
+        // multi-group cue show would keep the others running on pause — SetAllPausedAsync freezes them together.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoGroupAudioCues());
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue1")); // group A
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("cue2")); // group B
+
+        // The standalone session also carries an implicit empty "main" master group; assert on the two cue groups.
+        static bool Running(IReadOnlyList<TransportSnapshot> s, string g) => s.Single(x => x.GroupId == g).IsRunning;
+
+        var fired = await session.SnapshotAsync();
+        Assert.True(Running(fired, "A"));
+        Assert.True(Running(fired, "B"));
+
+        // Single-group pause hits only its group — the other keeps running (the gap SetAllPausedAsync closes).
+        await session.SetPausedAsync(true, "A");
+        var afterOne = await session.SnapshotAsync();
+        Assert.False(Running(afterOne, "A"));
+        Assert.True(Running(afterOne, "B"));
+
+        // All-groups pause freezes both …
+        await session.SetAllPausedAsync(true);
+        var afterAll = await session.SnapshotAsync();
+        Assert.False(Running(afterAll, "A"));
+        Assert.False(Running(afterAll, "B"));
+
+        // … and resumes both.
+        await session.SetAllPausedAsync(false);
+        var afterResume = await session.SnapshotAsync();
+        Assert.True(Running(afterResume, "A"));
+        Assert.True(Running(afterResume, "B"));
+    }
+
+    [Fact]
+    public async Task SeekManyAsync_SeeksEachTargetedGroup_BehindOneBarrier()
+    {
+        // NXT-04: the group-seek barrier seeks several groups together. Both groups must land at their target — a
+        // sequential loop that dropped the second group would leave it near the head.
+        var outA = new PixelRecordingVideoOutput();
+        var outB = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("a", 1, "A", GroupId: "A"), new CueDefinition("b", 2, "B", GroupId: "B")],
+            Clips:
+            [
+                new ShowClipBinding("a", "fake://va", CompositionId: "compA")
+                    { Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"), AudioRoutes = [] },
+                new ShowClipBinding("b", "fake://vb", CompositionId: "compB")
+                    { Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"), AudioRoutes = [] },
+            ],
+            Compositions: [new ShowComposition("compA", "A", 8, 8, 30, 1), new ShowComposition("compB", "B", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            FakeVideoDecoderProvider.Registry(),
+            videoOutputFactory: (compId, name, _, _) =>
+                [new ClipCompositionOutputLease($"{compId}-out", name, compId == "compA" ? outA : outB)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("a"));
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("b"));
+        await outA.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await outB.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        await session.SeekManyAsync([("A", TimeSpan.FromMilliseconds(600)), ("B", TimeSpan.FromMilliseconds(600))]);
+
+        static TimeSpan Pos(IReadOnlyList<TransportSnapshot> s, string g) => s.Single(x => x.GroupId == g).ClipPosition;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        IReadOnlyList<TransportSnapshot> snap;
+        do
+        {
+            await Task.Delay(25);
+            snap = await session.SnapshotAsync();
+        }
+        while ((Pos(snap, "A") < TimeSpan.FromMilliseconds(450) || Pos(snap, "B") < TimeSpan.FromMilliseconds(450))
+               && DateTime.UtcNow < deadline);
+
+        Assert.True(Pos(snap, "A") >= TimeSpan.FromMilliseconds(450), $"group A did not seek forward (was {Pos(snap, "A")})");
+        Assert.True(Pos(snap, "B") >= TimeSpan.FromMilliseconds(450), $"group B did not seek forward (was {Pos(snap, "B")})");
+    }
+
     private sealed class PixelRecordingVideoOutput : IVideoOutput
     {
         private readonly object _gate = new();

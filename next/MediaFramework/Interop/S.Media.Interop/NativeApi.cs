@@ -44,7 +44,10 @@ internal static unsafe class NativeApi
     private sealed class SessionBox
     {
         public required ShowSession Session;
-        public required IMediaRegistry Registry;
+
+        /// <summary>The per-session owning host (NXT-05). Disposing it releases the session's module native-runtime
+        /// holds (PortAudio <c>Pa_Terminate</c>/NDI); create/destroy churn no longer ratchets those refs up forever.</summary>
+        public required MediaHost Host;
     }
 
     // ----------------------------------------------------------------- global lifecycle ------------
@@ -75,7 +78,7 @@ internal static unsafe class NativeApi
             {
                 try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
                 catch { /* teardown best-effort */ }
-                (box.Registry as IDisposable)?.Dispose(); // release native runtime holds (NXT-05)
+                box.Host.Dispose(); // release native runtime holds (NXT-05)
             }
             s_initialized = false;
             FreeLastErrorNative();
@@ -117,13 +120,13 @@ internal static unsafe class NativeApi
 
         try
         {
-            var registry = MediaRegistry.Build(b => b.Use(new FFmpegModule()).Use(new PortAudioModule()));
+            var host = MediaHost.Build(b => b.Use(new FFmpegModule()).Use(new PortAudioModule()));
 
             // Headless by default — a show runner that drives transport + composition without owning an audio device
             // (CI-safe, no flaky-ALSA/device dependency). Audio-out on a real backend is a later create-with-audio option.
-            var session = new ShowSession(registry, audioBackend: null);
+            var session = new ShowSession(host.Registry, audioBackend: null);
 
-            var box = new SessionBox { Session = session, Registry = registry };
+            var box = new SessionBox { Session = session, Host = host };
             ClearLastError();
             return RegisterSession(box);
         }
@@ -143,7 +146,7 @@ internal static unsafe class NativeApi
                 return; // unknown / already-destroyed handle → idempotent no-op (no throw, no double-free)
             try { box.Session.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
             catch { /* teardown is best-effort */ }
-            (box.Registry as IDisposable)?.Dispose(); // release the session's PortAudio/NDI runtime holds (NXT-05)
+            box.Host.Dispose(); // release the session's PortAudio/NDI runtime holds (NXT-05)
         }
         catch { /* no-throw boundary across the ABI */ }
     }

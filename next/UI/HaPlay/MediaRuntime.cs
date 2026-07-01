@@ -21,29 +21,63 @@ internal static class MediaRuntime
 {
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.MediaRuntime");
     private static readonly object Gate = new();
-    private static IMediaRegistry? _registry;
+    private static MediaHost? _host;
 
-    /// <summary>The built registry. Lazily built on first access (idempotent + thread-safe), so anything that
-    /// resolves backends/decoders works whether or not <see cref="Initialize"/> ran first (tests, dialogs).</summary>
-    public static IMediaRegistry Registry
+    /// <summary>The owning host (NXT-05): builds the registry and, when disposed on app shutdown, releases the
+    /// modules' native runtime holds (PortAudio <c>Pa_Terminate</c>, NDI runtime) instead of leaking them. Lazily
+    /// built on first access (idempotent + thread-safe).</summary>
+    private static MediaHost Host
     {
         get
         {
-            if (_registry is not null)
-                return _registry;
+            if (_host is not null)
+                return _host;
             lock (Gate)
-                return _registry ??= Build();
+                return _host ??= Build();
         }
     }
 
-    public static bool IsInitialized => _registry is not null;
+    /// <summary>The built registry. Lazily built on first access (idempotent + thread-safe), so anything that
+    /// resolves backends/decoders works whether or not <see cref="Initialize"/> ran first (tests, dialogs).</summary>
+    public static IMediaRegistry Registry => Host.Registry;
+
+    public static bool IsInitialized => _host is not null;
 
     /// <summary>Eagerly builds the registry at startup (for deterministic timing/logging). Idempotent.</summary>
-    public static void Initialize() => _ = Registry;
+    public static void Initialize() => _ = Host;
 
-    private static IMediaRegistry Build()
+    /// <summary>
+    /// Disposes the owning host at app shutdown, releasing the modules' native runtime holds deterministically
+    /// (NXT-05 — without this the process-wide registry was never disposed and <c>Pa_Terminate</c>/NDI release
+    /// never ran). Idempotent and thread-safe; call <em>after</em> sessions/engines that borrow the registry have
+    /// been torn down. A subsequent <see cref="Registry"/> access would rebuild a fresh host, so only call this on
+    /// the way out.
+    /// </summary>
+    public static void Shutdown()
     {
-        var registry = MediaRegistry.Build(b =>
+        MediaHost? host;
+        lock (Gate)
+        {
+            host = _host;
+            _host = null;
+        }
+
+        if (host is null)
+            return;
+        try
+        {
+            host.Dispose();
+            Trace.LogInformation("MediaRuntime shut down — module native runtimes released.");
+        }
+        catch (Exception ex)
+        {
+            Trace.LogWarning(ex, "MediaRuntime: host disposal during shutdown");
+        }
+    }
+
+    private static MediaHost Build()
+    {
+        var host = MediaHost.Build(b =>
         {
             TryUse(b, static () => new FFmpegModule(), "FFmpeg");
             TryUse(b, static () => new PortAudioModule(), "PortAudio");
@@ -57,8 +91,8 @@ internal static class MediaRuntime
         });
 
         Trace.LogInformation("MediaRuntime ready — audio backends: {Backends}",
-            string.Join(", ", registry.AudioBackends.Select(x => x.Name)));
-        return registry;
+            string.Join(", ", host.Registry.AudioBackends.Select(x => x.Name)));
+        return host;
     }
 
     private static void TryUse(IMediaRegistryBuilder builder, Func<IMediaModule> factory, string name)

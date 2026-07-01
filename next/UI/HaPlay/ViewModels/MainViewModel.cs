@@ -291,16 +291,15 @@ public partial class MainViewModel : ViewModelBase
             // them to the executors, so we fire by id (FireCueAsync) — independent of ShowSession's GO anchor.
             // Each transport op is guarded so a failure is LOGGED (not only surfaced as a UI notification).
             CuePlayer.StopPlaybackCallback = () => GuardedCueShowOp("stop", () => _cueShowSession!.StopAllAsync());
-            CuePlayer.SetPlaybackPausedCallback = paused => GuardedCueShowOp("pause", () => _cueShowSession!.SetPausedAsync(paused));
+            // Pause must hit EVERY active group, not just the default one — a multi-group cue show would otherwise
+            // keep the other groups running on pause (parity with StopAllAsync).
+            CuePlayer.SetPlaybackPausedCallback = paused => GuardedCueShowOp("pause", () => _cueShowSession!.SetAllPausedAsync(paused));
             CuePlayer.SeekCueCallback = (_, pos) => GuardedCueShowOp("seek", () => _cueShowSession!.SeekAsync(pos));
-            CuePlayer.SeekCuesCallback = positions => GuardedCueShowOp("seek-cues", async () =>
-            {
-                // Multi-cue seek → seek each cue's transport group (a group runs one active clip, so this lands on
-                // the cue currently active in it).
-                foreach (var (cueId, pos) in positions)
-                    await _cueShowSession!.SeekAsync(pos, _cueGroupByCueId.GetValueOrDefault(cueId, ShowSession.DefaultGroup))
-                        .ConfigureAwait(false);
-            });
+            // Multi-cue seek goes through the group-seek barrier so every targeted group lands atomically behind one
+            // shared epoch (a group runs one active clip, so a cue's seek lands on whatever is active in its group).
+            CuePlayer.SeekCuesCallback = positions => GuardedCueShowOp("seek-cues", () =>
+                _cueShowSession!.SeekManyAsync(
+                    positions.Select(p => (_cueGroupByCueId.GetValueOrDefault(p.CueId, ShowSession.DefaultGroup), p.Position)).ToList()));
             CuePlayer.CancelCueCallback = id => GuardedCueShowOp("cancel", () => _cueShowSession!.StopCueAsync(id.ToString()));
             CuePlayer.MediaCueExecutor = async (cue, _) =>
             {

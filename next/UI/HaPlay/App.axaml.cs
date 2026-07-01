@@ -45,8 +45,14 @@ public partial class App : Application
             {
                 DataContext = mainVm
             };
-            // Best-effort teardown of the gated ShowSession cue re-back at shutdown (no-op when disabled).
-            desktop.ShutdownRequested += (_, _) => mainVm.ShutdownCleanup();
+            // At shutdown, tear down the gated ShowSession cue re-back first (no-op when disabled), then dispose
+            // the media host so the modules' native runtime holds are released deterministically (NXT-05 — sessions
+            // that borrow the registry must go first; the host is the last thing out).
+            desktop.ShutdownRequested += (_, _) =>
+            {
+                mainVm.ShutdownCleanup();
+                MediaRuntime.Shutdown();
+            };
         }
         else if (ApplicationLifetime is IActivityApplicationLifetime singleViewFactoryApplicationLifetime)
         {
