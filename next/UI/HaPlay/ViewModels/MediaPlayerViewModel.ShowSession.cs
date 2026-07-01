@@ -9,12 +9,12 @@ using S.Media.Session;
 namespace HaPlay.ViewModels;
 
 /// <summary>
-/// 8a.4 convergence (gated by <c>HAPLAY_USE_SHOWSESSION=1</c>): re-backs the media-player deck's FILE playback
-/// onto a per-player headless <see cref="ShowSession"/> (via <see cref="MediaPlayerShowMapper"/>) instead of
-/// <c>HaPlayPlaybackSession</c>. Off by default → the engine path is untouched. File-core slice: play / pause /
-/// resume / stop / seek + position readout; live inputs, logo/hold, and advanced state (fault recovery,
-/// end-of-track auto-advance) stay on the engine for now. The transport methods early-return into here only
-/// while <see cref="ShowSessionActive"/>.
+/// Phase-8 convergence: the media-player deck's FILE playback runs on a per-player headless
+/// <see cref="ShowSession"/> (via <see cref="MediaPlayerShowMapper"/>) instead of <c>HaPlayPlaybackSession</c>.
+/// This is the <b>default</b> as of the 2026-07-01 flip; <c>HAPLAY_USE_SHOWSESSION=0</c> falls back to the engine
+/// (see <see cref="ShowSessionGate"/>). Covers play / pause / resume / stop / seek + position readout, end-of-track
+/// auto-advance, idle logo/hold, and NDI live input. The transport methods early-return into here only while
+/// <see cref="ShowSessionActive"/>.
 /// </summary>
 public partial class MediaPlayerViewModel
 {
@@ -28,8 +28,7 @@ public partial class MediaPlayerViewModel
     /// <summary>True while a file is playing through the per-player ShowSession (the transport guards divert here).</summary>
     public bool ShowSessionActive { get; private set; }
 
-    private static bool UseShowSessionPlayer =>
-        Environment.GetEnvironmentVariable("HAPLAY_USE_SHOWSESSION") == "1";
+    private static bool UseShowSessionPlayer => ShowSessionGate.UseShowSession;
 
     /// <summary>Gated file open: builds/loads the 1-cue player show and fires it. Returns false (and leaves the
     /// engine path to run) when disabled or on any failure.</summary>
@@ -110,7 +109,7 @@ public partial class MediaPlayerViewModel
                 IsPlaying = true;
                 StartShowSessionPoll();
             });
-            ShowLog.LogInformation("MediaPlayer: re-backed onto per-player ShowSession (HAPLAY_USE_SHOWSESSION=1).");
+            ShowLog.LogInformation("MediaPlayer: playing through the per-player ShowSession (convergence default).");
             return true;
         }
         catch (Exception ex)

@@ -45,6 +45,11 @@ public sealed class ShowSession : IAsyncDisposable
     private CueGraph _cueGraph = new(); // swapped atomically on load (NXT-12 transactional load)
     private readonly Dictionary<string, TransportGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
+    // Lock-free view of the compositions for the UI health poll: republished (on the dispatcher) whenever
+    // _compositions changes, so GetCompositionStats can read it — and the runtime's own thread-safe GetStats —
+    // off any thread without marshaling (mirrors _groupViews / SnapshotAsync).
+    private volatile IReadOnlyDictionary<string, ClipCompositionRuntime> _compositionsView =
+        new Dictionary<string, ClipCompositionRuntime>(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime.LayerSlot> _testPatternSlots = new(StringComparer.Ordinal);
     private IReadOnlyList<OutputPatchRoute> _routes = [];
     private IReadOnlyList<ShowAudioOutput> _audioOutputs = [];
@@ -272,6 +277,7 @@ public sealed class ShowSession : IAsyncDisposable
         _compositions.Clear();
         foreach (var (id, runtime) in newCompositions)
             _compositions[id] = runtime;
+        PublishCompositionsView(); // refresh the lock-free health-poll view for the new composition set
 
         _cueGraph = newCueGraph;
         _clipsByCue = newClipsByCue;
@@ -1640,6 +1646,22 @@ public sealed class ShowSession : IAsyncDisposable
             .Select(kv => new GroupClockView(kv.Key, kv.Value.Clock, kv.Value.Active?.Player))
             .ToArray();
 
+    /// <summary>Republishes the lock-free composition view after a load/dispose changes <see cref="_compositions"/>.
+    /// Call on the dispatcher (the only place <see cref="_compositions"/> is mutated).</summary>
+    private void PublishCompositionsView() =>
+        _compositionsView = new Dictionary<string, ClipCompositionRuntime>(_compositions, StringComparer.Ordinal);
+
+    /// <summary>Lock-free per-composition stats for a UI health poll — no dispatcher marshaling (mirrors
+    /// <see cref="SnapshotAsync"/>). Reads a volatile snapshot of the compositions republished on load, then the
+    /// runtime's own thread-safe <c>GetStats</c>. Null when no such composition exists (or it is mid-teardown).</summary>
+    public ClipCompositionRuntimeStats? GetCompositionStats(string compositionId)
+    {
+        if (!_compositionsView.TryGetValue(compositionId, out var runtime))
+            return null;
+        try { return runtime.GetStats(); }
+        catch (ObjectDisposedException) { return null; } // retired between snapshot publish and read
+    }
+
     /// <summary>Swaps a group's active clip and republishes the query view so a position/state poll always sees
     /// the new run-state without waiting behind the dispatcher.</summary>
     private async ValueTask ReplaceActiveAsync(
@@ -1687,6 +1709,7 @@ public sealed class ShowSession : IAsyncDisposable
         foreach (var composition in _compositions.Values)
             composition.Dispose();
         _compositions.Clear();
+        PublishCompositionsView(); // drop the health-poll view's references to the retired compositions
         await _standby.DisposeAsync().ConfigureAwait(false);
     }
 

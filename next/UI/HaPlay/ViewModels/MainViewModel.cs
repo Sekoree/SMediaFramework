@@ -37,8 +37,8 @@ public partial class MainViewModel : ViewModelBase
     private readonly object _midiInitSync = new();
     private readonly Playback.CuePlaybackEngine _cuePlaybackEngine;
     private readonly Playback.SoundboardEngine _soundboardEngine;
-    // 8a.4 convergence: when HAPLAY_USE_SHOWSESSION=1, the cue transport re-backs onto this headless session
-    // instead of the engine above (off by default → the engine path is untouched). See TryWireShowSessionCueTransport.
+    // Phase-8 convergence: the cue transport runs on this headless session by default (2026-07-01 flip); the engine
+    // above is the HAPLAY_USE_SHOWSESSION=0 fallback. See TryWireShowSessionCueTransport / ShowSessionGate.
     private ShowSession? _cueShowSession;
     // compositionId → the real video outputs it renders to, acquired on the UI thread in ReloadCueShowSession
     // so ShowSession's video factory is a pure lookup during (synchronous) LoadDocument (no deadlock).
@@ -170,7 +170,7 @@ public partial class MainViewModel : ViewModelBase
             ScheduleCueShowSessionReload();
         };
         CuePlayer.RefreshPreviewAudioDevices();
-        TryWireShowSessionCueTransport(); // 8a.4: optionally re-back cue transport onto ShowSession (gated, off by default)
+        TryWireShowSessionCueTransport(); // convergence: cue transport on ShowSession by default (HAPLAY_USE_SHOWSESSION=0 opts out)
         foreach (var player in Players)
             player.NaturalPlaybackEnded += OnPlayerNaturalPlaybackEnded;
         RebuildEndpointWorkspaceLists();
@@ -247,22 +247,23 @@ public partial class MainViewModel : ViewModelBase
 
     // ----- Remote API (HTTP) ---------------------------------------------------------------------
 
-    /// <summary>8a.4 convergence (gated by <c>HAPLAY_USE_SHOWSESSION=1</c>): re-back the cue workspace's
-    /// transport onto the headless <see cref="ShowSession"/> instead of <c>CuePlaybackEngine</c>. Off by
-    /// default → the engine wiring above stands untouched. Audio realizes on the default device via the
-    /// session's backend; cue video realizes on the OutputManagement NDI/SDL/local lines acquired per
-    /// composition→line binding in <see cref="ReloadCueShowSession"/> and fanned out through the session's
-    /// composition-id video factory. Best-effort: any failure logs and leaves the engine active. The show
-    /// reloads on cue-list change. (Cutover remainders: live-input cues + logo/hold slate.)</summary>
+    /// <summary>Phase-8 convergence: run the cue workspace's transport on the headless <see cref="ShowSession"/>
+    /// instead of <c>CuePlaybackEngine</c>. This is the <b>default</b> as of the 2026-07-01 flip; set
+    /// <c>HAPLAY_USE_SHOWSESSION=0</c> to fall back to the engine (see <see cref="ShowSessionGate"/>). Audio
+    /// realizes on the default device via the session's backend; cue video realizes on the OutputManagement
+    /// NDI/SDL/local lines acquired per composition→line binding in <see cref="ReloadCueShowSession"/> and fanned
+    /// out through the session's composition-id video factory. Best-effort: any failure logs and leaves the engine
+    /// active as a safety net. The show reloads on cue-list change.</summary>
     private void TryWireShowSessionCueTransport()
     {
         // One unambiguous startup line records which playback path this run uses, so a hardware-soak log makes the
-        // active engine obvious from the top instead of having to infer it from later behaviour.
-        var useShowSession = Environment.GetEnvironmentVariable("HAPLAY_USE_SHOWSESSION") == "1";
+        // active engine obvious from the top instead of having to infer it from later behaviour. ShowSession is the
+        // default now (2026-07-01 flip); HAPLAY_USE_SHOWSESSION=0 forces the legacy engine as a no-rebuild fallback.
+        var useShowSession = ShowSessionGate.UseShowSession;
         Trace.LogInformation(
             "HaPlay cue playback path: {Path} (HAPLAY_USE_SHOWSESSION={Flag}).",
-            useShowSession ? "ShowSession (convergence)" : "legacy CuePlaybackEngine",
-            useShowSession ? "1" : "unset/other");
+            useShowSession ? "ShowSession (convergence default)" : "legacy CuePlaybackEngine (opt-out)",
+            ShowSessionGate.DescribeOptOut());
         if (!useShowSession)
             return;
 
@@ -294,6 +295,11 @@ public partial class MainViewModel : ViewModelBase
             };
             SubscribeCueGraphForReload();
             ReloadCueShowSession();
+
+            // Cue output-line health now comes from the session's composition throughput (overrides the engine
+            // probe wired at construction) — so a cue-driven line's health LED keeps working on the ShowSession
+            // path, and deleting CuePlaybackEngine later won't leave those lines dark.
+            OutputManagement.CueLineMetricsProbe = TryGetCueShowLineHealthMetrics;
 
             // Override the transport callbacks to drive ShowSession. The VM resolves WHICH cues fire and hands
             // them to the executors, so we fire by id (FireCueAsync) — independent of ShowSession's GO anchor.
@@ -543,13 +549,50 @@ public partial class MainViewModel : ViewModelBase
                     Dispatcher.UIThread.Post(() => Soundboard.OnSoundEnded(tileId));
             };
 
-            Trace.LogInformation("HaPlay: cue transport + soundboard re-backed onto ShowSession (HAPLAY_USE_SHOWSESSION=1).");
+            Trace.LogInformation("HaPlay: cue transport + soundboard running on ShowSession (convergence default).");
         }
         catch (Exception ex)
         {
             Trace.LogWarning(ex, "HaPlay: ShowSession cue re-back failed; staying on the engine.");
             _cueShowSession = null;
         }
+    }
+
+    /// <summary>ShowSession replacement for <c>CuePlaybackEngine.TryGetLineHealthMetrics</c>: sums the video
+    /// throughput of the composition(s) feeding <paramref name="outputLineId"/> from the session's lock-free
+    /// composition stats and scores a health state, mirroring the engine's video scoring. Video only — ShowSession
+    /// exposes no per-line audio pump counters yet, so a cue audio-only line reports null here and the outputs panel
+    /// falls back to the media-player probe / Idle (same null-fallthrough the engine used when no runtime drove the
+    /// line). Runs off the UI poll thread with no dispatcher marshaling.</summary>
+    private OutputLineHealthEvaluator.LineHealthMetrics? TryGetCueShowLineHealthMetrics(Guid outputLineId)
+    {
+        if (_cueShowSession is not { } session)
+            return null;
+
+        long videoSubmitted = 0;
+        long videoDropped = 0;
+        var driven = false;
+        foreach (var (compId, outs) in _cueVideoOutputs)
+        {
+            if (!outs.Any(o => o.LineId == outputLineId))
+                continue;
+            if (session.GetCompositionStats(compId) is not { } stats)
+                continue;
+            driven = true;
+            videoSubmitted += stats.FramesSubmitted;
+            videoDropped += stats.PumpOverruns + stats.SlotOverflowFrames;
+        }
+
+        if (!driven || videoSubmitted == 0)
+            return null;
+
+        var state = videoDropped == 0
+            ? OutputLineHealthState.Healthy
+            : videoDropped > 120 || (double)videoDropped / videoSubmitted > 0.05
+                ? OutputLineHealthState.Error
+                : OutputLineHealthState.Warning;
+        return new OutputLineHealthEvaluator.LineHealthMetrics(
+            state, videoSubmitted, videoDropped, 0, 0, 0, 0);
     }
 
     /// <summary>Watches structural parts of the selected cue list that are compiled into a ShowDocument:

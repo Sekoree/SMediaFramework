@@ -912,9 +912,15 @@ output fan-out** (NDI/SDL/local); **live inputs** (`ndi://` + `padev://`); subti
 
 ## What the flip needs (exit conditions)
 - Hardware soak of the full gated path (the review's own Gate-4 exit) — including visual checks of the new
-  cue-preview, live audio-route edit, and text-cue rendering.
-- Then: flip the default and delete `CuePlaybackEngine`/`HaPlayPlaybackSession`/`SoundboardEngine`
-  (the review's largest simplification — NXT-13).
+  cue-preview, live audio-route edit, and text-cue rendering. **Done** (operator-confirmed, 2026-07-01).
+- **DEFAULT FLIPPED (2026-07-01):** ShowSession is now the default runtime for both the cue workspace and the
+  media-player deck. The gate is centralized in `ShowSessionGate` (`UI/HaPlay/ShowSessionGate.cs`) and inverted:
+  ShowSession runs unless `HAPLAY_USE_SHOWSESSION` is an explicit falsey value (`0`/`false`/`off`/`no`), so the
+  legacy engines remain a **no-rebuild fallback** while the default-on soaks in real use. A startup log line names
+  the active path. The engines are still present.
+- **Remaining:** once the default-on has real-world miles, delete `SoundboardEngine` → `CuePlaybackEngine` →
+  `HaPlayPlaybackSession` (smallest blast radius first) and drop the flag — the review's largest simplification
+  (NXT-13). See *Engine-deletion footprint* below.
 
 With cue preview, the live audio-route edit, and text cues all now on the ShowSession path (action/comment cues
 were never engine-bound), the gated cue path's **transport/playback parity is complete** — the flip is gated on
@@ -1002,12 +1008,39 @@ Under `HAPLAY_USE_SHOWSESSION=1`, on real audio/NDI/SDL output:
 - [ ] **Calibration grid:** the test-pattern toggle overlays the grid on the selected composition/output and clears.
 - [ ] Corner-pin (Phase 3) is *not* wired anywhere yet — no show can depend on it (parity with the shipping app).
 
-## Engine-deletion footprint (after soak passes)
-Delete order, smallest blast radius first:
+## Engine-deletion migrations (started 2026-07-01)
+Investigation found the engines are **not** a clean delete — deletion is gated behind two real migrations:
+
+**(1) Cue line-health → ShowSession — DONE (video), 1 audio item remaining.** The engine's
+`CuePlaybackEngine.TryGetLineHealthMetrics` fed the output panel's per-line health LEDs and had no ShowSession
+equivalent. Added a **synchronous, lock-free** `ShowSession.GetCompositionStats(compositionId)` (volatile
+`_compositionsView` republished on load/dispose; the runtime's `GetStats` is already thread-safe) so a 1 Hz UI poll
+reads composition throughput without marshaling. The VM's `OutputManagement.CueLineMetricsProbe` now points at a new
+`MainViewModel.TryGetCueShowLineHealthMetrics` (reverse-maps line→compositions via `_cueVideoOutputs`, sums
+video submitted/dropped, scores health mirroring the engine). *Remaining:* ShowSession exposes no per-line **audio**
+pump stats, so a cue audio-only line reports null and falls back (same null-fallthrough as the engine when no runtime
+drove a line) — full audio parity needs a per-output audio-stats API on ShowSession. Tests:
+`GetCompositionStats_SyncLockFree_ReflectsLoadAndRetire`.
+
+**(2) Full media-player deck re-back — LARGE, hardware-gated, NOT started.** `HaPlayPlaybackSession` is still the
+deck's primary engine: **93 `_session` usages** across `MediaPlayerViewModel(.Transport/.Playlist/.Configuration)`,
+plus **9 shared static/instance members** used off the deck (`BuildFileOpenOptions`, `TryCreate`/`TryCreateLive`,
+`WireAudio`, `TrySetOutputMatrix`, `TryGetOutputResolution`, `AttachMediaPlayerSubtitles`, `SourceAudioFormat`,
+`WrapWithNDILockIfNeeded`). The ShowSession deck path (`MediaPlayerViewModel.ShowSession.cs`) already covers
+file/NDI transport + auto-advance + idle logo, but the engine remains the fallback and backs the audio matrix,
+output-resolution queries, subtitle attach, and output health. Deleting it requires: the ShowSession deck path
+reaching parity for every source/feature (so `_session` is never constructed), relocating the shared static helpers
+out of the engine file, then migrating the 93 usages — all hardware-verified. This is a dedicated multi-stage effort.
+
+## Engine-deletion footprint (after the two migrations above)
+The default is now ShowSession (see *What the flip needs*); the engines remain only as the `HAPLAY_USE_SHOWSESSION=0`
+fallback. Deletion is the last step, gated on the two migrations above + real-world miles. Delete order, smallest
+blast radius first:
 - `SoundboardEngine` — **2 files**.
 - `CuePlaybackEngine` (+ `CuePlaybackEngineTypes`, `CuePlaybackEngine.AudioRouting`) — **9 files**.
 - `HaPlayPlaybackSession` — **19 files** (the media-player deck's engine; the largest and last, since the deck's
   ShowSession re-back must be confirmed on hardware first).
 Each deletion also removes its unconditional event subscriptions in `MainViewModel` (`CueStarted/Ended/Progress/
-NaturalEnd/PreparedCues*/PreviewEnded`, `Sound*`) — dead under the gate today — and lets the `HAPLAY_USE_SHOWSESSION`
-branch become the only path (removing the flag). This is NXT-13's biggest simplification.
+NaturalEnd/PreparedCues*/PreviewEnded`, `Sound*`) — dead now that ShowSession is the default — and, once all three
+are gone, lets the `HAPLAY_USE_SHOWSESSION` branch + `ShowSessionGate` be removed (ShowSession the only path). This
+is NXT-13's biggest simplification.

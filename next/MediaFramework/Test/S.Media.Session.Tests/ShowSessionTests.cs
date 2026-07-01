@@ -950,6 +950,31 @@ public sealed class ShowSessionTests
         Assert.False(await session.UpdateActivePlacementAsync("c", "z", 9, edit)); // no such layer → rejected
     }
 
+    [Fact]
+    public async Task GetCompositionStats_SyncLockFree_ReflectsLoadAndRetire()
+    {
+        // The UI health poll reads composition throughput synchronously (no dispatcher marshaling). It must see
+        // the loaded compositions, reject unknown ids, and drop them when a reload retires them.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips: [new ShowClipBinding("c", "fake://v", CompositionId: "screen")],
+            Compositions: [new ShowComposition("screen", "Screen", 320, 240, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
+
+        Assert.Null(session.GetCompositionStats("screen")); // nothing loaded yet
+
+        await session.LoadDocumentAsync(doc);
+        var stats = session.GetCompositionStats("screen");
+        Assert.NotNull(stats);
+        Assert.Equal("screen", stats!.Value.CompositionId);
+        Assert.Null(session.GetCompositionStats("nope")); // unknown composition
+
+        await session.LoadDocumentAsync(new ShowDocument(1, [], [], [], [], [], [])); // reload with no compositions
+        Assert.Null(session.GetCompositionStats("screen")); // retired
+    }
+
     private static VideoFrame MakeBgraFrame(int w = 4, int h = 4) =>
         new(TimeSpan.Zero, new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(30, 1)),
             [new byte[w * h * 4]], [w * 4]);
