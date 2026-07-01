@@ -71,6 +71,15 @@ public static class ShowDocumentValidator
                 errors.Add($"a clip binds unknown cue '{clip.CueId}'.");
             if (clip.CompositionId is { Length: > 0 } cid && !compIds.Contains(cid))
                 errors.Add($"the clip for cue '{clip.CueId}' references unknown composition '{cid}'.");
+            // A clip may fan its video onto several compositions (ExtraPlacements); every one must resolve too,
+            // else the placement is silently dropped at play time instead of caught at load.
+            foreach (var extra in clip.ExtraPlacements ?? [])
+            {
+                if (string.IsNullOrEmpty(extra.CompositionId))
+                    errors.Add($"the clip for cue '{clip.CueId}' has an extra placement with an empty composition id.");
+                else if (!compIds.Contains(extra.CompositionId))
+                    errors.Add($"the clip for cue '{clip.CueId}' has an extra placement on unknown composition '{extra.CompositionId}'.");
+            }
         }
 
         ValidateFollowOn(document.Cues, cueIds, errors);

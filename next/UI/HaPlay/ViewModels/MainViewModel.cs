@@ -256,7 +256,14 @@ public partial class MainViewModel : ViewModelBase
     /// reloads on cue-list change. (Cutover remainders: live-input cues + logo/hold slate.)</summary>
     private void TryWireShowSessionCueTransport()
     {
-        if (Environment.GetEnvironmentVariable("HAPLAY_USE_SHOWSESSION") != "1")
+        // One unambiguous startup line records which playback path this run uses, so a hardware-soak log makes the
+        // active engine obvious from the top instead of having to infer it from later behaviour.
+        var useShowSession = Environment.GetEnvironmentVariable("HAPLAY_USE_SHOWSESSION") == "1";
+        Trace.LogInformation(
+            "HaPlay cue playback path: {Path} (HAPLAY_USE_SHOWSESSION={Flag}).",
+            useShowSession ? "ShowSession (convergence)" : "legacy CuePlaybackEngine",
+            useShowSession ? "1" : "unset/other");
+        if (!useShowSession)
             return;
 
         try

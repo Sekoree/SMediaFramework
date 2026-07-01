@@ -220,6 +220,15 @@ public sealed class ShowSessionTests
                 [new ShowClipBinding("a", "x", CompositionId: "ghost")], [], [], [], [])),
             e => e.Contains("unknown composition"));
 
+        // An extra fan-out placement pointing at a non-existent composition is caught at load, not dropped silently.
+        Assert.Contains(
+            ShowDocumentValidator.Validate(new ShowDocument(1,
+                [new CueDefinition("a", 1, "A")],
+                [new ShowClipBinding("a", "x", CompositionId: "real")
+                    { ExtraPlacements = [new ShowClipPlacement("ghost", 1)] }],
+                [new ShowComposition("real", "Real", 320, 240)], [], [], [])),
+            e => e.Contains("extra placement on unknown composition"));
+
         Assert.Empty(ShowDocumentValidator.Validate(TwoAudioCues()));
     }
 
@@ -848,6 +857,102 @@ public sealed class ShowSessionTests
         Assert.True((await session.GetCompositionStatsAsync("a"))!.Value.ClockMastered);
         Assert.True((await session.GetCompositionStatsAsync("b"))!.Value.ClockMastered); // fanned to the second canvas
     }
+
+    [Fact]
+    public async Task ClipWithMultiplePlacements_TearsDownEveryLayer_OnStop()
+    {
+        // Fan-out must not leak: stopping the cue has to release the composition layer on EVERY canvas it fed,
+        // not just the primary. A leaked layer would keep compositing a released clip's last frame forever.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "a")
+                {
+                    ExtraPlacements = [new ShowClipPlacement("b", 0)],
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions:
+            [
+                new ShowComposition("a", "A", 320, 240, 30, 1),
+                new ShowComposition("b", "B", 320, 240, 30, 1),
+            ],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+
+        await session.GoAsync();
+        Assert.Equal(1, (await session.GetCompositionStatsAsync("a"))!.Value.LayerCount);
+        Assert.Equal(1, (await session.GetCompositionStatsAsync("b"))!.Value.LayerCount);
+
+        await session.StopAllAsync();
+        Assert.Equal(0, (await session.GetCompositionStatsAsync("a"))!.Value.LayerCount); // released on both canvases
+        Assert.Equal(0, (await session.GetCompositionStatsAsync("b"))!.Value.LayerCount);
+    }
+
+    [Fact]
+    public async Task TestPattern_AddsReplacesAndClearsATopLayer()
+    {
+        // Calibration-grid injection (Gap 6): show adds one top layer, re-show reuses the same slot (still one),
+        // hide removes it, and an unknown composition is rejected (the frame it was handed is disposed, not leaked).
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips: [],
+            Compositions: [new ShowComposition("a", "A", 320, 240, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(0, (await session.GetCompositionStatsAsync("a"))!.Value.LayerCount);
+        Assert.False(await session.SetCompositionTestPatternAsync("ghost", MakeBgraFrame())); // unknown → rejected
+
+        Assert.True(await session.SetCompositionTestPatternAsync("a", MakeBgraFrame()));
+        Assert.Equal(1, (await session.GetCompositionStatsAsync("a"))!.Value.LayerCount);
+        Assert.True(await session.SetCompositionTestPatternAsync("a", MakeBgraFrame())); // replace reuses the slot
+        Assert.Equal(1, (await session.GetCompositionStatsAsync("a"))!.Value.LayerCount);
+
+        Assert.True(await session.SetCompositionTestPatternAsync("a", null)); // hide
+        Assert.Equal(0, (await session.GetCompositionStatsAsync("a"))!.Value.LayerCount);
+    }
+
+    [Fact]
+    public async Task MultiPlacement_LivePlacementEdit_TargetsTheAddressedLayer()
+    {
+        // With a clip fanned onto two canvases, a live placement edit must resolve the specific (composition, layer)
+        // it addresses — and REJECT a key that matches no layer rather than silently moving the wrong one.
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "C")],
+            Clips:
+            [
+                new ShowClipBinding("c", "fake://v", CompositionId: "a", LayerIndex: 0)
+                {
+                    ExtraPlacements = [new ShowClipPlacement("b", 0)],
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions:
+            [
+                new ShowComposition("a", "A", 320, 240, 30, 1),
+                new ShowComposition("b", "B", 320, 240, 30, 1),
+            ],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+        await session.GoAsync();
+
+        var edit = new ShowVideoPlacement(DestX: 0.25, DestWidth: 0.5, DestHeight: 0.5);
+        Assert.True(await session.UpdateActivePlacementAsync("c", "a", 0, edit));  // primary layer
+        Assert.True(await session.UpdateActivePlacementAsync("c", "b", 0, edit));  // the fanned-out layer
+        Assert.False(await session.UpdateActivePlacementAsync("c", "z", 9, edit)); // no such layer → rejected
+    }
+
+    private static VideoFrame MakeBgraFrame(int w = 4, int h = 4) =>
+        new(TimeSpan.Zero, new VideoFormat(w, h, PixelFormat.Bgra32, new Rational(30, 1)),
+            [new byte[w * h * 4]], [w * 4]);
 
     [Fact]
     public async Task CompositionBoundClip_UsesOpenedVideoDimensionsForFullCanvasPlacement()
