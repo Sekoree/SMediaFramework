@@ -129,6 +129,34 @@ public partial class MediaPlayerViewModel
     private Task ShowSessionSeekAsync(TimeSpan position) =>
         _playerShowSession?.SeekAsync(position) ?? Task.CompletedTask;
 
+    /// <summary>Deck output-line health under the ShowSession path (engine-parity for the outputs-panel LEDs):
+    /// reads this player's ShowSession composition throughput for a line it drives and scores video health like
+    /// the engine's <see cref="Playback.OutputLineHealthEvaluator"/>. Returns null when this deck isn't
+    /// ShowSession-driving the line, so the caller falls back to the engine probe. Video only for now — the
+    /// ShowSession deck path does not yet device-route audio (that is the audio-matrix re-back gap), so an
+    /// audio-only deck line still reports Unknown here. Lock-free (composition stats), no marshaling.</summary>
+    internal OutputLineHealthEvaluator.LineHealthMetrics? TryGetShowSessionLineHealthMetrics(Guid outputLineId)
+    {
+        if (!ShowSessionActive || _playerShowSession is not { } session)
+            return null;
+        if (!_playerAcquiredLines.Contains(outputLineId))
+            return null;
+        if (session.GetCompositionStats(MediaPlayerShowMapper.PlayerCompositionId) is not { } stats)
+            return null;
+
+        var videoSubmitted = stats.FramesSubmitted;
+        if (videoSubmitted == 0)
+            return null;
+        var videoDropped = stats.PumpOverruns + stats.SlotOverflowFrames;
+        var state = videoDropped == 0
+            ? OutputLineHealthState.Healthy
+            : videoDropped > 120 || (double)videoDropped / videoSubmitted > 0.05
+                ? OutputLineHealthState.Error
+                : OutputLineHealthState.Warning;
+        return new OutputLineHealthEvaluator.LineHealthMetrics(
+            state, videoSubmitted, videoDropped, 0, 0, 0, 0);
+    }
+
     /// <summary>Stops the player ShowSession, releases its video leases, and returns the deck to idle.</summary>
     private async Task ShowSessionStopAsync()
     {

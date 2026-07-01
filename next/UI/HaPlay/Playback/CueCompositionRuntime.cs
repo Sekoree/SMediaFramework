@@ -222,7 +222,7 @@ internal sealed class CueCompositionRuntime : IDisposable
                     if (ndi is not null)
                     {
                         IVideoOutput sink = ndi.Video;
-                        sink = WrapWithNDILockIfNeeded(sink, nd, $"cuecomp-ndi-{nd.Id:N}");
+                        sink = HaPlayPlaybackHelpers.WrapWithNDILockIfNeeded(sink, nd, $"cuecomp-ndi-{nd.Id:N}");
                         var pump = new VideoOutputPump(
                             sink,
                             maxQueuedFrames: 8,
@@ -304,20 +304,6 @@ internal sealed class CueCompositionRuntime : IDisposable
             new CpuVideoCompositor(canvasFormat),
             RequiresBgraLayerConversion: true,
             BackendName: "CPU");
-    }
-
-    /// <summary>Mirrors <c>HaPlayPlaybackSession.WrapWithNDILockIfNeeded</c>.</summary>
-    private static IVideoOutput WrapWithNDILockIfNeeded(IVideoOutput ndiSender, NDIOutputDefinition nd, string name)
-    {
-        if (nd.PixelFormatLock is null && nd.ResolutionLockWidth is null && nd.ResolutionLockHeight is null)
-            return ndiSender;
-        return new LockedFormatVideoOutput(
-            ndiSender,
-            nd.PixelFormatLock,
-            nd.ResolutionLockWidth,
-            nd.ResolutionLockHeight,
-            name,
-            disposeInnerOnDispose: false);
     }
 
     private static Guid? TryParseGuid(string id) =>

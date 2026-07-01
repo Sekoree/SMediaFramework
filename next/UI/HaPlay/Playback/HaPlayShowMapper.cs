@@ -51,7 +51,7 @@ public static class HaPlayShowMapper
                     int? height = null;
                     definitions.TryGetValue(binding.OutputLineId, out var definition);
                     if (definition is not null
-                        && HaPlayPlaybackSession.TryGetOutputResolution(definition, out var w, out var h))
+                        && HaPlayPlaybackHelpers.TryGetOutputResolution(definition, out var w, out var h))
                     {
                         width = w;
                         height = h;

@@ -246,7 +246,7 @@ internal sealed partial class HaPlayPlaybackSession
 
         if (needsVideo)
         {
-            var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-hot");
+            var lockedSink = HaPlayPlaybackHelpers.WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-hot");
             var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-hot", log: null,
                 disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
             var logo = new LogoFallbackVideoOutput(pump, disposeInnerOnDispose: true);

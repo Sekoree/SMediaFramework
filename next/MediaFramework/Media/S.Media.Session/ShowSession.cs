@@ -2,6 +2,7 @@ using S.Media.Core.Audio;
 using S.Media.Core.Registry;
 using S.Media.Core.Threading;
 using S.Media.Core.Video;
+using S.Media.Routing;
 using S.Media.Time;
 
 namespace S.Media.Session;
@@ -89,6 +90,13 @@ public sealed class ShowSession : IAsyncDisposable
     private volatile IReadOnlyList<GroupClockView> _groupViews = [];
 
     private sealed record GroupClockView(string GroupId, SessionClock Clock, S.Media.Players.MediaPlayer? Player);
+
+    // Lock-free per-device audio-pump view for the outputs-panel line-health poll (the audio analogue of
+    // _compositionsView): republished on the dispatcher whenever the active clips change, so a UI poll sums a
+    // routed line's enqueued/dropped chunks off-thread without marshaling. Keyed to the device the cue routed to.
+    private volatile IReadOnlyList<ActiveAudioPump> _audioPumpsView = [];
+
+    private readonly record struct ActiveAudioPump(AudioRouter Router, string OutputId, string DeviceId);
 
     /// <summary>A composition layer the active clip's video is fanned to, tagged by its composition + layer index
     /// so a live placement edit can target the right one when a clip is placed onto more than one layer.</summary>
@@ -342,6 +350,8 @@ public sealed class ShowSession : IAsyncDisposable
         // Retained for the active clip so both fade-in and every stop path ramp each route relative to its
         // configured gain rather than assuming unity.
         var routeTargets = new List<(string OutputId, float TargetGain)>();
+        // Device-tagged routed outputs (OutputId → device) for the per-line audio-health poll.
+        var audioPumps = new List<(string OutputId, string DeviceId)>();
         try
         {
             if (player.VideoSource is { } videoSource)
@@ -395,6 +405,8 @@ public sealed class ShowSession : IAsyncDisposable
                         player.AttachAudioOutput(o, outputId, map: channelMap, gain: fadeIn ? 0f : route.Gain);
                         outputs.Add(o);
                         routeTargets.Add((outputId, route.Gain));
+                        if (route.DeviceId is { } clipDevice)
+                            audioPumps.Add((outputId, clipDevice));
                     }
                 }
                 else
@@ -412,6 +424,8 @@ public sealed class ShowSession : IAsyncDisposable
                         player.AttachAudioOutput(o, outDef.Id, map: channelMap, gain: fadeIn ? 0f : 1f);
                         outputs.Add(o);
                         routeTargets.Add((outDef.Id, 1f));
+                        if (outDef.DeviceId is { } groupDevice)
+                            audioPumps.Add((outDef.Id, groupDevice));
                     }
                 }
             }
@@ -440,6 +454,10 @@ public sealed class ShowSession : IAsyncDisposable
             armed.Start();
             await ReplaceActiveAsync(group, armed, outputs, layers, subtitleAttachments).ConfigureAwait(false);
             group.SetActiveFadeMetadata(binding, routeTargets, fadeIn ? 0f : 1f);
+            // Publish the device-tagged audio outputs for the line-health poll (ReplaceActiveAsync republished
+            // the group views before these were set, so refresh once more now they're known).
+            group.SetActiveAudioPumps(audioPumps);
+            PublishGroupViews();
 
             // Background per-clip work — the fade-in ramp + the end-of-clip (loop/trim-out/freeze) monitor —
             // shares one cancellation, cancelled when the clip is replaced. Both gated, so a plain
@@ -1641,10 +1659,47 @@ public sealed class ShowSession : IAsyncDisposable
 
     /// <summary>Republishes the lock-free query view (NXT-16). Called on the dispatcher after any change to the
     /// group set or a group's active clip, so <see cref="Snapshot"/> reads never round-trip the dispatcher.</summary>
-    private void PublishGroupViews() =>
+    private void PublishGroupViews()
+    {
         _groupViews = _groups
             .Select(kv => new GroupClockView(kv.Key, kv.Value.Clock, kv.Value.Active?.Player))
             .ToArray();
+
+        // Audio-pump view: every active clip's device-tagged routed outputs (skips default-device routes, which
+        // can't be line-correlated). GetActiveAudioPumpStatsByDevice reads this lock-free.
+        var pumps = new List<ActiveAudioPump>();
+        foreach (var kv in _groups)
+        {
+            if (kv.Value.Active?.Player?.AudioRouter is not { } router)
+                continue;
+            foreach (var (outputId, deviceId) in kv.Value.ActiveAudioPumps)
+                pumps.Add(new ActiveAudioPump(router, outputId, deviceId));
+        }
+        _audioPumpsView = pumps;
+    }
+
+    /// <summary>Lock-free per-device audio-pump stats (enqueued/dropped chunks) summed across the active cues'
+    /// routed outputs — the audio analogue of <see cref="GetCompositionStats"/> for the outputs-panel line-health
+    /// poll. Keyed by the PortAudio device id a cue routed audio to; a UI output line maps its device id into this.
+    /// Reads a volatile snapshot (republished on fire/stop) then each router's own thread-safe pump stats — no
+    /// dispatcher marshaling. Empty when no active cue routes device-addressed audio.</summary>
+    public IReadOnlyDictionary<string, (long Enqueued, long Dropped)> GetActiveAudioPumpStatsByDevice()
+    {
+        var view = _audioPumpsView;
+        var result = new Dictionary<string, (long Enqueued, long Dropped)>(StringComparer.Ordinal);
+        foreach (var pump in view)
+        {
+            try
+            {
+                var st = pump.Router.GetPumpStats(pump.OutputId);
+                var cur = result.TryGetValue(pump.DeviceId, out var v) ? v : default;
+                result[pump.DeviceId] = (cur.Enqueued + st.Enqueued, cur.Dropped + st.Dropped);
+            }
+            catch (ArgumentException) { /* output retired between snapshot publish and read */ }
+        }
+
+        return result;
+    }
 
     /// <summary>Republishes the lock-free composition view after a load/dispose changes <see cref="_compositions"/>.
     /// Call on the dispatcher (the only place <see cref="_compositions"/> is mutated).</summary>
@@ -1726,11 +1781,21 @@ public sealed class ShowSession : IAsyncDisposable
         private CancellationTokenSource? _clipWorkCts;
         private ShowClipBinding? _activeBinding;
         private IReadOnlyList<(string OutputId, float TargetGain)> _activeRouteTargets = [];
+        // Device-tagged routed audio outputs of the active clip (OutputId → the PortAudio device it plays on),
+        // for the per-line audio-health poll. Only device-addressed routes are tracked (default-device routes
+        // can't be line-correlated). Set after the clip commits; reset on replacement.
+        private IReadOnlyList<(string OutputId, string DeviceId)> _activeAudioPumps = [];
         private float _activeAudioScale = 1f;
         private int _fadeOutStarted;
         public int LastFiredNumber { get; set; } = int.MinValue;
 
         public ShowClipBinding? ActiveBinding => _activeBinding;
+        public IReadOnlyList<(string OutputId, string DeviceId)> ActiveAudioPumps => _activeAudioPumps;
+
+        /// <summary>Records the active clip's device-tagged routed audio outputs (for the line-health poll). Call
+        /// on the dispatcher after the clip's outputs are attached.</summary>
+        public void SetActiveAudioPumps(IReadOnlyList<(string OutputId, string DeviceId)> pumps) =>
+            _activeAudioPumps = pumps as (string, string)[] ?? pumps.ToArray();
         // Every placement fades on one ramp, so the primary (first) layer's opacity is representative for the
         // cross-fade opacity readback.
         public ClipCompositionRuntime.LayerSlot? ActiveLayer => _layers.Count > 0 ? _layers[0].Slot : null;
@@ -1815,6 +1880,7 @@ public sealed class ShowSession : IAsyncDisposable
             _clipWorkCts = null;
             _activeBinding = null;
             _activeRouteTargets = [];
+            _activeAudioPumps = [];
             _activeAudioScale = 1f;
             Volatile.Write(ref _fadeOutStarted, 0);
 

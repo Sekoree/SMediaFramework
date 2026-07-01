@@ -6,7 +6,7 @@ namespace HaPlay.Playback;
 /// <summary>
 /// Process-wide latch that disables hardware video decode once a hardware-decode fault has been seen, so later
 /// file opens fall back to software decode (CPU NV12 → plain <c>glTexSubImage2D</c> upload) which has no D3D11VA /
-/// VAAPI surface-pool or GPU-interop dependency. Read by <see cref="HaPlayPlaybackSession.BuildFileOpenOptions"/>.
+/// VAAPI surface-pool or GPU-interop dependency. Read by <see cref="HaPlayPlaybackHelpers.BuildFileOpenOptions"/>.
 /// </summary>
 /// <remarks>
 /// The latch is deliberately coarse (whole process, not per file): a decode fault almost always means the

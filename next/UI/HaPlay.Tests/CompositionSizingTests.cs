@@ -18,7 +18,7 @@ public sealed class CompositionSizingTests
             Guid.NewGuid(), "Projector", default, default, ScreenIndex: 0,
             WindowWidth: 1280, WindowHeight: 720);
 
-        Assert.True(HaPlayPlaybackSession.TryGetOutputResolution(def, out var w, out var h));
+        Assert.True(HaPlayPlaybackHelpers.TryGetOutputResolution(def, out var w, out var h));
         Assert.Equal((1280, 720), (w, h));
     }
 
@@ -29,7 +29,7 @@ public sealed class CompositionSizingTests
             Guid.NewGuid(), "Projector", default, default, ScreenIndex: 0,
             WindowWidth: null, WindowHeight: null);
 
-        Assert.False(HaPlayPlaybackSession.TryGetOutputResolution(def, out _, out _));
+        Assert.False(HaPlayPlaybackHelpers.TryGetOutputResolution(def, out _, out _));
     }
 
     [Fact]
@@ -39,7 +39,7 @@ public sealed class CompositionSizingTests
             Guid.NewGuid(), "Wall", "wall", null, default, AudioChannelCount: 2, AudioSampleRate: 48_000,
             ResolutionLockWidth: 3840, ResolutionLockHeight: 2160);
 
-        Assert.True(HaPlayPlaybackSession.TryGetOutputResolution(def, out var w, out var h));
+        Assert.True(HaPlayPlaybackHelpers.TryGetOutputResolution(def, out var w, out var h));
         Assert.Equal((3840, 2160), (w, h));
     }
 
@@ -49,7 +49,7 @@ public sealed class CompositionSizingTests
         var def = new NDIOutputDefinition(
             Guid.NewGuid(), "Wall", "wall", null, default, AudioChannelCount: 2, AudioSampleRate: 48_000);
 
-        Assert.False(HaPlayPlaybackSession.TryGetOutputResolution(def, out _, out _));
+        Assert.False(HaPlayPlaybackHelpers.TryGetOutputResolution(def, out _, out _));
     }
 
     [Fact]

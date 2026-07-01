@@ -52,7 +52,7 @@ internal sealed class PlaylistDecoderCache : IDisposable
             // Match the live open path's deep read-ahead + large file read buffer so a cached track plays as
             // smoothly as a freshly-opened one (anyNDI=false: the speculative pre-open can't know the future
             // route, and HW decode is the safe default — the NDI path re-opens without it when needed).
-            var options = HaPlayPlaybackSession.BuildFileOpenOptions(anyNDI: false) with
+            var options = HaPlayPlaybackHelpers.BuildFileOpenOptions(anyNDI: false) with
             {
                 AudioStreamIndex = audioTrackIndex,
             };

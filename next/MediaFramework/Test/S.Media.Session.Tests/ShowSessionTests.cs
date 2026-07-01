@@ -525,6 +525,38 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task GetActiveAudioPumpStatsByDevice_ReflectsRoutedDevice_AndClearsOnStop()
+    {
+        // NXT-06 cutover (cue audio line-health parity): the outputs panel reverse-maps a line to its PortAudio
+        // device and reads this per-device pump snapshot, so an audio-only cue line lights up. The key must appear
+        // once a cue routes audio to the device and clear when the cue stops.
+        var backend = new RecordingAudioBackend();
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), backend);
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("cue1", 1, "One")],
+            Clips:
+            [
+                new ShowClipBinding("cue1", "fake://1")
+                {
+                    AudioRoutes = [new ShowClipAudioRoute(DeviceId: "hw:7", ChannelMatrix: [0, 1], Gain: 1f)],
+                },
+            ],
+            Compositions: [], Outputs: [], Routes: [], Devices: []);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Empty(session.GetActiveAudioPumpStatsByDevice()); // idle → nothing driven
+
+        await session.GoAsync(); // cue1 active with its clip0 output on device hw:7
+        Assert.True(session.GetActiveAudioPumpStatsByDevice().ContainsKey("hw:7"),
+            "an active cue's routed device must appear in the per-device audio-pump snapshot");
+
+        await session.StopAllAsync();
+        Assert.False(session.GetActiveAudioPumpStatsByDevice().ContainsKey("hw:7"),
+            "stopping the cue must clear its device from the audio-pump snapshot");
+    }
+
+    [Fact]
     public async Task PreviewCueAsync_StartsForLoadedCue_StopCleanlyReleases()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), new RecordingAudioBackend());

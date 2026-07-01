@@ -1011,26 +1011,51 @@ Under `HAPLAY_USE_SHOWSESSION=1`, on real audio/NDI/SDL output:
 ## Engine-deletion migrations (started 2026-07-01)
 Investigation found the engines are **not** a clean delete — deletion is gated behind two real migrations:
 
-**(1) Cue line-health → ShowSession — DONE (video), 1 audio item remaining.** The engine's
+**(1) Cue line-health → ShowSession — DONE (video + audio, 2026-07-01).** The engine's
 `CuePlaybackEngine.TryGetLineHealthMetrics` fed the output panel's per-line health LEDs and had no ShowSession
 equivalent. Added a **synchronous, lock-free** `ShowSession.GetCompositionStats(compositionId)` (volatile
 `_compositionsView` republished on load/dispose; the runtime's `GetStats` is already thread-safe) so a 1 Hz UI poll
 reads composition throughput without marshaling. The VM's `OutputManagement.CueLineMetricsProbe` now points at a new
 `MainViewModel.TryGetCueShowLineHealthMetrics` (reverse-maps line→compositions via `_cueVideoOutputs`, sums
-video submitted/dropped, scores health mirroring the engine). *Remaining:* ShowSession exposes no per-line **audio**
-pump stats, so a cue audio-only line reports null and falls back (same null-fallthrough as the engine when no runtime
-drove a line) — full audio parity needs a per-output audio-stats API on ShowSession. Tests:
-`GetCompositionStats_SyncLockFree_ReflectsLoadAndRetire`.
+video submitted/dropped, scores health mirroring the engine). **Audio parity now closed:** ShowSession publishes a
+lock-free per-device audio-pump snapshot (`GetActiveAudioPumpStatsByDevice` — device-tagged routed outputs of the
+active clips, republished on fire/stop; each read sums the router's thread-safe `GetPumpStats`), and
+`TryGetCueShowLineHealthMetrics` reverse-maps the line to its PortAudio device id and folds enqueued/dropped chunks
+into the score, so an **audio-only** cue line now lights up (video, audio, or both). Tests:
+`GetCompositionStats_SyncLockFree_ReflectsLoadAndRetire`,
+`GetActiveAudioPumpStatsByDevice_ReflectsRoutedDevice_AndClearsOnStop`.
 
-**(2) Full media-player deck re-back — LARGE, hardware-gated, NOT started.** `HaPlayPlaybackSession` is still the
-deck's primary engine: **93 `_session` usages** across `MediaPlayerViewModel(.Transport/.Playlist/.Configuration)`,
-plus **9 shared static/instance members** used off the deck (`BuildFileOpenOptions`, `TryCreate`/`TryCreateLive`,
-`WireAudio`, `TrySetOutputMatrix`, `TryGetOutputResolution`, `AttachMediaPlayerSubtitles`, `SourceAudioFormat`,
-`WrapWithNDILockIfNeeded`). The ShowSession deck path (`MediaPlayerViewModel.ShowSession.cs`) already covers
-file/NDI transport + auto-advance + idle logo, but the engine remains the fallback and backs the audio matrix,
-output-resolution queries, subtitle attach, and output health. Deleting it requires: the ShowSession deck path
-reaching parity for every source/feature (so `_session` is never constructed), relocating the shared static helpers
-out of the engine file, then migrating the 93 usages — all hardware-verified. This is a dedicated multi-stage effort.
+**(2) Full media-player deck re-back — LARGE, hardware-gated, in progress.** `HaPlayPlaybackSession` is still the
+deck's primary engine: **93 `_session` usages** across `MediaPlayerViewModel(.Transport/.Playlist/.Configuration)`.
+
+*Stage 1 — relocate the shared stateless helpers — DONE (2026-07-01).* The three off-deck / duplicated **pure
+statics** are now in a new `HaPlayPlaybackHelpers`, so the cue workspace, playlist cache, output-setup dialog, and
+cue composition runtime no longer depend on the deletion-bound engine type: `BuildFileOpenOptions(bool)` (used by
+`PlaylistDecoderCache`), `TryGetOutputResolution` (used by `CueOutputSetupDialog` + `HaPlayShowMapper` + tests), and
+`WrapWithNDILockIfNeeded` (was **duplicated** in `CueCompositionRuntime` — de-duplicated onto the shared helper).
+All call sites (external + the engine's own internal uses) rewired; full solution builds 0 errors, suite 1400/0.
+The remaining engine members are **not** relocatable — `TryCreate`/`TryCreateLive` construct the engine,
+`TrySetOutputMatrix`/`AttachMediaPlayerSubtitles`/`SourceAudioFormat`/`WireAudio` are deck/instance-bound — so they
+migrate with the deck path itself, not as a helper move.
+
+*Stage 2 (in progress).* The ShowSession deck path (`MediaPlayerViewModel.ShowSession.cs`) already covers
+file/NDI transport + auto-advance + idle logo. Closing the remaining deck-parity gaps so `_session` is never
+constructed:
+- **Output health — video DONE (2026-07-01).** `MediaPlayerViewModel.TryGetShowSessionLineHealthMetrics` reads the
+  per-player ShowSession's composition throughput (lock-free `GetCompositionStats`) and scores a line's video
+  health like the engine; `OutputManagementViewModel.RefreshOutputHealth` now prefers it over the (idle-under-the-
+  flipped-default) engine session, falling back to the engine evaluator when a player isn't ShowSession-driving the
+  line. So a ShowSession-playing deck's video output LED lights up instead of showing Idle. Suite 1400/0.
+- **Audio routing / matrix — OPEN, functional + hardware-critical.** `MediaPlayerShowMapper.ToShowDocument` is
+  called with **no `ShowClipAudioRoute`s**, so a deck's ShowSession audio plays on the **default device only** — the
+  deck's selected audio output line(s) + channel matrix (`TrySetOutputMatrix`, applied on the engine session) are
+  **ignored** under the flipped default. This is the priority functional gap; it needs the deck's `PlayerOutputBinding`
+  → `ShowClipAudioRoute` mapping (mirroring the cue `MapAudioRoutes`) + live-matrix re-apply, and **must be validated
+  on real audio devices** (it also unblocks the audio side of deck output-health).
+- **Subtitle attach** and **output-resolution / composition sizing** (currently hardcoded 1920×1080) remain.
+
+*Stage 3 (remaining).* Migrate the 93 `_session` usages to the ShowSession deck path, then the engine is never
+constructed. All hardware-verified. This is a dedicated multi-stage effort.
 
 ## Engine-deletion footprint (after the two migrations above)
 The default is now ShowSession (see *What the flip needs*); the engines remain only as the `HAPLAY_USE_SHOWSESSION=0`

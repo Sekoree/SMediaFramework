@@ -1184,11 +1184,25 @@ public partial class OutputManagementViewModel : ViewModelBase
             var anyWired = false;
             foreach (var player in players)
             {
-                var session = player.PlaybackSession;
-                if (session is null)
-                    continue;
+                Playback.OutputLineHealthEvaluator.LineHealthMetrics metrics;
+                string? metricsDetail;
+                // A deck on the ShowSession path (the flipped default) drives lines through its per-player
+                // ShowSession, not its (idle/absent) engine session — read the session-side composition health.
+                // Falls back to the engine health evaluator when this player isn't ShowSession-driving the line.
+                if (player.TryGetShowSessionLineHealthMetrics(line.Definition.Id) is { } showMetrics)
+                {
+                    metrics = showMetrics;
+                    metricsDetail = FormatShowSessionHealthDetail(showMetrics);
+                }
+                else
+                {
+                    var session = player.PlaybackSession;
+                    if (session is null)
+                        continue;
+                    metrics = OutputLineHealthEvaluator.EvaluateWithMetrics(session, line);
+                    metricsDetail = FormatHealthDetail(session, line, metrics.State);
+                }
 
-                var metrics = OutputLineHealthEvaluator.EvaluateWithMetrics(session, line);
                 if (metrics.State != OutputLineHealthState.Unknown)
                 {
                     anyWired = true;
@@ -1198,7 +1212,7 @@ public partial class OutputManagementViewModel : ViewModelBase
                 if (metrics.State > worst)
                 {
                     worst = metrics.State;
-                    detail = FormatHealthDetail(session, line, metrics.State);
+                    detail = metricsDetail;
                 }
             }
 
@@ -1259,6 +1273,11 @@ public partial class OutputManagementViewModel : ViewModelBase
         m.State == OutputLineHealthState.Healthy
             ? $"Cues: {m.VideoSubmitted:N0} f · {m.AudioEnqueued:N0} ch"
             : $"Cues: {m.VideoDropped + m.AudioDropped:N0} drops of {m.VideoSubmitted + m.AudioEnqueued:N0} delivered";
+
+    private static string FormatShowSessionHealthDetail(Playback.OutputLineHealthEvaluator.LineHealthMetrics m) =>
+        m.State == OutputLineHealthState.Healthy
+            ? $"Player: {m.VideoSubmitted:N0} f"
+            : $"Player: {m.VideoDropped:N0} drops of {m.VideoSubmitted:N0} f";
 
     private static string? FormatHealthDetail(
         HaPlayPlaybackSession session,

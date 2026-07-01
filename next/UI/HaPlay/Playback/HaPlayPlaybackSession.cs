@@ -444,42 +444,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         }
     }
 
-    /// <summary>
-    /// Decoder/open options for file playback. Single source of truth so both <see cref="TryCreate(string,
-    /// IReadOnlyList{OutputLineViewModel}, OutputManagementViewModel, out HaPlayPlaybackSession?, out string?,
-    /// HaPlayFilePlaybackOptions?, MediaContainerDecoder?)"/> and the speculative <see cref="PlaylistDecoderCache"/>
-    /// pre-open use the same deep read-ahead and large file read buffer (otherwise a cached track would play
-    /// with the shallow ~4 s audio buffer / ~32 KB reads and stutter on slow media).
-    /// </summary>
-    /// <remarks>
-    /// Deep demux read-ahead buffers the single demux thread through variable file read throughput (an
-    /// external/USB drive whose sustained rate dips for a second or two): bare defaults give audio only ~4 s
-    /// (192 pkts) and video ~16 s (384), so a brief read stall drains the audio buffer and underruns the
-    /// router. These are compressed packets — ~15-20 s of look-ahead is only tens of MB. The large
-    /// <c>FileReadBufferBytes</c> makes each read a big sequential block (vs FFmpeg's ~32 KB native reads) so
-    /// the demux keeps up on high-per-IOP-latency media — the gap vs players like VLC.
-    /// </remarks>
-    internal static MediaPlayerOpenOptions BuildFileOpenOptions(bool anyNDI) =>
-        new(
-            // Software decode once the hardware path has faulted this process (see HardwareVideoDecodeGate).
-            TryHardwareAcceleration: !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
-            // Windows D3D11VA only: keep decoded frames on their D3D11 NV12 surfaces and let the GL output do the
-            // GPU->CPU staging upload on its OWN render thread, instead of av_hwframe_transfer_data on the decode
-            // thread. That parallelizes decode and upload and is what holds file video at a stable 60 fps — the
-            // decode-thread transfer otherwise jitters frame production so the player presents ~1/6 of frames late
-            // (measured: retain ≈ 60 fps / 0 late vs transfer ≈ 50 fps / climbing late). Gated exactly like hardware
-            // decode: NDI needs CPU-readable pixels (a D3D11 surface has none), and a faulted hw path forces software.
-            // The decoder sizes its surface pool for the retained pipeline via extra_hw_frames (no pool exhaustion).
-            RetainD3D11SharedHandleForGl:
-                OperatingSystem.IsWindows() && !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
-            // Keep rendering on shared NT handles only. Borrowing libav-owned D3D11 COM objects couples GL upload
-            // lifetime to decoder teardown, which is fragile during playlist switches on Windows.
-            Win32Nv12SharedHandleOnlyExport:
-                OperatingSystem.IsWindows() && !anyNDI && HardwareVideoDecodeGate.HardwareDecodeEnabled,
-            IncludeAudioRouter: true,
-            AudioPacketQueueDepth: 720,   // ~15 s @ ~21 ms/packet
-            VideoPacketQueueDepth: 512,   // ~21 s @ 24 fps
-            FileReadBufferBytes: 4 * 1024 * 1024);
+    // BuildFileOpenOptions moved to HaPlayPlaybackHelpers (NXT-13 engine-deletion prep, stage 1).
 
     public static bool TryCreate(
         string mediaPath,
@@ -504,7 +469,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
             mediaPath, lines.Count,
             string.Join(",", lines.Select(l => l.Definition.GetType().Name)),
             anyNDI, preOpenedDecoder is not null, audioTrackIndex?.ToString() ?? "auto");
-        var mpOpt = BuildFileOpenOptions(anyNDI) with { AudioStreamIndex = audioTrackIndex };
+        var mpOpt = HaPlayPlaybackHelpers.BuildFileOpenOptions(anyNDI) with { AudioStreamIndex = audioTrackIndex };
 
         MediaContainerDecoder? decoder = preOpenedDecoder;
         if (decoder is null)
@@ -604,7 +569,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                         // §4.3.5 follow-up — apply the NDI definition's pixel-format / resolution lock by
                         // wrapping NDIVideoSender. Negotiation respects the locked pixel format; frames are
                         // letterboxed into the locked dimensions before the pump fans them to the receiver.
-                        var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}");
+                        var lockedSink = HaPlayPlaybackHelpers.WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}");
                         var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}", log: null,
                             disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
                         var logo = new LogoFallbackVideoOutput(pump, disposeInnerOnDispose: true);
@@ -796,7 +761,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                 {
                     if (!ndiByDefinitionId.TryGetValue(nd.Id, out var ndi))
                         continue;
-                    var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-comp-{nd.Id:N}");
+                    var lockedSink = HaPlayPlaybackHelpers.WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-comp-{nd.Id:N}");
                     var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-comp-{nd.Id:N}",
                         log: null, disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
                     // Carrier released via the session's acquired-carriers list; the composition owns the pump.
@@ -886,26 +851,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
         return (1920, 1080);
     }
 
-    /// <summary>Reads a video output line's declared pixel resolution (local window size, or NDI resolution
-    /// lock). Returns false when the output declares none.</summary>
-    internal static bool TryGetOutputResolution(OutputDefinition definition, out int width, out int height)
-    {
-        switch (definition)
-        {
-            case LocalVideoOutputDefinition { WindowWidth: > 0, WindowHeight: > 0 } lv:
-                width = lv.WindowWidth!.Value;
-                height = lv.WindowHeight!.Value;
-                return true;
-            case NDIOutputDefinition { ResolutionLockWidth: > 0, ResolutionLockHeight: > 0 } nd:
-                width = nd.ResolutionLockWidth!.Value;
-                height = nd.ResolutionLockHeight!.Value;
-                return true;
-            default:
-                width = 0;
-                height = 0;
-                return false;
-        }
-    }
+    // TryGetOutputResolution moved to HaPlayPlaybackHelpers (NXT-13 engine-deletion prep, stage 1).
 
     private static void DisposePipelineOwned(List<IDisposable> owned)
     {
@@ -1148,7 +1094,7 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
                         needsAudio);
                     if (needsVideo)
                     {
-                        var lockedSink = WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-live");
+                        var lockedSink = HaPlayPlaybackHelpers.WrapWithNDILockIfNeeded(ndi.Video, nd, $"ndi-{nd.Id:N}-live");
                         var pump = new VideoOutputPump(lockedSink, maxQueuedFrames: 8, name: $"ndi-{nd.Id:N}-live",
                             disposeInnerOnDispose: !ReferenceEquals(lockedSink, ndi.Video));
                         var logo = new LogoFallbackVideoOutput(pump, disposeInnerOnDispose: true);
@@ -1273,18 +1219,8 @@ internal sealed partial class HaPlayPlaybackSession : IDisposable
     /// <summary>§4.3.5 follow-up — wrap an NDI sender in <see cref="LockedFormatVideoOutput"/> when the
     /// <see cref="NDIOutputDefinition"/> carries a pixel-format or resolution lock. Returns the inner
     /// output unchanged when no lock is set so the existing pump → sender hot path isn't perturbed.</summary>
-    private static IVideoOutput WrapWithNDILockIfNeeded(IVideoOutput ndiSender, NDIOutputDefinition nd, string name)
-    {
-        if (nd.PixelFormatLock is null && nd.ResolutionLockWidth is null && nd.ResolutionLockHeight is null)
-            return ndiSender;
-        return new LockedFormatVideoOutput(
-            ndiSender,
-            nd.PixelFormatLock,
-            nd.ResolutionLockWidth,
-            nd.ResolutionLockHeight,
-            name,
-            disposeInnerOnDispose: false);
-    }
+    // WrapWithNDILockIfNeeded moved to HaPlayPlaybackHelpers (NXT-13 engine-deletion prep, stage 1) — was
+    // duplicated in CueCompositionRuntime; both now call the shared helper.
 
     private static void ReleaseAcquiredCarriers(OutputManagementViewModel outputs, List<OutputLineViewModel> acquired)
     {

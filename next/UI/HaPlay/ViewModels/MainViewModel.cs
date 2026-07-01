@@ -559,11 +559,11 @@ public partial class MainViewModel : ViewModelBase
     }
 
     /// <summary>ShowSession replacement for <c>CuePlaybackEngine.TryGetLineHealthMetrics</c>: sums the video
-    /// throughput of the composition(s) feeding <paramref name="outputLineId"/> from the session's lock-free
-    /// composition stats and scores a health state, mirroring the engine's video scoring. Video only — ShowSession
-    /// exposes no per-line audio pump counters yet, so a cue audio-only line reports null here and the outputs panel
-    /// falls back to the media-player probe / Idle (same null-fallthrough the engine used when no runtime drove the
-    /// line). Runs off the UI poll thread with no dispatcher marshaling.</summary>
+    /// throughput of the composition(s) feeding <paramref name="outputLineId"/> AND the audio-pump chunks of any
+    /// cue routing audio to the line's device (reverse-mapped via its PortAudio device id), scoring a combined
+    /// health state that mirrors the engine. Both sides read the session's lock-free snapshots, so a video, audio,
+    /// or audio-only cue line all light up. Null only when the line is genuinely undriven (the outputs panel then
+    /// falls back to the media-player probe / Idle). Runs off the UI poll thread with no dispatcher marshaling.</summary>
     private OutputLineHealthEvaluator.LineHealthMetrics? TryGetCueShowLineHealthMetrics(Guid outputLineId)
     {
         if (_cueShowSession is not { } session)
@@ -583,16 +583,34 @@ public partial class MainViewModel : ViewModelBase
             videoDropped += stats.PumpOverruns + stats.SlotOverflowFrames;
         }
 
-        if (!driven || videoSubmitted == 0)
+        // Audio: reverse-map the line to its PortAudio device and sum this line's active cue-audio pump chunks
+        // (enqueued/dropped). Closes the "audio-only cue line reports Idle" gap — an audio-only line now lights up
+        // once a cue routes audio to its device. Device-addressed routes only (matches the session-side tracking).
+        long audioEnqueued = 0;
+        long audioDropped = 0;
+        var deviceId = OutputManagement.DefinitionsSnapshot
+            .OfType<PortAudioOutputDefinition>()
+            .FirstOrDefault(d => d.Id == outputLineId)?.EffectiveAudioBackendDeviceId;
+        if (deviceId is not null
+            && session.GetActiveAudioPumpStatsByDevice().TryGetValue(deviceId, out var audio))
+        {
+            driven = true;
+            audioEnqueued = audio.Enqueued;
+            audioDropped = audio.Dropped;
+        }
+
+        var totalSubmitted = videoSubmitted + audioEnqueued;
+        if (!driven || totalSubmitted == 0)
             return null;
 
-        var state = videoDropped == 0
+        var totalDropped = videoDropped + audioDropped;
+        var state = totalDropped == 0
             ? OutputLineHealthState.Healthy
-            : videoDropped > 120 || (double)videoDropped / videoSubmitted > 0.05
+            : totalDropped > 120 || (double)totalDropped / totalSubmitted > 0.05
                 ? OutputLineHealthState.Error
                 : OutputLineHealthState.Warning;
         return new OutputLineHealthEvaluator.LineHealthMetrics(
-            state, videoSubmitted, videoDropped, 0, 0, 0, 0);
+            state, videoSubmitted, videoDropped, 0, 0, audioEnqueued, audioDropped);
     }
 
     /// <summary>Watches structural parts of the selected cue list that are compiled into a ShowDocument:
