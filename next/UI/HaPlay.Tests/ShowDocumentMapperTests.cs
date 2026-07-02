@@ -341,6 +341,21 @@ public class ShowDocumentMapperTests
         Assert.Empty(clip.AudioRoutes); // HaPlay never assumes a default device; routing is operator-authored.
     }
 
+    [Fact]
+    public void NotifyNaturalEnd_SetForFileCues_NotForHeldOrLiveSources()
+    {
+        // Bare plain-Stop FILE cues must fire cue auto-follow at EOF (the session's NotifyNaturalEnd monitor);
+        // held (image/text) and live sources hold/run until the operator moves on, so they must NOT opt in.
+        ShowClipBinding Map(PlaylistItem source) =>
+            Assert.Single(HaPlayShowMapper.ToShowDocument(
+                new CueList { Nodes = { new MediaCueNode { Label = "n", Source = source, DurationMs = 1000 } } }).Clips);
+
+        Assert.True(Map(new FilePlaylistItem("/m/a.wav")).NotifyNaturalEnd);
+        Assert.False(Map(new ImagePlaylistItem("/m/a.png")).NotifyNaturalEnd);
+        Assert.False(Map(new TextPlaylistItem { Text = "t" }).NotifyNaturalEnd);
+        Assert.False(Map(new NDIInputPlaylistItem("cam")).NotifyNaturalEnd);
+    }
+
     /// <summary>End-to-end: the mapper's output is a valid <see cref="ShowDocument"/> that a real
     /// <see cref="ShowSession"/> loads, exposing the cues in order with their groups (the 8a dispatch seam).</summary>
     [Fact]

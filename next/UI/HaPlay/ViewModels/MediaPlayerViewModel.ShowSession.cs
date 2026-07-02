@@ -387,13 +387,34 @@ public partial class MediaPlayerViewModel
     private static string CompositionOutputId(Guid lineId) =>
         $"{MediaPlayerShowMapper.PlayerCompositionId}_line_{lineId:N}";
 
+    /// <summary>The audio-output factory. Wraps every resolved output in a <see cref="MeteringAudioOutput"/>
+    /// tap (registered for the deck's VU poll, unregistered via the lease release hook) around
+    /// <see cref="BuildDeckAudioLeaseCore"/>. The wrapper is disposal-transparent, so the session's ownership
+    /// semantics (<c>DisposeOutputOnRuntimeDispose</c>) are unchanged.</summary>
+    private ClipAudioOutputLease? BuildDeckAudioLease(string deviceId, AudioFormat format)
+    {
+        if (BuildDeckAudioLeaseCore(deviceId, format) is not { } lease)
+            return null;
+        var tap = MeteringAudioOutput.Wrap(lease.Output);
+        RegisterMeterTap(tap);
+        return lease with
+        {
+            Output = tap,
+            Release = () =>
+            {
+                UnregisterMeterTap(tap);
+                lease.Release?.Invoke();
+            },
+        };
+    }
+
     /// <summary>The audio-output factory body. NDI route device ids resolve to the borrowed carrier audio held
     /// since open (wrapped in a per-fire resampler only when the carrier's format differs). Every other device id
     /// is a PortAudio route: the deck creates it here so a device that rejects the clip's mix rate (a fixed-rate
     /// JACK graph, mismatched hardware) can be opened at the LINE's configured rate behind an egress resampler —
     /// without this, routing a device to an already-playing clip whose mix rate the device can't open simply
     /// failed (the mid-play "route → no output" bug). Safe on the session thread.</summary>
-    private ClipAudioOutputLease? BuildDeckAudioLease(string deviceId, AudioFormat format)
+    private ClipAudioOutputLease? BuildDeckAudioLeaseCore(string deviceId, AudioFormat format)
     {
         if (_playerNdiAudioOutputs.TryGetValue(deviceId, out var carrierAudio))
         {
@@ -720,6 +741,7 @@ public partial class MediaPlayerViewModel
     private void StopShowSessionPoll()
     {
         _playerShowPoll?.Stop();
+        PeakLevelDb = double.NegativeInfinity;
     }
 
     private async void OnShowSessionPollTick(object? sender, EventArgs e)
@@ -728,6 +750,7 @@ public partial class MediaPlayerViewModel
             return;
         try
         {
+            PollAudioMeters();
             var snap = (await _playerShowSession.SnapshotAsync().ConfigureAwait(true))
                 .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
             if (snap is null)

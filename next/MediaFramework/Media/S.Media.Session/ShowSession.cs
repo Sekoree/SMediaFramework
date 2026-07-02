@@ -581,7 +581,7 @@ public sealed class ShowSession : IAsyncDisposable
             var end = player.Duration - binding.EndOffset;
             var endHandling = (binding.Loop || binding.EndBehavior != ClipEndBehavior.Stop
                                || binding.EndOffset > TimeSpan.Zero || binding.FadeOut > TimeSpan.Zero
-                               || binding.EndAtDuration)
+                               || binding.EndAtDuration || binding.NotifyNaturalEnd)
                 && player.Duration > TimeSpan.Zero
                 && end > binding.StartOffset;
             if (fadeIn || endHandling)
@@ -1442,6 +1442,11 @@ public sealed class ShowSession : IAsyncDisposable
     private static readonly TimeSpan EndMonitorPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan EndMonitorGuard = TimeSpan.FromMilliseconds(120);
 
+    /// <summary>Consecutive end-monitor ticks a NotifyNaturalEnd clip's audio clock must sit stopped (not
+    /// host-paused) before the stall is treated as source EOF — 500 ms at the 100 ms poll, comfortably past a
+    /// coordinated seek's transient clock pause (~100–300 ms) while still snappy for cue auto-follow.</summary>
+    private const int EndMonitorStallTicks = 5;
+
     /// <summary>Watches the active clip's position and applies its end-of-clip behaviour at <paramref name="end"/>
     /// (the trimmed out-point, or the natural duration): <see cref="ClipEndBehavior.Loop"/> → seek back to the
     /// in-point; <see cref="ClipEndBehavior.FreezeLastFrame"/> → pause on the last frame; otherwise stop. A
@@ -1453,6 +1458,7 @@ public sealed class ShowSession : IAsyncDisposable
         var loops = binding.Loop || binding.EndBehavior == ClipEndBehavior.Loop;
         var freezes = binding.EndBehavior == ClipEndBehavior.FreezeLastFrame;
         var start = binding.StartOffset;
+        var stalledTicks = 0;
 
         // Suppress ExecutionContext flow so the dispatcher's AsyncLocal identity does NOT leak into the monitor
         // thread; otherwise InvokeAsync would run the checks inline (off-dispatcher) and race transport commands.
@@ -1474,6 +1480,31 @@ public sealed class ShowSession : IAsyncDisposable
                                     return true; // clip replaced/gone → stop monitoring
                                 var position = player.Position;
                                 var remaining = end - position;
+
+                                // Stall-at-EOF (NotifyNaturalEnd only): a real file can end short of its metadata
+                                // duration (VBR/imprecise headers), so position never reaches the out-point and the
+                                // position check below would idle forever. An audio-clocked player whose clock has
+                                // stopped mid-clip without a host pause has hit source EOF (or an unrecoverable
+                                // stall — either way the clip is over for the operator). Requires the stop to
+                                // PERSIST so a coordinated seek's transient clock pause can't be mistaken for it.
+                                // Audio-clocked only: a video-only held clip's clock legitimately idles while up.
+                                if (binding.NotifyNaturalEnd && !loops && !freezes
+                                    && player.SampleRate > 0
+                                    && !group.PausedByHost
+                                    && !player.IsRunning
+                                    && position > TimeSpan.Zero)
+                                {
+                                    if (++stalledTicks >= EndMonitorStallTicks)
+                                    {
+                                        await ReplaceActiveAsync(group, null, [], []).ConfigureAwait(false);
+                                        ClipNaturallyEnded?.Invoke(binding.CueId); // EOF stall = natural end
+                                        return true;
+                                    }
+                                }
+                                else
+                                {
+                                    stalledTicks = 0;
+                                }
                                 var naturalFade = binding.FadeOut > TimeSpan.Zero
                                     ? binding.FadeOut
                                     : binding.EndBehavior == ClipEndBehavior.FadeOutAndStop
@@ -1947,8 +1978,10 @@ public sealed class ShowSession : IAsyncDisposable
     public Task SetPausedAsync(bool paused, string groupId = DefaultGroup) =>
         InvokeAsync(() =>
         {
-            if (GetOrAddGroup(groupId).Active is { } active)
+            var group = GetOrAddGroup(groupId);
+            if (group.Active is { } active)
             {
+                group.PausedByHost = paused; // end-monitor stall detection must not read a host pause as EOF
                 if (paused)
                     active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                 else
@@ -1968,6 +2001,7 @@ public sealed class ShowSession : IAsyncDisposable
             foreach (var group in _groups.Values)
                 if (group.Active is { } active)
                 {
+                    group.PausedByHost = paused; // see SetPausedAsync — keeps the end monitor's stall check honest
                     if (paused)
                         active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                     else
@@ -2253,6 +2287,12 @@ public sealed class ShowSession : IAsyncDisposable
         private int _fadeOutStarted;
         public int LastFiredNumber { get; set; } = int.MinValue;
 
+        /// <summary>True while the host holds this group paused (Set(All)PausedAsync). The end monitor's
+        /// stall-at-EOF check reads it so a paused clip's stopped clock is never mistaken for a natural end.
+        /// Dispatcher-confined (set by the pause commands, read by the monitor's dispatcher-marshalled checks);
+        /// cleared when the active clip is replaced.</summary>
+        public bool PausedByHost { get; set; }
+
         public ShowClipBinding? ActiveBinding => _activeBinding;
         public IReadOnlyList<(string OutputId, string DeviceId)> ActiveAudioPumps => _activeAudioPumps;
 
@@ -2368,6 +2408,7 @@ public sealed class ShowSession : IAsyncDisposable
             _activeRouteTargets = [];
             _activeAudioPumps = [];
             _activeAudioScale = 1f;
+            PausedByHost = false;
             Volatile.Write(ref _fadeOutStarted, 0);
 
             Clock.SetReference(clip is null

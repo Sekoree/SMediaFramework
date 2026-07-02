@@ -1043,7 +1043,20 @@ public partial class MediaPlayerViewModel : ViewModelBase
     {
         try
         {
-            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, cts.Token).ConfigureAwait(false);
+            // Progressive display: partial snapshots land as they are analysed (throttled by the extractor),
+            // so the waveform fills in left-to-right behind the scrubber instead of popping in at the end.
+            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, cts.Token, partial =>
+            {
+                if (cts.IsCancellationRequested)
+                    return;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (!ReferenceEquals(_waveformCts, cts))
+                        return;
+                    WaveformPeaks = partial;
+                    WaveformRevision++;
+                });
+            }).ConfigureAwait(false);
             // A superseding extraction (or a path clear) owns the flag once this token is cancelled, so
             // only the run that finishes naturally clears the "analysing" state.
             if (!cts.IsCancellationRequested)
@@ -1110,11 +1123,37 @@ public partial class MediaPlayerViewModel : ViewModelBase
         double.IsNegativeInfinity(PeakLevelDb) ? 0
         : Math.Clamp((PeakLevelDb + 60) / 72.0, 0, 1);
 
+    /// <summary>Metering taps wrapped around every deck audio-output lease (registered by the ShowSession
+    /// audio-output factory on the session thread, read by the UI poll) — the deck's VU source.</summary>
+    private readonly object _meterTapGate = new();
+    private readonly List<Playback.MeteringAudioOutput> _meterTaps = [];
+
+    private void RegisterMeterTap(Playback.MeteringAudioOutput tap)
+    {
+        lock (_meterTapGate)
+            _meterTaps.Add(tap);
+    }
+
+    private void UnregisterMeterTap(Playback.MeteringAudioOutput tap)
+    {
+        lock (_meterTapGate)
+            _meterTaps.Remove(tap);
+    }
+
     private void PollAudioMeters()
     {
-        // The legacy engine exposed per-output peak meters; the ShowSession deck path has no meter tap yet
-        // (follow-up: surface router peak levels through the session), so the VU readout stays dark.
-        PeakLevelDb = double.NegativeInfinity;
+        Playback.MeteringAudioOutput[] taps;
+        lock (_meterTapGate)
+            taps = _meterTaps.Count > 0 ? _meterTaps.ToArray() : [];
+
+        var peak = double.NegativeInfinity;
+        foreach (var tap in taps)
+        {
+            var db = tap.ReadAndResetPeakDb();
+            if (db > peak) peak = db;
+        }
+
+        PeakLevelDb = peak;
     }
 
     private static string FormatClock(TimeSpan t) =>

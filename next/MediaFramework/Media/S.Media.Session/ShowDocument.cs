@@ -146,6 +146,14 @@ public sealed record ShowClipBinding(
     /// time-based monitor instead of by source exhaustion, so a resize/live-edit re-read can't end it early.</summary>
     public bool EndAtDuration { get; init; }
 
+    /// <summary>Monitor a plain <see cref="ClipEndBehavior.Stop"/> file clip with no trim/fade/loop for its
+    /// natural end: release the clip and raise <c>ShowSession.ClipNaturallyEnded</c> when it plays through —
+    /// at the duration out-point, or when its (finite, audio-clocked) playback stalls at source EOF short of
+    /// the metadata duration. Opt-in per clip: set it for real file cues that drive cue auto-follow; leave it
+    /// off for held/live sources (their clock legitimately idles while the clip is up) and for hosts that
+    /// poll and advance themselves (the media-player deck).</summary>
+    public bool NotifyNaturalEnd { get; init; }
+
     /// <summary>Where/how this clip's video sits on its <see cref="CompositionId"/> canvas (GUI
     /// <c>CueVideoPlacement</c>). Null ⇒ full-canvas, opaque, Cover (the prior hardcoded placement).</summary>
     public ShowVideoPlacement? Placement { get; init; }

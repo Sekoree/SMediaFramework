@@ -134,7 +134,20 @@ public partial class CuePlayerViewModel : ViewModelBase
         var ct = _waveformCts.Token;
         _ = Task.Run(async () =>
         {
-            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct);
+            // Progressive display: throttled partial snapshots fill the editor waveform in left-to-right.
+            var peaks = await Playback.WaveformExtractor.ExtractAsync(path, ct, partial =>
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (ct.IsCancellationRequested)
+                        return;
+                    SelectedCueWaveform = partial;
+                    SelectedCueWaveformRevision++;
+                    OnPropertyChanged(nameof(HasSelectedCueWaveform));
+                });
+            });
             if (!ct.IsCancellationRequested)
             {
                 Avalonia.Threading.Dispatcher.UIThread.Post(() =>

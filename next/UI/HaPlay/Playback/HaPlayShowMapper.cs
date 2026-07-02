@@ -180,6 +180,10 @@ public static class HaPlayShowMapper
             // monitor (EndAtDuration) rather than by source exhaustion — otherwise a resize/live-edit re-read ends
             // it early. Only when a positive duration is set; a 0-duration text cue holds until the next cue.
             EndAtDuration = media.Source is TextPlaylistItem && media.DurationMs > 0,
+            // A real FILE cue must fire cue auto-follow when it plays through, even as a bare plain-Stop clip
+            // with no trim/fade/loop (which otherwise starts no end monitor and just idles at EOF). Files only:
+            // images/text hold deliberately, and live inputs never naturally end.
+            NotifyNaturalEnd = media.Source is FilePlaylistItem,
             // Primary placement's full appearance; the fit enum name maps straight to the framework's fit string
             // (MapFit lowercases it). Any additional placements ride along in ExtraPlacements.
             Placement = primary is null ? null : ToShowVideoPlacement(primary),

@@ -1505,6 +1505,44 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task NotifyNaturalEnd_BarePlainStopClip_ReleasesAndRaisesClipNaturallyEnded()
+    {
+        // A bare plain-Stop file cue (no trim/fade/loop) previously started NO end monitor, so at EOF it just
+        // idled — cue auto-follow never fired. NotifyNaturalEnd opts the clip into the monitor: at the
+        // duration out-point it is released and ClipNaturallyEnded is raised for the host's auto-follow.
+        var output = new PixelRecordingVideoOutput();
+        var doc = new ShowDocument(
+            Version: 1,
+            Cues: [new CueDefinition("c", 1, "File")],
+            Clips:
+            [
+                new ShowClipBinding("c", "held://x", CompositionId: "screen")
+                {
+                    NotifyNaturalEnd = true,
+                    Placement = new ShowVideoPlacement(DestWidth: 1, DestHeight: 1, Fit: "Stretch"),
+                    AudioRoutes = [],
+                },
+            ],
+            Compositions: [new ShowComposition("screen", "Screen", 8, 8, 30, 1)],
+            Outputs: [], Routes: [], Devices: []);
+        await using var session = new ShowSession(
+            UnboundedHeldProvider.Registry(TimeSpan.FromMilliseconds(400)),
+            videoOutputFactory: (_, _, _, _) => [new ClipCompositionOutputLease("o", "Screen", output)],
+            compositorFactory: fmt => new ClipCompositionCompositor(
+                new S.Media.Compositor.CpuVideoCompositor(fmt), true, "TEST-CPU"));
+        var naturallyEnded = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        session.ClipNaturallyEnded += cueId => naturallyEnded.TrySetResult(cueId);
+        await session.LoadDocumentAsync(doc);
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
+        await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal("c", await naturallyEnded.Task.WaitAsync(TimeSpan.FromSeconds(3)));
+        var snap = Assert.Single(await session.SnapshotAsync());
+        Assert.Equal(TimeSpan.Zero, snap.ClipDuration); // released, not held
+    }
+
+    [Fact]
     public async Task Snapshot_IsActive_WhileAHeldClipIsUp()
     {
         // A held (text/still) clip is on screen with a clock that may report IsRunning=false. The snapshot must
