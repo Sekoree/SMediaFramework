@@ -643,7 +643,9 @@ was **flipped** (2026-07-01, `ShowSessionGate`), and after the operator hardware
 (2026-07-02, −9.8k lines). `ShowSession` is the app's only playback runtime. The authoritative record of the
 re-back, its blockers, and the verification gates is `Review/MFPlayer-Next-Review-2026-07-02.md` (and the
 Critical-Review continuation sections); the checklist below is kept as HISTORY of the abandoned rebuild —
-note its `HAPLAY_SMOKE` claims belong to the abandoned app; the ported app has no such hook (NXT-15).
+its `HAPLAY_SMOKE` claims belong to the abandoned app. (The PORTED app gained its own `HAPLAY_SMOKE`
+launch/self-exit gate on 2026-07-02 — first rendered frame → normal teardown → exit 0 — wired into CI as a
+gating step together with the app's NativeAOT publish; NXT-15 closed.)
 
 - [x] Old HaPlay ported to `next/UI/` on the new framework (2026-06-29; builds 0/0, launches, tests green).
 - [x] Cue workspace + soundboard + media-player deck re-backed onto `ShowSession` (2026-06-30…07-02; per-player

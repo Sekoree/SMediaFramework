@@ -45,14 +45,24 @@ public partial class App : Application
             {
                 DataContext = mainVm
             };
-            // At shutdown, tear down the gated ShowSession cue re-back first (no-op when disabled), then dispose
-            // the media host so the modules' native runtime holds are released deterministically (NXT-05 — sessions
-            // that borrow the registry must go first; the host is the last thing out).
-            desktop.ShutdownRequested += (_, _) =>
+            // At shutdown, tear down the ShowSession cue re-back first, then dispose the media host so the
+            // modules' native runtime holds are released deterministically (NXT-05 — sessions that borrow the
+            // registry must go first; the host is the last thing out). Wired to BOTH lifetime events: a forced
+            // Shutdown() skips ShutdownRequested but still raises Exit — the teardown is idempotent, so the
+            // normal path (request → exit) just runs it once with a no-op second call.
+            var toreDown = 0;
+            void Teardown()
             {
+                if (System.Threading.Interlocked.Exchange(ref toreDown, 1) != 0)
+                    return;
                 mainVm.ShutdownCleanup();
                 MediaRuntime.Shutdown();
-            };
+            }
+
+            desktop.ShutdownRequested += (_, _) => Teardown();
+            desktop.Exit += (_, _) => Teardown();
+
+            WireSmokeSelfExit(desktop);
         }
         else if (ApplicationLifetime is IActivityApplicationLifetime singleViewFactoryApplicationLifetime)
         {
@@ -71,6 +81,43 @@ public partial class App : Application
 
         base.OnFrameworkInitializationCompleted();
         timing?.SetOutcome($"lifetime={ApplicationLifetime?.GetType().Name ?? "<none>"}");
+    }
+
+    /// <summary>
+    /// CI launch gate (NXT-15): with <c>HAPLAY_SMOKE=1</c> the app renders its first real frame and then
+    /// shuts itself down through the NORMAL teardown path (ShutdownRequested → ShowSession cleanup →
+    /// MediaRuntime.Shutdown), so the smoke gates startup wiring AND clean exit, not just "a process ran".
+    /// Exit 0 = frame rendered + clean shutdown; a watchdog hard-exits 2 when no frame appears in time so a
+    /// wedged launch fails the gate instead of hanging the runner.
+    /// </summary>
+    private static void WireSmokeSelfExit(IClassicDesktopStyleApplicationLifetime desktop)
+    {
+        var smoke = System.Environment.GetEnvironmentVariable("HAPLAY_SMOKE");
+        if (smoke is not ("1" or "true"))
+            return;
+
+        var exited = 0;
+        desktop.MainWindow!.Opened += (_, _) =>
+            // RequestAnimationFrame fires after a compositor frame actually renders — the "a real frame was
+            // drawn" signal the old rebuild app's smoke had and the ported app lacked (review NXT-15).
+            Avalonia.Controls.TopLevel.GetTopLevel(desktop.MainWindow)?.RequestAnimationFrame(_ =>
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    if (System.Threading.Interlocked.Exchange(ref exited, 1) != 0)
+                        return;
+                    Trace.LogInformation("HAPLAY_SMOKE: first frame rendered — shutting down (exit 0)");
+                    // TryShutdown, NOT Shutdown: the forced path skips ShutdownRequested, and the smoke must
+                    // exercise the app's real teardown (ShowSession cleanup + MediaRuntime.Shutdown).
+                    desktop.TryShutdown(0);
+                }));
+
+        _ = System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(45)).ContinueWith(_ =>
+        {
+            if (System.Threading.Interlocked.Exchange(ref exited, 1) != 0)
+                return;
+            Trace.LogError("HAPLAY_SMOKE: no frame rendered within 45s — hard exit 2");
+            System.Environment.Exit(2);
+        });
     }
 
     /// <summary>

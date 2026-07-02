@@ -45,10 +45,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang zlib1g-dev
 
-      # The subtitle stack (libass + a font) and the GL/A-V smokes need native libs the runners don't ship.
+      # The subtitle stack (libass + a font), the GL/A-V smokes, and the HaPlay launch gate need native libs
+      # the runners don't ship. libportaudio2 lets the app's audio module register (no devices needed).
       - name: Install libass + smoke prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri
+        run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2
 
       - name: Build (Release)
         run: dotnet build next/MFPlayer.Next.sln -c Release
@@ -75,17 +76,18 @@ jobs:
         if: runner.os == 'Linux'
         run: dotnet run --project next/MediaFramework/Tools/AbiSmoke/AbiSmoke.csproj -c Release --no-build
 
-      # Best-effort (runner FFmpeg/GL versions vary): they run + report but don't gate until proven stable on CI.
+      # GATING since 2026-07-02 (NXT-15): the native deps are installed explicitly above (libass, a pinned
+      # font, mesa software GL), so these paths are deterministic on the runner — a failure is a real
+      # regression, not environment noise. If a runner image update ever breaks one, fix the pin rather
+      # than re-adding continue-on-error.
       - name: Subtitle decode smoke
         if: runner.os == 'Linux'
-        continue-on-error: true
         run: >
           dotnet run --project next/MediaFramework/Tools/SubtitleDecodeSmoke/SubtitleDecodeSmoke.csproj
           -c Release --no-build -- Reference/TestSubs/karaoke-timing.ass
 
       - name: ABI GL layer-surface smoke (xvfb, software GL)
         if: runner.os == 'Linux'
-        continue-on-error: true
         env:
           MFPLAYER_NEXT_ROOT: ${{ github.workspace }}/next
           LIBGL_ALWAYS_SOFTWARE: 1
@@ -108,3 +110,30 @@ jobs:
           if ffmpeg -nostdin -loglevel error -y -f lavfi -i "sine=frequency=440:duration=1" "$PUB/tone.wav"; then
             "$PUB/smoke" "$PUB/tone.wav" || echo "media smoke non-gating failure (FFmpeg native version?)"
           fi
+
+      # The HaPlay launch gate (NXT-15): AOT-publish the REAL app deliverable, launch it headless, and let
+      # HAPLAY_SMOKE self-exit after the first rendered frame — through the app's normal teardown
+      # (ShowSession cleanup + MediaRuntime dispose), so a startup-wiring OR clean-exit regression fails CI.
+      # Exit 0 = frame rendered + clean shutdown; the in-app watchdog exits 2 if no frame appears.
+      - name: HaPlay AOT publish (the app deliverable)
+        run: >
+          dotnet publish next/UI/HaPlay.Desktop/HaPlay.Desktop.csproj
+          -c Release -r ${{ matrix.rid }} -o haplay-publish
+
+      - name: HaPlay launch smoke (xvfb, HAPLAY_SMOKE self-exit)
+        if: runner.os == 'Linux'
+        timeout-minutes: 5
+        env:
+          HAPLAY_SMOKE: '1'
+          LIBGL_ALWAYS_SOFTWARE: 1
+        run: xvfb-run -a ./haplay-publish/HaPlay.Desktop --media-log-level information
+
+      # Windows runners have a service desktop; the launch there is unproven — run it best-effort until it
+      # has a green history, then promote to gating (the AOT publish above IS the Windows compile gate).
+      - name: HaPlay launch smoke (Windows, best-effort)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          HAPLAY_SMOKE: '1'
+        run: ./haplay-publish/HaPlay.Desktop.exe --media-log-level information

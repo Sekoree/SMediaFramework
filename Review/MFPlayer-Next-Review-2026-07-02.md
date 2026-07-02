@@ -332,6 +332,19 @@ SessionSmoke exit 0; headless app launch clean):
    nearest-not-ahead selection, ~¾ frame), jitter 1–3 ms, shift 0 ms everywhere — tight and reproducible.
    The full NXT-04 timeline/discontinuity CONTRACT (generation IDs threaded to every consumer) remains the
    architectural remainder; this closes the "no measured gates" half.
+7. **NXT-15 — CLOSED (same evening).** (a) The ported app gained a real `HAPLAY_SMOKE` launch gate: first
+   rendered frame (via `RequestAnimationFrame` after window open) → `TryShutdown(0)` through the app's
+   NORMAL teardown — which is now wired to BOTH `ShutdownRequested` and `Exit` (idempotent), so forced
+   shutdowns also release native holds — with a 45 s watchdog exiting 2 on a wedged launch. Verified JIT
+   and AOT under xvfb (teardown log shows `Pa_Terminate` + `MediaRuntime shut down`, exit 0). (b) The
+   **HaPlay AOT re-audit PASSED**: `PublishAot=true` is now the deliverable default — the linux-x64 publish
+   emits exactly ONE warning (the known Mond `StackFrame` IL2026) and the native app launches/renders/
+   tears down clean. (c) The `HaPlay_Test` leftover is gone — the exe is `HaPlay.Desktop` (the plain
+   `HaPlay` name belongs to the UI library for `avares://`). (d) `next-build.yml`: the subtitle and GL
+   smokes are GATING (deps pinned via apt; both verified locally with the exact CI args), `libportaudio2`
+   added, and a gating **HaPlay AOT publish** (both OSes) + **Linux launch smoke** (exact CI command
+   verified locally end-to-end) landed; the Windows launch run is best-effort until it has green history.
+   Remaining niche: a Windows dynamic-plugin compile leg (MSVC plugin build — untested from this box).
 
 ## Verification appendix
 
