@@ -417,6 +417,24 @@ SessionSmoke exit 0; headless app launch clean):
    the exception type and AOT frame instead of a bare message. Post-fix: full suite 1,416 passed / 0 failed;
    local C-ABI smoke exit 0.
 
+12. **CI round 4 — one more release-lag test race + a REAL startup crash the Windows launch smoke caught.**
+   (a) `EndAtDuration_StopsAHeldClip_ViaTheMonitor_WithoutSourceEof` failed on the Linux runner
+   (`ClipDuration` still 400 ms after `IsRunning` flipped): the poll loop exits on the FIRST observable
+   transition (stop) but the release that zeroes `ClipDuration` lands one dispatcher op later. The loop now
+   polls for the terminal state (stopped AND released, 10 s deadline); same fix applied to the sibling
+   `NaturalEnd_PlainStop_ReleasesClipAtOutPoint` (identical pattern, hadn't flaked yet). The FreezeLastFrame
+   sibling is safe as-is (asserts attached, which holds from the instant the stop is visible).
+   (b) **The Windows HaPlay launch smoke did its job**: on a machine without the portaudio native library the
+   app hard-crashed in the MainViewModel ctor — `CuePlayerViewModel.RefreshPreviewAudioDevices()` calls
+   `PortAudioDeviceCatalog.EnumerateOutputDevices()` directly, bypassing MediaRuntime's module guard
+   (MediaRuntime itself degraded correctly to miniaudio; the unguarded picker then threw
+   `DllNotFoundException` to the process boundary). Fixed app-wide with a cached `RuntimeModules`
+   PortAudio probe (the MIDI/NDI pattern): the preview picker, both add-PortAudio-device dialogs
+   (which surface the unavailable reason via `ValidationMessage`), all guarded;
+   `PortAudioOutputRuntime` activation was already caught by `OutputManagementViewModel`. Verified: full
+   suite 1,416 / 0; local xvfb HAPLAY_SMOKE launch exit 0. The smoke stays best-effort until it has a green
+   history on both runners, but this is the first regression it caught — promotion candidate.
+
 ## Verification appendix
 
 ```bash

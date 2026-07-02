@@ -1382,14 +1382,16 @@ public sealed class ShowSessionTests
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
         await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        // Terminal-state poll (see EndAtDuration test): the release that zeroes ClipDuration lands one
+        // dispatcher op after IsRunning flips.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
         TransportSnapshot snap;
         do
         {
             await Task.Delay(25);
             snap = Assert.Single(await session.SnapshotAsync());
         }
-        while (snap.IsRunning && DateTime.UtcNow < deadline);
+        while ((snap.IsRunning || snap.ClipDuration > TimeSpan.Zero) && DateTime.UtcNow < deadline);
 
         Assert.False(snap.IsRunning, "clip should have stopped at its out-point");
         Assert.Equal(TimeSpan.Zero, snap.ClipDuration); // released → player detached
@@ -1546,11 +1548,17 @@ public sealed class ShowSessionTests
         Assert.Equal(CueExecutionStatus.Fired, await session.GoAsync());
         await output.FirstFrame.Task.WaitAsync(TimeSpan.FromSeconds(2)); // playing (source never EOFs)
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(3);
-        while ((await session.SnapshotAsync()).Single().IsRunning && DateTime.UtcNow < deadline)
+        // Poll for the TERMINAL state (stopped AND released): IsRunning flips one dispatcher op before the
+        // release zeroes ClipDuration, so a snapshot can observe the stop mid-teardown (flaked on CI).
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        TransportSnapshot snap;
+        do
+        {
             await Task.Delay(25);
+            snap = Assert.Single(await session.SnapshotAsync());
+        }
+        while ((snap.IsRunning || snap.ClipDuration > TimeSpan.Zero) && DateTime.UtcNow < deadline);
 
-        var snap = Assert.Single(await session.SnapshotAsync());
         Assert.False(snap.IsRunning);                        // stopped at ~its duration by the monitor
         Assert.Equal(TimeSpan.Zero, snap.ClipDuration);      // released (not merely frozen)
     }

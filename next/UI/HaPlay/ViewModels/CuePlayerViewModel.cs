@@ -82,8 +82,14 @@ public partial class CuePlayerViewModel : ViewModelBase
     {
         PreviewAudioDevices.Clear();
         PreviewAudioDevices.Add(new PreviewAudioDeviceOption(null, Strings.Format(nameof(Strings.DefaultDeviceLabel))));
-        foreach (var dev in S.Media.Audio.PortAudio.PortAudioDeviceCatalog.EnumerateOutputDevices())
-            PreviewAudioDevices.Add(new PreviewAudioDeviceOption(dev.GlobalDeviceIndex, dev.Name));
+        // Runs in the MainViewModel ctor — on a machine without the portaudio native library the
+        // enumeration throws DllNotFoundException and takes the whole process down before the first
+        // frame. MediaRuntime already degrades to other backends; the preview picker must too.
+        if (RuntimeModules.IsPortAudioAvailable)
+        {
+            foreach (var dev in S.Media.Audio.PortAudio.PortAudioDeviceCatalog.EnumerateOutputDevices())
+                PreviewAudioDevices.Add(new PreviewAudioDeviceOption(dev.GlobalDeviceIndex, dev.Name));
+        }
         SelectedPreviewAudioDevice ??= PreviewAudioDevices.FirstOrDefault();
     }
 

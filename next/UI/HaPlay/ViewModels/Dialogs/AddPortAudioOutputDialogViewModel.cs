@@ -211,6 +211,15 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
     {
         var previousHost = SelectedHostApi?.Index;
         HostApis.Clear();
+        if (!RuntimeModules.IsPortAudioAvailable)
+        {
+            // Opening the dialog on a machine without the portaudio native library must not crash;
+            // leave the pickers empty and say why.
+            ValidationMessage = RuntimeModules.PortAudioUnavailableReason;
+            SelectedHostApi = null;
+            ReloadDevices();
+            return;
+        }
         foreach (var h in PortAudioDeviceCatalog.EnumerateHostApis())
             HostApis.Add(h);
         SelectedHostApi =
@@ -233,6 +242,12 @@ public partial class AddPortAudioOutputDialogViewModel : ViewModelBase
 
         if (IsPortAudioBackend)
         {
+            if (!RuntimeModules.IsPortAudioAvailable)
+            {
+                ValidationMessage = RuntimeModules.PortAudioUnavailableReason;
+                SelectedDevice = null;
+                return;
+            }
             var host = SelectedHostApi?.Index;
             foreach (var d in PortAudioDeviceCatalog.EnumerateOutputDevices(host))
             {
