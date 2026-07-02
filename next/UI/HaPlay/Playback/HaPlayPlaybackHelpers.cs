@@ -12,6 +12,47 @@ namespace HaPlay.Playback;
 /// </summary>
 internal static class HaPlayPlaybackHelpers
 {
+    /// <summary>Builds the provider-owned <c>ndi:</c> descriptor URI for a live NDI input item, carrying its
+    /// per-item stream selection, bandwidth mode, and audio jitter-buffer override — the ONE builder both the
+    /// deck and the cue mapper must use, so a persisted item keeps its options on either playback path (the
+    /// registry's <c>NDIDecoderProvider.ParseSourceUri</c> is the counterpart).</summary>
+    internal static string BuildNdiInputUri(NDIInputPlaylistItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var query = new List<string>
+        {
+            $"audio={(item.VideoOnly ? 0 : 1)}",
+            $"video={(item.AudioOnly ? 0 : 1)}",
+            $"lowBandwidth={(item.LowBandwidth ? 1 : 0)}",
+        };
+        if (item.AudioMinBufferedDurationMs is { } bufferMs)
+            query.Add($"audioBufferMs={bufferMs.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        return $"ndi://{Uri.EscapeDataString(item.SourceName)}?{string.Join('&', query)}";
+    }
+
+    /// <summary>Builds the provider-owned <c>padev:</c> descriptor URI for a PortAudio capture item, carrying
+    /// host API, saved global-index fallback, channels, sample rate, and latency (parsed by
+    /// <c>PortAudioCaptureDecoderProvider.ParseDescriptor</c>). Shared by the deck and the cue mapper.</summary>
+    internal static string BuildPortAudioInputUri(PortAudioInputPlaylistItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var query = new List<string>();
+        static void Add(List<string> target, string key, string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                target.Add($"{key}={Uri.EscapeDataString(value)}");
+        }
+
+        Add(query, "hostApiName", item.HostApiName);
+        if (item.HostApiIndex is { } hostApi) query.Add($"hostApiIndex={hostApi}");
+        if (item.GlobalDeviceIndex is { } global) query.Add($"globalDeviceIndex={global}");
+        query.Add($"channels={item.Channels}");
+        query.Add($"sampleRate={item.SampleRate}");
+        if (item.SuggestedLatency is { } latency)
+            query.Add($"latency={latency.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}");
+        return $"padev://{Uri.EscapeDataString(item.DeviceName)}?{string.Join('&', query)}";
+    }
+
     /// <summary>
     /// The default file open options for deck / cue / playlist-cache file playback: hardware-decode + Windows
     /// D3D11 shared-handle GL retention gated on <see cref="HardwareVideoDecodeGate"/> and the absence of NDI

@@ -53,14 +53,19 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
     private readonly SharedNdiSourceCache _cache;
 
     public NDIDecoderProvider(TimeSpan? audioMinBuffer = null) =>
-        _cache = new SharedNdiSourceCache(name =>
+        _cache = new SharedNdiSourceCache(uri =>
         {
-            var source = NDISource.Open(ResolveSource(name), new NDISourceOptions
+            var descriptor = ParseSourceUri(uri);
+            var source = NDISource.Open(ResolveSource(descriptor.SourceName), new NDISourceOptions
             {
-                ReceiveVideo = true,
-                ReceiveAudio = true,
+                ReceiveVideo = descriptor.ReceiveVideo,
+                ReceiveAudio = descriptor.ReceiveAudio,
+                Bandwidth = NDIReceiveBandwidthPolicy.Resolve(
+                    descriptor.ReceiveAudio,
+                    descriptor.ReceiveVideo,
+                    descriptor.LowBandwidth ? NDILib.NDIRecvBandwidth.Lowest : NDILib.NDIRecvBandwidth.Highest),
                 // The audio jitter reserve — the dominant tunable latency between the audio and the live video.
-                AudioMinBufferedDuration = audioMinBuffer,
+                AudioMinBufferedDuration = descriptor.AudioMinBufferedDuration ?? audioMinBuffer,
             });
             // Warm up so the A/V formats are available before the open path reads them — the audio router needs
             // the format up front (live NDI delivers no format until the first frame arrives). Best-effort: an
@@ -79,7 +84,10 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
 
     public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options)
     {
-        var source = _cache.LeaseVideo(SourceNameFromUri(uri));
+        var descriptor = ParseSourceUri(uri);
+        if (!descriptor.ReceiveVideo)
+            throw new NotSupportedException($"NDI source '{descriptor.SourceName}' is configured without video.");
+        var source = _cache.LeaseVideo(uri);
         try
         {
             _ = source.Format;
@@ -94,7 +102,10 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
 
     public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options)
     {
-        var source = _cache.LeaseAudio(SourceNameFromUri(uri));
+        var descriptor = ParseSourceUri(uri);
+        if (!descriptor.ReceiveAudio)
+            throw new NotSupportedException($"NDI source '{descriptor.SourceName}' is configured without audio.");
+        var source = _cache.LeaseAudio(uri);
         try
         {
             _ = source.Format;
@@ -122,12 +133,15 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         return await Task.Run(() =>
         {
             progress?.Report(new MediaPrepareProgress("connecting", Message: request.Uri));
-            var name = SourceNameFromUri(request.Uri);
-            var video = request.Video is not null ? _cache.LeaseVideo(name) : null;
+            var descriptor = ParseSourceUri(request.Uri);
+            var video = request.Video is not null && descriptor.ReceiveVideo ? _cache.LeaseVideo(request.Uri) : null;
             IAudioSource? audio = null;
             try
             {
-                audio = request.Audio is not null ? _cache.LeaseAudio(name) : null;
+                audio = request.Audio is not null && descriptor.ReceiveAudio ? _cache.LeaseAudio(request.Uri) : null;
+                if (video is null && audio is null)
+                    throw new InvalidOperationException(
+                        $"NDI source '{descriptor.SourceName}' has no enabled stream requested by the player.");
                 _ = video?.Format; // surface formats before returning (live NDI delivers none until the first frame)
                 _ = audio?.Format;
             }
@@ -165,12 +179,66 @@ internal sealed class NDIDecoderProvider : IMediaDecoderProvider
         return i > 0 ? uri[..i].ToLowerInvariant() : string.Empty;
     }
 
-    /// <summary>The NDI source name from <c>ndi:&lt;name&gt;</c> / <c>ndi://&lt;name&gt;</c> (URL-decoded).</summary>
-    private static string SourceNameFromUri(string uri)
+    internal sealed record SourceDescriptor(
+        string SourceName,
+        bool ReceiveAudio,
+        bool ReceiveVideo,
+        bool LowBandwidth,
+        TimeSpan? AudioMinBufferedDuration);
+
+    /// <summary>Parses an NDI source descriptor. Query options are deliberately provider-owned so a persisted
+    /// HaPlay item keeps its stream-selection, bandwidth, and jitter-buffer policy when opened through the
+    /// provider-neutral media registry.</summary>
+    internal static SourceDescriptor ParseSourceUri(string uri)
     {
+        ArgumentException.ThrowIfNullOrEmpty(uri);
         var rest = uri["ndi:".Length..];
         if (rest.StartsWith("//", StringComparison.Ordinal))
             rest = rest[2..];
-        return Uri.UnescapeDataString(rest);
+        var queryAt = rest.IndexOf('?');
+        var encodedName = queryAt >= 0 ? rest[..queryAt] : rest;
+        var values = queryAt >= 0 ? ParseQuery(rest[(queryAt + 1)..]) : new Dictionary<string, string>();
+        var receiveAudio = ReadBool(values, "audio", true);
+        var receiveVideo = ReadBool(values, "video", true);
+        if (!receiveAudio && !receiveVideo)
+            throw new ArgumentException("an NDI source must enable audio, video, or both.", nameof(uri));
+
+        TimeSpan? audioBuffer = null;
+        if (values.TryGetValue("audioBufferMs", out var bufferText))
+        {
+            if (!int.TryParse(bufferText, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var ms) || ms is < 0 or > 2000)
+                throw new ArgumentException("NDI audioBufferMs must be between 0 and 2000.", nameof(uri));
+            audioBuffer = TimeSpan.FromMilliseconds(ms);
+        }
+
+        return new SourceDescriptor(
+            Uri.UnescapeDataString(encodedName), receiveAudio, receiveVideo,
+            ReadBool(values, "lowBandwidth", false), audioBuffer);
+    }
+
+    private static Dictionary<string, string> ParseQuery(string query)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var equals = part.IndexOf('=');
+            var key = Uri.UnescapeDataString(equals >= 0 ? part[..equals] : part);
+            var value = Uri.UnescapeDataString(equals >= 0 ? part[(equals + 1)..] : string.Empty);
+            values[key] = value;
+        }
+        return values;
+    }
+
+    private static bool ReadBool(IReadOnlyDictionary<string, string> values, string key, bool fallback)
+    {
+        if (!values.TryGetValue(key, out var text))
+            return fallback;
+        return text switch
+        {
+            "1" or "true" or "on" or "yes" => true,
+            "0" or "false" or "off" or "no" => false,
+            _ => throw new ArgumentException($"NDI option '{key}' must be a boolean."),
+        };
     }
 }

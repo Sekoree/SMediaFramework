@@ -32,6 +32,21 @@ public sealed class PortAudioCaptureDecoderProviderTests
         Assert.Equal(expected, PortAudioCaptureDecoderProvider.ParseDeviceName(uri));
 
     [Fact]
+    public void ParseDescriptor_preserves_saved_capture_configuration()
+    {
+        var descriptor = PortAudioCaptureDecoderProvider.ParseDescriptor(
+            "padev://USB%20Interface?hostApiName=JACK&hostApiIndex=2&globalDeviceIndex=7&channels=6&sampleRate=96000&latency=0.0125");
+
+        Assert.Equal("USB Interface", descriptor.DeviceName);
+        Assert.Equal("JACK", descriptor.HostApiName);
+        Assert.Equal(2, descriptor.HostApiIndex);
+        Assert.Equal(7, descriptor.GlobalDeviceIndex);
+        Assert.Equal(6, descriptor.Channels);
+        Assert.Equal(96000, descriptor.SampleRate);
+        Assert.Equal(0.0125, descriptor.SuggestedLatencySeconds);
+    }
+
+    [Fact]
     public void ResolveDevice_emptyName_selectsTheDefaultInput()
     {
         var devices = new[]
@@ -61,6 +76,48 @@ public sealed class PortAudioCaptureDecoderProviderTests
         Assert.Equal("7", id);
         Assert.Equal(96000, format.SampleRate);
         Assert.Equal(2, format.Channels);
+    }
+
+    [Fact]
+    public void ResolveDevice_configuredDescriptor_prefersSavedGlobalIndexAndFormat()
+    {
+        var devices = new[]
+        {
+            new AudioDeviceInfo("3", "USB Interface", MaxChannels: 2, DefaultSampleRate: 48000, IsDefault: true),
+            new AudioDeviceInfo("7", "USB Interface", MaxChannels: 8, DefaultSampleRate: 48000, IsDefault: false),
+        };
+        var descriptor = new PortAudioCaptureDecoderProvider.CaptureDescriptor(
+            "USB Interface", GlobalDeviceIndex: 7, Channels: 6, SampleRate: 96000,
+            SuggestedLatencySeconds: 0.01);
+
+        var (id, format) = PortAudioCaptureDecoderProvider.ResolveDevice(descriptor, devices);
+
+        Assert.Equal("7", id);
+        Assert.Equal(6, format.Channels);
+        Assert.Equal(96000, format.SampleRate);
+    }
+
+    [Fact]
+    public void ResolveCatalogDevice_prefersStableHostNameBeforeStaleIndexes()
+    {
+        var hosts = new[]
+        {
+            new PortAudioHostApiEntry(0, "ALSA", 0, 1, -1),
+            new PortAudioHostApiEntry(4, "JACK", 0, 1, -1),
+        };
+        var devices = new[]
+        {
+            new PortAudioInputDeviceEntry(3, 0, "Interface", 2, 48000, 0.01, true),
+            new PortAudioInputDeviceEntry(12, 4, "Interface", 8, 48000, 0.01, false),
+        };
+        var descriptor = new PortAudioCaptureDecoderProvider.CaptureDescriptor(
+            "Interface", HostApiName: "jack", HostApiIndex: 1, GlobalDeviceIndex: 3,
+            Channels: 6, SampleRate: 96000);
+
+        var (id, format) = PortAudioCaptureDecoderProvider.ResolveCatalogDevice(descriptor, devices, hosts);
+
+        Assert.Equal("12", id); // current JACK device wins over both stale numeric fallbacks
+        Assert.Equal(new AudioFormat(96000, 6), format);
     }
 
     [Fact]

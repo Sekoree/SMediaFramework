@@ -489,6 +489,18 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task Snapshot_ReportsActiveAudioFormat_ForHostMatrixSizing()
+    {
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry(), new RecordingAudioBackend());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync();
+
+        var snapshot = Assert.Single(session.Snapshot());
+        Assert.Equal(2, snapshot.AudioChannels);
+        Assert.Equal(48_000, snapshot.AudioSampleRate);
+    }
+
+    [Fact]
     public async Task ApplyActiveAudioRoutesAsync_ReAppliesRoutesToTheActiveClip()
     {
         // NXT-06 live audio-route edit: a cue with per-clip audio routes attaches clip{i} outputs at fire; the

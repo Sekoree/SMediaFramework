@@ -3491,7 +3491,7 @@ public partial class MediaPlayerViewModel : ViewModelBase
             _nextRetryAt = DateTime.UtcNow.AddSeconds(Math.Max(retrySec, 1));
             await OpenOrReloadAsync().ConfigureAwait(false);
 
-            // If the open succeeded, we exited waiting AND _session is set — start the source naturally.
+            // The ShowSession path fires during open; the legacy path still needs its explicit start.
             if (_session is not null && !IsPlaying)
                 await StartPlaybackAsync().ConfigureAwait(false);
             return;

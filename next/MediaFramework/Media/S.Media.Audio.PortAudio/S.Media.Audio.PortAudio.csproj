@@ -28,6 +28,7 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.PortAudio.Tests" />
+        <InternalsVisibleTo Include="HaPlay.Tests" />
     </ItemGroup>
 
 </Project>

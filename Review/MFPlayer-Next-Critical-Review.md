@@ -1084,3 +1084,75 @@ Each deletion also removes its unconditional event subscriptions in `MainViewMod
 NaturalEnd/PreparedCues*/PreviewEnded`, `Sound*`) — dead now that ShowSession is the default — and, once all three
 are gone, lets the `HAPLAY_USE_SHOWSESSION` branch + `ShowSessionGate` be removed (ShowSession the only path). This
 is NXT-13's biggest simplification.
+
+---
+
+# Continuation pass — deck cutover blockers (2026-07-02)
+
+The four bounded blockers from the evening engine-deletion audit are now implemented. Legacy-engine deletion is
+deliberately still gated on one focused hardware pass over these changes; deleting the fallback before testing the
+live-device contracts would remove the only no-rebuild escape hatch.
+
+| Prior blocker | Status | Implementation / evidence |
+|---|---|---|
+| NDI per-item options dropped | **FIXED** | The deck emits a provider-owned `ndi:` descriptor carrying audio/video selection, low-bandwidth mode, and the per-item audio-buffer override. `NDIDecoderProvider` parses it and keys shared receivers by the full configured descriptor, so differently configured opens cannot accidentally share one receiver. |
+| PortAudio per-item options dropped | **FIXED** | The `padev:` descriptor now carries host API name/index, global-device fallback, channels, sample rate, and suggested latency. Resolution prefers the stable host API name + device name, then the saved global index; the configured format/latency reach `CreateInput`. |
+| Offline live source fell through to legacy engine | **FIXED** | A failed default-path live open now enters HaPlay's existing `WaitingForSource` retry state and remains owned by the ShowSession path. A successful retry clears the waiting state; it no longer silently constructs `HaPlayPlaybackSession`. |
+| Deck per-cell audio matrix absent | **FIXED** | `ShowClipAudioRoute` now has a source-generated-JSON-safe full gain-matrix form. Fire, hot rebuild, live edit, and fade ramps use `AudioRouter.ApplyMatrix`; multiple inputs can sum into one output, cell gain + input trim are retained, and master/output gain remains the route-wide envelope. The simple `ChannelMap` form remains compatible for existing cue documents. |
+
+Validation after this pass:
+
+- Release solution build: **0 errors** (37 pre-existing HaPlay test trim/AOT warnings).
+- Full managed suite under JACK: **1,447 passed, 0 failed**.
+- `S.Media.Session.Tests`: **100/100**; `HaPlay.Tests`: **529/529**; `S.Media.PortAudio.Tests`: **21/21**.
+- Real-media `SessionSmoke`: exit 0 (audio, seek, video composition/subtitles, trim, loop, fade, output fan-out).
+- Linux-x64 NativeAOT publish + run: passed (existing Mond trim warning only).
+- `git diff --check`: passed.
+
+## Required hardware gate before engine deletion
+
+1. NDI deck items: verify audio-only, video-only, low-bandwidth, and a visibly different
+   `AudioMinBufferedDurationMs` setting; take the sender offline, confirm `WAITING` retries, restore it, and confirm
+   playback resumes without selecting the legacy path.
+2. PortAudio input deck item: use a non-default host API/device with a non-default channel count/sample rate and
+   confirm the selected device—not a same-named device on another host API—is captured. Unplug/reconnect it and
+   confirm retry recovery.
+3. During file playback, build a matrix where input 0 and input 1 both feed output 0 at different gains. Change
+   both cell gains, input trim, line gain, master gain/mute, and the route selection while playing. Confirm changes
+   are immediate, click-free, not doubled, and survive the next track.
+4. Recheck stop/fade, HOLD, hot output add/remove, audio-only line-health LEDs, and clean shutdown once in the same
+   run. The startup log must say `ShowSession`; do not set `HAPLAY_USE_SHOWSESSION=0`.
+
+After that passes, the remaining cutover step is the destructive simplification: remove
+`SoundboardEngine`, `CuePlaybackEngine`, `HaPlayPlaybackSession`, `ShowSessionGate`, and both legacy callback
+branches together, then rerun the full build/test/AOT/smoke gates. The broader original-review gates remain as
+previously recorded: the measured NXT-04 sync contract, NXT-09/10 plugin/surface work, and NXT-11/14/15
+performance/CI expansion are architectural follow-ons, not cutover correctness blockers.
+
+### Independent verification + completion (2026-07-02, later)
+
+The continuation pass above was re-reviewed against the code and **confirmed correct**: the `ndi:`/`padev:`
+descriptor parsing is provider-owned with full-URI receiver keying (differently-configured opens can't share a
+receiver); the matrix path attaches through the same `AudioRouter.AddOutput` as the legacy path (so adaptive-rate
+wrapping and master promotion still apply) and `ApplyMatrix`'s reconcile-in-place / click-free-ramp semantics
+match what the session code assumes (`RemoveRoute(pair)` removes both kinds on a mode switch); fade-in attaches a
+zero-scaled matrix and the ramps rescale it; the waiting-for-source retry correctly stays on the ShowSession path
+(`GetRetrySeconds` also covers PortAudio items at 2 s) and clears on a successful retry. Operator hardware gate:
+**passed**.
+
+Two follow-ups applied during verification:
+
+1. **Cue-path option carriage completed.** The deck built descriptor URIs but `HaPlayShowMapper.ResolveMediaPath`
+   still emitted bare `ndi://name` / `padev://name`, so a CUE-fired live input silently dropped its per-item
+   options (and keyed a separate shared receiver from a same-config deck item). The two builders moved to
+   `HaPlayPlaybackHelpers` (the shared statics home); the deck forwards to them and the mapper now uses them, so
+   deck- and cue-fired items produce identical descriptors. The mapper test now asserts via the provider parser.
+2. **Live-edit fade ownership edge:** `ApplyActiveAudioRoutesAsync` rebuilt the route-target list from updated
+   entries only — a line the edit left fully unrouted kept its installed (still-playing) route but fell out of
+   the list, exempting it from stop-fades/scale rides (hard cut at release). The old target is carried forward.
+
+Verified after the follow-ups: full suite **1,447/1,447** (the one intermittent failure across runs is the
+pre-existing flaky `Go_DispatchedStatusMessage_IsRaisedOnUiThread` 2 s UI-pump window under parallel load; passes
+solo), real-media `SessionSmoke` exit 0. **Engine deletion is now unblocked** — the hardware gate passed and no
+known parity gap remains. Execute it as one dedicated pass (all three engines + `ShowSessionGate` + both legacy
+callback branches together), then rerun the full build/test/AOT/smoke gates.

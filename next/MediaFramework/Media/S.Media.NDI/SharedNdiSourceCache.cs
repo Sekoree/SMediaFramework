@@ -18,9 +18,9 @@ internal sealed class SharedNdiSourceCache(Func<string, NDISource> open)
     private readonly object _gate = new();
     private readonly Dictionary<string, List<Entry>> _entries = new(StringComparer.Ordinal);
 
-    public IVideoSource LeaseVideo(string name) => new VideoLease(AcquireVideo(name));
+    public IVideoSource LeaseVideo(string sourceKey) => new VideoLease(AcquireVideo(sourceKey));
 
-    public IAudioSource LeaseAudio(string name) => new AudioLease(AcquireAudio(name));
+    public IAudioSource LeaseAudio(string sourceKey) => new AudioLease(AcquireAudio(sourceKey));
 
     private Entry AcquireVideo(string name)
     {

@@ -163,8 +163,13 @@ public class ShowDocumentMapperTests
         Assert.Equal(TimeSpan.FromMilliseconds(750), introClip.FadeOut);
         Assert.Equal(ClipEndBehavior.FreezeLastFrame, introClip.EndBehavior);
 
-        // Live + image sources resolve to a path / scheme URI.
-        Assert.Equal("ndi://STUDIO (CAM 2)", doc.Clips.Single(c => c.CueId == camB.Id.ToString()).MediaPath);
+        // Live + image sources resolve to a path / scheme URI. The NDI URI is the option-carrying descriptor
+        // form (shared with the deck) — assert via the provider's parser so option order stays free.
+        var camUri = doc.Clips.Single(c => c.CueId == camB.Id.ToString()).MediaPath;
+        var camDescriptor = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(camUri);
+        Assert.Equal("STUDIO (CAM 2)", camDescriptor.SourceName);
+        Assert.True(camDescriptor.ReceiveAudio);
+        Assert.True(camDescriptor.ReceiveVideo);
         Assert.Equal("/media/a.png", doc.Clips.Single(c => c.CueId == slideA.Id.ToString()).MediaPath);
 
         // Composition + output-mapping warp section carried through (1:1, minus Name/corner-pin).

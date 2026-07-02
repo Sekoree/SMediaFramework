@@ -80,6 +80,22 @@ public static class ShowDocumentValidator
                 else if (!compIds.Contains(extra.CompositionId))
                     errors.Add($"the clip for cue '{clip.CueId}' has an extra placement on unknown composition '{extra.CompositionId}'.");
             }
+
+            foreach (var audioRoute in clip.AudioRoutes ?? [])
+            {
+                if (!float.IsFinite(audioRoute.Gain) || audioRoute.Gain < 0f)
+                    errors.Add($"the clip for cue '{clip.CueId}' has an invalid audio-route gain.");
+                if (audioRoute.MatrixOutputChannels is <= 0)
+                    errors.Add($"the clip for cue '{clip.CueId}' has a non-positive audio matrix output count.");
+                foreach (var cell in audioRoute.MatrixCells ?? [])
+                {
+                    if (cell.InputChannel < 0 || cell.OutputChannel < 0
+                        || audioRoute.MatrixOutputChannels is { } outputs && cell.OutputChannel >= outputs)
+                        errors.Add($"the clip for cue '{clip.CueId}' has an audio matrix cell outside its declared dimensions.");
+                    if (!float.IsFinite(cell.Gain) || cell.Gain < 0f)
+                        errors.Add($"the clip for cue '{clip.CueId}' has an invalid audio matrix cell gain.");
+                }
+            }
         }
 
         ValidateFollowOn(document.Cues, cueIds, errors);

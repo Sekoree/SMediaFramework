@@ -252,8 +252,11 @@ public static class HaPlayShowMapper
     {
         FilePlaylistItem f => f.Path,
         ImagePlaylistItem i => i.Path,
-        NDIInputPlaylistItem n => $"ndi://{n.SourceName}",
-        PortAudioInputPlaylistItem p => $"padev://{p.DeviceName}",
+        // Live inputs use the SAME descriptor URIs as the deck so a cue-fired item keeps its per-item options
+        // (NDI stream selection / bandwidth / audio jitter-buffer override; PortAudio host API / channels /
+        // rate / latency) instead of silently opening with provider defaults.
+        NDIInputPlaylistItem n => HaPlayPlaybackHelpers.BuildNdiInputUri(n),
+        PortAudioInputPlaylistItem p => HaPlayPlaybackHelpers.BuildPortAudioInputUri(p),
         _ => null,
     };
 

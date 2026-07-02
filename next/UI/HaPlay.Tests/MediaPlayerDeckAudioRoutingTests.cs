@@ -3,12 +3,47 @@ using Xunit;
 
 namespace HaPlay.Tests;
 
-/// <summary>Covers <c>MediaPlayerViewModel.BuildDeckChannelMatrix</c> — the deck→ShowSession audio channel map
-/// (out←src) used to route a deck's audio to its SELECTED device on the ShowSession path (NXT-06 cutover,
-/// stage 2). The actual audio flow reuses the hardware-proven <c>ShowClipAudioRoute</c> mechanism; this pins the
-/// mapping (the correctness-critical part — an off-by-one misroutes channels).</summary>
+/// <summary>Covers the deck→ShowSession live-source descriptors and audio matrix conversion used to route a
+/// deck's audio to its selected device on the default ShowSession path.</summary>
 public sealed class MediaPlayerDeckAudioRoutingTests
 {
+    [Fact]
+    public void LiveInputUris_preservePerItemOptions()
+    {
+        var ndi = new NDIInputPlaylistItem("Camera A (LAN)")
+        {
+            VideoOnly = true,
+            LowBandwidth = true,
+            AudioMinBufferedDurationMs = 25,
+        };
+        var ndiUri = MediaPlayerViewModel.BuildNdiInputUri(ndi);
+        var parsedNdi = S.Media.NDI.NDIDecoderProvider.ParseSourceUri(ndiUri);
+        Assert.Equal("Camera A (LAN)", parsedNdi.SourceName);
+        Assert.False(parsedNdi.ReceiveAudio);
+        Assert.True(parsedNdi.ReceiveVideo);
+        Assert.True(parsedNdi.LowBandwidth);
+        Assert.Equal(TimeSpan.FromMilliseconds(25), parsedNdi.AudioMinBufferedDuration);
+
+        var pa = new PortAudioInputPlaylistItem("USB In")
+        {
+            HostApiName = "JACK / PipeWire",
+            HostApiIndex = 3,
+            GlobalDeviceIndex = 11,
+            Channels = 6,
+            SampleRate = 96000,
+            SuggestedLatency = 0.0075,
+        };
+        var descriptor = S.Media.Audio.PortAudio.PortAudioCaptureDecoderProvider.ParseDescriptor(
+            MediaPlayerViewModel.BuildPortAudioInputUri(pa));
+        Assert.Equal("USB In", descriptor.DeviceName);
+        Assert.Equal("JACK / PipeWire", descriptor.HostApiName);
+        Assert.Equal(3, descriptor.HostApiIndex);
+        Assert.Equal(11, descriptor.GlobalDeviceIndex);
+        Assert.Equal(6, descriptor.Channels);
+        Assert.Equal(96000, descriptor.SampleRate);
+        Assert.Equal(0.0075, descriptor.SuggestedLatencySeconds);
+    }
+
     [Fact]
     public void EmptyGrid_DefaultsToStereoIdentity()
     {
@@ -55,5 +90,21 @@ public sealed class MediaPlayerDeckAudioRoutingTests
         // full-matrix path, so the map keeps the last declared source for a shared output.
         var map = MediaPlayerViewModel.BuildDeckChannelMatrix([(0, 0, false), (1, 0, false)]);
         Assert.Equal(new[] { 1 }, map);
+    }
+
+    [Fact]
+    public void GainMatrixCells_PreserveMixesCellGainsAndInputTrim()
+    {
+        var cells = MediaPlayerViewModel.BuildDeckGainMatrixCells([
+            (Input: 0, Output: 0, GainDb: -6.0, Muted: false, InputTrimDb: 3.0, InputMuted: false),
+            (Input: 1, Output: 0, GainDb: -12.0, Muted: false, InputTrimDb: 0.0, InputMuted: false),
+            (Input: 2, Output: 1, GainDb: 0.0, Muted: false, InputTrimDb: 0.0, InputMuted: true),
+        ]);
+
+        Assert.Equal(2, cells.Count); // both inputs still contribute to output 0; muted trim is removed
+        Assert.Equal((0, 0), (cells[0].InputChannel, cells[0].OutputChannel));
+        Assert.Equal(Math.Pow(10, -3.0 / 20.0), cells[0].Gain, precision: 5);
+        Assert.Equal((1, 0), (cells[1].InputChannel, cells[1].OutputChannel));
+        Assert.Equal(Math.Pow(10, -12.0 / 20.0), cells[1].Gain, precision: 5);
     }
 }

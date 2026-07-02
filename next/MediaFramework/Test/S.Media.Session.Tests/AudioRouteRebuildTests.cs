@@ -153,4 +153,38 @@ public sealed class AudioRouteRebuildTests
             "the good route did not play");
         Assert.True(Assert.Single(session.Snapshot()).IsActive);
     }
+
+    [Fact]
+    public async Task FullGainMatrix_MixesMultipleInputsToOneOutput_AndReappliesLive()
+    {
+        var backend = new PickyAudioBackend();
+        var route = new ShowClipAudioRoute(GoodDevice, Gain: 0.5f)
+        {
+            MatrixOutputChannels = 1,
+            MatrixCells =
+            [
+                new ShowAudioMatrixCell(0, 0, 1f),
+                new ShowAudioMatrixCell(1, 0, 0.25f),
+            ],
+        };
+        await using var session = new ShowSession(LongAudioProvider.Registry(), backend);
+        await session.LoadDocumentAsync(OneCue(route));
+
+        Assert.Equal(CueExecutionStatus.Fired, await session.FireCueAsync("c"));
+        var output = Assert.Single(backend.GoodOutputs);
+        Assert.Equal(1, output.Format.Channels); // declared full-matrix destination, not legacy stereo
+        Assert.True(await WaitForSubmitsAsync(output, TimeSpan.FromSeconds(5)) > 0);
+
+        var updated = route with
+        {
+            Gain = 0.75f,
+            MatrixCells =
+            [
+                new ShowAudioMatrixCell(0, 0, 0.5f),
+                new ShowAudioMatrixCell(1, 0, 0.5f),
+            ],
+        };
+        Assert.True(await session.ApplyActiveAudioRoutesAsync("c", [updated]));
+        Assert.True(Assert.Single(session.Snapshot()).IsActive);
+    }
 }

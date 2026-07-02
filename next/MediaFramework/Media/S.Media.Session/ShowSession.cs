@@ -19,7 +19,9 @@ public sealed record TransportSnapshot(
     TimeSpan ClipDuration,
     bool IsRunning,
     bool IsActive = false,
-    bool LiveSourceDisconnected = false);
+    bool LiveSourceDisconnected = false,
+    int AudioChannels = 0,
+    int AudioSampleRate = 0);
 
 /// <summary>A soundboard voice's playhead — for the UI's per-tile progress/countdown.</summary>
 public readonly record struct VoiceProgress(string VoiceId, TimeSpan Position, TimeSpan Duration);
@@ -113,6 +115,7 @@ public sealed class ShowSession : IAsyncDisposable
     // DisposeOnRelease (a backend-created device it owns); a host lease (e.g. an NDI carrier's audio) is
     // BORROWED — never disposed, only its Release hook is invoked so the host can drop its reference.
     private readonly record struct ClipAudioOutput(IAudioOutput Output, bool DisposeOnRelease, Action? Release);
+    private sealed record AudioRouteTarget(string OutputId, float TargetGain, ShowClipAudioRoute? Route = null);
 
     /// <summary>Resolves a route's device to a sink: the host audio factory first (a borrowed lease it owns),
     /// else the session's <see cref="IAudioBackend"/> creates one it owns. Called only when a backend exists.</summary>
@@ -144,12 +147,15 @@ public sealed class ShowSession : IAsyncDisposable
         ChannelMap? channelMap,
         int rate,
         float gain,
-        List<ClipAudioOutput> outputs)
+        List<ClipAudioOutput> outputs,
+        ShowClipAudioRoute? route = null)
     {
         ClipAudioOutput o;
         try
         {
-            var channels = channelMap?.OutputChannels ?? 2;
+            var channels = route is { HasGainMatrix: true }
+                ? route.MatrixOutputChannels ?? route.MatrixCells!.Max(c => c.OutputChannel) + 1
+                : channelMap?.OutputChannels ?? 2;
             o = ResolveAudioOutput(deviceId ?? _outputDeviceId, new AudioFormat(rate, channels));
         }
         catch (Exception ex)
@@ -162,7 +168,25 @@ public sealed class ShowSession : IAsyncDisposable
 
         try
         {
-            player.AttachAudioOutput(o.Output, outputId, map: channelMap, gain: gain);
+            if (route is { HasGainMatrix: true }
+                && player.AudioRouter is { } router
+                && player.AudioSourceId is { } sourceId)
+            {
+                router.AddOutput(o.Output, outputId);
+                try
+                {
+                    router.ApplyMatrix(sourceId, outputId, route.ToGainMatrix(gain));
+                }
+                catch
+                {
+                    router.RemoveOutput(outputId);
+                    throw;
+                }
+            }
+            else
+            {
+                player.AttachAudioOutput(o.Output, outputId, map: channelMap, gain: gain);
+            }
         }
         catch (Exception ex)
         {
@@ -436,7 +460,7 @@ public sealed class ShowSession : IAsyncDisposable
         var fadeIn = binding.FadeIn > TimeSpan.Zero;
         // Retained for the active clip so both fade-in and every stop path ramp each route relative to its
         // configured gain rather than assuming unity.
-        var routeTargets = new List<(string OutputId, float TargetGain)>();
+        var routeTargets = new List<AudioRouteTarget>();
         // Device-tagged routed outputs (OutputId → device) for the per-line audio-health poll.
         var audioPumps = new List<(string OutputId, string DeviceId)>();
         try
@@ -488,9 +512,9 @@ public sealed class ShowSession : IAsyncDisposable
                         var outputId = $"clip{i}";
                         if (!TryAttachRouteOutput(
                                 player, outputId, route.DeviceId, route.ToChannelMap(), rate,
-                                gain: fadeIn ? 0f : route.Gain, outputs))
+                                gain: fadeIn ? 0f : route.Gain, outputs, route))
                             continue; // one un-openable device must not fault the whole cue — play the rest
-                        routeTargets.Add((outputId, route.Gain));
+                        routeTargets.Add(new AudioRouteTarget(outputId, route.Gain, route));
                         if (route.DeviceId is { } clipDevice)
                             audioPumps.Add((outputId, clipDevice));
                     }
@@ -508,7 +532,7 @@ public sealed class ShowSession : IAsyncDisposable
                                 player, outDef.Id, outDef.DeviceId, ResolveOutputChannelMap(binding, outDef.Id), rate,
                                 gain: fadeIn ? 0f : 1f, outputs))
                             continue;
-                        routeTargets.Add((outDef.Id, 1f));
+                        routeTargets.Add(new AudioRouteTarget(outDef.Id, 1f));
                         if (outDef.DeviceId is { } groupDevice)
                             audioPumps.Add((outDef.Id, groupDevice));
                     }
@@ -726,11 +750,9 @@ public sealed class ShowSession : IAsyncDisposable
         });
 
     /// <summary>Live-edit the active cue's audio routing by re-applying its per-output-line routes (each line's
-    /// channel map + gain) while it plays — the GUI's <c>UpdateActiveCueAudioRoutes</c> under the ShowSession
-    /// path. Each route <c>i</c> is re-applied to the clip's <c>clip{i}</c> output through the SAME
-    /// <see cref="AudioRouter.AddRoute(string,string,ChannelMap,float)"/> the fire path used, so the route is
-    /// <em>replaced in place</em> (same legacy route id) rather than doubled — <see cref="AudioRouter.ApplyMatrix"/>
-    /// would instead ADD a parallel matrix-id route on top of the fire path's legacy-id route. Returns false when
+    /// channel map/full gain matrix + gain) while it plays — the GUI's <c>UpdateActiveCueAudioRoutes</c> under the
+    /// ShowSession path. Each route <c>i</c> replaces every route for the clip's <c>clip{i}</c> output, then installs
+    /// either its legacy channel map or its per-cell matrix. Returns false when
     /// the cue isn't the active clip on any group. If the live clip-output count no longer matches the edited route
     /// count (a line was added/removed/muted mid-playback, which reorders the positional <c>clip{i}</c> ids), the
     /// live apply is skipped so nothing is mis-patched — that change lands cleanly on the next fire instead.</summary>
@@ -754,19 +776,64 @@ public sealed class ShowSession : IAsyncDisposable
                     if (liveClipOutputs != routes.Count)
                         return Task.FromResult(true); // composition changed → applies on the next fire
 
+                    var updatedTargets = new List<AudioRouteTarget>(routes.Count);
                     for (var i = 0; i < routes.Count; i++)
                     {
-                        if (routes[i].ToChannelMap() is not { } map)
-                            continue; // a fully-unrouted line carries no map — nothing to re-apply
+                        var map = routes[i].ToChannelMap();
+                        var outputId = $"clip{i}";
+                        if (!routes[i].HasGainMatrix && map is null)
+                        {
+                            // A fully-unrouted line carries no map — nothing to re-apply. Its previously
+                            // installed route keeps playing, so keep its OLD target too: dropping it from the
+                            // rebuilt list would exempt that line from stop-fades/scale rides (hard cut).
+                            if (group.ActiveRouteTargets.FirstOrDefault(t => t.OutputId == outputId) is { } kept)
+                                updatedTargets.Add(kept);
+                            continue;
+                        }
+                        var old = group.ActiveRouteTargets.FirstOrDefault(t => t.OutputId == outputId);
+                        var switchedKinds = old is null || old.Route?.HasGainMatrix != routes[i].HasGainMatrix;
                         try
                         {
-                            router.AddRoute(sourceId, $"clip{i}", map, routes[i].Gain); // legacy id → replace in place
+                            // Same-kind updates reconcile in place (matrix cells ramp atomically; legacy route id
+                            // replaces in place). Only a matrix↔legacy mode switch needs all pair routes removed.
+                            if (switchedKinds)
+                                router.RemoveRoute(sourceId, outputId);
+                            if (routes[i].HasGainMatrix)
+                                router.ApplyMatrix(sourceId, outputId,
+                                    routes[i].ToGainMatrix(routes[i].Gain * group.ActiveAudioScale));
+                            else
+                                router.AddRoute(sourceId, outputId, map!.Value,
+                                    routes[i].Gain * group.ActiveAudioScale);
+                            updatedTargets.Add(new AudioRouteTarget(outputId, routes[i].Gain, routes[i]));
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
                         {
                             // channel count mismatch vs the live output — lands on the next fire
+                            if (old is not null)
+                            {
+                                if (switchedKinds && old.Route is { } oldRoute)
+                                {
+                                    try
+                                    {
+                                        if (oldRoute.HasGainMatrix)
+                                            router.ApplyMatrix(sourceId, outputId,
+                                                oldRoute.ToGainMatrix(old.TargetGain * group.ActiveAudioScale));
+                                        else if (oldRoute.ToChannelMap() is { } oldMap)
+                                            router.AddRoute(sourceId, outputId, oldMap,
+                                                old.TargetGain * group.ActiveAudioScale);
+                                    }
+                                    catch (Exception rollbackEx) when (
+                                        rollbackEx is ArgumentException or InvalidOperationException)
+                                    {
+                                        // The output changed underneath both edits; the next rebuild/fire owns it.
+                                    }
+                                }
+                                updatedTargets.Add(old); // keep stop/fade ownership of the still-installed route
+                            }
                         }
                     }
+
+                    group.SetActiveRouteTargets(updatedTargets);
 
                     return Task.FromResult(true);
                 }
@@ -806,16 +873,16 @@ public sealed class ShowSession : IAsyncDisposable
                 var rate = active.Player.SampleRate > 0 ? active.Player.SampleRate : 48_000;
                 var newOutputs = new List<ClipAudioOutput>(routes.Count);
                 var audioPumps = new List<(string OutputId, string DeviceId)>();
-                var routeTargets = new List<(string OutputId, float TargetGain)>();
+                var routeTargets = new List<AudioRouteTarget>();
                 for (var i = 0; i < routes.Count; i++)
                 {
                     var route = routes[i];
                     var outputId = $"clip{i}";
                     if (!TryAttachRouteOutput(
                             active.Player, outputId, route.DeviceId, route.ToChannelMap(), rate,
-                            gain: route.Gain, newOutputs))
+                            gain: route.Gain, newOutputs, route))
                         continue;
-                    routeTargets.Add((outputId, route.Gain));
+                    routeTargets.Add(new AudioRouteTarget(outputId, route.Gain, route));
                     if (route.DeviceId is { } dev)
                         audioPumps.Add((outputId, dev));
                 }
@@ -1320,7 +1387,7 @@ public sealed class ShowSession : IAsyncDisposable
     /// set below or above unity fades up to exactly that level rather than to a hardcoded 1.0 (NXT-07). A
     /// background poll that marshals each gain step onto the dispatcher; cancelled when the clip is replaced.</summary>
     private void StartFadeIn(string groupId, S.Media.Players.MediaPlayer player,
-        IReadOnlyList<(string OutputId, float TargetGain)> routes, TimeSpan duration, CancellationToken ct)
+        IReadOnlyList<AudioRouteTarget> routes, TimeSpan duration, CancellationToken ct)
     {
         if (player.AudioSourceId is null)
             return;
@@ -1461,7 +1528,7 @@ public sealed class ShowSession : IAsyncDisposable
     private void StartNaturalFadeOut(
         string groupId,
         IArmedClip clip,
-        IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+        IReadOnlyList<AudioRouteTarget> routeTargets,
         float startAudioScale,
         float startOpacity,
         TimeSpan duration,
@@ -1858,7 +1925,7 @@ public sealed class ShowSession : IAsyncDisposable
         TimeSpan Duration,
         float StartAudioScale,
         float StartOpacity,
-        IReadOnlyList<(string OutputId, float TargetGain)> RouteTargets);
+        IReadOnlyList<AudioRouteTarget> RouteTargets);
 
     /// <summary>Pauses or resumes the active clip on <paramref name="groupId"/> — a seamless toggle (codec
     /// pipelines are not flushed, so resume continues from the same frame, matching the GUI engine's
@@ -1919,6 +1986,8 @@ public sealed class ShowSession : IAsyncDisposable
             TimeSpan now = TimeSpan.Zero, pos = TimeSpan.Zero, dur = TimeSpan.Zero;
             var running = false;
             var liveDisconnected = false;
+            var audioChannels = 0;
+            var audioSampleRate = 0;
             var active = v.Player is not null; // has a clip (playing/paused/frozen) — independent of the clock
             try
             {
@@ -1929,10 +1998,16 @@ public sealed class ShowSession : IAsyncDisposable
                     dur = p.Duration;
                     running = p.IsRunning;
                     liveDisconnected = p.IsLiveSourceExhausted; // live input dropped (router may still report running)
+                    if (p.AudioSource is { } audio)
+                    {
+                        audioChannels = audio.Format.Channels;
+                        audioSampleRate = audio.Format.SampleRate;
+                    }
                 }
             }
             catch { /* concurrent teardown — leave zeros for this tick */ }
-            snaps[i] = new TransportSnapshot(v.GroupId, now, pos, dur, running, active, liveDisconnected);
+            snaps[i] = new TransportSnapshot(
+                v.GroupId, now, pos, dur, running, active, liveDisconnected, audioChannels, audioSampleRate);
         }
         return snaps;
     }
@@ -2157,7 +2232,7 @@ public sealed class ShowSession : IAsyncDisposable
         private IReadOnlyList<PlacedLayer> _layers = [];
         private CancellationTokenSource? _clipWorkCts;
         private ShowClipBinding? _activeBinding;
-        private IReadOnlyList<(string OutputId, float TargetGain)> _activeRouteTargets = [];
+        private IReadOnlyList<AudioRouteTarget> _activeRouteTargets = [];
         // Device-tagged routed audio outputs of the active clip (OutputId → the PortAudio device it plays on),
         // for the per-line audio-health poll. Only device-addressed routes are tracked (default-device routes
         // can't be line-correlated). Set after the clip commits; reset on replacement.
@@ -2186,12 +2261,12 @@ public sealed class ShowSession : IAsyncDisposable
 
         /// <summary>Updates the active route targets (OutputId → target gain) after a rebuild so the fade/gain
         /// ride rides the NEW output set. Keeps the binding and current audio scale.</summary>
-        public void SetActiveRouteTargets(IReadOnlyList<(string OutputId, float TargetGain)> routeTargets) =>
+        public void SetActiveRouteTargets(IReadOnlyList<AudioRouteTarget> routeTargets) =>
             _activeRouteTargets = routeTargets.ToArray();
         // Every placement fades on one ramp, so the primary (first) layer's opacity is representative for the
         // cross-fade opacity readback.
         public ClipCompositionRuntime.LayerSlot? ActiveLayer => _layers.Count > 0 ? _layers[0].Slot : null;
-        public IReadOnlyList<(string OutputId, float TargetGain)> ActiveRouteTargets => _activeRouteTargets;
+        public IReadOnlyList<AudioRouteTarget> ActiveRouteTargets => _activeRouteTargets;
         public float ActiveAudioScale => _activeAudioScale;
 
         /// <summary>Hands the group the cancellation source for the active clip's background work (the fade-in
@@ -2200,7 +2275,7 @@ public sealed class ShowSession : IAsyncDisposable
 
         public void SetActiveFadeMetadata(
             ShowClipBinding binding,
-            IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+            IReadOnlyList<AudioRouteTarget> routeTargets,
             float initialAudioScale)
         {
             _activeBinding = binding;
@@ -2214,20 +2289,27 @@ public sealed class ShowSession : IAsyncDisposable
 
         public void ApplyAudioScale(
             S.Media.Players.MediaPlayer player,
-            IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+            IReadOnlyList<AudioRouteTarget> routeTargets,
             float scale)
         {
             if (Active?.Player != player)
                 return;
             _activeAudioScale = Math.Clamp(scale, 0f, 1f);
             if (player.AudioRouter is { } router && player.AudioSourceId is { } sourceId)
-                foreach (var (outputId, targetGain) in routeTargets)
-                    router.SetRouteGain(sourceId, outputId, targetGain * _activeAudioScale);
+                foreach (var target in routeTargets)
+                {
+                    if (target.Route is { HasGainMatrix: true } matrixRoute)
+                        router.ApplyMatrix(
+                            sourceId, target.OutputId,
+                            matrixRoute.ToGainMatrix(target.TargetGain * _activeAudioScale));
+                    else
+                        router.SetRouteGain(sourceId, target.OutputId, target.TargetGain * _activeAudioScale);
+                }
         }
 
         public void ApplyFadeLevel(
             S.Media.Players.MediaPlayer player,
-            IReadOnlyList<(string OutputId, float TargetGain)> routeTargets,
+            IReadOnlyList<AudioRouteTarget> routeTargets,
             float startAudioScale,
             float startOpacity,
             float scale)

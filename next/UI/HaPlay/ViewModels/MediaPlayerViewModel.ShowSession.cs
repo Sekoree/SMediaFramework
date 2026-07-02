@@ -11,7 +11,7 @@ using S.Media.Session;
 namespace HaPlay.ViewModels;
 
 /// <summary>
-/// Phase-8 convergence: the media-player deck's FILE playback runs on a per-player headless
+/// Phase-8 convergence: the media-player deck's file and live-input playback runs on a per-player headless
 /// <see cref="ShowSession"/> (via <see cref="MediaPlayerShowMapper"/>) instead of <c>HaPlayPlaybackSession</c>.
 /// This is the <b>default</b> as of the 2026-07-01 flip; <c>HAPLAY_USE_SHOWSESSION=0</c> falls back to the engine
 /// (see <see cref="ShowSessionGate"/>). Covers play / pause / resume / stop / seek + position readout, end-of-track
@@ -47,12 +47,12 @@ public partial class MediaPlayerViewModel
     // top layer covers the canvas exactly.
     private (int Width, int Height) _playerShowCanvas = (1920, 1080);
 
-    /// <summary>True while a file is playing through the per-player ShowSession (the transport guards divert here).</summary>
+    /// <summary>True while a deck source is playing through the per-player ShowSession (transport diverts here).</summary>
     public bool ShowSessionActive { get; private set; }
 
     private static bool UseShowSessionPlayer => ShowSessionGate.UseShowSession;
 
-    /// <summary>Gated file open: builds/loads the 1-cue player show and fires it. Returns false (and leaves the
+    /// <summary>Gated source open: builds/loads the 1-cue player show and fires it. Returns false (and leaves the
     /// engine path to run) when disabled or on any failure.</summary>
     private async Task<bool> TryOpenViaShowSessionAsync(PlaylistItem item, IReadOnlyList<OutputLineViewModel> lines)
     {
@@ -71,13 +71,13 @@ public partial class MediaPlayerViewModel
                 hasVideo = probe?.HasVideo == true;
                 break;
             case NDIInputPlaylistItem ndi when RuntimeModules.IsNdiAvailable:
-                mediaPath = $"ndi://{Uri.EscapeDataString(ndi.SourceName)}";
+                mediaPath = BuildNdiInputUri(ndi);
                 hasVideo = !ndi.AudioOnly;
                 break;
             case PortAudioInputPlaylistItem paIn:
                 // Live capture through the registry's `padev:` provider (the same URI the cue path uses; the
                 // provider unescapes, so device names with spaces round-trip). Audio-only — no composition.
-                mediaPath = $"padev://{Uri.EscapeDataString(paIn.DeviceName)}";
+                mediaPath = BuildPortAudioInputUri(paIn);
                 hasVideo = false;
                 break;
             default:
@@ -197,6 +197,8 @@ public partial class MediaPlayerViewModel
                 MediaPlayerShowMapper.ToShowDocument(mediaPath, hasVideo, audioRoutes, canvas.Width, canvas.Height,
                     (item as FilePlaylistItem)?.Subtitles)).ConfigureAwait(true);
             await _playerShowSession.FireCueAsync(MediaPlayerShowMapper.PlayerCueId).ConfigureAwait(true);
+            var openedSnapshot = _playerShowSession.Snapshot()
+                .FirstOrDefault(s => s.GroupId == ShowSession.DefaultGroup);
 
             _playerShowCanvas = canvas; // the HOLD top-layer renders at this canvas size
 
@@ -204,10 +206,15 @@ public partial class MediaPlayerViewModel
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 ShowSessionActive = true;
+                ExitWaitingForSource();
                 MediaFilePath = (item as FilePlaylistItem)?.Path;
                 IsMediaLoaded = true;
                 LoadState = PlayerLoadState.Ready;
                 IsPlaying = true;
+                StatusMessage = null;
+                LastLoadError = null;
+                if (!_audioMatrixSourceChannelsExplicit && openedSnapshot is { AudioChannels: > 0 })
+                    SetAudioMatrixSourceChannels(openedSnapshot.AudioChannels, explicitValue: false, resize: true);
                 StartShowSessionPoll();
                 // Kick the scrubber waveform explicitly. The engine path starts it post-arc (OpenOrReload's tail),
                 // but the ShowSession path returns before that, and OnMediaFilePathChanged bails while a transport
@@ -225,11 +232,29 @@ public partial class MediaPlayerViewModel
         }
         catch (Exception ex)
         {
-            ShowLog.LogWarning(ex, "MediaPlayer: ShowSession open failed; falling back to the engine path");
+            ShowLog.LogWarning(ex, "MediaPlayer: ShowSession open failed");
             await ShowSessionStopAsync().ConfigureAwait(true);
+            if (item.IsLive && GetRetrySeconds(item) > 0)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() =>
+                {
+                    EnterWaitingForSource(item, ex.GetBaseException().Message);
+                    SyncIdleSlate();
+                });
+                return true; // handled by the ShowSession retry path; do not silently fall back to the old engine
+            }
             return false;
         }
     }
+
+    // The descriptor-URI builders live in HaPlayPlaybackHelpers so the CUE mapper shares them (a cue-fired
+    // live input must keep its per-item options exactly like a deck-fired one); these thin forwards keep the
+    // deck's call sites and tests stable.
+    internal static string BuildNdiInputUri(NDIInputPlaylistItem item) =>
+        HaPlayPlaybackHelpers.BuildNdiInputUri(item);
+
+    internal static string BuildPortAudioInputUri(PortAudioInputPlaylistItem item) =>
+        HaPlayPlaybackHelpers.BuildPortAudioInputUri(item);
 
     private Task ShowSessionPauseAsync(bool paused)
     {
@@ -302,11 +327,10 @@ public partial class MediaPlayerViewModel
     /// a deck on the ShowSession path plays audio on the operator-SELECTED device(s) (with the binding's channel
     /// map + effective gain) instead of the default device — the core parity fix for the flipped default.
     /// Runs on the UI thread (reads deck observable state).</summary>
-    /// <remarks>One device route per selected audio line with an out←src channel map + the compound
+    /// <remarks>One device route per selected audio line with a full per-cell gain matrix + the compound
     /// (master × per-output) gain. PortAudio lines route to their backend device; audio-capable NDI lines route
     /// to their carrier's audio side (its device id resolves through <see cref="BuildNdiAudioLease"/>, populated
-    /// on open). Deferred (needs hardware validation): the full per-cell gain matrix (int channel map + one
-    /// compound gain here).</remarks>
+    /// on open).</remarks>
     private IReadOnlyList<ShowClipAudioRoute> BuildDeckShowAudioRoutes(IReadOnlyList<OutputLineViewModel> lines)
     {
         var routes = new List<ShowClipAudioRoute>();
@@ -314,17 +338,30 @@ public partial class MediaPlayerViewModel
         {
             if (Outputs.FirstOrDefault(b => b.Line == line) is not { } binding)
                 continue;
-            if (BuildDeckChannelMatrix(binding.Matrix.Cells.Select(c => (c.InputChannel, c.OutputChannel, c.Muted)).ToArray())
-                is not { } matrix)
-                continue; // all cells muted → silent line, no route
+            var declaredCells = binding.Matrix.Cells;
+            var gainCells = BuildDeckGainMatrixCells(declaredCells.Select(c =>
+            {
+                var (trimDb, trimMuted) = InputTrimValues(c.InputChannel);
+                return (c.InputChannel, c.OutputChannel, c.GainDb, c.Muted, trimDb, trimMuted);
+            }).ToArray());
+            if (declaredCells.Count > 0 && gainCells.Count == 0)
+                continue; // declared matrix but every cell is muted/at floor → silent line, no route
+            var matrix = declaredCells.Count == 0 ? new[] { 0, 1 } : null; // unsized grid → stereo default
+            int? matrixOutputs = declaredCells.Count == 0 ? null : declaredCells.Max(c => c.OutputChannel) + 1;
+
+            ShowClipAudioRoute Route(string? deviceId, float gain, int? sampleRate) => new(
+                deviceId, matrix, gain, sampleRate)
+            {
+                MatrixCells = gainCells,
+                MatrixOutputChannels = matrixOutputs,
+            };
 
             switch (line.Definition)
             {
                 case PortAudioOutputDefinition pa:
                     if (pa.EffectiveAudioBackendDeviceId is { } paDevice)
                         _playerPaDeviceRates[paDevice] = pa.SampleRate; // factory rate-fallback lookup
-                    routes.Add(new ShowClipAudioRoute(
-                        pa.EffectiveAudioBackendDeviceId, matrix, CompoundEnvelope(binding),
+                    routes.Add(Route(pa.EffectiveAudioBackendDeviceId, CompoundEnvelope(binding),
                         pa.SampleRate > 0 ? pa.SampleRate : null));
                     break;
                 case NDIOutputDefinition nd when nd.StreamMode != NDIOutputStreamMode.VideoOnly:
@@ -332,8 +369,7 @@ public partial class MediaPlayerViewModel
                     // to that borrowed carrier in the audio-output factory.
                     var ndiDeviceId = NdiAudioDeviceId(line.Definition.Id);
                     if (_playerNdiAudioOutputs.ContainsKey(ndiDeviceId))
-                        routes.Add(new ShowClipAudioRoute(
-                            ndiDeviceId, matrix, CompoundEnvelope(binding),
+                        routes.Add(Route(ndiDeviceId, CompoundEnvelope(binding),
                             nd.AudioSampleRate > 0 ? nd.AudioSampleRate : null));
                     break;
             }
@@ -424,6 +460,24 @@ public partial class MediaPlayerViewModel
         foreach (var c in audible)
             matrix[c.Output] = c.Input;
         return matrix;
+    }
+
+    /// <summary>Pure conversion of the deck's per-cell dB matrix (including input trim) into the linear cells
+    /// carried by <see cref="ShowClipAudioRoute"/>. Unlike <see cref="BuildDeckChannelMatrix"/>, this preserves
+    /// several input channels mixed into the same output and each cell's independent gain.</summary>
+    internal static IReadOnlyList<ShowAudioMatrixCell> BuildDeckGainMatrixCells(
+        IReadOnlyList<(int Input, int Output, double GainDb, bool Muted, double InputTrimDb, bool InputMuted)> cells)
+    {
+        var result = new List<ShowAudioMatrixCell>(cells.Count);
+        foreach (var cell in cells)
+        {
+            var db = cell.GainDb + cell.InputTrimDb;
+            if (cell.Muted || cell.InputMuted || db <= AudioMatrixDefaults.MutedFloorDb)
+                continue;
+            result.Add(new ShowAudioMatrixCell(
+                cell.Input, cell.Output, (float)Math.Pow(10.0, Math.Clamp(db, -80.0, 24.0) / 20.0)));
+        }
+        return result;
     }
 
     /// <summary>Live-re-apply the deck's current audio routing (per-line channel maps + compound gains + mutes)

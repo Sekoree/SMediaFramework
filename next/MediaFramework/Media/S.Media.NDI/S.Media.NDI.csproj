@@ -17,6 +17,7 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="S.Media.NDI.Tests" />
+        <InternalsVisibleTo Include="HaPlay.Tests" />
     </ItemGroup>
 
 </Project>

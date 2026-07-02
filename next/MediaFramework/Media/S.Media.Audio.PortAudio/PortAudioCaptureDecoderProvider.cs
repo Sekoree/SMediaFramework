@@ -37,10 +37,15 @@ internal sealed class PortAudioCaptureDecoderProvider : IMediaDecoderProvider
 
     public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options)
     {
-        var deviceName = ParseDeviceName(uri);
-        var devices = _backend.EnumerateInputDevices();
-        var (deviceId, format) = ResolveDevice(deviceName, devices);
-        return _backend.CreateInput(deviceId, format);
+        var descriptor = ParseDescriptor(uri);
+        var (deviceId, format) = _backend is PortAudioBackend
+            ? ResolveCatalogDevice(
+                descriptor,
+                PortAudioDeviceCatalog.EnumerateInputDevices(),
+                PortAudioDeviceCatalog.EnumerateHostApis())
+            : ResolveDevice(descriptor, _backend.EnumerateInputDevices());
+        return _backend.CreateInput(deviceId, format,
+            new AudioBackendOptions(SuggestedLatencySeconds: descriptor.SuggestedLatencySeconds));
     }
 
     /// <summary>Live capture: a single audio track, no duration, not seekable. Overrides the default bridge so the
@@ -81,15 +86,37 @@ internal sealed class PortAudioCaptureDecoderProvider : IMediaDecoderProvider
     /// <summary>The device name from <c>padev:&lt;name&gt;</c> / <c>padev://&lt;name&gt;</c> (URL-decoded; empty
     /// when none, meaning the system default input).</summary>
     internal static string ParseDeviceName(string uri)
+        => ParseDescriptor(uri).DeviceName;
+
+    internal sealed record CaptureDescriptor(
+        string DeviceName,
+        string? HostApiName = null,
+        int? HostApiIndex = null,
+        int? GlobalDeviceIndex = null,
+        int? Channels = null,
+        int? SampleRate = null,
+        double? SuggestedLatencySeconds = null);
+
+    internal static CaptureDescriptor ParseDescriptor(string uri)
     {
         ArgumentNullException.ThrowIfNull(uri);
         var colon = uri.IndexOf(':');
         if (colon < 0)
-            return string.Empty;
+            return new CaptureDescriptor(string.Empty);
         var rest = uri[(colon + 1)..];
         if (rest.StartsWith("//", StringComparison.Ordinal))
             rest = rest[2..];
-        return Uri.UnescapeDataString(rest).Trim();
+        var queryAt = rest.IndexOf('?');
+        var name = Uri.UnescapeDataString(queryAt >= 0 ? rest[..queryAt] : rest).Trim();
+        var values = queryAt >= 0 ? ParseQuery(rest[(queryAt + 1)..]) : new Dictionary<string, string>();
+        return new CaptureDescriptor(
+            name,
+            Text(values, "hostApiName"),
+            Int(values, "hostApiIndex"),
+            Int(values, "globalDeviceIndex"),
+            Int(values, "channels", min: 1),
+            Int(values, "sampleRate", min: 8000, max: 192000),
+            Double(values, "latency", min: 0));
     }
 
     /// <summary>Pure: resolves a requested device name against an enumerated input-device list to a backend device
@@ -98,26 +125,117 @@ internal sealed class PortAudioCaptureDecoderProvider : IMediaDecoderProvider
     /// capturing the wrong input. The format follows the device's default sample rate and up to two channels.</summary>
     internal static (string? DeviceId, AudioFormat Format) ResolveDevice(
         string deviceName, IReadOnlyList<AudioDeviceInfo> devices)
+        => ResolveDevice(new CaptureDescriptor(deviceName), devices);
+
+    internal static (string? DeviceId, AudioFormat Format) ResolveDevice(
+        CaptureDescriptor descriptor, IReadOnlyList<AudioDeviceInfo> devices)
     {
         ArgumentNullException.ThrowIfNull(devices);
-        if (string.IsNullOrEmpty(deviceName))
+        if (string.IsNullOrEmpty(descriptor.DeviceName))
         {
             var def = devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
-            return (null, FormatFor(def));
+            return (null, FormatFor(def, descriptor));
         }
 
-        var match = devices.FirstOrDefault(d => string.Equals(d.Name, deviceName, StringComparison.OrdinalIgnoreCase))
+        var matchingNames = devices.Where(d =>
+            string.Equals(d.Name, descriptor.DeviceName, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var globalId = descriptor.GlobalDeviceIndex?.ToString(CultureInfo.InvariantCulture);
+        var match = (globalId is not null
+                         ? matchingNames.FirstOrDefault(d => string.Equals(d.Id, globalId, StringComparison.Ordinal))
+                         : null)
+                    ?? matchingNames.FirstOrDefault()
+                    ?? (globalId is not null
+                        ? devices.FirstOrDefault(d => string.Equals(d.Id, globalId, StringComparison.Ordinal))
+                        : null)
                     ?? throw new ArgumentException(
-                        $"no PortAudio input device named '{deviceName}' (available: {DescribeDevices(devices)}).",
-                        nameof(deviceName));
-        return (match.Id, FormatFor(match));
+                        $"no PortAudio input device named '{descriptor.DeviceName}' (available: {DescribeDevices(devices)}).",
+                        nameof(descriptor));
+        return (match.Id, FormatFor(match, descriptor));
     }
 
-    private static AudioFormat FormatFor(AudioDeviceInfo? device)
+    /// <summary>PortAudio-specific resolver: host API name is the stable discriminator when several APIs expose
+    /// the same device name; the saved global index is only a final fallback because it can change across boots.</summary>
+    internal static (string? DeviceId, AudioFormat Format) ResolveCatalogDevice(
+        CaptureDescriptor descriptor,
+        IReadOnlyList<PortAudioInputDeviceEntry> devices,
+        IReadOnlyList<PortAudioHostApiEntry> hostApis)
     {
-        var rate = device is { DefaultSampleRate: > 0 } ? (int)Math.Round(device.DefaultSampleRate) : 48_000;
-        var channels = device is not null ? Math.Clamp(device.MaxChannels, 1, 2) : 2;
+        ArgumentNullException.ThrowIfNull(devices);
+        ArgumentNullException.ThrowIfNull(hostApis);
+        var hostByName = !string.IsNullOrWhiteSpace(descriptor.HostApiName)
+            ? hostApis.Where(h => string.Equals(h.Name, descriptor.HostApiName, StringComparison.OrdinalIgnoreCase))
+                .Cast<PortAudioHostApiEntry?>().FirstOrDefault()
+            : null;
+        var hostIndex = hostByName?.Index ?? descriptor.HostApiIndex;
+
+        PortAudioInputDeviceEntry? match = devices.Where(d =>
+                string.Equals(d.Name, descriptor.DeviceName, StringComparison.OrdinalIgnoreCase)
+                && (hostIndex is null || d.HostApiIndex == hostIndex))
+            .Cast<PortAudioInputDeviceEntry?>().FirstOrDefault();
+        if (match is null && descriptor.GlobalDeviceIndex is { } global)
+            match = devices.Where(d => d.GlobalDeviceIndex == global)
+                .Cast<PortAudioInputDeviceEntry?>().FirstOrDefault();
+        if (match is null && string.IsNullOrEmpty(descriptor.DeviceName))
+            match = devices.Where(d => d.IsDefault).Cast<PortAudioInputDeviceEntry?>().FirstOrDefault()
+                    ?? devices.Cast<PortAudioInputDeviceEntry?>().FirstOrDefault();
+        if (match is null)
+            throw new ArgumentException(
+                $"no PortAudio input device named '{descriptor.DeviceName}' on the configured host API.",
+                nameof(descriptor));
+
+        var selected = match.Value;
+        var channels = descriptor.Channels ?? Math.Clamp(selected.MaxInputChannels, 1, 2);
+        if (channels > selected.MaxInputChannels)
+            throw new ArgumentException(
+                $"PortAudio input '{selected.Name}' has {selected.MaxInputChannels} channels, but {channels} were requested.");
+        var rate = descriptor.SampleRate
+                   ?? (selected.DefaultSampleRate > 0 ? (int)Math.Round(selected.DefaultSampleRate) : 48_000);
+        return (selected.GlobalDeviceIndex.ToString(CultureInfo.InvariantCulture), new AudioFormat(rate, channels));
+    }
+
+    private static AudioFormat FormatFor(AudioDeviceInfo? device, CaptureDescriptor? descriptor = null)
+    {
+        var rate = descriptor?.SampleRate
+                   ?? (device is { DefaultSampleRate: > 0 } ? (int)Math.Round(device.DefaultSampleRate) : 48_000);
+        var channels = descriptor?.Channels
+                       ?? (device is not null ? Math.Clamp(device.MaxChannels, 1, 2) : 2);
+        if (device is not null && channels > device.MaxChannels)
+            throw new ArgumentException(
+                $"PortAudio input '{device.Name}' has {device.MaxChannels} channels, but {channels} were requested.");
         return new AudioFormat(rate, channels);
+    }
+
+    private static Dictionary<string, string> ParseQuery(string query)
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var part in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var equals = part.IndexOf('=');
+            var key = Uri.UnescapeDataString(equals >= 0 ? part[..equals] : part);
+            values[key] = Uri.UnescapeDataString(equals >= 0 ? part[(equals + 1)..] : string.Empty);
+        }
+        return values;
+    }
+
+    private static string? Text(IReadOnlyDictionary<string, string> values, string key) =>
+        values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
+
+    private static int? Int(IReadOnlyDictionary<string, string> values, string key, int? min = null, int? max = null)
+    {
+        if (!values.TryGetValue(key, out var text)) return null;
+        if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            || min is { } lo && value < lo || max is { } hi && value > hi)
+            throw new ArgumentException($"PortAudio option '{key}' is invalid.");
+        return value;
+    }
+
+    private static double? Double(IReadOnlyDictionary<string, string> values, string key, double? min = null)
+    {
+        if (!values.TryGetValue(key, out var text)) return null;
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            || !double.IsFinite(value) || min is { } lo && value < lo)
+            throw new ArgumentException($"PortAudio option '{key}' is invalid.");
+        return value;
     }
 
     private static string DescribeDevices(IReadOnlyList<AudioDeviceInfo> devices) =>

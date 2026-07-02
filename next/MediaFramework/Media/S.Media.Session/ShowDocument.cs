@@ -53,8 +53,40 @@ public sealed record ShowClipAudioRoute(
     float Gain = 1f,
     int? SampleRate = null)
 {
+    /// <summary>Optional full source→output gain matrix. When present it supersedes
+    /// <see cref="ChannelMatrix"/> and preserves multiple source contributions to one output channel plus
+    /// per-cell gain. Values are linear gains before the route-wide <see cref="Gain"/> envelope.</summary>
+    public IReadOnlyList<ShowAudioMatrixCell>? MatrixCells { get; init; }
+
+    /// <summary>Declared output channel count for <see cref="MatrixCells"/>. This keeps muted/unrouted trailing
+    /// channels in the device format; null derives the count from the highest cell.</summary>
+    public int? MatrixOutputChannels { get; init; }
+
+    [JsonIgnore]
+    public bool HasGainMatrix => MatrixCells is { Count: > 0 };
+
     public ChannelMap? ToChannelMap() => ChannelMatrix is { Length: > 0 } m ? new ChannelMap(m) : null;
+
+    internal float[,] ToGainMatrix(float routeScale)
+    {
+        if (MatrixCells is not { Count: > 0 } cells)
+            return new float[0, 0];
+        var sourceChannels = cells.Max(c => c.InputChannel) + 1;
+        var outputChannels = MatrixOutputChannels is > 0
+            ? MatrixOutputChannels.Value
+            : cells.Max(c => c.OutputChannel) + 1;
+        var gains = new float[sourceChannels, outputChannels];
+        foreach (var cell in cells)
+        {
+            if (cell.InputChannel < 0 || cell.OutputChannel < 0 || cell.OutputChannel >= outputChannels)
+                throw new ArgumentException("audio matrix cell indices are outside the declared matrix.");
+            gains[cell.InputChannel, cell.OutputChannel] += cell.Gain * routeScale;
+        }
+        return gains;
+    }
 }
+
+public sealed record ShowAudioMatrixCell(int InputChannel, int OutputChannel, float Gain);
 
 /// <summary>
 /// Binds a cue to the media it plays: when the cue fires, <see cref="MediaPath"/> is opened through the

@@ -127,6 +127,37 @@ public sealed class ShowDocumentTests
     }
 
     [Fact]
+    public void ToJson_FromJson_RoundTripsClipFullGainMatrix()
+    {
+        var doc = ShowDocument.Empty with
+        {
+            Clips =
+            [
+                new ShowClipBinding("cue", "file.wav")
+                {
+                    AudioRoutes =
+                    [
+                        new ShowClipAudioRoute("device", Gain: 0.5f)
+                        {
+                            MatrixOutputChannels = 1,
+                            MatrixCells =
+                            [
+                                new ShowAudioMatrixCell(0, 0, 1f),
+                                new ShowAudioMatrixCell(1, 0, 0.25f),
+                            ],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var route = Assert.Single(Assert.Single(ShowDocument.FromJson(doc.ToJson()).Clips).AudioRoutes!);
+        Assert.Equal(1, route.MatrixOutputChannels);
+        Assert.Equal(2, route.MatrixCells!.Count);
+        Assert.Equal(new ShowAudioMatrixCell(1, 0, 0.25f), route.MatrixCells[1]);
+    }
+
+    [Fact]
     public void ToJson_FromJson_RoundTripsCompositionOutputMapping()
     {
         var doc = ShowDocument.Empty with
