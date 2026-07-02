@@ -37,6 +37,17 @@ internal sealed class VoicePlayer
     private sealed record VoiceHandle(
         IArmedClip Clip, IReadOnlyList<IAudioOutput> Outputs, string OutputId, CancellationTokenSource Cts);
 
+    // Lock-free query view (NXT-16 residue): the current voices (id + player), republished on the dispatcher
+    // whenever a voice commits or releases, so the soundboard's 200 ms progress poll and the is-playing query
+    // never round-trip the dispatcher — a parked loop must not freeze the tiles.
+    private volatile VoiceView[] _voiceViews = [];
+
+    private sealed record VoiceView(string Id, S.Media.Players.MediaPlayer Player);
+
+    /// <summary>Republishes the lock-free voice view. Call on the dispatcher after <see cref="_voices"/> changes.</summary>
+    private void PublishVoiceViews() =>
+        _voiceViews = _voices.Select(kv => new VoiceView(kv.Key, kv.Value.Clip.Player)).ToArray();
+
     /// <summary>Raised (with the voice id) when a voice ends on its own. Raised from the session dispatcher;
     /// <see cref="ShowSession"/> forwards it to its public event.</summary>
     public event Action<string>? VoiceEnded;
@@ -286,6 +297,7 @@ internal sealed class VoicePlayer
                 armed.Start();
                 // The claim CTS becomes the running voice's CTS (cancels the end monitor on release).
                 _voices[voiceId] = new VoiceHandle(armed, outputs, outputId, cts);
+                PublishVoiceViews();
                 StartVoiceEndMonitor(voiceId, player, cts.Token);
             }
             catch
@@ -329,25 +341,32 @@ internal sealed class VoicePlayer
             return Task.CompletedTask;
         });
 
-    /// <summary>Whether a soundboard voice is currently playing.</summary>
-    public Task<bool> IsVoicePlayingAsync(string voiceId) =>
-        _session.InvokeAsync(() => Task.FromResult(_voices.ContainsKey(voiceId)));
+    /// <summary>Whether a soundboard voice is currently playing — a lock-free view read (NXT-16 residue),
+    /// eventually consistent with the dispatcher state like every session snapshot query.</summary>
+    public Task<bool> IsVoicePlayingAsync(string voiceId)
+    {
+        foreach (var v in _voiceViews)
+            if (string.Equals(v.Id, voiceId, StringComparison.Ordinal))
+                return Task.FromResult(true);
+        return Task.FromResult(false);
+    }
 
-    /// <summary>Per-voice playhead (id, position, duration) for every currently-playing soundboard voice.</summary>
-    public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync() =>
-        _session.InvokeAsync<IReadOnlyList<VoiceProgress>>(() =>
+    /// <summary>Per-voice playhead (id, position, duration) for every currently-playing soundboard voice — a
+    /// lock-free view read (NXT-16 residue): the 200 ms soundboard poll must never queue behind the dispatcher.
+    /// Player position/duration reads are thread-safe (the transport snapshot reads them the same way).</summary>
+    public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync()
+    {
+        var views = _voiceViews; // single volatile read of the published view
+        var snaps = new VoiceProgress[views.Length];
+        for (var i = 0; i < views.Length; i++)
         {
-            var snaps = new VoiceProgress[_voices.Count];
-            var i = 0;
-            foreach (var (id, v) in _voices)
-            {
-                TimeSpan pos = TimeSpan.Zero, dur = TimeSpan.Zero;
-                try { pos = v.Clip.Player.Position; dur = v.Clip.Player.Duration; }
-                catch { /* concurrent teardown — zeros for this tick */ }
-                snaps[i++] = new VoiceProgress(id, pos, dur);
-            }
-            return Task.FromResult<IReadOnlyList<VoiceProgress>>(snaps);
-        });
+            TimeSpan pos = TimeSpan.Zero, dur = TimeSpan.Zero;
+            try { pos = views[i].Player.Position; dur = views[i].Player.Duration; }
+            catch { /* concurrent teardown — zeros for this tick */ }
+            snaps[i] = new VoiceProgress(views[i].Id, pos, dur);
+        }
+        return Task.FromResult<IReadOnlyList<VoiceProgress>>(snaps);
+    }
 
     /// <summary>Releases the preview and every voice (running or still opening) — the session's disposal
     /// teardown. Call on the dispatcher (disposal runs there directly, not through InvokeAsync).</summary>
@@ -373,6 +392,7 @@ internal sealed class VoicePlayer
 
         if (!_voices.Remove(voiceId, out var v))
             return;
+        PublishVoiceViews();
         v.Cts.Cancel();
         v.Cts.Dispose();
         await v.Clip.ReleaseAsync().ConfigureAwait(false);

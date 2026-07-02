@@ -1182,9 +1182,6 @@ public partial class MainViewModel : ViewModelBase
                 ?? typeof(MainViewModel).Assembly.GetName().Version?.ToString(),
             SavedSections = sections is null ? null : ProjectSections.Normalize(sections),
             Outputs = outputs,
-            SharedHeadphonesBuses = Has(ProjectSections.OutputsAudio)
-                ? OutputManagement.BuildSharedHeadphonesBusesSnapshot().ToList()
-                : [],
             Players = Has(ProjectSections.Players) ? Players.Select(p => p.BuildPlayerConfigSnapshot()).ToList() : [],
             ActionEndpoints = ActionEndpoints
                 .Where(e => e is MidiActionEndpoint ? Has(ProjectSections.TargetsMidi) : Has(ProjectSections.TargetsOsc))
@@ -1232,8 +1229,6 @@ public partial class MainViewModel : ViewModelBase
         // aliases + per-player matrix presets. Old projects still load; tell the operator once.
         if (project.VirtualAudioChannels.Count > 0)
             ToastCenter.Info(Strings.VirtualChannelsMigratedToast);
-        if (hasAudioOut)
-            OutputManagement.ApplySharedHeadphonesBuses(project.SharedHeadphonesBuses);
 
         var hasMidiTargets = Has(ProjectSections.TargetsMidi);
         var hasOscTargets = Has(ProjectSections.TargetsOsc);

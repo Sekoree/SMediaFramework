@@ -21,7 +21,7 @@ You already started this exact restructure once (the stubbed `S.Media.Time`, `S.
 | Decision | Choice |
 |---|---|
 | **Scope** | Framework first. HaPlay keeps running on a thin shim and is ported workspace-by-workspace afterward (see [07](07-Migration-and-Phasing.md)). |
-| **Plugins** | Two tiers, one dynamic mechanism: **(A)** AOT-pure typed registration into scoped registries, **(B)** a general **native C-ABI plugin** host (`S.Abi`) for third parties — any NativeAOT/C/C++/Rust `.so`/`.dll` exposing the plugin C API. No managed reflection/ALC loading. See [05](05-Plugin-Model.md). |
+| **Plugins** | Two tiers, one dynamic mechanism: **(A)** AOT-pure typed registration into scoped registries, **(B)** a general **native C-ABI plugin** host (`S.Abi`) for third parties — any NativeAOT/C/C++/Rust `.so`/`.dll` exposing the plugin C API. No managed reflection/ALC loading. See [05](05-Plugin-Model.md). **The C ABI is EXPERIMENTAL — do not freeze it as v1 until the YouTube/MMD designs have exercised it** (review NXT-09/10: source options, seek/position reporting, sync negotiation, GL-texture frames, and surface lifecycle all have known gaps). |
 | **Migration** | Fresh parallel `MFPlayer.Next.sln` built alongside the current one; salvage code file-by-file; cut over at parity. See [07](07-Migration-and-Phasing.md). |
 
 Three further architecture blockers are now locked: new source lives in a `next/` subtree, the master

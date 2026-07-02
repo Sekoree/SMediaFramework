@@ -234,7 +234,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         Name = name;
         SyncOutputsCollection();
         _outputs.Outputs.CollectionChanged += OnSharedOutputsCollectionChanged;
-        _outputs.SharedHeadphonesBusesChanged += OnSharedHeadphonesBusesChanged;
         // Phase B (§3.4) — also resync on definition changes (Edit) so clone-of transitions update
         // the routing checkbox list. CollectionChanged alone misses Edit-driven topology changes.
         _outputs.RoutingTopologyChanged += OnRoutingTopologyChanged;
@@ -349,7 +348,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
     private void UnsubscribeOutputEvents()
     {
         _outputs.Outputs.CollectionChanged -= OnSharedOutputsCollectionChanged;
-        _outputs.SharedHeadphonesBusesChanged -= OnSharedHeadphonesBusesChanged;
         _outputs.RoutingTopologyChanged -= OnRoutingTopologyChanged;
         _outputs.OutputNamingChanged -= OnOutputNamingChanged;
         _outputs.OutputLineRemoving -= OnOutputLineRemoving;
@@ -424,13 +422,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         // Hot-add the clone to the live composition (HotAdd is idempotent + guards already-driven).
         await WithPlaybackArcAsync(() => Dispatcher.UIThread.InvokeAsync(() =>
             ShouldRouteLine(line) ? HotAddOutputToShowSessionAsync(line) : Task.CompletedTask)).ConfigureAwait(false);
-    }
-
-    private void OnSharedHeadphonesBusesChanged(object? sender, EventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        Dispatcher.UIThread.Post(RefreshHeadphonesCueTargets);
     }
 
     private void OnRoutingTopologyChanged(object? sender, EventArgs e)
@@ -535,12 +526,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
     public IReadOnlyList<PlayerOutputPreset> OutputPresets { get; } = Enum.GetValues<PlayerOutputPreset>();
 
     public IReadOnlyList<PlayerTransitionMode> TransitionModes { get; } = Enum.GetValues<PlayerTransitionMode>();
-
-    public IReadOnlyList<HeadphonesCueTapPoint> HeadphonesCueTapPoints { get; } = Enum.GetValues<HeadphonesCueTapPoint>();
-
-    public ObservableCollection<HeadphonesCueTargetOption> HeadphonesCueTargets { get; } = new();
-
-    public bool HasHeadphonesCueOutputs => HeadphonesCueTargets.Count > 0;
 
     /// <summary>Phase C (§4.3.4) — combobox choices for the per-output channel-mix mode.</summary>
     public IReadOnlyList<AudioRouteMixMode> MixModes { get; } = Enum.GetValues<AudioRouteMixMode>();
@@ -804,18 +789,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
 
     [ObservableProperty]
     private int _customOutputHeight = 1080;
-
-    [ObservableProperty]
-    private bool _headphonesCueEnabled;
-
-    [ObservableProperty]
-    private HeadphonesCueTargetOption? _selectedHeadphonesCueTarget;
-
-    [ObservableProperty]
-    private HeadphonesCueTapPoint _headphonesCueTapPoint = HeadphonesCueTapPoint.PreFader;
-
-    [ObservableProperty]
-    private double _headphonesCueGainDb;
 
     [ObservableProperty]
     private bool _isMediaLoaded;
@@ -1443,43 +1416,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         }
         OnPropertyChanged(nameof(HasNoOutputs));
         OnPropertyChanged(nameof(RoutingSummary));
-        RefreshHeadphonesCueTargets();
-    }
-
-    private void RefreshHeadphonesCueTargets()
-    {
-        var selectedKind = SelectedHeadphonesCueTarget?.Kind;
-        var selectedId = SelectedHeadphonesCueTarget?.Identity;
-
-        HeadphonesCueTargets.Clear();
-        foreach (var line in _outputs.PortAudioOutputLines)
-            HeadphonesCueTargets.Add(HeadphonesCueTargetOption.ForDirect(line));
-        foreach (var bus in _outputs.SharedHeadphonesBuses)
-            HeadphonesCueTargets.Add(HeadphonesCueTargetOption.ForBus(bus, _outputs.ResolveSharedBusOutput(bus.Id)));
-
-        SelectedHeadphonesCueTarget =
-            HeadphonesCueTargets.FirstOrDefault(t => t.Kind == selectedKind && t.Identity == selectedId)
-            ?? HeadphonesCueTargets.FirstOrDefault();
-        OnPropertyChanged(nameof(HasHeadphonesCueOutputs));
-    }
-
-    private void SelectHeadphonesCueTarget(Guid? directOutputId, Guid? sharedBusId)
-    {
-        if (sharedBusId is { } busId)
-        {
-            SelectedHeadphonesCueTarget = HeadphonesCueTargets.FirstOrDefault(
-                t => t.Kind == HeadphonesCueTargetOption.TargetKind.SharedBus && t.Identity == busId);
-            return;
-        }
-
-        if (directOutputId is { } outputId)
-        {
-            SelectedHeadphonesCueTarget = HeadphonesCueTargets.FirstOrDefault(
-                t => t.Kind == HeadphonesCueTargetOption.TargetKind.Direct && t.Identity == outputId);
-            return;
-        }
-
-        SelectedHeadphonesCueTarget = HeadphonesCueTargets.FirstOrDefault();
     }
 
     private int SanitizedCustomOutputWidth() => Math.Clamp(CustomOutputWidth, 16, 7680);
@@ -2082,15 +2018,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         TransitionDurationMs = TransitionDurationMs,
         CustomOutputWidth = SanitizedCustomOutputWidth(),
         CustomOutputHeight = SanitizedCustomOutputHeight(),
-        HeadphonesCueEnabled = HeadphonesCueEnabled,
-        HeadphonesCueOutputId = SelectedHeadphonesCueTarget?.Kind == HeadphonesCueTargetOption.TargetKind.Direct
-            ? SelectedHeadphonesCueTarget.Identity
-            : null,
-        HeadphonesCueSharedBusId = SelectedHeadphonesCueTarget?.Kind == HeadphonesCueTargetOption.TargetKind.SharedBus
-            ? SelectedHeadphonesCueTarget.Identity
-            : null,
-        HeadphonesCueTapPoint = HeadphonesCueTapPoint,
-        HeadphonesCueGainDb = Math.Clamp(HeadphonesCueGainDb, -60.0, 12.0),
         SelectedOutputDisplayNames = Outputs
             .Where(b => b.IsSelected)
             .Select(b => b.Line.Definition.DisplayName)
@@ -2191,10 +2118,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
         TransitionDurationMs = config.TransitionDurationMs <= 0 ? 500 : config.TransitionDurationMs;
         CustomOutputWidth = Math.Clamp(config.CustomOutputWidth, 16, 7680);
         CustomOutputHeight = Math.Clamp(config.CustomOutputHeight, 16, 4320);
-        HeadphonesCueEnabled = config.HeadphonesCueEnabled;
-        HeadphonesCueTapPoint = config.HeadphonesCueTapPoint;
-        HeadphonesCueGainDb = Math.Clamp(config.HeadphonesCueGainDb, -60.0, 12.0);
-
         var wanted = new HashSet<string>(config.SelectedOutputDisplayNames, StringComparer.OrdinalIgnoreCase);
         var missing = new HashSet<string>(wanted, StringComparer.OrdinalIgnoreCase);
         SuppressVideoRouteConflictPrompt(() =>
@@ -2225,10 +2148,6 @@ public partial class MediaPlayerViewModel : ViewModelBase
             .ToDictionary(g => g.Key, g => g.Last());
         RebuildInputTrimRows(AudioMatrixInputChannelCount);
         RebuildAudioMatrixRouteRows();
-        RefreshHeadphonesCueTargets();
-        SelectHeadphonesCueTarget(config.HeadphonesCueOutputId, config.HeadphonesCueSharedBusId);
-        if (HeadphonesCueEnabled && SelectedHeadphonesCueTarget?.ResolvedLine is null)
-            HeadphonesCueEnabled = false;
 
         StatusMessage = missing.Count > 0
             ? $"Loaded. Missing outputs: {string.Join(", ", missing)}."

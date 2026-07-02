@@ -132,13 +132,13 @@ available.
 |---|---|---|---|
 | `S.Media.FFmpeg.Common` | Core (+FFmpeg.AutoGen) | FFmpeg init, native loading, error helpers, stream/format mapping shared by FFmpeg modules | split from `S.Media.FFmpeg` / `S.Media.FFmpeg.Encode` |
 | `S.Media.Decode.FFmpeg` | Core, FFmpeg.Common | file/stream `IVideoSource`+`IAudioSource`, hw decode (D3D11VA/VAAPI/…), `IVideoCpuFrameConverter` (swscale), `IDeinterlacer` (yadif), audio resampler, **capture** sources (v4l2/dshow), track enumeration, embedded subtitle packet/source providers | `S.Media.FFmpeg` (8.5k) |
-| `S.Media.Encode.FFmpeg` | Core, FFmpeg.Common | muxers/encoders for record/stream out | `S.Media.FFmpeg.Encode` |
+| `S.Media.Encode.FFmpeg` | Core, FFmpeg.Common | muxers/encoders for record/stream out | `S.Media.FFmpeg.Encode` — **NOT BUILT: the empty Phase-0 shell was removed from the solution (NXT-13, 2026-07-01); salvage the old project when the YouTube remux gate (Gate 5) starts** |
 | `S.Media.Audio.PortAudio` | Core, Time, Routing (+PALib) | `IAudioBackend` (output+input), clocked output | `S.Media.PortAudio` |
 | `S.Media.Audio.MiniAudio` | Core, Time, Routing (+MALib) | `IAudioBackend` (output+input) | `S.Media.MiniAudio` |
 | `S.Media.Present.SDL3` | Core, Gpu (+SDL3-CS) | `IVideoOutput` on its own render thread | `S.Media.SDL3` |
 | `S.Media.Present.Avalonia` | Core, Gpu (+Avalonia) | `IVideoOutput` embeddable in an `OpenGlControlBase` | `S.Media.Avalonia` |
 | `S.Media.NDI` | Core, Time, Routing (+NDILib) | NDI sender (video+audio `IVideoOutput`/`IAudioOutput`) **and** receiver (`IVideoSource`/`IAudioSource`) | `S.Media.NDI` (4.3k) |
-| `S.Media.Images.Skia` | Core (+SkiaSharp) | still-image `IVideoSource`, text-layer rendering | `S.Media.SkiaSharp` |
+| `S.Media.Images.Skia` | Core (+SkiaSharp) | still-image `IVideoSource`, text-layer rendering | `S.Media.SkiaSharp` — **NOT BUILT: the empty Phase-0 shell was removed from the solution (NXT-13, 2026-07-01); text/still rendering shipped HaPlay-private instead (`TextFrameRenderer` + the `text:` provider), images open via FFmpeg — a headless host cannot render text cues until a framework module exists** |
 | `S.Media.Subtitles` | Core, LibAssLib (+ optional FFmpeg subtitle providers via registry) | timed subtitle layer source (SRT/VTT/ASS/PGS) | **new** — see [04](04-Compositor-Warp-GPU.md) §subtitles |
 
 > JACK can ship later as `S.Media.Audio.Jack` (→ Core, Routing, JackLib) — same `IAudioBackend` seam.

@@ -101,13 +101,6 @@ public partial class OutputManagementViewModel : ViewModelBase
                 ndi.ReleaseFromPlayback(releaseVideo: false, releaseAudio: true);
     }
 
-    /// <summary>§8.2 cross-player follow-up — project-level shared headphones buses. Edits propagate
-    /// to player VMs via <see cref="SharedHeadphonesBusesChanged"/> so the cue target picker refreshes.</summary>
-    public ObservableCollection<SharedHeadphonesBusViewModel> SharedHeadphonesBuses { get; } = new();
-
-    /// <summary>§8.2 — pre-filtered view of <see cref="Outputs"/> exposing only PortAudio lines.
-    /// Refreshed every time <see cref="Outputs"/> changes so the shared-bus PA picker stays in sync.</summary>
-    public ObservableCollection<OutputLineViewModel> PortAudioOutputLines { get; } = new();
 
     private readonly Dictionary<OutputLineViewModel, ILocalVideoPreviewRuntime> _localPreviews = new();
     private readonly Dictionary<OutputLineViewModel, NDIOutputPreviewRuntime> _ndiOutputs = new();
@@ -167,10 +160,6 @@ public partial class OutputManagementViewModel : ViewModelBase
     /// </summary>
     public event EventHandler? RoutingTopologyChanged;
 
-    /// <summary>§8.2 — raised when the shared-bus list mutates or any bus's PortAudio target /
-    /// label changes. Player VMs use this to refresh their cue target picker.</summary>
-    public event EventHandler? SharedHeadphonesBusesChanged;
-
     // ----- Phase E (§8.1): aggregate health summary -------------------------------------------------
 
     /// <summary>Number of output lines currently driving at least one player session. 0 when the
@@ -190,7 +179,6 @@ public partial class OutputManagementViewModel : ViewModelBase
     public bool HasAggregateIssues => AggregateWarningCount + AggregateErrorCount > 0;
     public bool HasOutputs => Outputs.Count > 0;
     public bool HasNoOutputs => Outputs.Count == 0;
-    public bool HasAdvancedRoutingConfiguration => Outputs.Count > 0 || SharedHeadphonesBuses.Count > 0;
 
     /// <summary>One-line summary: "5 active · 1 warning · 0 errors" — bound by the panel chip.</summary>
     public string AggregateSummary => AggregateActiveCount == 0
@@ -228,23 +216,13 @@ public partial class OutputManagementViewModel : ViewModelBase
         {
             OnPropertyChanged(nameof(HasOutputs));
             OnPropertyChanged(nameof(HasNoOutputs));
-            OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
             if (SelectedLine is { } sel && !Outputs.Contains(sel))
                 SelectedLine = null;
             SelectedLine ??= Outputs.FirstOrDefault();
             RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
         };
-        // §8.2 — a removed PA output may have been a bus's target; raise the event so player VMs
-        // can re-resolve and mark buses without a backing PA output as broken.
-        Outputs.CollectionChanged += (_, _) =>
-        {
-            RebuildPortAudioOutputLines();
-            RaiseSharedHeadphonesBusesChanged();
-        };
         Outputs.CollectionChanged += OnOutputsChangedForSnapshot;
-        RebuildPortAudioOutputLines();
         RebuildDefinitionsSnapshot();
-        SharedHeadphonesBuses.CollectionChanged += OnSharedHeadphonesBusesCollectionChanged;
     }
 
     // Keep DefinitionsSnapshot current: a line-up change (add/remove) or any line's Definition edit
@@ -270,85 +248,6 @@ public partial class OutputManagementViewModel : ViewModelBase
 
     private void RebuildDefinitionsSnapshot() =>
         _definitionsSnapshot = Outputs.Select(o => o.Definition).ToArray();
-
-    private void OnSharedHeadphonesBusesCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        _ = sender;
-        if (e.OldItems is not null)
-            foreach (var removed in e.OldItems.OfType<SharedHeadphonesBusViewModel>())
-                removed.PropertyChanged -= OnSharedHeadphonesBusPropertyChanged;
-        if (e.NewItems is not null)
-            foreach (var added in e.NewItems.OfType<SharedHeadphonesBusViewModel>())
-                added.PropertyChanged += OnSharedHeadphonesBusPropertyChanged;
-        RaiseSharedHeadphonesBusesChanged();
-        OnPropertyChanged(nameof(HasAdvancedRoutingConfiguration));
-    }
-
-    private void OnSharedHeadphonesBusPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        _ = sender;
-        _ = e;
-        RaiseSharedHeadphonesBusesChanged();
-    }
-
-    private void RaiseSharedHeadphonesBusesChanged() =>
-        SharedHeadphonesBusesChanged?.Invoke(this, EventArgs.Empty);
-
-    private void RebuildPortAudioOutputLines()
-    {
-        PortAudioOutputLines.Clear();
-        foreach (var line in Outputs.Where(o => o.Definition is PortAudioOutputDefinition))
-            PortAudioOutputLines.Add(line);
-    }
-
-    [RelayCommand]
-    private void AddSharedHeadphonesBus()
-    {
-        var firstPa = Outputs.FirstOrDefault(o => o.Definition is PortAudioOutputDefinition)?.Definition.Id;
-        SharedHeadphonesBuses.Add(new SharedHeadphonesBusViewModel
-        {
-            Id = Guid.NewGuid(),
-            Label = Strings.Format(nameof(Strings.SharedHeadphonesBusNameFormat), SharedHeadphonesBuses.Count + 1),
-            PortAudioOutputId = firstPa,
-        });
-    }
-
-    [RelayCommand]
-    private void RemoveSharedHeadphonesBus(SharedHeadphonesBusViewModel? bus)
-    {
-        if (bus is null) return;
-        SharedHeadphonesBuses.Remove(bus);
-    }
-
-    /// <summary>Returns the PortAudio <see cref="OutputLineViewModel"/> backing the bus, or
-    /// <c>null</c> when the bus has no target / the target was removed (broken).</summary>
-    public OutputLineViewModel? ResolveSharedBusOutput(Guid busId)
-    {
-        var bus = SharedHeadphonesBuses.FirstOrDefault(b => b.Id == busId);
-        if (bus?.PortAudioOutputId is not { } paId)
-            return null;
-        return Outputs.FirstOrDefault(o => o.Definition.Id == paId && o.Definition is PortAudioOutputDefinition);
-    }
-
-    public IReadOnlyList<SharedHeadphonesBus> BuildSharedHeadphonesBusesSnapshot() =>
-        SharedHeadphonesBuses.Select(b => new SharedHeadphonesBus
-        {
-            Id = b.Id,
-            Label = b.Label,
-            PortAudioOutputId = b.PortAudioOutputId,
-        }).ToList();
-
-    public void ApplySharedHeadphonesBuses(IReadOnlyList<SharedHeadphonesBus> buses)
-    {
-        SharedHeadphonesBuses.Clear();
-        foreach (var b in buses)
-            SharedHeadphonesBuses.Add(new SharedHeadphonesBusViewModel
-            {
-                Id = b.Id,
-                Label = string.IsNullOrWhiteSpace(b.Label) ? Strings.SharedHeadphonesBusDefaultName : b.Label,
-                PortAudioOutputId = b.PortAudioOutputId,
-            });
-    }
 
     private void RaiseTopologyChanged() => RoutingTopologyChanged?.Invoke(this, EventArgs.Empty);
 

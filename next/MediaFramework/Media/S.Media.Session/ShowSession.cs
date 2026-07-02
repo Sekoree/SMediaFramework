@@ -47,7 +47,9 @@ public sealed class ShowSession : IAsyncDisposable
     private readonly IMediaRegistry _registry;
     private readonly IAudioBackend? _audioBackend;
     private readonly string? _outputDeviceId;
-    private CueGraph _cueGraph = new(); // swapped atomically on load (NXT-12 transactional load)
+    // Swapped atomically on load (NXT-12 transactional load); volatile because fires and the lock-free cue-
+    // definition query read it OFF the dispatcher (the graph itself is internally locked).
+    private volatile CueGraph _cueGraph = new();
     private readonly Dictionary<string, TransportGroup> _groups = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ClipCompositionRuntime> _compositions = new(StringComparer.Ordinal);
     // Lock-free view of the compositions for the UI health poll: republished (on the dispatcher) whenever
@@ -991,12 +993,21 @@ public sealed class ShowSession : IAsyncDisposable
     /// FadeOutSound). No <see cref="VoiceEnded"/>. A zero/negative duration stops immediately.</summary>
     public Task FadeVoiceAsync(string voiceId, TimeSpan duration) => _voicePlayer.FadeVoiceAsync(voiceId, duration);
 
-    /// <summary>Whether a soundboard voice is currently playing.</summary>
-    public Task<bool> IsVoicePlayingAsync(string voiceId) => _voicePlayer.IsVoicePlayingAsync(voiceId);
+    /// <summary>Whether a soundboard voice is currently playing (a lock-free view read — NXT-16 residue).</summary>
+    public Task<bool> IsVoicePlayingAsync(string voiceId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _voicePlayer.IsVoicePlayingAsync(voiceId);
+    }
 
     /// <summary>Per-voice playhead (id, position, duration) for every currently-playing soundboard voice — the
-    /// source for the UI's per-tile progress/countdown. Empty when nothing is playing.</summary>
-    public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync() => _voicePlayer.GetVoiceProgressAsync();
+    /// source for the UI's per-tile progress/countdown (a lock-free view read — NXT-16 residue). Empty when
+    /// nothing is playing.</summary>
+    public Task<IReadOnlyList<VoiceProgress>> GetVoiceProgressAsync()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _voicePlayer.GetVoiceProgressAsync();
+    }
 
     /// <summary>The clip specs for the next <paramref name="count"/> clip-bound cues after the last fired in
     /// <paramref name="groupId"/>. Reads cue/clip state, so call on the dispatcher.</summary>
@@ -1590,14 +1601,22 @@ public sealed class ShowSession : IAsyncDisposable
     }
 
     /// <summary>An immutable snapshot of the loaded cue definitions, ordered by cue number.</summary>
-    public Task<IReadOnlyList<CueDefinition>> GetCueDefinitionsAsync() =>
-        InvokeAsync(() => Task.FromResult(_cueGraph.Cues));
+    public Task<IReadOnlyList<CueDefinition>> GetCueDefinitionsAsync()
+    {
+        // Lock-free (NXT-16 residue): the graph reference is volatile and CueGraph is internally locked, so
+        // this UI/fire-failure query never queues behind the dispatcher (a long command would stall it).
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return Task.FromResult(_cueGraph.Cues);
+    }
 
     /// <summary>The cue ids whose clips are currently prepared (warm) in the standby engine — a UI "ready"
     /// indicator, and how a test confirms the pre-roll ran.</summary>
-    public Task<IReadOnlyList<string>> GetPreparedCueIdsAsync() =>
-        InvokeAsync<IReadOnlyList<string>>(() =>
-            Task.FromResult<IReadOnlyList<string>>(_standby.PreparedKeys.Select(k => k.Id).ToArray()));
+    public Task<IReadOnlyList<string>> GetPreparedCueIdsAsync()
+    {
+        // Lock-free (NXT-16 residue): the standby engine is internally locked — no dispatcher round-trip.
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return Task.FromResult<IReadOnlyList<string>>(_standby.PreparedKeys.Select(k => k.Id).ToArray());
+    }
 
     /// <summary>
     /// Attach a live <see cref="IVideoOutput"/> (e.g. a UI preview surface) to a loaded composition's pump — the

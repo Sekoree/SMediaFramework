@@ -633,8 +633,28 @@ load → cue-list → go → transport advances → stop → close, all from pur
 
 ---
 
-## Phase 8 — UI port (separate effort, firewalled)
-**Goal:** rebuild HaPlay on `ShowSession`; retire the old app.
+## Phase 8 — UI (PIVOTED: port + re-back — ✅ complete 2026-07-02)
+**Goal (original):** rebuild HaPlay on `ShowSession` as fresh thin-MVVM slices; retire the old app.
+**What actually happened (the pivot, 2026-06-29):** the fresh rebuild below was ABANDONED. Instead the whole
+old HaPlay was **ported** onto the new framework (`next/UI/`, csproj repointed, surgical edits), its engines were
+then **re-backed** workspace-by-workspace onto `ShowSession` (cue → soundboard → media-player deck), the default
+was **flipped** (2026-07-01, `ShowSessionGate`), and after the operator hardware soak the legacy engines
+(`CuePlaybackEngine`, `HaPlayPlaybackSession`, `SoundboardEngine`, the gate itself) were **deleted**
+(2026-07-02, −9.8k lines). `ShowSession` is the app's only playback runtime. The authoritative record of the
+re-back, its blockers, and the verification gates is `Review/MFPlayer-Next-Review-2026-07-02.md` (and the
+Critical-Review continuation sections); the checklist below is kept as HISTORY of the abandoned rebuild —
+note its `HAPLAY_SMOKE` claims belong to the abandoned app; the ported app has no such hook (NXT-15).
+
+- [x] Old HaPlay ported to `next/UI/` on the new framework (2026-06-29; builds 0/0, launches, tests green).
+- [x] Cue workspace + soundboard + media-player deck re-backed onto `ShowSession` (2026-06-30…07-02; per-player
+      1-cue sessions for decks, per-app session for cues/soundboard, output-line leases, live edit, previews,
+      voices, HOLD/fallback, hot output add/remove, live-source retry, per-cell audio matrices, descriptors).
+- [x] Default flipped (2026-07-01) and, after the hardware soak, the legacy engines DELETED (2026-07-02) —
+      the re-filed "retire the old playback god-objects" item below is done.
+- [ ] UI persists only **view-state** on top of Session's `ShowDocument` (D10) — the remaining Phase-8 exit
+      item, carried as a standing gate (HaPlayProject still persists the full model; the mapper bridges).
+
+### Historical: the abandoned thin-MVVM rebuild (kept for its lessons — XAML/AOT gotchas, preview-surface findings)
 
 - [~] `HaPlay.Core` / `HaPlay.Controls` / `HaPlay.App` / `HaPlay.Desktop` — thin MVVM over `ShowSession`.
       **FOUNDATION STARTED (2026-06-28):** new `next/UI/` tree (outside the arch-scanned `MediaFramework/{Media,Control,
@@ -714,15 +734,17 @@ load → cue-list → go → transport advances → stop → close, all from pur
       untouched. *Next (the rest of this workspace, multi-step):* in HaPlay, assemble a `ControlSystemRuntimeSession`
       (config = devices+scripts, an OSC sender, MIDI runners) wired to `new ShowSessionControlActions(session)` +
       `StartAsync`; then the UI (device list / profile load / monitor / learn). Then the **soundboard** (`Soundboard`).
-- [ ] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
-      `HaPlayPlaybackSession`, `SoundboardEngine`): their engine is superseded by the headless `ShowSession`
-      built in Phase 4 — audit each for any logic `ShowSession` still lacks, then delete it as its workspace
-      is strangled onto `ShowSession`.
-- [ ] UI persists only **view-state** on top of Session's `ShowDocument` (D10).
-- [ ] Strangle the old app **workspace by workspace**; old + new never share a process (OQ6).
+- [x] **(Re-filed from Phase 4)** Retire the old playback god-objects (`CuePlaybackEngine` 2425 LOC,
+      `HaPlayPlaybackSession`, `SoundboardEngine`) — **DONE 2026-07-02** via the pivot path above (audited,
+      re-backed, hardware-soaked, deleted in one pass; gates: full build 0 errors, suite green, real-media
+      SessionSmoke, AotSmoke).
+- [x] Strangle **workspace by workspace**; old + new never share a process (OQ6) — done via the pivot
+      (re-back behind `HAPLAY_USE_SHOWSESSION`, flip, delete; the abandoned rebuild app never shipped).
 
-**Gate:** `HaPlay.Tests` ported; manual parity per workspace.
-**Exit:** old HaPlay retired; the new UI is at feature parity.
+**Gate:** `HaPlay.Tests` ported ✓ (the ported app's suite, ~493 green); manual parity per workspace ✓
+(operator hardware soaks 2026-07-01/02).
+**Exit:** old HaPlay retired ✓ (engines deleted; the ported UI IS the app at feature parity). Remaining
+carry-over: view-state-only persistence (D10, above).
 
 ---
 

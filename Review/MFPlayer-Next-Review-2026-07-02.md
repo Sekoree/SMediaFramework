@@ -299,6 +299,40 @@ Ordered by leverage. Items 1–3 restate the standing plan with updated numbers;
 
 **Bottom line:** the remediation since `79b70ed` is real, verified, and in places ahead of its own ledger. The new findings are all in the newest code and share one root cause — the serial dispatcher's contract (“never await long work on the loop”) is enforced for cue fires but not yet everywhere — plus one ordering bug on a borrow/release boundary. Fixing that family closes the last *correctness*-grade risks on the default path; everything after is the planned architectural completion work, not firefighting.
 
+## Post-review implementation pass (2026-07-02, evening — after the engine deletion)
+
+Part-5 and residue items executed and verified (full suite **1,412/1,412** after every step; real-media
+SessionSmoke exit 0; headless app launch clean):
+
+1. **Structural split (Part-5 items 2–4) — DONE.** `FadeRamp` (one ramp loop; the clip fade-in, natural
+   fade-out, stop fade, and voice fade-out are now step lambdas over it — voice fades also moved from the
+   coarser 100 ms monitor step to the shared 25 ms rate, the one deliberate behavior change);
+   `VoicePlayer` (voices + preview out of `ShowSession`, claim-CTS/monitor semantics preserved verbatim);
+   `CueFireOrchestrator` (fire-lock + in-flight-fire cancellation; GO's select/advance stay internal
+   dispatcher ops on the session, now explicitly `_showGeneration`-guarded); `CueShowSessionCoordinator`
+   (the entire cue-workspace ShowSession surface out of `MainViewModel`: wiring, NXT-20 lease ordering in
+   ONE home, coalescing reload, progress polls, health, shutdown). Sizes: `ShowSession` 2,459 → ~1,990;
+   `MainViewModel` 2,405 → ~1,460.
+2. **NXT-16 residue (Part-5 item 5) — DONE.** `GetCueDefinitionsAsync`/`GetPreparedCueIdsAsync` read the
+   internally-locked graph/standby directly (volatile graph ref); `IsVoicePlayingAsync`/
+   `GetVoiceProgressAsync` read a published voice view — no query round-trips the dispatcher anymore.
+3. **`MediaRuntime` post-shutdown resurrection (NXT-05 note) — guarded** (loud error + debug assert; still
+   rebuilds so a straggling teardown path can't crash the exit).
+4. **Plan-doc drift (Part 2.2) — fixed** (Phase-8 checklist rewritten around the pivot; 02 project table
+   annotated; README ABI-experimental caveat).
+5. **HeadphonesCue/SharedHeadphonesBus — REMOVED (operator decision).** The persisted-but-never-consumed
+   monitor-send surface (config props + tap enum, bus model/project list, three VMs, both view sections,
+   strings) is deleted; a legacy-compat test asserts old projects carrying the fields still load (unknown
+   JSON members drop silently).
+6. **NXT-04 first measured gate — SHIPPED.** SessionSmoke now measures A/V sync quantitatively (exit codes
+   17–21): every host-fanned composited frame's media PTS vs the lock-free playhead → steady-state
+   bias/jitter, post-seek SHIFT (the audio-ahead-after-seek class), stale-frame detection, pause hold, and
+   resume shift. Tolerances: |median| ≤ 250 ms, jitter ≤ 120 ms, seek/resume shift ≤ 150 ms, pause PTS
+   advance ≤ 100 ms. Measured on this box (two files, three runs): bias −78…−79 ms (the mixer's
+   nearest-not-ahead selection, ~¾ frame), jitter 1–3 ms, shift 0 ms everywhere — tight and reproducible.
+   The full NXT-04 timeline/discontinuity CONTRACT (generation IDs threaded to every consumer) remains the
+   architectural remainder; this closes the "no measured gates" half.
+
 ## Verification appendix
 
 ```bash

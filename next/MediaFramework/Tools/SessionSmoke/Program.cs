@@ -190,6 +190,82 @@ if (log.Count != 2 || log.Any(e => e.Status != CueExecutionStatus.Fired))
     return 7;
 }
 
+// --- NXT-04 measured A/V sync gates -------------------------------------------------------------------
+// Every composited frame the host output receives carries the SELECTED video frame's media PTS (the mixer
+// canvas takes layer 0's master-aligned frame time), and the lock-free transport snapshot's ClipPosition is
+// the same clip's audio-paced playhead — both in media time. skew = framePts − playhead therefore measures
+// the video selection against the master clock quantitatively ("assert tolerances, not that frames
+// appeared"). A constant bias (container start_time, buffering lead) is tolerated loosely; the TIGHT gates
+// are jitter (selection instability) and the seek-induced SHIFT of the bias — the audio-ahead-after-seek
+// regression class ships as a measured gate here.
+var syncBefore = (await session.SnapshotAsync())[0];
+if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + TimeSpan.FromSeconds(14))
+{
+    var steady = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.5));
+    Console.WriteLine(
+        $"SYNC steady: n={steady.Count} median={steady.MedianMs:F0}ms p95(|skew|)={steady.P95AbsMs:F0}ms jitter={steady.JitterMs:F0}ms");
+    if (steady.Count < 10 || Math.Abs(steady.MedianMs) > 250 || steady.JitterMs > 120)
+    {
+        Console.Error.WriteLine(
+            $"FAIL: steady-state A/V skew out of tolerance (n={steady.Count}, |median|={Math.Abs(steady.MedianMs):F0}ms > 250ms or jitter={steady.JitterMs:F0}ms > 120ms)");
+        return 17;
+    }
+
+    // Coordinated A/V seek: the post-seek skew must MATCH the steady baseline (a shift = one side seeked
+    // to a different effective position — the long-GOP HW-frame PTS desync class), and no stale pre-seek
+    // frame may surface after the settle window.
+    var target = (await session.SnapshotAsync())[0].ClipPosition + TimeSpan.FromSeconds(6);
+    await session.SeekAsync(target);
+    await Task.Delay(700); // settle: pipeline flush + refill + resume
+    var postSeek = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.0));
+    Console.WriteLine(
+        $"SYNC post-seek: n={postSeek.Count} median={postSeek.MedianMs:F0}ms shift={postSeek.MedianMs - steady.MedianMs:F0}ms minPts={postSeek.MinPts.TotalSeconds:F2}s (target {target.TotalSeconds:F2}s)");
+    if (postSeek.Count < 8 || Math.Abs(postSeek.MedianMs - steady.MedianMs) > 150 || postSeek.JitterMs > 150)
+    {
+        Console.Error.WriteLine(
+            $"FAIL: post-seek A/V skew shifted/degraded (n={postSeek.Count}, shift={postSeek.MedianMs - steady.MedianMs:F0}ms > 150ms or jitter={postSeek.JitterMs:F0}ms > 150ms)");
+        return 18;
+    }
+
+    if (postSeek.MinPts < target - TimeSpan.FromSeconds(1.5))
+    {
+        Console.Error.WriteLine(
+            $"FAIL: stale pre-seek frame surfaced after the seek (minPts={postSeek.MinPts.TotalSeconds:F2}s « target {target.TotalSeconds:F2}s)");
+        return 19;
+    }
+
+    // Pause: the playhead freezes (clock contract) and the presented frame must HOLD — either no new
+    // submissions, or re-sent frames whose PTS no longer advances.
+    await session.SetPausedAsync(true);
+    await Task.Delay(300); // let the pause transient drain
+    var paused = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromMilliseconds(500));
+    Console.WriteLine($"SYNC paused: n={paused.Count} ptsAdvance={paused.PtsSpreadMs:F0}ms");
+    if (paused.Count > 0 && paused.PtsSpreadMs > 100)
+    {
+        Console.Error.WriteLine(
+            $"FAIL: presented frames kept advancing while paused (ptsAdvance={paused.PtsSpreadMs:F0}ms > 100ms)");
+        return 20;
+    }
+
+    // Resume: frames advance again and the skew returns to the steady baseline (no pause-induced shift —
+    // the pause/resume desync class of the playback-clock freeze contract).
+    await session.SetPausedAsync(false);
+    await Task.Delay(400);
+    var resumed = await screenOutput.CaptureSkewAsync(session, TimeSpan.FromSeconds(1.0));
+    Console.WriteLine(
+        $"SYNC resumed: n={resumed.Count} median={resumed.MedianMs:F0}ms shift={resumed.MedianMs - steady.MedianMs:F0}ms ptsAdvance={resumed.PtsSpreadMs:F0}ms");
+    if (resumed.Count < 8 || Math.Abs(resumed.MedianMs - steady.MedianMs) > 150 || resumed.PtsSpreadMs < 500)
+    {
+        Console.Error.WriteLine(
+            $"FAIL: post-resume playback degraded (n={resumed.Count}, shift={resumed.MedianMs - steady.MedianMs:F0}ms > 150ms or ptsAdvance={resumed.PtsSpreadMs:F0}ms < 500ms)");
+        return 21;
+    }
+}
+else
+{
+    Console.WriteLine("SYNC gates SKIPPED — clip too short (pass a ≥20s A/V file to exercise the measured sync gates)");
+}
+
 // --- 8b trim-in: a clip with a StartOffset starts at the trim point (forward play) -----------------
 await using (var trimSession = new ShowSession(registry, backend))
 {
@@ -267,17 +343,70 @@ await using (var fadeSession = new ShowSession(registry, backend))
 Console.WriteLine("SessionSmoke OK — a full show ran headless (audio cue + seek + video cue composited with a subtitle layer + trim-in + loop + fade-in + host video-output fan-out).");
 return 0;
 
-// Counts the composited frames a composition fans out to a host-provided video-output lease.
+// Counts the composited frames a composition fans out to a host-provided video-output lease, and — for the
+// NXT-04 measured sync gates — captures (frame media PTS, playhead at submit) pairs over a sample window.
 sealed class RecordingVideoOutput : IVideoOutput
 {
     private VideoFormat _format;
+    private readonly object _gate = new();
+    private List<(TimeSpan Pts, TimeSpan Clock)>? _capture;
+    private Func<TimeSpan>? _clockProbe;
     public int Submitted { get; private set; }
     public VideoFormat Format => _format;
     public IReadOnlyList<PixelFormat> AcceptedPixelFormats { get; } = Array.Empty<PixelFormat>();
     public void Configure(VideoFormat format) => _format = format;
+
     public void Submit(VideoFrame frame)
     {
         Submitted++;
+        lock (_gate)
+        {
+            if (_capture is not null && _clockProbe is not null)
+                _capture.Add((frame.PresentationTime, _clockProbe()));
+        }
+
         frame.Dispose();
+    }
+
+    /// <summary>Samples every submitted frame's (media PTS, lock-free snapshot playhead) for
+    /// <paramref name="window"/> and reduces them to skew statistics. The probe reads
+    /// <see cref="ShowSession.Snapshot"/> — no dispatcher marshaling on the submit path.</summary>
+    public async Task<SkewStats> CaptureSkewAsync(ShowSession session, TimeSpan window)
+    {
+        lock (_gate)
+        {
+            _capture = new List<(TimeSpan, TimeSpan)>();
+            _clockProbe = () => session.Snapshot() is [{ } s, ..] ? s.ClipPosition : TimeSpan.Zero;
+        }
+
+        await Task.Delay(window);
+        List<(TimeSpan Pts, TimeSpan Clock)> samples;
+        lock (_gate)
+        {
+            samples = _capture!;
+            _capture = null;
+            _clockProbe = null;
+        }
+
+        return SkewStats.From(samples);
+    }
+}
+
+/// <summary>Reduced skew samples: median signed skew (bias — start_time offsets/buffer lead land here),
+/// p95 of |skew|, jitter (p95 of |skew − median|, the selection-instability signal), the smallest PTS seen
+/// (stale-frame detection after a seek), and the PTS span (advance/hold detection around pause).</summary>
+readonly record struct SkewStats(int Count, double MedianMs, double P95AbsMs, double JitterMs, TimeSpan MinPts, double PtsSpreadMs)
+{
+    public static SkewStats From(List<(TimeSpan Pts, TimeSpan Clock)> samples)
+    {
+        if (samples.Count == 0)
+            return new SkewStats(0, 0, 0, 0, TimeSpan.Zero, 0);
+        var skews = samples.Select(s => (s.Pts - s.Clock).TotalMilliseconds).OrderBy(x => x).ToArray();
+        var median = skews[skews.Length / 2];
+        var p95Abs = skews.Select(Math.Abs).OrderBy(x => x).ToArray()[(int)(skews.Length * 0.95)];
+        var jitter = skews.Select(x => Math.Abs(x - median)).OrderBy(x => x).ToArray()[(int)(skews.Length * 0.95)];
+        var minPts = samples.Min(s => s.Pts);
+        var spread = (samples.Max(s => s.Pts) - minPts).TotalMilliseconds;
+        return new SkewStats(samples.Count, median, p95Abs, jitter, minPts, spread);
     }
 }

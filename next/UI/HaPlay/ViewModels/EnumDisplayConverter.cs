@@ -75,8 +75,6 @@ public sealed class EnumDisplayConverter : IValueConverter
             PlayerTransitionMode.Cut => "Cut",
             PlayerTransitionMode.Fade => "Fade from black",
             PlayerTransitionMode.IdleImage => "Idle image",
-            HeadphonesCueTapPoint.PreFader => "Pre-fader",
-            HeadphonesCueTapPoint.PostFader => "Post-fader",
             AudioRouteMixMode.Stereo => "Stereo",
             AudioRouteMixMode.Swap => "Swap L/R",
             AudioRouteMixMode.MonoLeft => "Mono from left",

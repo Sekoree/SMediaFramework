@@ -22,6 +22,7 @@ internal static class MediaRuntime
     private static readonly ILogger Trace = MediaDiagnostics.CreateLogger("HaPlay.MediaRuntime");
     private static readonly object Gate = new();
     private static MediaHost? _host;
+    private static bool _shutdown;
 
     /// <summary>The owning host (NXT-05): builds the registry and, when disposed on app shutdown, releases the
     /// modules' native runtime holds (PortAudio <c>Pa_Terminate</c>, NDI runtime) instead of leaking them. Lazily
@@ -33,7 +34,20 @@ internal static class MediaRuntime
             if (_host is not null)
                 return _host;
             lock (Gate)
+            {
+                if (_host is null && _shutdown)
+                {
+                    // A late poll/timer touched the registry AFTER Shutdown() released the native runtimes —
+                    // rebuilding resurrects PortAudio/NDI holds that will now leak (nothing disposes the fresh
+                    // host). Rebuild anyway so a straggling teardown path can't crash the exit, but make the
+                    // ordering bug loud: fix the caller to stop before MediaRuntime.Shutdown().
+                    Trace.LogError("MediaRuntime: Registry accessed AFTER Shutdown() — rebuilding a fresh host "
+                                   + "(native runtime holds will leak). Stop the caller before shutdown.");
+                    System.Diagnostics.Debug.Assert(false, "MediaRuntime.Registry accessed after Shutdown()");
+                }
+
                 return _host ??= Build();
+            }
         }
     }
 
@@ -60,6 +74,7 @@ internal static class MediaRuntime
         {
             host = _host;
             _host = null;
+            _shutdown = true; // a later Registry access is an ordering bug — the getter asserts + logs it
         }
 
         if (host is null)

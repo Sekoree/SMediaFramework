@@ -80,7 +80,6 @@ public static class Strings
     public static string MappingButtonLabel => Get(nameof(MappingButtonLabel));
     public static string MappingButtonTooltip => Get(nameof(MappingButtonTooltip));
     public static string MappingNeedsCompositionToast => Get(nameof(MappingNeedsCompositionToast));
-    public static string HeadphonesCueBusLabel => Get(nameof(HeadphonesCueBusLabel));
     public static string VirtualChannelsMigratedToast => Get(nameof(VirtualChannelsMigratedToast));
     public static string PlayersDeckHint => Get(nameof(PlayersDeckHint));
     public static string HoldButtonLabel => Get(nameof(HoldButtonLabel));
@@ -141,7 +140,6 @@ public static class Strings
     public static string NowPlayingGroupCancelTooltip => Get(nameof(NowPlayingGroupCancelTooltip));
     public static string Enable => Get(nameof(Enable));
     public static string Tap => Get(nameof(Tap));
-    public static string HeadphonesCueMatrixHint => Get(nameof(HeadphonesCueMatrixHint));
     public static string NoOutputsConfiguredHint => Get(nameof(NoOutputsConfiguredHint));
     public static string TransitionLabel => Get(nameof(TransitionLabel));
     public static string TransitionTooltip => Get(nameof(TransitionTooltip));
@@ -152,9 +150,6 @@ public static class Strings
     public static string BrowseButton => Get(nameof(BrowseButton));
     public static string ShowWhenNoMediaPlaying => Get(nameof(ShowWhenNoMediaPlaying));
     public static string HoldFallbackToggleTooltip => Get(nameof(HoldFallbackToggleTooltip));
-    public static string SharedHeadphonesBusesLabel => Get(nameof(SharedHeadphonesBusesLabel));
-    public static string SharedHeadphonesBusesHint => Get(nameof(SharedHeadphonesBusesHint));
-    public static string AddBusButton => Get(nameof(AddBusButton));
     public static string RemoveButton => Get(nameof(RemoveButton));
 
     public static string MenuFileHeader => Get(nameof(MenuFileHeader));
@@ -471,7 +466,6 @@ public static class Strings
     public static string OutputManagementHeader => Get(nameof(OutputManagementHeader));
     public static string OutputManagementHint => Get(nameof(OutputManagementHint));
     public static string NoOutputsEmptyHint => Get(nameof(NoOutputsEmptyHint));
-    public static string AdvancedRoutingHeader => Get(nameof(AdvancedRoutingHeader));
     public static string AddPortAudioButton => Get(nameof(AddPortAudioButton));
     public static string AddLocalVideoButton => Get(nameof(AddLocalVideoButton));
     public static string AddNdiButton => Get(nameof(AddNdiButton));
@@ -583,8 +577,6 @@ public static class Strings
 
     public static string AggregateSummaryIdle => Get(nameof(AggregateSummaryIdle));
     public static string AggregateSummaryActiveFormat => Get(nameof(AggregateSummaryActiveFormat));
-    public static string SharedHeadphonesBusNameFormat => Get(nameof(SharedHeadphonesBusNameFormat));
-    public static string SharedHeadphonesBusDefaultName => Get(nameof(SharedHeadphonesBusDefaultName));
     public static string OutputEditInUseDialogTitle => Get(nameof(OutputEditInUseDialogTitle));
     public static string OutputEditInUseApplyButton => Get(nameof(OutputEditInUseApplyButton));
     public static string OutputEditInUseDialogMessageFormat => Get(nameof(OutputEditInUseDialogMessageFormat));
@@ -671,7 +663,6 @@ public static class Strings
     public static string WaitingForSourceWithRetryFormat => Get(nameof(WaitingForSourceWithRetryFormat));
     public static string WaitingForSourceFormat => Get(nameof(WaitingForSourceFormat));
     public static string NegativeInfinityDbLabel => Get(nameof(NegativeInfinityDbLabel));
-    public static string NoPortAudioOutputForHeadphonesCueBus => Get(nameof(NoPortAudioOutputForHeadphonesCueBus));
     public static string PlaylistTabNameFormat => Get(nameof(PlaylistTabNameFormat));
     public static string SavePlaylistTabDialogTitle => Get(nameof(SavePlaylistTabDialogTitle));
     public static string HaPlayPlaylistFileTypeLabel => Get(nameof(HaPlayPlaylistFileTypeLabel));
@@ -711,9 +702,6 @@ public static class Strings
     public static string EndpointProbeOkDeviceFormat => Get(nameof(EndpointProbeOkDeviceFormat));
     public static string EndpointNoneOptionLabel => Get(nameof(EndpointNoneOptionLabel));
     public static string EndpointMissingOptionFormat => Get(nameof(EndpointMissingOptionFormat));
-
-    public static string HeadphonesCueBusNoTargetFormat => Get(nameof(HeadphonesCueBusNoTargetFormat));
-    public static string HeadphonesCueBusTargetFormat => Get(nameof(HeadphonesCueBusTargetFormat));
     public static string MutedLabel => Get(nameof(MutedLabel));
     public static string MuteLabel => Get(nameof(MuteLabel));
     public static string ChannelInLeftLabel => Get(nameof(ChannelInLeftLabel));
@@ -813,7 +801,6 @@ public static class Strings
     public static string PlayerSettingsDialogTitle => Get(nameof(PlayerSettingsDialogTitle));
     public static string PlayerSettingsButton => Get(nameof(PlayerSettingsButton));
     public static string PlayerSettingsTooltip => Get(nameof(PlayerSettingsTooltip));
-    public static string HeadphonesCueBusTab => Get(nameof(HeadphonesCueBusTab));
     public static string AudioMatrixDialogTitle => Get(nameof(AudioMatrixDialogTitle));
     public static string AudioMatrixButton => Get(nameof(AudioMatrixButton));
     public static string AudioMatrixButtonTooltip => Get(nameof(AudioMatrixButtonTooltip));
