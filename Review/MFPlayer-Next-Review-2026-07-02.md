@@ -345,6 +345,48 @@ SessionSmoke exit 0; headless app launch clean):
    added, and a gating **HaPlay AOT publish** (both OSes) + **Linux launch smoke** (exact CI command
    verified locally end-to-end) landed; the Windows launch run is best-effort until it has green history.
    Remaining niche: a Windows dynamic-plugin compile leg (MSVC plugin build — untested from this box).
+   *(Amendment, same evening: the first CI run hit missing runner native deps (portaudio/portmidi etc.) —
+   the operator deferred CI iteration, so the launch/subtitle/GL smokes were set back to best-effort with a
+   promotion note; the AOT publishes stay gating (pure compile/link).)*
+8. **NXT-04 contract, first structural slice — timeline discontinuity generations.** `TransportGroup` now
+   carries a `TimelineGeneration` bumped on every discontinuity — seek (single + group barrier), loop wrap,
+   pause/resume, clip replacement — exposed lock-free via `TransportSnapshot.TimelineGeneration`. Consumers
+   stop inferring: the end monitor's stall-at-EOF window and the deck's end-confirmation debounce restart on
+   a generation CHANGE (authoritative — covers discontinuities the deck didn't initiate, e.g. control-surface
+   seeks, where the old seek-in-flight flag was blind). Tests: session generation-bump test (the fake audio
+   source became `ISeekableSource` to allow transport seeks against doubles) + 2 deck window-restart tests;
+   suite 1,415/1,415; the measured sync gates (item 6) still read shift ≈ 0 ms through the changed paths.
+   Remainder of NXT-04: rate state + cue-local origin/trim + live correlation on one contract object, and
+   threading it into compositions/subtitle feeds (they currently self-correct via the mastered playhead).
+9. **NXT-11/14 first perf gate — steady-playback allocation budget (exit code 22).** SessionSmoke measures
+   `GC.GetTotalAllocatedBytes` + gen0 collections over a QUIET 1.5 s window of full A/V playback (no skew
+   sampling running, so the measurement doesn't pollute itself). Healthy baseline on the dev box (three
+   runs, two files): **59–60 KiB / window (≈40 KiB/s), gen0 = 0** — the hot decode→route→composite→fan-out
+   paths are allocation-free; the residue is the 100 ms monitors' Task machinery. Budget pinned at 512 KiB
+   (~8×): a per-audio-chunk buffer regression (≈600 KiB/window) or any per-frame canvas allocation
+   (MiB-scale) trips it; timer jitter never does. Deliberately NOT taken: the Part-5 §6 micro-allocs
+   (per-poll dictionaries at ≤1 Hz — measured noise next to this baseline) and the sustained
+   1080p60/multi-output benchmarks (hardware/nightly territory, still open).
+10. **CI test-environment failures + hang (first real full-suite CI run after the NXT-15 trigger fix)** —
+   from the operator's runner logs, four distinct problems, all addressed:
+   (a) `AdaptiveRateAudioOutputTests` ×4 failed on BOTH OSes — the FFmpeg.AutoGen dynamic bindings can't use
+   the runner's FFmpeg (absent on Windows; version-mismatched on Ubuntu → `NotSupportedException` from
+   `av_channel_layout_default`). New `FFmpegNativeFactAttribute` (the `LibAssFact` pattern: probe a trivial
+   resampler once, skip with the reason) applied to the resampler-backed tests.
+   (b) `ResolveMidiDevices_*` ×2 failed — the tests inject a fake port catalog but the flow's
+   `IsMidiAvailable` guard asked the REAL portmidi first. The availability probe is now a test seam beside
+   `MidiCatalogProvider` (`MidiAvailabilityProbe`, prod default unchanged); the tests inject `true` and now
+   pass on any runner — the resolution logic under test is pure.
+   (c) `FireVoice_RunsOffDispatcher…` flaked on the loaded 2-core Windows runner — the 2 s/5 s `WhenAny`
+   windows were too tight. All windows in `StopFadeAndVoiceOpenTests` widened (15 s probe / 20 s completion;
+   test 1's fade raised to 30 s so the parked-loop regression still discriminates), and its probe fixed to a
+   real marshaled op — `GetCueDefinitionsAsync` had become lock-free (item 2) and no longer proved anything.
+   (d) **HaPlay.Tests HANGS on the runner** (both OS logs stop before its summary; not reproducible locally
+   even without JACK — it needs the runner's truly-missing natives). Bounded + made diagnosable: the CI test
+   step now runs `--blame-hang --blame-hang-timeout 10m`, so the next run kills the wedged testhost and
+   NAMES the started-but-unfinished tests instead of stalling silently. `libportmidi0` added to the runner
+   so the app-level MIDI probe behaves like a real install. Follow-up: read the blame output of the next CI
+   run and fix the named test.
 
 ## Verification appendix
 

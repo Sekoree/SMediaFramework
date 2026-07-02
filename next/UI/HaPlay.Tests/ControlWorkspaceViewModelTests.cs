@@ -1110,6 +1110,7 @@ public sealed class ControlWorkspaceViewModelTests
     public async Task ResolveMidiDevices_AppliesUserSelectionToBinding()
     {
         await using var vm = new ControlWorkspaceViewModel();
+        vm.MidiAvailabilityProbe = static () => true; // resolution is pure over the injected catalog — no native portmidi needed
         var deviceId = Guid.NewGuid();
         vm.LoadConfig(new ControlSystemConfig
         {
@@ -1155,6 +1156,7 @@ public sealed class ControlWorkspaceViewModelTests
     public async Task ResolveMidiDevices_WhenAllMatch_DoesNotPrompt()
     {
         await using var vm = new ControlWorkspaceViewModel();
+        vm.MidiAvailabilityProbe = static () => true; // see above — the flow under test never touches the runtime
         vm.LoadConfig(new ControlSystemConfig
         {
             Devices =

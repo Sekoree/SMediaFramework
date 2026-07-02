@@ -42,6 +42,9 @@ public partial class MediaPlayerViewModel
     // Consecutive poll ticks that observed the clip stopped-while-playing. A coordinated seek transiently
     // pauses the clip, so the deck only treats "not running" as end-of-track once it PERSISTS across ticks.
     private int _showSessionEndConfirmTicks;
+    // The last TransportSnapshot.TimelineGeneration the poll saw (NXT-04): a change = seek/pause/resume/clip
+    // swap just happened, so the end-confirmation window restarts (its transient pause must not read as end).
+    private int _showSessionLastTimelineGeneration = -1;
     // The current show's composition canvas size (set at open) — the HOLD image renders at this size so the
     // top layer covers the canvas exactly.
     private (int Width, int Height) _playerShowCanvas = (1920, 1080);
@@ -732,6 +735,7 @@ public partial class MediaPlayerViewModel
     private void StartShowSessionPoll()
     {
         _showSessionEndConfirmTicks = 0;
+        _showSessionLastTimelineGeneration = -1;
         _playerShowPoll ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _playerShowPoll.Tick -= OnShowSessionPollTick;
         _playerShowPoll.Tick += OnShowSessionPollTick;
@@ -785,6 +789,7 @@ public partial class MediaPlayerViewModel
             // PERSIST across two ticks (a seek's pause is far shorter than the 250ms interval, so it can never
             // span two ticks; a genuine end does).
             if (ConfirmShowSessionEnded(snap.IsRunning, IsPlaying, IsScrubbing, _seekArcRunning,
+                    snap.TimelineGeneration, ref _showSessionLastTimelineGeneration,
                     ref _showSessionEndConfirmTicks))
             {
                 StopShowSessionPoll();
@@ -804,10 +809,21 @@ public partial class MediaPlayerViewModel
     /// (IsRunning=false) while it reseeks the demux, so this treats "stopped while playing" as the true end
     /// only when NOT mid-seek/scrub AND the stopped state has PERSISTED across two poll ticks — a seek's pause
     /// is far shorter than the 250 ms poll interval, so it can never span two ticks; a genuine end does.
+    /// A change of <paramref name="timelineGeneration"/> (the session's NXT-04 discontinuity signal: any
+    /// seek/pause/resume/clip swap, including ones the deck did not initiate — e.g. a control-surface seek)
+    /// authoritatively restarts the window, however long that discontinuity's transient pause lasts.
     /// <paramref name="confirmTicks"/> accumulates consecutive qualifying ticks and is reset otherwise.</summary>
     internal static bool ConfirmShowSessionEnded(
-        bool isRunning, bool isPlaying, bool isScrubbing, bool seekInFlight, ref int confirmTicks)
+        bool isRunning, bool isPlaying, bool isScrubbing, bool seekInFlight,
+        int timelineGeneration, ref int lastTimelineGeneration, ref int confirmTicks)
     {
+        if (timelineGeneration != lastTimelineGeneration)
+        {
+            lastTimelineGeneration = timelineGeneration;
+            confirmTicks = 0;
+            return false;
+        }
+
         if (!isRunning && isPlaying && !isScrubbing && !seekInFlight)
             return ++confirmTicks >= 2;
         confirmTicks = 0;

@@ -36,9 +36,10 @@ internal sealed class BlockingOpenProvider : IMediaDecoderProvider
 
 /// <summary>A finite stereo source that yields a few chunks of silence then exhausts — enough for a clip
 /// to open and Play() without a real decoder or device.</summary>
-internal sealed class SyntheticSilentSource : IAudioSource
+internal sealed class SyntheticSilentSource : IAudioSource, ISeekableSource
 {
     private int _remaining = 8;
+    private TimeSpan _position;
 
     public AudioFormat Format { get; } = new(48_000, 2);
 
@@ -51,6 +52,12 @@ internal sealed class SyntheticSilentSource : IAudioSource
         destination.Clear();
         return destination.Length - (destination.Length % Format.Channels);
     }
+
+    // Seekable so transport tests can drive SeekAsync/SeekCoordinated against the fake (a real file decoder
+    // implements this; without it a session-level seek test throws before reaching the code under test).
+    public TimeSpan Duration => TimeSpan.FromSeconds(10);
+    public TimeSpan Position => _position;
+    public void Seek(TimeSpan position) => _position = position;
 }
 
 /// <summary>A fake audio backend that records every output it creates (channel count + device id) — lets a

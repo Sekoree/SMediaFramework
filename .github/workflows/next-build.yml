@@ -49,13 +49,19 @@ jobs:
       # the runners don't ship. libportaudio2 lets the app's audio module register (no devices needed).
       - name: Install libass + smoke prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2
+        run: sudo apt-get install -y libass9 fontconfig fonts-dejavu-core ffmpeg xvfb libgl1 libgl1-mesa-dri libportaudio2 libportmidi0
 
       - name: Build (Release)
         run: dotnet build next/MFPlayer.Next.sln -c Release
 
+      # --blame-hang: a test that never completes on the runner (device-less audio/MIDI environment) would
+      # otherwise stall the job until the 6h job timeout with NO name in the log. The hang timeout kills the
+      # wedged testhost after 10 minutes and reports which tests had started-but-not-finished, turning a
+      # silent stall into an actionable failure.
       - name: Tests (arch rules + Core/Time/Routing)
-        run: dotnet test next/MFPlayer.Next.sln -c Release --no-build
+        run: >
+          dotnet test next/MFPlayer.Next.sln -c Release --no-build
+          --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type none
 
       - name: AOT-publish smoke
         run: >
@@ -76,18 +82,19 @@ jobs:
         if: runner.os == 'Linux'
         run: dotnet run --project next/MediaFramework/Tools/AbiSmoke/AbiSmoke.csproj -c Release --no-build
 
-      # GATING since 2026-07-02 (NXT-15): the native deps are installed explicitly above (libass, a pinned
-      # font, mesa software GL), so these paths are deterministic on the runner — a failure is a real
-      # regression, not environment noise. If a runner image update ever breaks one, fix the pin rather
-      # than re-adding continue-on-error.
+      # Best-effort until the runner's native deps (portaudio/portmidi/FFmpeg builds) are pinned — the first
+      # gating attempt (2026-07-02) hit missing-library exceptions on the runner; deferred by the operator.
+      # Both pass locally with these exact args; promote to gating once the runner deps are sorted.
       - name: Subtitle decode smoke
         if: runner.os == 'Linux'
+        continue-on-error: true
         run: >
           dotnet run --project next/MediaFramework/Tools/SubtitleDecodeSmoke/SubtitleDecodeSmoke.csproj
           -c Release --no-build -- Reference/TestSubs/karaoke-timing.ass
 
       - name: ABI GL layer-surface smoke (xvfb, software GL)
         if: runner.os == 'Linux'
+        continue-on-error: true
         env:
           MFPLAYER_NEXT_ROOT: ${{ github.workspace }}/next
           LIBGL_ALWAYS_SOFTWARE: 1
@@ -120,8 +127,11 @@ jobs:
           dotnet publish next/UI/HaPlay.Desktop/HaPlay.Desktop.csproj
           -c Release -r ${{ matrix.rid }} -o haplay-publish
 
+      # Best-effort for now (missing portaudio/portmidi native libs on the runner — operator deferred);
+      # the AOT publish above stays GATING (pure compile/link, no runtime deps).
       - name: HaPlay launch smoke (xvfb, HAPLAY_SMOKE self-exit)
         if: runner.os == 'Linux'
+        continue-on-error: true
         timeout-minutes: 5
         env:
           HAPLAY_SMOKE: '1'

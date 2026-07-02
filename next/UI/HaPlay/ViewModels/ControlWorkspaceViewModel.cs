@@ -91,7 +91,11 @@ public partial class ControlWorkspaceViewModel : ViewModelBase, IAsyncDisposable
 
     public ObservableCollection<string> ProfileWarnings { get; } = new();
 
-    public bool IsMidiAvailable => RuntimeModules.IsMidiAvailable;
+    // Test seam (like MidiCatalogProvider): the device-RESOLUTION flows are pure over an injected catalog,
+    // so tests on runners without a native portmidi override this probe — production always asks the runtime.
+    internal Func<bool> MidiAvailabilityProbe { get; set; } = static () => RuntimeModules.IsMidiAvailable;
+
+    public bool IsMidiAvailable => MidiAvailabilityProbe();
     public string MidiUnavailableStatus => RuntimeModules.MidiUnavailableReason ?? "MIDI runtime unavailable.";
 
     [ObservableProperty]

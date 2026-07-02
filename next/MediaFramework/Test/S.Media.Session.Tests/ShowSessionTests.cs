@@ -404,6 +404,39 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task TimelineGeneration_BumpsOnEveryDiscontinuity_AndIsStableDuringPlayback()
+    {
+        // The NXT-04 discontinuity contract slice: seek, pause, resume, and clip replacement each bump the
+        // group's timeline generation in the snapshot; plain playback progress does not. Pollers (the deck
+        // end-confirmation, the end monitor's stall check) key their transient windows off the CHANGE.
+        await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());
+        await session.LoadDocumentAsync(TwoAudioCues());
+        await session.GoAsync();
+        await Task.Delay(50);
+
+        var fired = Assert.Single(await session.SnapshotAsync()).TimelineGeneration;
+
+        await Task.Delay(60); // plain progress — no discontinuity
+        Assert.Equal(fired, Assert.Single(await session.SnapshotAsync()).TimelineGeneration);
+
+        await session.SeekAsync(TimeSpan.FromMilliseconds(200));
+        var afterSeek = Assert.Single(await session.SnapshotAsync()).TimelineGeneration;
+        Assert.True(afterSeek > fired, "seek must bump the timeline generation");
+
+        await session.SetPausedAsync(true);
+        var afterPause = Assert.Single(await session.SnapshotAsync()).TimelineGeneration;
+        Assert.True(afterPause > afterSeek, "pause must bump the timeline generation");
+
+        await session.SetPausedAsync(false);
+        var afterResume = Assert.Single(await session.SnapshotAsync()).TimelineGeneration;
+        Assert.True(afterResume > afterPause, "resume must bump the timeline generation");
+
+        await session.StopAsync(fade: false);
+        var afterStop = Assert.Single(await session.SnapshotAsync()).TimelineGeneration;
+        Assert.True(afterStop > afterResume, "clip replacement (stop) must bump the timeline generation");
+    }
+
+    [Fact]
     public async Task SetPausedAsync_NoActiveClip_IsNoOp()
     {
         await using var session = new ShowSession(FakeAudioDecoderProvider.Registry());

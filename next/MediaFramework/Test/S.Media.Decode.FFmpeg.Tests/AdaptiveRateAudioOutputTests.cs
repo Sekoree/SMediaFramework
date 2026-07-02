@@ -15,7 +15,7 @@ public sealed class AdaptiveRateAudioOutputTests
 
     private static float[] Stereo(int frames) => new float[checked(frames * 2)];
 
-    [Fact]
+    [FFmpegNativeFact]
     public void NegativeBias_ClampsToMaxDelta_LoweringOutputRate()
     {
         var inner = new RecordingOutput(new AudioFormat(48_000, 2));
@@ -26,7 +26,7 @@ public sealed class AdaptiveRateAudioOutputTests
         Assert.Equal(48_000 - 3, aro.EffectiveOutputRate); // clamp to nominal - maxRateDeltaHz
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void PositiveBias_ClampsToMaxDelta_RaisingOutputRate()
     {
         var inner = new RecordingOutput(new AudioFormat(48_000, 2));
@@ -37,7 +37,7 @@ public sealed class AdaptiveRateAudioOutputTests
         Assert.Equal(48_003, aro.EffectiveOutputRate);
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void ZeroBias_KeepsNominalRate_ForwardsRoughlyAllFrames()
     {
         var inner = new RecordingOutput(new AudioFormat(48_000, 2));
@@ -50,7 +50,7 @@ public sealed class AdaptiveRateAudioOutputTests
         Assert.InRange(inner.FramesSubmitted, inFrames - 1024, inFrames); // ~1:1, allow small resampler latency
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void NegativeBias_ShavesFramesOverTime()
     {
         var inner = new RecordingOutput(new AudioFormat(48_000, 2));
@@ -64,7 +64,7 @@ public sealed class AdaptiveRateAudioOutputTests
             $"expected < {inFrames} forwarded frames, got {inner.FramesSubmitted}");
     }
 
-    [Fact]
+    [FFmpegNativeFact]
     public void NullBias_Throws()
     {
         var inner = new RecordingOutput(new AudioFormat(48_000, 2));

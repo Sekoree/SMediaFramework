@@ -19,6 +19,13 @@ if (args.Length < 1)
 var audioFile = args[0];
 var videoFile = args.Length > 1 ? args[1] : args[0];
 
+// NXT-11/14: the steady-playback allocation budget (KiB per 1.5 s quiet window). Healthy baseline measured
+// 2026-07-02 (dev box, three runs, two files): 59-60 KiB / window, gen0Collections=0 — essentially just the
+// 100 ms monitor ticks' dispatcher Task machinery. Pinned at ~8× that so environment noise never trips it,
+// while a per-audio-chunk buffer regression (≥ 4 KiB × ~100 chunks/s ≈ 600 KiB / window) or any per-video-
+// frame canvas allocation (MiB-scale) always does.
+const double AllocBudgetKiB = 512;
+
 // A sidecar SRT shown over the video cue's composition — a non-ASS format, so it exercises the full
 // FFmpeg-decode → ASS events → libass path through the unified factory, end-to-end.
 var subPath = Path.Combine(Path.GetTempPath(), "sessionsmoke-subs.srt");
@@ -259,6 +266,25 @@ if (syncBefore.IsActive && syncBefore.ClipDuration > syncBefore.ClipPosition + T
         Console.Error.WriteLine(
             $"FAIL: post-resume playback degraded (n={resumed.Count}, shift={resumed.MedianMs - steady.MedianMs:F0}ms > 150ms or ptsAdvance={resumed.PtsSpreadMs:F0}ms < 500ms)");
         return 21;
+    }
+
+    // --- NXT-11/14 allocation budget gate --------------------------------------------------------------
+    // Steady A/V playback (decode → route → composite → fan-out, all pumps live) measured over a QUIET
+    // window — no skew capture running, so the sampling itself doesn't pollute the number. The budget pins
+    // CURRENT behavior with headroom; a per-chunk/per-frame allocation regression in the hot paths (the
+    // AOT-GC-audio-drops class) multiplies the rate and trips it. The printed number is the tracked metric.
+    GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+    var allocBefore = GC.GetTotalAllocatedBytes(precise: true);
+    var gen0Before = GC.CollectionCount(0);
+    await Task.Delay(1500);
+    var allocKiB = (GC.GetTotalAllocatedBytes(precise: true) - allocBefore) / 1024.0;
+    var gen0 = GC.CollectionCount(0) - gen0Before;
+    Console.WriteLine($"ALLOC steady: {allocKiB:F0} KiB over 1.5s ({allocKiB / 1.5:F0} KiB/s), gen0Collections={gen0}");
+    if (allocKiB > AllocBudgetKiB)
+    {
+        Console.Error.WriteLine(
+            $"FAIL: steady-playback allocation over budget ({allocKiB:F0} KiB > {AllocBudgetKiB} KiB per 1.5s) — a hot path grew a per-chunk/per-frame allocation");
+        return 22;
     }
 }
 else

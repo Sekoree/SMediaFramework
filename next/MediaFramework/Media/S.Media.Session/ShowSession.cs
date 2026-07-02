@@ -12,6 +12,10 @@ namespace S.Media.Session;
 /// <param name="IsActive">True when the group currently holds a clip (playing, paused, or frozen) — the reliable
 /// "is this cue still up" signal. Distinct from <paramref name="IsRunning"/> (the clock is advancing), which a
 /// video-only held/text clip can report <c>false</c> for while still on screen.</param>
+/// <param name="TimelineGeneration">The group's timeline DISCONTINUITY generation (NXT-04): bumped on every
+/// seek, loop wrap, pause/resume, and clip replacement. Pollers compare it across ticks to distinguish "the
+/// timeline jumped" from "playback progressed" — the authoritative signal that replaces transient-pause
+/// heuristics (a value has no meaning on its own; only change does).</param>
 public sealed record TransportSnapshot(
     string GroupId,
     TimeSpan SessionTime,
@@ -21,7 +25,8 @@ public sealed record TransportSnapshot(
     bool IsActive = false,
     bool LiveSourceDisconnected = false,
     int AudioChannels = 0,
-    int AudioSampleRate = 0);
+    int AudioSampleRate = 0,
+    int TimelineGeneration = 0);
 
 /// <summary>A soundboard voice's playhead — for the UI's per-tile progress/countdown.</summary>
 public readonly record struct VoiceProgress(string VoiceId, TimeSpan Position, TimeSpan Duration);
@@ -96,7 +101,7 @@ public sealed class ShowSession : IAsyncDisposable
     // serializes behind a long-running command on the dispatcher.
     private volatile IReadOnlyList<GroupClockView> _groupViews = [];
 
-    private sealed record GroupClockView(string GroupId, SessionClock Clock, S.Media.Players.MediaPlayer? Player);
+    private sealed record GroupClockView(string GroupId, SessionClock Clock, S.Media.Players.MediaPlayer? Player, TransportGroup Group);
 
     // Lock-free per-device audio-pump view for the outputs-panel line-health poll (the audio analogue of
     // _compositionsView): republished on the dispatcher whenever the active clips change, so a UI poll sums a
@@ -1096,6 +1101,7 @@ public sealed class ShowSession : IAsyncDisposable
         var freezes = binding.EndBehavior == ClipEndBehavior.FreezeLastFrame;
         var start = binding.StartOffset;
         var stalledTicks = 0;
+        var lastTimelineGeneration = -1;
 
         // Suppress ExecutionContext flow so the dispatcher's AsyncLocal identity does NOT leak into the monitor
         // thread; otherwise InvokeAsync would run the checks inline (off-dispatcher) and race transport commands.
@@ -1117,6 +1123,16 @@ public sealed class ShowSession : IAsyncDisposable
                                     return true; // clip replaced/gone → stop monitoring
                                 var position = player.Position;
                                 var remaining = end - position;
+
+                                // A timeline discontinuity (seek/pause/resume — NXT-04 generation) restarts the
+                                // stall persistence window: its transient clock pause must never accumulate
+                                // toward the stall-at-EOF verdict, however long the pipeline takes to settle.
+                                var generation = group.TimelineGeneration;
+                                if (generation != lastTimelineGeneration)
+                                {
+                                    lastTimelineGeneration = generation;
+                                    stalledTicks = 0;
+                                }
 
                                 // Stall-at-EOF (NotifyNaturalEnd only): a real file can end short of its metadata
                                 // duration (VBR/imprecise headers), so position never reaches the out-point and the
@@ -1173,6 +1189,7 @@ public sealed class ShowSession : IAsyncDisposable
                                     player.SeekCoordinated(start);
                                     if (!player.IsRunning)
                                         player.Play();
+                                    group.BumpTimelineGeneration(); // loop wrap = a timeline discontinuity (NXT-04)
                                     return false; // keep looping
                                 }
                                 if (freezes)
@@ -1336,6 +1353,7 @@ public sealed class ShowSession : IAsyncDisposable
                 active.Player.SeekCoordinated(position);
                 if (wasRunning)
                     active.Player.Play();
+                GetOrAddGroup(groupId).BumpTimelineGeneration(); // a seek is a timeline discontinuity (NXT-04)
             }
             return Task.CompletedTask;
         });
@@ -1355,23 +1373,27 @@ public sealed class ShowSession : IAsyncDisposable
         {
             // 1) Freeze every target's clock (shared epoch) so a slow demux seek on one group can't let another
             //    group's playhead run on past it. Remember which were running so paused cues stay paused.
-            var targets = new List<(S.Media.Players.MediaPlayer Player, TimeSpan Position, bool Resume)>(seeks.Count);
+            var targets = new List<(TransportGroup Group, S.Media.Players.MediaPlayer Player, TimeSpan Position, bool Resume)>(seeks.Count);
             foreach (var (groupId, position) in seeks)
             {
-                if (GetOrAddGroup(groupId).Active is not { } active)
+                var group = GetOrAddGroup(groupId);
+                if (group.Active is not { } active)
                     continue;
                 var wasRunning = active.Player.IsRunning;
                 if (wasRunning)
                     active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
-                targets.Add((active.Player, position, wasRunning));
+                targets.Add((group, active.Player, position, wasRunning));
             }
 
             // 2) Seek all with clocks frozen, then 3) release the running ones together from the shared epoch.
-            foreach (var (player, position, _) in targets)
+            foreach (var (_, player, position, _) in targets)
                 player.SeekCoordinated(position);
-            foreach (var (player, _, resume) in targets)
+            foreach (var (group, player, _, resume) in targets)
+            {
                 if (resume)
                     player.Play();
+                group.BumpTimelineGeneration(); // a seek is a timeline discontinuity (NXT-04)
+            }
             return Task.CompletedTask;
         });
     }
@@ -1528,6 +1550,7 @@ public sealed class ShowSession : IAsyncDisposable
                     active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                 else
                     active.Player.Play();
+                group.BumpTimelineGeneration(); // rate change (pause/resume) = a timeline discontinuity (NXT-04)
             }
 
             return Task.CompletedTask;
@@ -1548,6 +1571,7 @@ public sealed class ShowSession : IAsyncDisposable
                         active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                     else
                         active.Player.Play();
+                    group.BumpTimelineGeneration(); // see SetPausedAsync (NXT-04)
                 }
 
             return Task.CompletedTask;
@@ -1595,7 +1619,8 @@ public sealed class ShowSession : IAsyncDisposable
             }
             catch { /* concurrent teardown — leave zeros for this tick */ }
             snaps[i] = new TransportSnapshot(
-                v.GroupId, now, pos, dur, running, active, liveDisconnected, audioChannels, audioSampleRate);
+                v.GroupId, now, pos, dur, running, active, liveDisconnected, audioChannels, audioSampleRate,
+                v.Group.TimelineGeneration);
         }
         return snaps;
     }
@@ -1710,7 +1735,7 @@ public sealed class ShowSession : IAsyncDisposable
     private void PublishGroupViews()
     {
         _groupViews = _groups
-            .Select(kv => new GroupClockView(kv.Key, kv.Value.Clock, kv.Value.Active?.Player))
+            .Select(kv => new GroupClockView(kv.Key, kv.Value.Clock, kv.Value.Active?.Player, kv.Value))
             .ToArray();
 
         // Audio-pump view: every active clip's device-tagged routed outputs (skips default-device routes, which
@@ -1942,12 +1967,23 @@ public sealed class ShowSession : IAsyncDisposable
             return true;
         }
 
+        // The timeline discontinuity generation (NXT-04): written on the dispatcher (every bump site is a
+        // marshaled transport command), read lock-free by Snapshot() through the published group view.
+        private int _timelineGeneration;
+
+        /// <summary>The group's timeline discontinuity generation — see <see cref="TransportSnapshot.TimelineGeneration"/>.</summary>
+        public int TimelineGeneration => Volatile.Read(ref _timelineGeneration);
+
+        /// <summary>Marks a timeline discontinuity (seek, loop wrap, pause/resume, clip replacement).</summary>
+        public void BumpTimelineGeneration() => Interlocked.Increment(ref _timelineGeneration);
+
         public async ValueTask ReplaceAsync(
             IArmedClip? clip,
             IReadOnlyList<ClipAudioOutput> outputs,
             IReadOnlyList<PlacedLayer> layers,
             IReadOnlyList<IDisposable>? subtitleAttachments = null)
         {
+            BumpTimelineGeneration(); // a clip swap starts a new timeline (NXT-04)
             // Stop the displaced clip's background work (fade ramp + end-of-clip monitor) before anything else.
             _clipWorkCts?.Cancel();
             _clipWorkCts?.Dispose();
