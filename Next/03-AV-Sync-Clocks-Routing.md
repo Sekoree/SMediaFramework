@@ -8,7 +8,9 @@ converges everything onto **one** model.
 ## 1. The model in one paragraph
 
 Each **transport group** (a cue, or a set fired/seeked together) has exactly one **master clock**
-(`SessionClock`); a session runs one or more groups concurrently. Within a group, every source — file
+(`SessionClock`) and one authoritative **`TransportTimeline`** contract; a session runs one or more groups
+concurrently. The contract publishes monotonic master/output time, source time, cue-local origin/trim/rate,
+live/file correlation policy, and a discontinuity generation as one immutable snapshot. Within a group, every source — file
 or live — is presented through a **`SourceTimeline`** that maps source PTS onto master time via a fixed
 **offset** and a **rebase policy**. Correlated streams from one sender/device (for example NDI video +
 NDI audio, or camera + embedded audio) live in a **`SourceSyncGroup`** so their shared sender timeline
@@ -52,6 +54,12 @@ model uniform.
   - Each group picks its reference when it starts; when its master output stops, the group idles
     (mastership never floats between unrelated sources). Switching a group's reference is an explicit,
     debounced op.
+- **`TransportTimeline` (implemented, NXT-04).** One stable object per group over the `SessionClock`. Its
+  lock-free snapshot separates `MasterTime`/`OutputPresentationTime`, `SourceTime`, and cue-local `CueTime`,
+  and carries trim bounds, playback rate/running state, live correlation anchor/policy, and the discontinuity
+  generation. Seek and loop rebaseline the source reference while preserving monotonic master time;
+  pause/resume and source replacement re-anchor the same contract. `ShowSession` snapshots, composition frame
+  selection, and subtitle event selection consume this object; future plugin surfaces receive the same contract.
 - **`SourceTimeline` (new).** Per source: `Offset` (TimeSpan, signed) + `RebasePolicy`:
   - **`Scheduled`** — source PTS is authoritative; frame is shown when `master ≥ pts + offset`. Used
     for files and exact-rate live senders. Gives perfect lip-sync.
