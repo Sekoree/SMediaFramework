@@ -48,4 +48,12 @@ public sealed class SessionClock
         _reference = reference;
         _shift = now - reference.ElapsedSinceStart;
     }
+
+    /// <summary>
+    /// Rebaseline the current reference after it discontinuously changed (for example a media playhead seek or
+    /// loop wrap), preserving the supplied monotonic group time. The source coordinate may jump; the master
+    /// coordinate must not. The owning <see cref="TransportTimeline"/> records the matching generation/anchor.
+    /// </summary>
+    public void RebaseReference(TimeSpan preservedNow) =>
+        _shift = preservedNow - _reference.ElapsedSinceStart;
 }

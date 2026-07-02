@@ -26,7 +26,14 @@ public sealed record TransportSnapshot(
     bool LiveSourceDisconnected = false,
     int AudioChannels = 0,
     int AudioSampleRate = 0,
-    int TimelineGeneration = 0);
+    int TimelineGeneration = 0)
+{
+    /// <summary>
+    /// The complete NXT-04 timeline view used by render/subtitle/output consumers. The positional properties
+    /// above remain for UI/API compatibility; new timing-sensitive code should consume this contract.
+    /// </summary>
+    public TransportTimelineSnapshot Timeline { get; init; }
+}
 
 /// <summary>A soundboard voice's playhead — for the UI's per-tile progress/countdown.</summary>
 public readonly record struct VoiceProgress(string VoiceId, TimeSpan Position, TimeSpan Duration);
@@ -101,7 +108,7 @@ public sealed class ShowSession : IAsyncDisposable
     // serializes behind a long-running command on the dispatcher.
     private volatile IReadOnlyList<GroupClockView> _groupViews = [];
 
-    private sealed record GroupClockView(string GroupId, SessionClock Clock, S.Media.Players.MediaPlayer? Player, TransportGroup Group);
+    private sealed record GroupClockView(string GroupId, S.Media.Players.MediaPlayer? Player, TransportGroup Group);
 
     // Lock-free per-device audio-pump view for the outputs-panel line-health poll (the audio analogue of
     // _compositionsView): republished on the dispatcher whenever the active clips change, so a UI poll sums a
@@ -518,13 +525,11 @@ public sealed class ShowSession : IAsyncDisposable
                 // negotiated source format (not the canvas) keeps a clip smaller than the canvas correctly sized
                 // rather than identity-stretched.
                 //
-                // NXT-04: clock-master each DISTINCT composition pump once to this group's SessionClock, so it
-                // composites at the group cadence and selects frames against the clip's playhead instead of
-                // free-running (latest-frame). The group clock is stable across cues (it re-references each active
-                // clip and survives replacement), so the once-only master stays valid while the per-clip playhead
-                // updates each fire. ShowSession feeds raw source frames (no retiming) — playhead and frame PTS
-                // share the source timebase. Live sources keep the free-run "latest frame" path (live-sync is
-                // separate NXT-04 work). The same composition placed twice (PiP) is mastered only on its first slot.
+                // NXT-04: every DISTINCT composition follows the group's one authoritative TransportTimeline.
+                // Its master coordinate drives cadence/output target time; its source coordinate selects frames;
+                // cue-local origin/trim/rate/live-correlation remain available on the same generation. This also
+                // closes the former live free-run exception: a live clip is correlated to the group and composed
+                // against that contract rather than using an unrelated latest-frame clock.
                 var mastered = new HashSet<string>(StringComparer.Ordinal);
                 var fanoutIndex = 0;
                 foreach (var placement in binding.GetPlacements())
@@ -535,8 +540,8 @@ public sealed class ShowSession : IAsyncDisposable
                         videoSource.Format,
                         BuildVideoPlacementSpec(placement.CompositionId, placement.LayerIndex, placement.Placement));
                     player.AttachVideoOutput(slot.Output, id: $"comp{fanoutIndex++}"); // unique id ⇒ router fans out
-                    if (!player.IsLive && mastered.Add(placement.CompositionId))
-                        comp.SetClockMaster(new SessionClockMaster(group.Clock), player.PlayClock);
+                    if (mastered.Add(placement.CompositionId))
+                        comp.SetTransportTimeline(group.Timeline);
                     layers.Add(new PlacedLayer(placement.CompositionId, placement.LayerIndex, slot));
                 }
             }
@@ -599,13 +604,13 @@ public sealed class ShowSession : IAsyncDisposable
                     if (overlay is not null)
                     {
                         subtitleAttachments.Add(subtitleComposition.AttachSubtitleOverlay(
-                            overlay, () => player.Position, nextLayerIndex++));
+                            overlay, group.Timeline, nextLayerIndex++));
                     }
                 }
             }
 
             armed.Start();
-            await ReplaceActiveAsync(group, armed, outputs, layers, subtitleAttachments).ConfigureAwait(false);
+            await ReplaceActiveAsync(group, armed, outputs, layers, subtitleAttachments, binding).ConfigureAwait(false);
             group.SetActiveFadeMetadata(binding, routeTargets, fadeIn ? 0f : 1f);
             // Publish the device-tagged audio outputs for the line-health poll (ReplaceActiveAsync republished
             // the group views before these were set, so refresh once more now they're known).
@@ -1141,7 +1146,7 @@ public sealed class ShowSession : IAsyncDisposable
                                 // A timeline discontinuity (seek/pause/resume — NXT-04 generation) restarts the
                                 // stall persistence window: its transient clock pause must never accumulate
                                 // toward the stall-at-EOF verdict, however long the pipeline takes to settle.
-                                var generation = group.TimelineGeneration;
+                                var generation = group.Timeline.Generation;
                                 if (generation != lastTimelineGeneration)
                                 {
                                     lastTimelineGeneration = generation;
@@ -1200,15 +1205,17 @@ public sealed class ShowSession : IAsyncDisposable
                                     return false; // not at the out-point yet (frozen here if paused)
                                 if (loops)
                                 {
+                                    var masterBeforeLoop = group.Timeline.GetSnapshot().MasterTime;
                                     player.SeekCoordinated(start);
                                     if (!player.IsRunning)
                                         player.Play();
-                                    group.BumpTimelineGeneration(); // loop wrap = a timeline discontinuity (NXT-04)
+                                    group.Timeline.MarkDiscontinuity(masterBeforeLoop); // source wraps; master stays monotonic
                                     return false; // keep looping
                                 }
                                 if (freezes)
                                 {
                                     player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
+                                    group.Timeline.MarkDiscontinuity();
                                     return true; // held on the last frame
                                 }
                                 // Plain Stop: release the clip at the out-point. FadeOutAndStop is handled above.
@@ -1357,17 +1364,19 @@ public sealed class ShowSession : IAsyncDisposable
     public Task SeekAsync(TimeSpan position, string groupId = DefaultGroup) =>
         InvokeAsync(() =>
         {
-            if (GetOrAddGroup(groupId).Active is { } active)
+            var group = GetOrAddGroup(groupId);
+            if (group.Active is { } active)
             {
                 // SeekCoordinated pauses+seeks but does NOT resume, so preserve the pre-seek play state: a
                 // scrub while playing must keep playing, not freeze. Without this the clip is left paused
                 // (IsRunning=false) after every seek, and the media-player deck's poll reads that as "ended"
                 // and tears the deck down — i.e. seek "stops playback" (matches SeekManyAsync's resume).
                 var wasRunning = active.Player.IsRunning;
+                var masterBeforeSeek = group.Timeline.GetSnapshot().MasterTime;
                 active.Player.SeekCoordinated(position);
                 if (wasRunning)
                     active.Player.Play();
-                GetOrAddGroup(groupId).BumpTimelineGeneration(); // a seek is a timeline discontinuity (NXT-04)
+                group.Timeline.MarkDiscontinuity(masterBeforeSeek); // source jumps; master stays monotonic (NXT-04)
             }
             return Task.CompletedTask;
         });
@@ -1387,26 +1396,32 @@ public sealed class ShowSession : IAsyncDisposable
         {
             // 1) Freeze every target's clock (shared epoch) so a slow demux seek on one group can't let another
             //    group's playhead run on past it. Remember which were running so paused cues stay paused.
-            var targets = new List<(TransportGroup Group, S.Media.Players.MediaPlayer Player, TimeSpan Position, bool Resume)>(seeks.Count);
+            var targets = new List<(
+                TransportGroup Group,
+                S.Media.Players.MediaPlayer Player,
+                TimeSpan Position,
+                bool Resume,
+                TimeSpan MasterBeforeSeek)>(seeks.Count);
             foreach (var (groupId, position) in seeks)
             {
                 var group = GetOrAddGroup(groupId);
                 if (group.Active is not { } active)
                     continue;
                 var wasRunning = active.Player.IsRunning;
+                var masterBeforeSeek = group.Timeline.GetSnapshot().MasterTime;
                 if (wasRunning)
                     active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
-                targets.Add((group, active.Player, position, wasRunning));
+                targets.Add((group, active.Player, position, wasRunning, masterBeforeSeek));
             }
 
             // 2) Seek all with clocks frozen, then 3) release the running ones together from the shared epoch.
-            foreach (var (_, player, position, _) in targets)
+            foreach (var (_, player, position, _, _) in targets)
                 player.SeekCoordinated(position);
-            foreach (var (group, player, _, resume) in targets)
+            foreach (var (group, player, _, resume, masterBeforeSeek) in targets)
             {
                 if (resume)
                     player.Play();
-                group.BumpTimelineGeneration(); // a seek is a timeline discontinuity (NXT-04)
+                group.Timeline.MarkDiscontinuity(masterBeforeSeek); // all masters preserve the shared pre-seek epoch
             }
             return Task.CompletedTask;
         });
@@ -1564,7 +1579,7 @@ public sealed class ShowSession : IAsyncDisposable
                     active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                 else
                     active.Player.Play();
-                group.BumpTimelineGeneration(); // rate change (pause/resume) = a timeline discontinuity (NXT-04)
+                group.Timeline.MarkDiscontinuity(); // rate/state change re-anchors the contract (NXT-04)
             }
 
             return Task.CompletedTask;
@@ -1585,7 +1600,7 @@ public sealed class ShowSession : IAsyncDisposable
                         active.Player.Pause(flushPolicy: S.Media.Players.PauseFlushPolicy.SkipFlush);
                     else
                         active.Player.Play();
-                    group.BumpTimelineGeneration(); // see SetPausedAsync (NXT-04)
+                    group.Timeline.MarkDiscontinuity(); // see SetPausedAsync (NXT-04)
                 }
 
             return Task.CompletedTask;
@@ -1614,10 +1629,11 @@ public sealed class ShowSession : IAsyncDisposable
             var liveDisconnected = false;
             var audioChannels = 0;
             var audioSampleRate = 0;
+            var timeline = v.Group.Timeline.GetSnapshot();
             var active = v.Player is not null; // has a clip (playing/paused/frozen) — independent of the clock
             try
             {
-                now = v.Clock.Now;
+                now = timeline.MasterTime;
                 if (v.Player is { } p)
                 {
                     pos = p.Position;
@@ -1634,7 +1650,10 @@ public sealed class ShowSession : IAsyncDisposable
             catch { /* concurrent teardown — leave zeros for this tick */ }
             snaps[i] = new TransportSnapshot(
                 v.GroupId, now, pos, dur, running, active, liveDisconnected, audioChannels, audioSampleRate,
-                v.Group.TimelineGeneration);
+                timeline.Generation)
+            {
+                Timeline = timeline,
+            };
         }
         return snaps;
     }
@@ -1749,7 +1768,7 @@ public sealed class ShowSession : IAsyncDisposable
     private void PublishGroupViews()
     {
         _groupViews = _groups
-            .Select(kv => new GroupClockView(kv.Key, kv.Value.Clock, kv.Value.Active?.Player, kv.Value))
+            .Select(kv => new GroupClockView(kv.Key, kv.Value.Active?.Player, kv.Value))
             .ToArray();
 
         // Audio-pump view: every active clip's device-tagged routed outputs (skips default-device routes, which
@@ -1808,9 +1827,10 @@ public sealed class ShowSession : IAsyncDisposable
     /// the new run-state without waiting behind the dispatcher.</summary>
     private async ValueTask ReplaceActiveAsync(
         TransportGroup group, IArmedClip? clip, IReadOnlyList<ClipAudioOutput> outputs,
-        IReadOnlyList<PlacedLayer> layers, IReadOnlyList<IDisposable>? subtitleAttachments = null)
+        IReadOnlyList<PlacedLayer> layers, IReadOnlyList<IDisposable>? subtitleAttachments = null,
+        ShowClipBinding? binding = null)
     {
-        await group.ReplaceAsync(clip, outputs, layers, subtitleAttachments).ConfigureAwait(false);
+        await group.ReplaceAsync(clip, outputs, layers, subtitleAttachments, binding).ConfigureAwait(false);
         PublishGroupViews();
     }
 
@@ -1859,6 +1879,7 @@ public sealed class ShowSession : IAsyncDisposable
     private sealed class TransportGroup : IAsyncDisposable
     {
         public SessionClock Clock { get; } = new(new MonotonicWallClock(start: false));
+        public TransportTimeline Timeline { get; }
         public IArmedClip? Active { get; private set; }
         private IReadOnlyList<ClipAudioOutput> _outputs = [];
         private IReadOnlyList<IDisposable> _subtitleAttachments = [];
@@ -1873,6 +1894,8 @@ public sealed class ShowSession : IAsyncDisposable
         private float _activeAudioScale = 1f;
         private int _fadeOutStarted;
         public int LastFiredNumber { get; set; } = int.MinValue;
+
+        public TransportGroup() => Timeline = new TransportTimeline(Clock);
 
         /// <summary>True while the host holds this group paused (Set(All)PausedAsync). The end monitor's
         /// stall-at-EOF check reads it so a paused clip's stopped clock is never mistaken for a natural end.
@@ -1981,23 +2004,13 @@ public sealed class ShowSession : IAsyncDisposable
             return true;
         }
 
-        // The timeline discontinuity generation (NXT-04): written on the dispatcher (every bump site is a
-        // marshaled transport command), read lock-free by Snapshot() through the published group view.
-        private int _timelineGeneration;
-
-        /// <summary>The group's timeline discontinuity generation — see <see cref="TransportSnapshot.TimelineGeneration"/>.</summary>
-        public int TimelineGeneration => Volatile.Read(ref _timelineGeneration);
-
-        /// <summary>Marks a timeline discontinuity (seek, loop wrap, pause/resume, clip replacement).</summary>
-        public void BumpTimelineGeneration() => Interlocked.Increment(ref _timelineGeneration);
-
         public async ValueTask ReplaceAsync(
             IArmedClip? clip,
             IReadOnlyList<ClipAudioOutput> outputs,
             IReadOnlyList<PlacedLayer> layers,
-            IReadOnlyList<IDisposable>? subtitleAttachments = null)
+            IReadOnlyList<IDisposable>? subtitleAttachments = null,
+            ShowClipBinding? binding = null)
         {
-            BumpTimelineGeneration(); // a clip swap starts a new timeline (NXT-04)
             // Stop the displaced clip's background work (fade ramp + end-of-clip monitor) before anything else.
             _clipWorkCts?.Cancel();
             _clipWorkCts?.Dispose();
@@ -2012,6 +2025,25 @@ public sealed class ShowSession : IAsyncDisposable
             Clock.SetReference(clip is null
                 ? new MonotonicWallClock(start: false)
                 : new PlayheadPlaybackClock(clip.Player.PlayClock));
+
+            if (clip is null)
+            {
+                Timeline.Clear();
+            }
+            else
+            {
+                var trimStart = binding?.StartOffset ?? TimeSpan.Zero;
+                TimeSpan? trimEnd = clip.Player.Duration > TimeSpan.Zero
+                    ? clip.Player.Duration - (binding?.EndOffset ?? TimeSpan.Zero)
+                    : null;
+                if (trimEnd is { } knownEnd && knownEnd < trimStart)
+                    trimEnd = trimStart;
+                Timeline.BindSource(
+                    clip.Player.PlayClock.AsPlayhead(),
+                    trimStart,
+                    trimEnd,
+                    isLive: clip.Player.IsLive);
+            }
 
             var oldActive = Active;
             var oldOutputs = _outputs;
@@ -2044,14 +2076,4 @@ public sealed class ShowSession : IAsyncDisposable
         public bool IsAdvancing => playhead.IsRunning;
     }
 
-    /// <summary>Exposes a transport group's <see cref="SessionClock"/> as an <see cref="IPlaybackClock"/> so a
-    /// composition pump can be clock-mastered to the group (NXT-04). It follows whatever clip the group is
-    /// playing (the SessionClock re-references the active clip's playhead) and survives clip replacement, unlike
-    /// a per-clip clock which dies when its clip is released — which is what lets the once-only composition
-    /// master stay valid across successive cues.</summary>
-    private sealed class SessionClockMaster(SessionClock clock) : IPlaybackClock
-    {
-        public TimeSpan ElapsedSinceStart => clock.Now;
-        public bool IsAdvancing => clock.IsAdvancing;
-    }
 }

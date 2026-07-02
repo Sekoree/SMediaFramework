@@ -206,3 +206,46 @@ internal sealed class SyntheticVideoSource(int frameCount = 30) : IVideoSource, 
         return true;
     }
 }
+
+internal sealed class SyntheticLiveVideoSource : ILiveVideoSource
+{
+    private long _next;
+    private long _baseTicks;
+
+    public VideoFormat Format { get; } = new(4, 4, PixelFormat.Bgra32, new Rational(30, 1));
+    public IReadOnlyList<PixelFormat> NativePixelFormats { get; } = [PixelFormat.Bgra32];
+    public bool IsExhausted => false;
+
+    public void SelectOutputFormat(PixelFormat format)
+    {
+        if (format != PixelFormat.Bgra32)
+            throw new NotSupportedException();
+    }
+
+    public void RebaseToLatest(TimeSpan playClockNow)
+    {
+        Volatile.Write(ref _baseTicks, playClockNow.Ticks);
+        Interlocked.Exchange(ref _next, 0);
+    }
+
+    public bool TryReadNextFrame(out VideoFrame frame)
+    {
+        var index = Interlocked.Increment(ref _next) - 1;
+        var pts = TimeSpan.FromTicks(
+            Volatile.Read(ref _baseTicks) + TimeSpan.TicksPerSecond * index / 30);
+        frame = new VideoFrame(pts, Format, [new byte[4 * 4 * 4]], [4 * 4]);
+        return true;
+    }
+}
+
+internal sealed class FakeLiveVideoDecoderProvider : IMediaDecoderProvider
+{
+    public string Name => "fake-live-video";
+    public double Probe(string uri, MediaKind kind) =>
+        kind == MediaKind.Video && uri.StartsWith("live://", StringComparison.Ordinal) ? 1.0 : 0.0;
+    public IVideoSource OpenVideo(string uri, VideoSourceOpenOptions? options) => new SyntheticLiveVideoSource();
+    public IAudioSource OpenAudio(string uri, AudioSourceOpenOptions? options) => throw new NotSupportedException();
+
+    public static IMediaRegistry Registry() =>
+        MediaRegistry.Build(b => b.AddDecoder(new FakeLiveVideoDecoderProvider()));
+}

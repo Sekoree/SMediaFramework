@@ -7,6 +7,13 @@ internal sealed class FakePlaybackClock : IPlaybackClock
     public bool IsAdvancing { get; set; } = true;
 }
 
+internal sealed class FakeReadOnlyPlayhead : IReadOnlyPlayhead
+{
+    public TimeSpan CurrentPosition { get; set; }
+    public bool IsRunning { get; set; } = true;
+    public double PlaybackRate { get; set; } = 1.0;
+}
+
 internal sealed class FakeVideoSource : IVideoSource
 {
     public string Tag { get; init; } = "";

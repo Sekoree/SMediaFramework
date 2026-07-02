@@ -452,6 +452,19 @@ SessionSmoke exit 0; headless app launch clean):
    next hang produces a NAMED failure instead of a mystery cancel; if it hangs again, let the step run to
    the blame report. Post-fix: full suite 1,416 / 0 locally.
 
+14. **NXT-04 authoritative transport timeline — SHIPPED.** Added one long-lived `TransportTimeline` per
+   transport group. Its immutable snapshot carries monotonic master/output time, source time, cue-local time +
+   origin, trim bounds, playback rate/running state, live/file correlation policy + anchor, and the existing
+   discontinuity generation. Seek and loop now explicitly rebaseline `SessionClock` so source time can jump
+   without making master time jump; pause/resume, freeze, replacement, and stop re-anchor/clear the same
+   contract. `TransportSnapshot` publishes it while keeping the old fields; `ClipCompositionRuntime` uses its
+   source coordinate for frame selection and subtitle event time, and its master coordinate for pump/output
+   cadence. Live compositions now use this path too instead of the former free-running exception. Added 7
+   tests (mapping/rate/live policy, master monotonicity, trim/cue coordinates, seek re-anchor, live composition,
+   subtitle timing). Verification: solution build 0 errors; **1,423/1,423** tests green. The remaining NXT-04
+   work is the hardware/scheduled tier: sustained physical multi-output presentation-skew gates and exposing
+   this same contract to first-class plugin surfaces when NXT-10 lands.
+
 ## Verification appendix
 
 ```bash
@@ -462,6 +475,7 @@ MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet test next/MFPlayer.Next.sln --no-buil
 # post-engine-deletion (NXT-13): 1,409 passed / 0 failed (−38 engine tests)
 # post-follow-ups (VU meters / NotifyNaturalEnd / progressive waveform): 1,412 passed / 0 failed
 # post-implementation-pass (items 1–11): 1,416 passed / 0 failed
+# post-authoritative-timeline contract (item 14): 1,423 passed / 0 failed
 
 MFP_PORTAUDIO_HOST_API=JACK pw-jack dotnet run \
   --project next/MediaFramework/Tools/SessionSmoke -- /run/media/sekoree/512/mambo.mp4

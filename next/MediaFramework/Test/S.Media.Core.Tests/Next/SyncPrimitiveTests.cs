@@ -73,6 +73,21 @@ public class SessionClockTests
     }
 
     [Fact]
+    public void RebaseReference_keeps_master_monotonic_when_the_source_clock_seeks()
+    {
+        var source = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(3) };
+        var sc = new SessionClock(source);
+        var beforeSeek = sc.Now;
+
+        source.ElapsedSinceStart = TimeSpan.FromSeconds(40);
+        sc.RebaseReference(beforeSeek);
+
+        Assert.Equal(beforeSeek, sc.Now);
+        source.ElapsedSinceStart = TimeSpan.FromSeconds(41);
+        Assert.Equal(beforeSeek + TimeSpan.FromSeconds(1), sc.Now);
+    }
+
+    [Fact]
     public void IsAdvancing_reflects_reference()
     {
         var clk = new FakePlaybackClock { IsAdvancing = false };
@@ -88,6 +103,100 @@ public class SessionClockTests
         var sc = SessionClock.LiveWallClock();
         Assert.True(sc.IsAdvancing);
         Assert.True(sc.Now >= TimeSpan.Zero);
+    }
+}
+
+public class TransportTimelineTests
+{
+    [Fact]
+    public void BindSource_publishes_master_source_and_cue_coordinates_with_trim()
+    {
+        var master = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(5) };
+        var playhead = new FakeReadOnlyPlayhead { CurrentPosition = TimeSpan.FromSeconds(10) };
+        var timeline = new TransportTimeline(new SessionClock(master));
+
+        timeline.BindSource(
+            playhead,
+            trimStart: TimeSpan.FromSeconds(10),
+            trimEnd: TimeSpan.FromSeconds(20));
+        var start = timeline.GetSnapshot();
+
+        Assert.Equal(TimeSpan.FromSeconds(5), start.MasterTime);
+        Assert.Equal(TimeSpan.FromSeconds(10), start.SourceTime);
+        Assert.Equal(TimeSpan.Zero, start.CueTime);
+        Assert.Equal(TimeSpan.FromSeconds(5), start.CueOrigin);
+        Assert.Equal(TimeSpan.FromSeconds(10), start.TrimStart);
+        Assert.Equal(TimeSpan.FromSeconds(20), start.TrimEnd);
+        Assert.Equal(RebasePolicy.Scheduled, start.SourceCorrelation.Policy);
+        Assert.Equal(1, start.Generation);
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(7);
+        Assert.Equal(TimeSpan.FromSeconds(12), timeline.GetSnapshot().SourceTime);
+        Assert.Equal(TimeSpan.FromSeconds(2), timeline.GetSnapshot().CueTime);
+        Assert.Equal(TimeSpan.FromSeconds(7), timeline.MasterTimeAt(TimeSpan.FromSeconds(12)));
+    }
+
+    [Fact]
+    public void Discontinuity_reanchors_mapping_without_moving_the_cue_origin()
+    {
+        var master = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(2) };
+        var playhead = new FakeReadOnlyPlayhead { CurrentPosition = TimeSpan.FromSeconds(10) };
+        var timeline = new TransportTimeline(new SessionClock(master));
+        timeline.BindSource(playhead, trimStart: TimeSpan.FromSeconds(10));
+        var cueOrigin = timeline.GetSnapshot().CueOrigin;
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(3);
+        playhead.CurrentPosition = TimeSpan.FromSeconds(40); // coordinated seek
+        timeline.MarkDiscontinuity();
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(4);
+
+        var after = timeline.GetSnapshot();
+        Assert.Equal(2, after.Generation);
+        Assert.Equal(cueOrigin, after.CueOrigin);
+        Assert.Equal(TimeSpan.FromSeconds(41), after.SourceTime);
+        Assert.Equal(TimeSpan.FromSeconds(31), after.CueTime);
+    }
+
+    [Fact]
+    public void Playback_rate_and_live_correlation_are_part_of_the_same_contract()
+    {
+        var master = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(1) };
+        var playhead = new FakeReadOnlyPlayhead
+        {
+            CurrentPosition = TimeSpan.FromSeconds(100),
+            PlaybackRate = 2.0,
+        };
+        var timeline = new TransportTimeline(new SessionClock(master));
+        timeline.BindSource(playhead, isLive: true, sourceOffset: TimeSpan.FromMilliseconds(20));
+
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(2);
+        var snapshot = timeline.GetSnapshot();
+
+        Assert.True(snapshot.IsLive);
+        Assert.True(snapshot.IsRunning);
+        Assert.Equal(2.0, snapshot.PlaybackRate);
+        Assert.Equal(RebasePolicy.RebaseToLatest, snapshot.SourceCorrelation.Policy);
+        Assert.Equal(TimeSpan.FromMilliseconds(101_960), snapshot.SourceTime);
+        Assert.Equal(TimeSpan.FromMilliseconds(1_020), timeline.MasterTimeAt(TimeSpan.FromSeconds(100)));
+        Assert.Equal(TimeSpan.FromSeconds(2), snapshot.OutputPresentationTime);
+    }
+
+    [Fact]
+    public void Clear_freezes_an_inactive_timeline_and_bumps_generation()
+    {
+        var master = new FakePlaybackClock { ElapsedSinceStart = TimeSpan.FromSeconds(3) };
+        var timeline = new TransportTimeline(new SessionClock(master));
+        timeline.BindSource(new FakeReadOnlyPlayhead());
+
+        timeline.Clear();
+        master.ElapsedSinceStart = TimeSpan.FromSeconds(4);
+        var snapshot = timeline.GetSnapshot();
+
+        Assert.Equal(2, snapshot.Generation);
+        Assert.False(snapshot.IsRunning);
+        Assert.Equal(0d, snapshot.PlaybackRate);
+        Assert.Equal(TimeSpan.FromSeconds(4), snapshot.MasterTime);
+        Assert.Equal(TimeSpan.Zero, snapshot.SourceTime);
     }
 }
 

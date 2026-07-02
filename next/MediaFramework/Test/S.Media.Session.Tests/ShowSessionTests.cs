@@ -437,6 +437,69 @@ public sealed class ShowSessionTests
     }
 
     [Fact]
+    public async Task TransportTimeline_PublishesTrimmedCueCoordinates_AndReanchorsOnSeek()
+    {
+        var binding = new ShowClipBinding("c", "fake://v")
+        {
+            StartOffset = TimeSpan.FromSeconds(2),
+            EndOffset = TimeSpan.FromSeconds(5),
+            AudioRoutes = [],
+        };
+        var doc = new ShowDocument(
+            1,
+            [new CueDefinition("c", 1, "C")],
+            [binding],
+            [], [], [], []);
+        await using var session = new ShowSession(FakeVideoDecoderProvider.Registry(frameCount: 900));
+        await session.LoadDocumentAsync(doc);
+        await session.GoAsync();
+
+        var fired = Assert.Single(session.Snapshot());
+        Assert.Equal(TimeSpan.FromSeconds(2), fired.Timeline.TrimStart);
+        Assert.Equal(TimeSpan.FromSeconds(25), fired.Timeline.TrimEnd);
+        Assert.False(fired.Timeline.IsLive);
+        Assert.Equal(RebasePolicy.Scheduled, fired.Timeline.SourceCorrelation.Policy);
+        Assert.InRange(
+            (fired.Timeline.CueTime - (fired.Timeline.SourceTime - fired.Timeline.TrimStart)).Duration(),
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(1));
+        var cueOrigin = fired.Timeline.CueOrigin;
+        var masterBeforeSeek = fired.Timeline.MasterTime;
+
+        await session.SeekAsync(TimeSpan.FromSeconds(12));
+        var sought = Assert.Single(session.Snapshot());
+
+        Assert.True(sought.Timeline.Generation > fired.Timeline.Generation);
+        Assert.Equal(cueOrigin, sought.Timeline.CueOrigin);
+        Assert.InRange(
+            sought.Timeline.MasterTime - masterBeforeSeek,
+            TimeSpan.Zero,
+            TimeSpan.FromSeconds(1));
+        Assert.InRange(sought.Timeline.SourceTime, TimeSpan.FromSeconds(12), TimeSpan.FromSeconds(12.5));
+        Assert.InRange(sought.Timeline.CueTime, TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10.5));
+    }
+
+    [Fact]
+    public async Task LiveComposition_UsesTheTransportTimeline_AndPublishesLiveCorrelation()
+    {
+        var doc = new ShowDocument(
+            1,
+            [new CueDefinition("c", 1, "C")],
+            [new ShowClipBinding("c", "live://v", CompositionId: "screen") { AudioRoutes = [] }],
+            [new ShowComposition("screen", "Screen", 320, 240)],
+            [], [], []);
+        await using var session = new ShowSession(FakeLiveVideoDecoderProvider.Registry());
+        await session.LoadDocumentAsync(doc);
+
+        await session.GoAsync();
+        var snapshot = Assert.Single(session.Snapshot());
+
+        Assert.True(snapshot.Timeline.IsLive);
+        Assert.Equal(RebasePolicy.RebaseToLatest, snapshot.Timeline.SourceCorrelation.Policy);
+        Assert.True((await session.GetCompositionStatsAsync("screen"))!.Value.ClockMastered);
+    }
+
+    [Fact]
     public async Task LoadDocument_TheCAbiSmokesEmptyShowJson_OnABackendlessSession_Loads()
     {
         // The EXACT call the outbound C-ABI smoke makes (SmpSmoke EMPTY_SHOW + audioBackend: null) — this
@@ -760,7 +823,10 @@ public sealed class ShowSessionTests
                 [
                     new ShowSubtitleSelection(StreamIndex: 7),
                     new ShowSubtitleSelection("/subs/commentary.ass"),
-                ]),
+                ])
+                {
+                    StartOffset = TimeSpan.FromMilliseconds(200),
+                },
             ],
             Compositions: [new ShowComposition("screen", "Screen", 4, 4)],
             Outputs: [], Routes: [], Devices: []);
@@ -782,8 +848,13 @@ public sealed class ShowSessionTests
             opened);
 
         Assert.True(SpinWait.SpinUntil(
-            () => overlays.All(o => o.Positions.Any(p => p > TimeSpan.Zero)),
-            TimeSpan.FromSeconds(2)), "subtitle overlays were not driven from the active clip position");
+            () => overlays.All(o => o.Positions.LastOrDefault() >= TimeSpan.FromMilliseconds(200)),
+            TimeSpan.FromSeconds(2)), "subtitle overlays were not driven from the transport's trimmed source time");
+        var timelineSource = Assert.Single(session.Snapshot()).Timeline.SourceTime;
+        Assert.All(overlays, overlay => Assert.InRange(
+            (overlay.Positions[^1] - timelineSource).Duration(),
+            TimeSpan.Zero,
+            TimeSpan.FromMilliseconds(250)));
 
         await session.StopAsync();
         Assert.All(overlays, overlay => Assert.True(overlay.IsDisposed));

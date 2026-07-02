@@ -77,6 +77,7 @@ public sealed class ClipCompositionRuntime : IDisposable
     private TimeSpan _lastMasterPosition;
     private IPlaybackClock? _master;
     private IPlayhead? _timeline;
+    private ITransportTimeline? _transportTimeline;
     private MediaClock? _slaveClock;
     private int _driverDisposeState;
     private bool _disposed;
@@ -399,12 +400,15 @@ public sealed class ClipCompositionRuntime : IDisposable
             if (_disposed) return;
             if (_master is not null)
             {
-                if (timeline is not null)
+                // Preserve the first-master contract. In particular, a legacy caller must not detach an
+                // already-installed TransportTimeline and leave source selection reading master coordinates.
+                if (_transportTimeline is null && timeline is not null)
                     _timeline = timeline;
                 return;
             }
             _master = master;
             _timeline = timeline;
+            _transportTimeline = null;
             foreach (var layer in _slots)
                 layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
             clockToRetarget = _slaveClock;
@@ -413,6 +417,38 @@ public sealed class ClipCompositionRuntime : IDisposable
         clockToRetarget?.SetMaster(master);
         Trace.LogInformation(
             "ClipCompositionRuntime: composition {Composition} pump now slaved to master clock",
+            CompositionName);
+    }
+
+    /// <summary>
+    /// Masters this composition to the transport group's authoritative timeline. The master coordinate drives
+    /// pump cadence/output scheduling while <see cref="TransportTimelineSnapshot.SourceTime"/> selects decoded
+    /// frames. The same contract is also passed to subtitle feeds, keeping seek/trim/live correlation on one
+    /// generation instead of combining a raw player playhead with an unrelated session clock (NXT-04).
+    /// </summary>
+    public void SetTransportTimeline(ITransportTimeline timeline)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        MediaClock? clockToRetarget = null;
+        lock (_gate)
+        {
+            if (_disposed) return;
+            // A composition is one clock domain. The first transport group to drive it owns that domain until
+            // the composition is rebuilt; a later concurrent group must not retarget every existing layer.
+            // Repeated calls from successive clips in the SAME group carry the same stable timeline object.
+            if (_master is not null)
+                return;
+            _transportTimeline = timeline;
+            _timeline = null;
+            _master = timeline;
+            clockToRetarget = _slaveClock;
+            foreach (var layer in _slots)
+                layer.RawSlot.KeepPolicy = SlotKeepPolicy.MasterAligned;
+        }
+
+        clockToRetarget?.SetMaster(timeline);
+        Trace.LogInformation(
+            "ClipCompositionRuntime: composition {Composition} now follows the transport timeline",
             CompositionName);
     }
 
@@ -479,6 +515,20 @@ public sealed class ClipCompositionRuntime : IDisposable
             RepublishSubtitleFeedsSnapshot();
         }
         return feed;
+    }
+
+    /// <summary>
+    /// Attaches a subtitle source to the same authoritative transport timeline as video selection. Subtitle
+    /// events use source time (so a trimmed file still selects events at its original media timestamps), while
+    /// cue-local effects remain available from the contract's <see cref="TransportTimelineSnapshot.CueTime"/>.
+    /// </summary>
+    public IDisposable AttachSubtitleOverlay(
+        IVideoOverlaySource source,
+        ITransportTimeline timeline,
+        int layerIndex = int.MaxValue)
+    {
+        ArgumentNullException.ThrowIfNull(timeline);
+        return AttachSubtitleOverlay(source, () => timeline.GetSnapshot().SourceTime, layerIndex);
     }
 
     private void RemoveSubtitleFeed(SubtitleLayerFeed feed)
@@ -693,7 +743,12 @@ public sealed class ClipCompositionRuntime : IDisposable
     {
         var sw = Stopwatch.StartNew();
         TimeSpan? masterPts = null;
-        if (_timeline is not null)
+        if (_transportTimeline is { } transportTimeline)
+        {
+            try { masterPts = transportTimeline.GetSnapshot().SourceTime; }
+            catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: transport timeline read"); }
+        }
+        else if (_timeline is not null)
         {
             try { masterPts = _timeline.CurrentPosition; }
             catch (Exception ex) { Trace.LogTrace(ex, "ClipCompositionRuntime.PumpOneFrame: timeline read"); }
