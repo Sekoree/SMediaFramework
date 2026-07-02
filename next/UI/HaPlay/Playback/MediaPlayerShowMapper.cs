@@ -23,7 +23,7 @@ public static class MediaPlayerShowMapper
 
     /// <summary>Builds the 1-cue show for a player source. <paramref name="hasVideo"/> gates the composition
     /// (audio-only sources skip it); <paramref name="audioRoutes"/> sends the audio to the player's output
-    /// line(s) and devices (empty ⇒ the default output).</summary>
+    /// line(s) and devices (empty ⇒ NO audio output — the deck never opens a default device).</summary>
     public static ShowDocument ToShowDocument(
         string mediaPath,
         bool hasVideo,
